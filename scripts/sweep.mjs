@@ -8,13 +8,16 @@
 // even when it compiles nothing, and never reads one it does not build. Each sweep sets those
 // files' access times back to RESET; the kernel updates an access time older than the file's
 // mtime on the next read (macOS, and Linux relatime), so one read since the last sweep shows.
+// The sweep never writes a modification time: Cargo compares a unit's inputs against its
+// dep-info file's mtime to the nanosecond, so even rounding it to the millisecond can make an
+// input written in the same millisecond read as newer, and the unit rebuild.
 // A unit is `.fingerprint/<package>-<hash>` plus every `deps/` file and `build/` directory with
 // that hash. Incremental caches carry rustc's own names, so they go by when they last compiled.
 //
 // Cargo holds `<profile>/.cargo-lock` (flock) while it builds into a profile directory. The sweep
 // takes the same lock without waiting and skips a directory a build holds; under the lock it only
 // renames, fingerprints first, so a unit is never half there. It deletes after letting go.
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,18 +46,31 @@ export function startSweep(target, now = Date.now()) {
   return child;
 }
 
-async function locker() {
+async function libc() {
   const { dlopen, FFIType } = await import('bun:ffi');
-  const { symbols } = dlopen(process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6', { flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 } });
-  // LOCK_EX | LOCK_NB, the same flock Cargo takes. Closing the descriptor releases it.
-  return path => { const fd = openSync(path, 'a'); if (symbols.flock(fd, 6) === 0) return fd; closeSync(fd); return null; };
+  const mac = process.platform === 'darwin';
+  const { symbols } = dlopen(mac ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6', {
+    flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+    utimensat: { args: [FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+  });
+  // AT_FDCWD and UTIME_OMIT, from <fcntl.h> and <sys/stat.h> on each system (POSIX utimensat).
+  const [AT_FDCWD, UTIME_OMIT] = mac ? [-2, -2] : [-100, (1 << 30) - 2];
+  // Two 64-bit timespecs: the access time is RESET, the modification time is left as it is.
+  const times = new BigInt64Array([BigInt(RESET), 0n, 0n, BigInt(UTIME_OMIT)]);
+  return {
+    // LOCK_EX | LOCK_NB, the same flock Cargo takes. Closing the descriptor releases it.
+    lock: path => { const fd = openSync(path, 'a'); if (symbols.flock(fd, 6) === 0) return fd; closeSync(fd); return null; },
+    resetAccess: path => {
+      if (symbols.utimensat(AT_FDCWD, Buffer.from(`${path}\0`), times, 0) !== 0) throw new Error(`${path}: could not reset its access time`);
+    },
+  };
 }
 
 /** Without access times the sweep cannot tell a used unit from an abandoned one, so it refuses. */
-function assertAccessTimes(target) {
+function assertAccessTimes(target, resetAccess) {
   const probe = resolve(target, `${LEDGER}.probe`);
   writeFileSync(probe, 'x');
-  utimesSync(probe, RESET, statSync(probe).mtime);
+  resetAccess(probe);
   readFileSync(probe);
   const seen = statSync(probe).atimeMs > RESET * 1000;
   rmSync(probe);
@@ -68,10 +84,10 @@ const profiles = target => [target, ...readdirSync(target, { withFileTypes: true
 /** Sweep `target` as of `now`. Returns what was moved out, per profile directory. */
 export async function sweep(target, now = Date.now()) {
   if (process.platform === 'win32') throw new Error('Cargo cache sweeping is unavailable on Windows: its lock and access-time semantics have not been verified');
-  const lock = await locker(), own = lock(resolve(target, `${LEDGER}.lock`));
+  const { lock, resetAccess } = await libc(), own = lock(resolve(target, `${LEDGER}.lock`));
   if (own === null) return {};
   try {
-    assertAccessTimes(target);
+    assertAccessTimes(target, resetAccess);
     const path = resolve(target, LEDGER), old = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).units : {};
     const units = {}, removed = {}, aside = resolve(target, ASIDE, String(now));
     let n = 0;
@@ -91,7 +107,7 @@ export async function sweep(target, now = Date.now()) {
           const key = `${at}#${hash}`, read = files.some(f => statSync(f).atimeMs > RESET * 1000);
           units[key] = read || !(key in old) ? now : old[key];
           if (now - units[key] > KEEP) { stale.add(hash); delete units[key]; move(unit); continue; }
-          for (const f of files) utimesSync(f, RESET, statSync(f).mtime);
+          for (const f of files) resetAccess(f);
         }
         let count = stale.size;
         for (const sub of ['deps', 'build', 'examples']) {

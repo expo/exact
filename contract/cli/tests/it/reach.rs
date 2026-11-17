@@ -236,6 +236,88 @@ fn shortcuts_are_refused_where_the_platform_has_none() {
     assert!(logs(&r).contains("NotSupportedError"), "{}", logs(&r));
 }
 
+#[test]
+fn a_file_face_keeps_the_tools_string_parameter() {
+    let app = App::new("file-face", "component App\n  state path = \"\"\n  tool save writes closed \"Save a file.\" = save returns path\n  action save(image: string)\n    path = image\n  view\n    main\n      text path\n");
+    let good = json!({"tools": {"save": {"title": "Save", "doors": ["apple"],
+        "parameters": {"image": {"type": "file", "accept": ["image/png", "image/jpeg", "image/heic"]}}}}});
+    let compile = |intents: &Json| {
+        std::fs::write(
+            app.0.join("app.json"),
+            json!({"app": {"id": "com.exact.fileface", "name": "File Face"}, "intents": intents})
+                .to_string(),
+        )
+        .unwrap();
+        contract::compile_path_all(&app.0.join("app.contract"), false).map(|(p, _)| p)
+    };
+    let plan = compile(&good).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(exact_runner::uses(&plan).has(exact_runner::Capability::Picker));
+    let face: Json = serde_json::from_str(plan.str(plan.tools[0].face)).unwrap();
+    assert_eq!(
+        face["parameters"]["image"]["accept"],
+        good["tools"]["save"]["parameters"]["image"]["accept"]
+    );
+    let selected = exact_runner::uses(&plan);
+    let mut runner = Runner::boot(
+        plan.clone(),
+        NoData,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    runner.set_device_links(exact_runner::DeviceLinks {
+        picker: selected
+            .has(exact_runner::Capability::Picker)
+            .then_some(exact_runner::PickerLinks::LINKED),
+        ..exact_runner::DeviceLinks::CORE
+    });
+    let picked: Json = serde_json::from_str(
+        &exact_runner::agent::answer(&mut runner, r#"{"op":"pickedPath","name":"image.png"}"#)
+            .unwrap()
+            .0,
+    )
+    .unwrap();
+    assert!(picked["path"]
+        .as_str()
+        .unwrap()
+        .starts_with("app:/tmp/picked/"));
+    let mut changed = good.clone();
+    changed["tools"]["save"]["parameters"]["image"]["accept"] = json!(["application/pdf"]);
+    let moved = compile(&changed).unwrap();
+    assert_ne!(plan.str(plan.tools[0].face), moved.str(moved.tools[0].face));
+    for doors in [json!(["web"]), json!(["android"]), Json::Null] {
+        let mut bad = good.clone();
+        bad["tools"]["save"]["doors"] = doors;
+        assert!(format!("{:?}", compile(&bad).unwrap_err()).contains("intents-file-door"));
+    }
+    for accept in [
+        json!([]),
+        json!(["image/unknown"]),
+        json!(["inode/directory"]),
+        Json::Null,
+    ] {
+        let mut bad = good.clone();
+        bad["tools"]["save"]["parameters"]["image"]["accept"] = accept;
+        assert!(format!("{:?}", compile(&bad).unwrap_err()).contains("intents-file-accept"));
+    }
+    let mut entity = good.clone();
+    entity["tools"]["save"]["parameters"]["image"]["entity"] = json!("book");
+    assert!(format!("{:?}", compile(&entity).unwrap_err()).contains("intents-face-type"));
+}
+
+#[test]
+fn a_face_parameter_must_be_an_object() {
+    let app = App::new("bad-face", "component App\n  state path = \"\"\n  tool save writes closed \"Save a file.\" = save returns path\n  action save(image: string)\n    path = image\n  view\n    text path\n");
+    for parameter in [Json::Null, json!(3), json!("file"), json!([])] {
+        std::fs::write(app.0.join("app.json"), json!({"app": {"id": "com.exact.badface", "name": "Bad Face"}, "intents": {"tools": {"save": {"doors": ["apple"], "parameters": {"image": parameter}}}}}).to_string()).unwrap();
+        let errors = contract::compile_path_all(&app.0.join("app.contract"), false)
+            .err()
+            .unwrap();
+        assert!(format!("{errors:?}").contains("intents-face-type"));
+    }
+}
+
 /// LLP 1133.023 D5, D8, D10: `intents.tools` in `app.json` faces a tool. A
 /// face is stored with the doors it reaches and its digest; one naming no
 /// tool, a parameter of another type, a door with no confirmation for a
@@ -387,4 +469,92 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
         "{calls}"
     );
     assert_eq!(calls[1]["outcome"], "ok", "{calls} {}", logs(&r));
+}
+
+/// LLP 1111.000 D1: `mcp` is a door a face names, never a default. A face
+/// naming it alone keeps the plan's types; naming another door too, it is
+/// held to scalars; the entity and unknown-parameter checks hold on every
+/// face; a `destroys` tool may name it, since the Mac asks the person.
+#[test]
+fn an_mcp_face_keeps_the_plans_types() {
+    let source = r#"shape Item
+  name: string
+  aisle: enum<"produce", "dairy">
+
+component App
+  state items: Item[] = []
+  tool add writes "Add an item." = add
+    returns items
+  tool drop destroys "Remove every item." = drop
+  action add(item: Item, note: option<string>)
+    items = items.concat([item])
+  action drop
+    items = []
+  view
+    text `${items.length}`
+"#;
+    let app = App::new("mcp-faces", source);
+    let write = |tools: Json| {
+        let intents = json!({ "entities": { "book": { "title": "Book" } }, "tools": tools });
+        let manifest =
+            json!({ "app": { "id": "com.exact.mcp", "name": "Mcp" }, "intents": intents });
+        std::fs::write(app.0.join("app.json"), manifest.to_string()).unwrap();
+        contract::compile_path_all(&app.0.join("app.contract"), false).map(|(plan, _)| plan)
+    };
+    let refused = |tools: Json, id: &str| {
+        let errors = format!("{:?}", write(tools).unwrap_err());
+        assert!(errors.contains(id), "{id}: {errors}");
+    };
+    let plan = write(json!({
+        "add": { "title": "Add", "doors": ["mcp"] },
+        "drop": { "title": "Drop", "doors": ["apple", "mcp"] },
+    }))
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let face = |name: &str| -> Json {
+        let row = (plan.tools.iter())
+            .find(|t| plan.str(t.name) == name)
+            .unwrap();
+        serde_json::from_str(plan.str(row.face)).unwrap()
+    };
+    assert_eq!(face("add")["doors"], json!(["mcp"]));
+    assert_eq!(face("drop")["doors"], json!(["apple", "mcp"]));
+    assert!(
+        !exact_runner::activation::offers_tools(&plan),
+        "no face reaches the web"
+    );
+    let signature = contract::faces::tool_signature(&plan, 0);
+    assert_eq!(
+        signature["parameters"],
+        json!([
+            ["item", r#"Item{name:string,aisle:enum<"produce","dairy">}"#],
+            ["note", "option<string>"]
+        ]),
+        "an enum's cases are in the signature"
+    );
+    assert_eq!(signature["sends"], false);
+
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp", "apple"] } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp", "web"] } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp"], "parameters": { "note": { "entity": "author" } } } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp"], "parameters": { "other": {} } } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["tcp"] } }),
+        "intents-door",
+    );
+    refused(
+        json!({ "drop": { "title": "Drop", "doors": ["mcp", "android"] } }),
+        "intents-destroys-door",
+    );
 }

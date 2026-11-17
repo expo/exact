@@ -19,9 +19,11 @@ use serde_json::{json, Value};
 
 /// The press rows a held `active` shows, by wire name (LLP 1061 D7, which
 /// `:active` lowers to).
-const PRESS_ROWS: [exact_kernel::StyleId; 5] = {
+const PRESS_ROWS: [exact_kernel::StyleId; 7] = {
     use exact_kernel::StyleId::*;
     [
+        PressTranslate,
+        PressTranslatePercent,
         PressScale,
         PressOpacity,
         PressOpacityTo,

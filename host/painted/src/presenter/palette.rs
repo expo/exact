@@ -165,6 +165,16 @@ const ROLES: &[(&str, Material, u32)] = &[
     ("-exact-system-red", Error, 100),
 ];
 
+/// The Material role, and the opacity in percent, D4's table gives one of
+/// Exact's roles by name: what a widget names for the launcher to resolve
+/// (LLP 1126.003 D2). `None` for a role the table leaves out.
+pub(crate) fn material_of(name: &str) -> Option<(Material, u32)> {
+    ROLES
+        .iter()
+        .find(|(role, _, _)| *role == name)
+        .map(|(_, material, percent)| (*material, *percent))
+}
+
 impl Palette {
     /// A palette from the shell's colours, every role light and then
     /// every role dark; `None` for any other count.

@@ -11,6 +11,30 @@ test "signs in, reads the person, and stays signed in after a relaunch"
   expect text "status" == "Signed in"
   expect text "name" == "Ada Lovelace"
 
+test "signs out and revokes the session"
+  request POST "/control" {"action": "reset"}
+  expect text "status" == "Signed out"
+  tap "sign-in"
+  authorize
+  clock data
+  expect text "status" == "Signed in"
+  tap "sign-out"
+  clock data
+  expect text "status" == "Signed out"
+  request POST "/control" {"action": "expect", "profile": "spec", "least": {"revoke-current": 1}}
+
+test "signs out when provider sign-out is requested without an endpoint"
+  request POST "/control" {"action": "reset"}
+  expect text "status" == "Signed out"
+  tap "sign-in"
+  authorize
+  clock data
+  expect text "status" == "Signed in"
+  tap "end-session"
+  clock data
+  expect text "status" == "Signed out"
+  request POST "/control" {"action": "expect", "profile": "spec", "least": {"revoke-current": 1}}
+
 // LLP 1146 D8: the app's own sign-in screens, natively, where a fetch's
 // `redirect: "manual"` answers the redirect and the app's `Cookie` is sent
 test "with its own sign-in screens, it signs in to ForgeRock with no browser and stays signed in" on linux, macos, ios

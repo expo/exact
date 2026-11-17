@@ -2,6 +2,125 @@
 use super::*;
 
 #[test]
+fn built_extents_require_measurements_and_keep_pins_out_of_retirement() {
+    let mut h = Harness::new(1_000, false, false);
+    h.send(h.feedback(3200.0));
+    assert!(h.snapshot().window.is_none());
+    let mut f = h.feedback(3200.0);
+    f.measurements = h
+        .snapshot()
+        .rows
+        .iter()
+        .map(|r| RowMeasurement {
+            view: r.view,
+            epoch: r.epoch,
+            size: r.size,
+        })
+        .collect();
+    h.send(f);
+    let window = h.snapshot().window.unwrap();
+    assert_eq!(window.built, [2880.0, 3840.0]);
+    assert_eq!(window.retire, [2912.0, 3808.0]);
+    assert_eq!(window.edges, [32.0, 31968.0]);
+    assert_eq!(window.margin, [320.0; 2]);
+    let pin = h.snapshot().rows[0].root;
+    let mut f = h.feedback(3200.0);
+    f.interaction_view = Some(pin);
+    h.send(f);
+    let mut f = h.feedback(6400.0);
+    f.interaction_view = Some(pin);
+    h.send(f);
+    let mut f = h.feedback(6400.0);
+    f.interaction_view = Some(pin);
+    f.measurements = h
+        .snapshot()
+        .rows
+        .iter()
+        .map(|r| RowMeasurement {
+            view: r.view,
+            epoch: r.epoch,
+            size: r.size,
+        })
+        .collect();
+    h.send(f);
+    let window = h.snapshot().window.unwrap();
+    assert_eq!(
+        window.built,
+        [6080.0, 7040.0],
+        "a pin across a gap is no coverage"
+    );
+    assert_eq!(window.retire, [6112.0, 7008.0], "the distant pin may stay");
+    h.slots[3] = Value::Number(40.0);
+    h.update().unwrap();
+    assert!(
+        h.snapshot().window.is_none(),
+        "a new row epoch needs measurement"
+    );
+}
+
+#[test]
+fn offset_only_reports_do_not_walk_and_changed_geometry_and_pins_do() {
+    let mut h = Harness::new(1000, false, false);
+    h.send(h.feedback(641.));
+    let before = h.snapshot();
+    let walks = h.tree.collection_walks;
+    for n in 0..100 {
+        assert!(!h.send(h.feedback(641. + f64::from(n) / 100.)));
+    }
+    assert_eq!(h.tree.collection_walks, walks);
+    assert_eq!(h.snapshot().rows, before.rows);
+    assert_eq!(h.snapshot().revision, before.revision);
+    assert_eq!(h.snapshot().scroll_sequence, before.scroll_sequence + 100);
+
+    for input in 0..7 {
+        let mut f = h.feedback(642.);
+        let row = h.snapshot().rows[0].clone();
+        match input {
+            0 => f.measurements.push(RowMeasurement {
+                view: row.view,
+                epoch: row.epoch,
+                size: row.size + 20.,
+            }),
+            1 => f.cross += 10.,
+            2 => f.port_main += 10.,
+            3 => f.port_cross += 10.,
+            4 => f.padding[0] += 10.,
+            5 => f.focus_view = Some(row.root),
+            6 => f.interaction_view = Some(row.root),
+            _ => unreachable!(),
+        }
+        let walks = h.tree.collection_walks;
+        h.send(f);
+        assert_eq!(h.tree.collection_walks, walks + 1, "input {input}");
+        if input == 0 {
+            assert_eq!(h.snapshot().rows[0].size, row.size + 20.);
+        }
+    }
+    let walks = h.tree.collection_walks;
+    h.send(h.feedback(3200.));
+    assert_eq!(
+        h.tree.collection_walks,
+        walks + 1,
+        "the offset left its band"
+    );
+    assert!(h.snapshot().rows.iter().any(|r| r.index >= 100));
+
+    let mut h = Harness::new(1000, false, false);
+    h.send(h.feedback(641.));
+    let pin = h.snapshot().rows[0].root;
+    let mut f = h.feedback(641.);
+    f.focus_view = Some(pin);
+    h.send(f);
+    let walks = h.tree.collection_walks;
+    for n in 0..100 {
+        let mut f = h.feedback(641. + f64::from(n) / 100.);
+        f.focus_view = Some(pin);
+        assert!(!h.send(f));
+    }
+    assert_eq!(h.tree.collection_walks, walks, "an unchanged current pin");
+}
+
+#[test]
 fn a_limited_report_builds_what_it_owes_then_leads_in_travel_order() {
     let mut h = Harness::new(1_000, false, false);
     let rows = |h: &Harness| {
@@ -729,4 +848,154 @@ fn a_view_offset_crosses_the_wire_and_rejects_invalid_geometry() {
         assert!(CollectionFeedback::decode_with_fill(&invalid).is_err());
     }
     assert!(CollectionFeedback::decode_with_fill(&bytes[..bytes.len() - 1]).is_err());
+}
+
+#[test]
+fn snapshot_json_preserves_u64_metadata_as_decimal_strings() {
+    let snapshot = CollectionSnapshot {
+        window: None,
+        fixed: Vec::new(),
+        view: 1,
+        axis: ListAxis::Vertical,
+        parent: None,
+        restored: false,
+        seeking: false,
+        waiting: false,
+        request: 0,
+        revision: (1_u64 << 53) + 1,
+        scroll_sequence: u64::MAX - 1,
+        count: 3,
+        total_extent: 96.0,
+        rows: vec![CollectionRow {
+            view: 2,
+            root: 3,
+            index: 1,
+            start: 32.0,
+            size: 32.0,
+            epoch: u64::MAX,
+            measured: true,
+        }],
+        correction: Some(AnchorCorrection {
+            scroll_sequence: (1_u64 << 53) + 3,
+            offset: 16.5,
+            from: None,
+            smooth: false,
+        }),
+        pending: true,
+    };
+    let expected = concat!(
+        r#"{"view":1,"axis":"y","revision":"9007199254740993","scrollSequence":"18446744073709551614","count":3,"totalExtent":96,"rows":["#,
+        r#"{"view":2,"root":3,"index":1,"start":32,"size":32,"epoch":"18446744073709551615","measured":true}],"pending":true,"#,
+        r#""correction":{"scrollSequence":"9007199254740995","offset":16.5}}"#,
+    );
+    assert_eq!(snapshot.json(), expected);
+    assert_eq!(
+        snapshots_json(std::slice::from_ref(&snapshot)),
+        format!("[{expected}]")
+    );
+    let mut batch = String::from("prefix:");
+    snapshot.write_json(&mut batch);
+    assert_eq!(batch, format!("prefix:{expected}"));
+
+    let mut initial = snapshot;
+    initial.revision = 1;
+    initial.scroll_sequence = 0;
+    initial.rows[0].epoch = 1;
+    initial.correction.as_mut().unwrap().scroll_sequence = 0;
+    let json = initial.json();
+    assert!(json.contains(r#""revision":"1","scrollSequence":"0""#));
+    assert!(json.contains(r#""epoch":"1""#));
+    assert!(json.contains(r#""correction":{"scrollSequence":"0""#));
+}
+
+#[test]
+fn queued_build_uses_mailbox_travel_and_never_retires() {
+    let mut h = Harness::new(1_000, false, false);
+    h.send(h.feedback(3200.0));
+    let before: Vec<_> = h.snapshot().rows.iter().map(|r| r.view).collect();
+    let queued = h.feedback(3520.0);
+    let sequence = queued.scroll_sequence + 1;
+    h.tree
+        .collection_travel(queued.view, queued.revision, sequence, 6400.0);
+    h.send_filled(
+        queued,
+        CollectionFill {
+            create_only: true,
+            limit: None,
+            ..CollectionFill::default()
+        },
+    );
+    let snapshot = h.snapshot();
+    assert_eq!(snapshot.scroll_sequence, sequence);
+    assert!(before
+        .iter()
+        .all(|view| snapshot.rows.iter().any(|r| r.view == *view)));
+    assert!(
+        snapshot.rows.iter().any(|r| r.index == 200),
+        "build at current travel, not the queued offset"
+    );
+}
+
+#[test]
+fn quiet_travel_acknowledges_a_correction_before_the_next_prepend() {
+    let mut h = Harness::new(100, false, false);
+    h.send(h.feedback(642.0));
+    let list = |n: i32| Value::list((-n..100).map(|i| Value::Number(f64::from(i))).collect());
+    h.slots[0] = list(1);
+    h.update().unwrap();
+    assert_eq!(h.snapshot().correction.unwrap().from, Some(642.0));
+    let walks = h.tree.collection_walks;
+    let travel = h.feedback(680.0);
+    h.tree.collection_travel(
+        travel.view,
+        travel.revision,
+        travel.scroll_sequence,
+        travel.offset,
+    );
+    assert_eq!(
+        h.tree.collection_walks, walks,
+        "travel neither walks nor commits"
+    );
+    assert!(
+        h.snapshot().correction.is_none(),
+        "the applied correction was acknowledged"
+    );
+    let before = h.snapshot();
+    h.tree.collection_travel(
+        travel.view,
+        travel.revision,
+        travel.scroll_sequence - 1,
+        1.0,
+    );
+    h.tree.collection_travel(
+        travel.view,
+        travel.revision,
+        travel.scroll_sequence + 1,
+        f64::NAN,
+    );
+    assert_eq!(
+        h.snapshot(),
+        before,
+        "stale and nonfinite mailbox facts change nothing"
+    );
+    h.slots[0] = list(2);
+    h.update().unwrap();
+    let held = h.snapshot().correction.unwrap();
+    assert_eq!((held.offset, held.from), (712.0, Some(680.0)));
+    // Main moves again while this publication is held. Its relative correction
+    // still adds 32 points to the current offset, rather than replacing it.
+    assert_eq!(690.0 + held.offset - held.from.unwrap(), 722.0);
+    let mut stale = h.feedback(1.0);
+    stale.revision -= 1;
+    h.tree.collection_travel(
+        stale.view,
+        stale.revision,
+        stale.scroll_sequence,
+        stale.offset,
+    );
+    assert_eq!(
+        h.snapshot().correction,
+        Some(held),
+        "an old snapshot acknowledges nothing"
+    );
 }

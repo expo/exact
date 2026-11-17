@@ -1,5 +1,5 @@
 // Why a live proposal would not apply in place on the JS dev loop's pages
-// (LLP 1121 stage 6; tamber-server.mjs `proposeHere` makes such a one
+// (LLP 1121 stage 6; forma-server.mjs `proposeHere` makes such a one
 // `rebuild`): a token the pages write inline (a font-weight number, an SVG
 // attribute's) whose value moves. What can't be known yet is a rebuild too,
 // never live (theme2's ruling of 2026-10-23 10:01): with no design reader

@@ -1,5 +1,7 @@
 //! Independent platform timer delivery; virtual clocks retain the ordinary scheduler.
+use super::completion::{Identity, Owner};
 use super::*;
+use std::sync::OnceLock;
 
 /// An ordinary timer whose native callback owns its live firing.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,20 +49,89 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .enumerate()
             .filter(|(i, t)| self.native_timer(*i) && t.next_ms.is_finite())
-            .map(|(i, t)| NativeTimer {
-                index: i as u32,
-                generation: t.generation,
-                due_ms: t.next_ms,
-                interval_ms: self.plan.timers[i].interval_ms,
-                tolerance_ms: self.plan.timers[i].tolerance_ms,
-                once: self.plan.timers[i].once,
+            .map(|(i, t)| {
+                t.completion.get_or_init(|| {
+                    CompletionReply::callback(
+                        self.completion_identity
+                            .get_or_init(Identity::default)
+                            .clone(),
+                        i as u64,
+                        Owner::NativeTimer {
+                            index: i as u32,
+                            generation: t.generation,
+                        },
+                    )
+                });
+                NativeTimer {
+                    index: i as u32,
+                    generation: t.generation,
+                    due_ms: t.next_ms,
+                    interval_ms: self.plan.timers[i].interval_ms,
+                    tolerance_ms: self.plan.timers[i].tolerance_ms,
+                    once: self.plan.timers[i].once,
+                }
             })
             .collect()
+    }
+
+    /// The reusable authority for this native timer's arming generation.
+    /// Repeated snapshots share it; rearming binds a new subscription.
+    pub fn native_timer_completion(
+        &self,
+        index: u32,
+        generation: u64,
+    ) -> Option<CompletionSubscription> {
+        let timer = self.timers.get(index as usize)?;
+        if timer.generation != generation {
+            return None;
+        }
+        timer.completion.get()?.subscription()
     }
 
     /// Deliver only the native timer whose callback ran. Other due native
     /// timers remain the platform's; inputs and frame callbacks do not pull them in.
     pub fn fire_native_timer(&mut self, index: u32, generation: u64, cutoff: f64) -> Advanced {
+        let capability = self
+            .timers
+            .get(index as usize)
+            .filter(|timer| timer.generation == generation)
+            .and_then(|timer| timer.completion.get())
+            .and_then(CompletionReply::delivery);
+        let Some(capability) = capability else {
+            return self.fire_native_timer_now(index, generation, cutoff);
+        };
+        let delivered = self.deliver(
+            capability,
+            Completion::NativeTimer {
+                index,
+                generation,
+                cutoff,
+            },
+        );
+        let mut result = Advanced {
+            receipts: Vec::new(),
+            now_ms: self.now_ms,
+            error: None,
+            stopped_on_request: false,
+            needs_apply: false,
+        };
+        match delivered {
+            Ok(Some(receipt)) => result.receipts.push(Timed {
+                at_ms: self.now_ms,
+                receipt,
+            }),
+            Ok(None) => {}
+            Err(error) => result.error = Some(error),
+        }
+        result
+    }
+
+    pub(super) fn fire_native_timer_now(
+        &mut self,
+        index: u32,
+        generation: u64,
+        cutoff: f64,
+    ) -> Advanced {
         let mut result = Advanced {
             receipts: Vec::new(),
             now_ms: self.now_ms,
@@ -123,10 +194,24 @@ pub(super) struct Timer {
     /// Whether the task's gate holds (always, for `mount`).
     pub(super) armed: bool,
     pub(super) generation: u64,
+    pub(super) completion: OnceLock<CompletionReply>,
     /// The key it was armed with (`key=`), as `for` compares keys.
     pub(super) key: Option<String>,
     /// A frame task's last presented frame (or mount) …
     pub(super) base: f64,
     /// … and which virtual frame after it is next.
     pub(super) k: u32,
+}
+
+/// Equal when the timer would fall due at the same time: the reply its
+/// completion is bound to is where a result goes, not when.
+impl PartialEq for Timer {
+    fn eq(&self, other: &Self) -> bool {
+        self.next_ms == other.next_ms
+            && self.armed == other.armed
+            && self.generation == other.generation
+            && self.key == other.key
+            && self.base == other.base
+            && self.k == other.k
+    }
 }

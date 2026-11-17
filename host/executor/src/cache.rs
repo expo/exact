@@ -1,6 +1,7 @@
 //! The app executor's private, bounded HTTP cache (LLP 1162 D4; RFC 9111).
 use super::*;
 use exact_runner::CacheMode;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(super) const CAPACITY: usize = 16 << 20;
@@ -27,12 +28,25 @@ impl Key {
             headers,
         }
     }
+
+    fn matches(&self, request: &Request) -> bool {
+        self.method == request.method
+            && self.headers.len() == request.headers.len()
+            && self.headers.chunk_by(|a, b| a.0 == b.0).all(|fields| {
+                fields.iter().map(|(_, value)| value).eq(request
+                    .headers
+                    .iter()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(&fields[0].0))
+                    .map(|(_, value)| value))
+            })
+            && (self.url == request.url || self.url == identity(&request.url))
+    }
 }
 
 struct Entry {
     key: Key,
     // Secret writes reach HTTP copies after the holds release their keys (LLP 1162.000 D3).
-    preloads: u8,
+    preloads: u16,
     response: Response,
     stored: Instant,
     age: Duration,
@@ -57,6 +71,18 @@ impl Entry {
             && directives
                 .max_age
                 .is_none_or(|n| age <= Duration::from_secs(n))
+    }
+    fn answers(&self, request: &Request, now: Instant) -> bool {
+        // Fetch §4.6 lets these modes override freshness (LLP 1162 D4).
+        request.cache != CacheMode::NoCache
+            && (matches!(
+                request.cache,
+                CacheMode::ForceCache | CacheMode::OnlyIfCached
+            ) || self.fresh(request, now))
+    }
+    fn validates(&self) -> bool {
+        first(&self.response.headers, "etag").is_some()
+            || first(&self.response.headers, "last-modified").is_some()
     }
     fn response_head(&self, now: Instant) -> Response {
         let mut response = Response {
@@ -87,8 +113,13 @@ pub(super) struct Exchange {
 
 pub(super) struct Cache {
     pub(super) preload_names: bool,
-    pub(super) preload_definitions_due: Option<Instant>,
-    pub(super) preload_launch_due: Option<Instant>,
+    // Names remain possible across definitions and the function; Ended cannot reopen.
+    // Only change_wait advances this under Location::state before adoption or
+    // Shared::state after it (LLP 1162.000 D1, D2).
+    pub(super) preload_wait: super::preload::NameWait,
+    // Admission, starts and close hold Location::state before adoption or Shared::state
+    // after it. Once closed, no live hold survives or can be admitted (LLP 1162.000 D1, D5).
+    pub(super) preloads_open: bool,
     pub(super) preload_defined: std::collections::BTreeSet<String>,
     pub(super) grants: String,
     entries: VecDeque<Arc<Entry>>,
@@ -96,7 +127,8 @@ pub(super) struct Cache {
     retired: Vec<Arc<Entry>>,
     pub(super) bytes: usize,
     pub(super) preloads: Vec<super::preload::Held>,
-    pub(super) journal: Vec<super::preload::Fact>,
+    journal: Vec<super::preload::Fact>,
+    pub(super) journal_pending: Arc<AtomicBool>,
     pub(super) clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     tick: usize,
 }
@@ -104,8 +136,8 @@ impl Cache {
     pub(super) fn new(grants: String) -> Self {
         Self {
             preload_names: true,
-            preload_definitions_due: None,
-            preload_launch_due: None,
+            preload_wait: super::preload::NameWait::Idle,
+            preloads_open: true,
             preload_defined: Default::default(),
             grants,
             entries: VecDeque::new(),
@@ -113,9 +145,18 @@ impl Cache {
             bytes: 0,
             preloads: Vec::new(),
             journal: Vec::new(),
+            journal_pending: Arc::default(),
             clock: Arc::new(Instant::now),
             tick: 0,
         }
+    }
+    pub(super) fn record_preload_fact(&mut self, fact: super::preload::Fact) {
+        self.journal.push(fact);
+        self.journal_pending.store(true, Ordering::Release);
+    }
+    pub(super) fn take_preload_journal(&mut self) -> Vec<super::preload::Fact> {
+        self.journal_pending.store(false, Ordering::Release);
+        std::mem::take(&mut self.journal)
     }
     fn collect(&mut self) {
         super::preload::expire(self);
@@ -195,7 +236,15 @@ impl Cache {
 impl Core {
     /// Keep a private HTTP cache for the app's reads (LLP 1162 D4).
     pub fn enable_http_cache(&self) {
-        self.shared.state.lock().unwrap().cache = Some(Cache::new(self.grants.clone()));
+        let mut state = self.shared.state.lock().unwrap();
+        let mut cache = Cache::new(self.grants.clone());
+        // A preload control holds the old cache's pending bit: the new cache
+        // keeps that bit, cleared with the facts the old cache discards.
+        if let Some(old) = state.cache.take() {
+            old.journal_pending.store(false, Ordering::Release);
+            cache.journal_pending = old.journal_pending;
+        }
+        state.cache = Some(cache);
     }
 }
 
@@ -203,8 +252,17 @@ fn eligible(request: &Request, class: RequestClass) -> bool {
     class == RequestClass::Read && request.method.eq_ignore_ascii_case("GET")
         && request.http == HttpScheduling::Ordered && request.is_plain_http()
         // Partial and caller-conditional requests are forwarded (RFC 9111 §4).
-        && !request.headers.iter().any(|(k, _)| matches!(k.to_ascii_lowercase().as_str(),
-            "range" | "if-range" | "if-match" | "if-unmodified-since" | "if-none-match" | "if-modified-since"))
+        && !conditional(request)
+        && !request.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("range"))
+}
+
+fn conditional(request: &Request) -> bool {
+    request.headers.iter().any(|(k, _)| {
+        matches!(
+            k.to_ascii_lowercase().as_str(),
+            "if-range" | "if-match" | "if-unmodified-since" | "if-none-match" | "if-modified-since"
+        )
+    })
 }
 
 pub(super) fn barrier(request: &Request, class: RequestClass, work: bool) -> bool {
@@ -225,17 +283,66 @@ pub(super) fn replacing(
     .then(|| Key::of(request))
 }
 
+pub(super) fn exchange(state: &State, job: &Job) -> Option<Exchange> {
+    state.cache.as_ref()?;
+    let request = &job.request;
+    (!super::reads::opaque(&job.work)
+        && eligible(request, job.class)
+        && request.cache != CacheMode::NoStore)
+        .then(|| Exchange {
+            key: Key::of(request),
+            previous: None,
+            started: Instant::now(),
+            store: !job.cache_store_withheld && !Directives::of(&request.headers).no_store,
+        })
+}
+
+pub(super) fn asked(state: &mut State, r: &RequestOut, work: bool) {
+    let Some(cache) = state.cache.as_mut() else {
+        return;
+    };
+    let Some(key) = replacing(&r.request, r.class, r.forced, work) else {
+        return;
+    };
+    // A refresh must survive older completions, even before they start (LLP 1162 D4).
+    super::preload::withhold_store(cache, &r.request);
+    for old in state
+        .running
+        .iter_mut()
+        .filter_map(|r| r.cache_exchange.as_mut())
+    {
+        if old.key == key {
+            old.store = false;
+        }
+    }
+    for old in &mut state.jobs[0] {
+        if key.matches(&old.request) {
+            old.cache_store_withheld = true;
+        }
+    }
+    for place in &mut state.fenced {
+        if let Fenced::Held(old, _, _, _, withheld) = place {
+            if key.matches(&old.request) {
+                *withheld = true;
+            }
+        }
+    }
+}
+
 fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
-    state.ordered.iter().take_while(|t| **t != ticket).any(|t| {
+    reads::pending(state).any(|pending| {
         state
-            .running
+            .ordered
             .iter()
-            .any(|r| r.ticket == *t && !r.terminal && r.cache_replacing.as_ref() == Some(key))
-            || state.jobs[0].iter().any(|j| {
-                j.ticket == *t
-                    && replacing(&j.request, j.class, j.forced, j.work.is_some()).as_ref()
+            .take_while(|t| **t != ticket)
+            .any(|t| *t == pending.ticket())
+            && match pending {
+                reads::Pending::Running(r) => r.cache_replacing.as_ref() == Some(key),
+                reads::Pending::Queued(j) => {
+                    replacing(&j.request, j.class, j.forced, super::reads::opaque(&j.work)).as_ref()
                         == Some(key)
-            })
+                }
+            }
     })
 }
 
@@ -251,6 +358,41 @@ pub(super) fn granted_url(grants: &str, request: &Request, url: &str) -> Result<
         ibex2::boundary::admit(&grants, &ibex2::grant::Operation::Fetch { origin })
     });
     checked.map_err(|e| fetch_failure(e, &AbortController::new()))
+}
+
+fn lookup<'a>(
+    state: &'a State,
+    ticket: u64,
+    request: &Request,
+    class: RequestClass,
+    forced: bool,
+    key: &Key,
+) -> Option<&'a Arc<Entry>> {
+    let cache = state.cache.as_ref()?;
+    if !eligible(request, class)
+        || forced
+        || matches!(request.cache, CacheMode::NoStore | CacheMode::Reload)
+        || Directives::of(&request.headers).no_store
+        || replacing_before(state, ticket, key)
+        || super::preload::different_body(cache, request)
+    {
+        return None;
+    }
+    cache.entries.iter().find(|e| e.key == *key)
+}
+
+pub(super) fn unconditional(state: &State, job: &Job) -> bool {
+    !conditional(&job.request)
+        && missing(&job.request, job.forced).is_none()
+        && lookup(
+            state,
+            job.ticket,
+            &job.request,
+            job.class,
+            job.forced,
+            &Key::of(&job.request),
+        )
+        .is_none_or(|e| !e.answers(&job.request, Instant::now()) && !e.validates())
 }
 
 /// Hits settle without a worker, behind earlier non-reads (LLP 1162 D1, D4).
@@ -274,48 +416,27 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         let job = &state.jobs[0][index];
-        if job.class != RequestClass::Read || !job.request.is_plain_http() || job.work.is_some() {
+        if job.class != RequestClass::Read
+            || !job.request.is_plain_http()
+            || super::reads::opaque(&job.work)
+        {
             break;
         }
         if super::preload::waiting(state, job)
-            || state
-                .cache
-                .as_ref()
-                .is_some_and(|c| super::preload::different_body(c, &job.request))
             || job.request.reach.origin != exact_runner::CallOrigin::App
-            || job.forced
-            || matches!(
-                job.request.cache,
-                CacheMode::NoStore | CacheMode::Reload | CacheMode::NoCache
-            )
-            || !eligible(&job.request, job.class)
-            || Directives::of(&job.request.headers).no_store
         {
             index += 1;
             continue;
         }
         let key = Key::of(&job.request);
-        if replacing_before(state, job.ticket, &key) {
-            index += 1;
-            continue;
-        }
-        let cache = state.cache.as_mut().expect("enabled");
         let now = Instant::now();
-        // Fetch §4.6 allows force-cache and only-if-cached to use stored replies
-        // under no-cache or must-revalidate, overriding RFC 9111 §4.2.4 by
-        // author precedence (LLP 1162 D4; LLP 1115). Native apps have no page
-        // origin to restrict the hit.
-        let Some(entry) = cache.entries.iter().find(|e| {
-            e.key == key
-                && (matches!(
-                    job.request.cache,
-                    CacheMode::ForceCache | CacheMode::OnlyIfCached
-                ) || e.fresh(&job.request, now))
-        }) else {
+        let Some(entry) = lookup(state, job.ticket, &job.request, job.class, job.forced, &key)
+            .filter(|e| e.answers(&job.request, now))
+        else {
             index += 1;
             continue;
         };
-        let checked = granted(&cache.grants, &job.request);
+        let checked = granted(&state.cache.as_ref().expect("enabled").grants, &job.request);
         let (outcome, cached) = match checked {
             Ok(()) => {
                 let mut response = entry.response_head(now);
@@ -336,7 +457,7 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         if cached {
-            cache.find(&key);
+            state.cache.as_mut().expect("enabled").find(&key);
         }
         let job = state.jobs[0].remove(index).expect("cache job");
         state.bytes[0] = state.bytes[0] - job.charge + bytes;
@@ -385,51 +506,29 @@ pub(super) fn prepare(
     let mut state = shared.state.lock().unwrap();
     state.cache.as_ref()?;
     let key = Key::of(request);
-    let replacing = replacing_before(&state, ticket, &key)
-        || state
-            .cache
-            .as_ref()
-            .is_some_and(|c| super::preload::different_body(c, request));
+    let entry = lookup(&state, ticket, request, class, forced, &key).cloned();
     let cache = state.cache.as_mut().expect("enabled");
     {
         let now = Instant::now();
-        if !forced
-            && !replacing
-            && !matches!(request.cache, CacheMode::Reload | CacheMode::NoCache)
-            && !Directives::of(&request.headers).no_store
-        {
-            if let Some(entry) = cache.entries.iter().find(|e| {
-                e.key == key
-                    && (matches!(
-                        request.cache,
-                        CacheMode::ForceCache | CacheMode::OnlyIfCached
-                    ) || e.fresh(request, now))
-            }) {
-                let outcome = match checked {
-                    Ok(()) => granted(&cache.grants, request).map(|()| entry.response(now)),
-                    Err(e) => Err(fetch_failure(e, &AbortController::new())),
-                };
-                let cached = outcome.is_ok();
-                if cached {
-                    cache.find(&key);
-                }
-                if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
-                    run.cached = cached;
-                }
-                return Some(outcome.map_or_else(|outcome| outcome, Outcome::Response));
+        if let Some(entry) = entry.as_ref().filter(|e| e.answers(request, now)) {
+            let outcome = match checked {
+                Ok(()) => granted(&cache.grants, request).map(|()| entry.response(now)),
+                Err(e) => Err(fetch_failure(e, &AbortController::new())),
+            };
+            let cached = outcome.is_ok();
+            if cached {
+                cache.find(&key);
             }
+            if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
+                run.cached = cached;
+            }
+            return Some(outcome.map_or_else(|outcome| outcome, Outcome::Response));
         }
     }
     let store = !Directives::of(&request.headers).no_store;
-    let previous = if !forced && !replacing && request.cache != CacheMode::Reload && store {
-        cache.find(&key)
-    } else {
-        None
-    };
-    let previous = previous.filter(|e| {
-        first(&e.response.headers, "etag").is_some()
-            || first(&e.response.headers, "last-modified").is_some()
-    });
+    let previous = entry
+        .and_then(|_| cache.find(&key))
+        .filter(|e| e.validates());
     if let Some(entry) = &previous {
         for (validator, condition) in [
             ("etag", "If-None-Match"),
@@ -440,13 +539,15 @@ pub(super) fn prepare(
             }
         }
     }
-    if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
-        run.cache_exchange = Some(Exchange {
-            key,
-            previous,
-            started: Instant::now(),
-            store,
-        });
+    if let Some(exchange) = state
+        .running
+        .iter_mut()
+        .find(|r| r.ticket == ticket)
+        .and_then(|r| r.cache_exchange.as_mut())
+    {
+        exchange.previous = previous;
+        exchange.started = Instant::now();
+        exchange.store &= store;
     }
     None
 }
@@ -489,7 +590,9 @@ pub(super) fn retry(state: &mut State, ticket: u64, status: u16, redirected: boo
     }
     exchange.started = Instant::now();
     if let Some(cache) = state.cache.as_mut() {
-        cache.drop_key(&exchange.key);
+        if exchange.store {
+            cache.drop_key(&exchange.key);
+        }
         cache.collect();
     }
     true
@@ -517,9 +620,8 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
         store,
     } = exchange;
     if redirected {
-        if store {
-            cache.drop_key(&key);
-        }
+        drop(previous);
+        discard_redirected(cache, &key, store);
         return;
     }
     if response.status == 304 {
@@ -559,6 +661,7 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
     }
     let preloads = previous.as_ref().map_or(0, |entry| entry.preloads);
     drop(previous);
+    cache.collect();
     store_response(
         cache, key, started, store, response, run.cached, preloads, now, wall,
     );
@@ -573,19 +676,40 @@ pub(super) fn store_preload(
     started: Instant,
     redirected: bool,
 ) {
-    if !redirected && eligible(request, RequestClass::Read) && request.cache != CacheMode::NoStore {
+    // Only launch slots retain secret dependencies after expiry (LLP 1162.000 D3, D5).
+    if cache.preloads[index].store
+        && eligible(request, RequestClass::Read)
+        && request.cache != CacheMode::NoStore
+    {
+        let key = Key::of(request);
+        let store = !Directives::of(&request.headers).no_store;
+        if redirected {
+            discard_redirected(cache, &key, store);
+            return;
+        }
         store_response(
             cache,
-            Key::of(request),
+            key,
             started,
-            !Directives::of(&request.headers).no_store,
+            store,
             response,
             false,
-            1 << index,
+            if cache.preloads[index].prefetch {
+                0
+            } else {
+                1 << index
+            },
             Instant::now(),
             SystemTime::now(),
         );
     }
+}
+
+fn discard_redirected(cache: &mut Cache, key: &Key, store: bool) {
+    if store {
+        cache.drop_key(key);
+    }
+    cache.collect();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -596,25 +720,11 @@ fn store_response(
     store: bool,
     response: &mut Response,
     cached: bool,
-    preloads: u8,
+    preloads: u16,
     now: Instant,
     wall: SystemTime,
 ) {
-    if !store {
-        return;
-    }
     if response.status != 200 && !Directives::of(&response.headers).no_store {
-        return;
-    }
-    let preloads = preloads
-        | cache
-            .entries
-            .iter()
-            .find(|e| e.key == key)
-            .map_or(0, |e| e.preloads);
-    cache.drop_key(&key);
-    cache.collect();
-    if response.status != 200 {
         return;
     }
     let mut headers = end_to_end(&response.headers);
@@ -629,6 +739,20 @@ fn store_response(
             "age",
             &current_age(&headers, delay, received).as_secs().to_string(),
         );
+    }
+    if !store {
+        return;
+    }
+    let preloads = preloads
+        | cache
+            .entries
+            .iter()
+            .find(|e| e.key == key)
+            .map_or(0, |e| e.preloads);
+    cache.drop_key(&key);
+    cache.collect();
+    if response.status != 200 {
+        return;
     }
     let Some((age, lifetime, validate)) = freshness(&headers, delay, received) else {
         return;
@@ -726,7 +850,7 @@ pub(super) fn identity(value: &str) -> String {
 pub(super) fn invalidates(request: &Request, synthetic: bool) -> Option<(String, bool)> {
     unsafe_method(&request.method).then(|| (identity(&request.url), synthetic))
 }
-fn unsafe_method(method: &str) -> bool {
+pub(super) fn unsafe_method(method: &str) -> bool {
     !["GET", "HEAD", "OPTIONS", "TRACE"]
         .iter()
         .any(|m| method.eq_ignore_ascii_case(m))
@@ -741,20 +865,35 @@ pub(super) fn invalidate(
     invalidation: Option<&(String, bool)>,
     outcome: &Outcome,
 ) {
+    let Some(cache) = state.cache.as_mut() else {
+        return;
+    };
     match (invalidation, outcome) {
         (Some((url, true)), Outcome::Response(response)) => {
-            invalidate_head(state, url, response.status, &response.headers)
+            invalidate_head(cache, url, response.status, &response.headers)
         }
-        (Some((url, _)), Outcome::Failed { .. }) => drop_urls(state, &[identity(url)]),
+        (Some((url, _)), Outcome::Failed { .. }) => drop_urls(cache, &[identity(url)]),
         _ => {}
     }
 }
-fn invalidate_head(state: &mut State, url: &str, status: u16, headers: &[(String, String)]) {
+fn invalidate_head(cache: &mut Cache, url: &str, status: u16, headers: &[(String, String)]) {
+    drop_urls(cache, &invalidated_urls(url, status, headers));
+}
+pub(super) fn invalidate_preload_head(
+    cache: &mut Cache,
+    url: &str,
+    status: u16,
+    headers: &[(String, String)],
+) {
+    // A hold's exchange invalidates entries, never holds (LLP 1162.000 D1, D5).
+    drop_entries(cache, &invalidated_urls(url, status, headers));
+}
+fn invalidated_urls(url: &str, status: u16, headers: &[(String, String)]) -> Vec<String> {
     if !(200..400).contains(&status) {
-        return;
+        return Vec::new();
     }
     let Ok(base) = url::Url::parse(url) else {
-        return;
+        return Vec::new();
     };
     let mut urls = vec![identity(url)];
     for name in ["location", "content-location"] {
@@ -766,13 +905,13 @@ fn invalidate_head(state: &mut State, url: &str, status: u16, headers: &[(String
             }
         }
     }
-    drop_urls(state, &urls);
+    urls
 }
-fn drop_urls(state: &mut State, urls: &[String]) {
-    let Some(cache) = state.cache.as_mut() else {
-        return;
-    };
+fn drop_urls(cache: &mut Cache, urls: &[String]) {
     super::preload::drop_urls(cache, urls);
+    drop_entries(cache, urls);
+}
+pub(super) fn drop_entries(cache: &mut Cache, urls: &[String]) {
     for index in (0..cache.entries.len()).rev() {
         if urls.contains(&cache.entries[index].key.url) {
             cache.remove(index);
@@ -799,12 +938,12 @@ pub(super) fn observe(shared: &Arc<Shared>, request: &mut ibex2::stdlib::fetch::
         move |method, url, status, headers| {
             if unsafe_method(method) {
                 if let Some(shared) = shared.upgrade() {
-                    invalidate_head(
-                        &mut shared.state.lock().unwrap(),
-                        url,
-                        status,
-                        headers.entries(),
-                    );
+                    let mut state = shared.state.lock().unwrap();
+                    if let Some(cache) = state.cache.as_mut() {
+                        invalidate_head(cache, url, status, headers.entries());
+                    }
+                    // A complete hold has no abort callback to wake its readers (LLP 1162.000 D1).
+                    rouse(&shared, &state);
                     #[cfg(test)]
                     shared.ready.notify_all();
                 }

@@ -216,6 +216,7 @@ pub struct Host<D: DataSource> {
     /// Open dialogs and popovers, bottom to top, with the focus each took
     /// and whether it was opened modally (`show-modal`) or as a popover.
     pub(crate) layers: Vec<(ViewId, Option<ViewId>, bool)>,
+    pub(crate) popovers: crate::top_layer::State,
     /// The appearance `light-dark()` resolves by.
     pub dark: bool,
     painted: Option<Painted>,
@@ -333,6 +334,7 @@ impl<D: DataSource> Host<D> {
             collections: crate::collection::Collections::default(),
             press_point: None,
             layers: Vec::new(),
+            popovers: Default::default(),
             dark: true,
             painted: None,
             generation: 0,
@@ -584,7 +586,7 @@ impl<D: DataSource> Host<D> {
         self.after_commit();
     }
 
-    fn scene(&self) -> Scene<'_> {
+    pub(crate) fn scene(&self) -> Scene<'_> {
         Scene {
             kernel: self.runner.kernel(),
             focus: self.focus,
@@ -595,6 +597,7 @@ impl<D: DataSource> Host<D> {
             layers: self.layers.iter().map(|(id, ..)| *id).collect(),
             images: &self.images,
             center: self.mode == Mode::Fullscreen,
+            origins: &self.popovers.origins,
             // A disabled or inert box is still hit, and swallows the press
             // (`handler`), so nothing beneath it takes it either.
             presses: Box::new(|id| self.runner.handlers_of(id).contains(&EventKind::Press)),
@@ -604,6 +607,7 @@ impl<D: DataSource> Host<D> {
     /// The current full-screen frame, painted once per change.
     pub fn frame(&mut self) -> &Painted {
         if self.painted.is_none() {
+            self.sync_top_layer();
             let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
             let roots = self.runner.roots();
             let painted = paint(&self.scene(), &roots, self.cols, self.rows, 0);
@@ -1181,7 +1185,10 @@ impl<D: DataSource> Host<D> {
             return;
         };
         match (invocation.action, self.open_mode(layer)) {
-            (Action::Show | Action::Toggle, None) => self.open_layer(layer, false),
+            (Action::Show | Action::Toggle, None) => {
+                self.popovers.remember(layer, key);
+                self.open_layer(layer, false);
+            }
             (Action::ShowModal, None) => self.open_layer(layer, true),
             (Action::Hide | Action::Toggle, Some(false)) | (Action::Close, Some(true)) => {
                 self.close_layer(layer)
@@ -1293,45 +1300,6 @@ impl<D: DataSource> Host<D> {
     /// Whether a dialog or popover is open.
     pub fn has_layer(&self) -> bool {
         !self.layers.is_empty()
-    }
-
-    /// The open layers, told to the runner. A popover in the viewport's
-    /// block (stage 14 B) is where it paints, not at its frame: by its
-    /// block's rectangle in the grid, which `frame` and `elementFromPoint`
-    /// map it through; any other layer is at its frame, as before.
-    fn sync_top_layer(&mut self) {
-        let open: Vec<ViewId> = self.layers.iter().map(|(id, ..)| *id).collect();
-        let frames = {
-            let scene = self.scene();
-            let kernel = scene.kernel;
-            let shown = |&id: &ViewId| {
-                let used = kernel.host_block_size(id)?;
-                let (dx, dy) = crate::paint::placement(&scene, id, self.cols, self.rows, 0.0);
-                Some((
-                    id,
-                    [-dx as f64, -dy as f64, used.0 as f64, used.1 as f64],
-                    None,
-                ))
-            };
-            let placed: Vec<_> = open.iter().filter_map(shown).collect();
-            let at_frame = |&id: &ViewId| {
-                let f = kernel.node(id)?.frame;
-                let rect = [f.x as f64, f.y as f64, f.width as f64, f.height as f64];
-                Some(
-                    placed
-                        .iter()
-                        .find(|p| p.0 == id)
-                        .copied()
-                        .unwrap_or((id, rect, None)),
-                )
-            };
-            (!placed.is_empty()).then(|| open.iter().filter_map(at_frame).collect::<Vec<_>>())
-        };
-        let Some(frames) = frames else {
-            self.runner.top_layer(&open);
-            return;
-        };
-        self.runner.top_layer_frames(&frames, None);
     }
 
     /// The node an agent names by `testId`.

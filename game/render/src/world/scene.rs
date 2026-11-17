@@ -14,64 +14,13 @@ use pointer::CameraPointer;
 /// radiance of 3. Exposure applies after.
 pub const PHOTOMETRIC_SCALE: f32 = 0.0003;
 
-/// The displayed global: drawn(parent) · local · offset. Presentation offsets
-/// (exact_game::Offset) move an entity and everything under it; without one on
-/// the chain this is the simulated global, exactly.
-pub(crate) fn drawn(w: &World, e: Entity) -> Option<glam::Affine3A> {
-    let affine = |t: Transform| {
-        glam::Affine3A::from_scale_rotation_translation(t.scale, t.rotation, t.position)
-    };
-    let offset = |e: Entity| w.get::<exact_game::Offset>(e).map(|o| affine(o.0));
-    // Most chains carry no offset: no allocation for them.
-    let mut at = e;
-    let mut any = false;
-    for _ in 0..=w.len() {
-        any |= w.has::<exact_game::Offset>(at);
-        match w.get::<Parent>(at) {
-            Some(p) if !any => at = p.0,
-            _ => break,
-        }
-    }
-    if !any {
-        return w.global(e);
-    }
-    // The parent chain, bounded even if tools edit a cycle.
-    let mut chain = vec![e];
-    while let Some(p) = w.get::<Parent>(*chain.last().unwrap()) {
-        if chain.len() > w.len() {
-            break;
-        }
-        chain.push(p.0);
-    }
-    // The offset nearest the root: above it the simulated global holds.
-    let Some(first) = (0..chain.len()).rev().find(|&i| offset(chain[i]).is_some()) else {
-        return w.global(e);
-    };
-    let mut global = w.global(chain[first])? * offset(chain[first]).unwrap();
-    for &below in chain[..first].iter().rev() {
-        let local = affine(*w.get::<Transform>(below)?);
-        global = global * local * offset(below).unwrap_or(glam::Affine3A::IDENTITY);
-    }
-    Some(global)
-}
+mod poses;
+#[cfg(test)]
+pub(crate) use poses::resolution_count;
+pub(crate) use poses::PoseRows;
+
 pub(crate) fn pose(w: &World, e: Entity) -> Option<Transform> {
-    drawn(w, e).map(decompose)
-}
-// Roots use their authored quaternion and signed scale in the opaque buffers.
-// Decomposing even an unparented affine can move a reflection into the rotation.
-pub(crate) fn primitive_endpoint(
-    w: &World,
-    e: Entity,
-    global: impl FnOnce() -> Option<glam::Affine3A>,
-) -> Option<Transform> {
-    if !w.has::<Parent>(e) && !w.has::<exact_game::Offset>(e) {
-        w.get::<Transform>(e).map(|t| *t)
-    } else {
-        global().map(decompose)
-    }
-}
-pub(crate) fn primitive_pose(w: &World, e: Entity) -> Option<Transform> {
-    primitive_endpoint(w, e, || drawn(w, e))
+    PoseRows::new(w).pose(e)
 }
 // Shared by direct reads and feed rows that already know no offsets exist.
 pub(super) fn decompose(global: glam::Affine3A) -> Transform {
@@ -86,71 +35,17 @@ pub(super) fn decompose(global: glam::Affine3A) -> Transform {
         scale,
     }
 }
-// Resolve an explicit start through the same local/offset chain as current poses.
-// No override means the caller keeps its ordinary retained history.
 pub(crate) fn interpolation_origin(w: &World, e: Entity) -> Option<Transform> {
-    if w.fresh().is_empty() {
-        return None;
-    }
-    if !w.has::<Parent>(e) && !w.has::<exact_game::Offset>(e) {
-        return w.interpolation_origin(e);
-    }
-    let mut chain = vec![e];
-    while let Some(p) = w.get::<Parent>(*chain.last()?) {
-        if chain.len() > w.len() {
-            return None;
-        }
-        chain.push(p.0);
-    }
-    let first = (0..chain.len())
-        .rev()
-        .find(|&i| w.interpolation_origin(chain[i]).is_some())?;
-    let mut global = match chain.get(first + 1) {
-        Some(&parent) => drawn(w, parent)?,
-        None => glam::Affine3A::IDENTITY,
-    };
-    for &entity in chain[..=first].iter().rev() {
-        let local = w
-            .interpolation_origin(entity)
-            .or_else(|| w.get::<Transform>(entity).map(|t| *t))?;
-        let offset = w
-            .get::<exact_game::Offset>(entity)
-            .map_or(Transform::default(), |o| o.0);
-        for t in [local, offset] {
-            global *=
-                glam::Affine3A::from_scale_rotation_translation(t.scale, t.rotation, t.position);
-        }
-    }
-    Some(decompose(global))
+    PoseRows::new(w).interpolation_origin(e)
 }
-// Bounded even if tools edit a cycle before propagation.
-pub(crate) fn snap(w: &World, mut e: Entity, parent_changed: bool) -> bool {
+pub(crate) fn snap(w: &World, e: Entity, parent_changed: bool) -> bool {
     if parent_changed {
         return true;
     }
-    // Without a fresh pose, no ancestor can require an interpolation reset.
     if w.fresh().is_empty() {
         return false;
     }
-    for _ in 0..=w.len() {
-        if w.is_fresh(e) {
-            return true;
-        }
-        let Some(parent) = w.get::<Parent>(e) else {
-            return false;
-        };
-        e = parent.0;
-    }
-    false
-}
-/// [`snap`] in a feed that knows which chains changed: `chains`, given when
-/// some parent edge did, answers for `e`'s own chain, so an edit elsewhere in
-/// the hierarchy leaves `e`'s interpolation alone.
-pub(crate) fn snap_in(w: &World, e: Entity, chains: Option<&ParentChanges>) -> bool {
-    match chains {
-        Some(chains) => chains.get(w, e),
-        None => snap(w, e, false),
-    }
+    PoseRows::new(w).snap(e, false)
 }
 #[derive(Clone, Copy)]
 struct History {
@@ -166,12 +61,12 @@ impl History {
             curr,
         }
     }
-    fn update(&mut self, w: &World, next_tick: bool, chains: Option<&ParentChanges>) {
-        if let Some(curr) = pose(w, self.entity) {
-            let reset = snap_in(w, self.entity, chains);
+    fn update(&mut self, poses: &PoseRows<'_>, next_tick: bool, chains: Option<&ParentChanges>) {
+        if let Some(curr) = poses.pose(self.entity) {
+            let reset = poses.snap_in(self.entity, chains);
             self.update_to(curr, next_tick, reset);
             if reset {
-                if let Some(previous) = interpolation_origin(w, self.entity) {
+                if let Some(previous) = poses.interpolation_origin(self.entity) {
                     self.prev = previous;
                 }
             }
@@ -281,6 +176,7 @@ impl Scene {
         structure: bool,
         chains: Option<&ParentChanges>,
     ) {
+        let poses = PoseRows::new(w);
         let versions = [
             w.revision::<Camera>(),
             w.revision::<DirectionalLight>(),
@@ -292,10 +188,11 @@ impl Scene {
         ];
         let old = self.versions;
         if old.is_none_or(|v| v[0] != versions[0]) || structure {
-            let camera = w
-                .query::<&Camera>()
-                .iter()
-                .find_map(|(e, c)| c.valid().then(|| pose(w, e).map(|t| (e, t, *c))).flatten());
+            let camera = w.query::<&Camera>().iter().find_map(|(e, c)| {
+                c.valid()
+                    .then(|| poses.pose(e).map(|t| (e, t, *c)))
+                    .flatten()
+            });
             self.camera = camera.map(|(e, t, c)| {
                 (
                     self.camera
@@ -306,10 +203,11 @@ impl Scene {
             });
         }
         if let Some((history, _)) = &mut self.camera {
-            history.update(w, next_tick, chains);
+            history.update(&poses, next_tick, chains);
         }
         self.pointer.feed(
             w,
+            &poses,
             self.camera.map(|(h, _)| h.entity),
             next_tick,
             structure,
@@ -329,13 +227,13 @@ impl Scene {
             let mut query = w.query::<&DirectionalLight>();
             let mut posed = query
                 .iter()
-                .filter(|(e, _)| w.is_visible(*e))
-                .filter_map(|(e, s)| pose(w, e).map(|t| (keep(e, t), *s)));
+                .filter(|(e, _)| poses.is_visible(*e))
+                .filter_map(|(e, s)| poses.pose(e).map(|t| (keep(e, t), *s)));
             self.sun = posed.next();
             self.fill = posed.next();
         }
         for (history, _) in [&mut self.sun, &mut self.fill].into_iter().flatten() {
-            history.update(w, next_tick, chains);
+            history.update(&poses, next_tick, chains);
         }
         if old.is_none_or(|v| v[2..] != versions[2..]) || structure || visibility_changed {
             // Compact departures once; keep each kind's histories in entity order
@@ -348,8 +246,8 @@ impl Scene {
                 let spot = index >= spot_at;
                 index += 1;
                 let e = l.history.entity;
-                let live = w.is_visible(e)
-                    && w.global(e).is_some()
+                let live = poses.is_visible(e)
+                    && poses.global(e).is_some()
                     && if spot {
                         w.has::<SpotLight>(e)
                     } else {
@@ -365,7 +263,7 @@ impl Scene {
             let mut fresh = Vec::new();
             let mut at = 0;
             for (e, light) in w.query::<&PointLight>().iter() {
-                if !w.is_visible(e) {
+                if !poses.is_visible(e) {
                     continue;
                 }
                 let emitter = Emitter::point(light, w.has::<LightShadows>(e));
@@ -373,7 +271,7 @@ impl Scene {
                 if at < points && self.lights[at].history.entity == e {
                     (self.lights[at].light, self.lights[at].lit) = (emitter, lit);
                     at += 1;
-                } else if let Some(t) = pose(w, e) {
+                } else if let Some(t) = poses.pose(e) {
                     fresh.push((
                         false,
                         Light {
@@ -386,7 +284,7 @@ impl Scene {
             }
             let mut at = points;
             for (e, light) in w.query::<&SpotLight>().iter() {
-                if !w.is_visible(e) {
+                if !poses.is_visible(e) {
                     continue;
                 }
                 let emitter = Emitter::spot(light, w.has::<LightShadows>(e));
@@ -394,7 +292,7 @@ impl Scene {
                 if at < kept && self.lights[at].history.entity == e {
                     (self.lights[at].light, self.lights[at].lit) = (emitter, lit);
                     at += 1;
-                } else if let Some(t) = pose(w, e) {
+                } else if let Some(t) = poses.pose(e) {
                     fresh.push((
                         true,
                         Light {
@@ -426,7 +324,7 @@ impl Scene {
                 displayed(&self.attachments.output, h.entity, h.curr).position
             });
             for (i, light) in self.lights.iter_mut().enumerate() {
-                light.history.update(w, next_tick, chains);
+                light.history.update(&poses, next_tick, chains);
                 // Eligibility is evaluated at the same tick endpoint as distance.
                 let intensity = light.light.intensity
                     * light
@@ -481,8 +379,15 @@ impl Scene {
                         c,
                     )
                 });
-        self.pointer
-            .frame(&mut camera_pose, &mut self.attachments.output, alpha);
+        let tick_move = self
+            .camera
+            .map_or(Vec3::ZERO, |(h, _)| h.curr.position - h.prev.position);
+        self.pointer.frame(
+            &mut camera_pose,
+            tick_move,
+            &mut self.attachments.output,
+            alpha,
+        );
         if !pixels {
             if let exact_game::Projection::Orthographic { integer_scale, .. } =
                 &mut camera.projection
@@ -625,24 +530,27 @@ struct Owner {
     priming: crate::node_poses::Priming,
 }
 /// An entity's presentation offset, or the identity.
-fn offset_of(w: &World, e: Entity) -> Transform {
-    w.get::<exact_game::Offset>(e)
+fn offset_of(poses: &PoseRows<'_>, e: Entity) -> Transform {
+    poses
+        .offsets
+        .get(e)
         .map_or_else(Transform::default, |o| o.0)
 }
 impl Owner {
-    fn new(w: &World, entity: Entity) -> Self {
+    fn new(w: &World, poses: &PoseRows<'_>, entity: Entity) -> Self {
         let mut owner = Self {
             first_attachment: None,
             chain: Vec::new(),
             offsets: Vec::new(),
             priming: Default::default(),
         };
-        owner.update(w, entity, false, None);
+        owner.update(w, poses, entity, false, None);
         owner
     }
     fn update(
         &mut self,
         w: &World,
+        poses: &PoseRows<'_>,
         entity: Entity,
         next_tick: bool,
         chains: Option<&ParentChanges>,
@@ -651,15 +559,17 @@ impl Owner {
         let mut at = entity;
         let mut length = 0;
         for _ in 0..=w.len() {
-            let curr = w
-                .get::<Transform>(at)
+            let curr = poses
+                .transforms
+                .get(at)
                 .as_deref()
                 .copied()
                 .unwrap_or_default();
-            let offset = offset_of(w, at);
+            let offset = offset_of(poses, at);
             // A snapped link starts at its `teleport_from` landing, as the
             // transform buffer's does; an offset has no landing.
             let origin = w.interpolation_origin(at);
+            let reset = poses.snap_in(at, chains);
             for (list, value, origin) in [
                 (&mut self.chain, curr, origin),
                 (&mut self.offsets, offset, None),
@@ -676,12 +586,17 @@ impl Owner {
                     h.prev = h.curr;
                 }
                 h.curr = value;
-                if snap_in(w, at, chains) {
+                if reset {
                     h.prev = origin.unwrap_or(value);
                 }
             }
             length += 1;
-            let Some(parent) = w.get::<Parent>(at).map(|p| p.0).filter(|e| w.contains(*e)) else {
+            let Some(parent) = poses
+                .parents
+                .get(at)
+                .map(|p| p.0)
+                .filter(|e| w.contains(*e))
+            else {
                 break;
             };
             at = parent;
@@ -785,6 +700,7 @@ impl Attachments {
         chains: Option<&ParentChanges>,
         _models_changed: bool,
     ) {
+        let poses = std::cell::LazyCell::new(|| PoseRows::new(w));
         self.node_offsets.update(w, initial);
         self.assignments.update(w, initial);
         if initial {
@@ -794,18 +710,22 @@ impl Attachments {
         self.diagnostics.borrow_mut().observe(w);
         for (&entity, owner) in &mut self.owners {
             owner.first_attachment = None;
-            owner.update(w, entity, next_tick, chains);
+            owner.update(w, &poses, entity, next_tick, chains);
         }
         // Retain animated owners before attachments are spawned so a new charm
         // inherits the owner's displayed history, rather than snapping its bones.
         for (e, _) in w.query::<&exact_game::Pose>().iter() {
-            if w.has::<Transform>(e) {
-                self.owners.entry(e).or_insert_with(|| Owner::new(w, e));
+            if poses.transforms.has(e) {
+                self.owners
+                    .entry(e)
+                    .or_insert_with(|| Owner::new(w, &poses, e));
             }
         }
         for (e, _) in w.query::<&exact_game::NodeOffsets>().iter() {
-            if w.has::<Transform>(e) {
-                self.owners.entry(e).or_insert_with(|| Owner::new(w, e));
+            if poses.transforms.has(e) {
+                self.owners
+                    .entry(e)
+                    .or_insert_with(|| Owner::new(w, &poses, e));
             }
         }
         for (_, follow) in w.query::<&exact_game::SocketFollow>().iter() {
@@ -813,8 +733,10 @@ impl Attachments {
                 exact_game::FollowTarget::Entity(e) => Some(*e),
                 exact_game::FollowTarget::Name(n) => w.named(n),
             };
-            if let Some(e) = target.filter(|e| w.contains(*e) && w.has::<Transform>(*e)) {
-                self.owners.entry(e).or_insert_with(|| Owner::new(w, e));
+            if let Some(e) = target.filter(|e| w.contains(*e) && poses.transforms.has(*e)) {
+                self.owners
+                    .entry(e)
+                    .or_insert_with(|| Owner::new(w, &poses, e));
             }
         }
         // Prime model-local endpoints once per owner, before visiting followers.
@@ -839,7 +761,7 @@ impl Attachments {
                 w.tick(),
                 (self.assignments.revision(e), digest),
                 sampled.is_some(),
-                initial || exact_game::animation::socket_stale(w, e) || snap_in(w, e, chains),
+                initial || exact_game::animation::socket_stale(w, e) || poses.snap_in(e, chains),
                 self.node_offsets.pair(e, false)[1],
             );
             if owner.priming.capturing() {
@@ -889,7 +811,7 @@ impl Attachments {
                     continue;
                 }
             };
-            let (Some(home), Some(_)) = (pose(w, e), w.get::<Transform>(target)) else {
+            let (Some(home), Some(_)) = (poses.pose(e), poses.transforms.get(target)) else {
                 self.warn(e, "transform", || {
                     format!(
                         "SocketFollow `{}`: unresolved Transform",
@@ -922,7 +844,7 @@ impl Attachments {
                         node,
                         chain: vec![],
                         offset: follow.offset,
-                        drawn: History::new(e, offset_of(w, e)),
+                        drawn: History::new(e, offset_of(&poses, e)),
                         model_digest: self
                             .model_digests
                             .get(name)
@@ -932,13 +854,12 @@ impl Attachments {
                 );
             }
             let item = &mut self.items[at];
-            item.history
-                .update_to(home, next_tick, snap_in(w, e, chains));
-            item.drawn
-                .update_to(offset_of(w, e), next_tick, snap_in(w, e, chains));
+            let reset = poses.snap_in(e, chains);
+            item.history.update_to(home, next_tick, reset);
+            item.drawn.update_to(offset_of(&poses, e), next_tick, reset);
             self.owners
                 .entry(target)
-                .or_insert_with(|| Owner::new(w, target))
+                .or_insert_with(|| Owner::new(w, &poses, target))
                 .first_attachment
                 .get_or_insert(e.index());
             let digest = self
@@ -1095,6 +1016,64 @@ pub(crate) fn displayed_matrix(
 #[cfg(test)]
 mod diagnostic_tests {
     use super::*;
+    #[test]
+    fn snap_fast_paths_do_not_resolve_pose_columns() {
+        let w = World::new(60, 0);
+        let before = resolution_count();
+        assert!(snap(&w, Entity::default(), true));
+        assert!(!snap(&w, Entity::default(), false));
+        assert_eq!(resolution_count() - before, 0);
+        let mut attachments = Attachments::default();
+        attachments.feed(&w, true, false, None, false);
+        assert_eq!(resolution_count() - before, 0);
+    }
+
+    #[test]
+    fn scene_feed_resolves_pose_columns_once() {
+        struct Lights;
+        impl exact_game::Game for Lights {
+            const ID: &'static str = "scene-pose-columns";
+            type Args = ();
+            fn setup(w: &mut World, _: &()) {
+                let camera = w.spawn((
+                    Transform::default(),
+                    Camera::default(),
+                    exact_game::MouseLook {
+                        yaw_per_point: 0.01,
+                        pitch_per_point: 0.01,
+                        pitch_limit: 1.,
+                    },
+                ));
+                for i in 0..16 {
+                    w.spawn((
+                        Transform::at(i as f32, 0., -1.),
+                        Parent(camera),
+                        PointLight::default(),
+                    ));
+                }
+            }
+            fn tick(_: &mut World, _: &exact_game::Input, _: &()) {}
+        }
+        let mut sim = exact_game::Sim::<Lights>::new(()).unwrap();
+        let mut scene = Scene::default();
+        for initial in [true, false] {
+            let before = resolution_count();
+            scene.feed(sim.world(), true, true, initial, None);
+            assert_eq!(scene.lights.len(), 16);
+            assert_eq!(resolution_count() - before, 1);
+            scene.pointer.unshown = glam::Vec2::ONE;
+            assert_eq!(
+                scene
+                    .frame(sim.world(), 0.5, glam::Vec2::splat(100.), false)
+                    .attachments
+                    .len(),
+                16
+            );
+            assert_eq!(sim.run(1000. / 60.), 1);
+            assert!(sim.world().fresh().is_empty());
+        }
+    }
+
     struct Rig;
     impl exact_game::Game for Rig {
         const ID: &'static str = "attachment-owner";
@@ -1125,7 +1104,9 @@ mod diagnostic_tests {
         w.propagate();
         let mut a = Attachments::default();
         a.model_digests.insert("rig.model".into(), digest);
+        let before_rows = resolution_count();
         a.feed(w, true, true, None, true);
+        assert_eq!(resolution_count() - before_rows, 1);
         assert_eq!(a.owners.len(), 1);
         assert_eq!(a.items.len(), 3);
         assert!(a
@@ -1134,7 +1115,9 @@ mod diagnostic_tests {
             .all(|v| v.owner == owner && v.model_digest == digest));
         // A residency identity is supplied, never rediscovered from model bytes.
         a.model_digests.insert("rig.model".into(), digest ^ 1);
+        let before_rows = resolution_count();
         a.feed(w, false, true, None, true);
+        assert_eq!(resolution_count() - before_rows, 1);
         assert!(a.items.iter().all(|v| v.model_digest == digest ^ 1));
         assert_eq!(crate::models::model_hash_count(), before + 1);
     }
@@ -1229,7 +1212,7 @@ mod diagnostic_tests {
             Mesh::asset("rig.model"),
             SocketFollow::new(root, "joint"),
         ));
-        let stale = Owner::new(w, old);
+        let stale = Owner::new(w, &PoseRows::new(w), old);
         let middle = w.spawn((Transform::default(), SocketFollow::new(root, "joint")));
         let tail = w.spawn((Transform::default(), SocketFollow::new(old, "joint")));
         w.propagate();
@@ -1346,15 +1329,15 @@ mod diagnostic_tests {
         let mut w = World::new(60, 0);
         let parent = w.spawn(Transform::at(2., 0., 0.));
         let child = w.spawn((Transform::at(1., 0., 0.), Parent(parent)));
-        let mut owner = Owner::new(&w, child);
+        let mut owner = Owner::new(&w, &PoseRows::new(&w), child);
         let allocation = owner.chain.as_ptr();
         for _ in 0..100 {
-            owner.update(&w, child, true, None);
+            owner.update(&w, &PoseRows::new(&w), child, true, None);
             assert_eq!(owner.chain.as_ptr(), allocation);
             assert_eq!(owner.chain.len(), 2);
         }
         w.remove::<Parent>(child);
-        owner.update(&w, child, true, None);
+        owner.update(&w, &PoseRows::new(&w), child, true, None);
         assert_eq!(owner.chain.len(), 1);
         assert_eq!(owner.chain.as_ptr(), allocation);
     }

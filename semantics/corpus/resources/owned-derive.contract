@@ -1,0 +1,21 @@
+// Executable rows read an instance-owned request from that instance, including
+// its currentness, when a descendant view reads them.
+component App
+  view
+    column
+      if true
+        Owner(seed=3)
+
+component Owner
+  props
+    seed: number
+  resource answer = ownedAnswer(seed) as shape number
+  derive value = answer + 1
+  derive fresh = current(answer)
+  view
+    column
+      for descendant in [9] key=descendant
+        text `${value} ${fresh} ${descendant}` testId="owned-answer"
+
+test "an owned answer reaches executable rows"
+  expect tree has "owned-answer"

@@ -4,7 +4,7 @@
 //! and a layout transition's box (LLP 1063).
 
 use super::shadow::ShadowPaint;
-use super::BoxPaint;
+use super::{bbox, BoxPaint, HitGeometry, PaintedBox, Rect4};
 use exact_kernel::StyleProps;
 use exact_motion::{Property, Value};
 use tiny_skia::Transform;
@@ -23,12 +23,16 @@ pub struct Presented {
     pub scale: f32,
     /// Host feedback, multiplied into scale without entering the motion engine.
     pub press: f32,
+    /// Host feedback: x px, x percent, y px, y percent.
+    pub press_translate: [f32; 4],
     /// How far a press shows its pressed paint, 0 to 1 (LLP 1061 D7): the
     /// painter mixes the node's background and its subtree's text toward
     /// its press colours by it.
     pub press_paint: f32,
     /// Degrees.
     pub rotate: f32,
+    /// The presented rotation axis, including an animated axis.
+    pub rotate_axis: exact_kernel::style::space::RotateAxis,
     /// Zero to one.
     pub opacity: f32,
     /// An SVG shape's presented `r`, `stroke-dashoffset`, `cx`, `cy`, `x`, `y`, `rx`, `ry`.
@@ -55,8 +59,10 @@ impl Presented {
         translate_percent: (0.0, 0.0),
         scale: 1.0,
         press: 1.0,
+        press_translate: [0.; 4],
         press_paint: 0.0,
         rotate: 0.0,
+        rotate_axis: exact_kernel::style::space::RotateAxis([0.0, 0.0, 1.0]),
         opacity: 1.0,
         svg: [None; 8],
         colors: PaintValues::NONE,
@@ -67,14 +73,22 @@ impl Presented {
 
     /// The committed style's values (what the engine starts from).
     pub fn from_style(s: &StyleProps) -> Presented {
+        let rotation = exact_motion::rotation::presented(exact_motion::rotation::value(
+            s.rotate as f64,
+            s.rotate_axis.0.map(f64::from),
+        ));
         Presented {
             dark: None,
             translate: (s.translate.x, s.translate.y),
             translate_percent: (s.translate_percent.x, s.translate_percent.y),
             scale: s.scale,
             press: 1.0,
+            press_translate: [0.; 4],
             press_paint: 0.0,
-            rotate: s.rotate,
+            rotate: rotation.x as f32,
+            rotate_axis: exact_kernel::style::space::RotateAxis(
+                exact_motion::rotation::axis(rotation).map(|v| v as f32),
+            ),
             opacity: s.opacity,
             svg: [None; 8],
             colors: PaintValues::NONE,
@@ -89,8 +103,8 @@ impl Presented {
     pub fn translate_at(&self, w: f32, h: f32) -> (f32, f32) {
         let (px, py) = self.translate_percent;
         (
-            self.translate.0 + px / 100.0 * w,
-            self.translate.1 + py / 100.0 * h,
+            self.translate.0 + self.press_translate[0] + (px + self.press_translate[1]) / 100.0 * w,
+            self.translate.1 + self.press_translate[2] + (py + self.press_translate[3]) / 100.0 * h,
         )
     }
 
@@ -99,6 +113,7 @@ impl Presented {
             || self.translate_percent != (0.0, 0.0)
             || self.scale != 1.0
             || self.press != 1.0
+            || self.press_translate != [0.; 4]
             || self.rotate != 0.0
             || self.layout != Presented::IDENTITY.layout
     }
@@ -131,19 +146,90 @@ impl Presented {
     }
 }
 
+impl PaintedBox {
+    pub(crate) fn for_hit(&self) -> Self {
+        let mut result = self.clone();
+        result.use_hit();
+        result
+    }
+
+    fn use_hit(&mut self) {
+        if let Some(hit) = self.hit.take() {
+            self.rect = hit.rect;
+            self.clip = hit.clip;
+            self.affine = hit.affine;
+            self.projective = hit.projective;
+            self.shape_clips = hit.shape_clips;
+        }
+    }
+
+    pub(super) fn geometry(&self) -> HitGeometry {
+        HitGeometry {
+            shape_clips: self.shape_clips.clone(),
+            rect: self.rect,
+            clip: self.clip,
+            affine: self.affine,
+            projective: self.projective,
+        }
+    }
+
+    /// Placed by a perspective (`space.rs`), so no rectangle bounds it.
+    pub(crate) fn projected(&self) -> bool {
+        self.projective.is_some()
+    }
+
+    /// The surface's box through the same transform the painter used.
+    /// Projective canvas placements have no affine surface observation.
+    pub fn surface(&self, shown: Presented) -> Option<Rect4> {
+        if self.projective.is_some() {
+            return None;
+        }
+        self.affine.map(|(ts, rect)| bbox(ts, shown.surface(rect)))
+    }
+
+    /// Project the local center, which need not be the projected AABB center.
+    pub fn center(&self) -> (f32, f32) {
+        if let Some((inv, rect, _, _)) = self.projective {
+            if let Some(h) = crate::placement::inverse(inv) {
+                return crate::placement::map(&h, rect.0 + rect.2 / 2., rect.1 + rect.3 / 2.);
+            }
+        }
+        (
+            self.rect.0 + self.rect.2 / 2.,
+            self.rect.1 + self.rect.3 / 2.,
+        )
+    }
+}
+
 impl super::PaintedBox {
     /// Undo only this node's feedback in its own reference box. The painted
     /// matrix keeps the authored scale, rotation, origin and all ancestors.
-    pub(crate) fn unpressed(mut self, origin: exact_kernel::svg::TransformOrigin) -> Self {
+    pub(crate) fn unpressed(mut self, clips_self: bool) -> Self {
+        if self.unpress == Transform::identity() {
+            return self;
+        }
         if let Some((ts, rect)) = self.affine {
-            let (ox, oy) = origin.resolve(rect.2, rect.3);
-            let ts = ts
-                .pre_translate(rect.0 + ox, rect.1 + oy)
-                .pre_scale(1. / self.press, 1. / self.press)
-                .pre_translate(-rect.0 - ox, -rect.1 - oy);
+            let ts = ts.pre_concat(self.unpress);
             self.affine = Some((ts, rect));
             self.rect = super::bbox(ts, rect);
-            self.press = 1.;
+            if let Some((inv, bounds, _, planes)) = self.projective.as_mut() {
+                *bounds = self.rect;
+                if let Some(map) = crate::placement::inverse(*inv) {
+                    self.rect = crate::placement::clipped_bounds(&map, *planes, *bounds);
+                }
+            }
+            // The walk adds this node's clip first, then its ancestors' clips.
+            // Recompute only the former in the unscaled tracking geometry.
+            if clips_self {
+                if let Some(clip) = self.shape_clips.first_mut() {
+                    clip.inverse = ts.pre_translate(rect.0, rect.1).invert().map(|t| {
+                        let inverse = [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.];
+                        self.projective
+                            .map_or(inverse, |(outer, ..)| super::space::mul3(&inverse, &outer))
+                    });
+                }
+            }
+            self.unpress = Transform::identity();
         }
         self
     }

@@ -1,32 +1,30 @@
-//! @ref LLP 1121 D9 (stage 8 C2) — `tamber-unreachable`: for each target the
+//! @ref LLP 1121 D9 (stage 8 C2) — `forma-unreachable`: for each target the
 //! app ships, each control parameter it sets that the target's host does
 //! not honour there (the schema's control-role table), once a target,
 //! control and parameter, in one line for each override; `best-effort` says
 //! nothing; a node's own row wins over the role.
 
-use std::path::PathBuf;
+use crate::scratch::Scratch;
 
-fn app(name: &str, targets: &str, design: &str, view: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("exact2-controls-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn app(name: &str, targets: &str, design: &str, view: &str) -> Scratch {
+    let dir = Scratch::new(format!("exact2-controls-{name}-{}", std::process::id()));
     std::fs::write(dir.join("app.json"), format!("{{\"app\": {{\"id\": \"dev.test.controls\", \"name\": \"Controls\"}}, \"host\": {{{targets}}}}}")).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        format!("tamber t\n\ntheme\n  // One colour in both schemes.\n{design}"),
+        dir.join("app.forma"),
+        format!("forma t\n\ntheme\n  // One colour in both schemes.\n{design}"),
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), view).unwrap();
-    dir.join("app.contract")
+    dir.at("app.contract")
 }
 
-/// The `tamber-unreachable` messages, sorted.
+/// The `forma-unreachable` messages, sorted.
 fn unreachable(path: &std::path::Path) -> Vec<String> {
     let (plan, warnings) = contract::compile_path_all_warned(path, false);
     plan.unwrap_or_else(|e| panic!("{e:?}"));
     let mut out: Vec<String> = warnings
         .iter()
-        .filter(|w| w.id == "tamber-unreachable")
+        .filter(|w| w.id == "forma-unreachable")
         .map(|w| w.message.clone())
         .collect();
     out.sort();
@@ -345,13 +343,13 @@ fn unreachable_survives_the_warning_cap() {
     );
 }
 
-/// The `tamber-contrast` messages of a compile.
+/// The `forma-contrast` messages of a compile.
 fn contrast(path: &std::path::Path) -> Vec<String> {
     let (plan, warnings) = contract::compile_path_all_warned(path, false);
     plan.unwrap_or_else(|e| panic!("{e:?}"));
     warnings
         .iter()
-        .filter(|w| w.id == "tamber-contrast")
+        .filter(|w| w.id == "forma-contrast")
         .map(|w| w.message.clone())
         .collect()
 }

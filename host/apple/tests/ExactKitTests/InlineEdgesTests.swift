@@ -111,6 +111,88 @@ final class InlineEdgesTests: XCTestCase {
         XCTAssertEqual(margined.width, bare.width, accuracy: 0.05)
     }
 
+    /// Above and below its text a box's background covers its padding and
+    /// border too, which move no line (CSS 2 §10.6.1): Chrome paints
+    /// `<span style="padding:3px 0 12px;background:#ddd">code</span>` 15 px
+    /// taller than its font's content area, from 3 px above it. A box around
+    /// it paints its own, not the inner box's.
+    func testABackgroundCoversItsBlockPadding() throws {
+        let gray: [Double] = [242, 242, 247, 255], red: [Double] = [255, 0, 0, 255]
+        var bare = run("code"), padded = bare
+        bare.background = gray; bare.backgroundBox = 9
+        padded.background = gray; padded.backgroundBox = 9; (padded.backgroundAbove, padded.backgroundBelow) = (3, 12)
+        func fills(_ runs: [Run]) -> (Paragraph, [TextLinePaint.Fill]) {
+            let p = engine.paragraph(spec(runs), width: .infinity)
+            return (p, TextLinePaint.backgrounds(p.lines[0], at: .zero))
+        }
+        let (plain, b) = fills([run("a "), bare, run(" b")]), (tall, t) = fills([run("a "), padded, run(" b")])
+        let short = try XCTUnwrap(b.first?.rect), rect = try XCTUnwrap(t.first?.rect)
+        XCTAssertEqual(rect.minY, short.minY - 3, accuracy: 0.05)
+        XCTAssertEqual(rect.height, short.height + 15, accuracy: 0.05)
+        XCTAssertEqual(rect.width, short.width, accuracy: 0.05, "no wider")
+        XCTAssertEqual(tall.height, plain.height, "the line is as tall")
+        var inner = padded
+        inner.outerBackgrounds = [OuterBackground(color: red, box: 8, radii: [], before: 0, after: 0, above: 1, below: 2)]
+        let nested = fills([run("a "), inner, run(" b")]).1
+        XCTAssertEqual(nested.count, 2, "\(nested)")
+        guard nested.count == 2 else { return }
+        XCTAssertEqual(nested[0].rect.minY, short.minY - 1, accuracy: 0.05, "the outer box's own")
+        XCTAssertEqual(nested[0].rect.height, short.height + 3, accuracy: 0.05)
+        XCTAssertEqual(nested[1].rect, rect)
+    }
+
+    /// A box's border paints on each of its fragments, on its border box,
+    /// over its background (CSS 2 §8.6, Appendix E): its top and bottom on
+    /// every line, its start side on its first fragment and its end side on
+    /// its last (`box-decoration-break: slice`), left and right the other way
+    /// about under `rtl`. A box with a border and no background paints none.
+    func testABorderIsSlicedAcrossItsFragments() throws {
+        let red: [Double] = [255, 0, 0, 255]
+        for direction in [0, 1] {
+            var boxed = run("alpha beta gamma delta")
+            boxed.backgroundBox = 9
+            boxed.border = InlineBorder(widths: [1, 2, 3, 4], colors: Array(repeating: red, count: 4),
+                                        styles: Array(repeating: "dashed", count: 4))
+            var s = spec([run("x "), boxed, run(" y")])
+            s.direction = direction
+            let p = engine.paragraph(s, width: 120)
+            XCTAssertGreaterThan(p.lines.count, 1, "the box wraps")
+            // One fragment a line: a space that hangs past the line has none.
+            let lines = p.lines.map { TextLinePaint.backgrounds($0, at: .zero) }
+            XCTAssertEqual(lines.map(\.count), Array(repeating: 1, count: p.lines.count), "a fragment a line: \(lines)")
+            let fills = lines.compactMap(\.first)
+            for (i, fill) in fills.enumerated() {
+                let border = try XCTUnwrap(fill.border)
+                let (first, last) = (i == 0, i == fills.count - 1)
+                let (left, right) = direction == 0 ? (first, last) : (last, first)
+                XCTAssertEqual(border.widths, [1, right ? 2 : 0, 3, left ? 4 : 0], "line \(i), direction \(direction)")
+                XCTAssertEqual(border.styles, Array(repeating: "dashed", count: 4))
+                XCTAssertEqual(fill.color.alpha, 0, "no background")
+            }
+        }
+    }
+
+    /// A run with no text and padding is a box in its line, as Chrome lays
+    /// `Hi<span style="padding:0 5px;border:2px solid;background:#ddd"></span> there`
+    /// out: its padding and border take room after "Hi", where its background
+    /// and its border paint, 14 wide, starting and ending there.
+    func testAnEmptyRunPaintsItsBox() throws {
+        var empty = run("", start: 7, end: 7)
+        empty.background = [242, 242, 247, 255]; empty.backgroundBox = 9
+        (empty.backgroundBefore, empty.backgroundAfter) = (7, 7)
+        empty.border = InlineBorder(widths: [2, 2, 2, 2], colors: Array(repeating: [255, 0, 0, 255], count: 4),
+                                    styles: Array(repeating: "solid", count: 4))
+        let plain = engine.paragraph(spec([run("Hi"), run(" there")]), width: .infinity)
+        let boxed = engine.paragraph(spec([run("Hi"), empty, run(" there")]), width: .infinity)
+        XCTAssertEqual(boxed.width, plain.width + 14, accuracy: 0.05)
+        let fills = TextLinePaint.backgrounds(boxed.lines[0], at: .zero)
+        XCTAssertEqual(fills.count, 1, "\(fills)")
+        let fill = try XCTUnwrap(fills.first)
+        XCTAssertEqual(fill.rect.minX, x(plain, 2), accuracy: 0.05)
+        XCTAssertEqual(fill.rect.width, 14, accuracy: 0.05)
+        XCTAssertEqual(fill.border?.widths, [2, 2, 2, 2], "both its ends")
+    }
+
     /// Boxes inside one another each paint their own background into their
     /// own padding, the inner over the outer (CSS 2 Appendix E), as Chrome
     /// paints `<span style="padding:0 2px;background:A;border-radius:4px">p
@@ -136,6 +218,95 @@ final class InlineEdgesTests: XCTestCase {
         XCTAssertEqual(inner.rect.minX, self.x(bare, 3) + 2, accuracy: 0.05)
         XCTAssertEqual(inner.rect.maxX, self.x(bare, 4) + 10, accuracy: 0.05)
         XCTAssertNil(inner.path)
+    }
+
+    /// An inline box's start and end follow its own direction, its
+    /// paragraph's, whatever the direction of its text, and its first and
+    /// last fragments are in visual order (CSS 2 §8.6, §9.10; CSS Writing
+    /// Modes 3 §2.1): in a right-to-left paragraph its start room is right of
+    /// its text and its end room left of it, as Chrome draws `<p dir=rtl>אב
+    /// <span style="padding:0 3px 0 7px">גדה</span> וז</p>` and the same span
+    /// holding "abc"; in a left-to-right one a Hebrew span's start is left of
+    /// its last letter, its leftmost. Each case: its texts, its direction,
+    /// and the UTF-16 indices of the run's leftmost glyph and of the glyph
+    /// right of the run, with the room each has left of it.
+    func testABoxsRoomsAreOnItsOwnSidesWhateverItsTextsDirection() {
+        for (texts, direction, leftmost, after, rooms) in [
+            (["אב ", "גדה", " וז"], 1, 5, 2, (7, 10)),
+            (["אב ", "abc", " גד"], 1, 3, 2, (7, 10)),
+            (["ab ", "אבג", " cd"], 0, 5, 6, (3, 10)),
+        ] as [([String], Int, Int, Int, (CGFloat, CGFloat))] {
+            var bare = spec(texts.map { run($0) }), padded = spec([run(texts[0]), run(texts[1], start: 3, end: 7), run(texts[2])])
+            bare.direction = direction; padded.direction = direction
+            let plain = engine.paragraph(bare, width: .infinity), boxed = engine.paragraph(padded, width: .infinity)
+            XCTAssertEqual(boxed.width, plain.width + 10, accuracy: 0.05, "\(texts)")
+            XCTAssertEqual(x(boxed, leftmost), x(plain, leftmost) + rooms.0, accuracy: 0.05, "\(texts): room left of the run")
+            XCTAssertEqual(x(boxed, after), x(plain, after) + rooms.1, accuracy: 0.05, "\(texts): room right of it")
+        }
+    }
+
+    /// A right-to-left run that ends its line has its end room left of its
+    /// glyphs, where no glyph is to carry a kern: the line counts it, and a
+    /// left-aligned line starts that much in.
+    func testAnEndRoomLeftOfALinesGlyphsIsCounted() {
+        var bare = spec([run("אב "), run("גד")]), padded = spec([run("אב "), run("גד", start: 3, end: 7)])
+        bare.direction = 1; padded.direction = 1
+        let plain = engine.paragraph(bare, width: .infinity), boxed = engine.paragraph(padded, width: .infinity)
+        XCTAssertEqual(boxed.width, plain.width + 10, accuracy: 0.05)
+        XCTAssertEqual(TextEngine.leftRoom(boxed.lines[0]), 7)
+        XCTAssertEqual(x(boxed, 4), x(plain, 4), accuracy: 0.05, "its leftmost glyph has no room kerned left of it")
+        XCTAssertEqual(boxed.origin(0, align: 0, width: 300), 7, accuracy: 0.05)
+        XCTAssertEqual(boxed.origin(0, align: 2, width: 300), plain.origin(0, align: 2, width: 300) - 3, accuracy: 0.05)
+    }
+
+    /// Each fragment of a wrapped box holds its glyphs, its padding past them
+    /// on its own start and end sides: in a right-to-left paragraph a Hebrew,
+    /// Arabic or Latin box's start border is on its first line's right and
+    /// its end border on its last line's left, its last letter inside it.
+    func testAWrappedBoxsFragmentsHoldItsGlyphsInARightToLeftParagraph() throws {
+        let red: [Double] = [255, 0, 0, 255]
+        for texts in [["מילה ", "טקסט ארוך שעובר בין שורות", " סוף"], ["كلمة ", "نص طويل يمتد عبر السطور", " نهاية"],
+                      ["Wrap ", "a run that wraps across lines", " end"]] {
+            var boxed = run(texts[1], start: 9, end: 9)
+            boxed.backgroundBox = 9; (boxed.backgroundBefore, boxed.backgroundAfter) = (6, 6)
+            boxed.border = InlineBorder(widths: [3, 3, 3, 3], colors: Array(repeating: red, count: 4), styles: Array(repeating: "solid", count: 4))
+            var s = spec([run(texts[0]), boxed, run(texts[2])])
+            s.direction = 1
+            let p = engine.paragraph(s, width: 180)
+            let start = texts[0].utf16.count, end = start + texts[1].utf16.count
+            let mine = p.lines.indices.filter {
+                let r = CTLineGetStringRange(p.lines[$0])
+                return r.location < end && r.location + r.length > start
+            }
+            XCTAssertGreaterThan(mine.count, 1, "\(texts) wraps")
+            for i in mine {
+                let line = p.lines[i]
+                let fills = TextLinePaint.backgrounds(line, at: .zero)
+                XCTAssertEqual(fills.count, 1, "\(texts) line \(i): \(fills)")
+                let fill = try XCTUnwrap(fills.first)
+                // The run's glyphs on this line, less the room kerned on them;
+                // a hanging space is left of the pen.
+                var lo = CGFloat.infinity, hi = -CGFloat.infinity
+                for glyphRun in CTLineGetGlyphRuns(line) as! [CTRun] {
+                    let count = CTRunGetGlyphCount(glyphRun)
+                    var indices = [CFIndex](repeating: 0, count: count), positions = [CGPoint](repeating: .zero, count: count)
+                    var advances = [CGSize](repeating: .zero, count: count)
+                    CTRunGetStringIndices(glyphRun, CFRange(), &indices); CTRunGetPositions(glyphRun, CFRange(), &positions)
+                    CTRunGetAdvances(glyphRun, CFRange(), &advances)
+                    let room = (CTRunGetAttributes(glyphRun) as NSDictionary)[NSAttributedString.Key.exactEdgeRoom] as? CGFloat ?? 0
+                    // The room is right of the glyph that reaches furthest.
+                    let reach = (0..<count).max { positions[$0].x + advances[$0].width < positions[$1].x + advances[$1].width }
+                    for g in 0..<count where indices[g] >= start && indices[g] < end && positions[g].x >= 0 {
+                        lo = min(lo, positions[g].x); hi = max(hi, positions[g].x + advances[g].width - (g == reach ? room : 0))
+                    }
+                }
+                let (first, last) = (i == mine.first, i == mine.last)
+                let border = try XCTUnwrap(fill.border)
+                XCTAssertEqual(fill.rect.maxX, hi + (first ? 6 : 0), accuracy: 0.05, "\(texts) line \(i): right")
+                XCTAssertEqual(fill.rect.minX, lo - (last ? 6 : 0), accuracy: 0.05, "\(texts) line \(i): left")
+                XCTAssertEqual(border.widths, [3, first ? 3 : 0, 3, last ? 3 : 0], "\(texts) line \(i)")
+            }
+        }
     }
 
     /// The kernel's request carries the edges, and the paragraph it measures

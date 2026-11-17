@@ -35,13 +35,13 @@ export function dateWall(input, off) {
   const doy = Math.floor((153 * month + 2) / 5) + day - 1;
   return (era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468) * 864e5;
 }
-/** `h:mm AM` of (epoch ms, UTC offset minutes east), U+0020 before the period. */
+/** `h:mm AM` ("short") or `hh:mm AM` ("2-digit") of (epoch ms, UTC offset minutes east), U+0020 before the period. */
 export function x_formatTime(ms, off, style, loc) {
   if (loc) return other("formatTime", [ms, off, style], loc);
   const w = wall(ms, off);
   if (w === null) return "";
   const m = Math.floor((((w % 864e5) + 864e5) % 864e5) / 6e4), h = m / 60 | 0;
-  return `${h % 12 || 12}:${String(m % 60).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+  return `${String(h % 12 || 12).padStart(style === "2-digit" ? 2 : 1, "0")}:${String(m % 60).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
 // `formatDate`, `formatDay` and `formatNumber`, runner/src/format/mod.rs's `en-US` strings.
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -59,23 +59,34 @@ function date(w, style) {
   const [year, month, day] = civil(Math.floor(w / 864e5)), name = MONTHS[month - 1];
   // "iso" (LLP 1102 §3.4): the date part of `toISOString`; `wall` admits years 1–9999 only, so four digits.
   if (style === "iso") return `${pad(year, 4)}-${pad(month, 2)}-${pad(day, 2)}`;
+  if (style === "month-day") return `${name.slice(0, 3)} ${day}`;
   return style === "month-year" ? `${name} ${year}` : `${name.slice(0, 3)} ${day}, ${year}`;
 }
-/** `Sep 26, 2026` ("medium"), `September 2026` ("month-year") or `2026-09-26` ("iso"). */
+/** `Sep 26, 2026` ("medium"), `September 2026` ("month-year"), `Sep 26` ("month-day") or `2026-09-26` ("iso"). */
 export function x_formatDate(ms, off, style, loc) {
   if (loc) return other("formatDate", [ms, off, style], loc);
   const w = dateWall(ms, off);
   return w === null ? "" : date(w, style);
 }
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/** Whether two wall times fall in one calendar year (runner/src/format/mod.rs `same_year`). */
+export const sameYear = (w, other) => civil(Math.floor(w / 864e5))[0] === civil(Math.floor(other / 864e5))[0];
 /** `formatDay` (LLP 1116.020 D8, runner/src/format/mod.rs `day_label`): `then`'s day counted from `now`'s at the offset.
  * "day" is Today, Yesterday, Tomorrow or the medium date, "day-time" adds ` at ` and the short time, "list" is the
- * short time today, Yesterday, the weekday two to six days back, else `M/D/YY`. */
+ * short time today, Yesterday, the weekday two to six days back, else `M/D/YY`; "section" (LLP 1168.000 D5) is Today,
+ * Yesterday, Tomorrow, the weekday two to six days either side, else `Thu, Oct 15`, with `, 2025` in another year. */
 export function x_formatDay(then, now, off, mode, loc) {
   if (loc) return other("formatDay", [then, now, off, mode], loc);
   const w = wall(then, off), n = wall(now, off);
   if (w === null || n === null) return "";
   const days = Math.floor(w / 864e5), apart = days - Math.floor(n / 864e5);
+  if (mode === "section") {
+    if (apart >= -1 && apart <= 1) return apart === 0 ? "Today" : apart === -1 ? "Yesterday" : "Tomorrow";
+    const weekday = WEEKDAYS[(((days + 4) % 7) + 7) % 7];
+    if (apart >= -6 && apart <= 6) return weekday;
+    const [year, month, day] = civil(days);
+    return `${weekday.slice(0, 3)}, ${MONTHS[month - 1].slice(0, 3)} ${day}${sameYear(w, n) ? "" : `, ${year}`}`;
+  }
   if (mode === "list") {
     if (apart === 0) return x_formatTime(then, off);
     if (apart === -1) return "Yesterday";
@@ -101,9 +112,11 @@ const CURRENCIES = { USD: "$2", EUR: "€2", GBP: "£2", JPY: "¥0", CNY: "CN¥2
   HKD: "HK$2", SGD: "SGD2", CHF: "CHF2", SEK: "SEK2", NOK: "NOK2", DKK: "DKK2", PLN: "PLN2", MXN: "MX$2", BRL: "R$2", KRW: "₩0",
   ZAR: "ZAR2", TWD: "NT$2", ILS: "₪2", PHP: "₱2", VND: "₫0" };
 /** `decimal`, `currency` and `percent` (runner/src/format/mod.rs `styled`): `Intl.NumberFormat("en-US")`'s, from
- * `String(n)`'s shortest digits cut half away from zero, grouped by threes, a negative zero signed. */
+ * `String(n)`'s shortest digits cut half away from zero, grouped by threes, a negative zero signed. A `decimal` given
+ * a digit count has exactly that many fraction digits. */
 function styled(n, style, code) {
   let sym = "", lo = 0, hi = 3, shift = 0;
+  if (style === "decimal" && typeof code === "number") lo = hi = code;
   if (style === "percent") { hi = 0; shift = 2; }
   if (style === "currency") {
     const c = CURRENCIES[code] ?? "";

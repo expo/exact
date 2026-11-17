@@ -79,6 +79,7 @@ zeroize = "1"
 zerotrie = "0.2"
 
 [dev-dependencies]
+sha2 = "0.10"
 exact-logic = { path = "../../logic" }
 caltrain = { path = "../../apps/caltrain" }
 caltrain-data = { path = "../../apps/caltrain/data" }

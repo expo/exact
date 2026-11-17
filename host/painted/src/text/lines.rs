@@ -44,6 +44,12 @@ impl super::Paragraph {
                 .filter(|b| range.contains(&(b.line as usize)))
                 .copied()
                 .collect(),
+            rooms: source
+                .rooms
+                .iter()
+                .filter(|r| range.contains(&(r.line as usize)))
+                .copied()
+                .collect(),
         };
         Self {
             source: self.source.clone(),
@@ -178,6 +184,8 @@ pub struct Lines {
     pub faces: Vec<Face>,
     /// Every line's inline boxes, in visual order.
     pub boxes: Vec<LayoutBox>,
+    /// Every line's inline-box room, by line.
+    pub rooms: Vec<LayoutRoom>,
 }
 
 impl Lines {
@@ -192,6 +200,7 @@ impl Lines {
             + self.glyphs.capacity() * size_of::<LayoutGlyph>()
             + self.faces.capacity() * size_of::<Face>()
             + self.boxes.capacity() * size_of::<LayoutBox>()
+            + self.rooms.capacity() * size_of::<LayoutRoom>()
             + self
                 .faces
                 .iter()
@@ -224,50 +233,197 @@ impl Lines {
     }
 }
 
-/// The room before clusters, by text index, and before inline boxes, by run.
-pub(super) type Leads<'a> = (&'a [(usize, f32)], &'a [(u32, f32)]);
+/// Which of a run's rooms (`Run::edges`) a room is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomKind {
+    /// Its inline box's start, beside its first character.
+    Start,
+    /// Its end, beside its last character.
+    End,
+    /// The whole box of a run with no text, before the character after it.
+    Before,
+    /// The whole box of a run with no text at the end of its line's text,
+    /// after the character before it.
+    After,
+}
+
+/// One room in a hard line, as it is shaped: on the cluster holding byte
+/// `at`, the run's characters there being `span`.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Room {
+    pub at: usize,
+    pub w: f32,
+    pub run: u32,
+    pub kind: RoomKind,
+    pub span: std::ops::Range<usize>,
+}
+
+/// A room as a line draws it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutRoom {
+    /// The visual line it is on, an index into [`Lines::lines`].
+    pub line: u32,
+    /// Its left edge from the paragraph's left, points.
+    pub x: f32,
+    /// Its width, points.
+    pub w: f32,
+    /// The canonical run index whose room it is.
+    pub run: u32,
+    /// Which of the run's rooms it is.
+    pub kind: RoomKind,
+}
+
+/// A hard line's rooms, its images' start rooms by run, and whether its
+/// paragraph, and so each inline box in it, is right to left.
+#[derive(Clone, Copy)]
+pub(super) struct Rooms<'a> {
+    pub rooms: &'a [Room],
+    pub boxes: &'a [(u32, f32)],
+    pub rtl: bool,
+}
+
+impl Rooms<'_> {
+    pub const NONE: Rooms<'static> = Rooms {
+        rooms: &[],
+        boxes: &[],
+        rtl: false,
+    };
+}
+
+/// One cluster of a line in visual order: its first byte, whether it runs
+/// right to left, and `None` for an inline box.
+type Placed = Option<(usize, bool)>;
+
+/// Where each room on a line is drawn: (visual cluster, right of it, room),
+/// in the order each side of a cluster holds them. A start or an end is on
+/// its inline box's start or end side of the visually contiguous characters
+/// of its run that hold the character it is shaped with: under `rtl` the
+/// start on their right and the end on their left (CSS 2 §8.6, §9.10; CSS
+/// Writing Modes 3 §2.1), whatever the direction of the text. A run with no
+/// text is on the start side of the character after it, or the end side of
+/// the character before it, by that character's direction.
+fn place(order: &[Placed], ends: &[usize], rooms: &[Room], rtl: bool) -> Vec<(usize, bool, usize)> {
+    let mut out = Vec::new();
+    for (i, room) in rooms.iter().enumerate() {
+        let Some(k) = order
+            .iter()
+            .zip(ends)
+            .position(|(c, end)| c.is_some_and(|(start, _)| start <= room.at && room.at < *end))
+        else {
+            continue;
+        };
+        let (_, glyph_rtl) = order[k].expect("a cluster");
+        let (k, right) = match room.kind {
+            RoomKind::Before => (k, glyph_rtl),
+            RoomKind::After => (k, !glyph_rtl),
+            kind => {
+                let mine = |c: &Placed| c.is_some_and(|(start, _)| room.span.contains(&start));
+                let right = (kind == RoomKind::Start) == rtl;
+                if right {
+                    let run = order[k..].iter().take_while(|c| mine(c)).count();
+                    (k + run.max(1) - 1, true)
+                } else {
+                    let run = order[..k].iter().rev().take_while(|c| mine(c)).count();
+                    (k - run, false)
+                }
+            }
+        };
+        out.push((k, right, i));
+    }
+    // Logical order away from the text on a start side, towards it on an end side.
+    out.sort_by_key(|&(k, right, i)| {
+        let away = match rooms[i].kind {
+            RoomKind::Start | RoomKind::Before => right,
+            RoomKind::End | RoomKind::After => !right,
+        };
+        (k, right, if away { usize::MAX - i } else { i })
+    });
+    out
+}
 
 /// One Parley line's glyphs, appended in visual order with `shift` added
 /// to every x (`styles` is the layout's, whose brushes are run indices),
-/// and its inline boxes as the next line's (a box's id is its run index).
-/// `leads` is the room before clusters (by text index) and boxes (by run),
-/// in their advance and not their glyphs': each is drawn past it, on its
-/// start side. Returns the line's summed cluster advance (justified where
-/// it is).
+/// and its inline boxes and rooms as the next line's (a box's id is its run
+/// index). A room is in its cluster's advance and not its glyphs': it is
+/// drawn where [`place`] puts it, and an image's start before its box.
+/// Returns the line's summed cluster advance (justified where it is).
 pub(super) fn extract(
     line: &parley::Line<'_, u32>,
     styles: &[parley::Style<u32>],
     shift: f32,
-    leads: Leads<'_>,
+    rooms: Rooms<'_>,
     out: &mut Lines,
 ) -> f32 {
-    let lead = |at: usize| {
-        leads
-            .0
-            .binary_search_by_key(&at, |l| l.0)
-            .map_or(0.0, |i| leads.0[i].1)
-    };
     let m = line.metrics();
+    let line_index = out.lines.len() as u32;
+    // The rooms shaped on this line, and where each is drawn.
+    let mut placed = Vec::new();
+    let mut here: &[Room] = &[];
+    if !rooms.rooms.is_empty() {
+        let range = line.text_range();
+        let from = rooms.rooms.partition_point(|r| r.at < range.start);
+        let to = rooms.rooms.partition_point(|r| r.at < range.end);
+        here = &rooms.rooms[from..to];
+    }
+    if !here.is_empty() {
+        let mut order: Vec<Placed> = Vec::new();
+        let mut ends = Vec::new();
+        for item in line.items_nonpositioned() {
+            match item {
+                parley::LineItem::Run(run) => {
+                    let rtl = run.bidi_level() % 2 == 1;
+                    for cluster in run.visual_clusters() {
+                        let range = cluster.text_range();
+                        order.push(Some((range.start, rtl)));
+                        ends.push(range.end.max(range.start + 1));
+                    }
+                }
+                parley::LineItem::InlineBox(_) => {
+                    order.push(None);
+                    ends.push(0);
+                }
+            }
+        }
+        placed = place(&order, &ends, here, rooms.rtl);
+    }
+    let mut next = 0;
     let mut pen = m.offset + m.inline_min_coord + shift;
     let mut content = 0.0f32;
+    let mut k = 0usize;
+    // Draw the rooms placed at visual cluster `k` on one side, moving the pen.
+    let rooms_at = |k: usize, right: bool, pen: &mut f32, out: &mut Lines, next: &mut usize| {
+        while *next < placed.len() && placed[*next].0 == k && placed[*next].1 == right {
+            let room = &here[placed[*next].2];
+            out.rooms.push(LayoutRoom {
+                line: line_index,
+                x: *pen,
+                w: room.w,
+                run: room.run,
+                kind: room.kind,
+            });
+            *pen += room.w;
+            *next += 1;
+        }
+    };
     for item in line.items_nonpositioned() {
         let run = match item {
             parley::LineItem::Run(run) => run,
             parley::LineItem::InlineBox(b) => {
                 if b.kind == parley::InlineBoxKind::InFlow {
-                    let before = leads
-                        .1
+                    let before = rooms
+                        .boxes
                         .iter()
                         .find(|l| l.0 == b.id as u32)
                         .map_or(0.0, |l| l.1);
                     out.boxes.push(LayoutBox {
-                        line: out.lines.len() as u32,
+                        line: line_index,
                         x: pen + before,
                         run: b.id as u32,
                     });
                     pen += b.width;
                     content += b.width;
                 }
+                k += 1;
                 continue;
             }
         };
@@ -291,17 +447,10 @@ pub(super) fn extract(
                     next = c.next_logical();
                 }
             }
-            // Room before the cluster is on its start side: the left under
-            // `ltr`, after its glyphs under `rtl`.
-            let room = if leads.0.is_empty() {
-                0.0
-            } else {
-                lead(cluster.text_range().start)
-            };
-            let rtl = level % 2 == 1;
-            if !rtl {
-                pen += room;
-            }
+            // The rooms shaped with this cluster, which its advance holds.
+            let start = cluster.text_range().start;
+            let room: f32 = here.iter().filter(|r| r.at == start).map(|r| r.w).sum();
+            rooms_at(k, false, &mut pen, out, &mut next);
             // A single glyph Parley keeps in its cluster takes the cluster's
             // advance, room included: the room is not the glyph's.
             let mut excess = if room == 0.0 {
@@ -326,9 +475,8 @@ pub(super) fn extract(
                 });
                 pen += w;
             }
-            if rtl {
-                pen += room;
-            }
+            rooms_at(k, true, &mut pen, out, &mut next);
+            k += 1;
         }
     }
     content

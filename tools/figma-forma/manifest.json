@@ -1,0 +1,13 @@
+{
+  "name": "Forma",
+  "id": "exact-forma-private",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Your own Forma design server, at the address you type: this machine's dev loop, or a tunnel to it with a certificate of its own."
+  }
+}

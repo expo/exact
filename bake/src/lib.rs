@@ -9,18 +9,22 @@
 #![deny(missing_docs)]
 
 mod atom_faces;
+mod channels;
 pub mod colors;
 pub mod compat;
+pub mod host;
 mod icon_rules;
 mod link;
+mod links;
 mod preload;
 mod reach;
 mod receipt;
+mod sandbox;
 mod widgets;
 
 pub use compat::{
     compatibility_id, compatibility_id_pinned, compatibility_id_sources,
-    compatibility_id_sources_with_entries, stored_module, Compat,
+    compatibility_id_sources_with_entries, Compat,
 };
 pub use link::{ahead, apple_link, take_linked};
 pub use receipt::{plan_graph, write_development_artifacts};
@@ -114,6 +118,33 @@ pub fn bun_error(e: std::io::Error) -> String {
         format!("{bun}: not found; the bake runs Bun (install it, put ~/.bun/bin on PATH, or name it with BUN)")
     } else {
         format!("{bun}: {e}")
+    }
+}
+
+/// A test's directory, removed when dropped, so a test that fails or panics
+/// leaves nothing in the system temp directory.
+#[cfg(test)]
+pub(crate) struct TempDir(pub(crate) std::path::PathBuf);
+
+#[cfg(test)]
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

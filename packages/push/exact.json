@@ -11,12 +11,21 @@
     "field": "state",
     "denied": "NotAllowedError"
   },
+  "config": {
+    "android": {
+      "googleServices": { "type": "string" }
+    }
+  },
   "shapes": {
     "ApplePushSubscription": {
       "deviceToken": "string"
     },
+    "AndroidPushSubscription": {
+      "installationId": "string"
+    },
     "PushSubscription": {
-      "apple": "option<ApplePushSubscription>"
+      "apple": "option<ApplePushSubscription>",
+      "android": "option<AndroidPushSubscription>"
     },
     "PushPermissionStatus": {
       "available": "bool",
@@ -36,7 +45,6 @@
         },
         "unsupported": [
           "tvos",
-          "android",
           "web",
           "linux",
           "windows",
@@ -64,10 +72,6 @@
         },
         "targets": {
           "tvos": {
-            "available": false,
-            "state": "unknown"
-          },
-          "android": {
             "available": false,
             "state": "unknown"
           },

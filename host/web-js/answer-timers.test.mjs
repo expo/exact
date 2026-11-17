@@ -191,8 +191,12 @@ export const answer = resume(function* () {
     await page.clock.pauseAt(1100);
     await page.goto(server.url.href);
     await page.evaluate(async () => {
+      // The page mounts at time 0, as it may on a paused clock (how far the page's time ran before the pause is real
+      // time): a mount at 0 is a mount, and the page's time runs from it.
+      const now = performance.now.bind(performance), at = now();
+      performance.now = () => now() - at;
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const source = await import('/source.js');
       install(rt.data);
       rt.mount(root => {

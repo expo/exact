@@ -13,9 +13,10 @@
 //! it is one evaluation, and passes the bound at 1,000 × 1,000.
 
 use crate::LowerError;
+use contract_checking::{Checking, View};
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{Expr, Node, Span};
-use contract_types::{infer, Checked, Ref, Scope, Shapes, Ty};
+use contract_syntax::{Expr, Span};
+use contract_types::{infer, Ref, Scope, Shapes, Ty};
 use std::collections::BTreeSet;
 
 #[path = "own_list.rs"]
@@ -103,89 +104,23 @@ impl Rows<'_> {
         }
     }
 
-    /// `outer` is the data list the innermost enclosing row iterates, if any.
-    fn nodes(&mut self, nodes: &[Node], scope: &Scope, outer: Option<&str>) {
-        for node in nodes {
-            match node {
-                Node::Element {
-                    positional,
-                    attrs,
-                    children,
-                    ..
-                } => {
-                    if let Some(outer) = outer {
-                        for e in positional.iter().chain(attrs.iter().map(|a| &a.value)) {
-                            self.expr(e, scope, outer);
-                        }
-                    }
-                    self.nodes(children, scope, outer);
+    /// `outer` is the innermost enclosing data list, when known.
+    fn nodes(&mut self, view: &View<'_>) {
+        let shapes = self.shapes;
+        let declared = self.declared.clone();
+        for (node, scope, outer) in view.scoped_with(None::<String>, |node, scope, outer, _| {
+            let Some((_, _, _, list, _)) = node.repetition() else { return outer.clone(); };
+            let records = matches!(infer(list, scope, shapes), Ok(Ty::List(t)) if matches!(*t, Ty::Record(ref n) if declared.contains(n.as_str())));
+            path(list).filter(|(_, root)| records && data(root, scope)).map(|(list, _)| list).or_else(|| outer.clone())
+        }) {
+            if let Some((_, _, _, list, _)) = node.repetition() {
+                let records = matches!(infer(list, &scope, self.shapes), Ok(Ty::List(t)) if matches!(*t, Ty::Record(ref n) if self.declared.contains(n.as_str())));
+                let listed = path(list).filter(|(_, root)| data(root, &scope));
+                if let (Some(outer), Some((inner, _)), true) = (&outer, listed, records) {
+                    if &inner != outer { self.warn(outer, &inner, "a nested `for`", node.span()); }
                 }
-                Node::When {
-                    cond,
-                    then,
-                    otherwise,
-                    ..
-                } => {
-                    if let Some(outer) = outer {
-                        self.expr(cond, scope, outer);
-                    }
-                    self.nodes(then, scope, outer);
-                    self.nodes(otherwise, scope, outer);
-                }
-                Node::Each {
-                    var,
-                    index,
-                    list,
-                    body,
-                    span,
-                    ..
-                } => {
-                    let item = match infer(list, scope, self.shapes) {
-                        Ok(Ty::List(t)) => *t,
-                        _ => Ty::Unknown,
-                    };
-                    let records =
-                        matches!(&item, Ty::Record(n) if self.declared.contains(n.as_str()));
-                    let listed = path(list).filter(|(_, root)| data(root, scope));
-                    if let (Some(outer), Some((inner, _)), true) = (outer, &listed, records) {
-                        if inner != outer {
-                            self.warn(outer, inner, "a nested `for`", *span);
-                        }
-                    }
-                    let mut inner = scope.clone();
-                    inner.push_each(var, index.as_deref(), item);
-                    let rows = listed.filter(|_| records).map(|(p, _)| p);
-                    self.nodes(body, &inner, rows.as_deref().or(outer));
-                }
-                Node::Match {
-                    subject,
-                    some,
-                    none,
-                    ..
-                } => {
-                    if let Some(outer) = outer {
-                        self.expr(subject, scope, outer);
-                    }
-                    let bound = match infer(subject, scope, self.shapes) {
-                        Ok(Ty::Option(t)) => *t,
-                        _ => Ty::Unknown,
-                    };
-                    let mut inner = scope.clone();
-                    inner.push_region(Some((some.0.clone(), Ref::Bound(0), bound)));
-                    self.nodes(&some.1, &inner, outer);
-                    let mut none_scope = scope.clone();
-                    none_scope.push_region(None);
-                    self.nodes(none, &none_scope, outer);
-                }
-                Node::Use { args, children, .. } => {
-                    if let Some(outer) = outer {
-                        for a in args {
-                            self.expr(&a.value, scope, outer);
-                        }
-                    }
-                    self.nodes(children, scope, outer);
-                }
-                Node::Children { .. } => {}
+            } else if let Some(outer) = outer {
+                for expr in node.expressions() { self.expr(expr, &scope, &outer); }
             }
         }
     }
@@ -193,26 +128,19 @@ impl Rows<'_> {
 
 /// `lower-row-lookup`'s sites in the expanded root's view, then
 /// `lower-row-own-list`'s and `lower-key-position`'s ([`key_position`]).
-pub(super) fn row_lookup(checked: &Checked<'_>) -> Vec<LowerError> {
-    let root = &checked.expanded.root;
-    let keys = key_position(checked);
-    let Some(types) = checked.types.components.first() else {
+pub(super) fn row_lookup(checking: &Checking<'_>) -> Vec<LowerError> {
+    let keys = key_position(checking);
+    let Some(_) = checking.declarations().next() else {
         return keys;
     };
     let mut rows = Rows {
-        shapes: &checked.types.shapes,
-        declared: checked
-            .file
-            .shapes
-            .iter()
-            .map(|s| s.name.as_str())
-            .collect(),
+        shapes: checking.shapes(),
+        declared: checking.declared_shapes().collect(),
         seen: BTreeSet::new(),
         out: Vec::new(),
     };
-    let scope = checked.types.component_scope(root, types);
-    rows.nodes(&root.view, &scope, None);
-    rows.out.extend(own_list::own_list(checked));
+    rows.nodes(&checking.expanded());
+    rows.out.extend(own_list::own_list(checking));
     rows.out.extend(keys);
     rows.out
 }
@@ -235,11 +163,10 @@ fn reads(e: &Expr, name: &str) -> bool {
 /// the position, not the record. A row that holds nothing (a waveform's bars,
 /// text over plain values) has nothing to follow, and its position may be all
 /// the identity its items have.
-fn key_position(checked: &Checked<'_>) -> Vec<LowerError> {
-    let held = Held::new(checked);
-    let walk = |nodes: &[Node], out: &mut Vec<LowerError>| held.walk(nodes, out);
+fn key_position(checking: &Checking<'_>) -> Vec<LowerError> {
+    let held = Held::new(checking);
     let mut out = Vec::new();
-    walk(&checked.expanded.root.view, &mut out);
+    held.walk(&checking.expanded(), &mut out);
     out
 }
 
@@ -331,40 +258,30 @@ fn holding_attr(name: &str) -> bool {
 }
 
 impl<'c> Held<'c> {
-    fn new(checked: &'c Checked<'_>) -> Self {
-        let owning = (checked.expanded.owners.iter())
-            .filter_map(|o| match o {
-                contract_syntax::Owner::Arm { tag, .. } => Some(*tag),
-                _ => None,
-            })
-            .collect();
-        let styles = (checked.file.styles.iter())
+    fn new(checking: &Checking<'c>) -> Self {
+        let owning = checking.state_regions().collect();
+        let styles = checking
+            .styles()
+            .iter()
             .filter(|s| s.attrs.iter().any(|a| holding_attr(&a.name)))
             .map(|s| s.name.as_str())
             .collect();
         Held { owning, styles }
     }
 
-    /// Whether any of `nodes` holds something.
-    fn holds(&self, nodes: &[Node]) -> bool {
-        nodes.iter().any(|node| match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                !PLAIN.contains(&tag.as_str())
+    /// Whether any descendant keeps state or another instance-owned value.
+    fn holds<'a>(&self, mut body: impl Iterator<Item = contract_checking::Visit<'a>>) -> bool {
+        body.any(|node| {
+            if let Some((tag, _, attrs)) = node.element() {
+                !PLAIN.contains(&tag)
                     || attrs.iter().any(|a| {
                         holding_attr(&a.name) || a.name == "class" && self.class_holds(&a.value)
                     })
-                    || self.holds(children)
+            } else {
+                node.region().is_some_and(|tag| self.owning.contains(&tag))
+                    || node.component_use().is_some()
+                    || node.is_slot()
             }
-            Node::When { tag, .. } | Node::Each { tag, .. } | Node::Match { tag, .. } => {
-                self.owning.contains(tag)
-                    || node.child_lists().into_iter().any(|list| self.holds(list))
-            }
-            Node::Use { .. } | Node::Children { .. } => true,
         })
     }
 
@@ -377,37 +294,19 @@ impl<'c> Held<'c> {
         }
     }
 
-    fn walk(&self, nodes: &[Node], out: &mut Vec<LowerError>) {
-        for node in nodes {
-            match node {
-                Node::Element { children, .. } | Node::Use { children, .. } => {
-                    self.walk(children, out)
-                }
-                Node::Each {
-                    tag,
-                    index,
-                    key,
-                    body,
-                    ..
-                } => {
-                    if let Some(i) = index
-                        .as_deref()
-                        .filter(|i| reads(key, i))
-                        .filter(|_| self.owning.contains(tag) || self.holds(body))
-                    {
-                        let i = shown(i);
-                        out.push(LowerError {
-                            id: "lower-key-position",
-                            message: format!("this key reads `{i}`, the row's position: after a row is inserted or removed before others, their keys name other records, so what a row holds (its state, a field's focus or text, its motion) follows the position; key by something the record keeps, such as its id"),
-                            span: key.span(),
-                        });
-                    }
-                    self.walk(body, out);
-                }
-                node => {
-                    for list in node.child_lists() {
-                        self.walk(list, out);
-                    }
+    fn walk(&self, view: &View<'_>, out: &mut Vec<LowerError>) {
+        for node in view.walk() {
+            if let Some((tag, _, index, _, key)) = node.repetition() {
+                if let Some(i) = index
+                    .filter(|i| reads(key, i))
+                    .filter(|_| self.owning.contains(&tag) || self.holds(node.repetition_body()))
+                {
+                    let i = shown(i);
+                    out.push(LowerError {
+                        id: "lower-key-position",
+                        message: format!("this key reads `{i}`, the row's position: after a row is inserted or removed before others, their keys name other records, so what a row holds (its state, a field's focus or text, its motion) follows the position; key by something the record keeps, such as its id"),
+                        span: key.span(),
+                    });
                 }
             }
         }

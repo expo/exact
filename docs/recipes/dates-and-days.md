@@ -63,14 +63,14 @@ test "an entry made 30 s after midnight, before the tick, is the new day's"
 ```
 
 - **The write reads the clock itself.** The ticked `now` can lag a minute, so an
-  entry keyed by `today` just after midnight lands on yesterday: the action takes
+  entry keyed by `today` at midnight lands on yesterday: the action takes
   `let at = time.epochAtZero + performanceNow()` and keys `formatDate(at, time.utcOffset, "iso")`.
-- A derive of the clock doesn't update by itself: keep the time in state that a
-  `task … every` writes; `performanceNow()` alone is 0 at each launch.
+- A derive of the clock doesn't update by itself: keep the time in state a
+  `task … every` writes; `performanceNow()` is 0 at each launch.
 - `"iso"` is the day key, compared as text. A label is `formatDay(then, shown, offset,
   mode)`, never `day == today ? "Today" : …`: `"day"` is `Today`, `Tomorrow` or `Mar 14, 2026`;
-  `"day-time"` adds ` at 11:30 PM`; `"list"` is Mail's.
+  `"day-time"` adds ` at 11:30 PM`; `"list"` is Mail's; `"section"` a chat's separator.
 - Label an `input type="date"` value with `formatDate(due, 0, "medium")`.
-  A strict `YYYY-MM-DD` key keeps its day at any valid offset; invalid dates print `""`.
-- `utcOffset` is the zone's offset now, so `shown - 86400000` and `formatDay` can miss by an hour
+  A `YYYY-MM-DD` key keeps its day at any valid offset; invalid dates print `""`.
+- `utcOffset` is the zone's offset now: `shown - 86400000` and `formatDay` can miss an hour
   across a DST change. Tests pin `epoch` and `time-zone`; the default is 2026-01-01 UTC.

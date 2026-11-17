@@ -46,6 +46,9 @@ struct Envelope {
     /// cards, is refused here as every other reader refuses it.
     assets: Option<AssetIndexCard>,
     rust: Option<std::collections::BTreeMap<String, RustVariant>>,
+    /// The TypeScript module pair: `native` the Hermes bytecode, `receipt`
+    /// its pairing; `web` is the browser's form, unread here.
+    module: Option<ModuleCards>,
     seq: Option<u64>,
     events: Option<String>,
 }
@@ -57,6 +60,14 @@ struct AssetIndexCard {
     sha256: String,
     bytes: u64,
     count: u64,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct ModuleCards {
+    native: PlanCard,
+    receipt: PlanCard,
+    web: PlanCard,
 }
 
 #[derive(Deserialize)]
@@ -450,6 +461,12 @@ fn fetch_unless(
             ));
         }
     }
+    if let Some(module) = &envelope.module {
+        fingerprint.push_str(&format!(
+            ":module:{}:{}:{}:{}",
+            module.receipt.sha256, module.receipt.bytes, module.native.sha256, module.native.bytes
+        ));
+    }
     let identity = format!("{:x}", Sha256::digest(fingerprint.as_bytes()));
     if known.contains(&Some(identity.as_str())) {
         return Ok(None);
@@ -498,13 +515,18 @@ fn fetch_unless(
             {
                 return Err("invalid Rust executor manifest".into());
             }
-            let variant = variants
-                .get(mode)
-                .ok_or("no Rust replacement matching this binary's executor")?;
-            if mode != "wasm" && variant.target.as_deref() != compat["target"].as_str() {
-                return Err("Rust replacement target does not match this binary".into());
+            match variants.get(mode) {
+                Some(variant) => {
+                    if mode != "wasm" && variant.target.as_deref() != compat["target"].as_str() {
+                        return Err("Rust replacement target does not match this binary".into());
+                    }
+                    Some(variant)
+                }
+                // A binary that replaces no Rust takes the TypeScript pair,
+                // as the Apple loader does.
+                None if mode == "off" && envelope.module.is_some() => None,
+                None => return Err("no Rust replacement matching this binary's executor".into()),
             }
-            Some(variant)
         }
         None => None,
     };
@@ -514,6 +536,14 @@ fn fetch_unless(
             receipt: String::from_utf8(fetch_card(&variant.receipt, 1 << 20)?)
                 .map_err(|e| e.to_string())?,
             bytes: fetch_card(&variant.module, 32 << 20)?,
+        })
+    } else if let Some(cards) = &envelope.module {
+        // A TypeScript app's logic, the pair its library was baked with: an
+        // app.ts edit reloads as a Contract edit does.
+        Some(crate::delivery::Module {
+            receipt: String::from_utf8(fetch_card(&cards.receipt, 1 << 20)?)
+                .map_err(|e| e.to_string())?,
+            bytes: fetch_card(&cards.native, 32 << 20)?,
         })
     } else {
         None
@@ -990,6 +1020,81 @@ mod tests {
             6,
             "only the envelope, for a held generation and an unrunnable one"
         );
+        server.join().unwrap();
+    }
+
+    /// A TypeScript app's dev envelope names its module pair (`module`:
+    /// `native` the Hermes bytecode, `receipt` its pairing, `web` the
+    /// browser's form, never fetched here): an app.ts edit is a new generation
+    /// whose bytecode reaches the host, as a Contract edit's plan does.
+    #[test]
+    fn polling_a_typescript_generation_fetches_its_bytecode_and_receipt() {
+        use sha2::Digest;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering::SeqCst},
+            Arc,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let page = format!("http://{}/", listener.local_addr().unwrap());
+        let revision = Arc::new(AtomicUsize::new(1));
+        let payload_requests = Arc::new(AtomicUsize::new(0));
+        let serving_revision = revision.clone();
+        let serving_payloads = payload_requests.clone();
+        let server = std::thread::spawn(move || {
+            for connection in listener.incoming().take(9) {
+                let mut stream = connection.unwrap();
+                let path = read_request_path(&mut stream);
+                let hbc = format!("hbc revision {}", serving_revision.load(SeqCst)).into_bytes();
+                let receipt = br#"{"kind":"javascript"}"#.to_vec();
+                let card = |url: &str, bytes: &[u8]| serde_json::json!({"url":url, "bytes":bytes.len(), "sha256":format!("{:x}", sha2::Sha256::digest(bytes))});
+                let body = match path.as_str() {
+                    "/" => serde_json::to_vec(&serde_json::json!({
+                        "exact":1, "plan":card("/app.plan", b"plan"),
+                        "module":{"native":card("/app.hbc", &hbc),"receipt":card("/app.module.json", &receipt),"web":card("/app.js", b"js")}
+                    })).unwrap(),
+                    "/app.plan" => b"plan".to_vec(),
+                    "/app.module.json" => receipt,
+                    "/app.hbc" => hbc,
+                    _ => panic!("unexpected path {path}"),
+                };
+                if path != "/" {
+                    serving_payloads.fetch_add(1, SeqCst);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        let compat = r#"{"inputs":{"rustMode":"off"}}"#;
+        let first = super::fetch_changed(&page, compat, None).unwrap().unwrap();
+        let module = first.module.as_ref().expect("the module pair is fetched");
+        assert_eq!(module.bytes, b"hbc revision 1");
+        assert_eq!(module.receipt, r#"{"kind":"javascript"}"#);
+        assert_eq!(
+            payload_requests.load(SeqCst),
+            3,
+            "plan, receipt and bytecode; not app.js"
+        );
+        assert!(super::fetch_changed(&page, compat, Some(&first.identity))
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            payload_requests.load(SeqCst),
+            3,
+            "only the envelope is polled when unchanged"
+        );
+        // An app.ts edit: the same plan, new bytecode, a new generation.
+        revision.store(2, SeqCst);
+        let next = super::fetch_changed(&page, compat, Some(&first.identity))
+            .unwrap()
+            .unwrap();
+        assert_ne!(next.identity, first.identity);
+        assert_eq!(next.module.unwrap().bytes, b"hbc revision 2");
+        assert_eq!(payload_requests.load(SeqCst), 6);
         server.join().unwrap();
     }
 

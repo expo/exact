@@ -21,6 +21,7 @@ extension NodeView {
         if state.key == key, clipBox?.layer?.mask === state.boxMask, hasBoxFilter || layer.mask === state.layerMask,
            effect?.maskImage === state.effectMask as? NSImage { return }
         state.key = key
+        clipPath = ClipPath.path(style["clip_path"], size: bounds.size)
         let shaped = ClipPath.mask(outline)
         if let box = clipBox?.layer { box.mask = shaped }
         state.boxMask = clipBox?.layer?.mask
@@ -29,7 +30,7 @@ extension NodeView {
         defer { CATransaction.commit() }
         defer { state.layerMask = layer.mask; state.effectMask = effect?.maskImage }
         if let effect {
-            if let gradient = Gradient(style["mask_image"]) {
+            if let gradient = Gradient(style["mask_image"], tint: gradientTint) {
                 let size = effect.bounds.size, dark = drawsDark
                 effect.maskImage = NSImage(size: size, flipped: true) { rect in
                     if let ctx = NSGraphicsContext.current?.cgContext {
@@ -49,7 +50,7 @@ extension NodeView {
     /// `mask-image` over `clip-path` over the shaped corners, as one mask.
     func composedMask(shaped: CALayer?) -> CALayer? {
         let clip = clipMask(shaped: shaped)
-        guard let layer, let gradient = Gradient(style["mask_image"]) else { return clip }
+        guard let layer, let gradient = Gradient(style["mask_image"], tint: gradientTint) else { return clip }
         if gradient.needsDrawing {
             // Conic and repeating masks use the drawn pixels (LLP 1077 D5, LLP 1066).
             let m = GradientImageMaskLayer()

@@ -790,7 +790,9 @@ fn clearing_an_effect_at_present_time_draws_the_frame_without_it_and_keeps_the_r
     let mean = |p: &fixture::Pixels| {
         let sum: f32 = p
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| f32::from(c[0]) + f32::from(c[1]) + f32::from(c[2]))
             .sum();
         sum / (p.data.len() as f32 * 0.75 * 255.)

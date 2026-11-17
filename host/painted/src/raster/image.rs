@@ -2,6 +2,108 @@
 use super::*;
 
 impl Raster {
+    pub(super) fn draw_image(
+        &mut self,
+        image: &Arc<Bitmap>,
+        dst: Rect4,
+        clips: &[Shape],
+        ts: Transform,
+        tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
+    ) {
+        let (nw, nh) = (image.width() as f32, image.height() as f32);
+        if nw <= 0.0 || nh <= 0.0 || dst.2 <= 0.0 || dst.3 <= 0.0 {
+            return;
+        }
+        let dev = self
+            .device(ts)
+            .pre_concat(Transform::from_translate(dst.0, dst.1).pre_scale(dst.2 / nw, dst.3 / nh));
+        let mask = if self.image_inside_clips(nw, nh, dev, clips, ts) {
+            self.active_clip().cloned()
+        } else {
+            self.mask_with(clips, ts).map(Rc::new)
+        };
+        let paint = PixmapPaint {
+            quality: if rendering == exact_kernel::ImageRendering::CrispEdges {
+                FilterQuality::Nearest
+            } else {
+                FilterQuality::Bilinear
+            },
+            ..PixmapPaint::default()
+        };
+        // Tint in an isolated paint layer, never by copying the decoded asset.
+        let layers = self.layers.len();
+        if tint.is_some() {
+            self.push_opacity(1.0);
+            if self.layers.len() == layers {
+                return;
+            }
+        }
+        let device = self.device(ts);
+        if let Some(t) = self.target.pixels() {
+            let tiled = crate::image::sampling::pixelated(
+                image.pixels(),
+                dst,
+                device,
+                [self.width as f32, self.height as f32],
+                rendering,
+                |pixels, dst, core| {
+                    let mut clip = Mask::new(t.width(), t.height()).unwrap();
+                    let path = rounded_rect(&core).unwrap();
+                    clip.fill_path(&path, FillRule::Winding, false, device);
+                    if let Some(mask) = mask.as_deref() {
+                        multiply(&mut clip, mask);
+                    }
+                    let transform =
+                        device.pre_concat(Transform::from_translate(dst.0, dst.1).pre_scale(
+                            dst.2 / pixels.width() as f32,
+                            dst.3 / pixels.height() as f32,
+                        ));
+                    t.draw_pixmap(
+                        0,
+                        0,
+                        pixels.as_ref().as_ref(),
+                        &paint,
+                        transform,
+                        Some(&clip),
+                    );
+                },
+            );
+            let drawn = tiled
+                || rendering != exact_kernel::ImageRendering::CrispEdges
+                    && image_area::draw(
+                        t,
+                        image.pixels(),
+                        dev,
+                        mask.as_deref(),
+                        &mut self.image_area,
+                    );
+            #[cfg(target_arch = "x86_64")]
+            let drawn = drawn
+                || rendering == exact_kernel::ImageRendering::Auto
+                    && image_sample::draw(
+                        t,
+                        image.pixels(),
+                        dev,
+                        mask.as_deref(),
+                        &mut self.image_samples,
+                    );
+            if !drawn {
+                t.draw_pixmap(0, 0, image.pixels(), &paint, dev, mask.as_deref());
+            }
+            if let Some(tint) = tint {
+                let mut ink = solid(tint);
+                ink.blend_mode = tiny_skia::BlendMode::SourceIn;
+                let rect = Rect::from_xywh(0., 0., t.width() as f32, t.height() as f32).unwrap();
+                t.fill_rect(rect, &ink, Transform::identity(), None);
+            }
+        }
+        if tint.is_some() {
+            self.pop_opacity();
+        }
+        self.recycle_clip_mask(mask);
+    }
+
     pub(super) fn image_inside_clips(
         &self,
         width: f32,
@@ -156,7 +258,14 @@ mod tests {
                             actual.image_inside_clips(32., 24., dev, &clips, ts),
                             case < 2
                         );
-                        actual.image(&bitmap, dst, &clips, ts, tint);
+                        actual.image(
+                            &bitmap,
+                            dst,
+                            &clips,
+                            ts,
+                            tint,
+                            exact_kernel::ImageRendering::Auto,
+                        );
                         masked_image(&mut expected, &bitmap, dst, &clips, ts, tint);
                         assert_eq!(
                             actual.finish().unwrap().data(),
@@ -202,7 +311,14 @@ mod tests {
                             }
                             let inside = x >= 0. && x + width <= 40.;
                             let before = actual.clip_allocations.get();
-                            actual.image(&bitmap, dst, &clips, Transform::identity(), tint);
+                            actual.image(
+                                &bitmap,
+                                dst,
+                                &clips,
+                                Transform::identity(),
+                                tint,
+                                exact_kernel::ImageRendering::Auto,
+                            );
                             assert_eq!(actual.clip_allocations.get() == before, inside);
                             masked_image(
                                 &mut expected,

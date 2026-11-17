@@ -105,7 +105,9 @@ pub(crate) type ImageCache = HashMap<String, Arc<Pixmap>>;
 
 /// One canvas's replayer: its bitmap and the state the lists build on.
 pub(crate) struct Replayer {
-    pixmap: Pixmap,
+    /// Shared with the painters' snapshot until the next list draws into it,
+    /// which copies it only while a painter still holds the last one.
+    pixmap: Arc<Pixmap>,
     base: Transform,
     scale: f32,
     lifetime: u64,
@@ -172,7 +174,7 @@ pub(crate) struct Env<'a> {
 impl Replayer {
     fn new(w: u32, h: u32, scale: f64, lifetime: u64, generation: u32) -> Option<Replayer> {
         Some(Replayer {
-            pixmap: Pixmap::new(w, h)?,
+            pixmap: Arc::new(Pixmap::new(w, h)?),
             base: Transform::from_scale(scale as f32, scale as f32),
             scale: scale as f32,
             lifetime,
@@ -296,7 +298,7 @@ impl Replayer {
                     }
                 }
                 Op::Reset => {
-                    self.pixmap.fill(Color::TRANSPARENT);
+                    Arc::make_mut(&mut self.pixmap).fill(Color::TRANSPARENT);
                     self.state = State::default();
                     self.stack.clear();
                     self.path = PathBuilder::new();
@@ -445,7 +447,7 @@ impl Replayer {
                             ..Default::default()
                         };
                         let ts = self.device();
-                        self.pixmap.fill_path(
+                        Arc::make_mut(&mut self.pixmap).fill_path(
                             &p,
                             &paint,
                             FillRule::Winding,
@@ -496,7 +498,7 @@ pub(crate) fn replay(
     for list in lists {
         replayer.apply(list, env)?;
     }
-    Ok(Some(Arc::new(replayer.pixmap)))
+    Ok(Some(replayer.pixmap))
 }
 
 /// Every 2D canvas's replayer and snapshot, the decoded images, and the
@@ -548,6 +550,8 @@ impl Canvases {
             if r.lifetime != c.lifetime || r.generation != c.generation {
                 continue;
             }
+            // Its snapshot is replaced below: it holds the bitmap no longer.
+            self.snapshots.remove(&c.view);
             for l in &c.lists {
                 if let Err(e) = r.apply(l, &env) {
                     errors.push(format!("canvas {}: {e}", c.view));
@@ -564,7 +568,7 @@ impl Canvases {
                 self.snapshots.insert(
                     view,
                     CanvasPaint {
-                        pixels: Arc::new(r.pixmap.clone()),
+                        pixels: r.pixmap.clone(),
                     },
                 );
             }

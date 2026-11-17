@@ -3,7 +3,7 @@
 //! [`Rgba8`]; the rest keep their space ([`Wide`]). No ICC conversion.
 //!
 //! Transcendentals use the locked `libm` kernels, shared by folding and runtime
-//! colour arithmetic, so host libm rounding cannot change Tamber's IR or digests.
+//! colour arithmetic, so host libm rounding cannot change Forma's IR or digests.
 //! Cubes use explicit multiplication rather than `powi`'s unspecified precision.
 
 mod mix;

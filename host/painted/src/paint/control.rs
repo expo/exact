@@ -258,6 +258,8 @@ impl super::Painter {
             || node.props.str(PropId::Href).is_some()
             || self.unringed(node)
             || node.props.bool(PropId::Disabled) == Some(true)
+            // Its player marks the focus on its controller's own button.
+            || self.media.focused == Some(node.key)
         {
             return;
         }
@@ -551,7 +553,9 @@ pub(super) fn paint(
         };
         backend.fill(&track, dim(if on { accent } else { off }), ts);
         let d = (h - 4.0).max(0.0);
-        let tx = if on { x + w - 2.0 - d } else { x + 2.0 };
+        let rtl = node.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
+            == exact_kernel::Direction::Rtl;
+        let tx = if on != rtl { x + w - 2.0 - d } else { x + 2.0 };
         let thumb = Shape::new((tx, y + 2.0, d, d), [d / 2.0; 4]);
         backend.fill(&thumb, dim(if on { on_accent } else { [0xff; 4] }), ts);
         return;

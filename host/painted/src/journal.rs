@@ -234,8 +234,10 @@ fn value_json(v: &exact_plan::Value) -> Value {
 /// Leading positional arguments are followed by alternating keys and values.
 pub fn host_command(name: &str, args: &[exact_plan::Value]) {
     let pairs = |from: usize| {
-        let pairs = args.get(from..).unwrap_or_default().chunks_exact(2);
-        let o = pairs.filter_map(|kv| Some((kv[0].as_str()?.into(), value_json(&kv[1]))));
+        let pairs = args.get(from..).unwrap_or_default().as_chunks::<2>().0;
+        let o = pairs
+            .iter()
+            .filter_map(|kv| Some((kv[0].as_str()?.into(), value_json(&kv[1]))));
         Value::Object(o.collect())
     };
     let text = |i: usize, or: &str| {

@@ -7,7 +7,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, resolve, toNamespacedPath } from 'node:path';
 import { HERMES_INSTALLER, PINNED_RUST, hermesBundle, hermesLeanSysRoots } from './app.mjs';
-import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, platformRowNames } from './exact.mjs';
+import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, hermesRefusal, platformRowNames, shellPath } from './exact.mjs';
 import { iosAssets, iosTarget, entitlements, infoPlist, macInfoPlist, documentTypes, importedTypes, exportedTypes, writeUsageStrings, designCompatible, COMPATIBLE_SDK, moduleTripleFor } from '../host/apple/build.mjs';
 import { HOST_SDKS, olderVersion, useXcode, xcodeRefusal } from '../host/apple/devices.mjs';
 import { encodePng } from './png.mjs';
@@ -18,28 +18,80 @@ delete process.env.DEVELOPMENT_TEAM;
 
 const packagingTools = process.platform === 'darwin' && ['clang', 'codesign', 'sips', 'dsymutil', 'nm'].every((tool) => Bun.which(tool));
 
+test('simulator assets use the installed bundle or a private copy of an explicit override', async () => {
+  const { simulatorAssetRoot } = await import('../host/apple/assets.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-simulator-assets-'));
+  const installed = resolve(dir, 'container/App.app'), stage = resolve(dir, 'drive/assets');
+  try {
+    assert.equal(simulatorAssetRoot(installed), installed);
+    assert.equal(existsSync(stage), false);
+    for (const folder of ['Desktop', 'Documents', 'Downloads', 'Library/Mobile Documents/com~apple~CloudDocs']) {
+      const source = resolve(dir, folder, 'app/target/clients/capture');
+      mkdirSync(resolve(source, 'assets'), { recursive: true });
+      writeFileSync(resolve(source, 'assets/page.html'), folder);
+      writeFileSync(resolve(source, 'local.html'), 'a root-relative fixture');
+      symlinkSync(resolve(source, 'assets/page.html'), resolve(source, 'assets/linked.html'));
+      symlinkSync(resolve(source, 'assets'), resolve(source, 'linked-assets'));
+      assert.equal(simulatorAssetRoot(installed, source, stage), stage);
+      assert.equal(realpathSync(resolve(stage, 'assets/page.html')), resolve(realpathSync(stage), 'assets/page.html'));
+      assert.equal(readFileSync(resolve(stage, 'assets/page.html'), 'utf8'), folder);
+      assert.equal(readFileSync(resolve(stage, 'local.html'), 'utf8'), 'a root-relative fixture');
+      rmSync(source, { recursive: true });
+      assert.equal(readFileSync(resolve(stage, 'assets/page.html'), 'utf8'), folder);
+      assert.equal(readFileSync(resolve(stage, 'assets/linked.html'), 'utf8'), folder);
+      assert.equal(readFileSync(resolve(stage, 'linked-assets/page.html'), 'utf8'), folder);
+      rmSync(stage, { recursive: true });
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('simulator plans stage the initial generation and a later plan-only edit with their modules', async () => {
+  const { simulatorPlanPath } = await import('../host/apple/assets.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-simulator-plan-'));
+  const source = resolve(dir, 'Desktop/app/target/clients/ios/plan');
+  try {
+    for (const generation of ['initial', 'edited']) {
+      mkdirSync(resolve(source, 'rust/native'), { recursive: true });
+      const files = ['app.plan', 'app.module.json', 'app.hbc', 'rust/native/app.dylib', 'rust/native/app.module.json'];
+      for (const name of files) writeFileSync(resolve(source, name), `${generation}:${name}`);
+      const stage = resolve(dir, `drive-${generation}/plan`);
+      assert.equal(simulatorPlanPath(resolve(source, 'app.plan'), stage), resolve(stage, 'app.plan'));
+      rmSync(source, { recursive: true });
+      for (const name of files) {
+        assert.equal(readFileSync(resolve(stage, name), 'utf8'), `${generation}:${name}`);
+        assert.equal(realpathSync(resolve(stage, name)), resolve(realpathSync(stage), name));
+      }
+    }
+    mkdirSync(source, { recursive: true });
+    writeFileSync(resolve(source, 'fixture.plan'), 'bare plan');
+    const bare = simulatorPlanPath(resolve(source, 'fixture.plan'), resolve(dir, 'bare'));
+    assert.equal(readFileSync(bare, 'utf8'), 'bare plan');
+    assert.equal(existsSync(resolve(dir, 'bare/app.hbc')), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('Apple production optimization defaults, manifest choices and command-line overrides agree with artifact paths', async () => {
   const { appleProduction } = await import('../host/apple/link.mjs');
   const { appleArtifacts } = await import('../host/apple/build.mjs');
   for (const [platform, destination] of [['ios', 'ios'], ['ios', 'ios-simulator'], ['tvos', 'tvos'], ['tvos', 'tvos-simulator'], ['macos', 'macos']]) {
-    for (const game of [false, true]) for (const embed of [false, true]) for (const manifest of [undefined, 'speed', 'size']) for (const cli of [undefined, 'speed', 'size']) {
+    for (const game of [false, true]) for (const embed of [false, true]) for (const manifest of [undefined, 'speed', 'size', 'balanced']) for (const cli of [undefined, 'speed', 'size', 'balanced']) {
       const key = platform === 'macos' ? 'macos' : 'ios';
       const app = { dir: import.meta.dir, target: '/fixture/target', id: 'test.fixture', name: 'fixture', displayName: 'Fixture', manifest: { ...(game ? { game: { crate: 'fixture-logic' } } : {}), host: { [key]: { optimize: manifest } } } };
       const args = [...(embed ? ['--embed'] : []), ...(cli ? ['--optimize', cli] : [])];
-      const expected = cli ?? manifest ?? (game ? 'speed' : embed || platform !== 'macos' ? 'size' : 'speed');
-      if (game && expected === 'size') {
-        assert.throws(() => appleProduction(app, platform, args), /games cannot optimize for size because their generated Cargo workspace has no size profile; use speed/);
+      const expected = cli ?? manifest ?? (game ? 'speed' : embed ? 'size' : platform !== 'macos' ? 'balanced' : 'speed');
+      if (game && expected !== 'speed') {
+        assert.throws(() => appleProduction(app, platform, args), new RegExp(`games cannot optimize for ${expected} because their generated Cargo workspace has no ${expected} profile; use speed`));
         continue;
       }
       const selected = appleProduction(app, platform, args);
-      assert.deepEqual(selected, { optimize: expected, profile: expected === 'size' ? 'size' : 'release' });
+      assert.deepEqual(selected, { optimize: expected, profile: expected === 'speed' ? 'release' : expected });
       const paths = appleArtifacts(app, { destination, trust: 'production', ...(embed || cli ? { optimize: selected.optimize } : {}) });
-      assert.ok(paths.swift.endsWith(expected === 'size' ? '-size' : '-whole'), JSON.stringify({ platform, args, manifest, paths }));
+      assert.ok(paths.swift.endsWith(expected === 'speed' ? '-whole' : `-${expected}`), JSON.stringify({ platform, args, manifest, paths }));
       const development = appleArtifacts(app, { destination, trust: 'development' });
-      assert.doesNotMatch(development.swift, /-(size|whole)$/);
+      assert.doesNotMatch(development.swift, /-(size|balanced|whole)$/);
     }
   }
-  for (const args of [['--optimize', 'other'], ['--optimize']]) assert.throws(() => appleProduction({ manifest: {} }, 'ios', args), /--optimize is speed or size/);
+  for (const args of [['--optimize', 'other'], ['--optimize']]) assert.throws(() => appleProduction({ manifest: {} }, 'ios', args), /--optimize is speed, size or balanced/);
   const trust = process.env.EXACT_UPDATE_TRUST;
   process.env.EXACT_UPDATE_TRUST = 'production';
   try {
@@ -200,7 +252,7 @@ test.skipIf(process.platform === 'win32')('an archive of an app without a 1024 p
     mkdirSync(bin); mkdirSync(app);
     writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\nprintf 'aarch64-apple-ios\\n'\n`, { mode: 0o755 });
     // Every compiler the build could start records that it was started, and compiles nothing; the SDK is new enough.
-    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
+    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--version*) echo "Apple Swift version 6.4"; exit 0;; *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
     writeFileSync(resolve(app, 'app.contract'), 'component A\n');
     mkdirSync(resolve(app, 'assets'));
     writeFileSync(resolve(app, 'assets/small.png'), encodePng({ width: 192, height: 192, data: new Uint8Array(192 * 192 * 4).fill(255) }));
@@ -294,6 +346,15 @@ test('iOS Hermes preflight selects the pinned digest and exact installer command
     assert.equal(simulator.installed, false);
     assert.equal(simulator.root, intelSimulator.root, 'both simulator triples select the universal bundle');
     assert.equal(simulator.fix, `cargo run --manifest-path ${HERMES_INSTALLER} -- --target aarch64-apple-ios-sim`);
+    // A build that finds it missing (a fresh HOME, a copied checkout) names this checkout's setup first, then the
+    // installer's line for the bundle alone (LLP 1168.000 D4.5).
+    const said = hermesRefusal(simulator, env), setup = `bun ${shellPath(resolve(import.meta.dir, 'exact.mjs'))} setup`;
+    assert.ok(said.startsWith('the pinned Hermes bundle for aarch64-apple-ios-sim is not installed: '), said);
+    assert.ok(said.includes(`\`${setup}\` installs it and the rest a native build needs`), said);
+    assert.ok(said.indexOf(setup) < said.indexOf(simulator.fix) && said.endsWith(simulator.fix), said);
+    // The tvOS device's bundle, which setup does not install, is named with its installer line alone.
+    const tv = hermesBundle('aarch64-apple-tvos', env), tvSaid = hermesRefusal(tv, env);
+    assert.ok(!tvSaid.includes(setup) && tvSaid.includes('exact setup does not install this one') && tvSaid.endsWith(tv.fix), tvSaid);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -463,8 +524,14 @@ test('device grants derive the plists, their translations and the release entitl
     assert.match(plist, /<key>NSSpeechRecognitionUsageDescription<\/key><string>Transcribes.<\/string>/);
     assert.match(plist, /<key>CFBundleLocalizations<\/key><array><string>en<\/string><string>fr<\/string><\/array>/);
   }
-  // No device grant, no key: the plists are what they were.
-  for (const plist of [infoPlist(app, false), macInfoPlist(app, { reach: { ...reach, usage: {} } })]) assert.doesNotMatch(plist, /UsageDescription|CFBundleLocalizations/);
+  // No device grant, no usage key; the strings tables are still the bundle's localizations (#486).
+  for (const plist of [infoPlist(app, false, { reach: { ...reach, usage: {} } }), macInfoPlist(app, { reach: { ...reach, usage: {} } })]) {
+    assert.doesNotMatch(plist, /UsageDescription/);
+    assert.match(plist, /<key>CFBundleDevelopmentRegion<\/key><string>en<\/string>/);
+    assert.match(plist, /<key>CFBundleLocalizations<\/key><array><string>en<\/string><string>fr<\/string><\/array>/);
+  }
+  // No strings table, no localization.
+  for (const plist of [infoPlist(app, false), macInfoPlist(app, { reach: { ...reach, usage: {}, base: null, locales: null } })]) assert.doesNotMatch(plist, /UsageDescription|CFBundleLocalizations|CFBundleDevelopmentRegion/);
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-usage-'));
   try {
     writeUsageStrings(reach, dir);
@@ -621,6 +688,17 @@ test('`userInterfaceStyle` writes UIUserInterfaceStyle on iOS and tvOS and Exact
   }
 });
 
+test('host.macos.layoutDirection writes ExactLayoutDirection only for a Mac rtl request', () => {
+  const app = (manifest) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', manifest });
+  const rtl = app({ host: { macos: { layoutDirection: 'rtl' } } });
+  assert.match(macInfoPlist(rtl), /<key>ExactLayoutDirection<\/key><string>rtl<\/string>/);
+  for (const plist of [infoPlist(rtl, false), infoPlist(rtl, false, { tv: true })])
+    assert.doesNotMatch(plist, /ExactLayoutDirection/);
+  for (const manifest of [{}, { host: {} }, { host: { macos: {} } }, { host: { macos: { layoutDirection: 'auto' } } }, { dir: 'rtl' }]) {
+    assert.doesNotMatch(macInfoPlist(app(manifest)), /ExactLayoutDirection/);
+  }
+});
+
 test('the launch handler bakes `ExactLaunchMode` with or without documents (LLP 1069.010 D4)', async () => {
   const { readManifest } = await import('./app.mjs');
   const app = (manifest) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', manifest: { host: {}, ...manifest } });
@@ -739,26 +817,15 @@ test('an App Clip is its parent\'s app under a second identity: NSAppClip, the p
   assert.match(parent, /<key>com.apple.developer.associated-domains<\/key><array><string>applinks:exact.test<\/string><string>webcredentials:exact.test<\/string><string>appclips:exact.test<\/string><\/array>/);
   assert.doesNotMatch(parent, /parent-application-identifiers/);
   assert.doesNotMatch(flat(entitlements(base, 'TEAM', true)), /appclips:/);
-  // The declared origin's applinks: becomes the clip's appclips: too; a tvOS build of the app has neither.
-  const origin = { ...app, origin: 'https://exact.test', manifest: { host: { ios: { associatedDomains: true, appClip: {} } } } };
+  // handle_links' applinks: becomes the clip's appclips: too; a tvOS build of the app has neither, and a wildcard
+  // gives no appclips: (LLP 1038 D8).
+  const origin = { ...app, origin: 'https://exact.test', manifest: { handle_links: 'preferred', app: { id: app.id, origin: 'https://exact.test' }, host: { ios: { appClip: {} } } } };
+  assert.match(flat(entitlements(origin, 'TEAM', true)), /<array><string>applinks:exact.test<\/string><string>appclips:exact.test<\/string><\/array>/);
   assert.match(flat(entitlements({ ...origin, id: clip.id, clipParent: app.id }, 'TEAM', true)), /<array><string>appclips:exact.test<\/string><\/array>/);
-  assert.doesNotMatch(entitlements({ ...origin, widgetTV: true }, 'TEAM', true), /appclips:/);
-  // The origin's association file names the clip under `appclips`, beside the app's `applinks` (LLP 1030).
-  const { appleAssociation } = await import('../host/web/association.mjs');
-  const team = (a) => ({ ...a, manifest: { host: { ios: { ...a.manifest.host.ios, team: 'TEAM' } } } });
-  assert.deepEqual(appleAssociation(team(origin)), {
-    applinks: { details: [{ appIDs: ['TEAM.com.exact.test'], components: [{ '/': '*' }] }] },
-    appclips: { apps: ['TEAM.com.exact.test.Clip'] },
-  });
-  assert.deepEqual(Object.keys(appleAssociation({ ...team(base), origin: 'https://exact.test' }, { webcredentials: true })), ['applinks', 'webcredentials']);
-  assert.equal(appleAssociation(origin), null, 'no team, no file');
-  // It claims the app only where the entitlements claim this origin's host as applinks:.
-  const listed = (associatedDomains) => team({ ...origin, manifest: { host: { ios: { associatedDomains, appClip: {} } } } });
-  assert.equal(appleAssociation(listed(['applinks:other.example'])), null);
-  assert.equal(appleAssociation(listed([])), null);
-  assert.deepEqual(Object.keys(appleAssociation(listed(['applinks:exact.test?mode=developer']))), ['applinks', 'appclips']);
-  assert.deepEqual([['applinks:*.exact.test'], ['applinks:*.test'], ['applinks:*.xexact.test']].map((l) => !!appleAssociation(listed(l))), [true, true, false]);
-  assert.equal(appleAssociation({ ...team(origin), origin: undefined }), null, 'no origin, no host to claim');
+  assert.doesNotMatch(entitlements({ ...origin, widgetTV: true }, 'TEAM', true), /applinks:|appclips:/);
+  const wildcard = { ...app, manifest: { host: { ios: { associatedDomains: ['applinks:*.exact.test'], appClip: {} } } } };
+  assert.match(flat(entitlements(wildcard, 'TEAM', true)), /<array><string>applinks:\*.exact.test<\/string><\/array>/);
+  // The origin's association files: scripts/links.test.mjs.
   // With widgets, the clip shares the parent's App Group and Keychain group, and takes no push environment.
   const entries = { ...app, manifest: { ...app.manifest, live_activities: [{ kind: 'departure', push: true }] } };
   const grouped = flat(entitlements({ ...entries, id: clip.id, clipParent: app.id }, 'TEAM', true, null, { prefix: 'PREFIX' }));
@@ -1169,6 +1236,39 @@ test('watch owns the build before the parent starts and reports a skipped TypeSc
 });
 
 
+test('a device watch app is arm64 from watchOS 26, signed with profiles of the iPhone app\'s kind that grant its group (LLP 1126.002 D7, D10)', async () => {
+  const { watchInfo, watchDestination, watchProfiles, buildWatch } = await import('../host/apple/watch.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-watch-device-'));
+  try {
+    const app = { dir, id: 'com.exact.watchy', displayName: 'Watchy', manifest: { watch: { source: 'watch.contract', component: 'Watch' }, widgets: [{ kind: 'next', families: ['accessoryInline'] }] } };
+    assert.deepEqual(watchDestination(true), { target: 'aarch64-apple-watchos', triple: 'arm64-apple-watchos26.0', sdkName: 'watchos', platform: 'WatchOS' });
+    assert.deepEqual(watchDestination(false), { target: 'aarch64-apple-watchos-sim', triple: 'arm64-apple-watchos26.0-simulator', sdkName: 'watchsimulator', platform: 'WatchSimulator' });
+    const fields = { appInfo: { CFBundleVersion: '7', CFBundleShortVersionString: '1.2' }, group: 'group.com.exact.watchy.watchkitapp', entries: [], live: true, generation: 'g' };
+    const device = watchInfo(app, { ...fields, device: true, toolchain: { DTSDKName: 'watchos27.2' } });
+    assert.deepEqual([device.CFBundleSupportedPlatforms, device.DTPlatformName, device.MinimumOSVersion, device.UIRequiredDeviceCapabilities, device.DTSDKName], [['WatchOS'], 'watchos', '26.0', ['arm64'], 'watchos27.2']);
+    assert.deepEqual([device.WKApplication, device.WKCompanionAppBundleIdentifier, device.CFBundleIdentifier, device.CFBundleVersion], [true, app.id, `${app.id}.watchkitapp`, '7']);
+    const simulator = watchInfo(app, fields);
+    assert.deepEqual([simulator.CFBundleSupportedPlatforms, simulator.MinimumOSVersion, simulator.UIRequiredDeviceCapabilities], [['WatchSimulator'], '26.0', undefined]);
+
+    const make = (id, extra = {}) => ({ name: id, appId: `PREFIX.${id}`, team: 'TEAM', prefix: 'PREFIX', platforms: ['iOS'], expires: new Date(Date.now() + 86400000),
+      method: 'development', dev: true, devices: ['PHONE'], groups: ['group.com.exact.watchy.watchkitapp'], keychain: [], entitlements: [], ...extra });
+    const like = make(app.id, { groups: [] }), watch = make(`${app.id}.watchkitapp`), extension = make(`${app.id}.watchkitapp.widgets`);
+    assert.deepEqual(watchProfiles({ app, udid: 'PHONE', like, installed: [like, watch, extension] }), [watch, extension]);
+    assert.deepEqual(watchProfiles({ app: { ...app, manifest: { watch: app.manifest.watch } }, udid: 'PHONE', like, installed: [watch] }), [watch], 'no complications, no extension profile');
+    assert.deepEqual(watchProfiles({ app: { ...app, manifest: {} }, udid: 'PHONE', like, installed: [] }), [], 'no watch app, no profiles');
+    for (const [changed, why] of [[{ groups: [] }, /does not grant the App Group group.com.exact.watchy.watchkitapp/], [{ team: 'OTHER' }, /is team OTHER's, not TEAM's/],
+      [{ devices: ['OTHER'] }, /does not include this phone/], [{ method: 'adhoc', dev: false }, /is Ad Hoc, not development/]]) {
+      assert.throws(() => watchProfiles({ app, udid: 'PHONE', like, installed: [{ ...watch, ...changed }, extension] }), why, JSON.stringify(changed));
+    }
+    assert.throws(() => watchProfiles({ app, udid: 'PHONE', like, installed: [watch] }), /com.exact.watchy.watchkitapp.widgets.*none on this Mac is for it.*register the App ID com.exact.watchy.watchkitapp.widgets with App Groups/);
+    // An archive's: the App Store profiles of the iPhone app's, which name no device.
+    const store = { method: 'appstore', dev: false, devices: [] };
+    assert.deepEqual(watchProfiles({ app, udid: undefined, like: { ...like, ...store }, installed: [{ ...watch, ...store }, { ...extension, ...store }] }).length, 2);
+    await assert.rejects(buildWatch(app, ['--watchos', '--device'], {}), /a --device or --archive build of the iPhone app embeds its watch app/);
+    await assert.rejects(buildWatch(app, ['--watchos', '--extensions', 'widgets'], {}), /--extensions leaves out/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a refused parent prevents use of a stale companion bundle', async () => {
   const { buildWatch } = await import('../host/apple/watch.mjs');
   const before = process.exitCode ?? 0, events = [];
@@ -1183,23 +1283,21 @@ test('a refused parent prevents use of a stale companion bundle', async () => {
 });
 
 
-test('Mac signing preflight falls back without a development identity and reads hardware only for Mac profiles', async () => {
+test('Mac signing preflight requires an identity or explicit omission and reads hardware only for Mac profiles', async () => {
   const { macWidgetSigning, widgetSigningTeam, macHardwareID, macWidgetProfiles } = await import('../host/apple/widgets.mjs');
   const { profile } = await import('../host/apple/devices.mjs');
   const app = { id: 'com.exact.test', manifest: { widgets: [{ kind: 'public', families: ['systemSmall'] }] } };
   const messages = [];
-  assert.equal(macWidgetSigning(app, null, { log: text => messages.push(text) }), null);
+  assert.throws(() => macWidgetSigning(app, null), /Apple Development.*EXACT_IDENTITY=-.*without the extension/);
+  assert.equal(macWidgetSigning(app, '-', { log: text => messages.push(text) }), null);
   assert.equal(messages.length, 1); assert.match(messages[0], /EXACT_IDENTITY/);
   const certificates = [{ subject: 'CN=Apple Development: Fixture\nOU=0123456789', fingerprint: 'AA' },
     { subject: 'CN=Developer ID Application: Fixture\nOU=0123456789', fingerprint: 'BB' }];
   assert.equal(widgetSigningTeam('AA', { certificates }), '0123456789');
   assert.equal(widgetSigningTeam('Apple Development: Fixture', { certificates }), '0123456789');
-  assert.equal(macWidgetSigning(app, 'BB', { certificates, log: text => messages.push(text) }), null);
-  assert.match(messages.at(-1), /Developer ID.*ad hoc.*EXACT_IDENTITY.*Apple Development/);
-  assert.equal(macWidgetSigning(app, null, { distribution: true, log: text => messages.push(text) }), null);
-  assert.match(messages.at(-1), /EXACT_IDENTITY.*Developer ID Application/);
-  assert.doesNotMatch(messages.at(-1), /Apple Development/);
-  assert.throws(() => macWidgetSigning(app, 'AA', { certificates, distribution: true }), /Developer ID Application.*EXACT_IDENTITY names Apple Development/);
+  assert.throws(() => macWidgetSigning(app, 'BB', { certificates }), /Apple Development.*EXACT_IDENTITY/);
+  assert.throws(() => macWidgetSigning(app, null, { distribution: true }), /Developer ID Application.*EXACT_DEVELOPER_ID/);
+  assert.throws(() => macWidgetSigning(app, 'AA', { certificates, distribution: true }), /Developer ID Application.*EXACT_DEVELOPER_ID names Apple Development/);
   assert.equal(widgetSigningTeam('BB', { certificates, distribution: true }), '0123456789');
   // Captured SPHardwareDataType property list; hardware and provisioning ids redacted separately.
   const capture = readFileSync(new URL('../host/apple/tests/fixtures/mac-hardware.json', import.meta.url), 'utf8');
@@ -1276,7 +1374,7 @@ for (const [moduleDirectory, staleDirectory] of [['', null], ['Modules', null], 
   if (process.platform !== 'darwin') return;
   const { sharedWidgetCore } = await import('../host/apple/widgets.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-core-recopy-'));
-  const run = (command, args) => { const r = spawnSync(command, args, { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r; };
+  const run = (command, args) => { const r = spawnSync(command, args, { encoding: 'utf8', env: { ...process.env, TMPDIR: dir } }); assert.equal(r.status, 0, r.stderr); return r; }; // swiftc leaves a TemporaryDirectory.* in its TMPDIR
   try {
     const bin = resolve(dir, 'bin'), base = resolve(dir, 'core'); mkdirSync(bin);
     const triple = moduleTripleFor({ manifest: {} }, false);

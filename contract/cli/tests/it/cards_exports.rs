@@ -12,6 +12,7 @@
 //! is exported too, its trailing control in its slot.
 #![cfg(unix)]
 
+use crate::scratch::Scratch;
 use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
@@ -44,9 +45,10 @@ component App
 "#;
 
 /// A consumer app in a fresh directory, `@exact/cards` the repository's.
-fn consumer(tag: &str, source: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("exact2-cards-exports-{tag}-{}", std::process::id()));
+fn consumer(tag: &str, source: &str) -> Scratch {
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-cards-exports-{tag}-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     copy(
         &repo().join("packages/cards"),
@@ -54,8 +56,8 @@ fn consumer(tag: &str, source: &str) -> PathBuf {
     );
     std::fs::write(dir.join("app.contract"), source).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber consumer\n\ntheme\n  ink = #111111\n",
+        dir.join("app.forma"),
+        "forma consumer\n\ntheme\n  ink = #111111\n",
     )
     .unwrap();
     std::fs::write(

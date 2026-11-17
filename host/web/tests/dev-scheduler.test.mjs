@@ -1,8 +1,8 @@
 import {test} from 'bun:test';
 import assert from 'node:assert/strict';
-import {readFileSync, writeFileSync, mkdirSync, unlinkSync, mkdtempSync, openSync, ftruncateSync, closeSync, rmSync, existsSync, readdirSync, watch, renameSync, watchFile, unwatchFile, statSync, lstatSync, utimesSync, symlinkSync} from 'node:fs';
+import {readFileSync, writeFileSync, mkdirSync, unlinkSync, mkdtempSync, openSync, ftruncateSync, closeSync, rmSync, existsSync, readdirSync, watch, renameSync, watchFile, unwatchFile, statSync, lstatSync, utimesSync, symlinkSync, chmodSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {basename, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve} from 'node:path';
 import {within} from '../../../scripts/paths.mjs';
 import {open} from '../../../scripts/agent.mjs';
 import {compilerPaths, gpuModules, pendingBuildInputs} from '../../../scripts/app.mjs';
@@ -10,14 +10,15 @@ import {directoryInputNames} from '../../../scripts/cargo-dep-info.mjs';
 import {createHash} from 'node:crypto';
 import {runInNewContext} from 'node:vm';
 
-// The `new Function` harnesses below run slices of dev.mjs at global scope, where its module imports are not; these two it
-// uses on its watch paths are given as globals.
-Object.assign(globalThis, { basename, within });
+// The `new Function` harnesses run slices of dev.mjs at global scope,
+// so these watcher imports are supplied as globals.
+Object.assign(globalThis, { basename, within, nativeResourceInputs, nativeWatchPaths });
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {watchStaticTrees} from '../serve.mjs';
 import {acceptModuleReply} from '../dev-phase.mjs';
-import {watchDirectoryInputs, watchModuleSources} from '../dev-watch.mjs';
+import {cacheBuildInputs, nativeResourceInputs, nativeWatchPaths, watchDirectoryInputs, watchModuleSources} from '../dev-watch.mjs';
+import {nativeResourceInventory} from '../../apple/assets.mjs';
 import {cdpBrowser, chromium} from '../../../scripts/agent-launch.mjs';
 import {need} from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
@@ -43,7 +44,7 @@ test('large module warning replies keep the producer alive and discard supersede
     MODULE_FILES: { native: 'app.hbc', web: 'app.js' }, captureAssets: () => new Map(),
     currentModule: null, assetCards: () => [], isEntryFile: () => false,
     moduleDesign: null, moduleScrubbed: null, moduleReleased: false,
-    designBytes: () => '', designSource: null, designSnapshot: null, tamber: null,
+    designBytes: () => '', designSource: null, designSnapshot: null, forma: null,
     app: { id: 'test.warnings' }, moduleCards() {}, seq: 0, captureGeneration() {}, pending: new Map(), sayReady() {},
     announcement: () => ({ seq: context.seq }), push: message => published.push(message),
     watchPackages() {}, rmSync() {}, moduleStage: null, produce: () => { retries++; },
@@ -77,7 +78,8 @@ test('the JS dev loop carries state by built logic revision and refreshes host f
   const appDir=resolve(fileURLToPath(new URL('../../../apps/realworld',import.meta.url))),contract=resolve(appDir,'app.contract'),logic=resolve(appDir,'app.ts'),helper=resolve(appDir,'dev-reload-helper.ts');
   const original=readFileSync(contract,'utf8'),originalLogic=readFileSync(logic,'utf8');
   const restoreTimes=keepTimes([contract,logic]);
-  const privateDist=mkdtempSync(join(tmpdir(),'exact-dev-carry-'));
+  // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): each dist here sits in a directory of its own.
+  const privateDist=join(mkdtempSync(join(tmpdir(),'exact-dev-carry-')),'dist');
   const withProbe=text=>text
     .replace('component RealWorld\n','shape DevReloadAnswer\n  value: string\nshape DevReloadRow\n  id: string\nshape DevReloadPage\n  visibilityState: string\n  onLine: bool\n  canShare: bool\n\ncomponent RealWorld\n  state reloadProbe = "fresh"\n  state rowProbe = "row fresh"\n')
     .replace('  resource follows = followings() as shape Follow[]\n','  resource follows = followings() as shape Follow[]\n  resource devReloadAnswer = devReloadAnswer() as shape DevReloadAnswer\n  resource devReloadRows = devReloadRows() as shape DevReloadRow[]\n  resource devReloadPage = exactPage() as shape DevReloadPage\n')
@@ -147,16 +149,16 @@ test('the JS dev loop carries state by built logic revision and refreshes host f
     writeFileSync(contract,original);
     writeFileSync(logic,originalLogic);
     restoreTimes();
-    rmSync(privateDist,{recursive:true,force:true});
     if(existsSync(helper))unlinkSync(helper);
     await drive?.close();
     if(dev?.exitCode===null){dev.kill('SIGTERM');await new Promise(ok=>{const t=setTimeout(ok,2000);dev.once('exit',()=>{clearTimeout(t);ok()})})}
+    rmSync(dirname(privateDist),{recursive:true,force:true});
   }
 },180_000);
 test('the Caltrain JS dev loop keeps its station search across an app edit', async () => {
   const contract=resolve(fileURLToPath(new URL('../../../apps/caltrain/app.contract',import.meta.url))),original=readFileSync(contract,'utf8');
   const restoreTimes=keepTimes([contract]);
-  const privateDist=mkdtempSync(join(tmpdir(),'exact-dev-carry-'));
+  const privateDist=join(mkdtempSync(join(tmpdir(),'exact-dev-carry-')),'dist');
   // The brand's text, wherever the layout puts it; an edit that no longer applies fails here, not as a reload that never shows.
   const edited=original.replace(/(\n\s*text )"Caltrain"( [^\n]*testId="brand")/,'$1"Caltrain reloaded"$2');
   assert.notEqual(edited, original, 'the brand edit no longer applies to apps/caltrain/app.contract');
@@ -182,9 +184,9 @@ test('the Caltrain JS dev loop keeps its station search across an app edit', asy
   } finally {
     writeFileSync(contract,original);
     restoreTimes();
-    rmSync(privateDist,{recursive:true,force:true});
     await drive?.close();
     if(dev?.exitCode===null){dev.kill('SIGTERM');await new Promise(ok=>{const t=setTimeout(ok,2000);dev.once('exit',()=>{clearTimeout(t);ok()})})}
+    rmSync(dirname(privateDist),{recursive:true,force:true});
   }
 },180_000);
 need('chrome', unavailable)('a page whose first build failed reloads into the fixed build', async () => {
@@ -194,7 +196,7 @@ need('chrome', unavailable)('a page whose first build failed reloads into the fi
   const contract=resolve(fileURLToPath(new URL('../../../apps/realworld/app.contract',import.meta.url))),original=readFileSync(contract,'utf8');
   const restoreTimes=keepTimes([contract]);
   const listener=createServer();await new Promise((ok,fail)=>{listener.once('error',fail);listener.listen(0,'127.0.0.1',ok)});const port=listener.address().port;await new Promise(ok=>listener.close(ok));
-  const dist=mkdtempSync(join(tmpdir(),'exact-dev-error-dist-'));
+  const dist=join(mkdtempSync(join(tmpdir(),'exact-dev-error-dist-')),'dist');
   let dev,suite,lines='';
   const waitFor=async (read,accept,ms=60000)=>{const end=Date.now()+ms;let last;while(Date.now()<end){try{last=await read();if(accept(last))return last}catch{}await new Promise(r=>setTimeout(r,50))}throw new Error(`not observed: ${JSON.stringify(last)}\n${lines.slice(-3000)}`)};
   try {
@@ -216,7 +218,7 @@ need('chrome', unavailable)('a page whose first build failed reloads into the fi
     restoreTimes();
     await suite?.close();
     if(dev?.exitCode===null){dev.kill('SIGTERM');await new Promise(ok=>{const t=setTimeout(ok,2000);dev.once('exit',()=>{clearTimeout(t);ok()})})}
-    rmSync(dist,{recursive:true,force:true});
+    rmSync(dirname(dist),{recursive:true,force:true});
   }
 },420_000);
 test('static watcher follows immediate creation, in-place edits, and directory replacement', async () => {
@@ -541,7 +543,7 @@ test('a failed build\'s files ride with the next build, whatever it touches', ()
 test('compiler cleanup kills the recorded GPU cargo group too', () => {
   const cleanup=source.slice(source.indexOf('const killCompiler = () => {'),source.indexOf('\nconst stop ='));
   const killed=[];
-  new Function('process', `const unasked=()=>{};let gpuBuildChild={pid:123},manualTypescript,rustSourceWatch,rustOutputWatch,rustHeartbeat,rustActive,rustChild,moduleWatch,moduleTimer,moduleRun=0,dev,moduleStage; ${cleanup}; killCompiler();`)
+  new Function('process', `const unasked=()=>{};let gpuBuildChild={pid:123},manualTypescript,rustSourceWatch,rustOutputWatch,rustHeartbeat,rustActive,rustChild,moduleWatch,moduleTimer,moduleRun=0,dev,moduleStage,compilerDown; ${cleanup}; killCompiler();`)
     ({kill:(...args)=>killed.push(args)});
   assert.deepEqual(killed,[[-123,'SIGKILL']]);
 });
@@ -644,10 +646,10 @@ function quietWatches() {
   };
 }
 
-function compilerWatches(directory, quiet, { inputs = [], directories = [], gpuInputs = [], appInputs = [] } = {}) {
-  const context = { ...quiet.clock, resolve, basename, within, existsSync, readdirSync, lstatSync, statSync, directoryInputNames,
-    app: { dir: directory, manifest: {} }, source: resolve(directory, 'app.contract'), skipped: /(^|\/)(target|dist)(\/|$)/,
-    builtReceipts: [{ binary: { inputs: inputs.map(path => ({ path })), directories: directories.map(path => ({ path })), missing: [] } }],
+function compilerWatches(directory, quiet, { inputs = [], directories = [], gpuInputs = [], appInputs = [], builds, skipped = /(^|\/)(target|dist)(\/|$)/ } = {}) {
+  const context = { ...quiet.clock, resolve, basename, within, nativeResourceInputs, nativeWatchPaths, existsSync, readdirSync, lstatSync, statSync, directoryInputNames,
+    app: { dir: directory, manifest: {} }, source: resolve(directory, 'app.contract'), skipped,
+    builtReceipts: builds ?? [{ binary: { inputs: inputs.map(path => ({ path })), directories: directories.map(path => ({ path })), missing: [] } }],
     readinessContracts: new Set(), contractGraph: () => ({ files: new Set(), sources: new Set() }),
     rustInputFiles: new Set(), gpuInputs: new Set(gpuInputs), appInputs: new Set(appInputs), failedInputs: new Set(), assetTrees: [],
     typescript: false, portableRust: false, producersOnly: false, timer: null, rebuildOn: { rust: 'save' }, changed: new Set(), tuning: { paths: new Set() },
@@ -656,7 +658,7 @@ function compilerWatches(directory, quiet, { inputs = [], directories = [], gpuI
   };
   const begin = source.indexOf('const watched=new Map();'), end = source.indexOf('\nwatchCompilerInputs();', begin);
   const gpu = source.slice(source.indexOf('const gpuOnly ='), source.indexOf(';', source.indexOf('const gpuOnly =')) + 1);
-  runInNewContext(`${gpu}\nglobalThis.isGpuOnly = gpuOnly;\n${source.slice(begin, end)}\nwatchCompilerInputs();\nglobalThis.close = () => { for (const handle of watched.values()) handle.close(); };`, context);
+  runInNewContext(`${gpu}\nglobalThis.isGpuOnly = gpuOnly;\n${source.slice(begin, end)}\nwatchCompilerInputs();\ncompilerInputChanged = path => globalThis.inputInvalidated?.(path);\nglobalThis.close = () => { for (const handle of watched.values()) handle.close(); };`, context);
   return context;
 }
 
@@ -807,7 +809,7 @@ test('compiler directories discover and coalesce input changes without filesyste
   let context;
   try {
     mkdirSync(tree); mkdirSync(swift); writeFileSync(resolve(swift, 'main.swift'), 'main');
-    context = { ...quiet.clock, resolve, basename, within, existsSync, readdirSync, lstatSync, statSync, directoryInputNames,
+    context = { ...quiet.clock, resolve, basename, within, nativeResourceInputs, nativeWatchPaths, existsSync, readdirSync, lstatSync, statSync, directoryInputNames,
       app: { dir: directory, manifest: {} }, source: resolve(directory, 'app.contract'), skipped: /(^|\/)(target|dist)(\/|$)/,
       builtReceipts: [{ binary: { inputs: [{ path: resolve(swift, 'main.swift') }, { path: directory }],
         directories: [{ path: tree }, { path: optional }], missing: [] } }],
@@ -1000,4 +1002,190 @@ test('Contract generations replace producer-owned plans and activity schemas whi
     assert.deepEqual(next.assets.map(c => c.name).sort(), ['activities/train.d.ts', 'activities/train.schema.json', 'assets/icon.png', 'plans/train.plan']);
     for (const card of next.assets) assert.equal(card.sha256, createHash('sha256').update(next.files.get(card.name)).digest('hex'));
   }
+});
+
+test('native program admission follows each built cohort across web rebuilds and native input changes', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'exact-native-program-'));
+  const path = resolve(directory, 'native.swift'), missing = resolve(directory, 'optional.swift');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  writeFileSync(path, 'native one');
+  const native = {compat: {id: hash('ios'), target: 'aarch64-apple-ios', inputs: {platform: 'ios'}},
+    binary: {sha256: hash('native binary one'), inputs: [{path, name: 'native.swift', sha256: hash('native one')}], missing: [missing], directories: []}};
+  const web = {compat: {id: hash('web'), inputs: {platform: 'web'}}, binary: {sha256: hash('web one')}};
+  const simulator = {...native, compat: {...native.compat, target: 'aarch64-apple-ios-sim'},
+    binary: {...native.binary, sha256: hash('simulator'), inputs: [], missing: []}};
+  const builds = [web, native];
+  let nativeBuilt = false;
+  const validation = cacheBuildInputs(pendingBuildInputs);
+  const context = {app: {target: directory}, buildEnv: {}, nativePrograms: {}, cacheBuildInputs: () => validation, readBuilds: () => nativeBuilt ? builds : [web], pendingBuildInputs};
+  const key = `${native.compat.target}/${native.compat.id}`;
+  const begin = source.indexOf('let builtReceipts=readBuilds('), end = source.indexOf('let previousWeb=', begin);
+  try {
+    runInNewContext(source.slice(begin, end), context);
+    assert.deepEqual(Object.keys(context.nativePrograms), [], 'an unbuilt native cohort has no admitted program');
+    nativeBuilt = true;
+    runInNewContext('refreshNativePending()', context);
+    const admittedPrograms = context.nativePrograms;
+    const admitted = admittedPrograms[key];
+    assert.equal(admitted, native.binary.sha256, 'an unchanged native cohort has its own program identity');
+    builds.push(simulator);
+    runInNewContext('refreshNativePending()', context);
+    const simulatorKey = `${simulator.compat.target}/${simulator.compat.id}`;
+    assert.equal(context.nativePrograms[key], admitted, 'a second target sharing a cohort cannot replace this program');
+    assert.equal(context.nativePrograms[simulatorKey], simulator.binary.sha256);
+    simulator.binary.missing = [path];
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(context.nativePrograms[key], admitted, 'a stale receipt for another target cannot refuse this program');
+    assert.equal(context.nativePrograms[simulatorKey], null);
+    builds.pop();
+    web.binary.sha256 = hash('web two');
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(context.nativePrograms[key], admitted, 'web bytes cannot invalidate native code');
+    writeFileSync(path, 'native two');
+    validation.invalidate(path);
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(context.nativePrograms[key], null, 'pending native inputs refuse admission before a native rebuild');
+    assert.equal(admittedPrograms[key], admitted, 'published admission maps remain immutable');
+    native.binary.inputs[0].sha256 = hash('native two');
+    native.binary.sha256 = hash('native binary two');
+    runInNewContext('refreshNativePending()', context);
+    assert.notEqual(context.nativePrograms[key], admitted, 'a rebuilt binary changes identity even within the same cohort');
+    assert.equal(context.nativePrograms[key], native.binary.sha256);
+    writeFileSync(missing, 'new optional native input');
+    validation.invalidate(missing);
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(context.nativePrograms[key], null);
+    rmSync(missing);
+    writeFileSync(path, 'native one');
+    native.binary.inputs[0].sha256 = hash('native one');
+    native.binary.sha256 = admitted;
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(context.nativePrograms[key], admitted, 'restoring the admitted native inputs permits the old host again');
+  } finally { rmSync(directory, {recursive: true, force: true}); }
+}, 20000);
+
+test('native generation validation is cached until input polls or receipts change', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-native-validation-'));
+  const path = resolve(directory, 'native.swift');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  writeFileSync(path, 'native one');
+  const native = {compat: {id: hash('native'), target: 'aarch64-apple-darwin', inputs: {platform: 'macos'}},
+    binary: {sha256: hash('binary'), inputs: [{path, name: 'native.swift', sha256: hash('native one')}], missing: [], directories: []}};
+  let validations = 0, watches;
+  const quiet = quietWatches();
+  const validate = build => { validations++; return pendingBuildInputs(build); };
+  const validation = cacheBuildInputs(validate);
+  const context = {app: {}, buildEnv: {}, cacheBuildInputs: () => validation, readBuilds: () => [native], pendingBuildInputs: validate};
+  const begin = source.indexOf('let builtReceipts=readBuilds('), finish = source.indexOf('let previousWeb=', begin);
+  try {
+    runInNewContext(source.slice(begin, finish), context);
+    watches = compilerWatches(directory, quiet, {inputs: [path]});
+    watches.inputInvalidated = validation.invalidate;
+    runInNewContext('refreshNativePending(); refreshNativePending()', context);
+    assert.equal(validations, 1, 'unchanged generations and discovery do not rescan binary inputs');
+    const before = statSync(path);
+    writeFileSync(path, 'native two');
+    utimesSync(path, before.atime, before.mtime);
+    quiet.tick();
+    runInNewContext('refreshNativePending(); refreshNativePending()', context);
+    assert.equal(validations, 2, 'ctime invalidates a same-size edit whose mtime was restored, without notifications');
+    const key = `${native.compat.target}/${native.compat.id}`;
+    assert.equal(context.nativePrograms[key], null);
+    native.binary.inputs[0].sha256 = hash('native two');
+    native.binary.sha256 = hash('rebuilt');
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(context.nativePrograms[key], native.binary.sha256, 'a new receipt validates its actual inputs');
+    assert.equal(validations, 3);
+    const replacement = resolve(directory, 'replacement.swift');
+    writeFileSync(replacement, 'native one');
+    utimesSync(replacement, before.atime, before.mtime);
+    renameSync(replacement, path); quiet.tick();
+    runInNewContext('refreshNativePending()', context);
+    assert.equal(validations, 4, 'an atomic replacement invalidates the file identity');
+    assert.equal(context.nativePrograms[key], null);
+    watches.close(); quiet.tick(); quiet.closed();
+  } finally { watches?.close(); rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('native resource polls invalidate cached admission without filesystem notifications', () => {
+  for (const platform of ['macos', 'ios']) {
+    const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-native-resources-'));
+    const root = resolve(directory, 'seed'), nested = resolve(root, '.private'), empty = resolve(root, 'empty');
+    const leaf = resolve(nested, 'value.txt'), link = resolve(root, 'link');
+    const quiet = quietWatches();
+    let watches, validations = 0;
+    try {
+      mkdirSync(nested, {recursive: true}); mkdirSync(empty); writeFileSync(leaf, 'one');
+      if (platform === 'macos') symlinkSync('.private/value.txt', link);
+      const app = {dir: directory, platform, manifest: {host: {[platform]: {resources: [{from: 'seed', to: 'Resources/Seed'}]}}}};
+      const build = {compat: {id: platform, target: platform, inputs: {platform}},
+        binary: {sha256: 'binary', inputs: [], missing: [], directories: [], nativeResourceApp: app,
+          metadata: {nativeResources: nativeResourceInventory(app, null, platform)}}};
+      const validation = cacheBuildInputs(value => { validations++; return pendingBuildInputs(value); });
+      watches = compilerWatches(directory, quiet, {directories: [nested]});
+      watches.builtReceipts = [build];
+      runInNewContext('watchCompilerInputs()', watches);
+      watches.inputInvalidated = validation.invalidate;
+      assert.deepEqual(validation.pending(build), []);
+      assert.deepEqual(validation.pending(build), []);
+      assert.equal(validations, 1, 'unchanged resource inventories remain cached');
+      const check = (edit, changed) => {
+        edit(); quiet.tick();
+        const expected = changed ? [`host.${platform}.resources`] : [];
+        assert.deepEqual(pendingBuildInputs(build), expected, 'the uncached inventory sees the edit');
+        assert.deepEqual(validation.pending(build), expected, 'polls invalidate resource dependencies');
+      };
+      const before = statSync(leaf);
+      check(() => { writeFileSync(leaf, 'two'); utimesSync(leaf, before.atime, before.mtime); }, true);
+      check(() => writeFileSync(leaf, 'one'), false);
+      const added = resolve(nested, '.new.txt');
+      check(() => writeFileSync(added, 'new'), true);
+      check(() => unlinkSync(added), false);
+      for (const path of [leaf, nested]) {
+        const mode = statSync(path).mode & 0o777;
+        check(() => chmodSync(path, mode ^ 0o040), true);
+        check(() => chmodSync(path, mode), false);
+      }
+      if (platform === 'macos') {
+        check(() => { unlinkSync(link); symlinkSync('./.private/value.txt', link); }, true);
+        check(() => { unlinkSync(link); symlinkSync('.private/value.txt', link); }, false);
+      }
+      check(() => rmSync(empty, {recursive: true}), true);
+      check(() => mkdirSync(empty), false);
+      watches.close(); quiet.tick(); quiet.closed();
+    } finally { watches?.close(); rmSync(directory, {recursive: true, force: true}); }
+  }
+});
+
+test('native receipt directories and missing inputs under skipped trees invalidate cached admission', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-native-skipped-'));
+  const packageDir = resolve(directory, 'node_modules/native-package/src');
+  const missing = resolve(directory, 'node_modules/absent/index.ts'), optional = resolve(directory, 'node_modules/optional/mod.ts');
+  const quiet = quietWatches();
+  let watches;
+  try {
+    mkdirSync(packageDir, {recursive: true}); writeFileSync(resolve(packageDir, 'lib.rs'), 'one');
+    const build = {compat: {id: 'cohort', target: 'aarch64-apple-darwin', inputs: {platform: 'macos'}},
+      binary: {sha256: 'binary', inputs: [], links: [], missing: [missing], directories: [{path: packageDir, names: directoryInputNames(packageDir)}]},
+      optionalInputs: [optional]};
+    const validation = cacheBuildInputs(pendingBuildInputs);
+    const skipped = new RegExp(source.match(/^const skipped = \/(.*)\/;$/m)[1]);
+    watches = compilerWatches(directory, quiet, {builds: [build], skipped});
+    watches.inputInvalidated = validation.invalidate;
+    assert.deepEqual(validation.pending(build), []);
+    const check = (edit, label) => {
+      edit(); quiet.tick();
+      assert.notDeepEqual(pendingBuildInputs(build), [], `the uncached receipt check sees ${label}`);
+      assert.deepEqual(validation.pending(build), pendingBuildInputs(build), `polls invalidate the cache for ${label}`);
+      assert.deepEqual(watches.builds, [], `${label} under a skipped tree does not rebuild the web host`);
+    };
+    check(() => writeFileSync(resolve(packageDir, 'added.rs'), 'new'), 'a directory addition');
+    rmSync(resolve(packageDir, 'added.rs')); quiet.tick();
+    assert.deepEqual(validation.pending(build), []);
+    check(() => { mkdirSync(resolve(missing, '..'), {recursive: true}); writeFileSync(missing, 'found'); }, 'a missing input appearing');
+    rmSync(resolve(missing, '..'), {recursive: true}); quiet.tick();
+    assert.deepEqual(validation.pending(build), []);
+    check(() => { mkdirSync(resolve(optional, '..'), {recursive: true}); writeFileSync(optional, 'found'); }, 'an optional input appearing');
+    watches.close(); quiet.tick(); quiet.closed();
+  } finally { watches?.close(); rmSync(directory, {recursive: true, force: true}); }
 });

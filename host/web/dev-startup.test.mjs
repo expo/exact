@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
@@ -70,8 +70,10 @@ import * as rust from ${JSON.stringify(resolve(root, 'scripts/rust.mjs'))};
 import * as serve from ${JSON.stringify(resolve(root, 'host/web/serve.mjs'))};
 import * as startup from ${JSON.stringify(resolve(root, 'host/web/dev-startup.mjs'))};
 import * as modules from ${JSON.stringify(resolve(root, 'host/web-js/module.mjs'))};
+import * as webBuild from ${JSON.stringify(resolve(root, 'host/web/build.mjs'))};
 const spawn = children.spawn, spawnSync = children.spawnSync;
 const watch = files.watch;
+mock.module(${JSON.stringify(resolve(root, 'host/web/build.mjs'))}, () => ({ ...webBuild, webSourceRoots: () => [] }));
 mock.module('node:fs', () => ({ ...files, watch(...args) {
   if (process.env.FIXTURE_PHASE !== 'queued-edit' || args[0] !== process.env.FIXTURE_DIR) return watch(...args);
   const callback = args.at(-1); let signalled = false;
@@ -319,4 +321,62 @@ test('a frontend claim names its live owner, separates targets, and releases aft
     next=claimDevLoop(dir,'js'); next.url('http://127.0.0.1:9878');
     expect(JSON.parse(readFileSync(resolve(dir,'.exact/web-js-loop.json'),'utf8')).url).toBe('http://127.0.0.1:9878');
   } finally { next?.close(); wasm?.close(); owner?.close(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test.each([false, true])('JS receipt recovers from metadata errors and records Cargo reads first seen during build: %s', async firstRead => {
+  const { cargoContractReads, changedContractReads, contractReadReceipt } = await import('../../scripts/web-build.mjs');
+  const { webChanges } = await import('../../scripts/agent-launch.mjs');
+  const source = readFileSync(resolve(root, 'host/web-js/dev.mjs'), 'utf8');
+  const body = source.slice(source.indexOf('function build('), source.indexOf('\nconst mtimeMs'));
+  const dir = mkdtempSync(resolve(root, 'target/dev-receipt-')), dist = resolve(dir, 'dist');
+  const file = resolve(dir, 'cargo.contract'), app = { dir, target: resolve(dir, 'target'), name: 'receipt', manifest: {} };
+  let produced = !firstRead, failed = false, edit = null;
+  const began = Date.now() + 60_000;
+  const env = { resolve, createHash, rmSync, existsSync, readFileSync, writeFileSync, cargoContractReads, changedContractReads, contractReadReceipt,
+    Date: class extends Date { static now() { return began; } },
+    root, appSources: () => ({ digest: 'sources' }), installedFileDependencies() {}, designPath: () => null,
+    devPackages: () => ({ sources: [], trees: [], shallow: [] }), changedSince: () => false, compilerWarnings: () => [],
+    devDesign: () => null, mapDesignSource: () => null, appManifestDigest: () => 'app', buildFileCards: () => ({}), builtSettings: () => ({}),
+    replaceBuild: (stage, output) => { rmSync(output, { recursive: true, force: true }); mkdirSync(output, { recursive: true });
+      writeFileSync(resolve(output, '.exact-build.json'), readFileSync(resolve(stage, '.exact-build.json'))); },
+    webSourceRoots: () => { if (failed) throw new Error('cargo metadata: invalid manifest'); return produced ? [{ file }] : []; },
+    spawn(command, args) {
+      const stage = args[args.indexOf('--out') + 1];
+      mkdirSync(resolve(stage, '.gen'), { recursive: true });
+      writeFileSync(resolve(stage, '.gen/app.plan.map.json'), JSON.stringify({ sources: [] }));
+      writeFileSync(resolve(stage, '.exact-dev-logic.json'), 'logic');
+      produced = true;
+      if (edit === 'delete') rmSync(file);
+      else if (edit) { writeFileSync(file, edit); utimesSync(file, began / 1000, began / 1000); }
+      const child = Object.assign(new EventEmitter(), { pid: 2 ** 30, stdout: new EventEmitter(), stderr: new EventEmitter() });
+      queueMicrotask(() => child.emit('exit', 0)); return child;
+    },
+  };
+  const build = new Function('env', `const {${Object.keys(env).join(',')}} = env; let building, lastSources = []; ${body}; return build;`)(env);
+  try {
+    writeFileSync(file, 'new Cargo include');
+    expect((await build(app, dist)).error).toBeNull();
+    expect(JSON.parse(readFileSync(resolve(dist, '.exact-build.json'))).reads.cargo[file]).toBe(createHash('sha256').update('new Cargo include').digest('hex'));
+    const before = readFileSync(resolve(dist, '.exact-build.json'), 'utf8');
+    failed = true;
+    expect((await build(app, dist)).error).toBe('cargo metadata: invalid manifest');
+    expect(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')).toBe(before);
+    failed = false;
+    expect((await build(app, dist)).error).toBeNull();
+    for (const change of ['edited during compilation', 'delete']) {
+      edit = change;
+      const result = await build(app, dist);
+      expect(result.superseded).toBe(true);
+      expect(result.packages.sources).toContain(file);
+      expect(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')).toBe(before);
+    }
+    edit = null;
+    writeFileSync(file, 'new Cargo include');
+    utimesSync(file, 1, 1);
+    expect((await build(app, dist)).error).toBeNull();
+    // Give freshness the roots recorded by the successful build, without another Cargo query.
+    const marker = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'))); marker.inputRoots = [{ file }];
+    writeFileSync(resolve(dist, '.exact-build.json'), JSON.stringify(marker)); rmSync(file);
+    expect(webChanges(dist, app).all.some(path => path.endsWith('/cargo.contract'))).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -1,0 +1,136 @@
+component App
+  view
+    Child()
+component Child
+  derive d0 = 0.25
+  derive d1 = d0
+  derive d2 = d1
+  derive d3 = d2
+  derive d4 = d3
+  derive d5 = d4
+  derive d6 = d5
+  derive d7 = d6
+  derive d8 = d7
+  derive d9 = d8
+  derive d10 = d9
+  derive d11 = d10
+  derive d12 = d11
+  derive d13 = d12
+  derive d14 = d13
+  derive d15 = d14
+  derive d16 = d15
+  derive d17 = d16
+  derive d18 = d17
+  derive d19 = d18
+  derive d20 = d19
+  derive d21 = d20
+  derive d22 = d21
+  derive d23 = d22
+  derive d24 = d23
+  derive d25 = d24
+  derive d26 = d25
+  derive d27 = d26
+  derive d28 = d27
+  derive d29 = d28
+  derive d30 = d29
+  derive d31 = d30
+  derive d32 = d31
+  derive d33 = d32
+  derive d34 = d33
+  derive d35 = d34
+  derive d36 = d35
+  derive d37 = d36
+  derive d38 = d37
+  derive d39 = d38
+  derive d40 = d39
+  derive d41 = d40
+  derive d42 = d41
+  derive d43 = d42
+  derive d44 = d43
+  derive d45 = d44
+  derive d46 = d45
+  derive d47 = d46
+  derive d48 = d47
+  derive d49 = d48
+  derive d50 = d49
+  derive d51 = d50
+  derive d52 = d51
+  derive d53 = d52
+  derive d54 = d53
+  derive d55 = d54
+  derive d56 = d55
+  derive d57 = d56
+  derive d58 = d57
+  derive d59 = d58
+  derive d60 = d59
+  derive d61 = d60
+  derive d62 = d61
+  derive d63 = d62
+  derive d64 = d63
+  view
+    column
+      main opacity=d0 testId="alias0"
+      main opacity=d1 testId="alias1"
+      main opacity=d2 testId="alias2"
+      main opacity=d3 testId="alias3"
+      main opacity=d4 testId="alias4"
+      main opacity=d5 testId="alias5"
+      main opacity=d6 testId="alias6"
+      main opacity=d7 testId="alias7"
+      main opacity=d8 testId="alias8"
+      main opacity=d9 testId="alias9"
+      main opacity=d10 testId="alias10"
+      main opacity=d11 testId="alias11"
+      main opacity=d12 testId="alias12"
+      main opacity=d13 testId="alias13"
+      main opacity=d14 testId="alias14"
+      main opacity=d15 testId="alias15"
+      main opacity=d16 testId="alias16"
+      main opacity=d17 testId="alias17"
+      main opacity=d18 testId="alias18"
+      main opacity=d19 testId="alias19"
+      main opacity=d20 testId="alias20"
+      main opacity=d21 testId="alias21"
+      main opacity=d22 testId="alias22"
+      main opacity=d23 testId="alias23"
+      main opacity=d24 testId="alias24"
+      main opacity=d25 testId="alias25"
+      main opacity=d26 testId="alias26"
+      main opacity=d27 testId="alias27"
+      main opacity=d28 testId="alias28"
+      main opacity=d29 testId="alias29"
+      main opacity=d30 testId="alias30"
+      main opacity=d31 testId="alias31"
+      main opacity=d32 testId="alias32"
+      main opacity=d33 testId="alias33"
+      main opacity=d34 testId="alias34"
+      main opacity=d35 testId="alias35"
+      main opacity=d36 testId="alias36"
+      main opacity=d37 testId="alias37"
+      main opacity=d38 testId="alias38"
+      main opacity=d39 testId="alias39"
+      main opacity=d40 testId="alias40"
+      main opacity=d41 testId="alias41"
+      main opacity=d42 testId="alias42"
+      main opacity=d43 testId="alias43"
+      main opacity=d44 testId="alias44"
+      main opacity=d45 testId="alias45"
+      main opacity=d46 testId="alias46"
+      main opacity=d47 testId="alias47"
+      main opacity=d48 testId="alias48"
+      main opacity=d49 testId="alias49"
+      main opacity=d50 testId="alias50"
+      main opacity=d51 testId="alias51"
+      main opacity=d52 testId="alias52"
+      main opacity=d53 testId="alias53"
+      main opacity=d54 testId="alias54"
+      main opacity=d55 testId="alias55"
+      main opacity=d56 testId="alias56"
+      main opacity=d57 testId="alias57"
+      main opacity=d58 testId="alias58"
+      main opacity=d59 testId="alias59"
+      main opacity=d60 testId="alias60"
+      main opacity=d61 testId="alias61"
+      main opacity=d62 testId="alias62"
+      main opacity=d63 testId="alias63"
+      main opacity=d64 testId="alias64"

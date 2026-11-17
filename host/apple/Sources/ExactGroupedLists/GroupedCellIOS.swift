@@ -5,11 +5,12 @@ import UIKit
 // Keep the detail button while UIKit refreshes the cell for accessibility.
 final class GroupedCell: UICollectionViewListCell {
     private var activeBounds = CGRect.null
+    var refreshActiveOnLayout = false
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds != activeBounds else { return }
         activeBounds = bounds
-        if layer.animation(forKey: "nativeActiveScale") != nil { setNeedsUpdateConfiguration() }
+        if refreshActiveOnLayout { setNeedsUpdateConfiguration() }
     }
     var forcedPressed = false { didSet { if forcedPressed != oldValue { setNeedsUpdateConfiguration() } } }
     override var configurationState: UICellConfigurationState {
@@ -35,31 +36,56 @@ final class GroupedCell: UICollectionViewListCell {
         button.removeFromSuperview()
         return .customView(configuration: .init(customView: button, placement: .trailing(displayed: .always)))
     }
+    /// Whether its detail button takes a press (`GroupedListView.detailTarget`).
+    var detailEnabled: Bool {
+        get { detailButton?.isEnabled ?? false }
+        set { if let detailButton, detailButton.isEnabled != newValue { detailButton.isEnabled = newValue } }
+    }
 
-    /// Its toggle row's switch. A `UITableViewCell` with a switch as its `accessoryView` is one
-    /// element, as each row of Settings is: the row's name with the switch's value and traits, and
-    /// activating it flips the switch. A list cell's custom accessory is not that on every iOS
-    /// (17's VoiceOver read the switch after the row, with no name), so this cell says it itself.
+    /// Whether the cell speaks for its row: UIKit draws the row's accessory, so the cell is the
+    /// row's one element, as each row of Settings is (`GroupedAccessoriesIOS.swift`). UIKit makes
+    /// a list cell an element only while it has content or a label of its own, and a cell's custom
+    /// accessory is not part of it on every iOS (17's VoiceOver read a switch after its row, with
+    /// no name), so this cell says so itself.
+    var speaksForRow = false
+    /// Its row's switch: the cell has its value and traits, and activating the cell flips it.
+    /// One its author hid (`aria-hidden`) adds nothing, and the cell is activated as a touch on
+    /// the row is. UIKit hides only the switch's own element: it still reads the switch's value
+    /// and traits into the cell and activates the cell at the switch (iOS 27).
     weak var toggle: UISwitch?
+    /// Checks its row's radio, where the row has one in the accessibility tree.
+    var checkRadio: (() -> Bool)?
+    private var hidesToggle: Bool { toggle?.accessibilityElementsHidden == true }
+    private var accessibleToggle: UISwitch? { hidesToggle ? nil : toggle }
     override var isAccessibilityElement: Bool {
-        get { toggle != nil || super.isAccessibilityElement }
+        get { speaksForRow || super.isAccessibilityElement }
         set { super.isAccessibilityElement = newValue }
     }
     override var accessibilityValue: String? {
-        get { toggle?.accessibilityValue ?? super.accessibilityValue }
+        get { hidesToggle ? nil : toggle?.accessibilityValue ?? super.accessibilityValue }
         set { super.accessibilityValue = newValue }
     }
+    override var accessibilityActivationPoint: CGPoint {
+        get {
+            guard hidesToggle else { return super.accessibilityActivationPoint }
+            let frame = accessibilityFrame
+            return CGPoint(x: frame.midX, y: frame.midY)
+        }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     override func accessibilityActivate() -> Bool {
-        guard let toggle else { return super.accessibilityActivate() }
+        guard let toggle = accessibleToggle else { return checkRadio?() ?? super.accessibilityActivate() }
         if toggle.isEnabled {
             toggle.setOn(!toggle.isOn, animated: true)
             toggle.sendActions(for: .valueChanged)
         }
         return true
     }
-    private var switchTraits: UIAccessibilityTraits { toggle?.accessibilityTraits ?? [] }
+    private var switchTraits: UIAccessibilityTraits { accessibleToggle?.accessibilityTraits ?? [] }
     #else
     private var switchTraits: UIAccessibilityTraits { [] }
+    /// Whether its detail accessory is drawn as one that takes a press (`GroupedListView.detailTarget`).
+    var detailEnabled = true
     #endif
 
     /// Its traits, which the host sets (`GroupedListView.accessibility`, `interact`), with its
@@ -165,8 +191,8 @@ extension UICollectionViewListCell {
 #if os(iOS)
 extension GroupedCell: GroupedMenuSurface {}
 
-extension GroupedCell: AgentOwned {
+extension GroupedCell: InspectionOwned {
     /// A toggle row's element is its switch's: `tree --ax` joins it to the control.
-    package var agentViewId: UInt32? { toggle == nil ? nil : target }
+    package var inspectionViewId: UInt32? { accessibleToggle == nil ? nil : target }
 }
 #endif

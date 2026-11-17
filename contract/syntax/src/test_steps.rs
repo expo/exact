@@ -61,7 +61,7 @@ pub enum Step {
         span: Span,
     },
     /// `tap "testId" drag dx dy [from x y] [mouse] [press ms] [over ms]
-    /// [hold ms] [during "op" …]`: one whole drag from the node's middle, or
+    /// [hold ms] [into keyboard] [during "op" …]`: one whole drag from the node's middle, or
     /// from `from` in its box, a finger's or the left button's; the driver's
     /// `tap … drag` (kanban F18, files diary F10). `tap "A" drag to "B" [at x y] …`
     /// ends at B's middle, or at `at` from its top left (LLP 1094 D12).
@@ -80,6 +80,8 @@ pub enum Step {
         from: Option<(f64, f64)>,
         /// The left button rather than a finger, where a carrier has both.
         mouse: bool,
+        /// Extend the end below the viewport, above the screen's bottom safe area.
+        into: Option<String>,
         /// Milliseconds held before the move.
         press: Option<f64>,
         /// Milliseconds the move takes.
@@ -132,9 +134,10 @@ pub enum Step {
         /// Where.
         span: Span,
     },
-    /// A media preference, before observations or between steps.
+    /// A media preference or a module's permission, before observations or
+    /// between steps.
     Prefer {
-        /// CSS media feature name.
+        /// A CSS media feature, or `permission.` and the module's name.
         name: String,
         /// The driver's value.
         value: String,
@@ -160,7 +163,16 @@ pub enum Step {
         /// Where.
         span: Span,
     },
-    /// `pass fetch "…"`: the prefix stops failing (LLP 1103).
+    /// An immediate HTTP fixture, installed before boot when leading a test.
+    AnswerFetch {
+        /// What a matching fetch's URL starts with.
+        prefix: String,
+        /// Response status, headers and text body, encoded as JSON.
+        response: String,
+        /// Where.
+        span: Span,
+    },
+    /// `pass fetch "…"`: the prefix stops failing or answering (LLP 1103).
     PassFetch {
         /// The prefix a `fail fetch` armed.
         prefix: String,
@@ -307,6 +319,29 @@ pub enum Step {
         target: String,
         /// `disabled`, or `enabled`.
         disabled: bool,
+        /// Where.
+        span: Span,
+    },
+    /// `expect focused "testId"`: the node holds the keyboard focus, as each host's tree
+    /// reports it (the web's `document.activeElement`, the platform's first responder).
+    ExpectFocused {
+        /// The node, by `testId`.
+        target: String,
+        /// Where.
+        span: Span,
+    },
+    /// `expect layout "testId" width|height ==|<=|>= n`: the node's laid-out size, the
+    /// width or height of the box the agent's `layout <target>` reports (LLP 1012:
+    /// viewport points, two decimals, presentation transforms folded in).
+    ExpectLayout {
+        /// The node, by `testId`.
+        target: String,
+        /// `width` or `height`.
+        dimension: String,
+        /// `Equal`, `AtLeast` or `AtMost`.
+        comparison: StateComparison,
+        /// The size, in points.
+        value: f64,
         /// Where.
         span: Span,
     },

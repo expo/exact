@@ -115,7 +115,7 @@ impl Tree {
         [port, minimum, maximum]: [f64; 3],
     ) -> Result<Vec<(f64, f64, bool)>, InstanceError> {
         let mut frames = Vec::new();
-        let Some((list, _)) = super::super::text::list_region(
+        let Some((list, _, _)) = super::super::text::list_region(
             None,
             &self.children,
             view,
@@ -140,15 +140,21 @@ impl Tree {
                 }))
             })
             .unwrap_or(0.0);
-        let row_at = |offset: f64| {
+        // Fixed content addresses an exclusive data boundary, not a row.
+        // Only an offset inside a data row includes it in an upper bound.
+        let bound = |offset: f64, upper: bool| {
+            let offset = offset - origin;
+            if offset < list.index.prefix(0).unwrap() {
+                return Ok(0);
+            }
             list.index
-                .row_at((offset - origin).max(0.0))
-                .map(|p| p.unwrap_or(list.index.len() - 1))
+                .row_at(offset)
+                .map(|p| p.map_or(list.index.len(), |p| p + usize::from(upper)))
                 .map_err(index_error)
         };
-        let at = row_at(around)?;
-        let first_row = row_at(window[0])?.max((at + 1).saturating_sub(cap));
-        let end_row = (row_at(window[1])? + 1).min(at.saturating_add(cap + 1));
+        let at = bound(around, true)?;
+        let first_row = bound(window[0], false)?.max(at.saturating_sub(cap));
+        let end_row = bound(window[1], true)?.min(at.saturating_add(cap));
         let mut areas = Vec::new();
         for position in first_row..end_row {
             // Mounted views supply their actual border boxes to the presenter;

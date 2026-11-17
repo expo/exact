@@ -769,6 +769,7 @@ mod tests {
             _: &[Shape],
             _: Transform,
             _: Option<[u8; 4]>,
+            _: exact_kernel::ImageRendering,
         ) {
         }
         fn text(
@@ -829,7 +830,11 @@ mod tests {
             .as_mut()
             .unwrap();
         let bytes = device.readback(*texture).unwrap();
-        assert!(bytes.chunks_exact(4).all(|c| c == [34, 153, 68, 255]));
+        assert!(bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|c| *c == [34, 153, 68, 255]));
         p.window_frame(window).unwrap();
         assert_eq!(
             p.surfaces.direct_window.as_ref().unwrap().retry.deadline(),
@@ -944,8 +949,10 @@ mod tests {
         assert!(p
             .frame()
             .data()
-            .chunks_exact(4)
-            .all(|c| c == [34, 153, 68, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|c| *c == [34, 153, 68, 255]));
     }
 
     #[test]
@@ -983,8 +990,10 @@ mod tests {
         assert!(p
             .frame()
             .data()
-            .chunks_exact(4)
-            .all(|c| c == [34, 153, 68, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|c| *c == [34, 153, 68, 255]));
     }
     #[test]
     #[ignore = "native Windows fixture requires a desktop session"]

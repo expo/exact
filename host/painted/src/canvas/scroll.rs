@@ -14,36 +14,8 @@
 use super::{CanvasHost, Section, GROUPS};
 #[cfg(target_os = "android")]
 use crate::presenter::PAGE;
+#[cfg(target_os = "android")]
 use exact_runner::DataSource;
-
-fn module_under<D: DataSource>(
-    p: &mut crate::presenter::Presenter<D>,
-    x: f32,
-    y: f32,
-    scale: f32,
-) -> [i32; 10] {
-    let module = p.hit(x / scale, y / scale).filter(|id| {
-        p.host().kernel().node(*id).is_some_and(|node| {
-            node.node_type == exact_kernel::NodeType::NativeView
-                && p.host().retained_action_eligible(node.key)
-        })
-    });
-    let rect = module.and_then(|id| p.rect_of(id)).unwrap_or_default();
-    let key = module.and_then(|id| p.host().kernel().node(id).map(|node| node.key));
-    let bits = |value: f32| (value * scale).to_bits() as i32;
-    [
-        module.unwrap_or(0) as i32,
-        bits(rect.0),
-        bits(rect.1),
-        bits(rect.2),
-        bits(rect.3),
-        key.map_or(0, |key| key.index as i32),
-        key.map_or(0, |key| key.generation as i32),
-        p.long_presses() as i32,
-        p.brush.native_session as i32,
-        (p.brush.native_session >> 32) as i32,
-    ]
-}
 
 #[cfg(target_os = "android")]
 impl<D: DataSource + Default> CanvasHost<D> {
@@ -51,11 +23,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// what a drag from there is: the scrollers, innermost first, and the
     /// axes the presenter's own gestures claim
     /// ([`crate::presenter::Presenter::reader_under`] has the words); then
-    /// the module under it (ten words), and each of those scrollers'
+    /// the module under it (thirteen words), and each of those scrollers'
     /// snap ([`crate::presenter::Presenter::reader_snaps`]).
     pub fn under(&mut self, x: f32, y: f32) -> Vec<i32> {
         let mut words = self.p.reader_under(x, y, self.scale);
-        words.extend(module_under(&mut self.p, x, y, self.scale));
+        words.extend(self.p.reader_module(x, y, self.scale));
         let ids: Vec<_> = (0..words[1] as usize)
             .map(|k| words[3 + 11 * k] as exact_kernel::ViewId)
             .collect();
@@ -142,6 +114,39 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
     }
 
+    /// The reader's pinch of zoomable scroller `id` (LLP 1057.001.000 §5):
+    /// `phase` 0 began, 1 scaled by `factor` while its focal point moved
+    /// from `from` to `to`, 2 ended; in pixels.
+    pub fn zoom(&mut self, id: u32, phase: i32, factor: f32, from: (f32, f32), to: (f32, f32)) {
+        let s = self.scale;
+        match phase {
+            0 => self.p.zoom_pinch_began(id),
+            1 => self
+                .p
+                .zoom_pinched(id, factor, (from.0 / s, from.1 / s), (to.0 / s, to.1 / s)),
+            _ => self.p.zoom_pinch_ended(id),
+        }
+    }
+
+    /// The reader's double tap at (`x`, `y`) pixels: `phase` 0 its second
+    /// tap came down, 1 it lifted ([`crate::presenter::Presenter::zoom_tap_down`],
+    /// [`crate::presenter::Presenter::zoom_double_tap`]).
+    pub fn zoom_tap(&mut self, phase: i32, x: f32, y: f32) {
+        let at = (x / self.scale, y / self.scale);
+        if phase == 0 {
+            self.p.zoom_tap_down(at);
+        } else {
+            self.p.zoom_double_tap(at);
+        }
+    }
+
+    /// A wheel with `ctrl` held at (`x`, `y`) pixels, `dy` points toward
+    /// the end: a trackpad's or a mouse's pinch, about the pointer.
+    pub fn zoom_wheel(&mut self, x: f32, y: f32, dy: f32) {
+        let s = self.scale;
+        self.p.wheel_zoom(x / s, y / s, dy);
+    }
+
     /// What the reader is told of the scrollers it knows, when that is not
     /// what it was last told
     /// ([`crate::presenter::Presenter::reader_scrollers`] has the words).
@@ -165,7 +170,6 @@ impl<D: DataSource + Default> CanvasHost<D> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::presenter::{PainterChoice, Presenter};
 
     fn props(p: &mut Presenter<()>) -> serde_json::Value {
@@ -204,8 +208,8 @@ mod tests {
         assert!(error.is_none(), "{error:?}");
         p.brush.native_session = 0x1234_5678_fedc_ba98;
         let before = props(&mut p);
-        let hit = module_under(&mut p, 20., 20., 2.);
-        let token = |words: [i32; 10]| words[8] as u32 as u64 | ((words[9] as u32 as u64) << 32);
+        let hit = p.reader_module(20., 20., 2.);
+        let token = |words: [i32; 13]| words[8] as u32 as u64 | ((words[9] as u32 as u64) << 32);
         assert_ne!(hit[0], 0);
         assert_eq!(hit[5] as u32 as u64, before["slot"].as_u64().unwrap());
         assert_eq!(hit[6] as u32 as u64, before["generation"].as_u64().unwrap());
@@ -216,7 +220,7 @@ mod tests {
             .unwrap()
             .is_none());
         let after = props(&mut p);
-        let next = module_under(&mut p, 20., 20., 2.);
+        let next = p.reader_module(20., 20., 2.);
         assert_eq!(hit[..8], next[..8]);
         for key in ["module", "slot", "generation"] {
             assert_eq!(before[key], after[key]);

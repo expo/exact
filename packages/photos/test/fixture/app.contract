@@ -1,16 +1,26 @@
 // The conformance fixture (LLP 1133.001 D7, LLP 1133.019 §11): each name of
 // @exact/photos, its answers shown by testId for the suite. The list is read
 // once `read` is pressed; its first six photos are drawn as pictures, each
-// counting its `load` and `error`.
+// counting its `load` and `error`. `read-all` and `read-all-2` read every
+// page, 500 or 2 a page.
 use photoLibraryStatus, copyPhotoAsset, addToPhotoLibrary, managePhotoSelection, PhotoLibraryStatus, PhotoAssetList, PhotoCopy, PhotoAdded from "@exact/photos"
+
+// Every page of the list, read by following its cursors.
+shape Paged
+  pages: number
+  count: number
+  distinct: number
+  ordered: bool
 
 component Fixture
   state reading = false
+  state pageSize = 0
   state loads = 0
   state errors = 0
   state lastError = ""
   resource status = photoLibraryStatus() as shape PhotoLibraryStatus else empty()
   resource list = assets(reading) as shape PhotoAssetList else empty()
+  resource all = everything(pageSize) as shape Paged else empty()
   mutation copied as shape PhotoCopy
   mutation added as shape PhotoAdded
   mutation managed as shape PhotoLibraryStatus
@@ -20,6 +30,8 @@ component Fixture
   derive manageError = match failure(managed) { case some(f) => f.code, case none => "" }
   action read
     reading = true
+  action readAll(size: number)
+    pageSize = size
   action copyFirst
     send copied = copyPhotoAsset(asset=first)
   action addCopy
@@ -36,6 +48,7 @@ component Fixture
       text `${status.available} ${status.state} ${status.access} ${status.addState}` testId="status"
       text (match status.apple { case some(a) => a.authorizationStatus + " " + a.addOnlyAuthorizationStatus, case none => "none" }) testId="apple"
       text `${list.assets.length}` testId="count"
+      text `${all.pages} ${all.count} ${all.distinct} ${all.ordered}` testId="all"
       text first testId="first"
       text (match list.assets.at(0) { case some(a) => `${a.width}x${a.height} ${a.picture == "photos:" + a.id}`, case none => "" }) testId="first-size"
       text `${loads} ${errors} ${lastError}` testId="pictures"
@@ -50,6 +63,10 @@ component Fixture
       text manageError testId="manage-error"
       button press=read testId="read"
         text "Read"
+      button press=readAll(500) testId="read-all"
+        text "Read all"
+      button press=readAll(2) testId="read-all-2"
+        text "Read all, 2 a page"
       button press=copyFirst testId="copy"
         text "Copy"
       button press=addCopy testId="add"

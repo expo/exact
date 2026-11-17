@@ -63,6 +63,7 @@ internal fun makePicture(id: Int, w: Int, h: Int, hwbuf: Boolean): Bitmap {
  * Player a thread. [image] and [row] resolve ids; [group] gives a scroller's node (main thread only).
  */
 internal class Player(private val fonts: Map<Int, Font>) {
+    var origins: PaintedOrigins? = null
     var image: (Int) -> Bitmap? = { null }
     /** A platform element's node (op 28, [Natives]). */
     var native: (Int) -> android.graphics.RenderNode? = { null }
@@ -73,19 +74,28 @@ internal class Player(private val fonts: Map<Int, Font>) {
     var slot: (Int) -> android.graphics.RenderNode? = { null }
     /** A node exact2's reader animates (op 29, [Layers]). */
     var layer: (Int) -> android.graphics.RenderNode? = { null }
+    var shared: (Long) -> android.graphics.RenderNode? = { null }
     var group: ((Int) -> android.graphics.RenderNode)? = null
     /** What is drawn in place of a scroller's own node, for one whose edge the reader stretches ([Scrolling]). */
     var holder: ((Int) -> android.graphics.RenderNode?)? = null
     var width = 0
     var height = 0
+    /** The scale an animated layer's node is drawn at beyond the stream's matrices ([Layers]): part of a pixelated
+     * image's enlargement. */
+    var layerScale = 1f
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var imageTint: Int? = null
+    private var imageRendering = 0
+    private var imageMode = 0
     private val clipUnion = Path()
     private val maskPaint = Paint().apply {
         xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_IN)
     }
     private fun tintImage() {
+        imageMode = imageRendering
+        imageRendering = 0
+        imagePaint.isFilterBitmap = imageMode != 1
         imagePaint.colorFilter = imageTint?.let {
             android.graphics.PorterDuffColorFilter(it, android.graphics.PorterDuff.Mode.SRC_IN)
         }
@@ -123,13 +133,77 @@ internal class Player(private val fonts: Map<Int, Font>) {
     /** [anim] over [bounds]: drawn at the origin, under a translation, with bounds of its size alone. Android 10's
      * `AnimatedImageDrawable` drew a strip of its frames, or nothing, at bounds away from the origin. */
     private fun drawAnimated(c: Canvas, anim: android.graphics.drawable.Drawable) {
-        c.save(); c.translate(bounds.left.toFloat(), bounds.top.toFloat())
-        anim.colorFilter = imagePaint.colorFilter
+        val target = RectF(bounds)
+        sampleImage(c, anim.intrinsicWidth, anim.intrinsicHeight, target, live = true) { canvas, placed, paint ->
+            canvas.save(); canvas.translate(placed.left, placed.top)
+            anim.colorFilter = paint.colorFilter
+            anim.setFilterBitmap(paint.isFilterBitmap)
+            try {
+                anim.setBounds(0, 0, placed.width().toInt(), placed.height().toInt()); anim.draw(canvas)
+            } finally { anim.colorFilter = null; canvas.restore() }
+        }
+    }
+
+    private fun drawSampledBitmap(c: Canvas, bmp: Bitmap, target: RectF) {
+        val hardware = bmp.config == Bitmap.Config.HARDWARE
+        if (hardware && c.isHardwareAccelerated) {
+            sampleImage(c, bmp.width, bmp.height, target, live = true) { canvas, placed, paint -> canvas.drawBitmap(bmp, null, placed, paint) }
+            return
+        }
+        // A software tile cannot draw a hardware bitmap: it draws a copy of its pixels.
+        val source = if (imageMode == 2 && hardware) (bmp.copy(Bitmap.Config.ARGB_8888, false) ?: return) else bmp
         try {
-            anim.setBounds(0, 0, bounds.width(), bounds.height()); anim.draw(c)
-        } finally {
-            anim.colorFilter = null
-            c.restore()
+            sampleImage(c, source.width, source.height, target) { canvas, placed, paint -> canvas.drawBitmap(source, null, placed, paint) }
+        } finally { if (source !== bmp) source.recycle() }
+    }
+
+    /** CSS's virtual integer enlargement is tiled so the scale cannot allocate it whole. [live] tiles are recorded
+     * into HWUI's display list rather than drawn into software bitmaps: an animated drawable keeps playing, and a
+     * hardware bitmap is drawn without a readback. */
+    private inline fun sampleImage(c: Canvas, width: Int, height: Int, target: RectF, live: Boolean = false, draw: (Canvas, RectF, Paint) -> Unit) {
+        if (imageMode != 2 || width <= 0 || height <= 0) { draw(c, target, imagePaint); return }
+        val matrixValues = FloatArray(9)
+        current.getValues(matrixValues)
+        val nx = kotlin.math.floor(target.width() * layerScale * kotlin.math.hypot(matrixValues[0], matrixValues[3]) / width + 0.5f).coerceAtLeast(1f)
+        val ny = kotlin.math.floor(target.height() * layerScale * kotlin.math.hypot(matrixValues[1], matrixValues[4]) / height + 0.5f).coerceAtLeast(1f)
+        if (nx == 1f && ny == 1f) { draw(c, target, imagePaint); return }
+        val fullWidth = width * nx; val fullHeight = height * ny
+        val sx = target.width() / fullWidth; val sy = target.height() / fullHeight
+        val clip = RectF(c.clipBounds)
+        if (!clip.intersect(target) || sx <= 0 || sy <= 0) return
+        val nearest = Paint().apply { isFilterBitmap = false }
+        val left = kotlin.math.floor((clip.left - target.left) / sx / 256).toInt() * 256
+        val top = kotlin.math.floor((clip.top - target.top) / sy / 256).toInt() * 256
+        val right = kotlin.math.ceil((clip.right - target.left) / sx).toInt()
+        val bottom = kotlin.math.ceil((clip.bottom - target.top) / sy).toInt()
+        for (y in top until bottom step 256) for (x in left until right step 256) {
+            val core = RectF(x.toFloat(), y.toFloat(), (x + 256f).coerceAtMost(fullWidth), (y + 256f).coerceAtMost(fullHeight))
+            val halo = RectF(core).apply { inset(-1f, -1f); intersect(0f, 0f, fullWidth, fullHeight) }
+            if (live && c.isHardwareAccelerated) {
+                // Keep the drawable in HWUI's display list: a software tile freezes an animation at its recorded frame.
+                val tile = android.graphics.RenderNode("pixelated image").apply {
+                    setPosition(0, 0, halo.width().toInt(), halo.height().toInt())
+                    setUseCompositingLayer(true, imagePaint)
+                }
+                val recording = tile.beginRecording()
+                draw(recording, RectF(-halo.left, -halo.top, fullWidth - halo.left, fullHeight - halo.top), nearest)
+                tile.endRecording()
+                c.save()
+                c.clipRect(target.left + core.left * sx, target.top + core.top * sy, target.left + core.right * sx, target.top + core.bottom * sy)
+                c.translate(target.left + halo.left * sx, target.top + halo.top * sy)
+                c.scale(sx, sy)
+                c.drawRenderNode(tile)
+                c.restore()
+                continue
+            }
+            val pixels = Bitmap.createBitmap(halo.width().toInt(), halo.height().toInt(), Bitmap.Config.ARGB_8888)
+            try {
+                draw(Canvas(pixels), RectF(-halo.left, -halo.top, fullWidth - halo.left, fullHeight - halo.top), nearest)
+                c.save()
+                c.clipRect(target.left + core.left * sx, target.top + core.top * sy, target.left + core.right * sx, target.top + core.bottom * sy)
+                c.drawBitmap(pixels, null, RectF(target.left + halo.left * sx, target.top + halo.top * sy, target.left + halo.right * sx, target.top + halo.bottom * sy), imagePaint)
+                c.restore()
+            } finally { pixels.recycle() }
         }
     }
 
@@ -177,7 +251,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         val sx = shiftX; val sy = shiftY
         shiftX = sx + l; shiftY = sy + t
         val inner = node.beginRecording()
-        replay(inner, b, from, at, reuseGroups = true)
+        replay(inner, b, from, at, reuseGroups = true, into = node)
         node.endRecording()
         shiftX = sx; shiftY = sy
         current.set(here)
@@ -245,10 +319,10 @@ internal class Player(private val fonts: Map<Int, Font>) {
     }
 
     /** [replay] into a node whose origin is at ([dx], [dy]) in the stream's pixels. */
-    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float) {
+    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float, into: android.graphics.RenderNode? = null) {
         val sx = shiftX; val sy = shiftY
         shiftX = sx + dx; shiftY = sy + dy
-        try { replay(canvas, b, from, n) } finally { shiftX = sx; shiftY = sy }
+        try { replay(canvas, b, from, n, into = into) } finally { shiftX = sx; shiftY = sy }
     }
 
     private fun f(b: IntBuffer, i: Int) = java.lang.Float.intBitsToFloat(b.get(i))
@@ -678,9 +752,12 @@ internal class Player(private val fonts: Map<Int, Font>) {
         }
     }
 
-    fun replay(canvas: Canvas, b: IntBuffer, from: Int, n: Int, reuseGroups: Boolean = false) {
+    fun replay(canvas: Canvas, b: IntBuffer, from: Int, n: Int, reuseGroups: Boolean = false, into: android.graphics.RenderNode? = null) {
+        val placements = origins?.let { ArrayList<PaintedOrigins.Placement>() }
+        var children = placements
         tint = 1f; tintEnd = -1
         imageTint = null
+        imageRendering = 0
         val base = canvas.save()
         val matrixBase = matrixDepth
         // Each recording starts locally; stream matrices supply the device coordinates.
@@ -719,6 +796,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         if (square) c.clipRect(rect) else { path.rewind(); path.addRoundRect(rect, radii, Path.Direction.CW); c.clipPath(path) }
                         current.mapRect(backdropBounds, rect)
                         val m = Matrix(); m.setTranslate(Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat())
+                        children?.add(PaintedOrigins.Placement(node, Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat()))
                         c.setMatrix(m)
                         c.drawRenderNode(node)
                         c.restore()
@@ -782,6 +860,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     i += 1
                 }
                 47 -> { imageTint = b.get(i + 1); i += 2 }
+                49 -> { imageRendering = b.get(i + 1); i += 2 }
                 6 -> {
                     if (i == tintEnd) { tint = 1f; tintEnd = -1 }
                     c.restore(); restoreMatrix(); i += 1
@@ -805,7 +884,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     val anim = animated(b.get(i + 1))
                     if (anim != null) {
                         rect.round(bounds); drawAnimated(c, anim)
-                    } else image(b.get(i + 1))?.let { bmp -> c.drawBitmap(bmp, null, rect, imagePaint) }
+                    } else image(b.get(i + 1))?.let { bmp -> drawSampledBitmap(c, bmp, rect) }
                     i += 6
                 }
                 26 -> i += 3 + (b.get(i + 2) + 3) / 4
@@ -856,7 +935,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                             square -> c.clipRect(rect)
                             else -> { path.rewind(); path.addRoundRect(rect, radii, Path.Direction.CW); c.clipPath(path) }
                         }
-                        c.drawBitmap(bmp, null, dstRect, imagePaint)
+                        drawSampledBitmap(c, bmp, dstRect)
                         c.restore()
                     }
                     i += 18
@@ -896,6 +975,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         c.save()
                         matrix.setTranslate(f(b, i + 2) - shiftX, f(b, i + 3) - shiftY)
                         c.setMatrix(matrix)
+                        children?.add(PaintedOrigins.Placement(r, f(b, i + 2) - shiftX, f(b, i + 3) - shiftY))
                         c.drawRenderNode(r)
                         c.restore()
                     }
@@ -911,12 +991,20 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 24 -> i += 3 + b.get(i + 2)
                 29 -> {
                     // A layer the reader moves and fades: drawn in the stream's coordinates, as a slot is.
-                    layer(b.get(i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    layer(b.get(i + 1))?.let { s ->
+                        children?.add(PaintedOrigins.Placement(s, -shiftX, -shiftY))
+                        c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore()
+                    }
                     i += 2
                 }
                 30, 31 -> i += 3 + b.get(i + 2)
                 32 -> i += 2
                 33 -> i += 3
+                50, 51 -> i += 2 + b.get(i + 1)
+                52 -> {
+                    shared(SharedElements.key(b, i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    i += 3
+                }
                 20 -> {
                     // A scroller's rows: their own node, so a move only translates it.
                     val g = group!!(b.get(i + 1))
@@ -931,6 +1019,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         outer = c
                         saveMatrix()
                         c = g.beginRecording()
+                        children = origins?.let { ArrayList<PaintedOrigins.Placement>() }
                         current.reset(); c.setMatrix(current)
                     }
                 }
@@ -938,9 +1027,12 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     node?.let { g ->
                         if (!reuseGroups) {
                             g.endRecording()
+                            children?.let { origins?.record(g, it) }
+                            children = placements
                             c = outer!!
                             restoreMatrix()
                         }
+                        children?.add(PaintedOrigins.Placement(g, -shiftX, -shiftY))
                         c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(holder?.invoke(grouped) ?: g); c.restore()
                     }
                     node = null
@@ -958,6 +1050,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         }
         canvas.restoreToCount(base)
         matrixDepth = matrixBase
+        placements?.let { origins?.record(into, it) }
     }
 
     private companion object {

@@ -1,12 +1,14 @@
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 import { test, expect } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { perfDelta } from '../../scripts/agent-inspect.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
 import { need } from '../../scripts/coverage.mjs';
+import { webCompiler } from './module.mjs';
 
 function runtimeServer(development = false, names = [[], [], []], types = [[], [], []], map = null) {
   const bytes = JSON.stringify(map);
@@ -677,7 +679,7 @@ test("refresh carries a Rust request's forced cache mode through runtime dispatc
     const observed = await page.evaluate(async () => {
       globalThis.__exactRender = true;
       const sent = [];
-      globalThis.fetch = async (_input, init) => { sent.push(init.cache); return new Response('reply'); };
+      globalThis.fetch = async (input, init) => { sent.push(new Request(input, init).cache); return new Response('reply'); };
       const rt = await import('/host/web-js/rt.js');
       const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
       setAppGrantSet();
@@ -708,7 +710,7 @@ test("the ask made when the source becomes ready is not a refresh, and a refresh
     const observed = await page.evaluate(async () => {
       globalThis.__exactRender = true;
       const sent = [], callbacks = [];
-      globalThis.fetch = async (_input, init) => { sent.push(init.cache ?? 'default'); return new Response('reply'); };
+      globalThis.fetch = async (input, init) => { sent.push(new Request(input, init).cache ?? 'default'); return new Response('reply'); };
       const rt = await import('/host/web-js/rt.js');
       const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
       setAppGrantSet();
@@ -744,7 +746,7 @@ test("a refused refresh while waiting leaves the launch's ask ordinary, and a fa
     const observed = await page.evaluate(async () => {
       globalThis.__exactRender = true;
       const sent = [], callbacks = [];
-      globalThis.fetch = async (_input, init) => { sent.push(init.cache ?? 'default'); return new Response('reply'); };
+      globalThis.fetch = async (input, init) => { sent.push(new Request(input, init).cache ?? 'default'); return new Response('reply'); };
       const rt = await import('/host/web-js/rt.js');
       const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
       setAppGrantSet();
@@ -786,7 +788,7 @@ test("a refresh of a resource that slept through its source becoming ready is a 
     const observed = await page.evaluate(async () => {
       globalThis.__exactRender = true;
       const sent = [], callbacks = [];
-      globalThis.fetch = async (_input, init) => { sent.push(init.cache ?? 'default'); return new Response('reply'); };
+      globalThis.fetch = async (input, init) => { sent.push(new Request(input, init).cache ?? 'default'); return new Response('reply'); };
       const rt = await import('/host/web-js/rt.js');
       const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
       setAppGrantSet();
@@ -865,3 +867,154 @@ test.each(['promise', 'stream', 'build', 'ready'])('a %s answer retained for pre
     expect(await page.evaluate(() => fixture.lines())).toHaveLength(1);
   } finally { await browser.close(); server.stop(true); }
 });
+
+test.each([false, true])('freezing releases a gated stream in its page commit (agent: %s)', async agent => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href + (agent ? '?agent' : ''));
+    await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js'), facts = await import('/host/web-js/facts.js');
+      rt.clock.agent = true;
+      facts.page({page:[['frozen']], online:[['onLine']]});
+      const controllers = [], asked = [];
+      const answer = rt.data.reserved.exactPage;
+      rt.data.reserved.exactPage = (...args) => { asked.push(args[2]); return answer(...args); };
+      rt.data.answer = () => ({stream: (deliver, controller) => {
+        controllers.push(controller);
+        deliver({v:7});
+        return new Promise(() => {});
+      }});
+      let pageFact, feed;
+      rt.mount(root => {
+        pageFact = rt.res('page', 'exactPage', () => [], undefined, undefined, {frozen:'b'}, [false]);
+        const online = rt.res('online', 'exactPage', () => [], undefined, undefined, {onLine:'b'}, [true]);
+        online();
+        const args = Object.assign(() => [], {gate: () => !pageFact()[0]});
+        feed = rt.res('feed', 'feed', args, undefined, undefined, 'n', 0);
+        rt.hd(root, {headTitle: () => `${pageFact()[0]} ${feed()}`});
+      });
+      window.fixture = {rt, pageFact, feed, controllers, asked};
+    });
+    await page.waitForFunction(() => fixture.feed() === 7);
+    const freeze = async value => page.evaluate(([agent, value]) => {
+      const epoch = fixture.rt.clock.epoch;
+      if (agent) exact.page.prefer({frozen:value});
+      else document.dispatchEvent(new Event(value ? 'freeze' : 'resume'));
+      return {epoch: fixture.rt.clock.epoch - epoch, frozen:fixture.pageFact()[0],
+        ticket:!!fixture.feed.r.ticket, aborted:fixture.controllers[0].signal.aborted,
+        title:document.title, streams:fixture.controllers.length};
+    }, [agent, value]);
+    expect(await freeze(true)).toEqual({epoch:1, frozen:true, ticket:false, aborted:true, title:'true 7', streams:1});
+    expect(await freeze(true)).toMatchObject({epoch:0, frozen:true, ticket:false});
+    expect(await page.evaluate(() => fixture.asked.filter(n => n === 'online'))).toHaveLength(1);
+    expect(await freeze(false)).toMatchObject({frozen:false, ticket:true, streams:2});
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
+
+test.each(['pending', 'resume', 'resume-refreeze', 'refused', 'skipped'])('freeze releases streams and stops sequences before a deferred tree update (%s)', async mode => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js'), facts = await import('/host/web-js/facts.js');
+      const { install } = await import('/host/web-js/sounds.js'), { sequence, transport } = await import('/host/web-js/transport.js');
+      rt.clock.agent = true;
+      install([]); transport({});
+      facts.page({page:[['frozen']]});
+      const controllers = [], changed = rt.sig(false), key = rt.sig(0);
+      rt.data.answer = () => ({stream: (deliver, controller) => {
+        controllers.push(controller); deliver({v:7}); return new Promise(() => {});
+      }});
+      let pageFact, feed;
+      rt.mount(root => {
+        pageFact = rt.res('page', 'exactPage', () => [], undefined, undefined, {frozen:'b'}, [false]);
+        feed = rt.res('feed', 'feed', Object.assign(() => [], {gate: () => !pageFact()[0]}), undefined, undefined, 'n', 0);
+        rt.hd(root, {headTitle: () => `${pageFact()[0]} ${feed()}`});
+        const label = text => parent => {
+          const el = document.createElement('div'); el.textContent = text; el.dataset.sharedElement = 'panel';
+          el.style.setProperty('--exact-layout-transition', '20 0 linear'); parent.append(el); rt.pr(el);
+        };
+        rt.when(root, changed, label('After'), label('Before'));
+      });
+      sequence([[() => true, () => key(), () => [[[16, 0, 0, '', []]], 120, 0, [], '', ''], null, 'freeze']]);
+      await rt.pieces();
+      const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+      let transition;
+      document.startViewTransition = update => transition = start(async () => { await gate.promise; return update(); });
+      const state = () => ({frozen:pageFact()[0], ticket:!!feed.r.ticket, aborted:controllers[0].signal.aborted,
+        transport:exact.transport.state().state, reason:exact.transport.state().reason, streams:controllers.length});
+      window.fixture = {rt, feed, state, openStreams: () => controllers.filter(c => !c.signal.aborted).length, refuseFreeze: () => rt.memo(() => {
+        if (pageFact()[0]) throw new rt.Refusal('freeze refused'); return 0;
+      }), restart: () => rt.commit(() => rt.W(key, 2)), begin: () => { rt.commit(() => rt.W(changed, true)); rt.commit(() => rt.W(key, 1)); return !!transition; },
+        finish: async skip => { if (skip) transition.skipTransition(); gate.resolve(); await transition.updateCallbackDone; await transition.finished; }};
+    });
+    await page.waitForFunction(() => fixture.feed() === 7);
+    const observed = await page.evaluate(async mode => {
+      const deferred = fixture.begin();
+      let refused;
+      if (mode === 'refused') {
+        const guard = fixture.refuseFreeze();
+        document.dispatchEvent(new Event('freeze'));
+        refused = fixture.state(); fixture.rt.end(guard.n);
+      }
+      document.dispatchEvent(new Event('freeze'));
+      const frozen = fixture.state();
+      if (mode.startsWith('resume')) document.dispatchEvent(new Event('resume'));
+      if (mode === 'resume-refreeze') { fixture.restart(); document.dispatchEvent(new Event('freeze')); }
+      const beforeUpdate = fixture.state();
+      await fixture.finish(mode === 'skipped');
+      return {deferred, frozen, refused, beforeUpdate, afterUpdate:fixture.state(), openStreams:fixture.openStreams(), stops:fixture.rt.journal.filter(l => l.includes('stopped (background)')).length};
+    }, mode);
+    expect(observed.deferred).toBe(true);
+    if (mode === 'refused') expect(observed.refused).toEqual({frozen:false, ticket:true, aborted:false, transport:'playing', reason:'', streams:1});
+    expect(observed.stops).toBe(mode === 'resume-refreeze' ? 2 : 1);
+    expect(observed.openStreams).toBe(mode === 'resume' ? 1 : 0);
+    expect(observed.frozen).toEqual({frozen:true, ticket:false, aborted:true, transport:'stopped', reason:'background', streams:1});
+    expect(observed.beforeUpdate).toMatchObject({aborted:true, transport:'stopped', reason:'background'});
+    expect(observed.afterUpdate).toEqual({frozen:mode !== 'resume', ticket:mode === 'resume', aborted:true,
+      transport:'stopped', reason:'background', streams:mode.startsWith('resume') ? 2 : 1});
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
+test('web builds expose their version inputs in the view and delivery state', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/delivery-version-'));
+  const dist = resolve(dir, 'dist');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Version', app: { id: 'test.delivery-version', name: 'Version' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'shape Build\n  version: string\n  buildNumber: string\n  production: bool\ncomponent App\n  resource build = exactDelivery() as shape Build\n  view\n    column\n      text `${build.version} (${build.buildNumber})` testId="version"\n      if build.production\n        text "production" testId="kind"\n      else\n        text "development" testId="kind"\n');
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) { const file = Bun.file(resolve(dist, new URL(request.url).pathname.slice(1) || 'index.html')); return await file.exists() ? new Response(file) : new Response(null, { status: 404 }); } });
+    for (const [version, buildNumber, production] of [['2.3.4', '56', false], [undefined, undefined, false], ['', '', false], ['2.3.4', '56', true]]) {
+      const env = { ...process.env, EXACT_APP_DIR: dir };
+      delete env.EXACT_VERSION; delete env.EXACT_BUILD_NUMBER;
+      if (version !== undefined) env.EXACT_VERSION = version;
+      if (buildNumber !== undefined) env.EXACT_BUILD_NUMBER = buildNumber;
+      const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'delivery-version', '--out', dist, '--render', 'none', ...(production ? ['--production'] : [])], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
+      expect(status, stdout + stderr).toBe(0);
+      expect(JSON.parse(readFileSync(resolve(dist, 'app.version.json'), 'utf8'))).toEqual({ version: version ?? '', buildNumber: buildNumber ?? '', production });
+      // A production page links no agent adapter: read what it shows in a plain browser.
+      if (production) {
+        const page = await (await suiteBrowser()).newPage();
+        try {
+          await page.goto(server.url.href);
+          await page.locator('[data-testid=kind]').waitFor();
+          expect(await page.locator('[data-testid=kind]').textContent()).toBe('production');
+          expect(await page.locator('[data-testid=version]').textContent()).toBe(`${version} (${buildNumber})`);
+        } finally { await page.close(); }
+        continue;
+      }
+      browser = await open({ host: 'web', app: dir, webDist: dist, url: server.url.href });
+      const state = await browser.state();
+      expect(state.resources.build).toEqual({ version: version ?? '', buildNumber: buildNumber ?? '', production: false });
+      expect(await browser.carrier.evaluate('document.querySelector("[data-testid=kind]").textContent')).toBe('development');
+      expect(state.delivery.version).toBe(version ?? '');
+      expect(state.delivery.buildNumber).toBe(buildNumber ?? '');
+      expect(state.delivery.production).toBe(production);
+      expect(await browser.carrier.evaluate('document.querySelector("[data-testid=version]").textContent')).toBe(`${version ?? ''} (${buildNumber ?? ''})`);
+      await browser.close(); browser = null;
+    }
+  } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

@@ -12,6 +12,7 @@
     "name": "Completion Storm"
   },
   "rust": {
+    "data": { "crate": "completion-storm-data", "type": "completion_storm_data::Storm" },
     "mode": "off"
   },
   "host": {

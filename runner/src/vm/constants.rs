@@ -157,6 +157,8 @@ mod tests {
             extents: vm::Extents::default(),
             decoded: vm::Decoded::default(),
             steps: 0,
+            calls: 0,
+            depth: 0,
         };
         assert_eq!(
             crate::machine::run(&mut run, &mut vm::Machine::new()).unwrap(),

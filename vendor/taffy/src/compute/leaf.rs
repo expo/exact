@@ -38,10 +38,10 @@ pub fn compute_leaf_layout<MeasureFunction>(
     inputs: LayoutInput,
     style: &impl CoreStyle,
     resolve_calc_value: impl Fn(*const (), f32) -> f32,
-    measure_function: MeasureFunction,
+    mut measure_function: MeasureFunction,
 ) -> LayoutOutput
 where
-    MeasureFunction: FnOnce(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32>,
+    MeasureFunction: FnMut(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32>,
 {
     let LayoutInput { known_dimensions, parent_size, available_space, sizing_mode, run_mode, .. } = inputs;
 
@@ -82,11 +82,17 @@ where
             },
         ),
         SizingMode::ContentSize => (known_dimensions, Size::NONE, Size::NONE),
-        SizingMode::InherentSize => (
-            known_dimensions.or(style.size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment)),
-            style.min_size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment),
-            style.max_size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment),
-        ),
+        SizingMode::InherentSize => {
+            let given =
+                known_dimensions.or(style.size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment));
+            let (keyword_min, keyword_max) =
+                keyword_bounds(style, given, ratio, available_space.width, pb_sum, &mut measure_function);
+            (
+                given,
+                style.min_size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment).or(keyword_min),
+                style.max_size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment).or(keyword_max),
+            )
+        }
     };
     let floor_height = floors_height(style, raw_min_size.height);
     let (node_size, node_min_size, node_max_size) = match ratio {
@@ -283,4 +289,62 @@ fn replaced_constraints(size: Size<f32>, min: Size<Option<f32>>, max: Size<Optio
         (_, _, _, true) => (f32_min(min_h * w / h, max_w), min_h),
     };
     Size { width: rw, height: rh } + ratio.inset
+}
+
+/// EXACT PATCH 78: a leaf's keyword minimum and maximum sizes, as
+/// `crate::compute::common::sizing_keyword::keyword_bounds` resolves a container's, measured
+/// with the leaf's own measure function, since a leaf has no tree to measure itself through.
+/// `given` is its border-box size where known, and with a ratio a definite height gives the
+/// inline content size (CSS Sizing 3 §5.1); `available` is the width it is offered, the
+/// stretch size for `fit-content`.
+fn keyword_bounds(
+    style: &impl CoreStyle,
+    given: Size<Option<f32>>,
+    ratio: Option<Ratio>,
+    available: AvailableSpace,
+    pb_sum: Size<f32>,
+    measure: &mut impl FnMut(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32>,
+) -> (Size<Option<f32>>, Size<Option<f32>>) {
+    use crate::CompactLength;
+    let (style_min, style_max) = (style.min_size(), style.max_size());
+    let (mut min, mut max) = (Size::NONE, Size::NONE);
+    if !crate::compute::common::sizing_keyword::has_keyword_bounds(style_min, style_max) {
+        return (min, max);
+    }
+    let keyword = |d: crate::Dimension| d.is_sizing_keyword() && !d.is_stretch();
+    let width = given.width;
+    let transferred = ratio.zip(given.height).map(|(ratio, height)| ratio.width(height));
+    let mut content_width = |constraint| match transferred {
+        Some(width) => width,
+        None => measure(Size::NONE, Size { width: constraint, height: AvailableSpace::MaxContent }).width + pb_sum.width,
+    };
+    let mut inline = |bound: crate::Dimension| match bound.tag() {
+        CompactLength::MIN_CONTENT_TAG => Some(content_width(AvailableSpace::MinContent)),
+        CompactLength::MAX_CONTENT_TAG => Some(content_width(AvailableSpace::MaxContent)),
+        _ => match available {
+            AvailableSpace::Definite(stretch) => {
+                let least = content_width(AvailableSpace::MinContent);
+                Some(least.max(stretch.min(content_width(AvailableSpace::MaxContent))))
+            }
+            constraint => Some(content_width(constraint)),
+        },
+    };
+    if keyword(style_min.width) {
+        min.width = inline(style_min.width);
+    }
+    if keyword(style_max.width) {
+        max.width = inline(style_max.width);
+    }
+    if keyword(style_min.height) || keyword(style_max.height) {
+        let inner = width.or(available.into_option()).map(|w| f32_max(w - pb_sum.width, 0.0));
+        let space = Size { width: inner.map_or(AvailableSpace::MaxContent, AvailableSpace::Definite), height: AvailableSpace::MaxContent };
+        let height = measure(Size { width: inner, height: None }, space).height + pb_sum.height;
+        if keyword(style_min.height) {
+            min.height = Some(height);
+        }
+        if keyword(style_max.height) {
+            max.height = Some(height);
+        }
+    }
+    (min, max)
 }

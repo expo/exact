@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # Blacksmith runners: https://docs.blacksmith.sh/blacksmith-runners/overview#runner-tags
+  labels:
+    - blacksmith-*

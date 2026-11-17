@@ -502,8 +502,10 @@ impl Readback {
             let data = (buffer.slice(..).get_mapped_range())
                 .map_err(|e| format!("look readback: {e:?}"))?;
             let words = || {
-                data.chunks_exact(4)
-                    .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+                data.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|w| u32::from_le_bytes(*w))
                     .collect::<Vec<_>>()
             };
             match *part {
@@ -520,7 +522,10 @@ impl Readback {
                         let line = &data[y * row as usize..][..width as usize * 4];
                         if bgra {
                             out.rgba.extend(
-                                line.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], p[3]]),
+                                line.as_chunks::<4>()
+                                    .0
+                                    .iter()
+                                    .flat_map(|p| [p[2], p[1], p[0], p[3]]),
                             );
                         } else {
                             out.rgba.extend_from_slice(line);
@@ -528,8 +533,8 @@ impl Readback {
                     }
                 }
                 Part::Queries(n) => {
-                    out.covered = (data.chunks_exact(8).take(n as usize))
-                        .map(|q| u64::from_le_bytes(q.try_into().unwrap()) != 0)
+                    out.covered = (data.as_chunks::<8>().0.iter().take(n as usize))
+                        .map(|q| u64::from_le_bytes(*q) != 0)
                         .collect();
                 }
                 Part::Counts(n) => out.counts = words().into_iter().take(n as usize).collect(),

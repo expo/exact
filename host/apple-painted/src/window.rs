@@ -1085,7 +1085,9 @@ mod tests {
             assert_eq!(first.data(), expected.data(), "{choice:?}: first frame");
             assert!(first
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|p| p != &first.data()[..4]));
             early.repaint();
             prepare_draw(&mut early, 0., false).unwrap();

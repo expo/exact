@@ -80,3 +80,21 @@ fn a_header_is_a_bar_by_what_hears_press() {
     k.project_bar_symbols(&pressed);
     assert_eq!(k.node(4).unwrap().bar_symbol_size(), None);
 }
+
+#[test]
+fn a_file_backed_icon_keeps_its_authored_geometry_in_a_neutral_bar() {
+    metrics::set_column(Column::Neutral);
+    let mut k = route(1);
+    k.apply(
+        0,
+        2,
+        &[Op::SetProp {
+            id: 4,
+            prop: PropId::ImageSource,
+            value: PropValue::Str("symbol:icon||10 20 40 20||two.svg".into()),
+        }],
+    )
+    .unwrap();
+    k.project_bar_symbols(&|id| id == 3);
+    assert_eq!(k.node(4).unwrap().bar_symbol_size(), None);
+}

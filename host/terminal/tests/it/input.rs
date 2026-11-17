@@ -5,7 +5,6 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod signals;
 
-use std::path::PathBuf;
 use std::process::Command;
 #[cfg(unix)]
 use std::{
@@ -18,15 +17,11 @@ use std::{
 };
 
 /// An entry file holding `source`.
-fn entry(name: &str, source: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "exact-terminal-input-{}-{name}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("app.contract");
-    std::fs::write(&path, source).unwrap();
-    path
+fn entry(name: &str, source: &str) -> crate::Temp {
+    crate::Temp::entry(
+        format!("exact-terminal-input-{}-{name}", std::process::id()),
+        source,
+    )
 }
 
 /// The app on a pseudo-terminal, its output read into a terminal emulator.
@@ -37,6 +32,8 @@ struct Pty {
     output: Vec<u8>,
     child: Child,
     screen: vt100::Parser,
+    /// The entry the child runs, removed after it.
+    _entry: crate::Temp,
 }
 
 #[cfg(unix)]
@@ -85,7 +82,7 @@ impl Pty {
         let mut command = Command::new(env!("CARGO_BIN_EXE_exact-terminal"));
         configure(&mut command);
         let child = command
-            .arg(path)
+            .arg(&*path)
             .arg(mode)
             .process_group(0)
             .stdin(slave.try_clone().unwrap())
@@ -99,6 +96,7 @@ impl Pty {
             output: Vec::new(),
             child,
             screen: vt100::Parser::new(6, 40, 0),
+            _entry: path,
         }
     }
 
@@ -249,11 +247,10 @@ fn a_held_escape_waits_its_time_whatever_wakes_the_loop() {
 #[test]
 fn a_timer_opens_its_url_without_waiting_for_input() {
     use std::os::unix::fs::PermissionsExt;
-    let bin = std::env::temp_dir().join(format!(
+    let bin = crate::Temp::dir(format!(
         "exact-terminal-input-{}-opener",
         std::process::id()
     ));
-    std::fs::create_dir_all(&bin).unwrap();
     let opened = bin.join("opened");
     let _ = std::fs::remove_file(&opened);
     let script = format!(
@@ -637,7 +634,7 @@ fn a_driven_key_is_the_chord_it_names() {
     );
     let drive = |keys: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
-            .arg(&path)
+            .arg(&*path)
             .args(["--size", "120x4", "--drive"])
             .args(keys.iter().flat_map(|k| ["key", k]))
             .arg("print")

@@ -97,6 +97,8 @@ final class SoundOutput {
     /// The latest start of a voice handed to the arm, host seconds: a voice
     /// still ahead keeps the output from counting as idle.
     private var latestStart = 0.0
+    /// A running transport keeps the engine between hits (LLP 1125 D4).
+    private var sequencePlaying = false
     /// Seconds after a failure before a voice tries again; settable for tests.
     var retryAfter = 1.0
     /// The host clock, on CACurrentMediaTime's timebase; settable for tests.
@@ -119,6 +121,7 @@ final class SoundOutput {
     /// The session is destroyed, or a boot names other files: the arm is
     /// stopped and let go, and the session claim given back.
     func shutdown() {
+        sequencePlaying = false
         haptics.values.forEach { $0.cancel() }
         haptics = [:]
         backlog = []
@@ -130,10 +133,11 @@ final class SoundOutput {
     }
 
     /// The owner is about to change the session for speech (LLP 1133.012
-    /// D4): an output with no voice submitted and not ended stops and gives
-    /// its hold back, and the next voice opens it again, as after a route
+    /// D4): an output with no playing sequence or unended voice stops and gives
+    /// its hold back; the next voice opens it again, as after a route
     /// change. Whether it let the hold go.
     func stopIfIdle() -> Bool {
+        guard !sequencePlaying else { return false }
         guard let arm else { return true }
         guard backlog.isEmpty, counts(arm)[0] == 0, now() > latestStart + 0.05 else { return false }
         say("sound: the idle output stopped so the audio session can change; the next sound opens it again")
@@ -147,6 +151,9 @@ final class SoundOutput {
     /// A batch's `sound` op: the files at a boot (the last boot's voices end
     /// now), then its ops in order.
     func apply(_ payload: [String: Any]) {
+        #if os(iOS) || os(tvOS)
+        defer { AudioSession.playbackChanged() }
+        #endif
         guard !ExactEnv.agentMode else { return }
         if let files = payload["files"] as? [String] {
             // New files let the output and its session claim go; the next voice takes both again.
@@ -155,6 +162,7 @@ final class SoundOutput {
             // voices waits its turn like any op, so a full ring never skips it.
             else if let arm, let library = library() { backlog = []; send(arm, library, (3, 0, 0, 0, 0, 1, 0, 0)) }
         }
+        if let playing = payload["playing"] as? Bool { sequencePlaying = playing }
         for op in payload["ops"] as? [[String: Any]] ?? [] {
             let id = UInt64((op["id"] as? NSNumber)?.int64Value ?? 0), at = (op["at"] as? NSNumber)?.doubleValue ?? 0
             // Runner time to host seconds on CACurrentMediaTime's timebase (D6).
@@ -216,6 +224,14 @@ final class SoundOutput {
         }
     }
 
+    #if os(iOS) || os(tvOS)
+    private var hasLiveSound: Bool {
+        guard let arm, started else { return false }
+        let c = counts(arm)
+        return c[3] == 1 && (sequencePlaying || c[0] > 0 || !backlog.isEmpty || now() < latestStart + 0.05)
+    }
+    #endif
+
     /// The running output, opened when there is none: at the first voice,
     /// after the system stopped the engine, or `retryAfter` after a failure.
     private func ready() -> Arm? {
@@ -244,7 +260,7 @@ final class SoundOutput {
         guard let library = library() else { fail("no sound module in this build"); return nil }
         #if os(iOS) || os(tvOS)
         // The session before the engine: an output made with no active session is AURemoteIO's to fail.
-        do { try AudioSession.hold(ObjectIdentifier(self)) } catch { fail("the audio session did not activate: \(error.localizedDescription)"); return nil }
+        do { try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in self?.hasLiveSound ?? false }) } catch { fail("the audio session did not activate: \(error.localizedDescription)"); return nil }
         AudioSession.stopsWhenIdle(ObjectIdentifier(self)) { [weak self] in self?.stopIfIdle() ?? true }
         observe()
         #endif
@@ -278,7 +294,7 @@ final class SoundOutput {
     /// when it must be activated again: nil, or why not.
     private func start(_ arm: Arm) -> String? {
         #if os(iOS) || os(tvOS)
-        if reactivate { do { try AudioSession.hold(ObjectIdentifier(self)) } catch { return "the audio session did not activate again: \(error.localizedDescription)" } }
+        if reactivate { do { try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in self?.hasLiveSound ?? false }) } catch { return "the audio session did not activate again: \(error.localizedDescription)" } }
         #endif
         var reason = [CChar](repeating: 0, count: 512)
         guard library()?.engine(arm.handle, 1, &reason, reason.count) == true else { return String(cString: reason) }
@@ -298,6 +314,9 @@ final class SoundOutput {
     }
 
     private func close() {
+        #if os(iOS) || os(tvOS)
+        defer { AudioSession.playbackChanged() }
+        #endif
         backlog = []
         guard let arm else { return }
         self.arm = nil
@@ -350,6 +369,7 @@ final class SoundOutput {
     private func observe() {
         AudioSession.listen(ObjectIdentifier(self)) { [weak self] event in
             switch event {
+            case .background: break
             case let .interruption(began, resume): self?.interruption(began: began, resume: resume)
             case let .appActive(othersPlaying): self?.becameActive(othersPlaying: othersPlaying)
             case .reset: self?.mediaServicesWereReset()

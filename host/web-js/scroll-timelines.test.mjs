@@ -12,6 +12,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['firefox']);
 
 const root = resolve(import.meta.dir, '../..'), fixtures = resolve(root, 'host/web/tests/fixtures');
 const target = resolve(root, 'target');
@@ -117,7 +120,7 @@ test('a bound animation under a literal timeline and range follows its scroller 
   } finally { await close(); }
 }, 120000);
 
-test('a browser with no scroll-driven animations shows every consumer its own values', async () => {
+engineTest.firefox('a browser with no scroll-driven animations shows every consumer its own values', async () => {
   for (const [source, ready, groups] of [
     [noDrag, 'vsub', steps],
     [DYNAMIC, 'c', [{ scroller: 's', axis: 'x', at: [0, 150, 300], read: ['c'], toggle: true }]],

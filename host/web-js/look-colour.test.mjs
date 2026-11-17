@@ -23,7 +23,7 @@ const { unavailable } = chromium();
 const test = need('chrome', unavailable, { test: bunTest });
 const SLOW = process.env.EXACT_SLOW_TESTS === '1';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const design = 'tamber t\n\ntheme\n  ink = light-dark(#222222, #e2e2e2)\n  ink.nav = light-dark(#666666, #ffffff)\n';
+const design = 'forma t\n\ntheme\n  ink = light-dark(#222222, #e2e2e2)\n  ink.nav = light-dark(#666666, #ffffff)\n';
 const view = `component App
   state n = 0
   action go
@@ -88,7 +88,7 @@ async function serve(target) {
   const app = resolve(dir, target, 'app'), out = resolve(dir, target, 'out');
   mkdirSync(app, { recursive: true });
   writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Looks', app: { id: 'test.looks', name: 'Looks' } }));
-  writeFileSync(resolve(app, 'app.tamber'), design);
+  writeFileSync(resolve(app, 'app.forma'), design);
   writeFileSync(resolve(app, 'app.contract'), view);
   if (target === 'wasm') writeFileSync(resolve(app, 'app.ts'), "export const appId = 'test.looks';\nexport const grants = '';\nexport const answer = () => { throw new Error('no sources'); };\n");
   // The wasm build writes the directory EXACT_WEB_DIST names; `--out` is the JS target's.

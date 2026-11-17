@@ -51,7 +51,7 @@ extension NodeView {
         guard (handlers.contains("scrollend") || presenter?.session?.timerAdmissions.enabled == true), hasScrollLayoutBox, let o = scroll?.contentView.bounds.origin else { return }
         let end = scrollEnd ?? ScrollEnd()
         scrollEnd = end
-        guard end.moved(to: [o.x, o.y, 0]) else { return }
+        guard end.moved(to: [o.x, o.y, scroll?.magnification ?? 1]) else { return }
         if end.live || end.elementAnimation != nil { end.hold() } else { end.settle { [weak self] in if self?.scrollEnd?.live == false { self?.endScroll() } } }
     }
 

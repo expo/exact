@@ -17,7 +17,12 @@ impl<D: DataSource> Runner<D> {
         request: &crate::Request,
         target: Option<(ViewId, u64, u64)>,
     ) -> Option<Result<crate::canvas_capture::CanvasCapture, crate::Outcome>> {
-        let Some(crate::SurfaceRequest::Canvas { name, path, .. }) = request.surface.as_deref()
+        let Some(crate::SurfaceRequest::Canvas {
+            name,
+            path,
+            encoding,
+            ..
+        }) = request.surface.as_deref()
         else {
             return None;
         };
@@ -26,7 +31,12 @@ impl<D: DataSource> Runner<D> {
             self.canvases.as_ref(),
         ) {
             (Some(why), _) => Err(("NotAllowedError", why)),
-            (None, Some(c)) => c.capture(name, path, target, &|v| self.kernel.node(v).is_some()),
+            (None, Some(c)) => c
+                .capture(name, path, target, &|v| self.kernel.node(v).is_some())
+                .map(|capture| crate::canvas_capture::CanvasCapture {
+                    encoding: encoding.clone(),
+                    ..capture
+                }),
             (None, None) => Err((
                 "NotFoundError",
                 format!("no canvas of surface {name:?} is mounted"),

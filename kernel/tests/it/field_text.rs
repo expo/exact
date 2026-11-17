@@ -19,6 +19,7 @@ impl TextMeasurer for Hosts {
         TextMetrics {
             width: 100.0,
             height: 20.0,
+            pending: false,
             first_baseline: Some(15.0),
         }
     }
@@ -32,6 +33,7 @@ impl TextMeasurer for Hosts {
         self.own.then_some(TextMetrics {
             width: 64.0,
             height: 30.0,
+            pending: false,
             first_baseline: Some(22.0),
         })
     }

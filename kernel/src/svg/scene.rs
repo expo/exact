@@ -51,6 +51,11 @@ pub trait Present {
     fn path(&self, _key: NodeKey) -> Option<exact_motion::PathValue> {
         None
     }
+    /// The presented `filter` of `key` while a transition moves it (LLP
+    /// 1003.002 D8).
+    fn filter(&self, _key: NodeKey) -> Option<exact_motion::FilterValue> {
+        None
+    }
 }
 
 impl<F: Fn(NodeKey, Property) -> Option<Value>> Present for F {
@@ -75,7 +80,7 @@ pub struct Scene {
     /// The elements, in paint order.
     pub items: Vec<Item>,
     /// What this host cannot draw and so leaves out, by name: a
-    /// `foreignObject` (LLP 1055.000 D13), which is the web's alone.
+    /// `foreignObject` or a basic clip shape on an SVG element.
     pub refused: Option<&'static str>,
     /// The cost limit the scene passed (LLP 1011.001 D2); `items` is then
     /// empty.
@@ -464,6 +469,11 @@ impl<'k> Resolver<'k, '_> {
                 style.stroke_dashoffset = v.x as f32;
             }
         }
+        // After `color`: a moving filter's share of `currentcolor` reads it
+        // (LLP 1003.002 D7).
+        if let Some(f) = self.presented.filter(key) {
+            style.filter = crate::motion::filter_list(&f, style.text_color);
+        }
     }
 
     fn children(
@@ -540,15 +550,15 @@ impl<'k> Resolver<'k, '_> {
                 Kind::Shape(Box::new(shape))
             }
         };
-        let clip = if style.rare.clip_path.url().is_some() {
-            let bbox = match &kind {
+        let bbox = if style.rare.clip_path.url().is_some() || style.rare.clip_path.has_path() {
+            match &kind {
                 Kind::Shape(s) => s.path.bounds(),
                 _ => self.bbox(node, &style, vp),
-            };
-            self.clip(node, bbox, vp, 0).map(Box::new)
+            }
         } else {
             None
         };
+        let clip = self.clip(node, bbox, vp, 0).map(Box::new);
         let mask = if style.rare.svg_mask.url().is_some() {
             let bbox = match &kind {
                 Kind::Shape(s) => s.path.bounds(),
@@ -621,9 +631,16 @@ impl<'k> Resolver<'k, '_> {
             ),
             |v| ((v.x as f32, v.y as f32), (v.z as f32, v.w as f32)),
         );
-        let rotate = self
-            .value(key, Property::Rotate)
-            .map_or(style.rotate, |v| v.x as f32);
+        let rotate = self.value(key, Property::Rotate).map_or_else(
+            || {
+                exact_motion::rotation::presented(exact_motion::rotation::value(
+                    style.rotate as f64,
+                    style.rotate_axis.0.map(f64::from),
+                ))
+                .x as f32
+            },
+            |v| v.x as f32,
+        );
         let scale = self
             .value(key, Property::Scale)
             .map_or(style.scale, |v| v.x as f32);

@@ -1,7 +1,7 @@
 //! Final sizing and placement of in-flow block children.
 
 use super::{resolve_stretch_height, BlockContext, BlockItem};
-use crate::compute::common::sizing_keyword::{resolve_sizing_keyword, SizingKeywordResolution};
+use crate::compute::common::sizing_keyword::{measure_keyword_width, resolve_sizing_keyword, SizingKeywordResolution};
 #[cfg(feature = "content_size")]
 use crate::compute::common::scrollable_overflow::compute_scrollable_overflow_contribution;
 use crate::geometry::{Line, Point, Rect, Size};
@@ -110,6 +110,8 @@ pub(super) fn perform_final_layout_on_in_flow_children(
                     Some(container_inner_width),
                 ) {
                     Some(SizingKeywordResolution::Measure(available)) => (None, available),
+                    // EXACT PATCH 77: a float's `fit-content` against its stretch size.
+                    Some(SizingKeywordResolution::Fit(stretch)) => (None, AvailableSpace::Definite(stretch)),
                     Some(SizingKeywordResolution::Exact(width)) => (Some(width), AvailableSpace::Definite(width)),
                     None => (None, AvailableSpace::Definite(available_width)),
                 };
@@ -317,17 +319,17 @@ pub(super) fn perform_final_layout_on_in_flow_children(
                 // the item under the corresponding available space constraint
                 let keyword_width =
                     resolve_sizing_keyword(item.size_style.width, Some(stretch_width), Some(container_inner_width))
-                        .map(|resolution| match resolution {
-                            SizingKeywordResolution::Exact(width) => width,
-                            SizingKeywordResolution::Measure(item_available_width) => tree.measure_child_size(
+                        .map(|resolution| {
+                            measure_keyword_width(
+                                tree,
                                 item.node_id,
+                                resolution,
                                 Size::NONE,
                                 parent_size,
-                                Size { width: item_available_width, height: AvailableSpace::MaxContent },
+                                AvailableSpace::MaxContent,
                                 SizingMode::InherentSize,
-                                crate::AbsoluteAxis::Horizontal,
                                 Line::TRUE,
-                            ),
+                            )
                         });
 
                 let keyword_height = resolve_stretch_height(

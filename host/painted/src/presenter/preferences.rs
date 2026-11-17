@@ -20,6 +20,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// A candidate has a new runner, but belongs to the same launch.
     pub(super) fn restore_time(&self, host: &mut Host<D>) -> Result<(), HostError> {
+        host.web_mount = self.host.web_mount.clone();
         host.set_scheme(self.dark());
         // The same launch keeps what the device said about itself.
         let runner = self.host.runner();
@@ -101,10 +102,32 @@ impl<D: DataSource> Presenter<D> {
     /// `hasFocus`, as `exactPage()` answers them: re-answered in one commit.
     pub fn set_page(&mut self, page: exact_runner::Page) -> Option<String> {
         let error = self.host.set_page(page);
+        // Hidden or frozen, nothing presents what a commit begins (LLP 1003.001 D9).
+        self.refresh_presentable();
         if error.is_some() {
             return error;
         }
         self.after_commit()
+    }
+
+    /// Android's reader composes Activity and promoted service ownership in `Exact.executionEligible`.
+    /// Apply visibility and execution together, preserving the agent's substitute.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn page_execution(&mut self, hidden: bool, eligible: bool) -> bool {
+        let page = self.host.runner().page();
+        let frozen = if self.agent { page.frozen } else { !eligible };
+        if page.hidden == hidden && page.frozen == frozen {
+            return false;
+        }
+        if let Some(error) = self.set_page(exact_runner::Page {
+            hidden,
+            frozen,
+            ..page
+        }) {
+            eprintln!("exact: page: {error}");
+        }
+        self.update_foreground(!hidden);
+        true
     }
 
     /// A live design batch or snapshot frame (LLP 1121 stage 4), in place;
@@ -391,4 +414,63 @@ pub fn scrub_frame_drawn() {
         .partition(|l| now.duration_since(l.4) > FRAME_WAIT);
     write_scrub(&late, Some(None));
     write_scrub(&fresh, Some(Some(turned)));
+}
+
+/// The app's `setScheme` argument as what a `light-dark()` colour resolves to
+/// here (LLP 1034 D2): dark, light, or, for `system`, no override.
+pub(crate) fn app_dark(scheme: Option<&exact_plan::Value>) -> Option<bool> {
+    match scheme.and_then(exact_plan::Value::as_str) {
+        Some("dark") => Some(true),
+        Some("light") => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activity_and_service_execution_edges_update_the_page_together() {
+        let plan = crate::test_plan("shape Page\n  frozen: bool\n  visibilityState: string\ncomponent App\n  resource page = exactPage() as shape Page\n  view\n    text `${page.frozen}`\n");
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            (),
+            (300., 300.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.agent = false;
+        // Started; hidden with a promoted service; last claim released; foreground;
+        // failed promotion at stop; promotion while hidden; service destroyed.
+        for (hidden, eligible, frozen) in [
+            (false, true, false),
+            (true, true, false),
+            (true, false, true),
+            (false, true, false),
+            (true, false, true),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            p.page_execution(hidden, eligible);
+            let page = p.host.runner().page();
+            assert_eq!(page.hidden, hidden);
+            assert_eq!(page.frozen, frozen);
+            assert!(
+                !p.page_execution(hidden, eligible),
+                "duplicate reports make no commit"
+            );
+        }
+        p.agent = true;
+        let reply = crate::agent::handle(&mut p, r#"{"op":"prefer","page":{"frozen":true}}"#);
+        assert!(!reply.contains("error"), "{reply}");
+        p.page_execution(false, true);
+        assert!(
+            p.host.runner().page().frozen,
+            "live lifecycle cannot replace prefer"
+        );
+    }
 }

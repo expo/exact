@@ -1,4 +1,5 @@
 #if os(iOS)
+import ObjectiveC
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XCTest
@@ -81,6 +82,60 @@ final class GesturePrecedenceIOSTests: XCTestCase {
         node.handlers = ["press"]
         node.updateContextGestures()
         XCTAssertNil(node.gestureRecognizers?.first { $0 is PointerRecognizer })
+    }
+
+    /// The touch an observer holds can end without its end reaching it (a
+    /// pull-down's menu takes the tap that opened it). The next touch is
+    /// observed anyway: the ended one is lifted first, as its end would have
+    /// lifted it, and the observer fails at the next lift. Left possible,
+    /// it kept UIKit from resetting the touch's other recognizers, and a
+    /// sheet's scroll view never began another pan.
+    func testAnObserverWhoseHeldTouchEndedUnseenObservesTheNextTouch() throws {
+        let p = host([
+            ["op": "create", "id": 1, "kind": "button", "handlers": ["press", "pointerdown", "pointerup"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 200.0, "h": 100.0]
+        ])
+        var log: [String] = []
+        p.onPointer = { id, kind, _ in log.append("\(kind == .down ? "down" : kind == .up ? "up" : "move") \(id)") }
+        let node = try XCTUnwrap(p.views[1])
+        let g = try XCTUnwrap(node.gestureRecognizers?.compactMap { $0 as? PointerRecognizer }.first)
+        let opened = LiftedTouch()
+        g.touchesBegan([opened], with: UIEvent())
+        XCTAssertEqual(log, ["down 1"])
+        opened.lifted = true
+        let next = UITouch()
+        g.touchesBegan([next], with: UIEvent())
+        XCTAssertEqual(log, ["down 1", "up 1", "down 1"], "the ended touch lifted, the next one observed")
+        g.touchesEnded([next], with: UIEvent())
+        XCTAssertEqual(log, ["down 1", "up 1", "down 1", "up 1"])
+    }
+
+    /// A touch the observer never takes (its node is disabled) fails it when
+    /// it ends: holding none, it is done, so UIKit resets the touch's other
+    /// recognizers. UIKit resets a failed recognizer inside the setter outside
+    /// its own dispatch, so the states it is given are recorded as they are set.
+    func testAnObserverFailsWhenATouchItNeverTookEnds() throws {
+        let p = host([
+            ["op": "create", "id": 1, "kind": "button", "handlers": ["press", "pointerdown", "pointerup"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 200.0, "h": 100.0]
+        ])
+        var log: [String] = []
+        p.onPointer = { id, kind, _ in log.append("\(kind == .down ? "down" : "up") \(id)") }
+        let node = try XCTUnwrap(p.views[1])
+        let g = try XCTUnwrap(node.gestureRecognizers?.compactMap { $0 as? PointerRecognizer }.first)
+        let uikit = try XCTUnwrap(class_getInstanceMethod(UIGestureRecognizer.self, #selector(setter: UIGestureRecognizer.state)))
+        let recorded = try XCTUnwrap(class_getInstanceMethod(UIGestureRecognizer.self, #selector(UIGestureRecognizer.recordedState(_:))))
+        method_exchangeImplementations(uikit, recorded)
+        statesSet = []
+        defer { method_exchangeImplementations(uikit, recorded); statesSet = [] }
+        node.props["disabled"] = "true"
+        let touch = UITouch()
+        g.touchesBegan([touch], with: UIEvent())
+        XCTAssertEqual(log, [], "a disabled node's observer takes no touch")
+        g.touchesEnded([touch], with: UIEvent())
+        XCTAssertTrue(statesSet.contains { $0.recognizer === g && $0.state == .failed }, "its lift ends it")
     }
 
     /// A touch's offsets are from the content box layout sent: a padding the
@@ -469,6 +524,20 @@ final class GesturePrecedenceIOSTests: XCTestCase {
         let stray = UIScreenEdgePanGestureRecognizer()
         UIView().addGestureRecognizer(stray)
         XCTAssertFalse(row.gestureRecognizer(swipe, shouldRequireFailureOf: stray), "nor another edge pan")
+    }
+}
+/// A touch whose phase a test ends: UIKit's end of it never reached the recognizer.
+private final class LiftedTouch: UITouch {
+    var lifted = false
+    override var phase: UITouch.Phase { lifted ? .ended : .began }
+}
+/// The states `setState:` was given, in order, while a test swaps it in.
+private var statesSet: [(recognizer: UIGestureRecognizer, state: UIGestureRecognizer.State)] = []
+extension UIGestureRecognizer {
+    /// Swapped with `setState:`, so this name calls UIKit's.
+    @objc fileprivate func recordedState(_ state: UIGestureRecognizer.State) {
+        statesSet.append((self, state))
+        recordedState(state)
     }
 }
 #endif

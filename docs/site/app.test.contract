@@ -28,6 +28,14 @@ test "a deep link opens a section page at its heading"
   at "/learn/contract-for-humans/input-events-and-commands#choosing-a-native-button"
   expect tree has "h-choosing-a-native-button"
 
+test "a page shows its full path, and a crumb opens that page"
+  size 1440x900
+  at "/learn/contract-for-humans/values-and-types"
+  expect text "crumb-current" == "Values and types"
+  expect tree has "crumb-Learn"
+  tap "crumb-Contract: a guide for humans"
+  expect text "crumb-current" == "Contract: a guide for humans"
+
 test "the recipe page renders"
   at "/recipes/website"
   expect tree has "h-a-deep-link"
@@ -78,23 +86,45 @@ test "a page has its section, a rule under the header, previous and next, and th
   expect tree has "page-next"
   expect tree has "updated"
 
-test "the rail has Edit page, the AI actions, and Copy markdown copies the page"
+test "previous and next follow the sidebar, within its tab"
+  size 1440x900
+  at "/agents"
+  expect tree missing "page-next"
+  tap "page-previous"
+  expect tree has "h-a-deep-link"
+
+test "the page header has Edit page, and Copy link copies the page's address"
   size 1440x900
   at "/recipes/website"
-  expect tree has "ai-actions"
+  expect tree has "edit-page"
+  tap "copy-link"
+  expect text "copy-link" == "Copied"
+
+test "the Actions menu copies the Markdown and opens the page in each AI app"
+  size 1440x900
+  at "/recipes/website"
+  tap "actions"
+  expect tree has "open-claude"
+  expect tree has "open-claude-code"
+  expect tree has "open-cursor"
+  expect tree has "open-chatgpt"
+  expect tree has "open-codex"
+  expect tree has "open-t3"
+  expect tree has "open-grok"
+  expect tree has "open-meta"
   tap "copy-markdown"
   expect text "copy-markdown" == "Copied"
 
-test "Open in Claude and Open in ChatGPT each offer the web chat and the coding app"
+test "Is this helpful thanks a yes, and a no offers the page's issue"
   size 1440x900
   at "/recipes/website"
-  expect tree missing "ai-claude-choices"
-  tap "ai-claude"
-  expect tree has "ai-claude-choices"
-  tap "ai-openai"
-  expect tree has "ai-openai-choices"
-  tap "ai-claude"
-  expect tree missing "ai-claude-choices"
+  tap "helpful-yes"
+  expect tree has "helpful-thanks"
+  expect tree missing "helpful-issue"
+  expect tree missing "helpful-no"
+  reload
+  tap "helpful-no"
+  expect tree has "helpful-issue"
 
 test "a collapsible opens, and steps, prerequisites and a file tree render"
   size 1440x900

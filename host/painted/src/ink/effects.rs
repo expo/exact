@@ -148,7 +148,7 @@ impl Ink {
         if dst.2 <= 0. || dst.3 <= 0. {
             return Ok(());
         }
-        let texture = self.images.pixmap(&mut self.device, pixels)?;
+        let texture = self.images.pixmap(&mut self.device, pixels, true)?;
         let mut i = Instance::new(Kind::RoundedRect, Brush::Image, rect(dst));
         i.xform = affine(self.device_transform(ts));
         i.flags |= u32::from(mode.min(15)) << flags::BLEND_SHIFT;

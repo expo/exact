@@ -1,16 +1,18 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // LLP 1115.000 D4 part B: one neutral web presentation in Chrome, Firefox and WebKit.
 // The role and metric censuses hold the sheet to the schema; the browser oracle
 // keeps the same geometry, colours and author precedence in all three engines.
 import { test, expect } from 'bun:test';
 import { withLook, appleColors } from '../look.mjs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { glueDeclarations, glueCase } from './glue-fixture.mjs';
+import { glueCase, glueDeclarations, hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
 import { readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const shell = read('../index.html'), neutral = read('../neutral.css');
@@ -86,7 +88,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
     'alert-title': ['font-size'], 'alert-message-gap': ['margin-bottom', 'margin-top'], 'alert-scroll-gutter': ['padding-inline-end'],
     'menu-min-width': ['min-width'], 'menu-max-width': ['max-width'], 'menu-margin': ['max-width'], 'menu-padding': ['padding'], 'menu-offset': ['margin'], 'popover-padding': ['padding'], 'popover-margin': ['margin', 'margin-left'],
     'menu-row-height': ['min-height'], 'menu-row-padding-block': ['padding'], 'menu-row-padding-inline': ['padding', 'padding-inline-start'], 'menu-row-gap': ['--exact-button-space-width', 'margin-inline-end', 'padding-inline-start', 'margin-inline-start'],
-    'sheet-wide': ['@media'], 'sheet-width': ['width'], 'sheet-height': ['height', 'max-height'], 'sheet-margin': ['width', 'height', 'max-height'], 'sheet-top': ['inset', 'max-height'], 'sheet-compact-height': ['@media'],
+    'sheet-wide': ['@media'], 'sheet-width': ['width'], 'sheet-height': ['height', 'max-height'], 'sheet-margin': ['width', 'height', 'max-height'], 'sheet-top': ['inset', 'max-height', 'top'], 'sheet-stack-offset': ['top'], 'sheet-compact-height': ['@media'],
     'sheet-padding': ['padding', 'margin', 'margin-inline-end', 'padding-inline-end'], 'sheet-gap': ['padding', 'margin'], 'sheet-action-gap': ['margin'],
     'list-row-inset': ['padding-left', 'padding-right'],
     'raised-shadow-y': ['--exact-raised'], 'raised-shadow-blur': ['--exact-raised'], 'modal-shadow-y': ['--exact-modal'], 'modal-shadow-blur': ['--exact-modal'],
@@ -108,6 +110,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
     'margin': ['.5em', '1rem', '1em'], '--exact-symbol-away': ['.5em'], '--exact-symbol-toward': ['.5em'], // a button's symbol overhangs its 1em place by half its growth (a bar item's, its 1rem place)
     'padding-block': ['.125em'], // a written height keeps room for a titled button's symbol's ink past its place
     'width': ['1em'], 'height': ['1em'], // a bar item's symbol is its em square times its scale, as a button face's is
+    'overflow-clip-margin': ['.5em'], // a generated sheet title keeps the same ink margin as a text title
     'mask': ['1em'], // a checked menu row's checkmark is drawn in its font's em square
     'padding-inline-start': ['1em'], 'margin-inline-start': ['1em'], 'top': ['.5em'], // a raster row reserves the mark's square and centres it vertically
   };
@@ -151,6 +154,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
     'raised-shadow-alpha': `--exact-raised: 0 0 0 1px var(--exact-separator), 0 4px 12px rgb(0 0 0 / ${alpha('raised-shadow-alpha')});`,
     'modal-shadow-alpha': `--exact-modal: 0 0 0 1px var(--exact-separator), 0 16px 48px rgb(0 0 0 / ${alpha('modal-shadow-alpha')});`,
     'scrim-alpha': `--exact-scrim: rgb(0 0 0 / ${alpha('scrim-alpha')});`,
+    'sheet-step-scale': `{ scale: ${alpha('sheet-step-scale')}; transform-origin: 50% 0; }`, 'sheet-covered-shade': `[data-exact-covered]::after { opacity: ${alpha('sheet-covered-shade')}; }`,
     'symbol-scale': `{ --exact-symbol-scale: ${value.get('symbol-scale')}; }`,
     'button-symbol-scale': `{ --exact-symbol-scale: ${value.get('button-symbol-scale')}; margin: calc(`,
   };
@@ -159,10 +163,10 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
   // level-1 title takes at the large title's size.
   expect(neutral.includes(`margin-block: max(0px, (var(--exact-large-title-size, ${largeTitle / 16}rem) * 1.2 - 1lh) / 2);`)).toBe(true);
   expect(shell.includes(`line-height: var(--exact-control-line-height); --exact-control-line-height: ${value.get('select-line-height')};`)).toBe(true);
-  // A control's line is one height and its title one weight, wherever the sheets write them: a select's own line
-  // aside, and a menu's rows, which are regular.
+  // A field's line is one height, a button's title its font's own line, and a title one weight, wherever the sheets
+  // write them: a select's own line aside, and a menu's rows, which are regular.
   const all = (css, property) => [...new Set(declarations(css).filter(([p]) => p === property).map(([, v]) => v.trim()))];
-  expect(all(neutral, 'line-height').sort()).toEqual([String(value.get('control-line-height')), 'var(--exact-control-line-height)']);
+  expect(all(neutral, 'line-height').sort()).toEqual([String(value.get('control-line-height')), 'normal', 'var(--exact-control-line-height)']);
   // Every symbol's scale is one of the two rows: a bar item's restates the image's.
   expect(all(neutral, '--exact-symbol-scale').sort()).toEqual([String(value.get('symbol-scale')), String(value.get('button-symbol-scale'))]);
   expect(all(neutral, 'font-weight').sort()).toEqual(['400', String(value.get('control-weight'))]);
@@ -264,7 +268,7 @@ const checkLook = async (page, ids, inset = 0) => {
   await page.evaluate(() => document.querySelector('head > style:last-of-type').remove());
   return Object.fromEntries(rows.map(({ id, ...row }) => [id, row]));
 };
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a menu whose rows can be checked marks the checked ones in a column of its own`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a menu whose rows can be checked marks the checked ones in a column of its own`, async () => {
   const browser = await launch(engine);
   try {
     for (const scheme of ['light', 'dark']) {
@@ -341,7 +345,7 @@ const rasterMenus = `
     ${rasterRow('rd-on', 'aria-checked="true"', 'display:flex;flex-direction:row;align-items:center;gap:8px;padding-left:4px;padding-right:12px;--exact-padding-left:4px;--exact-padding-right:12px;')}${rasterRow('rd-off', 'aria-checked="false"')}${radio('rd-native', 'Cancel', '')}
   </div>
 </div>`;
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: checked raster menu faces keep a leading mark beside native faces`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: checked raster menu faces keep a leading mark beside native faces`, async () => {
   const browser = await launch(engine);
   try {
     for (const mode of ['light', 'dark', ...(engine === 'chromium' ? ['forced'] : [])]) for (const dir of ['ltr', 'rtl']) {
@@ -455,7 +459,6 @@ const helpers = `
   window.contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return Math.round((x + 0.05) / (y + 0.05) * 100) / 100; };
 `;
 const launch = async (engine) => {
-  const playwright = await import('playwright-core');
   return suiteBrowser(engine);
 };
 
@@ -463,7 +466,7 @@ const launch = async (engine) => {
 const INK = { light: [0, 0, 0, 1], dark: [255, 255, 255, 1] }, GROUND = { light: [255, 255, 255, 1], dark: [18, 18, 18, 1] };
 const SURFACE = { light: [255, 255, 255, 1], dark: [30, 30, 30, 1] }, LINE = { light: [0, 0, 0, 0.45], dark: [255, 255, 255, 0.45] };
 const SECONDARY = { light: [71, 71, 71, 1], dark: [189, 189, 189, 1] }, RED = { light: [201, 15, 26, 1], dark: [254, 115, 103, 1] };
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the neutral look draws what the author left unsaid, by one set of numbers`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: the neutral look draws what the author left unsaid, by one set of numbers`, async () => {
   const browser = await launch(engine);
   try {
     for (const scheme of ['light', 'dark']) {
@@ -560,8 +563,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the neu
       await page.mouse.move(1, 1);
       expect(await page.evaluate(() => [css('pressable', 'backgroundImage'), css('inline', 'textDecorationLine')])).toEqual(['none', 'none']);
       // In a bar it dims instead, to the shell's press dim, with no wash, and at once: nothing moves, hovered or left,
-      // pressed or let go. An author's hover look (here its variable) replaces the dim, and an opacity the author wrote
-      // wins.
+      // pressed or let go. An author's hover look (here its variable) replaces the dim, and an opacity the author wrote wins.
       const seen = (id) => page.evaluate((id) => [css(id, 'opacity'), css(id, 'backgroundImage'), document.getElementById(id).getAnimations().length], id);
       // A press, held then let go: its opacity each time, and whether anything moved rather than changed at once.
       const press = (id) => page.evaluate((id) => { const b = document.getElementById(id), held = []; for (const on of [true, false]) { b.toggleAttribute('data-pressed', on); held.push(css(id, 'opacity'), b.getAnimations().length); } return held; }, id);
@@ -706,6 +708,17 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the neu
       expect([at('menu'), Math.abs(menu[0] - invoker[0]) <= 1, menu[1] - invoker[1] - invoker[3], menu[2]]).toEqual([at('menu'), true, 4, 176]);
       expect([at('menu rows'), await page.evaluate(() => [color('item'), color('item', 'backgroundColor'), css('item', 'borderTopStyle'), color('item-delete'), color('menu', 'backgroundColor')])])
         .toEqual([at('menu rows'), [INK[scheme], [0, 0, 0, 0], 'none', RED[scheme], SURFACE[scheme]]]);
+      // A colour the author writes on the menu is its rows' ink, as its background is its surface; a destructive row
+      // stays red. A colour on the page around it is not the menu's.
+      expect([at('menu authored'), await page.evaluate(() => {
+        const menu = document.getElementById('menu'), root = document.getElementById('exact-root'), read = () => [color('item'), color('item-delete')];
+        root.style.color = 'rgb(0, 128, 0)';
+        const page = read();
+        menu.style.color = 'rgb(245, 245, 240)';
+        const said = read();
+        root.style.color = ''; menu.style.color = '';
+        return [page, said];
+      })]).toEqual([at('menu authored'), [[INK[scheme], RED[scheme]], [[245, 245, 240, 1], RED[scheme]]]]);
       // One highlight, the focused row's (the input glue moves the focus with the pointer), with no ring beside it, and
       // no second one under the pointer.
       await page.evaluate(() => document.getElementById('item-delete').focus({ focusVisible: true }));
@@ -862,7 +875,7 @@ test('chromium: authored popovers pad unsaid edges by the root font', async () =
   } finally { await page.close(); }
 });
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet in a narrow window rises from the bottom edge`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet in a narrow window rises from the bottom edge`, async () => {
   const browser = await launch(engine);
   try {
     for (const reducedMotion of ['no-preference', 'reduce']) {
@@ -880,7 +893,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
         for (const a of opened.getAnimations()) a.finish();
         return [css('opened', 'position'), box('opened'), CSS.supports('corner-shape', 'superellipse(2)') ? css('opened', 'borderTopLeftRadius') === '18.24px' : css('opened', 'borderTopLeftRadius') === '12px', css('opened', 'borderBottomLeftRadius'), box('tabs')[1] < box('opened')[1] + box('opened')[3], css('opened', 'zIndex'), moving, path.length === 0 || (path[0] === 712 && path[1] > 12 && path[1] < 712)];
       });
-      expect([engine, reducedMotion, got]).toEqual([engine, reducedMotion, ['fixed', [0, 12, 400, 688], true, '0px', true, '1', reducedMotion === 'reduce' ? [] : ['box-shadow', 'translate'], true]]);
+      expect([engine, reducedMotion, got]).toEqual([engine, reducedMotion, ['fixed', [0, 12, 400, 688], true, '0px', true, '1', reducedMotion === 'reduce' ? [] : ['translate'], true]]);
       await context.close();
     }
   } finally {
@@ -907,7 +920,7 @@ const closing = `<div id="exact-root"><main id="nav" navigationKey="1" navigatio
   <div navigationKey="1" id="under"><header><h1>Inbox</h1></header></div>
   <div navigationKey="2" navigationPresentation="modal" id="leaving" style="position:absolute;inset:0"><header><h2>New</h2></header><button type="button" id="inside">Add</button><svg><defs><linearGradient id="shade"><stop offset="0" stop-color="red"/></linearGradient></defs><rect id="swatch" width="10" height="10" fill="url(#shade)"/><use id="again" href="#swatch"/></svg></div>
 </main></div>`;
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet slides back down as it closes`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet slides back down as it closes`, async () => {
   const browser = await launch(engine);
   try {
     for (const reducedMotion of ['no-preference', 'reduce']) {
@@ -926,7 +939,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
         select('2'); window.ready = true;</script>`);
       await page.waitForFunction('window.ready === true');
       // The commit removes the sheet once it has risen, asking first, as a runtime does, and names the route beneath.
-      await page.evaluate(() => { const route = document.getElementById('leaving'); finish(route); leave(route); select('1'); });
+      await page.evaluate(() => { const route = document.getElementById('leaving'); for (const a of document.getAnimations()) a.finish(); leave(route); select('1'); });
       // It stays where it was, whole (its ids, so its gradient and `use` still resolve), and moves from where it stood
       // down to the window's bottom edge.
       const leaving = await page.evaluate(() => {
@@ -935,9 +948,12 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
         const at = (t) => { for (const a of ghost.getAnimations()) { a.pause(); a.currentTime = t; } return Math.round(ghost.getBoundingClientRect().top); };
         const path = [at(0), at(200), at(399.9)];
         for (const a of ghost.getAnimations()) a.play();
-        return [ghost.id, ghost.getAttribute('navigationKey'), ghost.getAttribute('aria-hidden'), ghost.inert, ghost.previousElementSibling?.id, ghost.querySelector('rect').getAttribute('fill'), document.getElementById('shade')?.closest('[data-exiting]') === ghost, path[0] === 12 && path[1] > 12 && path[2] > 700, document.getElementById('under').inert];
+        // Only `translate` moves, which the compositor runs (#525), and the scrim fades out on its own box.
+        const moved = [...new Set(ghost.getAnimations().flatMap((a) => a.effect.getKeyframes().flatMap((k) => Object.keys(k).filter((p) => !['offset', 'computedOffset', 'easing', 'composite'].includes(p)))))];
+        const nav = document.getElementById('nav'), scrim = nav.getAnimations({ subtree: true }).filter((a) => a.effect.pseudoElement === '::before').map((a) => a.transitionProperty);
+        return [ghost.id, ghost.getAttribute('navigationKey'), ghost.getAttribute('aria-hidden'), ghost.inert, ghost.previousElementSibling?.id, ghost.querySelector('rect').getAttribute('fill'), document.getElementById('shade')?.closest('[data-exiting]') === ghost, path[0] === 12 && path[1] > 12 && path[2] > 700, document.getElementById('under').inert, moved, nav.getAttribute('data-exact-scrim'), scrim];
       });
-      expect([engine, reducedMotion, leaving]).toEqual([engine, reducedMotion, reducedMotion === 'reduce' ? null : ['leaving', '', 'true', true, 'under', 'url(#shade)', true, true, false]]);
+      expect([engine, reducedMotion, leaving]).toEqual([engine, reducedMotion, reducedMotion === 'reduce' ? null : ['leaving', '', 'true', true, 'under', 'url(#shade)', true, true, false, ['translate'], 'off', ['opacity']]]);
       const gone = await page.evaluate(async () => {
         await Promise.all(document.querySelector('[data-exiting]')?.getAnimations().map((a) => (a.finish(), a.finished)) ?? []);
         await tick();
@@ -945,22 +961,24 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
       });
       expect([engine, reducedMotion, gone]).toEqual([engine, reducedMotion, true]);
       // A sheet that opens while one leaves ends it, as they may share ids; one it uncovers does not, and it slides
-      // down over that one. While one is over the other, only the one above draws the scrim.
+      // down over that one. While one is over the other, the page is under the one scrim and the sheet beneath under
+      // a lighter shade of its own, and the one above draws neither. Narrow, the one beneath steps back about its top
+      // (#529), the one above stands lower and leaves from there, and the one it uncovers comes forward.
       const uncovered = await page.evaluate(async () => {
         const below = route('below', '6'); select('6');
         const above = route('above', '7'); select('7');
         await tick();
-        finish(below, above);
-        const scrims = [below, above].map((r) => getComputedStyle(r).boxShadow !== 'none').concat(getComputedStyle(document.getElementById('under')).visibility === 'visible');
+        for (const a of document.getAnimations()) a.finish();
+        const dim = (el, pseudo) => getComputedStyle(el, pseudo).opacity, scrims = [dim(document.getElementById('nav'), '::before'), dim(below, '::after'), dim(above, '::after'), getComputedStyle(document.getElementById('under')).visibility === 'visible'], stacked = [getComputedStyle(below).scale, getComputedStyle(below).transformOrigin, getComputedStyle(below).top, getComputedStyle(above).scale, getComputedStyle(above).top];
         leave(above);
         select('6');
         await tick();
-        const out = [above.isConnected, !above.isConnected ? 'gone' : above.compareDocumentPosition(below) & Node.DOCUMENT_POSITION_PRECEDING && getComputedStyle(above).zIndex === getComputedStyle(below).zIndex ? 'over' : 'under', scrims];
+        const out = [above.isConnected, !above.isConnected ? 'gone' : above.compareDocumentPosition(below) & Node.DOCUMENT_POSITION_PRECEDING && getComputedStyle(above).zIndex === getComputedStyle(below).zIndex ? 'over' : 'under', scrims, [...stacked, above.isConnected ? getComputedStyle(above).top : 'gone', (document.getAnimations().forEach((a) => a.finish()), getComputedStyle(below).scale)]];
         finish(below, above); below.remove(); above.remove();
         select('1');
         return out;
       });
-      expect([engine, reducedMotion, uncovered]).toEqual([engine, reducedMotion, reducedMotion === 'reduce' ? [false, 'gone', [false, true, true]] : [true, 'over', [false, true, true]]]);
+      expect([engine, reducedMotion, uncovered]).toEqual([engine, reducedMotion, reducedMotion === 'reduce' ? [false, 'gone', ['1', '0.6', '0', true], ['0.93', '200px 0px', '12px', 'none', '22px', 'gone', 'none']] : [true, 'over', ['1', '0.6', '0', true], ['0.93', '200px 0px', '12px', 'none', '22px', '22px', 'none']]]);
       // A full-screen route it uncovers keeps it too; a sheet that replaces it in the same commit ends it; one closed as
       // it still rises turns back from where it is; one that holds media, a field's painted decorations, or an open
       // dialog or popover closes at once; and one that holds a native view slides, showing what its module left in it.
@@ -1121,7 +1139,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
 // A bar's level-1 title takes at least the large title's line, 33 px at 1.2 (neutral.css): the bar keeps that height
 // with a smaller title, a tighter line or no text, and the title stays centred beside a button. The sheet reads the
 // role and level, not the tag: the JS target makes a level chosen between literals an `h2`.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar's level-1 title keeps the large title's line`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a bar's level-1 title keeps the large title's line`, async () => {
   const browser = await launch(engine);
   try {
     const page = await browser.newPage({ viewport: { width: 600, height: 2400 }, colorScheme: 'light' });
@@ -1174,7 +1192,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar's
   } finally { await browser.close(); }
 }, 90000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar uses each runtime's large-title line at the current root`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a bar uses each runtime's large-title line at the current root`, async () => {
   const browser = await launch(engine);
   try {
     const page = await browser.newPage({ viewport: { width: 600, height: 2400 } });
@@ -1294,17 +1312,19 @@ test('chromium: painted route titles match the web at several root sizes', async
 // What the author writes wins (LLP 1115). In CSS a minimum outranks a size and a border box is never narrower than
 // its padding, so the look's floor and padding would redraw `button width=84 height=24` as 84 by 36. The hosts name a
 // written size (`data-exact-said`, host/web/src/element.rs) and the sheet steps aside on that axis. A written padding
-// is UIKit's `contentInsets`, which no floor raises in any style, so there the button is its title's line and that
-// padding, under a mouse and on a touch device, written inline (as the wasm runtime writes it) or in a class (the JS
-// target's); an outline stays drawn around the padding.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a size or a padding the author wrote on a platform button is its box, and an unsaid one keeps the look's floor`, async () => {
+// is UIKit's `contentInsets`, which no floor raises in any style, so there the button is its title's line (its font's
+// own) and that padding, under a mouse and on a touch device, written inline (as the wasm runtime writes it) or in a
+// class (the JS target's); an outline stays drawn around the padding. A face whose own line is 2em (`Tall`) grows the
+// button past its floor, as a tall font grows a UIKit button, and its title's ink is drawn where it overhangs the
+// title's box (WebKit has no `overflow-clip-margin`).
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a size or a padding the author wrote on a platform button is its box, and an unsaid one keeps the look's floor`, async () => {
   const browser = await launch(engine);
   try {
     for (const touch of [false, true]) {
       const context = await browser.newContext({ viewport: { width: 600, height: 400 }, hasTouch: touch, ...(touch && engine === 'chromium' ? { isMobile: true } : {}) });
       const page = await context.newPage();
       const button = (id, style, said, look = 'bordered', own = '') => `<button type="button" data-native data-button-style="${look}" id="${id}"${own && ` class="${own}"`} style="display:grid;${style}"${said ? ` data-exact-said="${said}"` : ''}><span data-exact-text>Go</span></button>`;
-      await page.setContent(`<meta name="viewport" content="width=device-width, initial-scale=1"><style>${sheet()} #exact-root#exact-root { & .flush { padding-top: 0; padding-bottom: 0; } }</style><div id="exact-root">
+      await page.setContent(`<meta name="viewport" content="width=device-width, initial-scale=1"><style>${sheet()} #exact-root#exact-root { & .flush { padding-top: 0; padding-bottom: 0; } } @font-face { font-family: Tall; src: local("Arial"), local("Helvetica"), local("DejaVu Sans"); ascent-override: 150%; descent-override: 50%; line-gap-override: 0%; }</style><div id="exact-root">
         ${button('unsized', '')}${button('sized', 'width:84px;height:24px', 'width height')}${button('square', 'width:28px;height:28px', 'width height')}${button('short', 'height:24px', 'height')}${button('unsaid', 'width:28px;height:28px')}
         ${button('plain', 'padding-top:0;padding-bottom:0', 'padding-block', 'plain')}${button('borderless', '', 'padding-block', 'borderless', 'flush')}${button('gray', '', 'padding-block', 'gray', 'flush')}${button('filled', 'padding:0', 'padding-inline padding-block', 'filled')}
         ${button('outline', 'padding:0', 'padding-inline padding-block')}${button('inset', 'padding-top:4px;padding-bottom:4px', 'padding-block', 'plain')}${button('padding-unsaid', 'padding-top:0;padding-bottom:0', '', 'plain')}
@@ -1312,16 +1332,21 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a size 
         <div role="radiogroup">${button('segment', 'padding:0', 'padding-block padding-inline', 'gray').replace('type="button"', 'type="button" role="radio"')}</div>
         <div role="menu">${button('menu-row', 'padding:0', 'padding-block padding-inline', 'plain')}</div>
         ${button('bound', 'padding-top:0;padding-bottom:0', '', 'plain').replace('data-native', 'data-native data-exact-padding-top data-exact-padding-bottom')}
+        <div style="font-family:Tall">${button('tall', '')}</div>
 
       </div><script>${helpers}</script>`);
       // A box less its title's, each way.
       const got = await page.evaluate(() => {
         const around = (id) => { const title = document.querySelector(`#${id} > span`).getBoundingClientRect(), b = box(id); return [b[2] - title.width, b[3] - title.height].map((v) => Math.round(v * 100) / 100); };
-        return { line: Math.round(document.querySelector('#plain > span').getBoundingClientRect().height * 100) / 100, unsized: box('unsized')[3], sized: box('sized').slice(2), square: box('square').slice(2), short: box('short')[3], unsaid: box('unsaid').slice(2), plain: around('plain')[1], borderless: around('borderless')[1], gray: around('gray')[1], filled: around('filled'), outline: around('outline'), inset: around('inset')[1], paddingUnsaid: box('padding-unsaid')[3], oneSide: around('one-side')[1], segment: box('segment')[3], menu: box('menu-row')[3], bound: around('bound')[1] };
+        // The title's font on its own line (`normal`), which a title sits on, as UIKit lays out a label.
+        const title = document.querySelector('#plain > span'), own = document.createElement('div');
+        own.style.font = getComputedStyle(title).font; own.style.lineHeight = 'normal'; own.textContent = 'Go'; document.body.append(own);
+        const normal = Math.round(own.getBoundingClientRect().height * 100) / 100; own.remove();
+        return { line: Math.round(title.getBoundingClientRect().height * 100) / 100, normal, unsized: box('unsized')[3], sized: box('sized').slice(2), square: box('square').slice(2), short: box('short')[3], unsaid: box('unsaid').slice(2), plain: around('plain')[1], borderless: around('borderless')[1], gray: around('gray')[1], filled: around('filled'), outline: around('outline'), inset: around('inset')[1], paddingUnsaid: box('padding-unsaid')[3], oneSide: around('one-side')[1], segment: box('segment')[3], menu: box('menu-row')[3], bound: around('bound')[1], tall: [document.querySelector('#tall > span').getBoundingClientRect().height, box('tall')[3]], clip: ['overflow', 'overflowClipMargin'].map((p) => getComputedStyle(document.querySelector('#tall > span'))[p]) };
       });
       const floor = touch ? 44 : 36;
       // `unsaid` and `paddingUnsaid`: the floor, were the host not to say.
-      expect([engine, touch, got]).toEqual([engine, touch, { line: 20, unsized: floor, sized: [84, 24], square: [28, 28], short: 24, unsaid: [floor, floor], plain: 0, borderless: 0, gray: 0, filled: [0, 0], outline: [2, 2], inset: 8, paddingUnsaid: floor, oneSide: 7, segment: touch ? 38 : 30, menu: touch ? 44 : 32, bound: 0 }]);
+      expect([engine, touch, got]).toEqual([engine, touch, { line: got.normal, normal: got.normal, unsized: floor, sized: [84, 24], square: [28, 28], short: 24, unsaid: [floor, floor], plain: 0, borderless: 0, gray: 0, filled: [0, 0], outline: [2, 2], inset: 8, paddingUnsaid: floor, oneSide: 7, segment: touch ? 38 : 30, menu: touch ? 44 : 32, bound: 0, tall: [32, Math.max(floor, 48)], clip: ['clip', engine === 'webkit' ? undefined : '8px'] }]);
       await context.close();
     }
   } finally { await browser.close(); }
@@ -1331,7 +1356,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a size 
 // the symbol, inline (the wasm runtime) or in a class (the JS target), leaves the word its padding and its wash, as
 // UIKit sizes a bar item to its title: 16 px either side of the word, inside the bar, in either direction. Two long
 // names in a narrow bar both stay in it, each word ending in an ellipsis.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet's bar word keeps its padding whatever width its author wrote`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet's bar word keeps its padding whatever width its author wrote`, async () => {
   const browser = await launch(engine);
   try {
     const page = await browser.newPage({ viewport: { width: 400, height: 300 }, colorScheme: 'light' });
@@ -1367,8 +1392,8 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
     expect([engine, 'bound width', await fit('class')]).toEqual([engine, 'bound width', [['16px', '16px'], 34, 44, true]]);
     await page.setViewportSize({ width: 320, height: 300 });
     await page.evaluate(() => { for (const [id, name] of [['inline', 'Abbrechen und verwerfen'], ['class', 'Speichern und schließen']]) document.getElementById(id).setAttribute('aria-label', name); document.getElementById('unsized').remove(); document.getElementById('inline').after(document.querySelector('#bar > div')); });
-    const narrow = [await fit('inline'), await fit('class'), await page.evaluate(() => [box('inline')[0] + box('inline')[2] <= box('class')[0], css('inline', 'textOverflow', '::after')])];
-    expect([engine, 'narrow', narrow]).toEqual([engine, 'narrow', [[['16px', '16px'], 34, 44, true], [['16px', '16px'], 34, 44, true], [true, 'ellipsis']]]);
+    const narrow = [await fit('inline'), await fit('class'), await page.evaluate(() => [box('inline')[0] + box('inline')[2] <= box('class')[0], css('inline', 'textOverflow', '::after'), css('inline', 'overflowX', '::after')])];
+    expect([engine, 'narrow', narrow]).toEqual([engine, 'narrow', [[['16px', '16px'], 34, 44, true], [['16px', '16px'], 34, 44, true], [true, 'ellipsis', 'hidden']]]);
     // A button its author made a block keeps the word a block of its own, which `text-overflow` ends.
     await page.evaluate(() => { document.getElementById('inline').style.display = 'block'; });
     expect([engine, 'narrow block', await fit('inline'), await page.evaluate(() => css('inline', 'display', '::after'))]).toEqual([engine, 'narrow block', [['16px', '16px'], 34, 44, true], 'block']);
@@ -1376,7 +1401,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
 }, 90000);
 
 // A part colour's alpha is its only opacity. Removing it restores the look's default.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: authored placeholder colour and reset in both schemes`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: authored placeholder colour and reset in both schemes`, async () => {
   const browser = await launch(engine);
   try {
     for (const scheme of ['light', 'dark']) {
@@ -1411,8 +1436,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: authore
   } finally { await browser.close(); }
 }, 90000);
 
-
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a primary row press fills the cell and hides only platform separators`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a primary row press fills the cell and hides only platform separators`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {

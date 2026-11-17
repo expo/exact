@@ -9,6 +9,10 @@ use std::sync::{Arc, Mutex};
 
 type Wake = Box<dyn FnOnce() + Send>;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "activation_native_tests.rs"]
+mod native;
+
 /// Prepares in the background until `ready`; keeps the wakes it is given.
 struct Loading {
     ready: Arc<AtomicBool>,
@@ -176,6 +180,56 @@ fn prepared_data_activates_once_and_its_refusal_is_committed_then_retried() {
     assert!(host.data_activated);
     host.prepare_data();
     assert_eq!(count(), 2, "nothing to prepare once activated");
+}
+
+/// Says only what `evaluates_from_draw` reads: whether it has a native slot
+/// (a TypeScript module), where it runs, and its grants.
+struct Shaped {
+    native: bool,
+    placement: exact_runner::Placement,
+    grants: &'static str,
+}
+impl DataSource for Shaped {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(name.into()))
+    }
+    fn native(&self) -> Option<exact_runner::Native> {
+        self.native.then(exact_runner::Native::default)
+    }
+    fn placement(&self) -> exact_runner::Placement {
+        self.placement
+    }
+    fn grants(&self) -> &str {
+        self.grants
+    }
+}
+
+/// LLP 1027.008 D3: the presenter posts the evaluation from the first draw
+/// only for a TypeScript module on the runner's thread.
+#[test]
+fn only_a_module_on_the_runners_thread_is_evaluated_from_the_draw() {
+    use exact_runner::Placement::{Main, Worker};
+    let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    builder.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let plan = builder.finish().unwrap().encode();
+    let evaluates = |native, placement, grants| {
+        let source = Shaped {
+            native,
+            placement,
+            grants,
+        };
+        let measurer = Box::new(MonospaceMeasurer::default());
+        let (host, _) = Host::boot(&plan, source, measurer, 10.0, 10.0).unwrap();
+        host.evaluates_from_draw()
+    };
+    assert!(evaluates(true, Main, ""), "a module on the runner's thread");
+    assert!(!evaluates(false, Main, ""), "a Rust source");
+    assert!(!evaluates(true, Worker, ""), "a module on a worker");
+    assert_eq!(
+        evaluates(true, Main, "doc.keep\n"),
+        !cfg!(target_os = "macos"),
+        "a module that keeps documents waits for them on a Mac"
+    );
 }
 
 #[test]
@@ -349,12 +403,14 @@ fn app_side_writes_publish_without_reasking_a_time_varying_reader() {
     if std::env::var("EXACT_WP12_WRITER_TEST").as_deref() != Ok("1") {
         // Environment is fixed before the child starts; parallel tests in
         // this process never observe a changed app group or writer identity.
-        let root = std::env::temp_dir().join(format!("exact-wp12-self-{}", std::process::id()));
+        let root = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-wp12-self-{}", std::process::id())),
+        );
         std::fs::create_dir_all(&root).unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "host::activation_tests::app_side_writes_publish_without_reasking_a_time_varying_reader", "--test-threads=1"])
             .env("EXACT_WP12_WRITER_TEST", "1")
-            .env("EXACT_APP_GROUP_ROOT", &root)
+            .env("EXACT_APP_GROUP_ROOT", &*root)
             .env("EXACT_APP_GROUP_APP", app)
             .env("EXACT_WIDGET_WRITER", app)
             .output().unwrap();

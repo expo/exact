@@ -1,4 +1,4 @@
-use super::{support::*, *};
+use super::*;
 
 #[test]
 fn region_receipt_carries_resolved_exclusions_with_selected_frames() {
@@ -122,7 +122,14 @@ fn region_exclusions(profile: RegionProfile, external: bool, padded: bool) {
     let RegionSelection::Accepted(publication) = &initial.selection else {
         panic!("expected accepted publication");
     };
+    let publication = publication.clone();
     let artifact = publication.paint_artifact(key(&k, 4)).unwrap();
+    assert!(artifact.request() == &artifact.request().clone());
+    let content = publication.content_rect(key(&k, 4)).unwrap();
+    let border = publication.frame(key(&k, 4), Frame::default()).unwrap();
+    assert_eq!(content.x, border.x + inset_x);
+    assert_eq!(content.y, border.y + inset_y);
+    assert_eq!(content.width, 400.);
     artifact.request().with_request(|request| {
         assert_eq!(request.exclusions, &shapes(120., inset_y));
     });
@@ -172,6 +179,7 @@ fn region_exclusions(profile: RegionProfile, external: bool, padded: bool) {
         panic!("expected accepted publication")
     };
     let next = next.paint_artifact(key(&k, 4)).unwrap();
+    assert!(next.request() != artifact.request());
     assert_eq!(next.request().stamp(), artifact.request().stamp());
     assert!(std::sync::Arc::ptr_eq(
         next.request().source(),
@@ -192,6 +200,8 @@ fn region_exclusions(profile: RegionProfile, external: bool, padded: bool) {
         }]
     );
     assert!(!r.shell.changed.contains(&key(&k, 4)));
+    assert_eq!(publication.content_rect(key(&k, 4)).unwrap(), content);
+    drop(publication);
     drop(waiting);
     drop(initial);
     if padded {

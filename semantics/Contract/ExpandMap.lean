@@ -156,7 +156,7 @@ theorem subst_get_nil {m : SMap} {records valueOnly : List String} {k : String} 
   simp [Subst.get]
 
 /-- Distinct names across a component's props, injects, states, actions,
-derives and device resources (the checker refuses duplicate names). -/
+derives, resources and mutations (the checker refuses duplicate names). -/
 structure Distinct (c : CComponent) : Prop where
   props : (c.props.map (·.name)).Nodup
   states : (c.states.map (·.name)).Nodup
@@ -166,8 +166,10 @@ structure Distinct (c : CComponent) : Prop where
   pd : ∀ x ∈ c.props.map (·.name), x ∉ c.derives.map (·.name)
   sa : ∀ x ∈ c.states.map (·.name), x ∉ c.actions.map (·.name)
   sd : ∀ x ∈ c.states.map (·.name), x ∉ c.derives.map (·.name)
-  pr : ∀ x ∈ c.props.map (·.name), x ∉ c.deviceResources.map (·.name)
-  sr : ∀ x ∈ c.states.map (·.name), x ∉ c.deviceResources.map (·.name)
+  pr : ∀ x ∈ c.props.map (·.name), x ∉ c.resources.map (·.name)
+  sr : ∀ x ∈ c.states.map (·.name), x ∉ c.resources.map (·.name)
+  pm : ∀ x ∈ c.props.map (·.name), x ∉ c.mutations.map (·.name)
+  sm : ∀ x ∈ c.states.map (·.name), x ∉ c.mutations.map (·.name)
 
 /-- **A prop's replacement** in the expander's substitution for a use: its
 argument substituted at the use site, typed by the declaration when a
@@ -197,7 +199,15 @@ theorem map_prop {records : List String} {s : Subst} {c : CComponent}
       rw [get?_insertAll_not _ _ (fun p hp hpk => by
           simp only [List.mem_map] at hp; obtain ⟨r, hr, rfl⟩ := hp
           simp only at hpk
-          exact hd.pr _ hpn (hpk ▸ List.mem_map_of_mem hr))]
+          exact hd.pr _ hpn (hpk ▸ List.mem_map_of_mem (List.mem_filter.mp hr).1))]
+      rw [get?_insertAll_not _ _ (fun p hp hpk => by
+          simp only [List.mem_map] at hp; obtain ⟨md, hmd, rfl⟩ := hp
+          simp only at hpk
+          exact hd.pm _ hpn (hpk ▸ List.mem_map_of_mem hmd))]
+      rw [get?_insertAll_not _ _ (fun p hp hpk => by
+          simp only [List.mem_map] at hp; obtain ⟨r, hr, rfl⟩ := hp
+          simp only at hpk
+          exact hd.pr _ hpn (hpk ▸ List.mem_map_of_mem (List.mem_filter.mp hr).1))]
       rw [get?_insertAll_not _ _ (fun p hp hpk => by
           simp only [List.mem_map] at hp; obtain ⟨st, hst, rfl⟩ := hp
           simp only at hpk
@@ -234,7 +244,15 @@ theorem map_state {records : List String} {s : Subst} {c : CComponent}
       rw [get?_insertAll_not _ _ (fun p hp hpk => by
           simp only [List.mem_map] at hp; obtain ⟨r, hr, rfl⟩ := hp
           simp only at hpk
-          exact hd.sr _ hsn (hpk ▸ List.mem_map_of_mem hr))]
+          exact hd.sr _ hsn (hpk ▸ List.mem_map_of_mem (List.mem_filter.mp hr).1))]
+      rw [get?_insertAll_not _ _ (fun p hp hpk => by
+          simp only [List.mem_map] at hp; obtain ⟨md, hmd, rfl⟩ := hp
+          simp only at hpk
+          exact hd.sm _ hsn (hpk ▸ List.mem_map_of_mem hmd))]
+      rw [get?_insertAll_not _ _ (fun p hp hpk => by
+          simp only [List.mem_map] at hp; obtain ⟨r, hr, rfl⟩ := hp
+          simp only at hpk
+          exact hd.sr _ hsn (hpk ▸ List.mem_map_of_mem (List.mem_filter.mp hr).1))]
       have hstates : ((c.states.map fun st => (st.name, Expr.var (lifted st.name n))).map (·.1)).Nodup := by
         simp only [List.map_map]
         exact hd.states
@@ -265,7 +283,10 @@ theorem use_prop {records : List String} {s : Subst} {c : CComponent}
     ∀ v, (∃ k, cvar k ce cname id binds pd.name = .ok v) ↔
       Reads fe Lf (withDerives records (valueNames c) (insertAll m acts) derives) pd.name v := by
   have hpn : pd.name ∈ c.props.map (·.name) := List.mem_map_of_mem hpd
-  refine prop_reads hC (not_any_of_not_mem (hd.pd _ hpn)) (not_any_of_not_mem (hd.ps _ hpn)) hb ?_ harg
+  refine prop_reads hC (not_any_of_not_mem (hd.pd _ hpn)) (not_any_of_not_mem (hd.ps _ hpn))
+    (not_any_of_not_mem fun hm => hd.pr _ hpn (by
+      obtain ⟨r, hr, he⟩ := List.mem_map.mp hm
+      exact he ▸ List.mem_map_of_mem (List.mem_filter.mp hr).1)) hb ?_ harg
   rw [map_prop hm hd hacts hdv hpd ha]
   by_cases hw : (pd.declared && untypedLeaf (substExpr s a)) = true
   · exact .inr ⟨pd.ty, by simp [propValue, hw]⟩

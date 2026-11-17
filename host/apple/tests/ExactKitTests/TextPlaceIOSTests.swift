@@ -719,6 +719,8 @@ final class TextPlaceIOSTests: XCTestCase {
         let (p, node) = try paragraph("text-relaid-pixels", text: Self.fuji, height: 200, box: [16, 0, 368, 200])
         XCTAssertTrue(node.textRasterLayer?.delegate is CoverageImageView, "one colour, drawn by its own layer")
         let window = try XCTUnwrap(window)
+        // Compare the lines without UIKit's status-bar edge blur over them.
+        p.viewport.frame = window.bounds.inset(by: window.safeAreaInsets)
         let old = try screen(window)
         try stop(p, node)
         UIView.animate(springDuration: 0.5, bounce: 0) {

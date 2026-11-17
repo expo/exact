@@ -15,6 +15,9 @@ import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../../..');
 const schema = JSON.parse(readFileSync(resolve(ROOT, 'kernel/tables/schema.json'), 'utf8'));
@@ -71,7 +74,7 @@ const RUNTIMES = {
   'host/web-js/symbols.js': ['const All = true, journal = [], clock = { now: 0 }, appSource = () => {}, Images = new Set(document.querySelectorAll("#exact-root img")), image = e => Images.add(e);', ['refresh'], 'refresh();'],
 };
 
-for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: a symbol for an SF Symbol is SF's size, UIKit's image padding from its title (${file})`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest[engine](`${engine}: a symbol for an SF Symbol is SF's size, UIKit's image padding from its title (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const style = symbolSheet(source);
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
@@ -313,7 +316,7 @@ test('chromium: loaded raster scale-down follows symbol source and title resizin
   } finally { await suite.close(); }
 }, 10000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: empty button titles have the symbol-alone face (${file})`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest[engine](`${engine}: empty button titles have the symbol-alone face (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const cases = ['row', 'trailing', 'column', 'column-trailing', 'bar', 'sheet', 'own', 'padding', 'tight', 'subtitle', 'empty-subtitle'];
   const face = (kind, state) => {

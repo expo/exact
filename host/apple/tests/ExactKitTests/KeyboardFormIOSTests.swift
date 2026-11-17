@@ -89,6 +89,16 @@ final class KeyboardFormIOSTests: XCTestCase {
         return window?.hitTest(view.convert(center, to: window), with: nil)
     }
 
+    /// Focuses `node`'s field with the keyboard modeled as put away, which
+    /// reports no first responder until the test raises it. Once an earlier
+    /// test has loaded the keyboard, UIKit brings a real one up as soon as a
+    /// field is focused, and without the model the presenter would reveal the
+    /// field above those keys before the test raises its own.
+    private func focus(_ node: NodeView, in p: Presenter, file: StaticString = #filePath, line: UInt = #line) throws {
+        setKeyboard(p, top: nil)
+        XCTAssertTrue(try XCTUnwrap(node.field).becomeFirstResponder(), file: file, line: line)
+    }
+
     private func assertReachable(_ testId: String, below bar: CGFloat, file: StaticString = #filePath, line: UInt = #line) throws {
         let v = try node(testId), r = box(v)
         XCTAssertLessThanOrEqual(r.maxY, keys + 0.5, "\(testId) above the keys: \(r)", file: file, line: line)
@@ -120,7 +130,7 @@ final class KeyboardFormIOSTests: XCTestCase {
         XCTAssertEqual(try node("weight").field?.keyboardType, .decimalPad)
         XCTAssertGreaterThan(box(add).minY, keys, "the fixture's Add button starts where the keys will be")
         let resting = box(tabs.tabBar)
-        XCTAssertTrue(try XCTUnwrap(reps.field).becomeFirstResponder())
+        try focus(reps, in: p)
         setKeyboard(p, top: keys)
         let bar = box(nav.navigationBar).maxY
         let route = try XCTUnwrap(nav.topViewController as? RouteController)
@@ -186,7 +196,7 @@ final class KeyboardFormIOSTests: XCTestCase {
         let route = try XCTUnwrap(p.navigation.activeRoute)
         let nav = try XCTUnwrap(route.navigationController)
         let list = try XCTUnwrap(p.navigation.shownScroll(try node("form-list")))
-        XCTAssertTrue(try XCTUnwrap(reps.field).becomeFirstResponder())
+        try focus(reps, in: p)
         setKeyboard(p, top: keys)
         waitFor("the initial field and its action clear the keyboard") {
             self.fieldsShown([reps, add], below: self.box(nav.navigationBar).maxY)
@@ -419,7 +429,7 @@ final class KeyboardFormIOSTests: XCTestCase {
         let session = try fixture(), p = session.presenter
         let route = try node("route-log"), field = try node("bench-reps")
         let scroll = try XCTUnwrap(p.navigation.shownScroll(try node("form-list")))
-        XCTAssertTrue(try XCTUnwrap(field.field).becomeFirstResponder())
+        try focus(field, in: p)
         p.collections.onFill?(route.id, Data())
         XCTAssertTrue(session.fillInFlight)
         let rest = -scroll.adjustedContentInset.top

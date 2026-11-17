@@ -351,8 +351,13 @@ impl Shelf {
             stable >= 3
         });
         assert!(
-            previous.data().chunks_exact(4).any(|p| p[0] < 32)
-                && previous.data().chunks_exact(4).any(|p| p[0] > 224),
+            previous.data().as_chunks::<4>().0.iter().any(|p| p[0] < 32)
+                && previous
+                    .data()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| p[0] > 224),
             "Shelf capture must contain its text and background"
         );
         previous
@@ -455,7 +460,7 @@ impl Shelf {
             let _ = DeleteDC(dc);
             ReleaseDC(None, screen);
             result.unwrap();
-            for p in bytes.chunks_exact_mut(4) {
+            for p in bytes.as_chunks_mut::<4>().0 {
                 p.swap(0, 2);
                 p[3] = 255;
             }
@@ -525,7 +530,13 @@ fn band(a: &tiny_skia::Pixmap, b: &tiny_skia::Pixmap) -> (f64, f64) {
     assert_eq!((a.width(), a.height()), (b.width(), b.height()));
     let mut sum = 0u64;
     let mut over = 0usize;
-    for (a, b) in a.data().chunks_exact(4).zip(b.data().chunks_exact(4)) {
+    for (a, b) in a
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.data().as_chunks::<4>().0)
+    {
         let delta = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
         sum += u64::from(delta);
         over += usize::from(delta > 32);
@@ -562,12 +573,16 @@ fn fallback_launch(fault: &str) -> Shelf {
 fn assert_picture(image: &tiny_skia::Pixmap) {
     let dark = image
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[..3].iter().all(|n| *n < 80))
         .count();
     let light = image
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[..3].iter().all(|n| *n > 200))
         .count();
     assert!(
@@ -930,8 +945,10 @@ fn shelf_idle_caret() {
         let image = app.capture_pixels();
         let changed: Vec<_> = previous
             .data()
-            .chunks_exact(4)
-            .zip(image.data().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(image.data().as_chunks::<4>().0)
             .enumerate()
             .filter_map(|(i, (a, b))| (a != b).then_some(i))
             .collect();

@@ -386,7 +386,9 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
             .map(|mesh| {
                 let vertices: Vec<_> = mesh
                     .positions
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .enumerate()
                     .map(|(i, p)| Vertex {
                         position: [p[0], p[1], p[2]],
@@ -409,8 +411,10 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
                     let mut words = Vec::with_capacity(mesh.joints.len() * 2);
                     for (j, w) in mesh
                         .joints
-                        .chunks_exact(4)
-                        .zip(mesh.weights.chunks_exact(4))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(mesh.weights.as_chunks::<4>().0)
                     {
                         words.extend(j.iter().map(|j| u32::from(*j)));
                         words.extend(w.iter().map(|w| w.to_bits()));

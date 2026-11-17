@@ -337,6 +337,7 @@ impl Recorder {
         own: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) -> bool {
         let Some(d) = self.on_page(dst, ts) else {
             return false;
@@ -378,7 +379,7 @@ impl Recorder {
         }
         // Page space; inside a row, the matrix moves it to the row's origin.
         self.transform(Transform::identity());
-        self.image_tint(tint);
+        self.image_style(tint, rendering);
         self.ops.extend([IMAGE_RRECT, id]);
         for v in [d.0, d.1, d.2, d.3, region.0, region.1, region.2, region.3] {
             self.f(v);

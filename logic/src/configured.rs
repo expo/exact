@@ -28,6 +28,10 @@ macro_rules! configured {
                 $crate::exact_runner::DataSource::set_document_owner(&mut self.0, owner)
             }
 
+            fn render_web(&mut self) {
+                $crate::exact_runner::DataSource::render_web(&mut self.0)
+            }
+
             fn app_id(&self) -> &str {
                 $crate::exact_runner::DataSource::app_id(&self.0)
             }
@@ -192,6 +196,9 @@ macro_rules! configured {
                 outcome: $crate::exact_runner::Outcome,
             ) -> Result<(), $crate::exact_runner::DataError> {
                 $crate::exact_runner::DataSource::module_landed(&mut self.0, store, token, outcome)
+            }
+            fn take_reports(&mut self) -> Vec<$crate::exact_runner::Report> {
+                $crate::exact_runner::DataSource::take_reports(&mut self.0)
             }
             fn module_delivery(
                 &mut self,

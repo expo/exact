@@ -192,6 +192,7 @@ impl TextMeasurer for Counted {
             TextMetrics {
                 width: f32::NAN,
                 height: 20.0,
+                pending: false,
                 first_baseline: None,
             }
         } else {

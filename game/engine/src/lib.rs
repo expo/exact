@@ -77,8 +77,8 @@ pub use storage::{
 pub use tween::Tween;
 pub use values::Published;
 pub use world::{
-    Bundle, Component, Entity, Event, Near, PropBuilder, Resource, SpriteBuilder, Target, World,
-    WorldId,
+    Bundle, Component, Components, Entity, Event, Near, PropBuilder, Resource, SpriteBuilder,
+    Target, World, WorldId,
 };
 
 pub mod audio;

@@ -415,14 +415,20 @@ test('explicit focus in a commit precedes autofocus and its authored side effect
   expect(calls).toEqual(['explicit']);
 });
 
-test('KeyP forbids texture uploads and pipeline creation as well as requiring new geometry', async () => {
+test('residency counts uploads across readiness resets and rejects extra work', async () => {
   const {checkResidency}=await import('./render/tests/residency.mjs');
-  const state=(textureUploads=0,meshUploads=0,pipelineCreations=0)=>({ready:true,gpu:{afterReady:{textureUploads,meshUploads,pipelineCreations,modelSkinBufferReallocations:0}}});
-  for (const error of ['none','texture','pipeline']) {
-    const checks=[], responses=[{before:state(),after:state()}, {before:state(),after:state(1)}, {before:state(1),after:state(1)},
-      {before:state(1),after:state(error==='texture'?2:1,1,error==='pipeline'?1:0)}];
+  const work=(meshUploads=0,textureUploads=0,pipelineCreations=0)=>({textureUploads,meshUploads,pipelineCreations,modelSkinBufferReallocations:0});
+  const state=(before=work(),after=work())=>({ready:true,gpu:{beforeReady:before,afterReady:after}});
+  for (const reset of [false,true]) for (const error of ['none','missing','texture','pipeline']) {
+    const initial=state(work(4,1,31),work(0,0,1));
+    const uploads=work(error==='missing'?0:1,error==='texture'?1:0,error==='pipeline'?1:0);
+    const after=reset
+      ? state(work(4+uploads.meshUploads,1+uploads.textureUploads,32+uploads.pipelineCreations))
+      : state(work(4,1,31),work(uploads.meshUploads,uploads.textureUploads,1+uploads.pipelineCreations));
+    const checks=[], responses=[...Array.from({length:3},()=>({before:initial,after:initial})),{before:initial,after}];
     await checkResidency({run:async()=>responses.shift()}, {}, (name,ok)=>checks.push([name,ok]), ()=>{});
-    expect(checks.find(([name])=>name==='new model name reuses textures and pipelines')[1]).toBe(error==='none');
+    expect(checks.filter(([,ok])=>!ok).map(([name])=>name), `${reset} ${error}`).toEqual(
+      error==='none' ? [] : [error==='missing' ? 'new model name uploads geometry after arrival' : 'new model name reuses textures and pipelines']);
   }
 });
 

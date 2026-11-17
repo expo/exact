@@ -1,5 +1,6 @@
 //! @ref LLP 1133.024 D2, D3 — a received share is one location, and its
 //! files arrive by token after its text.
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, PropValue};
 use exact_runner::share_in::{self, Claims, Pending, PendingFile, ShareTarget, SharedFiles};
 use exact_runner::time::{launching_with, Launch};
@@ -81,7 +82,8 @@ fn target() -> ShareTarget {
 
 #[test]
 fn a_cold_share_shows_its_text_first_with_its_files_pending_then_they_land() {
-    let dir = std::env::temp_dir().join(format!("exact-share-{}", std::process::id()));
+    let dir =
+        Scratch::adopt(std::env::temp_dir().join(format!("exact-share-{}", std::process::id())));
     let inbox = dir.join("inbox");
     let shared = dir.join("shared");
     std::fs::create_dir_all(&inbox).unwrap();
@@ -274,9 +276,7 @@ fn the_manifest_and_the_inbox_record_read_as_the_rfc_writes_them() {
 
 #[test]
 fn the_bake_refuses_a_share_target_no_route_matches() {
-    let dir = std::env::temp_dir().join(format!("exact2-share-target-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-share-target-{}", std::process::id()));
     std::fs::write(dir.join("app.contract"), SOURCE).unwrap();
     let compile = |action: &str| {
         let manifest = format!(

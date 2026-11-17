@@ -3,6 +3,12 @@
 What no tool can do here: grant the camera on a Mac, open a phone's camera,
 and look. Each step says what to run and what you should see.
 
+Android's `takePhoto(android.shutterSound=false)` suppresses the sound only on
+API 33 or later when [`MediaActionSound.mustPlayShutterSound()`](https://developer.android.com/reference/android/media/MediaActionSound#mustPlayShutterSound())
+returns false. Earlier Android versions cannot report the regional requirement,
+so the shutter sound stays on. `ShutterSoundTest` checks the capture path on
+API 31, 32 and 33; a phone run must still check the audible cue.
+
 ## macOS, the conformance suite with a grant
 
 1. `bun packages/camera/test/apple.mjs macos --ask`
@@ -67,3 +73,16 @@ and look. Each step says what to run and what you should see.
 - A phone's browser (Safari on iOS, Chrome on Android), the web build: Camera app opens
   the browser's camera; the kept photo is the shot line. A desktop browser opens its
   file chooser instead, as `capture` asks nothing there.
+- Android, a video from the camera app (`recordVideoWithCameraApp`, LLP 1133.008.000), with `--bind camera`, on
+  a phone (the reporter's POCO X6 Pro among them): Camera video opens the camera app's video mode; record past
+  30 s and keep it: the clip line names `app:/tmp/camera/N.mp4` with its size, about 30 s, sized upright as held.
+  Close the camera app without keeping: `AbortError`. No microphone dialog shows from the app (the camera app
+  records sound under its own). Upload the clip with `exactBodyFrom` to a server on the LAN: its SHA-256 there is
+  the file's.
+- iPhone, a video from the camera app, with `--bind camera`: Camera video shows the system camera in video mode
+  (allow the camera and microphone the first time); record, Use Video: the clip line names
+  `app:/tmp/camera/N.mov`, sized upright as held, and `video src` plays it with sound. Cancel: `AbortError`. Built
+  without the `device.microphone` line: `NotAllowedError`, before any camera shows. Start an upload of the clip
+  and switch away: it keeps going for the system's finishing time and its reply lands when the app returns.
+- A phone's browser, a video: Camera video opens the browser's camera in video mode; the kept video is the clip
+  line, its duration as recorded (0 where the browser's recording has none in its header).

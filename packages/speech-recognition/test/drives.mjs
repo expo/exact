@@ -11,6 +11,7 @@
 //   simulator; `bun scripts/agent-android.mjs build recorder --apk`, driven with
 //   EXACT_ANDROID_READER=1 and ANDROID_SERIAL naming the emulator), which the driver
 //   checks is current.
+import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dir, '../../..');
@@ -48,6 +49,22 @@ async function allow(s) {
   return true;
 }
 const takes = async (s) => (await s.state()).resources.library.takes;
+/** Descriptor-held transcript directories in the Apple app process, or why they could not be inspected. */
+function transcriptDescriptors() {
+  if (!['ios', 'macos'].includes(host)) return null;
+  const pgrep = spawnSync('pgrep', ['-x', 'Recorder'], { encoding: 'utf8' });
+  const pids = pgrep.status === 0 ? pgrep.stdout.trim().split(/\s+/).map(Number).filter(Number.isSafeInteger) : [];
+  if (!pids.length) return { error: pgrep.stderr.trim() || `Recorder pid not found (${pgrep.status})` };
+  const paths = [];
+  for (const pid of pids) {
+    const listed = spawnSync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-Fn'], { encoding: 'utf8' });
+    if (listed.status !== 0) {
+      return { error: listed.stderr.trim() || `lsof failed for Recorder pid ${pid} (${listed.status})`, pids };
+    }
+    paths.push(...listed.stdout.split('\n').filter((line) => line.startsWith('n')).map((line) => line.slice(1)));
+  }
+  return { pids, paths: paths.filter((path) => path.includes(`/speech-${run}-6-long/`) && /\.transcript(?:\/|$)/.test(path)) };
+}
 /** The state once `want` holds of it, waiting on the wall clock up to 10 s: on Android's reader an extension answers
  * on the main thread, which `clock settle`, holding exact2's, cannot wait for. */
 async function until(s, want) {
@@ -179,6 +196,8 @@ await each(6, 'thirty phrases, then a backgrounded take', async (go) => {
   await s.clock('settle');
   const whole = (await takes(s))[1];
   check(6, 'Transcribe replaces the partial transcript', whole?.transcript === 'the whole take' && whole.complete, JSON.stringify(whole));
+  const descriptors = transcriptDescriptors();
+  if (descriptors) check(6, 'finished and repeated transcription releases its directories', !descriptors.error && descriptors.paths.length === 0, JSON.stringify(descriptors));
   return s;
 });
 

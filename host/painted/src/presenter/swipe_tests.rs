@@ -28,7 +28,7 @@ fn source() -> String {
 "#.into()
 }
 fn boot(src: &str) -> Presenter<()> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(src),
         (),
         (400., 500.),
@@ -548,7 +548,7 @@ component MessageBubble
         let (mut p, error) = if region {
             // A region an earlier boot in this test dropped retires first.
             crate::content_region::test_wait_idle();
-            Presenter::boot_with_content_region(
+            Presenter::boot_region_with_fixture_fonts(
                 &plan,
                 data,
                 (400., 500.),
@@ -564,7 +564,15 @@ component MessageBubble
             )
             .unwrap()
         } else {
-            Presenter::boot_with(&plan, data, (400., 500.), 1., assets, PainterChoice::Cpu).unwrap()
+            Presenter::boot_with_fixture_fonts(
+                &plan,
+                data,
+                (400., 500.),
+                1.,
+                assets,
+                PainterChoice::Cpu,
+            )
+            .unwrap()
         };
         assert!(error.is_none(), "{error:?}");
         ack(&mut p);
@@ -790,7 +798,7 @@ component MessageBubble
     fn budget_frame(lengths: Vec<usize>) -> bool {
         crate::content_region::test_wait_idle();
         let plan = contract::compile(budget_source()).unwrap().encode();
-        let (mut p, error) = Presenter::boot_with_content_region(
+        let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
             &plan,
             Rows {
                 extra_lengths: lengths,

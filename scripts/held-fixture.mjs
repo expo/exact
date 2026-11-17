@@ -63,19 +63,18 @@ export function holdingServer({ detailDelay = 0, plainAfter = 3000, port = 0 } =
 /** The app in a fresh directory under `root` (target/), asking `origin`. */
 export function heldApp(root, origin, language = 'TypeScript') {
   const dir = mkdtempSync(resolve(root, 'target/held-test-'));
-  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Held Test', app: { id: 'test.held', name: 'Held Test' }, host: { web: {}, macos: {} } }));
+  const rust = language === 'Rust' ? { rust: { data: { crate: 'held-test-data', type: 'held_test_data::Held' } } } : {};
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Held Test', app: { id: 'test.held', name: 'Held Test' }, host: { web: {}, macos: {} }, ...rust }));
   writeFileSync(resolve(dir, 'app.contract'), CONTRACT);
   if (language === 'Rust') {
     mkdirSync(resolve(dir, 'data/src'), { recursive: true });
-    mkdirSync(resolve(dir, 'web'));
-    writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, held_test_data::Held::default()); }\n');
     writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
 name = "held-test-data"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+workspace = "../.exact/shells"
 [dependencies]
-exact-runner = { path = "${root}/runner" }
-[workspace]
+exact-runner.workspace = true
 `);
     writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
 

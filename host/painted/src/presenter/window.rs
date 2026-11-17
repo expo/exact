@@ -239,7 +239,7 @@ impl<D: DataSource> Presenter<D> {
     /// keyboard left.
     // Only a host that shows pictures calls it (`display_complete`).
     #[cfg_attr(
-        not(any(target_os = "linux", target_os = "android", test)),
+        not(any(target_os = "linux", target_os = "macos", target_os = "android", test)),
         allow(dead_code)
     )]
     pub(super) fn reveal_owed(&mut self) {

@@ -40,7 +40,7 @@ package enum WakeLock {
         }
         #else
         // The agent keeps the idle timer off for the whole drive
-        // (`Agent.startSocket`): the last holder leaves it so.
+        // (`AgentLink.startSocket`): the last holder leaves it so.
         if on || !ExactEnv.agentMode { UIApplication.shared.isIdleTimerDisabled = on }
         #endif
     }

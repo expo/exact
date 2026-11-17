@@ -19,10 +19,10 @@ final class PickerColorTests: XCTestCase {
         let session = ExactApp.shared.makeSession(label: "panel")
         defer { session.destroy() }
         for accept in [[], ["*/*"], ["image/jpeg", "*/*"]] {
-            let request = Picker.Request(view: 1, id: "attach", accept: accept, multiple: false, issued: GenerationStamp(session))
+            let request = Picker.Request(view: 1, id: "attach", accept: accept, multiple: false, issued: SessionLease(session))
             XCTAssertTrue(Picker.panel(for: request).allowedContentTypes.isEmpty, "\(accept) must leave the panel unrestricted")
         }
-        let request = Picker.Request(view: 1, id: "photo", accept: ["image/jpeg"], multiple: false, issued: GenerationStamp(session))
+        let request = Picker.Request(view: 1, id: "photo", accept: ["image/jpeg"], multiple: false, issued: SessionLease(session))
         XCTAssertEqual(Picker.panel(for: request).allowedContentTypes, [.jpeg])
     }
     #endif

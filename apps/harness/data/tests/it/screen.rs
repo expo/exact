@@ -2,8 +2,8 @@
 //! P2): `terminal.contract`, compiled as the terminal host compiles it,
 //! takes `session(mode)` and `animation(...)` through the shape check.
 
-use exact_kernel::Kernel;
-use exact_runner::{DataSource, Runner};
+use exact_kernel::{Kernel, PropId};
+use exact_runner::{DataSource, Event, Runner};
 use exact_terminal::host::{Host, Mode};
 use exact_terminal::vt::Vt;
 use harness_data::shapes::{ContractValue, Session};
@@ -37,6 +37,39 @@ fn the_real_screen_boots_and_reads_the_session() {
         .expect("the session is a Session");
     assert_eq!(session.entries[0].kind, "banner");
     assert!(session.models.iter().any(|m| m.id == "mock"));
+    let prompt = r.kernel().find_by_test_id("prompt")[0];
+    let prompt = r.kernel().node_by_key(prompt).unwrap().id;
+    r.dispatch(prompt, Event::Input("/".into())).unwrap();
+    let props = &r.kernel().node(prompt).unwrap().props;
+    assert_eq!(props.str(PropId::AccessibilityRole), Some("combobox"));
+    assert_eq!(
+        props.str(PropId::AccessibilityControls),
+        Some("completions")
+    );
+    assert_eq!(props.bool(PropId::AccessibilityExpanded), Some(true));
+    assert_eq!(
+        props.str(PropId::AccessibilityActiveDescendant),
+        Some("complete-/help")
+    );
+    r.dispatch(prompt, Event::key("ArrowDown")).unwrap();
+    assert_eq!(
+        r.kernel()
+            .node(prompt)
+            .unwrap()
+            .props
+            .str(PropId::AccessibilityActiveDescendant),
+        Some("complete-/model")
+    );
+    let option = r.kernel().find_by_test_id("complete-/model")[0];
+    let props = &r.kernel().node_by_key(option).unwrap().props;
+    assert_eq!(props.str(PropId::Id), Some("complete-/model"));
+    assert_eq!(props.str(PropId::AccessibilityRole), Some("option"));
+    assert_eq!(props.bool(PropId::AccessibilitySelected), Some(true));
+    assert_eq!(
+        props.get(PropId::TabIndex).and_then(|v| v.as_int()),
+        Some(-1)
+    );
+    assert_eq!(props.bool(PropId::RetainFocus), Some(true));
     let _ = std::fs::remove_dir_all(dir);
 }
 

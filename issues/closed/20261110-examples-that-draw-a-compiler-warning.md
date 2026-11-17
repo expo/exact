@@ -51,7 +51,7 @@ not apply to it.
 Ran `contract build app.contract --json` and then `verify` on each of the four, on the web
 host; each build printed the one warning in the table. `symbols.md` also warns
 (`lower-symbol-platform`); `QUEUE.md:9` already doubts that recipe, so it is left out.
-`content-design.md` draws `tamber-unreachable` from `exact:content`, a note `verify` says
+`content-design.md` draws `forma-unreachable` from `exact:content`, a note `verify` says
 and does not count.
 
 ## Direction

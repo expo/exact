@@ -45,7 +45,7 @@ class FilesTest {
     }
 
     /** A file a module was answered and writes, made a link to a file elsewhere after the answer: every way a module
-     * writes refuses it and the file it names is unchanged (a photo copied to `app:/tmp/photos/1.jpg`, the agent's photo
+     * writes refuses it and the file it names is unchanged (a photo copied into `app:/tmp/photos/`, the agent's photo
      * library's `agent-7.jpg`, a transcript's appended lines), and a reader does not take it for a regular file. */
     @Test fun aWriteRefusesALinkPlantedAfterTheAnswerAndLeavesWhatItNames() {
         val databases = File(dir.root, "databases").apply { mkdirs() }

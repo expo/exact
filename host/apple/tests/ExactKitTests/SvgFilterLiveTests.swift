@@ -9,6 +9,32 @@ import XCTest
 /// the Metal chain's shared working textures. Run it under the Thread
 /// Sanitizer too (`swift test --sanitize=thread --filter SvgFilterLiveTests`).
 class SvgFilterLiveTests: XCTestCase {
+    #if os(iOS) || os(tvOS)
+    func testTextBaselineDoesNotDisableAFilteredAnimation() throws {
+        guard SvgFilterGPU.metal != nil, SvgFilterMetal.shared != nil else { throw missing("metal", "no SVG filter GPU") }
+        let region = [0, 0, 60, 40]
+        let program = region + [1, 0, -1, -3] + region + [0, 2, 2]
+        let shape: [String: Any] = ["id": 3, "o": 1,
+            "p": [0, 0, 0, 1, 40, 0, 1, 40, 40, 1, 0, 40, 3], "f": [255, 0, 0, 255],
+            "a": [["id": "fade", "k": "opacity", "v": [1, 0.2], "t": [0, 1], "d": 1, "n": -1, "s": 0]]]
+        let filter: [String: Any] = ["id": 2, "g": 1, "o": 1, "c": [Any](),
+            "fl": ["r": region, "k": 1, "p": program, "c": [shape]]]
+        let text: [String: Any] = ["id": 4, "o": 1, "tx": [["bl": 2, "x": 45, "y": 20,
+            "runs": [["t": "A", "fs": 12, "fw": 400, "f": [0, 0, 0, 255]]]]]]
+        let payload: [String: Any] = ["box": region, "t": [1, 0, 0, 1, 0, 0], "els": [filter, text]]
+        XCTAssertFalse(SvgBlend.requested(payload))
+        let scene = SvgScene()
+        defer { scene.reset() }
+        scene.apply(payload, dark: false, clock: 500)
+        SvgFilterLive.waitForDraws()
+        func livePicture(_ layer: CALayer) -> Bool {
+            if let contents = layer.contents, CFGetTypeID(contents as CFTypeRef) == IOSurfaceGetTypeID() { return true }
+            return (layer.sublayers ?? []).contains { livePicture($0) }
+        }
+        XCTAssertTrue(livePicture(scene.root), "the filtered animation remains a live Core Animation picture")
+    }
+    #endif
+
     func testManyUpdatesLandTheLatestPicture() throws {
         guard SvgFilterGPU.metal != nil, SvgFilterMetal.shared != nil else { throw missing("metal", "no Metal device or SVG filter library") }
         let sub: [Float] = [-10, -10, 80, 70]

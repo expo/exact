@@ -21,7 +21,7 @@ test('a viewport-only plan reads the tier the agent prefers', async () => {
   try {
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Resources = [], commits = []; export const commit = (f, why) => { commits.push(why); f(); }; export function R() {} export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {};`);
+    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = [], commits = []; export const commit = (f, why) => { commits.push(why); f(); }; export function R() {} export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {};`);
     const { viewport } = await import(resolve(dir, 'facts.js'));
     const { data, commits } = await import(resolve(dir, 'rt.js'));
     viewport({ v: [['gpuTier']], ratio: [['devicePixelRatio']], geometry: [['safeAreaTop', 'safeAreaBottom', 'segments'], { safeAreaTop: 'n', safeAreaBottom: 'n', segments: ['[]', { height: 'n', x: 'n', width: 'n', y: 'n' }] }] });
@@ -60,16 +60,24 @@ test('canvas performance keeps unsupported metrics unavailable and refuses bad s
   try {
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Resources = [{name:'hud',source:'exactCanvasPerformance'}], answers = {};
+    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = [{name:'hud',source:'exactCanvasPerformance'}], answers = {};
 export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {}; export function R(r) { answers[r.name] = data.reserved[r.source](null,null,r.name); }
 export function commit(f) { try { f(); return true; } catch { return false; } }`);
     const { canvasPerformance } = await import(resolve(dir, 'facts.js'));
-    const { data, answers } = await import(resolve(dir, 'rt.js'));
+    const { data, answers, Resources } = await import(resolve(dir, 'rt.js'));
     canvasPerformance({ hud: ['world', { frames: ['?', 'n'], gpuMs: ['?', 'n'] }] });
     const read = () => data.reserved.exactCanvasPerformance(null, null, 'hud');
     expect(read()).toEqual([null, null]);
     expect(exact.canvasPerformanceRequested('world')).toBe(true);
     expect(exact.canvasPerformanceRequested('unread')).toBe(false);
+    Resources[0].asleep = true;
+    expect(exact.canvasPerformanceRequested('world')).toBe(false);
+    Resources.push({ ...Resources[0], asleep: false });
+    expect(exact.canvasPerformanceRequested('world')).toBe(true);
+    Resources[1].gone = true;
+    expect(exact.canvasPerformanceRequested('world')).toBe(false);
+    Resources.pop();
+    Resources[0].asleep = false;
     exact.canvasPerformanceRecord('world', '{"frames":60}');
     expect(answers.hud).toEqual([60, null]);
     for (const bad of ['{"frames":"bad"}', '{"frames":1e999}', ' '.repeat(16385)]) {
@@ -92,7 +100,7 @@ test('kept surface readers seed launch, replace only on live publication and inv
   try {
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data={}, Resources=[{name:'hud',source:'exactSurface'}]; export const Kept=k=>'exact.'+k+'.', say=()=>{}, Refusal=Error;
+    writeFileSync(resolve(dir, 'rt.js'), `export const data={}, Sounds={}, Resources=[{name:'hud',source:'exactSurface'}]; export const Kept=k=>'exact.'+k+'.', say=()=>{}, Refusal=Error;
 export function R(r){data.reserved[r.source](null,null,r.name);} export function commit(f){try{f();return true;}catch{return false;}}`);
     const {surfaces} = await import(resolve(dir, 'facts.js')), {data} = await import(resolve(dir, 'rt.js'));
     const boot = (shape={count:'n'}, keep=true) => surfaces({hud:['world',shape,keep ? Buffer.from(JSON.stringify(shape)).toString('hex') : false]});
@@ -129,6 +137,25 @@ export function R(r){data.reserved[r.source](null,null,r.name);} export function
 });
 
 
+test('delivery reads whether the page is a production build, even from a pre-baked plan', async () => {
+  for (const production of [undefined, false, true]) {
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-delivery-production-'));
+    try {
+      const source = await Bun.file(resolve(import.meta.dir, 'facts.js')).text();
+      writeFileSync(resolve(dir, 'facts.js'), production === undefined ? source : source.replace('globalThis.__exactProduction', JSON.stringify(production)));
+      writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+      writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+      const { delivery, deliveryFacts } = await import(resolve(dir, 'facts.js'));
+      const { data } = await import(resolve(dir, 'rt.js'));
+      // A plan baked by a development build answers false; the page's own build decides.
+      delivery({ build: [['production']], baked: [['production', 'seq'], [!production, 7]] });
+      expect(data.reserved.exactDelivery(null, null, 'build')).toEqual([production ?? false]);
+      expect(data.reserved.exactDelivery(null, null, 'baked')).toEqual([production ?? false, 7]);
+      expect(deliveryFacts.production).toBe(production ?? false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
 test('delivery reads build-time versions even from a pre-baked plan', async () => {
   for (const [version, buildNumber] of [[undefined, undefined], ['2.3.4', '56'], ['', '']]) {
     const dir = mkdtempSync(resolve(tmpdir(), 'exact-delivery-facts-'));
@@ -137,7 +164,7 @@ test('delivery reads build-time versions even from a pre-baked plan', async () =
       const source = await Bun.file(resolve(import.meta.dir, 'facts.js')).text();
       writeFileSync(resolve(dir, 'facts.js'), source.replace('globalThis.__exactVersion', JSON.stringify(version ?? '')).replace('globalThis.__exactBuildNumber', JSON.stringify(buildNumber ?? '')));
       writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-      writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+      writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
       const { delivery, deliveryFacts } = await import(resolve(dir, 'facts.js'));
       const { data } = await import(resolve(dir, 'rt.js'));
       delivery({ build: [['buildNumber', 'version']], baked: [['version', 'seq', 'buildNumber'], ['old', 7, 'old']] });
@@ -147,4 +174,18 @@ test('delivery reads build-time versions even from a pre-baked plan', async () =
       expect(deliveryFacts.buildNumber).toBe(buildNumber ?? '');
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
+});
+
+test('a render answers the bake default for frozen', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-frozen-default-'));
+  const document = globalThis.document;
+  try {
+    delete globalThis.document;
+    copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+    const {page} = await import(resolve(dir, 'facts.js')), {data} = await import(resolve(dir, 'rt.js'));
+    page({page:[['frozen']]});
+    expect(data.reserved.exactPage(null, null, 'page')).toEqual([false]);
+  } finally { globalThis.document = document; rmSync(dir, {recursive:true, force:true}); }
 });

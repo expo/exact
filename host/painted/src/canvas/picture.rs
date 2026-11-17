@@ -1,6 +1,6 @@
 //! What a reader copies a picture from: a decoded image, or a canvas's
 //! rasterized drawing (Canvas 2D, LLP 1056), both premultiplied RGBA.
-use super::{pending, Recorder, Shape, ANIMATED, CLIP_RRECT, IMAGE, IMAGE_DEF, RESTORE};
+use super::{with_pending, Recorder, Shape, ANIMATED, CLIP_RRECT, IMAGE, IMAGE_DEF, RESTORE};
 use crate::image::Bitmap;
 use crate::paint::Rect4;
 use std::sync::{Arc, Weak};
@@ -95,11 +95,20 @@ impl WeakPicture {
 
 /// The next image's colour, including a fully transparent tint.
 pub(super) const IMAGE_TINT: u32 = 47;
+/// The next image's CSS sampling mode, in schema vocabulary order.
+pub(super) const IMAGE_RENDERING: u32 = 49;
 
 impl Recorder {
-    pub(super) fn image_tint(&mut self, tint: Option<[u8; 4]>) {
+    pub(super) fn image_style(
+        &mut self,
+        tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
+    ) {
         if let Some(color) = tint {
             self.ops.extend([IMAGE_TINT, Self::color(color)]);
+        }
+        if rendering != exact_kernel::ImageRendering::Auto {
+            self.ops.extend([IMAGE_RENDERING, rendering as u32]);
         }
     }
 
@@ -111,9 +120,10 @@ impl Recorder {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
         let id = self.image_id(picture);
-        if self.image_rrect(id, dst, clips, ts, tint) {
+        if self.image_rrect(id, dst, clips, ts, tint, rendering) {
             return;
         }
         self.need(None);
@@ -122,7 +132,7 @@ impl Recorder {
             self.ops.push(CLIP_RRECT);
             self.rect_radii(c);
         }
-        self.image_tint(tint);
+        self.image_style(tint, rendering);
         self.ops.extend([IMAGE, id]);
         for v in [dst.0, dst.1, dst.2, dst.3] {
             self.f(v);
@@ -157,7 +167,7 @@ impl Recorder {
                 self.string(&path);
             }
         }
-        pending().insert(id, image.clone());
+        with_pending(|p| p.insert(id, image.clone()));
         id
     }
 }

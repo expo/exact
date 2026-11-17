@@ -1,6 +1,6 @@
-// The tool's one `tamber/1` client (LLP 1122 D2, D12): its token and every
+// The tool's one `forma/1` client (LLP 1122 D2, D12): its token and every
 // request. Local, the server is this machine's at the tool's own origin and
-// the token is the one its loopback page gives (`/__tamber/token`), asked
+// the token is the one its loopback page gives (`/__forma/token`), asked
 // again when the server restarts. Paired with another machine's server
 // (T6), the server is the door the person typed, https or a tunnel they
 // trust to this machine's loopback (anything else is refused before the
@@ -22,7 +22,7 @@ const RESTARTED = 'The design server restarted (or another took its port) since 
 export const GONE = 'This client was revoked, or its pairing expired: nothing more is sent to the design server. Pair again with a new code.';
 const BEFORE = 'This was made before the tool paired with another design server, so it is not sent there: review it again.';
 
-/** What each method needs (scripts/tamber-pairing.mjs's table, which
+/** What each method needs (scripts/forma-pairing.mjs's table, which
  * scripts/design-tool-scope.test.mjs holds this to): a paired client never
  * sends one above its scope (the server refuses it too). `local` is the
  * local token's alone. */
@@ -36,7 +36,7 @@ export const NEEDS: Record<string, string> = {
 const SCOPES = ['read', 'propose', 'write'];
 // The long poll's reply ceiling: 16 MiB, room for a held import's diffs (a native host counts twice that running).
 const LONG_POLL_MAX = 16 * 1024 * 1024;
-// A batched resolve's reply (`tokens`, tamber/1.17): the server's bound on its answers (16 MiB) and its `files`, said
+// A batched resolve's reply (`tokens`, forma/1.17): the server's bound on its answers (16 MiB) and its `files`, said
 // rather than left to a host's default (a fetch's is 64 MiB, a stream's 1 MiB).
 const BATCH_MAX = 17 * 1024 * 1024;
 /** What a request needs, as the server reads it: inspect other than a
@@ -44,7 +44,7 @@ const BATCH_MAX = 17 * 1024 * 1024;
  * client's held proposal (`ownerOf` its proposer, null when not known); a
  * method not in the table, `local`. */
 export const needOf = (path: string, body: any, ownerOf: (id: string) => string | null = () => null) => {
-  if (path !== '/__tamber') return 'read';
+  if (path !== '/__forma') return 'read';
   if (body?.method === 'inspect' && body.refresh !== true) return 'write';
   if (body?.method === 'drop' || body?.method === 'edit-held' || body?.method === 'choose') { const by = ownerOf(String(body.proposal)); return by !== null && by !== body.client ? 'write' : 'propose'; }
   return NEEDS[String(body?.method)] ?? 'local';
@@ -77,8 +77,8 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
   // One ask at a time: the first reads start together.
   let asking: Promise<{ token: string | null; error: string }> | null = null;
   const noServer = () => paired
-    ? `No design server answers at ${base}. Check the other machine's dev loop or tamber serve still runs with --remote.`
-    : `No design server answers at ${api}. Start one for your app with \`bun exact.mjs tamber tool <app>\`, then try again.`;
+    ? `No design server answers at ${base}. Check the other machine's dev loop or forma serve still runs with --remote.`
+    : `No design server answers at ${api}. Start one for your app with \`bun exact.mjs forma tool <app>\`, then try again.`;
 
   /** The token, asked once; null with the words to show when there is none. */
   function tokenOf(): Promise<{ token: string | null; error: string }> {
@@ -91,8 +91,8 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
 
   async function askToken(): Promise<{ token: string | null; error: string }> {
     try {
-      const res = await fetch(`${api}/__tamber/token`, { exactTimeout: 5000, redirect: 'error' });
-      if (!res.ok) return paired ? tokenOf() : { token: null, error: `${api} gave no design server token: it answers only this machine's loopback, and only while \`bun exact.mjs tamber tool\` runs.` };
+      const res = await fetch(`${api}/__forma/token`, { exactTimeout: 5000, redirect: 'error' });
+      if (!res.ok) return paired ? tokenOf() : { token: null, error: `${api} gave no design server token: it answers only this machine's loopback, and only while \`bun exact.mjs forma tool\` runs.` };
       const given = String(((await res.json()) as { token?: unknown }).token ?? '') || null;
       // (Paired meanwhile, while it was asked or read: this machine's token is never the one used.)
       if (paired) return tokenOf();
@@ -104,7 +104,7 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
     }
   }
 
-  /** One `tamber/1` request: its reply (and a handle for the token it went with), or the
+  /** One `forma/1` request: its reply (and a handle for the token it went with), or the
    * words to show. A token the server no longer knows (it restarted: a bare
    * not-found, which an operation's own refusal never is) is asked for again,
    * once, for a read. A write goes with the token of the server run it
@@ -128,7 +128,7 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
       try {
         const batch = Array.isArray((body as { tokens?: unknown })?.tokens) ? { exactIndependentHttp: { maxResponseBytes: BATCH_MAX } } : {};
         const res = await fetch(`${base}${path}`, { method: 'POST', exactTimeout: timeout, exactHeld: held, redirect: 'error', body: JSON.stringify(body), ...batch,
-          headers: { 'content-type': 'application/json', 'x-exact-tamber-token': got.token } });
+          headers: { 'content-type': 'application/json', 'x-exact-forma-token': got.token } });
         const reply = (await res.json().catch(() => ({}))) as Reply;
         // (A 401 to an older pairing's token ends that one, not the session since.)
         if (res.status === 401 && paired) { if (at === session && got.token === pairedToken) { gone = true; token = null; } return { error: GONE, reply: {}, used }; }
@@ -153,7 +153,7 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
     if (door.error) return { ok: false, error: door.error, client: '', scope: '' };
     if (!code.trim()) return { ok: false, error: 'Type the code the other machine shows.', client: '', scope: '' };
     try {
-      const res = await fetch(`${door.origin}/__tamber/pair`, { method: 'POST', exactTimeout: 15000, redirect: 'error', body: JSON.stringify({ code: code.trim(), ...(name ? { name } : {}) }), headers: { 'content-type': 'application/json' } });
+      const res = await fetch(`${door.origin}/__forma/pair`, { method: 'POST', exactTimeout: 15000, redirect: 'error', body: JSON.stringify({ code: code.trim(), ...(name ? { name } : {}) }), headers: { 'content-type': 'application/json' } });
       const reply = (await res.json().catch(() => ({}))) as Reply;
       if (res.status === 429) return { ok: false, error: 'Too many tries from here: wait a minute, then type the code again.', client: '', scope: '' };
       if (!res.ok || typeof reply.ok?.token !== 'string') return { ok: false, error: res.ok ? 'The design server gave no token.' : refusal(reply.error, res.status), client: '', scope: '' };
@@ -161,12 +161,12 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
       return { ok: true, error: '', client: String(reply.ok.client ?? ''), scope: String(reply.ok.scope ?? '') };
     } catch (e) {
       if ((e as { code?: string }).code === 'bake') throw e;
-      return { ok: false, error: `No design server answers at ${door.origin}: check the address, and that its certificate was accepted in this browser (open ${door.origin}/__tamber/tool/ once).`, client: '', scope: '' };
+      return { ok: false, error: `No design server answers at ${door.origin}: check the address, and that its certificate was accepted in this browser (open ${door.origin}/__forma/tool/ once).`, client: '', scope: '' };
     }
   }
 
   // (The server checks every scope; the tool's own reading of it only words and greys.)
-  /** The changes' long poll (tamber/1.17's GET, `exactLongPoll`): its stream, made at once with the token in hand,
+  /** The changes' long poll (forma/1.17's GET, `exactLongPoll`): its stream, made at once with the token in hand,
    * each event mapped with that token's handle; null when no token is in hand, or this client was revoked: the caller
    * reads once instead, which asks.
    * Its replies may be as large as a read's (a held import's diffs): `LONG_POLL_MAX`, not a stream's 1 MiB. */
@@ -180,7 +180,7 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
       if (event.type !== 'error' || at !== session || token !== sent) return;
       if (status === 401 && paired) { gone = true; token = null; } else if (status === 404 && !paired) token = null;
     };
-    return fetch(`${base}/__tamber/events?${query}`, { exactStream: (event: StreamEvent) => (ended(event), map(event, used)), exactLongPoll: { cursor: 'after', from: 'cursor' }, exactIndependentHttp: { maxResponseBytes: LONG_POLL_MAX }, redirect: 'error', headers: { 'x-exact-tamber-token': token } });
+    return fetch(`${base}/__forma/events?${query}`, { exactStream: (event: StreamEvent) => (ended(event), map(event, used)), exactLongPoll: { cursor: 'after', from: 'cursor' }, exactIndependentHttp: { maxResponseBytes: LONG_POLL_MAX }, redirect: 'error', headers: { 'x-exact-forma-token': token } });
   }
 
   return { call, longPoll, RESTARTED, pairWith, remote: () => (paired ? base : ''), scope: () => scope };

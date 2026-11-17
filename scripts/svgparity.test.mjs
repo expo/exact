@@ -5,12 +5,12 @@ import { resolve } from 'node:path';
 import { undrawn } from './svgparity.mjs';
 
 test('a fixture is excused where the schema says the row is not drawn, and nowhere else', () => {
-  expect(undrawn('ios')).toEqual(['fx-mix']);
+  expect(undrawn('ios')).toEqual([]);
   expect(undrawn('macos')).toEqual([]);
   // The paint walk's gap is every host's that draws with it.
-  // The paint walk filters a box, so Linux and Windows are excused nothing; Android's stream has no blend.
+  // SVG blends include their backdrop, including on Android's recording path.
   for (const host of ['linux', 'windows']) expect(undrawn(host)).toEqual([]);
-  expect(undrawn('android')).toEqual(['fx-mix']);
+  expect(undrawn('android')).toEqual([]);
   const styles = [
     { field: 'mix_blend_mode', hosts: [{ host: 'ios', fidelity: 'best-effort', why: 'x' }] },
     { field: 'filter', hosts: [{ host: 'linux', on: 'svg', fidelity: 'none', why: 'x' }] },

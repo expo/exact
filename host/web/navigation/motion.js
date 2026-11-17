@@ -335,6 +335,9 @@ export function animationClock(now, settled, synced, early = () => undefined) {
 // Alternate animations count a pair of iterations as one cycle. sync updates startTime once per commit.
 export function animationClocks(root) {
   const origins = new Map(), members = new Map(), paused = new WeakMap(), clocked = new WeakMap();
+  // LLP 1003.001 D8, D9: on the page, an idle clock's origin is its first member's ready time, when the browser
+  // presents it; the members that join before then (the waiting set) take that origin's phase.
+  const waiting = new Map();
   const clockOf = (a) => a.animationName === undefined ? "" : a.effect?.target?.style?.getPropertyValue("--exact-animation-clock").trim() ?? "";
   const live = (a) => a.effect?.target?.isConnected && a.playState !== "idle" && a.playState !== "finished";
   // Release departed, ended or retargeted animations so they do not keep clocks busy.
@@ -349,7 +352,57 @@ export function animationClocks(root) {
         members.delete(c);
       }
     }
+    for (const [c, w] of waiting) {
+      for (const b of w) {
+        if (!live(b) || clockOf(b) !== c) {
+          w.delete(b);
+        }
+      }
+      if (!w.size) {
+        waiting.delete(c);
+      }
+    }
   };
+  // The first waiting member the browser makes ready sets the origin, and every other waiting member starts there.
+  const ready = (c, a) => {
+    const w = waiting.get(c);
+    if (!w?.has(a) || !live(a)) {
+      return;
+    }
+    const origin = a.startTime ?? document.timeline.currentTime;
+    waiting.delete(c);
+    origins.set(c, origin);
+    for (const b of w) {
+      if (b !== a && live(b) && b.playState !== "paused") {
+        b.startTime = origin;
+      }
+    }
+  };
+  // A play-pending member joining a clock that is idle, or whose origin waits: it waits for its ready time.
+  function wait(a, c) {
+    const idle = !members.get(c)?.size || !origins.has(c);
+    if (!(waiting.has(c) || idle && a.pending && a.playState !== "paused")) {
+      return false;
+    }
+    let m = members.get(c);
+    if (!m) {
+      members.set(c, m = new Set());
+    }
+    m.add(a);
+    if (a.playState === "paused") {
+      return true;
+    }
+    let w = waiting.get(c);
+    if (!w) {
+      waiting.set(c, w = new Set());
+      origins.delete(c);
+    }
+    w.add(a);
+    if (a.pending) {
+      a.ready.then(() => ready(c, a), () => {});
+    }
+    return true;
+  }
   function start(a, now) {
     const c = clockOf(a);
     if (!c) {
@@ -397,6 +450,9 @@ export function animationClocks(root) {
         }
         // A pause keeps its membership: paused, it still holds the clock busy. A new one joins (paused, without a start, which would unpause it); a resume rejoins.
         if (is && was !== undefined && c === had && member) {
+          continue;
+        }
+        if (c && wait(a, c)) {
           continue;
         }
         const s = start(a, now);

@@ -324,8 +324,10 @@ fn identical<G: Game, P: crate::Executor, const ASSETS: bool>(
             all.save(&format!("{name}-{now_ms}-all"));
             let differing = culled
                 .data
-                .chunks_exact(4)
-                .zip(all.data.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(all.data.as_chunks::<4>().0)
                 .filter(|(a, b)| a != b)
                 .count();
             panic!("{name} at {now_ms} ms: culling changed {differing} pixels");
@@ -644,8 +646,10 @@ fn local_shadow_culling_preserves_large_groups_in_every_view() {
             .expect("cubes share one draw group");
         let words = |buffer: &exact_gpu::wgpu::Buffer| {
             crate::skinning::tests::read(&gpu, buffer, buffer.size())
-                .chunks_exact(4)
-                .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| u32::from_ne_bytes(*b))
                 .collect::<Vec<_>>()
         };
         let mut views = Vec::new();
@@ -671,8 +675,10 @@ fn local_shadow_culling_preserves_large_groups_in_every_view() {
         let (direct, _) = fixture::render(&gpu, &mut surface, &frame).unwrap();
         let differing = culled
             .data
-            .chunks_exact(4)
-            .zip(direct.data.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(direct.data.as_chunks::<4>().0)
             .filter(|(a, b)| a != b)
             .count();
         assert_eq!(differing, 0, "{cubes} cubes: culling changed pixels");
@@ -770,8 +776,10 @@ fn cull_lists_preserve_model_slots_across_many_draw_groups() {
         queue.submit([encoder.finish()]);
         let words = |buffer: &wgpu::Buffer| {
             crate::skinning::tests::read(&gpu, buffer, buffer.size())
-                .chunks_exact(4)
-                .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| u32::from_ne_bytes(*b))
                 .collect::<Vec<_>>()
         };
         let draws = words(&cull.indirect.raw);
@@ -946,8 +954,10 @@ fn posed_palettes_and_cull_slots_match_cpu_reference() {
     for &offset in &skin.offsets {
         let at = (offset & 0x7fffffff) as usize * 64;
         let actual: Vec<_> = palette[at..at + 64]
-            .chunks_exact(4)
-            .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_ne_bytes(*b))
             .collect();
         for (a, b) in actual.iter().zip(expected.to_cols_array()) {
             assert!(a.is_finite());

@@ -124,7 +124,6 @@ fn a_page_gets_its_retained_wasm_after_a_deploy() {
     assert_eq!(get(without_retention.addr, &new_url).0, 200);
     assert_eq!(get(without_retention.addr, &old_url).0, 404);
     drop(without_retention);
-    std::fs::remove_dir_all(dist).unwrap();
 }
 
 #[test]
@@ -211,7 +210,6 @@ fn only_verified_content_addressed_stages_are_immutable() {
     assert_eq!(body, b"different stage bytes");
     assert_eq!(header(&headers, "cache-control"), Some("no-cache"));
     drop(served);
-    std::fs::remove_dir_all(dist).unwrap();
 }
 
 #[test]
@@ -341,5 +339,4 @@ fn a_named_build_goes_against_the_earlier_one_the_browser_holds() {
         "a retained build's delta decodes to that build"
     );
     drop(served);
-    std::fs::remove_dir_all(dist).unwrap();
 }

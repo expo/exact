@@ -35,23 +35,25 @@ import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { writeInstallPages } from '../../scripts/install-page.mjs';
 import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
-import { compilerWarnings, webInputDigests } from '../../scripts/agent-launch.mjs';
+import { compilerWarnings, oneScheme, webInputDigests } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
 import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp, webToolchainEnv } from '../../scripts/app.mjs';
-import { buildEditor, buildFlow } from '../web-js/module.mjs';
+import { buildEditor, buildFlow, compilerSet } from '../web-js/module.mjs';
+import { RustMissing, WEB_CRATES, rustMissing, setMetadata } from '../../scripts/tools.mjs';
 import { closeFilesystemReader } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, unsplitReason } from './stages.mjs';
-import { interfaceStyle, withInterfaceStyle, withLook } from './look.mjs';
+import { interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
-import { writeAppleAssociation } from './association.mjs';
+import { androidAssociation, writeLinkFiles } from './association.mjs';
 import { cargoInputPaths, compilerPaths } from '../../scripts/cargo-dep-info.mjs';
+import { captureWebProducts, contractReadReceipt } from '../../scripts/web-build.mjs';
 
 const SDK_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const metadataCache = new Map();
@@ -95,14 +97,20 @@ export function webSourceRoots(app, js, render = 'rust') {
     for (const name of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.cargo/config']) files.add(resolve(metadata.workspace_root, name));
     workspaces.push({ metadata, packages: local });
   };
-  closure(webMetadata(SDK_ROOT), ['exact-web-js', 'exact-web', 'exact-js-bake', 'exact-markdown-editor', 'exact-web-js-motion', 'exact-textflow']);
+  // The compiler and the leaves from a tool set: its record of Cargo's answer, and Cargo is not asked (LLP 1174 D5).
+  const set = js ? compilerSet() : null, recorded = set && setMetadata(set);
+  // Without Rust only a set answers what Cargo would: said as that, not as `cargo metadata` failing (LLP 1174 D5).
+  if (js && !set && rustMissing()) throw new RustMissing('exact-web-js');
+  closure(recorded ?? webMetadata(SDK_ROOT), WEB_CRATES);
   const names = [], build = resolve(app.dir, 'web/build.rs');
   const authored = existsSync(build) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(build, 'utf8'));
   if (app.crate) {
     if (!js || authored) names.push(app.crate('web'));
     if (app.manifest.rust?.module?.package) names.push(app.manifest.rust.module.package);
-    if (app.manifest.game || existsSync(resolve(app.dir, 'gpu/Cargo.toml'))) names.push(app.crate('gpu'));
-    names.push(...gpuModules(app.manifest).map(({ name }) => app.crate(`gpu-${name}`)));
+    const gpu = [...(app.manifest.game || existsSync(resolve(app.dir, 'gpu/Cargo.toml')) ? [app.crate('gpu')] : []), ...gpuModules(app.manifest).map(({ name }) => app.crate(`gpu-${name}`))];
+    // A generated app's GPU crates resolve in a workspace of their own (LLP 1153.003 D5.1).
+    const own = gpu.length && app.gpuWorkspace && app.gpuWorkspace !== app.workspace ? app.gpuWorkspace : null;
+    if (own) closure(webMetadata(own), gpu); else names.push(...gpu);
     const at = (!js || render === 'rust') && ['linux', 'web'].find(dir => existsSync(resolve(app.dir, dir, 'src/bin', `${app.name ?? app.crate('web').replace(/-web$/, '')}-render.rs`)));
     if (at) names.push(app.crate(at));
   }
@@ -122,6 +130,10 @@ export function webSourceRoots(app, js, render = 'rust') {
     if (directory || (watch && !info)) roots.add(path);
     if (!directory) files.add(path);
   };
+  // What the set's products were built from beyond their crates' directories: includes and build-script watches.
+  // (A source build finds the same in the target directory's dep-info, the Contract compiler's and the filesystem
+  // helper's included.)
+  if (recorded) for (const product of Object.values(set.manifest.products)) for (const [file] of product.inputs) add(resolve(SDK_ROOT, file), true);
   const targetsOf = workspaces.flatMap(({ packages }) => packages.flatMap(pkg => pkg.targets ?? []));
   const sources = new Set(targetsOf.map(target => resolve(target.src_path)));
   // rustc names a target's dep-info after its crate (`<crate>-<hash>.d`, `lib<crate>.d`, `<crate>.d`), so the
@@ -182,6 +194,12 @@ function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt) {
   }
 }
 
+/** `app.version.json` beside the plan, from the bake's embedded record: what the Rust renderer answers for
+ * `exactDelivery()`'s version, build number and `production` (the binary's resolved trust), as the page does. */
+export function versionFile(embedded) {
+  return JSON.stringify({ version: embedded.version, buildNumber: embedded.buildNumber, production: embedded.trust === 'production' }) + '\n';
+}
+
 async function main() {
 guardFlags('web-build', process.argv.slice(2));
 const target = ['--js', '--wasm'].find((flag) => process.argv.includes(flag));
@@ -201,6 +219,9 @@ const outFlag = process.argv.indexOf('--out');
 const outDir = outFlag < 0 ? null : process.argv.splice(outFlag, 2)[1];
 if (outFlag >= 0 && (!outDir || outDir.startsWith('--'))) { console.error('web-build: --out names a directory'); process.exit(2); }
 const app = resolveApp(process.argv[2]);
+if ((app.manifest.host?.web?.base ?? '/') !== '/' && (target === '--wasm' || bakeOnly || app.manifest.game)) {
+  throw new Error('host.web.base: the wasm target and native update store require /; build a standalone JS site');
+}
 const outRoot = outDir && outPath(outDir);
 /** `--out`'s directory, its links resolved, once it is one the build may replace whole: never the app, this checkout or
  * a directory holding either; inside the app, `dist` or a path under `dist/` or `target/`, which no source scan reads,
@@ -230,7 +251,8 @@ const [{ rolldown }, { minifySync }] = await Promise.all([import('rolldown'), im
 // build, and what it refuses is an error; `--wasm` is internal (below).
 const game = app.manifest.game !== undefined;
 const jsTarget = target !== '--wasm' && !game && !bakeOnly;
-const inputRoots = webSourceRoots(app, jsTarget, render[1] ?? 'rust');
+let inputRoots;
+try { inputRoots = webSourceRoots(app, jsTarget, render[1] ?? 'rust'); } catch (error) { if (!error.rustMissing) throw error; console.error(error.message); process.exit(1); }
 if (checkOnly) {
   if (!jsTarget) {
     webToolchainEnv(developmentBuildEnv());
@@ -277,16 +299,18 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // What the JS target warned of, in its own words: the count it prints names nothing (workout F3, kanban F30).
     // The bundler's notes on the generated glue are not the app's to act on. The types app.ts imports, when
     // the build rewrote them, are one line (LLP 1116.001 D4.5).
-    for (const line of compiler) console.error(line);
-    for (const line of (js.stderr ?? '').split('\n')) if (/^(warning|app\.contract\.d\.ts): /.test(line)) console.error(line);
-    // The origin's association file, from the manifest's claims (LLP 1030 D1). Its `webcredentials` comes from the
-    // bake's grants, which only the wasm build below runs.
-    writeAppleAssociation(stage, app);
+    // The colours that stay one in dark mode in one line (`oneScheme`), unless a drive reads these lines
+    // (`EXACT_WARNINGS_WHOLE`), which lists each in its file and says the one line itself.
+    for (const line of process.env.EXACT_WARNINGS_WHOLE ? compiler : oneScheme(compiler)) console.error(line);
+    for (const line of (js.stderr ?? '').split('\n')) if (/^(warning|app\.contract\.d\.ts|links): /.test(line)) console.error(line);
+    // The JS target writes the origin's link files itself (host/web-js/build.mjs, LLP 1038 D8); the filter above passes
+    // its `links:` lines.
     // The receipt first, since what it records may come from the build's intermediates. `release`: a site to host
     // (`--out`), built again (to the same directory, as a release) when what it was built from changes.
     // `env`: each setting app.ts read, as inlined, and its source (LLP 1153 D4), for the drive's logs and `changedSettings`.
     writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
       manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...(inputs ? { inputs, inputsAt, inputRoots } : {}), sources: sourcesBuilt(app, dist, sources),
+      ...(inputs ? { reads: { contract: contractReadReceipt(resolve(stage, '.gen')) } } : {}),
       ...builtSettings(stage), ...(outDir ? { release: true } : {}) }) + '\n');
     // A site to host holds the site, not the build's intermediates (`.gen`, the app's captured sources among them;
     // the receipt's file cards name no dot path), but for what `serve` renders a `render=request` or `cached` route's
@@ -307,7 +331,9 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     if (process.argv.includes('--json')) reportBuilt({ path: dist, target: 'web', trust: outDir ? 'production' : 'development' });
     process.exit(0);
   }
-  console.error(`${webBuildFailure(js.stderr).join('\n')}\n${app.name}: the web build (the JS target) failed; the wasm target is internal (--wasm)`);
+  // Its warnings as a success says them: the colours in one line unless a drive reads each (`EXACT_WARNINGS_WHOLE`).
+  const failure = webBuildFailure(js.stderr);
+  console.error(`${(process.env.EXACT_WARNINGS_WHOLE ? failure : oneScheme(failure)).join('\n')}\n${app.name}: the web build (the JS target) failed; the wasm target is internal (--wasm)`);
   process.exit(1);
 }
 const crate = app.crate('web');
@@ -323,7 +349,10 @@ const previous = `${dist}.previous`;
 if (!existsSync(dist) && existsSync(previous)) renameSync(previous, dist);
 else if (existsSync(dist) && existsSync(previous)) rmSync(previous, { recursive: true, force: true });
 const buildEnv = developmentBuildEnv();
-buildEnv.EXACT_BAKE_OUTPUT = bakeOutput(app, buildEnv);
+mkdirSync(resolve(app.target, 'web-bakes'), { recursive: true });
+const packaging = mkdtempSync(resolve(app.target, 'web-bakes/build-'));
+process.once('exit', () => rmSync(packaging, { recursive: true, force: true }));
+buildEnv.EXACT_BAKE_OUTPUT = bakeOutput(app);
 // Proofs select the requested game profile under either trust mode; ordinary builds ship web.
 const proofProfile = game ? process.env.EXACT_GAME_PROOF_PROFILE : undefined;
 if (proofProfile && !['gpu-dev', 'release'].includes(proofProfile)) throw new Error('EXACT_GAME_PROOF_PROFILE must be gpu-dev or release');
@@ -344,7 +373,9 @@ if (keepNames || !unsplit) buildEnv.CARGO_PROFILE_WEB_STRIP = 'debuginfo';
 const inputsAt = Date.now(), inputs = webInputDigests(app, false, inputRoots), sources = appSources(app.dir, dist).digest;
 const generated = game ? generatedInputFiles(app.dir) : [];
 const warmInputs = !bakeOnly ? warmGameInputs(app, {...buildEnv, EXACT_GAME_PROOF_PROFILE:proofProfile}) : null;
-const buildReceipt = contractLast(() => buildBake(app, 'web', 'wasm32-unknown-unknown', {env:buildEnv, check:bakeOnly, gpuProfile}));
+let products;
+const buildReceipt = contractLast(() => buildBake(app, 'web', 'wasm32-unknown-unknown', {env:buildEnv, check:bakeOnly, gpuProfile,
+  capture: receipt => { products = captureWebProducts(receipt, resolve(packaging, 'products')); } }));
 // Game bakes create, replace and prune assets. Capture those outputs before packaging;
 // authored files keep their initial digests, including handwritten assets beside generated ones.
 if (game) {
@@ -354,7 +385,7 @@ if (game) {
     else if (outputs.has(path)) inputs[path] = createHash('sha1').update(readFileSync(path)).digest('hex');
   }
 }
-const built = resolve(app.target, 'wasm32-unknown-unknown/web', crate.replace(/-/g, '_') + '.wasm');
+const built = products[resolve(app.target, 'wasm32-unknown-unknown/web', crate.replace(/-/g, '_') + '.wasm')];
 // Build one app into its own staging directory. Only a complete build replaces
 // dist, so a server sees the previous app or the next one, never a mixture;
 // replacing the directory also drops every stale optional/private artifact.
@@ -477,11 +508,11 @@ if (bakeOnly ? !!moduleInput : typeof exports.exact_module_artifact === 'functio
   for (const [index, name] of ['app.module.json', 'app.js'].entries()) {
     // The length first: the call can grow memory, detaching an earlier view of it.
     const len = bakeOnly ? 0 : exports.exact_module_artifact(index);
-    const body = bakeOnly ? readFileSync(resolve(moduleInput.path, '..', name)) : Buffer.from(new Uint8Array(exports.memory.buffer, exports.exact_out(), len));
+    const body = bakeOnly ? readFileSync(products[resolve(moduleInput.path, '..', name)]) : Buffer.from(new Uint8Array(exports.memory.buffer, exports.exact_out(), len));
     files.set(name, body); writeFileSync(resolve(stage, name), body);
   }
   if (!moduleInput) throw new Error('the build receipt does not name the paired module output');
-  const bytecode = readFileSync(resolve(moduleInput.path, '..', 'app.hbc'));
+  const bytecode = readFileSync(products[resolve(moduleInput.path, '..', 'app.hbc')]);
   files.set('app.hbc', bytecode);
   // moduleCards checks every byte against the receipt embedded in this wasm,
   // including the native digest/version. A concurrent rebake cannot mix pairs.
@@ -498,7 +529,7 @@ if (bakeOnly ? !!moduleInput : typeof exports.exact_module_artifact === 'functio
   finally { await bundle.close(); }
 }
 const bakedReceipt = readBake(app, 'web', 'wasm32-unknown-unknown', buildEnv.EXACT_BAKE_OUTPUT);
-writeFileSync(resolve(stage, 'app.version.json'), JSON.stringify({ version: bakedReceipt.embedded.version, buildNumber: bakedReceipt.embedded.buildNumber }) + '\n');
+writeFileSync(resolve(stage, 'app.version.json'), versionFile(bakedReceipt.embedded));
 if (!bakeOnly) {
   if (typeof exports.exact_compat !== 'function') throw new Error('the web wasm exposes no baked receipt');
   const compatLen = exports.exact_compat();
@@ -567,22 +598,10 @@ function minifyCss(css) {
 // The app's module artifact answers `native.later` on the page too (LLP
 // 1067 D5): the glue finds it by the meta tag below.
 const pageNative = app.modules.web;
-// The page in the app's first-frame background from its first paint (the
-// manifest's background colours, as the iOS launch screen), so nothing lighter or
-// darker shows before the first frame. Only until then: from the first frame
-// the app paints its own, and the canvas beyond it is the browser's for the
-// page's colour scheme, as on the JS target (a launch white kept under an
-// app that chose dark showed beside its root; Markdown's conformance).
-// A fixed `userInterfaceStyle` takes its side alone, as the iOS launch screen does.
-const hex = (value) => /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value ?? '') ? value : null;
-const launchLight = app.manifest.background_color, launchDark = interfaceStyle(app.manifest) === 'light' ? null : hex(app.manifest.color_scheme_dark?.background_color);
-const launchHtml = 'html:has(#exact-root:empty)';
-const launchCss = !hex(launchLight) ? '' : interfaceStyle(app.manifest) === 'dark' ? `${launchHtml}{background-color:${launchDark ?? launchLight}}`
-  : `${launchHtml}{background-color:${launchLight}}${launchDark ? `@media (prefers-color-scheme:dark){${launchHtml}{background-color:${launchDark}}}` : ''}`;
 writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.html'), 'utf8')
-  .replace(/<style>([\s\S]*?)<\/style>/, (_, css) => `<style>${minifyCss(css)}${launchCss}</style>`)
+  .replace(/<style>([\s\S]*?)<\/style>/, (_, css) => `<style>${minifyCss(css)}${launchBackground(app.manifest)}</style>`)
   .replace('<html lang="en">', `<html lang="${escapeHtml(webManifest.lang)}">`)
-  .replace('<title>Exact</title>', `<title>${escapeHtml(webManifest.name)}</title>`)
+  .replace('<title>Exact</title>', `${schemeHead(!bakeOnly && exports.exact_chooses_scheme() ? "exact.state.#scheme" : null, { development: !production, wasm: true })}<title>${escapeHtml(webManifest.name)}</title>`)
   // The manifest's favicons and Apple touch icon, else the shell's default favicon (LLP 1163 D7).
   .replace(/<link rel="icon"[^>]*>/, (link) => webIconLinks(app.manifest, app.dir, link))
   // `app.json`'s `audio_session` (LLP 1096 D7), applied by a separate page entry before the runtime, and
@@ -662,26 +681,21 @@ if (buildLocations.length && renderAt) {
   const late = pages.filter((doc) => doc.settled === false).map((doc) => doc.location);
   documentNote = `${pages.length} document${pages.length === 1 ? '' : 's'}${pages.length && !app.origin ? ' (no origin: no sitemap)' : ''}${late.length ? `; at the deadline, with placeholders: ${late.join(', ')}` : ''}`;
 }
-// The deep-link association file (LLP 1030 D1; 1030.000 D2): generated from
-// the manifest when the iOS host claims the domain and names its team; a
-// static origin file Apple's CDN fetches, never a dev-server claim.
+// The origin's association files (LLP 1030 D1; 1030.000 D2; LLP 1038 D8): one merged file per platform, from the
+// manifest's link claims and the bake's credentials; static origin files the platforms fetch, never a dev-server
+// claim. Every other origin a claim names is printed with its files.
 const ios = app.manifest.host?.ios ?? {};
 // @ref LLP 1069.006 D2 — a claimed https auth callback on Apple needs this
-// origin's `webcredentials` entry too (not `applinks:`, which stays routing).
+// origin's `webcredentials` entry too (and is excluded from its links).
 const authReach = bakedReceipt.reach?.auth ?? {};
 // @ref LLP 1133.011 D6 — an `auth.passkey` RP ID that is the origin's host: this origin serves both platforms' files.
 const originHost = app.origin ? new URL(app.origin).hostname : null;
 const passkeyHere = (authReach.passkeys ?? []).includes(originHost);
 const webcredentials = passkeyHere || (authReach.callbacks ?? []).some((c) => app.origin && c.startsWith(new URL(app.origin).origin + '/'));
-writeAppleAssociation(stage, app, { webcredentials });
-// Android's statement (LLP 1133.011 D6): the package may use this domain's passkeys, for each certificate the app
-// lists. Every other RP ID's two entries are printed, for the domain that serves it.
+for (const line of writeLinkFiles(stage, app, { webcredentials, passkeys: passkeyHere, callbacks: authReach.callbacks ?? [] })) console.error(line);
+// Every other RP ID's two entries are printed, for the domain that serves it.
 const certificates = app.manifest.host?.android?.certificates ?? [];
-const androidStatement = { relation: ['delegate_permission/common.get_login_creds'], target: { namespace: 'android_app', package_name: app.id, sha256_cert_fingerprints: certificates } };
-if (passkeyHere && certificates.length) {
-  mkdirSync(resolve(stage, '.well-known'), { recursive: true });
-  writeFileSync(resolve(stage, '.well-known/assetlinks.json'), JSON.stringify([androidStatement], null, 2) + '\n');
-}
+const androidStatement = androidAssociation(app.manifest);
 const elsewhere = (authReach.passkeys ?? []).filter((rp) => rp !== originHost && rp !== 'localhost');
 const passkeyNote = (authReach.passkeys ?? []).length ? `; passkeys: ${[
   passkeyHere ? `${originHost}'s association files${ios.team ? '' : ' (no host.ios.team: no apple-app-site-association)'}${certificates.length ? '' : ' (no host.android.certificates: no assetlinks.json)'}` : null,
@@ -707,7 +721,7 @@ if (authReach.sessions) {
 // the web) and wasm-opt. Only when the app has a GPU crate.
 // Each declared GPU module (LLP 1009 D6) is its own wasm under gpu/, fetched
 // the first time a canvas of one of its surfaces mounts.
-const gpu = bakeOnly ? { note: 'none (--bake)', built: false } : webGpuArtifacts(app, stage, {profile:gpuProfile});
+const gpu = bakeOnly ? { note: 'none (--bake)', built: false } : webGpuArtifacts(app, stage, {profile:gpuProfile, products});
 let gpuNote = gpu.note;
 if (gpu.built) {
   copyHostFiles('gpu');

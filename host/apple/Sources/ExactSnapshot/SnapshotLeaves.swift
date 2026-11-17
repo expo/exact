@@ -31,32 +31,68 @@ struct SnapshotTextView: View {
             let frames = node.lines.map { line in
                 CGRect(x: box.minX + line.origin.x, y: box.minY + line.origin.y - line.ascent, width: max(0, line.width), height: line.ascent + line.descent)
             }
+            let groups = opacityGroups()
+            groupView(0, groups: groups, frames: frames)
+        }
+    }
+
+    private struct Group {
+        var alpha = 1.0
+        var runs: Set<Int> = []
+        var children: [Int] = []
+    }
+
+    private func opacityGroups() -> [Group] {
+        var groups = [Group()], byId: [UInt32: Int] = [:]
+        for (index, run) in node.runs.enumerated() {
+            var owner = 0
+            for step in run.opacityGroups {
+                let child: Int
+                if let found = byId[step.box] { child = found }
+                else {
+                    child = groups.count
+                    groups.append(Group(alpha: step.alpha))
+                    byId[step.box] = child
+                    groups[owner].children.append(child)
+                }
+                owner = child
+            }
+            groups[owner].runs.insert(index)
+        }
+        return groups
+    }
+
+    private func groupView(_ index: Int, groups: [Group], frames: [CGRect]) -> AnyView {
+        let group = groups[index]
+        return AnyView(ZStack(alignment: .topLeading) {
             FrameLayout(frames: frames, size: node.frame.size) {
                 ForEach(Array(node.lines.enumerated()), id: \.offset) { _, line in
-                    text(line)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .widgetAccentable()
+                    text(line, selected: group.runs).lineLimit(1).fixedSize().widgetAccentable()
                 }
             }
-        }
+            ForEach(group.children, id: \.self) { child in
+                groupView(child, groups: groups, frames: frames)
+            }
+        }.compositingGroup().opacity(group.alpha))
     }
 
     /// The line's runs, each in the font the kernel measured it in and its
     /// own colour or the paragraph's, concatenated into one `Text`. The
     /// text is WP1's `Line.text`: a clamped line's cut and "…" come from
     /// there. A run's background and `href` are refused by the profile.
-    private func text(_ line: HeadlessSession.Line) -> Text {
+    private func text(_ line: HeadlessSession.Line, selected: Set<Int>) -> Text {
         let dark = scheme == .dark
         let ink = SnapshotColor.style(SnapshotStyle(node).color("text_color"), dark: dark, context: .ink) ?? AnyShapeStyle(.primary)
         let segments = line.segments.isEmpty ? [HeadlessSession.Segment(run: 0, text: line.text)] : line.segments
         return segments.reduce(Text(verbatim: "")) { whole, segment in
             guard segment.run < node.runs.count else { return whole + Text(verbatim: segment.text) }
             let run = node.runs[segment.run]
-            let part = Text(verbatim: segment.text)
-                .font(Font(run.font))
-                .foregroundStyle(SnapshotColor.style(ColorRow(run.color), dark: dark, context: .ink) ?? ink)
-            return whole + SnapshotTextPaint.styled(part, run: run, node: node)
+            // Every group lays out the whole line; another group's runs keep
+            // their metrics and paint nothing.
+            let shown = selected.contains(segment.run) && !run.hidden
+            let part = Text(verbatim: segment.text).font(Font(run.font))
+                .foregroundStyle(shown ? (SnapshotColor.style(ColorRow(run.color), dark: dark, context: .ink) ?? ink) : AnyShapeStyle(Color.clear))
+            return whole + SnapshotTextPaint.styled(part, run: run, node: node, paints: shown)
         }
     }
 }
@@ -68,9 +104,11 @@ package enum SnapshotTextPaint {
     package static func decoration(_ run: HeadlessSession.Run, node: HeadlessSession.Node) -> String {
         [node.style["text_decoration_line"]?.string ?? "", run.decoration].filter { !$0.isEmpty }.joined(separator: " ")
     }
-    static func styled(_ text: Text, run: HeadlessSession.Run, node: HeadlessSession.Node) -> Text {
+    /// Without `paints`, only the tracking, which moves the text after it.
+    static func styled(_ text: Text, run: HeadlessSession.Run, node: HeadlessSession.Node, paints: Bool = true) -> Text {
         var part = text
         if run.letterSpacing != 0 { part = part.tracking(run.letterSpacing) }
+        guard paints else { return part }
         let decoration = decoration(run, node: node)
         if decoration.contains("underline") { part = part.underline() }
         if decoration.contains("line-through") { part = part.strikethrough() }
@@ -307,6 +345,24 @@ struct SnapshotImageView: View {
             }
             .font(.system(size: points, weight: Font.Weight(css: Int(weight))))
             .foregroundStyle(ink)
+        } else if let svg = node.props["symbolAsset"],
+                  let asset = IconAsset.image(named: IconAsset.name(svg),
+                    bundles: environment.imageRoots.compactMap { Bundle(url: $0) }.flatMap { IconAsset.bundles(for: $0) } + SnapshotBundles.all,
+                    scale: displayScale) {
+            let style = SnapshotStyle(node)
+            let natural = IconAsset.size(asset.size, points: style.number("font_size") ?? 17)
+            let ink = SnapshotColor.style(style.color("tint_color") ?? style.color("text_color"), dark: scheme == .dark, context: .ink) ?? AnyShapeStyle(.tint)
+            #if canImport(UIKit)
+            let image = Image(uiImage: asset)
+            #else
+            let image = Image(nsImage: asset)
+            #endif
+            let box = node.contentBox.size
+            // Symbol fill keeps the file's aspect, matching the page hosts.
+            let fit = fit == "fill" ? "contain" : fit
+            SnapshotRaster(image: image.renderingMode(style.string("symbol_rendering") == "multicolor" ? .original : .template),
+                           natural: natural, fit: fit, box: box, fullColor: true)
+                .foregroundStyle(ink)
         } else if let commands = node.props["symbolPath"] {
             // An icon with no SF Symbol draws its own path (LLP 1121 D10, stage 9 A), as the page hosts do: its
             // em square placed by `object-fit` in the box, the viewBox met in that square, each path filled

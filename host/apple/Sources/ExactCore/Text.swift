@@ -55,6 +55,10 @@ package struct Run: Hashable {
     /// CSS `font-feature-settings`: a metric, applied after `numeric` and
     /// `ligatures` and winning for the same feature.
     package var features: [FontFeature] = []
+    /// Opacity groups from the outermost inline box inward; each alpha is relative to its parent.
+    package var opacity: [InlineOpacity] = []
+    /// An inherited background can belong to an ancestor's group.
+    package var backgroundOpacity: [InlineOpacity] = []
     package var color: [Double]? = nil
     package var decoration: String = ""
     /// The lines its decorating ancestors draw through it, each in that
@@ -72,7 +76,11 @@ package struct Run: Hashable {
     package var backgroundRadii: [InlineRadius] = []
     /// How far that box's padding box stands out from its first and last characters: its background covers it. Paint.
     package var backgroundBefore: CGFloat = 0, backgroundAfter: CGFloat = 0
-    /// The boxes around that one with backgrounds of their own, nearest first. Paint.
+    /// How far it stands above and below the run's content area, which the line makes no room for (CSS 2 §10.6.1). Paint.
+    package var backgroundAbove: CGFloat = 0, backgroundBelow: CGFloat = 0
+    /// That box's border, which paints over its background. Paint.
+    package var border: InlineBorder?
+    /// The boxes around that one with backgrounds or borders of their own, nearest first. Paint.
     package var outerBackgrounds: [OuterBackground] = []
     /// CSS visibility hides ink without changing shaping or descendant visibility.
     package var hidden = false
@@ -82,7 +90,7 @@ package struct Run: Hashable {
     /// `NSTextView` leaves it (LLP 1115.000 D7.9). Paint, never metrics.
     package var fixedInk = false
     /// Its own `text-shadow` (offset x, y, blur, r g b a) when the
-    /// paragraph's runs differ (`Spec.gatherShadows`), and its
+    /// paragraph cannot share it (`Spec.gatherShadows`), and its
     /// `-webkit-text-stroke` (width, r g b a): paint (LLP 1077 D3, D7).
     package var shadow: [Double]? = nil
     package var stroke: [Double]? = nil
@@ -104,11 +112,13 @@ package struct Run: Hashable {
               lhs.italic == rhs.italic, lhs.lineHeight == rhs.lineHeight,
               lhs.letterSpacing == rhs.letterSpacing, lhs.numeric == rhs.numeric, lhs.ligatures == rhs.ligatures, lhs.stretch == rhs.stretch,
               lhs.variations == rhs.variations, lhs.features == rhs.features, lhs.color == rhs.color,
+              lhs.opacity == rhs.opacity, lhs.backgroundOpacity == rhs.backgroundOpacity,
               lhs.decoration == rhs.decoration, lhs.underlineColor == rhs.underlineColor,
               lhs.strikeColor == rhs.strikeColor, lhs.href == rhs.href,
               lhs.hidden == rhs.hidden, lhs.fixedInk == rhs.fixedInk, lhs.background == rhs.background, lhs.backgroundBox == rhs.backgroundBox,
               lhs.backgroundRadii == rhs.backgroundRadii, lhs.shadow == rhs.shadow, lhs.stroke == rhs.stroke,
-              lhs.backgroundBefore == rhs.backgroundBefore, lhs.backgroundAfter == rhs.backgroundAfter, lhs.outerBackgrounds == rhs.outerBackgrounds,
+              lhs.backgroundBefore == rhs.backgroundBefore, lhs.backgroundAfter == rhs.backgroundAfter,
+              lhs.backgroundAbove == rhs.backgroundAbove, lhs.backgroundBelow == rhs.backgroundBelow, lhs.border == rhs.border, lhs.outerBackgrounds == rhs.outerBackgrounds,
               lhs.indent == rhs.indent, lhs.hang == rhs.hang, lhs.box == rhs.box, lhs.atomIcon == rhs.atomIcon,
               lhs.inlineStart == rhs.inlineStart, lhs.inlineEnd == rhs.inlineEnd else { return false }
         // CoreText's ranges address the original UTF16 source. Swift String's
@@ -136,6 +146,8 @@ package struct Run: Hashable {
         hasher.combine(variations)
         hasher.combine(features)
         hasher.combine(color)
+        hasher.combine(opacity)
+        hasher.combine(backgroundOpacity)
         hasher.combine(decoration)
         hasher.combine(underlineColor)
         hasher.combine(strikeColor)
@@ -145,6 +157,9 @@ package struct Run: Hashable {
         hasher.combine(backgroundRadii)
         hasher.combine(backgroundBefore)
         hasher.combine(backgroundAfter)
+        hasher.combine(backgroundAbove)
+        hasher.combine(backgroundBelow)
+        hasher.combine(border)
         hasher.combine(outerBackgrounds)
         hasher.combine(hidden)
         hasher.combine(fixedInk)
@@ -201,6 +216,10 @@ package struct Spec: Hashable {
     package var color: [Double] // r g b a, 0–255
     package var overflowWrap: Int = 0 // CSS: normal, break-word, anywhere
     package var direction: Int = 0 // CSS: ltr, rtl
+    /// Natural text (LLP 1060.000 D3): each paragraph's base is its first
+    /// strong character's (`TextEngine.naturalBases`), `direction` where it
+    /// has none; `direction` alone resolves alignment.
+    package var natural = false
     package var whiteSpace: Int = 0 // CSS: normal, pre-wrap, nowrap, pre-line, pre (runs already collapsed unless pre-wrap or pre)
     /// `white-space-collapse: preserve` (pre-wrap, pre): spaces, tabs and breaks are text.
     package var preserves: Bool { whiteSpace == 1 || whiteSpace == 4 }
@@ -224,7 +243,7 @@ package struct Spec: Hashable {
     package var language = ""
     /// CSS `text-shadow` (LLP 1077 D3) shared by every run: offset x, y and
     /// blur in points, then the colour's r g b a (0–255), resolved for the
-    /// appearance. Nil when the runs' own differ (`gatherShadows`).
+    /// appearance. Nil when it must stay with the runs (`gatherShadows`).
     package var shadow: [Double]? = nil
     /// CSS `text-box-trim` (0 none, 1 trim-start, 2 trim-end, 3 trim-both)
     /// and `text-box-edge`'s over (0 text, 1 cap, 2 ex) and under (0 text,
@@ -872,7 +891,7 @@ package final class TextEngine {
         // their text once, then assign UTF-16 spans, instead of allocating and
         // appending an attributed string for every run.
         let s = NSMutableAttributedString(string: spec.runs.map(\.text).joined())
-        var offset = 0
+        var offset = 0, empties: [EmptyRun] = []
         for (index, r) in spec.runs.enumerated() {
             var a: [NSAttributedString.Key: Any] = [.font: font(r)]
             if r.letterSpacing != 0 { a[.kern] = r.letterSpacing }
@@ -880,6 +899,7 @@ package final class TextEngine {
             if let box = r.box { TextEngine.boxAttributes(box, font: font(r) as CTFont, index: index, scale: lineScale, into: &a) }
             let length = r.text.utf16.count
             if length > 0 { s.setAttributes(a, range: NSRange(location: offset, length: length)) }
+            else if r.box == nil { empties.append(EmptyRun(offset: offset, attributes: a, past: spec.roomPast(index))) }
             offset += length
         }
         if spec.lineClamp > 0, s.length > 0, var block = spec.strut ?? spec.runs.first {
@@ -889,9 +909,9 @@ package final class TextEngine {
             presentation?.attributes(block, color: spec.color, scale: lineScale, attributes: &a)
             s.addAttribute(.exactClampStyle, value: a, range: NSRange(location: 0, length: s.length))
         }
-        TextEngine.kernInlineEdges(s, runs: spec.runs)
-        TextEngine.setBaseDirection(s, direction: spec.direction)
-        presentation?.finish(s)
+        TextEngine.kernInlineEdges(s, runs: spec.runs, rtl: spec.direction == 1)
+        TextEngine.setBaseDirection(s, direction: spec.direction, natural: spec.natural)
+        presentation?.finish(s, empties: empties)
         if spec.preserves, s.string.contains("\t"), let first = spec.strut ?? spec.runs.first {
             setTabStops(s, run: first)
         }
@@ -1119,7 +1139,10 @@ package final class TextEngine {
             // A justified one also depends on the width, so it is made again.
             if spec.align != 3, let oldLine, CTLineGetStringRange(oldLine).location == start, CTLineGetStringRange(oldLine).length == count {
                 line = oldLine
-            } else { line = TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: shape.attributed, range: range) }
+            } else {
+                line = TextEngine.placingRooms(TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: shape.attributed, range: range),
+                                               source: shape.attributed, range: range)
+            }
             var clamps = false
             // A word too long for its line keeps its width in layout, as CSS
             // measures it; only what is drawn ends in "…".
@@ -1439,7 +1462,7 @@ package final class TextEngine {
         var made = Spec(runs: runs, align: Int(request.align), lineClamp: Int(request.line_clamp), color: [0, 0, 0, 255], overflowWrap: Int(request.overflow_wrap), direction: Int(request.direction), whiteSpace: Int(request.white_space), strut: run(request.strut))
         made.textIndent = CGFloat(request.text_indent); made.hyphens = Int(request.hyphens)
         made.textBoxTrim = Int(request.text_box_trim); made.textBoxOver = Int(request.text_box_over); made.textBoxUnder = Int(request.text_box_under)
-        made.balance = request.text_wrap_style == 1
+        made.balance = request.text_wrap_style == 1; made.natural = request.natural != 0
         if made.automaticHyphens, let lang = request.lang {
             made.language = String(decoding: UnsafeBufferPointer(start: lang, count: request.lang_len), as: UTF8.self)
         }

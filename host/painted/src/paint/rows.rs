@@ -183,9 +183,31 @@ impl Painter {
         self.invalidate_rows(kernel, dirty);
     }
 
-    fn invalidate_rows(&mut self, kernel: &Kernel, dirty: Dirty) {
+    fn invalidate_rows(&mut self, kernel: &Kernel, mut dirty: Dirty) {
         if self.rows.kept.is_empty() {
             return;
+        }
+        // A source can animate outside the row holding its SVG instance.
+        let changed: IdSet<_> = dirty
+            .hard
+            .iter()
+            .filter_map(|k| kernel.node_by_key(*k))
+            .filter(|n| n.node_type.is_svg_element())
+            .map(|n| n.id)
+            .collect();
+        if !changed.is_empty() {
+            let arena = kernel.arena();
+            for slot in arena
+                .iter_live()
+                .filter(|s| arena.node_type(*s) == NodeType::Svg)
+            {
+                if exact_kernel::svg::scene_sources(kernel, arena.local_id(slot))
+                    .iter()
+                    .any(|id| changed.contains(id))
+                {
+                    dirty.hard.push(arena.key(slot));
+                }
+            }
         }
         // Each node climbed, with the row it is in (or none): a row's nodes,
         // and those outside rows, climb their shared ancestors once.
@@ -350,10 +372,17 @@ impl Painter {
                     .copied()
                     .unwrap_or((0.0, 0.0));
                 c.scrolls.push((node.id, at));
+                // Its zoom moves without a commit or an offset.
+                c.refused |= zoom::range(node).is_some();
             }
             return false;
         }
-        self.rows.active && self.backend.rows() && (scrolls(y) || self.rows_wrapper(node.key))
+        // A zoomable container's child is drawn at the zoom, which a row
+        // replayed at another offset would not follow.
+        self.rows.active
+            && self.backend.rows()
+            && (scrolls(y) || self.rows_wrapper(node.key))
+            && zoom::range(node).is_none()
     }
 
     /// Whether `key` is the container walked for its scroller's rows.
@@ -420,7 +449,7 @@ impl Painter {
                 frame: f,
                 padding: kernel.resolved_padding(key).unwrap_or_default(),
             });
-            c.refused |= shown.press != 1.0;
+            c.refused |= shown.press != 1.0 || shown.press_translate != [0.; 4];
         }
     }
 
@@ -458,7 +487,14 @@ impl Painter {
         if let Some(dst) = object_fit(img.natural(), node.style.object_fit, content) {
             let shown = (walk.scene.presented)(node.id);
             let tint = image_tint(node, &shown, self.dark);
-            self.backend.image(img, img.placed(dst), &[edge], ts, tint);
+            self.backend.image(
+                img,
+                img.placed(dst),
+                &[edge],
+                ts,
+                tint,
+                node.computed_row(StyleId::ImageRendering, |s| s.image_rendering),
+            );
         }
     }
 
@@ -566,7 +602,7 @@ impl Painter {
         clip_rect: Option<Rect4>,
     ) {
         // A transparent ancestor can replace the backend after rows_begin enabled reuse.
-        if !self.backend.rows() {
+        if !self.backend.rows() || walk.hit_space.is_some() {
             return self.node(walk, id, ts, offset, clip_rect);
         }
         let Some(node) = walk.scene.kernel.node(id) else {
@@ -588,7 +624,8 @@ impl Painter {
             counters::add(Counter::RowsReplayed, 1);
             let d = (origin.0 - row.origin.0, origin.1 - row.origin.1);
             for b in &row.boxes {
-                let mut b = *b;
+                let mut b = b.clone();
+                b.translate_clips(d.0, d.1);
                 b.rect.0 += d.0;
                 b.rect.1 += d.1;
                 b.clip = within(b.clip.map(|c| (c.0 + d.0, c.1 + d.1, c.2, c.3)), clip_rect);
@@ -670,6 +707,23 @@ impl Painter {
         let mut capture = self.rows.recording.take().expect("recording");
         if local {
             for b in &mut walk.boxes[start..] {
+                b.translate_clips(origin.0, origin.1);
+                if let Some(hit) = b.hit.as_mut() {
+                    for clip in &mut hit.shape_clips {
+                        clip.translate(origin.0, origin.1);
+                    }
+                    hit.rect.0 += origin.0;
+                    hit.rect.1 += origin.1;
+                    hit.clip = hit.clip.map(|c| (c.0 + origin.0, c.1 + origin.1, c.2, c.3));
+                    if let Some((inv, ..)) = &mut hit.projective {
+                        *inv =
+                            space::mul3(inv, &[1., 0., -origin.0, 0., 1., -origin.1, 0., 0., 1.]);
+                    } else {
+                        hit.affine = hit
+                            .affine
+                            .map(|(t, r)| (t.post_translate(origin.0, origin.1), r));
+                    }
+                }
                 b.rect.0 += origin.0;
                 b.rect.1 += origin.1;
                 b.clip = b.clip.map(|c| (c.0 + origin.0, c.1 + origin.1, c.2, c.3));
@@ -695,6 +749,9 @@ impl Painter {
         let boxes: Vec<PaintedBox> = walk.boxes[start..].to_vec();
         for b in &mut walk.boxes[start..] {
             b.clip = within(b.clip, clip_rect);
+            if let Some(hit) = b.hit.as_mut() {
+                hit.clip = within(hit.clip, clip_rect);
+            }
         }
         // What the row can draw: each box within its clip (a scroller's
         // content box is its whole extent, a horizontal list's thousands of

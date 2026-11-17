@@ -14,6 +14,9 @@ import { createDocument } from '../../web-js/dom.js';
 import { markBars } from '../navigation/routes.js';
 
 import { bundleHostModule } from '../../web-js/glue.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 const navigationModule = await bundleHostModule(resolve(import.meta.dir, '../../..'), 'navigation.js');
 const ROOT = resolve(import.meta.dir, '../../..');
 const heading = '<h2 role="heading" data-exact-text>Pokédex</h2>';
@@ -44,7 +47,7 @@ const WANT = {
   own: WRITTEN, 'nav-later': { ...WRITTEN, site: true }, 'own-later': WRITTEN,
 };
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a site's header is drawn as written, and the app bar stays for a heading and its buttons`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a site's header is drawn as written, and the app bar stays for a heading and its buttons`, async () => {
   const content = Object.entries(CASES).map(([id, [inner, header, before]]) => stack(id, inner, header, before)).join('');
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
     .replace('<div id="exact-root"></div>', () => `<div id="exact-root">${content}</div>`)

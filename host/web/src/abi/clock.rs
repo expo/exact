@@ -100,7 +100,36 @@ impl<D: DataSource> Bridge<D> {
     /// (`None`): the running runner and every one booted later take it.
     pub fn set_live_clock(&mut self, now: Option<fn() -> f64>) {
         self.live_clock = now;
+        // On the page's clock the browser presents what the runner commits:
+        // `presented` waits for the first picture (LLP 1069.000 D2 r7). The
+        // page sets the clock before every boot, so every runner it makes
+        // reads this.
+        exact_runner::page::set_awaits_present(now.is_some());
         self.give_clock();
+    }
+
+    /// The first animation frame after a runner's first commit: the present
+    /// of the page's first picture (LLP 1069.000 D2 r7).
+    pub fn page_presented(&mut self) -> u32 {
+        let out = self
+            .host
+            .as_mut()
+            .map_or_else(|| "{\"ops\":[]}".into(), |h| h.page_presented());
+        self.emit(out)
+    }
+
+    /// `prefer presented`: 0 gives the fact back to the page, 1 holds it
+    /// false, 2 true (LLP 1069.000 D6).
+    pub fn prefer_presented(&mut self, code: u32) -> u32 {
+        let preferred = [None, Some(false), Some(true)]
+            .get(code as usize)
+            .copied()
+            .flatten();
+        let out = self
+            .host
+            .as_mut()
+            .map_or_else(|| "{\"ops\":[]}".into(), |h| h.prefer_presented(preferred));
+        self.emit(out)
     }
 
     /// What a boot is told at launch: the date and place last told, and the
@@ -120,6 +149,9 @@ impl<D: DataSource> Bridge<D> {
         if let Some(h) = self.host.as_mut() {
             h.runner_mut().hold_waits(exact_runner::WaitKinds::ALL);
             h.runner_mut().set_live_clock(sample);
+            // A held spring starts at the browser's ready time; under the
+            // agent's clock at its commit (LLP 1003.001 D7, D9).
+            h.set_start_on_frame(self.live_clock.is_some());
         }
     }
 }
@@ -149,6 +181,18 @@ macro_rules! live_clock_export {
         #[no_mangle]
         pub extern "C" fn exact_sensor_events(to_ms: f64) -> u32 {
             $bridge.with(|b| b.borrow_mut().sensor_events(to_ms))
+        }
+
+        /// The first animation frame after a runner's first commit.
+        #[no_mangle]
+        pub extern "C" fn exact_page_presented() -> u32 {
+            $bridge.with(|b| b.borrow_mut().page_presented())
+        }
+
+        /// `prefer presented`: 0 none, 1 false, 2 true.
+        #[no_mangle]
+        pub extern "C" fn exact_prefer_presented(code: u32) -> u32 {
+            $bridge.with(|b| b.borrow_mut().prefer_presented(code))
         }
 
         /// Nonzero: the page's clock owns time; zero: the agent's does.

@@ -188,7 +188,7 @@ fn the_checkpoint_never_closes_its_script_or_opens_a_comment() {
     assert_eq!(
         json,
         format!(
-            "{{\"location\":\"/x{lt}/script{gt}{lt}!--]]{gt}{amp}\",\"time\":0,\"logic\":null,\"answers\":[],\"pending\":[]}}"
+            "{{\"location\":\"/x{lt}/script{gt}{lt}!--]]{gt}{amp}\",\"time\":0,\"logic\":null,\"answers\":[],\"urls\":[],\"pending\":[]}}"
         )
     );
     for bad in ["<", ">", "&"] {
@@ -714,4 +714,78 @@ component App
         *calls.borrow(),
         vec![vec![current, Value::str("ar"), Value::Number(250.)]]
     );
+}
+
+#[test]
+fn driven_checkpoint_revalidates_only_the_answers_named_by_fixtures() {
+    let source = "component App\n  resource greeting = say() as shape string\n  resource other = other() as shape string\n  view\n    column\n      text greeting\n      text other\n";
+    let plan = contract::compile(source).unwrap().encode();
+    exact_web::link(exact_web_capabilities::ALL);
+    let rendered = Host::boot(&plan, Says("Live greeting"), Default::default(), "/")
+        .unwrap()
+        .0;
+    let page = checkpoint(rendered.runner(), "/");
+    let root = rendered.document().unwrap().root;
+    let written = digest(&plan, "/", &page, &root);
+    for _reload in 0..2 {
+        let (host, _) = Host::boot_checkpoint(
+            &plan,
+            Says("Stubbed greeting"),
+            &page,
+            &format!("{written} driven:0"),
+            vec![],
+            None,
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let root = host.document().unwrap().root;
+        assert!(root.contains("Stubbed greeting"), "{root}");
+        assert!(
+            root.contains("Live greeting"),
+            "unrelated answer was reasked: {root}"
+        );
+    }
+}
+
+#[test]
+fn production_checkpoints_omit_backend_request_urls() {
+    use exact_runner::{delivery::Delivery, Outcome, Response, Runner};
+    let url = "https://backend.test/download?signature=private-credential";
+    let plan = contract::compile(&format!(
+        "source summary() as shape string\n  url \"{url}\"\ncomponent App\n  resource summary = summary() as shape string\n  view\n    text summary\n"
+    )).unwrap();
+    for production in [false, true] {
+        let mut runner = Runner::boot_at(
+            &plan,
+            Says(""),
+            exact_web::host::template::kernel(),
+            Default::default(),
+            "/",
+            0.,
+            Delivery {
+                production,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let requests = runner.take_requests();
+        assert_eq!(requests.len(), 1);
+        runner.record_render_request(&requests[0]);
+        runner
+            .fulfill_measured(
+                requests[0].ticket,
+                Outcome::Response(Response {
+                    status: 200,
+                    headers: vec![],
+                    body: br#""Summary only""#.to_vec(),
+                }),
+                None,
+            )
+            .unwrap();
+        let page = checkpoint(&runner, "/");
+        assert!(page.contains("Summary only"), "{page}");
+        assert_eq!(page.contains("private-credential"), !production, "{page}");
+        assert_eq!(page.contains("\"urls\""), !production, "{page}");
+    }
 }

@@ -147,7 +147,7 @@ fn r6_a_modes_channel_keeps_its_effects() {
     let dir = std::env::temp_dir().join(format!("exact-web-js-lower-r6-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), "tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  text.primary = #000001\n    when ink=plain: #000002\n").unwrap();
+    std::fs::write(dir.join("app.forma"), "forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  text.primary = #000001\n    when ink=plain: #000002\n").unwrap();
     std::fs::write(
         dir.join("app.contract"),
         format!("{HEAD}      text \"x\" color=(s == \"a\" ? \"text.primary\" : \"#007AFF\")\n"),
@@ -404,8 +404,14 @@ fn an_inline_read_property_keeps_its_effects() {
             "transform-origin",
         ),
     ] {
-        let _ = prop;
-        refused(&format!("{node}\n        text \"x\""), Refusal::GlueWritten);
+        refused(
+            &format!("{node}\n        text \"x\""),
+            if prop == "transition" {
+                Refusal::SidePath
+            } else {
+                Refusal::GlueWritten
+            },
+        );
     }
     // The rest no contract attribute here binds (mask-size, overflow-anchor,
     // view-transition-name: the compiler refuses the attribute), or only a

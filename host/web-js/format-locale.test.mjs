@@ -37,7 +37,7 @@ test('formatDate labels strict day keys without shifting their calendar day', ()
   for (const key of ['2026-10-16', '2024-02-29', '2000-02-29', '2400-02-29', '0001-01-01', '0099-12-31', '9999-12-31']) {
     const ms = Date.parse(`${key}T00:00:00Z`);
     for (const loc of ['', 'de', 'fr', 'ar-EG']) {
-      for (const style of ['medium', 'month-year', 'iso']) {
+      for (const style of ['medium', 'month-year', 'month-day', 'iso']) {
         const want = roster.x_formatDate(ms, 0, style, loc);
         for (const offset of [-1080, -720, -420, 0, 345.5, 840, 1080]) {
           expect(roster.x_formatDate(key, offset, style, loc)).toBe(want);
@@ -51,7 +51,7 @@ test('formatDate labels strict day keys without shifting their calendar day', ()
     '2024-02-09 ', '2024-02-09\n', '2024-02-09T00:00:00Z', '1707436800000',
     '２０２４-02-09', '2024-٠٢-09']) {
     for (const loc of ['', 'de']) {
-      for (const style of ['medium', 'month-year', 'iso']) {
+      for (const style of ['medium', 'month-year', 'month-day', 'iso']) {
         expect(roster.x_formatDate(key, 0, style, loc)).toBe('');
       }
     }

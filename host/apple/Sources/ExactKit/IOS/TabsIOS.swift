@@ -24,6 +24,44 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+/// A hidden tab bar's UIKit wrappers can remain visible to accessibility.
+/// Hide only its branch, stopping before any child controller's content.
+final class TabController: UITabBarController {
+    private weak var barGroup: UIView?
+    private var hidGroup = false
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        syncBarAccessibility()
+    }
+
+    func syncBarAccessibility() {
+        let hidden: Bool
+        if #available(iOS 18.0, tvOS 18.0, *) { hidden = isTabBarHidden } else { hidden = tabBar.isHidden }
+        guard hidden else { restoreBarAccessibility(); return }
+        var group: UIView = tabBar
+        while let parent = group.superview, parent !== view,
+              !children.contains(where: { $0.viewIfLoaded?.isDescendant(of: parent) == true }) {
+            group = parent
+        }
+        guard group !== tabBar else { restoreBarAccessibility(); return }
+        if barGroup !== group {
+            restoreBarAccessibility()
+            barGroup = group
+        }
+        if !group.accessibilityElementsHidden {
+            group.accessibilityElementsHidden = true
+            hidGroup = true
+        }
+    }
+
+    private func restoreBarAccessibility() {
+        if hidGroup { barGroup?.accessibilityElementsHidden = false }
+        barGroup = nil
+        hidGroup = false
+    }
+}
+
 extension NavigationHost {
     /// Whether the root's tabs are built from `UITab`s: on iOS 18 and later,
     /// five or fewer, which no width lists under More, of an iPad, or of a

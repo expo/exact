@@ -2,6 +2,10 @@
 //! app's store files (a named agent drive's, or the app's own) and physical
 //! memory.
 
+#[cfg(any(target_os = "android", all(test, unix)))]
+#[path = "secret_files.rs"]
+pub(crate) mod secret_files;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,7 +26,7 @@ const STATE: &str = "exact.state";
 /// said at boot and again by the activation. Beside it, the kept answers
 /// past the read budget, by name, for the runner to forget what it would
 /// had it read them (`Runner::forget_unread_kept`).
-pub(super) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>, Vec<String>) {
+pub(crate) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>, Vec<String>) {
     // What an earlier host in this process committed is on disk before it is read back.
     super::store_writer::settle();
     if carried {
@@ -40,23 +44,30 @@ pub(super) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>
     let kv = ibex2::kv::FileStore::new(root.join("kv"));
     let mut out = Vec::new();
     if let Ok(Some(secret_root)) = crate::picker::secret_root(app_id) {
-        let secrets = ibex2::secrets::FileStore::new(secret_root.join("secrets"));
-        // A leading dot is the store's temporary file, not a secret.
-        let mut names = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(secret_root.join("secrets")) {
-            for entry in entries.flatten() {
-                let Ok(name) = entry.file_name().into_string() else {
-                    continue;
-                };
-                if !name.starts_with('.') && ibex2::secrets::is_valid_name(&name) {
-                    names.push(name);
+        let secrets = secret_backend(&secret_root);
+        #[cfg(target_os = "android")]
+        let names = secret_files::names(&secret_root);
+        #[cfg(not(target_os = "android"))]
+        let names = {
+            let mut names = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(secret_root.join("secrets")) {
+                for entry in entries.flatten() {
+                    let Ok(name) = entry.file_name().into_string() else {
+                        continue;
+                    };
+                    if !name.starts_with('.') && ibex2::secrets::is_valid_name(&name) {
+                        names.push(name);
+                    }
                 }
             }
-        }
-        names.sort();
+            names.sort();
+            names
+        };
         for name in names {
-            if let Ok(Some(value)) = ibex2::secrets::SecretStore::get(&secrets, &name) {
-                out.push((name, value.into_bytes()));
+            match secrets.read(&name) {
+                Ok(Some(value)) => out.push((name, value.into_bytes())),
+                Ok(None) => {}
+                Err(_) => eprintln!("exact: a secret could not be restored"),
             }
         }
     }
@@ -122,7 +133,9 @@ pub(super) fn write_stamps(
         .collect()
 }
 
+#[cfg(not(target_os = "android"))]
 struct SecretFiles(ibex2::secrets::FileStore, PathBuf);
+#[cfg(not(target_os = "android"))]
 impl exact_data::secrets::Backend for SecretFiles {
     fn read(&self, name: &str) -> Result<Option<String>, String> {
         ibex2::secrets::SecretStore::get(&self.0, name).map_err(|error| error.to_string())
@@ -134,6 +147,23 @@ impl exact_data::secrets::Backend for SecretFiles {
         }
         .map_err(|error| error.to_string())?;
         exact_data::secrets::sync_directory_chain(&self.1)
+    }
+}
+
+pub(crate) fn secret_backend(root: &std::path::Path) -> Arc<dyn exact_data::secrets::Backend> {
+    #[cfg(target_os = "android")]
+    {
+        Arc::new(secret_files::EncryptedFiles::new(
+            root.to_owned(),
+            crate::canvas::secrets::crypt,
+        ))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Arc::new(SecretFiles(
+            ibex2::secrets::FileStore::new(root.join("secrets")),
+            root.join("secrets"),
+        ))
     }
 }
 
@@ -210,10 +240,7 @@ pub(super) fn shared_secrets(
     let root = roots.ok()??.1?;
     Some(GrantedSecrets::new(
         namespace,
-        std::sync::Arc::new(SecretFiles(
-            ibex2::secrets::FileStore::new(root.join("secrets")),
-            root.join("secrets"),
-        )),
+        secret_backend(&root),
         grants,
     ))
 }
@@ -358,9 +385,7 @@ impl StoreWrites {
                 return Vec::new();
             }
             Ok(Some((root, secrets))) => Ok((
-                secrets
-                    .as_ref()
-                    .map(|root| ibex2::secrets::FileStore::new(root.join("secrets"))),
+                secrets.as_ref().map(|root| secret_backend(root)),
                 ibex2::kv::FileStore::new(root.join("kv")),
             )),
             Err(error) => Err(error.clone()),
@@ -384,19 +409,16 @@ impl StoreWrites {
                             None => ibex2::kv::KvStore::delete(kv, scope, key),
                         },
                         None => {
-                            let write = || {
-                                match secrets {
-                                    Some(secrets) => match &pending.value {
-                                        Some(value) => ibex2::secrets::SecretStore::set(
-                                            secrets,
-                                            name,
-                                            &String::from_utf8_lossy(value),
-                                        ),
-                                        None => ibex2::secrets::SecretStore::forget(secrets, name),
-                                    },
-                                    None => Ok(()),
-                                }
-                                .map_err(|error| error.to_string())
+                            let write = || match secrets {
+                                Some(secrets) => secrets.write(
+                                    name,
+                                    pending
+                                        .value
+                                        .as_deref()
+                                        .map(String::from_utf8_lossy)
+                                        .as_deref(),
+                                ),
+                                None => Ok(()),
                             };
                             return match (&namespace, &pending.stamp) {
                                 (Some(namespace), Some(stamp)) => {

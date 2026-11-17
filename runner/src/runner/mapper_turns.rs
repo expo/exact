@@ -37,6 +37,8 @@ pub(super) struct MapperTurns {
 
 #[derive(Default)]
 struct Behind {
+    target: Option<crate::Target>,
+    completion: Option<super::CompletionReply>,
     /// The request out for the stream: its ticket, and whether it hands
     /// back a held outcome rather than resuming the mapper.
     out: Option<(u64, bool)>,
@@ -46,6 +48,26 @@ struct Behind {
     /// The messages held, a batch counting each of its own, and their bytes.
     messages: usize,
     bytes: usize,
+}
+
+impl MapperTurns {
+    pub(super) fn completion(
+        &mut self,
+        ticket: u64,
+    ) -> Option<(
+        super::completion::Owner,
+        &mut Option<super::CompletionReply>,
+    )> {
+        let (stream, behind) = self
+            .by_stream
+            .iter_mut()
+            .find(|(_, b)| b.out.is_some_and(|(t, _)| t == ticket))?;
+        let owner = super::completion::Owner::Mapper {
+            stream: *stream,
+            target: behind.target?,
+        };
+        Some((owner, &mut behind.completion))
+    }
 }
 
 impl Behind {
@@ -141,14 +163,18 @@ impl<D: DataSource> Runner<D> {
         let Some(p) = self.pending.iter().find(|p| p.ticket == stream) else {
             return;
         };
-        let name = self.target_name(p.target);
+        let target = p.target;
+        let name = self.target_name(target);
         let ticket = self.next_ticket;
         self.next_ticket += 1;
         self.log(super::lines::enqueued(ticket, &name, &request));
         let behind = self.mapper_turns.by_stream.entry(stream).or_default();
         behind.out = Some((ticket, held));
+        behind.target = Some(target);
+        behind.completion = None;
         behind.fetch = request.fetch;
         self.requests.push(RequestOut {
+            completion: None,
             class: crate::RequestClass::Ordered,
             ticket,
             target: name,
@@ -233,6 +259,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Option<CommitReceipt>, RunnerError> {
         let behind = (self.mapper_turns.by_stream.get_mut(&stream)).expect("found by turn_stream");
         let (_, held) = behind.out.take().expect("found by turn_stream");
+        behind.completion = None;
         let fetch = behind.fetch.take();
         let result = if !held {
             self.run_turn(stream, fetch, outcome)

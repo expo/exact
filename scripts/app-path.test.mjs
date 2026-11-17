@@ -1,7 +1,7 @@
 // A path names an app by its directory, keeping generated artifacts in its target.
 import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { authoredTests, resolveApp, webDist } from './app.mjs';
@@ -145,6 +145,30 @@ test('metrics passes its path-selected app to web rebuilds and Apple builds', ()
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);
 
+test('a failed balanced iOS build blocks the symbol proof and fails JSON metrics', () => {
+  const source = readFileSync(resolve(ROOT, 'scripts/metrics.mjs'), 'utf8');
+  const builds = [], out = { ios_floor_bytes: 0 };
+  const buildStart = source.indexOf("    for (const optimize of ['speed', 'size', 'balanced'])");
+  const buildEnd = source.indexOf('    const development =', buildStart);
+  const runBuilds = new Function('spawnSync', 'process', 'resolve', 'ROOT', 'hello', 'env', 'appleArtifacts', 'existsSync', 'out', 'strippedSize', 'writeFileSync', 'failure', 'failureSummary', 'console', source.slice(buildStart, buildEnd));
+  runBuilds((_, args) => {
+    const optimize = args[args.indexOf('--optimize') + 1];
+    builds.push(optimize);
+    return { status: optimize === 'balanced' ? 1 : 0, stdout: '', stderr: optimize === 'balanced' ? 'balanced failed' : '' };
+  }, { execPath: 'bun', env: {} }, resolve, ROOT, { crate: () => 'hello-apple' }, {}, (_, { optimize }) => ({ binary: optimize }), () => true,
+  out, () => 1, () => {}, () => 'balanced failed', () => 'balanced failed', { error() {} });
+  const failuresStart = source.indexOf('const APPLE_AGENT_FAILURES =');
+  const failuresEnd = source.indexOf('\nconst rules =', failuresStart);
+  const failures = new Function(`${source.slice(failuresStart, failuresEnd)}; return APPLE_AGENT_FAILURES;`)();
+  const prerequisitesStart = source.indexOf('    const prerequisites = [');
+  const prerequisitesEnd = source.indexOf('\n    ];', prerequisitesStart) + '\n    ];'.length;
+  const prerequisites = new Function('out', `${source.slice(prerequisitesStart, prerequisitesEnd)} return prerequisites;`)(out);
+  expect(builds).toEqual(['speed', 'size', 'balanced']);
+  expect(out.ios_balanced_failed).toContain('exit 1');
+  expect(failures).toContain('ios_balanced_failed');
+  expect(prerequisites).toEqual(['production iOS balanced build failed']);
+});
+
 test('an app\'s selector selects it again by name and directory, when its name is not its directory\'s', () => {
   const root = mkdtempSync(join(tmpdir(), 'exact-app-selector-')), dir = join(root, 'copy'), link = join(root, 'link');
   mkdirSync(dir);
@@ -170,7 +194,7 @@ test('a name still resolves under apps/, as before', () => {
   expect(resolveApp('theme-fixture-web').name).toBe('theme-fixture');
 });
 
-test('the JS build given a path writes its module crate under the target, none in the app', () => {
+test('the JS build given a path keeps its module crate private to that build', () => {
   const dir = realpathSync(resolve(ROOT, 'apps/theme-fixture'));
   const out = mkdtempSync(join(tmpdir(), 'exact-app-path-'));
   try {
@@ -179,7 +203,7 @@ test('the JS build given a path writes its module crate under the target, none i
     const built = spawnSync(process.execPath, ['host/web-js/build.mjs', dir, '--out', out, '--render', 'none'], { cwd: ROOT, env, encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     expect(existsSync(resolve(dir, 'crate'))).toBe(false);
-    expect(existsSync(resolve(resolveApp('theme-fixture').target, 'web-js-modules/theme-fixture/crate'))).toBe(true);
+    expect(existsSync(resolve(out, '.gen/rust-module/crate'))).toBe(true);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
@@ -194,5 +218,39 @@ test('an app\'s authored tests are app.test.contract, then each other *.test.con
     expect(authoredTests(dir)).toEqual([join(dir, 'a.test.contract'), join(dir, 'b.test.contract')]);
     writeFileSync(join(dir, 'app.test.contract'), '');
     expect(authoredTests(dir)).toEqual(['app', 'a', 'b'].map((n) => join(dir, `${n}.test.contract`)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('pathFrom refuses a missing Windows drive or UNC share instead of walking forever', () => {
+  const dir = mkdtempSync(resolve(ROOT, 'target/app-path-windows-'));
+  const file = resolve(dir, 'windows.test.mjs');
+  const script = `
+    import { expect, mock, test } from 'bun:test';
+    import * as fs from 'node:fs';
+    import * as path from 'node:path';
+    const exists = fs.existsSync, windows = path.win32, visited = [];
+    mock.module('node:path', () => ({ ...path, ...windows }));
+    mock.module('node:fs', () => ({ ...fs, existsSync(p) {
+      if (p.startsWith('Z:') || p.startsWith(String.fromCharCode(92, 92))) {
+        visited.push(p);
+        return false;
+      }
+      return exists(p);
+    } }));
+    const { pathFrom } = await import(${JSON.stringify(resolve(ROOT, 'scripts/paths.mjs'))});
+    test('walks to each unavailable Windows root and stops', () => {
+      for (const from of ['Z:/apps/notes', '//missing/share/apps/notes']) {
+        visited.length = 0;
+        expect(() => pathFrom(from, 'C:/exact')).toThrow(/no existing ancestor.*drive or share unavailable/);
+        expect(visited).toEqual([
+          windows.resolve(from), windows.dirname(windows.resolve(from)), windows.parse(from).root.replaceAll('/', String.fromCharCode(92)),
+        ]);
+      }
+    });
+  `;
+  try {
+    writeFileSync(file, script);
+    const result = spawnSync(process.execPath, ['test', file], { cwd: ROOT, encoding: 'utf8', timeout: 10_000 });
+    expect(result.status, result.stdout + result.stderr + (result.error ?? '')).toBe(0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -115,6 +115,7 @@ fn one(url: &str, reach: Reach) -> (Outcome, Vec<String>) {
     }
     request.reach = reach;
     let out = RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket: 1,
         target: "test".into(),
@@ -308,6 +309,51 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
             let app = super::super::cache::tests::job(2, Request::get(url));
             core.run(app, None).unwrap();
             assert!(collect(&core, &woke).2.cached);
+        }
+    }
+}
+
+#[test]
+fn response_fixtures_obey_local_network_permission_for_every_origin() {
+    let _turn = prompting(true);
+    for origin in [
+        CallOrigin::Tool,
+        CallOrigin::Wake,
+        CallOrigin::Device,
+        CallOrigin::App,
+    ] {
+        for state in [State::Prompt, State::Unknown, State::Denied, State::Granted] {
+            let (core, seen, woke) = setup();
+            let mut request = Request::get("http://192.168.1.40/");
+            request.reach = reach(origin, state);
+            let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let delivered = hits.clone();
+            let out = super::super::cache::tests::job(1, request);
+            core.run_owned(
+                out,
+                Some(exact_runner::Work::HttpResponse(Arc::new(move || {
+                    delivered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Outcome::Response(Response {
+                        status: 200,
+                        headers: vec![],
+                        body: vec![],
+                    })
+                }))),
+            )
+            .unwrap();
+            let (_, outcome, _) = super::super::cache::tests::collect(&core, &woke);
+            let allowed = origin == CallOrigin::App || state == State::Granted;
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(allowed),
+                "{origin:?} {state:?}"
+            );
+            if !allowed {
+                assert!(refused(&outcome).starts_with("NotAllowedError:"));
+            } else {
+                assert!(matches!(outcome, Outcome::Response(_)));
+            }
+            assert!(seen.0.lock().unwrap().is_empty());
         }
     }
 }

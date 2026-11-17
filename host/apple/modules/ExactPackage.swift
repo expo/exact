@@ -1,13 +1,14 @@
 // What a package's Swift implementation of a module sees of exact2 (LLP
 // 1133.001 D5; LLP 1133.009 D10 items 1-3; LLP 1133.008 D8 item 9): the
 // `ExactPackage` module, compiled on its own before the packages, which
-// import it, and linked into the app's one module, whose adapter for each
-// package (`exactExtensions`, written by host/apple/build.mjs) holds one
-// instance per session. Nothing of ExactKit or of the app's own module is
-// reachable from here.
+// import it. The seam links into the app module; each package's implementation
+// links into its own library, loaded at first use (LLP 1067.000.001). Its
+// adapter keeps one instance per session. Nothing of ExactKit or of the
+// app's own module is reachable from here.
 //
 // Every entry is on the main thread (LLP 1067.000 D4).
 import AVFoundation
+import Darwin
 import Foundation
 import Security
 #if os(macOS)
@@ -71,14 +72,166 @@ public extension ExactPackageView {
     func destroy() {}
 }
 
+/// A member's requests and result decoder for one credential ceremony
+/// (LLP 1133.014 D10 item 2). Platform objects cross this seam as NSObject.
+public struct ExactCredentialRequest {
+    public let requests: [NSObject]
+    public let answer: (NSObject) -> [String: Any]?
+    public init(requests: [NSObject], answer: @escaping (NSObject) -> [String: Any]?) {
+        self.requests = requests; self.answer = answer
+    }
+}
+
+public protocol ExactCredentialMember: AnyObject {
+    func credentialRequest(_ args: [String: Any]) throws -> ExactCredentialRequest
+}
+
+public struct ExactCredentialFailure: Error {
+    public let json: [String: Any]
+    public init(_ json: [String: Any]) { self.json = json }
+}
+
+/// A package-owned output directory held by descriptor. Every file is opened
+/// relative to that descriptor, so replacing its path cannot redirect a
+/// later write (LLP 1133.009 D10 item 4).
+public final class ExactPackageDirectory: @unchecked Sendable {
+    private let handle: FileHandle
+    fileprivate init(_ handle: FileHandle) { self.handle = handle }
+
+    /// Append `data` to one regular file in this directory, creating it with
+    /// owner-only permissions. A link or a name containing a path separator
+    /// is refused.
+    public func append(_ data: Data, to name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0") else { return false }
+        let fd = openat(handle.fileDescriptor, name, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { return false }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { try? file.close(); return false }
+        do {
+            try file.write(contentsOf: data)
+            try file.close()
+            return true
+        } catch {
+            try? file.close()
+            return false
+        }
+    }
+}
+
+/// Shared by contexts of the same session. Registrations do not keep a
+/// package alive; each returned request keeps its own decoder until completion.
+public final class ExactCredentialMembers {
+    private final class WeakTable {
+        weak var value: ExactCredentialMembers?
+        init(_ value: ExactCredentialMembers) { self.value = value }
+    }
+    private final class WeakMember {
+        weak var value: ExactCredentialMember?
+        init(_ value: ExactCredentialMember) { self.value = value }
+    }
+    private static var sessions: [String: WeakTable] = [:]
+    private let session: String
+    private var members: [String: WeakMember] = [:]
+    private struct Ceremony {
+        let id: ObjectIdentifier
+        let replaceable: Bool, modal: Bool
+        let start: () -> Void
+        let cancel: ([String: Any]) -> Void
+        var started = false
+    }
+    private var ceremonies: [Ceremony] = []
+    private var active: ObjectIdentifier?
+    private var changing = 0
+    private var advancing = false
+
+    private init(_ session: String) { self.session = session }
+    deinit { Self.sessions[session] = nil }
+
+    fileprivate static func table(_ session: String) -> ExactCredentialMembers {
+        if let table = sessions[session]?.value { return table }
+        let table = ExactCredentialMembers(session)
+        sessions[session] = WeakTable(table)
+        return table
+    }
+
+    public func register(_ name: String, member: ExactCredentialMember) { members[name] = WeakMember(member) }
+    public func unregister(_ name: String, member: ExactCredentialMember) {
+        if members[name]?.value === member { members[name] = nil }
+    }
+    public func request(_ name: String, args: [String: Any]) throws -> ExactCredentialRequest {
+        guard let member = members[name]?.value else {
+            throw ExactCredentialFailure(["error": "NotSupportedError", "message": "no credential member registered for \(name)"])
+        }
+        return try member.credentialRequest(args)
+    }
+
+    /// Native credential sheets wait in session order. A newer ceremony
+    /// first ends passive identity and conditional gets (LLP 1133.014 D5).
+    /// Call `finish` after replying; closures must not retain the ceremony.
+    public func enqueue(_ ceremony: AnyObject, replaceable: Bool, modal: Bool,
+                        start: @escaping () -> Void, cancel: @escaping ([String: Any]) -> Void) {
+        changing += 1
+        let replaced = ceremonies.filter { $0.replaceable }
+        ceremonies.append(Ceremony(id: ObjectIdentifier(ceremony), replaceable: replaceable, modal: modal, start: start, cancel: cancel))
+        for held in replaced { held.cancel(["error": "AbortError"]) }
+        changing -= 1
+        advance()
+    }
+
+    public func finish(_ ceremony: AnyObject) {
+        let id = ObjectIdentifier(ceremony)
+        ceremonies.removeAll { $0.id == id }
+        if active == id { active = nil }
+        advance()
+    }
+
+    public func cancel(_ pending: [AnyObject]) {
+        let ids = Set(pending.map(ObjectIdentifier.init))
+        cancel(ceremonies.filter { ids.contains($0.id) }, answer: ["error": "AbortError"])
+    }
+
+    /// The host ends all credential calls before destroying the session's packages.
+    public static func cancelSession(_ session: String) {
+        guard let table = sessions[session]?.value else { return }
+        table.cancel(table.ceremonies, answer: ["error": "AbortError"])
+    }
+
+    /// Backgrounding ends sheets and their waiting calls, preserving AutoFill.
+    public func cancelSheets() {
+        cancel(ceremonies.filter { $0.modal }, answer: ["error": "NotAllowedError"])
+    }
+
+    private func cancel(_ pending: [Ceremony], answer: [String: Any]) {
+        changing += 1
+        for held in pending { held.cancel(answer) }
+        changing -= 1
+        advance()
+    }
+
+    private func advance() {
+        guard changing == 0, !advancing else { return }
+        advancing = true
+        defer { advancing = false }
+        while let index = ceremonies.firstIndex(where: { !$0.started && (!$0.modal || active == nil) }) {
+            ceremonies[index].started = true
+            let next = ceremonies[index]
+            if next.modal { active = next.id }
+            next.start()
+        }
+    }
+}
+
 /// The session an implementation instance belongs to.
 public final class ExactPackageContext {
+    public let credentials: ExactCredentialMembers
     /// The session's track table, shared by its implementations (LLP
     /// 1133.009 D10 item 6).
     public let tracks: ExactTracks
     /// The process's audio session, which the host owns (D7, D10 item 5).
     public let audioSession: ExactAudioSession
-    private let fileFn: (String) -> URL?
+    private let fileFn: (String) -> URL?, directoryFn: (String) -> URL?
+    private let replaceDirectoryFn: (String) -> FileHandle?
     /// Under the agent, unless the drive bound the implementation as in
     /// production (`--bind`): an implementation that is its own substitute
     /// then opens no device and asks the OS for nothing (LLP 1133.006 D8).
@@ -143,11 +296,15 @@ public final class ExactPackageContext {
     /// The app's remote-notification registration, kept by the host (LLP
     /// 1133.004 §9 P3).
     public let push: ExactPushRegistration
+    /// The host events held for this session (LLP 1133.001.000 D2).
+    public let hostEvents: ExactHostEvents
 
     public init(agent: Bool, session: String, hostSession: String = "", label: String? = nil,
                 data: URL? = nil, cache: URL? = nil, temporary: URL? = nil, changed: @escaping (String) -> Void,
                 log: @escaping (String) -> Void, now: @escaping () -> Double,
                 tracks: ExactTracks = ExactTracks(), file: @escaping (String) -> URL? = { _ in nil },
+                directory: @escaping (String) -> URL? = { _ in nil },
+                replaceDirectory: @escaping (String) -> FileHandle? = { _ in nil },
                 audioSession: ExactAudioSession = ExactAudioSession { _, _, _, _ in nil },
                 picture: @escaping (UInt32, String) -> Void = { _, _ in },
                 surfaces: ExactSurfaces = ExactSurfaces { _ in nil }, orientation: @escaping () -> Double = { 0 },
@@ -166,16 +323,19 @@ public final class ExactPackageContext {
                 },
                 regions: ExactRegions = ExactRegions { _, _ in nil },
                 push: ExactPushRegistration = ExactPushRegistration { nil },
+                hostEvents: ExactHostEvents = ExactHostEvents { _ in [] },
                 expireWake: @escaping (String) -> Void = { _ in },
                 state: @escaping ([String: Any]) -> Void = { _ in }) {
         self.agent = agent; self.session = session; self.hostSession = hostSession; self.label = label ?? session
+        credentials = ExactCredentialMembers.table(session)
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         self.data = data ?? scratch; self.cache = cache ?? scratch; self.temporary = temporary ?? scratch
         changedFn = changed; logFn = log; nowFn = now
-        self.tracks = tracks; fileFn = file; self.audioSession = audioSession; pictureFn = picture
+        self.tracks = tracks; fileFn = file; directoryFn = directory; replaceDirectoryFn = replaceDirectory
+        self.audioSession = audioSession; pictureFn = picture
         self.surfaces = surfaces; orientationFn = orientation; viewFn = view; invokeFn = invoke
         emitFn = emit; activationFn = activation; wakeFn = wake; self.wakes = wakes; self.transfers = transfers
-        self.pads = pads; afterFn = after; self.regions = regions; self.push = push; expireWakeFn = expireWake; stateFn = state
+        self.pads = pads; afterFn = after; self.regions = regions; self.push = push; self.hostEvents = hostEvents; expireWakeFn = expireWake; stateFn = state
     }
 
     /// `body` once, `ms` later on the session's clock: the agent's under the
@@ -269,6 +429,18 @@ public final class ExactPackageContext {
     /// A destination may be missing; an existing destination must be a regular
     /// file, and existing parts must lead through no symbolic link.
     public func file(_ path: String) -> URL? { fileFn(path) }
+
+    /// The directory an admitted `app:/` path names. A package may create,
+    /// fill or empty it, but an existing regular file or symbolic link is
+    /// refused.
+    public func directory(_ path: String) -> URL? { directoryFn(path) }
+
+    /// Empty and recreate an admitted package output directory, returning a
+    /// descriptor-backed writer. Replacing any component after admission
+    /// cannot redirect its removal or writes.
+    public func replaceDirectory(_ path: String) -> ExactPackageDirectory? {
+        replaceDirectoryFn(path).map(ExactPackageDirectory.init)
+    }
 
     /// Under the agent, what the implementation discloses of its own objects
     /// for `state.extensions` (LLP 1133.008 D8 item 9): listed as its
@@ -385,6 +557,17 @@ public protocol ExactPackage: AnyObject {
     /// The host ran the app for this implementation's due wake requests
     /// (`context.wakes`, LLP 1133.017 D8): raise their events, then `done`.
     func woke(_ wake: ExactWake)
+}
+
+/// The retained result of a package library's C factory. The shared seam owns
+/// this box so an existential's layout never crosses the C entry itself.
+public final class ExactPackageImplementation {
+    public let package: any ExactPackage
+    public let authenticator: (any ExactAuthenticator)?
+    public init(_ package: any ExactPackage, authenticator: (any ExactAuthenticator)? = nil) {
+        self.package = package
+        self.authenticator = authenticator
+    }
 }
 
 public extension ExactPackage {
@@ -535,6 +718,24 @@ public final class ExactPushRegistration {
     /// `{token?, error?, answers}`: the last device token in lowercase hex,
     /// or the last failure's message, and how many answers this process had.
     public var current: [String: Any] { readFn() ?? ["answers": 0] }
+}
+
+/// The host events the app's delegates received for one session (LLP
+/// 1133.001.000 D2): a call such as an accepted iCloud share, which the host
+/// holds from launch until the implementation that declares the event in
+/// `"hostEvents"` takes it, even when it came before the module loaded. Each
+/// payload is the system's object (a `CKShare.Metadata`), which the
+/// implementation casts. Each later delivery is posted as `arrived`, its
+/// `userInfo` `{event, session}`; a test posts `deliver` with `{event,
+/// payload, session?}` (an `NSDictionary`) as the system would deliver one.
+public final class ExactHostEvents {
+    public static let arrived = Notification.Name("exact.hostEvents.arrived")
+    public static let deliver = Notification.Name("exact.hostEvents.deliver")
+    private let takeFn: (String) -> [NSObject]
+    public init(_ take: @escaping (String) -> [NSObject]) { takeFn = take }
+    /// What is held of `event` for this session, in arrival order, removed
+    /// from the host's mailbox. Any thread.
+    public func take(_ event: String) -> [NSObject] { takeFn(event) }
 }
 
 /// A wake the host was given for an implementation's due requests.

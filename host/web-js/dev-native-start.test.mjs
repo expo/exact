@@ -10,7 +10,7 @@ import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -50,12 +50,13 @@ async function devLoop(dir, env) {
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
   await new Promise(ok => listener.close(ok));
-  const dist = mkdtempSync(join(tmpdir(), 'exact-native-start-'));
+  // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-native-start-')), 'dist');
   const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', dir, '--port', String(port)], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   dev.stdout.on('data', d => { out += d; });
   dev.stderr.on('data', d => { out += d; });
-  const stop = async () => { await dev.stop(30_000); rmSync(dist, { recursive: true, force: true }); };
+  const stop = async () => { await dev.stop(30_000); rmSync(dirname(dist), { recursive: true, force: true }); };
   const until = async (pass, ms, what) => { const end = Date.now() + ms; while (!(await pass())) { if (Date.now() > end) throw new Error(`${what}: not seen in ${out.slice(-2000)}`); await new Promise(ok => setTimeout(ok, 100)); } };
   await until(() => out.includes('plan ready') && out.includes('design reader ready'), 900_000, 'the JS loop up');
   return { base: `http://127.0.0.1:${port}/`, stop, said: () => out, until };

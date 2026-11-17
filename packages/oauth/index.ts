@@ -131,10 +131,14 @@ export interface OAuthSignIn {
 export interface OAuthSignOut {
   /** Also end the person's sign-in at the provider (OpenID Connect RP-Initiated Logout 1.0), so that the next sign-in
    *  shows the provider's page instead of completing as the same account. The browser opens the provider's end-session
-   *  endpoint with the ID token as `id_token_hint`, `client_id`, the callback and `state`; the provider must send the
-   *  person back to the callback with that `state`, so register the callback as a post-logout redirect URI. Send it from
-   *  a press, as `signIn`. The session is forgotten and revoked either way; a browser step that does not finish, or a
-   *  provider that names no end-session endpoint, is answered as `ok` with code "end_session" and a sentence in `error`. */
+   *  endpoint with the ID token as `id_token_hint`, `client_id`, the callback and `state`; the provider may omit `state`
+   *  when it sends the person back, but its return must carry neither `code` nor `error`; the runner and Android
+   *  complete their oldest live logout. The web completes the popup's own logout or, after severance, only the live
+   *  logout holding the identity that the callback read from that popup. An unaddressed state-less return completes nothing. Register the callback as a
+   *  post-logout redirect URI. Send it from a press, as `signIn`. On the web that press reserves the provider window
+   *  while sign-out waits for the store lease. The app session ends and its revocable token is revoked under that lease before the browser opens. A browser step that
+   *  does not finish is answered as `ok` with code "end_session" and a sentence in `error`; a later end-session
+   *  sign-out retries that login. A provider that names no end-session endpoint gives the same answer but cannot be retried. */
   endSession?: boolean;
 }
 
@@ -169,7 +173,7 @@ export interface OAuthProvider {
   session(store: OAuthStore): Promise<OAuthSession>;
   /** Opens the provider's sign-in, then exchanges and keeps the tokens. Send it from a press. With `authorize`, the app's own sign-in sends the authorization request instead. */
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
-  /** Forgets the session, then asks the provider to revoke it. With `endSession`, also ends the person's sign-in at the provider. */
+  /** Takes and ends the current session and revokes that login under one store lease. A revoke with no reply, a 429, or a 5xx response is retried only by a later sign-out in this runtime; any other reply drops it. With `endSession`, opens the provider after releasing the lease and retains a failed provider logout for a later end-session press. */
   signOut(store: OAuthStore, options?: OAuthSignOut): Promise<OAuthResult>;
   /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
    *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or
@@ -194,7 +198,9 @@ export interface OAuthProvider {
   refresh(store: OAuthStore): Promise<OAuthResult>;
 }
 
-declare function openAuthSession(url: string, options: { callback: string; state: string; ephemeral?: boolean }): Promise<string>;
+declare function prepareAuthSession(): string | null;
+declare function cancelAuthSession(prepared: string): void;
+declare function openAuthSession(url: string, options: { callback: string; state: string; logout?: boolean; prepared?: string; ephemeral?: boolean }): Promise<string>;
 declare function authCallback(): string;
 
 interface Metadata {
@@ -227,6 +233,9 @@ interface Kept {
   tokenEndpoint?: string;
   revocationEndpoint?: string;
   endSessionEndpoint?: string;
+  /** A provider logout that did not finish, retained without an app session
+   *  so a later press can try it again. */
+  pendingLogout?: { id: string; endpoint: string; idToken?: string };
   ended?: string;
 }
 
@@ -306,6 +315,12 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     const run = work();
     sessionWork.set(config.key, run);
     try { return await run; } finally { if (sessionWork.get(config.key) === run) sessionWork.delete(config.key); }
+  };
+  const keepRecord = (store: OAuthStore, kept: Kept): void => {
+    const next = { ...kept };
+    for (const key of Object.keys(next) as (keyof Kept)[]) if (next[key] === undefined) delete next[key];
+    if (Object.keys(next).length) store.set(config.key, JSON.stringify(next));
+    else store.forget(config.key);
   };
   let discovered: Promise<Metadata> | null = null;
   let prepared: Transaction | null = null;
@@ -446,6 +461,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
       }
       if (reply.error) return result(reply.error, describe(reply), retryable(reply, ends(reply)), reply.status);
       const kept = keep(reply, null, tx.meta, config);
+      const held = read(store);
       if (typeof kept === 'string') return result('invalid_response', `Sign-in failed: ${kept}.`, true);
       if (config.scopes.includes('openid') && !kept.idToken) return result('invalid_response', 'Sign-in failed: the provider sent no ID token.');
       if (kept.idToken) {
@@ -464,7 +480,6 @@ export function oauth(config: OAuthConfig): OAuthProvider {
         // client: a reply with no refresh token keeps the one held (Google
         // sends one only on first consent, GOOG-8). A subject is the issuer's
         // own (OIDC Core §8), and a refresh token the client's (RFC 6749 §6).
-        const held = read(store);
         const same = held?.first?.iss === c.iss && held?.subject === kept.subject && held?.client === config.clientId;
         // The refresh token keeps the sign-in it came from: its refreshed ID
         // tokens are checked against that one's claims, its `nonce` included.
@@ -589,8 +604,9 @@ export function oauth(config: OAuthConfig): OAuthProvider {
   // the one kept: a newer sign-in or a sign-out already replaced it otherwise.
   // `status` and `code` are the refusal's, for `log`.
   const end = (store: OAuthStore, refused: string | undefined, reason: string, status: number, code: string): void => {
-    if (read(store)?.refreshToken !== refused) return;
-    store.set(config.key, JSON.stringify({ ended: reason } satisfies Kept));
+    const kept = read(store);
+    if (!kept || kept.refreshToken !== refused) return;
+    keepRecord(store, { ended: reason });
     note(async () => ({ type: 'ended', sent: await print(refused), status: failedStatus(status), code }));
   };
 
@@ -644,62 +660,90 @@ export function oauth(config: OAuthConfig): OAuthProvider {
   };
 
   const signOut = (store: OAuthStore, options: OAuthSignOut = {}): Promise<OAuthResult> => {
-    // Opened before any await, as a sign-in's browser is: a web popup must open in the press's task (LLP 1069.006 D4)
-    const ending = options.endSession ? endSession(read(store)) : null;
-    const revoked = revoke(store);
-    return ending ? Promise.all([ending, revoked]).then(([ended, r]) => ended ?? r) : revoked;
+    const endProviderSession = options.endSession === true;
+    let prepared: string | null = null;
+    if (endProviderSession && typeof prepareAuthSession === 'function') {
+      try { prepared = prepareAuthSession(); } catch {}
+    }
+    const cancelPrepared = (): void => {
+      if (!prepared || typeof cancelAuthSession !== 'function') return;
+      try { cancelAuthSession(prepared); } catch {}
+      prepared = null;
+    };
+    // Queue at the press. One lease reads and removes the current session,
+    // retains only what a failed provider logout needs, and makes this
+    // answer's bounded revocation requests before browser work begins.
+    const taken = exclusive(store, async () => {
+      const kept = read(store), active = kept?.accessToken ? kept : null;
+      let pending = kept?.pendingLogout ?? null;
+      let noEndpoint = false;
+      if (active) {
+        noEndpoint = endProviderSession && !active.endSessionEndpoint;
+        pending = endProviderSession && active.endSessionEndpoint
+          ? { id: active.login ?? random(16), endpoint: active.endSessionEndpoint, ...(active.idToken ? { idToken: active.idToken } : {}) }
+          : null;
+        note(() => ({ type: 'signed-out' }));
+      }
+      keepRecord(store, pending ? { pendingLogout: pending } : {});
+
+      const owed = unrevoked.get(config.key) ?? [];
+      const token = (session: Kept): string | undefined => session.refreshToken ?? session.accessToken;
+      if (active && token(active) && !owed.some(session => token(session) === token(active))) owed.push(active);
+      if (owed.length) unrevoked.set(config.key, owed);
+      while (owed.length) {
+        const last = owed[owed.length - 1], endpoint = last.revocationEndpoint;
+        // Best effort (RFC 7009 §2.2): the app session is already gone. No
+        // reply, 429 or 5xx leaves the token for the next sign-out in this
+        // runtime. Any other reply, or no endpoint, drops it.
+        const done = (reply: TokenReply): boolean => reply.status !== 429 && reply.status < 500;
+        if (endpoint && !await tokenRequest(config, endpoint,
+          { token: token(last)!, token_type_hint: last.refreshToken ? 'refresh_token' : 'access_token' }).then(done, () => false)) break;
+        owed.pop();
+      }
+      if (!owed.length) unrevoked.delete(config.key);
+      return { pending: endProviderSession ? pending : null, noEndpoint };
+    });
+    return taken.then(({ pending, noEndpoint }) => {
+      if (!pending) cancelPrepared();
+      if (pending) return endSession(pending, prepared, store, cancelPrepared).then(ended => ended ?? { ok: true, code: '', error: '', retryable: false, status: 0 });
+      if (noEndpoint) return { ok: true, code: 'end_session', error: 'Signed out of this app; the provider may still have you signed in: it names no end-session endpoint.', retryable: false, status: 0 };
+      return { ok: true, code: '', error: '', retryable: false, status: 0 };
+    }, e => { cancelPrepared(); throw e; });
   };
 
-  // Opens the provider's end-session endpoint for the kept session (RP-Initiated Logout 1.0 §2), answering null when
-  // the browser came back to the callback or nobody is signed in, else what `signOut` reports in its stead.
-  const endSession = (kept: Kept | null): Promise<OAuthResult | null> => {
-    if (!kept?.accessToken) return Promise.resolve(null);
+  // Open the provider logout retained under the session's lease. A successful
+  // return clears that same record under the lease; a failed open leaves it
+  // for a later sign-out press.
+  const endSession = (pending: NonNullable<Kept['pendingLogout']>, prepared: string | null, store: OAuthStore, cancelPrepared: () => void): Promise<OAuthResult | null> => {
     const ended = (why: string, status = 0): OAuthResult => ({ ok: true, code: 'end_session', error: `Signed out of this app; the provider may still have you signed in: ${why}`, retryable: false, status });
-    const endpoint = kept.endSessionEndpoint;
-    if (!endpoint) return Promise.resolve(ended('it names no end-session endpoint.'));
     try {
       const callback = config.callback ?? hostCallback(), state = random(32);
       const params: Record<string, string> = {
-        ...(kept.idToken ? { id_token_hint: kept.idToken } : {}),
+        ...(pending.idToken ? { id_token_hint: pending.idToken } : {}),
         client_id: config.clientId,
         [config.logoutRedirectParam ?? 'post_logout_redirect_uri']: callback,
         state,
       };
-      const url = endpoint + (endpoint.includes('?') ? '&' : '?') + form(params);
-      return openAuthSession(url, { callback, state, ephemeral: config.ephemeral }).then(() => null, (e) => {
+      const url = pending.endpoint + (pending.endpoint.includes('?') ? '&' : '?') + form(params);
+      return openAuthSession(url, { callback, state, logout: true, ...(prepared ? { prepared } : {}), ephemeral: config.ephemeral }).then(async () => {
+        cancelPrepared();
+        await exclusive(store, async () => {
+          const kept = read(store);
+          if (kept?.pendingLogout?.id === pending.id) keepRecord(store, { ...kept, pendingLogout: undefined });
+        });
+        return null;
+      }, (e) => {
+        cancelPrepared();
         const status = (e as { status?: number }).status;
         if (status === 499) return ended('ending its sign-in was cancelled.');
         if (status === 428) return ended('its window was blocked.');
         return ended(`its sign-in could not be ended (${(e as Error)?.message ?? String(e)}).`, status === 502 ? 502 : 0);
       });
     } catch (e) {
+      cancelPrepared();
       return Promise.resolve(ended(`its sign-in could not be ended (${(e as Error)?.message ?? String(e)}).`));
     }
   };
-
-  // After the session's work in flight, so it waits for a refresh: forgets the
-  // session, then revokes its newest token. A token whose revoke gets no reply
-  // (offline, or a superseded sign-out, whose request is refused) waits in
-  // `unrevoked` for the next sign-out, which revokes every waiting token,
-  // newest first, and stops at the first revoke with no reply.
-  const revoke = (store: OAuthStore): Promise<OAuthResult> => exclusive(store, async () => {
-    const kept = read(store), owed = unrevoked.get(config.key) ?? [];
-    const token = (k: Kept): string | undefined => k.refreshToken ?? k.accessToken;
-    if (kept && token(kept) && !owed.some(k => token(k) === token(kept))) owed.push(kept);
-    unrevoked.set(config.key, owed);
-    store.forget(config.key);
-    note(() => ({ type: 'signed-out' }));
-    while (owed.length) {
-      const last = owed[owed.length - 1], endpoint = last.revocationEndpoint;
-      // Best effort (RFC 7009 §2.2): the session is already gone here. No
-      // reply, or 429 or 5xx, leaves the token to revoke later (§2.2.1).
-      const done = (reply: TokenReply): boolean => reply.status !== 429 && reply.status < 500;
-      if (endpoint && !await tokenRequest(config, endpoint, { token: token(last)!, token_type_hint: last.refreshToken ? 'refresh_token' : 'access_token' }).then(done, () => false)) break;
-      owed.pop();
-    }
-    if (!owed.length) unrevoked.delete(config.key);
-    return { ok: true, code: '', error: '', retryable: false, status: 0 };
-  });
 
   const idClaims = (store: OAuthStore): Record<string, unknown> | null => {
     const kept = read(store);

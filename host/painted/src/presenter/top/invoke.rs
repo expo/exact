@@ -216,33 +216,7 @@ impl<D: DataSource> Presenter<D> {
     /// finger is, and the touch presses nothing when it lifts. Whether a
     /// node took it. Nothing on a host with no top layer.
     pub fn long_press(&mut self, x: f32, y: f32, now_ms: f64) -> bool {
-        if (!self.has_windows() && !self.neutral_alerts()) || self.page_inert() {
-            return false;
-        }
-        let Some(hit) = self.hit(x, y) else {
-            return false;
-        };
-        let (kernel, runner) = (self.host.kernel(), self.host.runner());
-        let mut at = Some(hit);
-        let mut found = None;
-        while let Some(node) = at.and_then(|id| kernel.node(id)) {
-            if node.props.bool(PropId::Disabled) == Some(true) {
-                break;
-            }
-            let names = node
-                .props
-                .str(PropId::ContextPopover)
-                .filter(|n| !n.is_empty());
-            let hears = runner
-                .handlers_of(node.id)
-                .contains(&EventKind::Contextmenu);
-            if names.is_some() || hears {
-                found = Some((node.id, names.map(str::to_string), hears));
-                break;
-            }
-            at = node.parent;
-        }
-        let Some((id, names, hears)) = found else {
+        let Some((id, names, hears)) = self.context_menu_at(x, y) else {
             return false;
         };
         self.top.long_presses = self.top.long_presses.wrapping_add(1);
@@ -262,6 +236,41 @@ impl<D: DataSource> Presenter<D> {
             self.present(menu, &name, Some(id), Some((x, y)), false, now_ms);
         }
         true
+    }
+
+    /// The node a long press at (`x`, `y`) would give to: its id, the
+    /// context menu it names and whether it hears `contextmenu`. The
+    /// Android reader asks it with the hit reply, so that a hosted view
+    /// under the finger does not start its own long click for a press
+    /// exact2 takes.
+    pub(in crate::presenter) fn context_menu_at(
+        &mut self,
+        x: f32,
+        y: f32,
+    ) -> Option<(ViewId, Option<String>, bool)> {
+        if (!self.has_windows() && !self.neutral_alerts()) || self.page_inert() {
+            return None;
+        }
+        let hit = self.hit(x, y)?;
+        let (kernel, runner) = (self.host.kernel(), self.host.runner());
+        let mut at = Some(hit);
+        while let Some(node) = at.and_then(|id| kernel.node(id)) {
+            if node.props.bool(PropId::Disabled) == Some(true) {
+                break;
+            }
+            let names = node
+                .props
+                .str(PropId::ContextPopover)
+                .filter(|n| !n.is_empty());
+            let hears = runner
+                .handlers_of(node.id)
+                .contains(&EventKind::Contextmenu);
+            if names.is_some() || hears {
+                return Some((node.id, names.map(str::to_string), hears));
+            }
+            at = node.parent;
+        }
+        None
     }
 
     /// How many long presses a node has taken, wrapping.

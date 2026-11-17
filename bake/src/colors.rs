@@ -236,7 +236,7 @@ pub(crate) fn check_plan(
 mod tests {
     use super::*;
 
-    fn app(rows: &str) -> std::path::PathBuf {
+    fn app(rows: &str) -> crate::TempDir {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "exact-colors-{}-{}",
@@ -248,7 +248,7 @@ mod tests {
             "shape D\n  colorGamut: string\nstyle Brand\n  color=\"color(display-p3 0 0.5 1)\"\ncomponent A\n  resource d = exactViewport() as shape D\n  view\n    column\n      {rows}\n"
         );
         std::fs::write(dir.join("app.contract"), src).unwrap();
-        dir
+        crate::TempDir(dir)
     }
 
     #[test]

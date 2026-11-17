@@ -8,14 +8,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentPage, backLayer, builtSettingLines, chromium, launchFacts, listenOn, netOptions, refuseStale, staleError, warnStale, webChanges, withEpoch, withFaults } from './agent-launch.mjs';
+import { agentPage, faultSpec, backLayer, builtSettingLines, chromium, launchFacts, listenOn, netOptions, refuseStale, staleError, suiteBrowser, warnStale, webChanges, withEpoch, withFaults } from './agent-launch.mjs';
 import { deliverClipboard, pasteChord } from './agent-keys.mjs';
 import { pageAim, pagePoint, pageOutside } from './agent-aim.mjs';
-import { builtAppMatches, jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs'; import { bootedGeneration, leaseGeneration } from '../host/web/generations.mjs';
+import { builtAppMatches, jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs'; import { buildBase, bootedGeneration, leaseGeneration } from '../host/web/generations.mjs';
 import { resolveApp, webBuildCommand, webDist as defaultWebDist } from './app.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const INSTALL = `bunx playwright@${JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).devDependencies['playwright-core']} install firefox webkit`;
+const PLAYWRIGHT = `bunx playwright@${JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).devDependencies['playwright-core']}`;
+const INSTALL = `${PLAYWRIGHT} install firefox webkit`;
 const WORLD_LIMIT = 256 * 1024 * 1024;
 
 const FIREFOX_PREFS = {
@@ -28,20 +29,32 @@ const FIREFOX_PREFS = {
   'ui.prefersReducedTransparency': 0,
 };
 
+const systemLibraries = message => [...new Set([...message.matchAll(/\b(lib[\w.+-]+\.so(?:\.\d+)*)/g)].map(m => m[1]))];
+
 function unavailable(name, error) {
-  const message = String(error?.message ?? error);
-  const libraries = [...new Set([...message.matchAll(/\b(lib[\w.+-]+\.so(?:\.\d+)*)/g)].map(m => m[1]))];
+  const message = String(error?.message ?? error), libraries = systemLibraries(message);
   if (libraries.length) return new Error(`web carrier unavailable: ${name} missing system libraries: ${libraries.join(', ')}`);
   if (/Executable doesn't exist|download new browsers/i.test(message)) return new Error(`web carrier unavailable: ${name} not installed: ${INSTALL}`);
   return new Error(`web carrier unavailable: ${name}: ${message.replace(/\s+/g, ' ').trim()}`);
 }
 
 /** Why the engine `name` (chromium, firefox, webkit) cannot be driven here, or null: Chromium as agent-launch.mjs
- * `chromium` finds it, Firefox and WebKit as Playwright installs them. For tests to choose themselves (scripts/coverage.mjs). */
+ * `chromium` finds it; Firefox and WebKit as Playwright installs them and as they launch. That launch is the process's
+ * `suiteBrowser`, which the test then shares, and one that fails is tried again by the next call. For tests to choose
+ * themselves (scripts/coverage.mjs). */
 export async function browserMissing(name) {
   if (name === 'chromium') return chromium().unavailable;
-  const playwright = await import('playwright-core');
-  return existsSync(playwright[name].executablePath()) ? null : `${name} not installed: ${INSTALL}`;
+  const label = name === 'firefox' ? 'Firefox' : 'WebKit', executable = (await import('playwright-core'))[name].executablePath();
+  if (!existsSync(executable)) return `${label} is missing at ${executable}; install it with ${PLAYWRIGHT} install ${name}`;
+  try { await suiteBrowser(name, { timeout: 30_000 }); return null; }
+  catch (error) {
+    // Without the terminal colours of Playwright's call log
+    const message = String(error?.message ?? error).replace(/\x1b\[[\d;]*m/g, ''), libraries = systemLibraries(message);
+    if (libraries.length) return `${label} at ${executable} lacks system libraries ${libraries.join(', ')}; ${PLAYWRIGHT} install-deps ${name} installs them`;
+    // The browser's own error lines, its headless notice aside, else Playwright's first line
+    const said = new Set([...message.matchAll(/\[err\] (.+)/g)].map(m => m[1].trim().replace(/\.$/, '')).filter(line => !/running in headless mode/.test(line)));
+    return `${label} at ${executable} does not launch: ${[...said].join(' ') || message.split('\n')[0]}; ${PLAYWRIGHT} install --force ${name} reinstalls it`;
+  }
 }
 
 /** Launch once without an app so a conformance run reports an engine-level
@@ -88,7 +101,7 @@ async function files({ plan, pageURL, app, webDist, port, env }) {
   // The drive's build, leased while its server runs (host/web/generations.mjs; agent-web.mjs's Chrome carrier does
   // the same).
   const pinned = js ? await bootedGeneration(served) : null, release = pinned ? leaseGeneration(served, pinned) : () => {};
-  const server = createServer((req, res) => {
+  const server = createServer({ maxHeaderSize: 128 * 1024 }, (req, res) => {
     if (req.url === '/__plan' && plan) { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(readFileSync(plan)); return; }
     if (req.url === '/favicon.ico') { res.writeHead(204); res.end(); return; }
     if (js) return serveBuildTree(served, req, res, { pinned });
@@ -97,7 +110,7 @@ async function files({ plan, pageURL, app, webDist, port, env }) {
   server.once('close', release);
   // `--port`/EXACT_PORT (agent-launch.mjs `webPort`), else a free one.
   await listenOn(server, port ?? 0, '127.0.0.1', undefined, port != null, env);
-  return { js, server, planBuild, url: pageURL ?? `http://127.0.0.1:${server.address().port}/` };
+  return { js, server, planBuild, url: pageURL ?? `http://127.0.0.1:${server.address().port}${js ? buildBase(served) : "/"}` };
 }
 
 const init = `
@@ -276,6 +289,30 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
       const encoded = worldFile(world).toString('base64');
       await page.addInitScript(value => { globalThis.exactWorldCarry = Uint8Array.from(atob(value), c => c.charCodeAt(0)); }, encoded);
     }
+    let faultScript, faultHeader = '';
+    const carryFaults = async route => {
+      const request = route.request(), url = new URL(request.url());
+      const carried = faultHeader && request.isNavigationRequest() && request.frame() === page.mainFrame()
+        && url.origin === new URL(hosted.url).origin && url.searchParams.has('agent') && url.searchParams.get('failFetch') === '1';
+      const headers = { ...request.headers() };
+      delete headers['x-exact-faults'];
+      if (carried) headers['x-exact-faults'] = faultHeader;
+      // Fetch one hop so a redirect cannot forward the table to another origin.
+      if (carried) await route.fulfill({ response: await route.fetch({ headers, maxRedirects: 0 }) });
+      else await route.continue();
+    };
+    const installFaults = async spec => {
+      if (spec === undefined && faultScript) return;
+      spec = faultSpec(spec ?? '');
+      if (spec && !faultHeader) await page.route('**/*', carryFaults);
+      if (!spec && faultHeader) await page.unroute('**/*', carryFaults);
+      faultHeader = Buffer.from(spec).toString('base64');
+      await faultScript?.dispose();
+      faultScript = await page.addInitScript(({ spec, origin }) => {
+        if (window === window.top && location.origin === origin) globalThis.__exactLaunchFaults = spec;
+      }, { spec, origin: new URL(hosted.url).origin });
+    };
+    await installFaults(facts.failFetch);
     const address = agentPage(new URL(hosted.url), { facts, storage, env });
     await page.goto(address.href, { waitUntil: 'commit' });
     let boot = await waitForBoot(page, neverBooted('the page never booted'));
@@ -367,9 +404,11 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         await page.evaluate(async (keep) => { sessionStorage.clear(); if (keep) return; localStorage.clear(); await Promise.all((await indexedDB.databases?.() ?? []).map(x => x.name && new Promise(ok => { const r = indexedDB.deleteDatabase(x.name); r.onsuccess = r.onerror = r.onblocked = ok; }))); }, keep);
         if (!keep) await context.clearCookies();
         const destination = withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch);
+        await installFaults(failFetch ?? (keep ? undefined : facts.failFetch ?? ''));
         hostLines.length = 0;
         if (keep) await reloadPlaywrightPage(page, destination);
-        else await page.goto(destination, { waitUntil: 'commit' });
+        // Firefox treats an unchanged fragment URL as same-document navigation.
+        else if (await page.goto(destination, { waitUntil: 'commit' }) === null) await page.reload({ waitUntil: 'commit' });
         this.boot = await waitForBoot(page, neverBooted('the reused page never booted'));
       },
       ask,

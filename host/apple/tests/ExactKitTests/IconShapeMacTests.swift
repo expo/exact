@@ -127,11 +127,8 @@ final class IconShapeMacTests: XCTestCase {
     private func render(_ view: NSView, scale: CGFloat) -> [UInt8] {
         view.window?.contentView?.layoutSubtreeIfNeeded()
         (view as? NodeView)?.presenter?.views[2]?.layoutSymbol()
-        let w = Int(view.bounds.width * scale), h = Int(view.bounds.height * scale)
-        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                                   isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: w * 4, bitsPerPixel: 32)!
-        rep.size = view.bounds.size
-        Capture.draw(view, to: rep)
+        let rep = Capture.picture(of: view, scale: scale)!
+        let w = rep.pixelsWide, h = rep.pixelsHigh
         let data = rep.bitmapData!
         return (0..<(w * h)).map { data[$0 * 4 + 3] }
     }
@@ -145,7 +142,13 @@ final class IconShapeMacTests: XCTestCase {
         view.image = IconPath.image(Self.d(icon), viewBox: "0 0 24 24", size: frame.size)
         view.imageScaling = .scaleProportionallyUpOrDown; view.contentTintColor = .black
         page.addSubview(view)
-        return render(page, scale: scale)
+        let w = Int(canvas.width * scale), h = Int(canvas.height * scale)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: w * 4, bitsPerPixel: 32)!
+        rep.size = page.bounds.size
+        page.cacheDisplay(in: page.bounds, to: rep)
+        let data = rep.bitmapData!
+        return (0..<(w * h)).map { data[$0 * 4 + 3] }
     }
 
     // MARK: theme2's checks (05:12 edge rule, 05:15 centroid, spread, coverage)

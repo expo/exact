@@ -15,6 +15,7 @@ const B: &str = "https://b.example.test/b";
 
 fn job(ticket: u64, url: &str) -> RequestOut {
     RequestOut {
+        completion: None,
         ticket,
         target: "cache-machine".into(),
         request: Request::get(url),

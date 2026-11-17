@@ -17,6 +17,7 @@ component App
   derive compact = `${formatNumber(1234.5 * k, "compact")} ${formatNumber(-0.005 * k, "compact")} ${formatNumber(999999 * k, "compact")} ${formatNumber(1e12 * k, "compact")}`
   derive dates = `${formatDate(now, -420, "medium")} / ${formatDate(now, -420, "month-year")} / ${formatDate(now, -420, "iso")} / ${formatTime(now, -420, "short")} | ${formatDate(now - 86400000 * 40, 120, "medium")} / ${formatTime(now - 86400000 * 40, 120, "short")} | ${formatDate(-62135596800000, 0, "medium")} / ${formatDate(-62135596800000, 0, "month-year")}`
   derive days = `${formatDay(now, now, -420, "day-time")} / ${formatDay(now - 86400000, now, -420, "day")} / ${formatDay(now - 86400000, now, -420, "list")} / ${formatDay(now - 86400000 * 3, now, -420, "list")} / ${formatDay(now + 86400000, now, -420, "day-time")} / ${formatDay(now - 86400000 * 9, now, -420, "list")} / ${formatDay(now - 86400000 * 9, now, -420, "day")}`
+  derive sections = `${formatDay(now, now, -420, "section")} / ${formatDay(now - 86400000 * 3, now, -420, "section")} / ${formatDay(now + 86400000 * 3, now, -420, "section")} / ${formatDay(now - 86400000 * 9, now, -420, "section")} / ${formatDay(now - 86400000 * 400, now, -420, "section")}`
   derive bad = `[${formatNumber(1 / z, "decimal")}${formatNumber(1 / z, "compact")}][${formatDate(now, 1081, "medium")}${formatTime(0 / 0, 0, "short")}][${formatDay(0 / 0, now, 0, "day")}]`
   derive picked = `${formatDate("2024-02-29", -1080, "medium")} / ${formatDate("2024-02-29", 1080, "month-year")} / ${formatDate("0001-01-01", -1080, "iso")} / ${formatDate("9999-12-31", 1080, "iso")}`
   derive badDay = `[${formatDate("1900-02-29", 0, "medium")}][${formatDate("2026-10-16", 1081, "month-year")}][${formatDate("2024-02-29\n", 0, "iso")}]`
@@ -34,6 +35,7 @@ component App
       text compact testId="compact"
       text dates testId="dates"
       text days testId="days"
+      text sections testId="sections"
       text bad testId="bad"
       text picked testId="picked"
       text badDay testId="badDay"
@@ -48,6 +50,7 @@ test "formats"
   expect text "compact" == "1234 -0,005 999.999 1 Bio."
   expect text "dates" == "11.10.2026 / Oktober 2026 / 2026-10-11 / 16:42 | 02.09.2026 / 01:42 | 01.01.1 / Januar 1"
   expect text "days" == "Heute, 16:42 / Gestern / Gestern / Donnerstag / Morgen, 16:42 / 02.10.26 / 02.10.2026"
+  expect text "sections" == "Heute / Donnerstag / Mittwoch / Fr. 2. Okt. / Sa. 6. Sept. 2025"
   expect text "bad" == "[][][]"
   expect text "picked" == "29.02.2024 / Februar 2024 / 0001-01-01 / 9999-12-31"
   expect text "badDay" == "[][][]"
@@ -58,3 +61,4 @@ test "formats"
   expect text "compact" == "-208.630 0,84 -168 Mio. -169 Bio."
   expect text "dates" == "22.10.2026 / Oktober 2026 / 2026-10-22 / 06:42 | 12.09.2026 / 15:42 | 01.01.1 / Januar 1"
   expect text "days" == "Heute, 06:42 / Gestern / Gestern / Montag / Morgen, 06:42 / 13.10.26 / 13.10.2026"
+  expect text "sections" == "Heute / Montag / Sonntag / Di. 13. Okt. / Mi. 17. Sept. 2025"

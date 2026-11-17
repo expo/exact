@@ -136,11 +136,11 @@ extension ControlHost {
     func progressObservation(_ node: NodeView) -> [String: Any]? {
         if let bar = bars[node.id] {
             return ["view": "UIProgressView", "progress": Double(bar.progress), "tinted": node.channels("accent_color") != nil,
-                    "size": [Agent.r2(bar.bounds.width), Agent.r2(bar.bounds.height)]]
+                    "size": [InspectionValue.r2(bar.bounds.width), InspectionValue.r2(bar.bounds.height)]]
         }
         guard let s = spinners[node.id] else { return nil }
         return ["view": "UIActivityIndicatorView", "style": s.style == .large ? "large" : "medium", "animating": s.isAnimating,
-                "size": [Agent.r2(s.bounds.width), Agent.r2(s.bounds.height)]]
+                "size": [InspectionValue.r2(s.bounds.width), InspectionValue.r2(s.bounds.height)]]
     }
 }
 #endif

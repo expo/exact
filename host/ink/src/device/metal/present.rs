@@ -517,8 +517,8 @@ mod tests {
             .iter()
             .all(|s| s.as_ref().unwrap().0.length() == 256));
         let pixels = device.readback(texture).unwrap();
-        for (row, pixels) in pixels.chunks_exact(28).enumerate() {
-            assert_eq!(pixels, [row as u8 * 30, 40, 80, 255].repeat(7));
+        for (row, pixels) in pixels.as_chunks::<28>().0.iter().enumerate() {
+            assert_eq!(pixels.as_slice(), [row as u8 * 30, 40, 80, 255].repeat(7));
         }
     }
 
@@ -571,9 +571,11 @@ mod tests {
                     0,
                 );
             }
-            for (actual, rgba) in output.chunks_exact(4).zip(pixels.chunks_exact(4)) {
+            for (actual, rgba) in
+                std::iter::zip(output.as_chunks::<4>().0, pixels.as_chunks::<4>().0)
+            {
                 assert_eq!(
-                    actual,
+                    *actual,
                     [rgba[2], rgba[1], rgba[0], rgba[3]],
                     "frame {frame}"
                 );

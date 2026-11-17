@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const WEB_JS = resolve(import.meta.dirname, '../../web-js');
+// Names whose do-nothing function would break their caller: `router.js` spreads `launchVisits()`'s list.
+const VALUES = { 'navigation.js': { launchVisits: '() => []' } };
 
 /** Each binding `file` of host/web-js imports or re-exports from a sibling module: the name the module exports, the
  * name `file` binds it to (null for a re-export, which binds none), and the module. */
@@ -27,7 +29,7 @@ export function standIns(real, given = {}) {
     for (const [, from] of readFileSync(resolve(WEB_JS, file), 'utf8').matchAll(/import\s*['"]\.\/([\w-]+\.js)['"]/g)) if (!real.includes(from) && !taken.has(from)) taken.set(from, new Set());
   }
   return new Map([...taken].map(([file, names]) => {
-    const stated = given[file] ?? {};
+    const stated = { ...VALUES[file], ...given[file] };
     const lines = Object.entries(stated).map(([n, value]) => `export const ${n} = ${value};`);
     for (const n of names) if (!(n in stated)) lines.push(`export function ${n}() {}`);
     return [file, lines.join('\n')];

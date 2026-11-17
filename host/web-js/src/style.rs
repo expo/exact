@@ -16,6 +16,9 @@ use exact_runner::bridge;
 use exact_runner::vm::instructions;
 use exact_web::host::template::{self, Parts};
 
+mod bound;
+pub use bound::bound_tokens;
+
 /// A canvas's explicit bitmap size (LLP 1056 D6 r3) and getContext settings
 /// (LLP 1100 D12a) as the attributes canvas2d.js reads, as the runner reads
 /// the node's props; a dynamic one is refused.
@@ -48,6 +51,7 @@ pub fn canvas_bitmap(
 
 /// A literal binding's value, if the code is one push and `Return`.
 pub fn literal(plan: &Plan, code: &[u8]) -> Option<exact_plan::Value> {
+    let code = plan.read_code(code).0;
     let ins: Vec<_> = instructions(code).collect::<Result<_, _>>().ok()?;
     match ins.as_slice() {
         [a, r] if r.op == Opcode::Return => match a.op {
@@ -65,7 +69,7 @@ pub fn literal(plan: &Plan, code: &[u8]) -> Option<exact_plan::Value> {
 /// Whether a binding's code pushes a string `used` accepts: what it can be,
 /// as runner/src/uses.rs asks it.
 pub fn can_be(plan: &Plan, code: &[u8], used: &dyn Fn(&str) -> bool) -> bool {
-    instructions(code).any(|i| {
+    exact_runner::vm::transitive_instructions(plan, code).any(|i| {
         i.is_ok_and(|i| i.op == Opcode::Str && used(plan.str(exact_plan::StrId(i.args[0] as u32))))
     })
 }
@@ -205,6 +209,9 @@ pub fn static_tree(
             }
         }
         if styled {
+            let keyframes = bridge::keyframes(plan);
+            let _ = keyframes.resolve(&mut patch.animation);
+            let _ = keyframes.resolve(&mut patch.rare.exit_animation);
             ops.push(Op::SetStyle {
                 id: view(i),
                 patch: Box::new(patch),
@@ -314,8 +321,20 @@ pub fn project(
             continue;
         }
         let child_may_fold = matches!(tree[i].as_slice(), [c] if may_fold[*c as usize]);
-        let mut parts = template::parts_with(&kernel, plan, view(i), may_fold[i], child_may_fold)
-            .ok_or("a view the kernel lost")?;
+        let press_translate = node.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+            b.kind == BindingKind::Style
+                && b.id == StyleId::PressTranslate as u16
+                && literal(plan, plan.code(b.expr)).is_none()
+        });
+        let mut parts = template::parts_with(
+            &kernel,
+            plan,
+            view(i),
+            may_fold[i],
+            child_may_fold,
+            press_translate,
+        )
+        .ok_or("a view the kernel lost")?;
         if kernel
             .node(view(i))
             .is_some_and(|n| n.style.rare.animation_trigger == exact_kernel::AnimationTrigger::None)
@@ -627,7 +646,7 @@ const PLATFORM: &str = "-exact-platform-color(";
 pub fn metric_map(plan: &Plan, code: &[u8]) -> Option<String> {
     use exact_kernel::style::metrics::{column, named, value};
     let mut pairs: Vec<String> = Vec::new();
-    for i in instructions(code).flatten() {
+    for i in exact_runner::vm::transitive_instructions(plan, code).flatten() {
         if i.op != Opcode::Str {
             continue;
         }
@@ -690,7 +709,7 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
         .into_iter()
-        .chain([Property::D])
+        .chain(Property::TRANSITION_ONLY)
         .filter(|p| *p != Property::ShadowColor)
         .map(|p| {
             (
@@ -707,7 +726,7 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     properties.insert("all", vec![]);
     let all: Vec<_> = Property::ALL
         .into_iter()
-        .chain([Property::D])
+        .chain(Property::TRANSITION_ONLY)
         .filter(|p| !p.springs() && *p != Property::ShadowColor)
         .map(|p| {
             if p == Property::BorderTopColor {
@@ -869,9 +888,27 @@ static CURSOR_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         StyleId::Cursor.enum_names(), invalid_unset("cursor")
     )
 });
+// Match the kernel's basic-shape subset for computed values too: the browser
+// also accepts relative units and calculations that the native parser refuses.
+const BASIC_CLIP: &str = r#"v=>{
+ if(typeof v!=="string")return false;
+ const m=v.trim().toLowerCase().match(/^(polygon|inset|circle|ellipse)\(([^()]*)\)$/);
+ if(!m)return false;
+ const tokens=s=>s.trim()?s.trim().split(/[ \t\r\n\f]+/):[];
+ const length=s=>{const m=s?.match(/^([+-]?(?:[0-9]*\.)?[0-9]+(?:e[+-]?[0-9]+)?)(px|%)?$/);return !!m&&Number.isFinite(Math.fround(+m[1]))&&(!!m[2]||+m[1]===0)};
+ const positive=s=>length(s)&&parseFloat(s)>=0;
+ const radius=s=>s==='closest-side'||s==='farthest-side'||positive(s);
+ const axis=(s,a,b)=>s==='center'||s===a||s===b||length(s);
+ const position=p=>p.length===1?(axis(p[0],'left','right')||p[0]==='top'||p[0]==='bottom'):p.length===2?((p[0]==='top'||p[0]==='bottom'||p[1]==='left'||p[1]==='right')?['top','bottom','center'].includes(p[0])&&['left','right','center'].includes(p[1]):axis(p[0],'left','right')&&axis(p[1],'top','bottom')):false;
+ const [_,kind,body]=m;
+ if(kind==='polygon'){const parts=body.split(',');if(['nonzero','evenodd'].includes(parts[0].trim()))parts.shift();return parts.length>0&&parts.every(p=>{const t=tokens(p);return t.length===2&&t.every(length)})}
+ if(kind==='inset'){const parts=body.split(/[ \t\r\n\f]+round[ \t\r\n\f]+/);if(parts.length>2)return false;const edges=tokens(parts[0]);if(edges.length<1||edges.length>4||!edges.every(length))return false;if(parts.length===1)return true;const radii=parts[1].split('/');return radii.length<=2&&radii.every(r=>{const t=tokens(r);return t.length>=1&&t.length<=4&&t.every(positive)})}
+ const t=tokens(body),at=t.indexOf('at'),r=at<0?t:t.slice(0,at);
+ return (r.length===0||r.length===(kind==='circle'?1:2)&&r.every(radius))&&(at<0||position(t.slice(at+1)));
+}"#;
 static CLIP_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        r#"v=>v==null||/^\s*(unset\s*$|none\s*$|path\(|url\()/i.test(v)?v:{}"#,
+        r#"v=>v==null||/^\s*(unset\s*$|none\s*$|path\(|url\()/i.test(v)||({BASIC_CLIP})(v)?v:{}"#,
         invalid_unset("clip-path")
     )
 });
@@ -982,6 +1019,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         ],
         StyleId::TintColor => vec![with("--exact-tint", &TINT_MAP)],
         StyleId::PlaceholderColor => vec![with("--exact-placeholder-color", "v=>v==null?v:/^\\s*(unset)?\\s*$/i.test(v)?'initial':v")],
+        StyleId::BackdropColor => vec![with("--exact-backdrop-color", "v=>v==null?v:/^\\s*(unset)?\\s*$/i.test(v)?'initial':v")],
         // A capsule's ends are half-circles, so it takes no curve (index.html).
         StyleId::ControlCornerStyle => vec![
             with("--exact-control-radius", "v=>v==null?v:v==='capsule'?'calc(infinity * 1px)':'revert'"),
@@ -1096,6 +1134,9 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
             with("timeline-scope", NONE),
             with("--exact-timeline-scope", NONE),
         ],
+        // @ref LLP 1123 D5 — a node's custom properties, which tree.js `css`
+        // writes one declaration at a time
+        StyleId::SafeAreaProperties => vec![with("--", "v=>v")],
         StyleId::GridTemplateColumns | StyleId::GridTemplateRows => vec![with(
             &css_property(row),
             "v=>gridValue(\"tracks\",v)",
@@ -1118,8 +1159,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
             "transition",
             TRANSITION_MAP.as_str(),
         )],
-        // The kernel's `clip-path` is `none`, `url(#id)` or `path()` (clip.rs);
-        // any other shape, which the browser would take, is refused: unset.
+        // CSS shapes and paths are drawn by the browser.
         StyleId::ClipPath => vec![with(
             "clip-path",
             &CLIP_MAP,
@@ -1293,6 +1333,7 @@ pub(crate) fn css_property(id: StyleId) -> String {
         StyleId::TintColor => return "--exact-tint".into(),
         // @ref LLP 1104 D3 — css.rs's `spell_property`.
         StyleId::PlaceholderColor => return "--exact-placeholder-color".into(),
+        StyleId::BackdropColor => return "--exact-backdrop-color".into(),
         StyleId::GlassTint => return "--exact-glass-tint".into(),
         StyleId::PositionType => return "position".into(),
         StyleId::BackdropFilter => return "backdrop-filter".into(),
@@ -1388,3 +1429,36 @@ pub(crate) fn unset_mirrors(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Transition authored bases independently of host press feedback.
+pub(crate) fn composed_transition_map(press: bool, shift: bool) -> String {
+    let names: Vec<_> = [(press, "scale"), (shift, "translate")]
+        .into_iter()
+        .filter_map(|(yes, name)| yes.then_some(name))
+        .collect();
+    format!(
+        r#"v=>{{if(v==null)return v;{}let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
+        crate::style::TRANSITION_ENTRIES.as_str(),
+        serde_json::to_string(&names).unwrap()
+    )
+}
+
+/// The live offset and its CSS axes; `none` removes the composition selector.
+pub(crate) fn press_translation_writes() -> Vec<(String, String, Option<String>)> {
+    let valid = r#"v=>{const t=String(v??'').trim();return /^(?:[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?|none)(?:\s+[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?)?$/i.test(t)&&CSS.supports('translate',t)&&!/^none$/i.test(t)?t:null}"#;
+    let mut writes = vec![(
+        "--exact-press-translate".into(),
+        String::new(),
+        Some(valid.into()),
+    )];
+    for (i, axis) in ["x", "y"].iter().enumerate() {
+        writes.push((
+            format!("--exact-press-{axis}"),
+            String::new(),
+            Some(format!(
+                "v=>{{const t=({valid})(v);return t?.split(/\\s+/)[{i}]??'0px'}}"
+            )),
+        ));
+    }
+    writes
+}

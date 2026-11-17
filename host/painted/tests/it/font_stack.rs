@@ -76,8 +76,25 @@ fn headless_app_draws_the_authored_glyph_fallback() {
         assert_ne!(glyph.glyph_id, 0);
     }
     assert!(actual_frame.pixels().iter().any(|p| p.red() < 128));
-    assert!(
-        actual_frame.data() == expected_frame.data(),
+    // The first available face supplies the strut, so two family lists
+    // can place identical fallback glyphs on different baselines.
+    let ink = |frame: &tiny_skia::Pixmap| {
+        let pixels: Vec<_> = frame
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.red() < 255)
+            .map(|(i, p)| (i as u32 % frame.width(), i as u32 / frame.width(), *p))
+            .collect();
+        let top = pixels.iter().map(|p| p.1).min().unwrap();
+        pixels
+            .into_iter()
+            .map(|(x, y, p)| (x, y - top, p))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ink(&actual_frame),
+        ink(&expected_frame),
         "fallback pixels reach the frame"
     );
 }

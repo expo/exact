@@ -70,7 +70,7 @@ const SHELL: &str = "<!doctype html>\n<title>t</title>\n<style>.a{}</style>\n\
 <script type=\"application/ld+json\">{\"@type\":\"Person\"}</script>\n\
 <script async src=\"https://cdn.test/lib/x.js?id=1\"></script>\n\
 <script src=\"/own.js\"></script>\n\
-<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
 
 /// A dist holding `.gen/csp.json` as `json`, removed when dropped.
 struct Dist(std::path::PathBuf);
@@ -208,6 +208,11 @@ fn a_script_src_is_its_origin_and_an_inline_script_is_hashed_as_the_browser_read
         <script>one();\r\ntwo();\rthree();</script>\n\
         <div id=\"exact-root\"></div>";
     let dist = Dist::with(None);
+    // And the JavaScript entry an `--inline` shell holds, under its content
+    // name (`routes.json` `files`, LLP 1153.004 D4).
+    std::fs::write(dist.0.join("app-Ab12Cd34.js"), "entry").unwrap();
+    let table = r#"{"routes":[],"files":{"app.js":"app-Ab12Cd34.js"}}"#;
+    std::fs::write(dist.0.join("routes.json"), table).unwrap();
     let scripts = |origin| {
         let headers = csp::headers("", &dist.0, shell, origin).unwrap();
         directive(&headers, "Content-Security-Policy", "script-src")
@@ -219,6 +224,7 @@ fn a_script_src_is_its_origin_and_an_inline_script_is_hashed_as_the_browser_read
     assert!(at_site.contains(" cdn.test:8443 "), "{at_site}");
     assert!(!at_site.contains("site.test"), "{at_site}");
     assert!(at_site.contains(&sha("m()")), "{at_site}");
+    assert!(at_site.contains(&sha("entry")), "{at_site}");
     // Not a JavaScript MIME type essence: a data block.
     assert!(!at_site.contains(&sha("d()")), "{at_site}");
     assert!(at_site.contains(&sha("x()")), "{at_site}");
@@ -342,7 +348,7 @@ fn a_page_carries_the_permissions_policy_its_grants_derive() {
     );
     assert_eq!(
         policy,
-        "microphone=(self), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), serial=(), hid=(), usb=()"
+        "bluetooth=(), microphone=(self), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), window-management=(), serial=(), hid=(), usb=()"
     );
     for (content_type, expected) in [("text/html; charset=utf-8", true), ("text/plain", false)] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -363,7 +369,7 @@ fn a_page_carries_the_permissions_policy_its_grants_derive() {
         client.read_to_string(&mut received).unwrap();
         assert_eq!(
             received.contains(
-                "\r\nPermissions-Policy: microphone=(self), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), serial=(), hid=(), usb=()\r\n"
+                "\r\nPermissions-Policy: bluetooth=(), microphone=(self), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), window-management=(), serial=(), hid=(), usb=()\r\n"
             ),
             expected,
             "{received}"

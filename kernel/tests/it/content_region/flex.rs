@@ -113,6 +113,7 @@ fn flex_region_complete_a_survives_pending_then_latest_b_matches_ordinary_geomet
             TextMetrics {
                 width: f32::NAN,
                 height: -1.,
+                pending: false,
                 first_baseline: None
             },
             Rc::new(())

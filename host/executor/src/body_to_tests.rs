@@ -20,6 +20,7 @@ struct Made {
     at: usize,
     size: usize,
     interrupted: bool,
+    ending: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 impl BodySource for Made {
     fn read(&mut self, out: &mut [u8]) -> Result<usize, HostError> {
@@ -40,8 +41,16 @@ impl BodySource for Made {
     }
 }
 
+impl Drop for Made {
+    fn drop(&mut self) {
+        if let Some(ending) = &self.ending {
+            ending();
+        }
+    }
+}
+
 /// Serves generated bodies, a declared length, an interrupted body and a 404.
-struct Server(Opened);
+struct Server(Opened, Option<Arc<dyn Fn() + Send + Sync>>);
 impl Transport for Server {
     fn open(
         &self,
@@ -62,6 +71,7 @@ impl Transport for Server {
                     at: 0,
                     size,
                     interrupted: false,
+                    ending: self.1.clone(),
                 }),
             ),
             _ if path == "/interrupted" => (
@@ -70,6 +80,7 @@ impl Transport for Server {
                     at: 0,
                     size: usize::MAX,
                     interrupted: true,
+                    ending: self.1.clone(),
                 }),
             ),
             _ => (
@@ -149,13 +160,22 @@ fn serving(grants: &str) -> (Core, Opened, Receiver<()>) {
 }
 
 pub(in super::super) fn serving_on(grants: &str, switched: bool) -> (Core, Opened, Receiver<()>) {
+    serving_with_end(grants, switched, None)
+}
+
+fn serving_with_end(
+    grants: &str,
+    switched: bool,
+    ending: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> (Core, Opened, Receiver<()>) {
     let opened = Opened::default();
     let owners = (0..WORKERS)
         .map(|_| {
             Some(
-                ibex2::host::Host::with_transport(Box::new(Server(opened.clone()))).endow(
-                    ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).unwrap(),
-                ),
+                ibex2::host::Host::with_transport(Box::new(Server(opened.clone(), ending.clone())))
+                    .endow(
+                        ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).unwrap(),
+                    ),
             )
         })
         .collect();
@@ -420,6 +440,121 @@ fn a_body_ended_mid_way_leaves_the_target() {
         assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
         physically_ended(&core);
         assert_eq!(files.cache(), ["a"], "a staging file was left");
+    }
+}
+
+#[test]
+fn an_abort_after_the_last_read_leaves_the_target() {
+    interrupted_after_last_read(false);
+}
+
+#[test]
+fn a_deadline_after_the_last_read_leaves_the_target() {
+    interrupted_after_last_read(true);
+}
+
+fn interrupted_after_last_read(timeout: bool) {
+    let _turn = one_at_a_time();
+    for independent in [false, true] {
+        for existing in [false, true] {
+            let files = Files::new();
+            if existing {
+                std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+            }
+            let (core, end, release, woke) = serving_at_end();
+            core.set_app_roots(files.roots());
+            let (armed, deadline) = channel();
+            *core.shared.deadline_armed.lock().unwrap() = Some(armed);
+            let mut request = download("/bytes/100", "app:/cache/a").timeout(60_000);
+            if independent {
+                request = request.independent_http(1024);
+            }
+            core.run(job(1, request), None).unwrap();
+            end.recv_timeout(Duration::from_secs(5)).unwrap();
+            if timeout {
+                deadline
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .expire();
+            } else {
+                let abort = core.shared.state.lock().unwrap().running[0]
+                    .exchange
+                    .clone()
+                    .unwrap();
+                abort.abort();
+            }
+            release.send(()).unwrap();
+            let done = collect(&core, &woke, 1);
+            if existing {
+                assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+                assert_eq!(files.cache(), ["a"], "a staging file was left");
+            } else {
+                assert!(files.cache().is_empty(), "an aborted body was published");
+            }
+            assert!(
+                matches!(&done[0].1, Outcome::Failed { kind, .. }
+                if *kind == if timeout { FailureKind::Timeout } else { FailureKind::Aborted }),
+                "{done:?}"
+            );
+        }
+    }
+}
+
+fn serving_at_end() -> (Core, Receiver<()>, Sender<()>, Receiver<()>) {
+    let (ended, end) = channel();
+    let (release, resume) = channel();
+    let resume = Mutex::new(resume);
+    // Body drops its source at EOF, after its last abort check.
+    let ending = Arc::new(move || {
+        ended.send(()).unwrap();
+        resume
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+    });
+    let (core, _, woke) = serving_with_end(GRANTS, false, Some(ending));
+    (core, end, release, woke)
+}
+
+#[test]
+fn cancelling_after_the_last_read_prevents_publish_before_abort_callbacks() {
+    let _turn = one_at_a_time();
+    for method in ["GET", "POST"] {
+        let files = Files::new();
+        std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+        let (core, end, release, woke) = serving_at_end();
+        core.set_app_roots(files.roots());
+        let mut request = download("/bytes/100", "app:/cache/a");
+        request.method = method.into();
+        core.run(job(1, request), None).unwrap();
+        end.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (finished, finish) = channel();
+        core.run(
+            job(2, Request::continuation(2)),
+            Some(Box::new(move || {
+                finished.send(()).unwrap();
+                Outcome::Storage(Vec::new())
+            })),
+        )
+        .unwrap();
+        let shared = core.shared.clone();
+        *core.shared.before_stream_release.lock().unwrap() = Some(Box::new(move || {
+            let abort = shared.state.lock().unwrap().running[0]
+                .exchange
+                .clone()
+                .unwrap();
+            release.send(()).unwrap();
+            finish.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(!abort.signal().aborted(), "abort callbacks already ran");
+        }));
+        core.cancel(&[1]);
+        assert_eq!(collect(&core, &woke, 1)[0].0, 2);
+        assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+        assert_eq!(files.cache(), ["a"], "a staging file was left");
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [0, 0]);
+        assert_eq!(state.bytes, [0, 0]);
     }
 }
 

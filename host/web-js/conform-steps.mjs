@@ -129,3 +129,15 @@ export async function clockOnAll(arg, pages, linux, pair) {
   const all = clockVerdict([...named, ['linux', await reply(() => linux.clock(arg))]]);
   return all.refused ? { ...all, compared: [...pages.map(([who]) => who), 'linux'] } : { refused: verdict.refused, linux: all.failure };
 }
+
+/** An agent test run's failed tests, each its `test "…": FAIL` line and the lines under it joined with ` | `. A long
+ *  test's progress (`still running test`, on whichever stream) and the property checks' count are no test's detail. */
+export function failedTests(output) {
+  const all = output.trim().split('\n'), found = [];
+  for (let i = 0; i < all.length; i++) if (/^test .*\bFAIL\b/.test(all[i])) {
+    const detail = [all[i]];
+    while (i + 1 < all.length && !/^test |^\d+ passed,/.test(all[i + 1])) { const line = all[++i]; if (!/^still running test |^properties on /.test(line)) detail.push(line); }
+    found.push(detail.map(line => line.trim()).filter(Boolean).join(' | '));
+  }
+  return found;
+}

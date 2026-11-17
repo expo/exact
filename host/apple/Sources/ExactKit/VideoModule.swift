@@ -152,7 +152,10 @@ final class VideoView {
             // Held even when activation fails: the session activates it when
             // the interruption ends, and a mute still releases it.
             holdsSession = true
-            do { try AudioSession.hold(ObjectIdentifier(self)) } catch { fputs("exact audio session: \(error)\n", stderr) }
+            do { try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in
+                guard let self else { return false }
+                return self.observed["playing"] as? Bool == true && self.observed["muted"] as? Bool == false && (self.observed["volume"] as? Double ?? 0) > 0
+            }) } catch { fputs("exact audio session: \(error)\n", stderr) }
         } else {
             holdsSession = false
             AudioSession.release(ObjectIdentifier(self))
@@ -281,6 +284,9 @@ final class VideoView {
         if let remoteRequest { props["exactRemote"] = remoteRequest }
         var listeners = owner.handlers.intersection(Self.events)
         if autoplayRule { listeners.formUnion(["pause", "play"]) }
+        #if os(iOS) || os(tvOS)
+        listeners.formUnion(["playing", "waiting", "pause", "ended", "error", "volumechange"])
+        #endif
         if !listeners.isEmpty { props["exactListeners"] = listeners.sorted().joined(separator: " ") }
         // A video with sound, or a media-session claimant (Now Playing needs
         // a non-mixable category), holds the app's session; muted (applied to
@@ -340,6 +346,9 @@ final class VideoView {
     }
     private func receive(_ message: [String: Any]) {
         if let state = message["state"] as? [String: Any] { observed = state; sessionReport = state["session"] as? [String: Any] ?? sessionReport }
+        #if os(iOS) || os(tvOS)
+        AudioSession.playbackChanged()
+        #endif
         if let result = message["remoteResult"] as? [String: String] { remoteResult = (result["n"] ?? "", result["status"] ?? "") }
         guard let owner else { return }
         if message["remote"] as? String == "play" { latched = true; latchedFrom = owner.props["paused"] }
@@ -393,6 +402,16 @@ extension Presenter {
 /// Optional media policy. Scroll/layout notifications coalesce without app actions
 /// or a frame clock; only a threshold crossing changes the player's paused request.
 final class VideoVisibilityHost {
+    #if os(iOS) || os(tvOS)
+    private let scrolls = ScrollMembership()
+    func changed(in scroll: UIScrollView) {
+        guard !videos.isEmpty, scrolls.contains(scroll, members: videos.values.compactMap { $0.value?.owner }) else {
+            AnimatedRasters.shared.poke()
+            return
+        }
+        changed()
+    }
+    #endif
     private final class WeakVideo {
         weak var value: VideoView?
         init(_ value: VideoView) { self.value = value }
@@ -402,10 +421,23 @@ final class VideoVisibilityHost {
     func track(_ video: VideoView) {
         let key = ObjectIdentifier(video)
         if videos[key] == nil { videos[key] = WeakVideo(video) }
+        #if os(iOS) || os(tvOS)
+        ScrollMembership.epoch &+= 1
+        #endif
         changed()
     }
-    func remove(_ video: VideoView) { videos.removeValue(forKey: ObjectIdentifier(video)) }
-    func reset() { videos.removeAll() }
+    func remove(_ video: VideoView) {
+        videos.removeValue(forKey: ObjectIdentifier(video))
+        #if os(iOS) || os(tvOS)
+        ScrollMembership.epoch &+= 1
+        #endif
+    }
+    func reset() {
+        videos.removeAll()
+        #if os(iOS) || os(tvOS)
+        ScrollMembership.epoch &+= 1
+        #endif
+    }
     func changed() {
         AnimatedRasters.shared.poke()
         guard !videos.isEmpty, !queued else { return }

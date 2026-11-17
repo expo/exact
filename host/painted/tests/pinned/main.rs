@@ -1,38 +1,25 @@
 //! The Linux host's integration tests that pin the fixture font: one binary.
 //! `tests/it/` holds the ones that leave the font environment alone.
 
+mod ahead;
 mod backdrop;
 mod borders;
 mod color_scheme;
+mod field_align;
 mod gradients;
 mod host;
 mod materials;
 mod motion_paint;
+mod native_buttons;
+mod native_fields;
 mod paint;
 mod text;
 mod tint;
 mod visual;
 
-/// The pinned font (LLP 1015 §3): the fixture directory and the family name
-/// the driver sets, so every number in these tests is the same on a Mac and
-/// on a builder. Set once, before the first engine is made; the environment
-/// is process-wide and every test in this binary wants the same values.
-/// Every test that makes an engine calls it first: the process reads its
-/// installed fonts once, at its first engine, so one test that boots
-/// unpinned leaves the tests that start after it without the font.
-fn pin_font() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        std::env::set_var(
-            "EXACT_FONTS",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../scripts/fixtures/fonts/assets"
-            ),
-        );
-        std::env::set_var("EXACT_FONT", "DejaVu Sans");
-    });
-}
+#[path = "../fonts/mod.rs"]
+mod test_fonts;
+use test_fonts::pin_font;
 
 /// Caltrain's plan, compiled and baked once for the binary: its boots each make their own
 /// presenter, data source and images from the same bytes.

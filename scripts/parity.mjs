@@ -86,11 +86,13 @@ export function register(a, b, { slop, band }) {
 }
 
 /** One screenshot of a session, in sRGB, with its device scale `k` and the
- * rows above the viewport (a window capture's title bar). */
-export async function shot(s, host, dir, name) {
+ * rows above the viewport (a window capture's title bar). `film`: a film's
+ * frame, which shows finite motion where the clock is rather than held at
+ * its end (LLP 1116.003 D8). */
+export async function shot(s, host, dir, name, film = false) {
   const layout = await s.layout();
   let path = resolve(dir, `${host}-${name}.png`);
-  await s.screenshot(path, host === 'macos');
+  await s.screenshot(path, host === 'macos', undefined, film);
   if (host === 'macos' || host === 'ios') {
     // A native capture is in the display's profile (Display P3 on a Mac);
     // Chrome's is sRGB.

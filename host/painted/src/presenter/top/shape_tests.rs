@@ -1,6 +1,40 @@
-//! The alert reader (`alert`) over trees built by hand rather than compiled,
-//! so it is held to the marks themselves.
+//! The top layer's reading of authored titles and confirmation rows.
 use super::*;
+
+#[test]
+fn projected_title_direction_follows_its_text_or_its_own_label() {
+    let source = r#"component App
+  state blank = ""
+  view
+    main direction="rtl"
+      button id="child" aria-label="Accessible label"
+        text "Visible title" direction="ltr"
+      button id="empty" aria-label="Fallback label" width=100 height=40
+        text blank direction="ltr"
+      button id="label" aria-label="Own label" direction="ltr" width=100 height=40
+"#;
+    let (p, error) = crate::presenter::Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (300., 600.),
+        1.,
+        std::path::PathBuf::new(),
+        crate::presenter::PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let kernel = p.host.kernel();
+    for (id, title, direction) in [
+        ("child", "Visible title", Direction::Ltr),
+        ("empty", "Fallback label", Direction::Rtl),
+        ("label", "Own label", Direction::Ltr),
+    ] {
+        let node = kernel.node_by_key(kernel.find_by_id(id)[0]).unwrap();
+        let row = row(kernel, &node, false);
+        assert_eq!(row.title, title, "{id}");
+        assert_eq!(row.direction, direction, "{id}");
+    }
+}
 
 /// The reader crosses the boxes the compiler groups an alert into
 /// (`alertPart`) only when each holds what its part does: a `message` box of

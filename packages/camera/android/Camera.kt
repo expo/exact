@@ -9,7 +9,7 @@
 //   own (`CAPTURE_MODE_MINIMIZE_LATENCY`, flash off, JPEG, D2); `fillLightMode` and the `android.*` words set the
 //   flash, mode and quality, a builder field built again when it changes. The shutter sound is
 //   `MediaActionSound.SHUTTER_CLICK` at each capture, unless `android.shutterSound` is false where the platform
-//   allows it.
+//   allows it. Before API 33 the regional requirement cannot be queried, so the sound stays on.
 // - Hosted views take no touches beyond a click (`host/android/README.md`): no tap to focus or pinch to zoom yet (D8
 //   item 6, recorded as a tell).
 // - Under the agent no capture exists: the viewfinder shows a drawn test card, mirrored for a `user` camera, and
@@ -26,6 +26,15 @@
 //   intent to an app that declares CAMERA (`getUserMedia` derives it) without holding it, so such an
 //   app asks for it first, as a hand-built one must. Under the agent the runner holds the person's sheet, and `take`
 //   writes the agent's picture.
+// - `recordVideoWithCameraApp` is the same camera app recording a video (`MediaStore.ACTION_VIDEO_CAPTURE`, Jetpack's
+//   `CaptureVideo`), staged and kept the same way and answered as a `Video` read with `MediaMetadataRetriever` (LLP
+//   1133.008.000 D2). `maxDuration` is `EXTRA_DURATION_LIMIT`, `android.videoQuality` and `android.sizeLimit` its other
+//   extras. A camera app that ignores `EXTRA_OUTPUT` and answers a video URI of its own has it copied in; its gallery
+//   copy is its own. The camera app records the sound under its own microphone permission. Under the agent `take`
+//   writes the package's one-second clip, the same bytes on every host.
+// - A call let go publishes nothing (LLP 1133.008.000 D7): the camera app stays up, as another app's UI must, and
+//   what the person keeps there is removed. The kept file replaces the path on the main thread, where `cancel` runs,
+//   after a copy-in and the facts are read off it.
 package exact.camera
 
 import android.app.Activity
@@ -38,6 +47,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.media.MediaActionSound
+import android.os.Build
 import android.provider.MediaStore
 import android.view.View
 import android.widget.ImageView
@@ -106,6 +116,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private var picture: String? = null
     private var taken = 0
     private val photos = JSONArray()
+    private val videos = JSONArray()
     private val sound by lazy { MediaActionSound().apply { load(MediaActionSound.SHUTTER_CLICK) } }
 
     private fun say(line: String) = context.log("camera: $line")
@@ -121,8 +132,20 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
-        if (name == "takePhotoWithCameraApp") cameraApp(args, (preferred as? JSONObject)?.optString("tap"), reply)
-        else later(name, args, reply)
+        val tap = (preferred as? JSONObject)?.optString("tap")
+        when (name) {
+            "takePhotoWithCameraApp" -> cameraApp(PHOTO, args, tap, reply)
+            "recordVideoWithCameraApp" -> cameraApp(VIDEO, args, tap, reply)
+            else -> later(name, args, reply)
+        }
+    }
+
+    /** The send [request] was let go (LLP 1133.016 D15 item 2): its camera app's result publishes nothing. */
+    override fun cancel(request: Int) {
+        if (cameraAppUp && request == cameraAppRequest) {
+            cameraAppLetGo = true
+            say("camera app: let go")
+        }
     }
 
     override fun preferred(values: JSONObject) {
@@ -255,10 +278,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** Under the agent, each photo for `state.extensions` (§9, Disclosure), by path and SHA-256; a photo from the camera
      * app names no track. */
-    private fun disclose(path: String, track: String?, bytes: ByteArray) {
+    private fun disclose(path: String, track: String?, bytes: ByteArray, into: JSONArray = photos) {
         val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        photos.put(JSONObject().put("path", path).put("sha256", sha).put("track", track ?: JSONObject.NULL).put("origin", context.origin))
-        context.state(JSONObject().put("photos", photos))
+        val entry = JSONObject().put("path", path).put("sha256", sha).put("origin", context.origin)
+        if (into === photos) entry.put("track", track ?: JSONObject.NULL)
+        into.put(entry)
+        context.state(JSONObject().put("photos", photos).put("videos", videos))
     }
 
     private fun takePhoto(args: JSONObject, reply: (JSONObject) -> Unit) {
@@ -281,7 +306,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val source = entry.video?.invoke() ?: return reply(error("InvalidStateError"))
         val android = args.optJSONObject("android") ?: JSONObject()
         val capture = try { imageCapture(source, args, android) } catch (e: TrackError) { return reply(error(e.code)) }
-        if (android.optBoolean("shutterSound", true) || MediaActionSound.mustPlayShutterSound()) sound.play(MediaActionSound.SHUTTER_CLICK)
+        if (android.optBoolean("shutterSound", true) || Build.VERSION.SDK_INT < 33 || MediaActionSound.mustPlayShutterSound()) sound.play(MediaActionSound.SHUTTER_CLICK)
         // A photo in flight is a consumer: its lease holds until the file is written (D3).
         val holder = Sub(entry.id, "app")
         holder.leave = context.tracks.subscribe(entry.id, holder, false, "app")
@@ -300,15 +325,23 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             })
     }
 
-    // The camera app (`takePhotoWithCameraApp`)
+    // The camera app (`takePhotoWithCameraApp`, `recordVideoWithCameraApp`)
 
-    /** Whether the camera app is up for a call; one is at a time. */
+    /** What the camera app is asked for: its intent, the staged file's name and extension, and its noun. */
+    private class Shot(val action: String, val ext: String, val noun: String)
+    private val PHOTO = Shot(MediaStore.ACTION_IMAGE_CAPTURE, "jpg", "photo")
+    private val VIDEO = Shot(MediaStore.ACTION_VIDEO_CAPTURE, "mp4", "video")
+
+    /** Whether the camera app is up for a call; one is at a time, a photo's or a video's. */
     private var cameraAppUp = false
+    /** The runner's number for that call, which a `cancel` names, and whether it was let go. */
+    private var cameraAppRequest: Int? = null
+    private var cameraAppLetGo = false
 
-    /** The answer of `takePhotoWithCameraApp`, [tap] the agent's on its sheet. */
-    private fun cameraApp(args: JSONObject, tap: String?, reply: (JSONObject) -> Unit) {
+    /** The answer of `takePhotoWithCameraApp` or `recordVideoWithCameraApp`, [tap] the agent's on its sheet. */
+    private fun cameraApp(shot: Shot, args: JSONObject, tap: String?, reply: (JSONObject) -> Unit) {
         if (cameraAppUp) return reply(error("InvalidStateError"))
-        val ext = "jpg"
+        val ext = shot.ext
         val path = args.optString("path").ifEmpty { null }?.let { if (it.endsWith(".$ext")) it else "$it.$ext" } ?: "app:/tmp/camera/${++taken}.$ext"
         val file = context.file(path) ?: return reply(error("UnknownError"))
         if (context.agent) {
@@ -316,19 +349,23 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
                 say("camera app: cancelled (the agent's sheet)")
                 return reply(error("AbortError"))
             }
-            val bytes = agentBytes() ?: return reply(error("UnknownError"))
+            val bytes = (if (shot === VIDEO) agentVideo() else agentBytes()) ?: return reply(error("UnknownError"))
             file.parentFile?.mkdirs()
             try { Files.write(file, bytes) } catch (e: IOException) { return reply(error("UnknownError")) }
-            say("camera app took $path (${bytes.size} bytes, the agent's picture)")
-            disclose(path, null, bytes)
-            return reply(photo(path, file))
+            say("camera app took $path (${bytes.size} bytes, the agent's ${shot.noun})")
+            disclose(path, null, bytes, if (shot === VIDEO) videos else photos)
+            return reply(if (shot === VIDEO) video(path, file) else photo(path, file))
         }
+        val request = context.request
         val camera = android.Manifest.permission.CAMERA
-        if (!declares(camera) || held(camera)) return openCameraApp(path, file, args, reply)
+        if (!declares(camera) || held(camera)) return openCameraApp(shot, request, path, file, args, reply)
         cameraAppUp = true
+        cameraAppRequest = request
+        cameraAppLetGo = false
         context.askPermission(camera) {
             cameraAppUp = false
-            if (held(camera)) return@askPermission openCameraApp(path, file, args, reply)
+            if (cameraAppLetGo) return@askPermission reply(error("AbortError"))
+            if (held(camera)) return@askPermission openCameraApp(shot, request, path, file, args, reply)
             say("camera app: the app declares CAMERA and does not hold it")
             reply(error("NotAllowedError"))
         }
@@ -343,14 +380,14 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions?.contains(permission) == true
     }.getOrDefault(false)
 
-    private fun openCameraApp(path: String, file: File, args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun openCameraApp(shot: Shot, request: Int?, path: String, file: File, args: JSONObject, reply: (JSONObject) -> Unit) {
         // Outside `app:/cache` and `app:/tmp` (`cache/cache`, `cache/temporary`), where the app's own code writes. A
         // file staged before the process last ended answers nothing now.
         val staging = File(context.application.cacheDir, "exact.camera-app")
         Files.removeTree(staging)
-        val staged = File(staging, "photo.jpg")
+        val staged = File(staging, "${shot.noun}.${shot.ext}")
         val out = Files.writableUri(context.application, staged) ?: return reply(error("UnknownError"))
-        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, out)
+        val intent = Intent(shot.action).putExtra(MediaStore.EXTRA_OUTPUT, out)
             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         // Android names no extra for the side; these are the ones camera apps read (Google Camera among them).
         when (args.optString("facingMode")) {
@@ -358,24 +395,76 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
                 .putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
             "environment" -> intent.putExtra("android.intent.extras.CAMERA_FACING", 0).putExtra("android.intent.extras.LENS_FACING_BACK", 1)
         }
+        if (shot === VIDEO) {
+            args.optDouble("maxDuration").takeIf { it > 0 }?.let { intent.putExtra(MediaStore.EXTRA_DURATION_LIMIT, kotlin.math.ceil(it).toInt()) }
+            val android = args.optJSONObject("android") ?: JSONObject()
+            when (android.optString("videoQuality")) {
+                "low" -> intent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 0)
+                "high" -> intent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1)
+            }
+            android.optDouble("sizeLimit").takeIf { it > 0 }?.let { intent.putExtra(MediaStore.EXTRA_SIZE_LIMIT, it.toLong()) }
+        }
         cameraAppUp = true
+        cameraAppRequest = request
+        cameraAppLetGo = false
         say("camera app for $path")
         val end = { reason: String ->
             Files.endWrite(staged)
             Files.removeTree(staging)
             cameraAppUp = false
+            cameraAppRequest = null
             say("camera app: $reason")
         }
         context.startActivityForResult(intent, { refusal ->
             end("not started, $refusal")
             reply(error(refusal))
-        }) { code, _ ->
+        }) { code, data ->
             Files.endWrite(staged)
-            val shot = code == Activity.RESULT_OK
-            val kept = shot && Files.regular(staged) && staged.length() > 0 && runCatching { keep(staged, file) }.isSuccess
-            end(if (kept) "took $path (${file.length()} bytes)" else if (shot) "kept nothing at $path" else "cancelled")
-            reply(if (kept) photo(path, file) else error(if (shot) "UnknownError" else "AbortError"))
+            if (code != Activity.RESULT_OK) {
+                end("cancelled")
+                return@startActivityForResult reply(error("AbortError"))
+            }
+            // A camera app that records to its own place despite `EXTRA_OUTPUT` answers its URI; copied in, and the
+            // facts read, off the main thread. The kept file is published back on it, where `cancel` runs.
+            val own = if (shot === VIDEO && !(Files.regular(staged) && staged.length() > 0)) data?.data else null
+            Thread {
+                val copied = own == null || copyIn(own, staged)
+                val facts = if (copied && Files.regular(staged) && staged.length() > 0) {
+                    if (shot === VIDEO) video(path, staged) else photo(path, staged)
+                } else null
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    when {
+                        cameraAppLetGo -> { end("let go; kept nothing at $path"); reply(error("AbortError")) }
+                        facts == null -> { end("kept nothing at $path"); reply(error("UnknownError")) }
+                        runCatching { keep(staged, file) }.isFailure -> { end("could not keep $path"); reply(error("UnknownError")) }
+                        else -> { end("took $path (${file.length()} bytes)"); reply(facts) }
+                    }
+                }
+            }.apply { name = "exact-camera-app" }.start()
         }
+    }
+
+    /** The camera app's own video at [uri], copied to [staged] 64 KiB at a time: a `video/` type only, never one of the
+     * app's own files. A copy that fails leaves no staged file. */
+    private fun copyIn(uri: android.net.Uri, staged: File): Boolean {
+        val resolver = context.application.contentResolver
+        if (uri.scheme != "content" || uri.authority == "${context.application.packageName}.exact.files") {
+            say("camera app: answered $uri, not read")
+            return false
+        }
+        val type = runCatching { resolver.getType(uri) }.getOrNull()
+        if (type?.startsWith("video/") != true) {
+            say("camera app: answered $uri of type $type, not read")
+            return false
+        }
+        return runCatching {
+            val input = resolver.openInputStream(uri) ?: throw IOException("no stream")
+            input.use { Files.output(staged).use { out -> input.copyTo(out, 64 shl 10) } }
+            say("camera app answered its own $uri; copied, and its gallery copy is the camera app's")
+        }.onFailure {
+            staged.delete()
+            say("camera app: could not read $uri, ${it.message}")
+        }.isSuccess
     }
 
     /** [staged] in place of [file]: renamed over it, which replaces a link there rather than writing what it names. */
@@ -408,6 +497,28 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         return made
     }
 
+    /** `Video`: its type, length in seconds, and size as it plays, its rotation applied; 0 where the file says nothing. */
+    private fun video(path: String, file: File): JSONObject {
+        val o = JSONObject().put("path", path).put("type", "video/mp4").put("size", file.length())
+            .put("duration", 0).put("width", 0).put("height", 0)
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(file.path)
+            val n = { key: Int -> r.extractMetadata(key)?.toLongOrNull() ?: 0L }
+            r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE)?.takeIf { it.startsWith("video/") }?.let { o.put("type", it) }
+            val w = n(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+            val h = n(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+            val turned = n(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION) % 180 == 90L
+            o.put("duration", n(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) / 1000.0)
+                .put("width", if (turned) h else w).put("height", if (turned) w else h)
+        } catch (e: Exception) {
+            say("video $path: ${e.message}")
+        } finally {
+            runCatching { r.release() }
+        }
+        return o
+    }
+
     /** `Photo`: its size as it is shown, its orientation applied. */
     private fun photo(path: String, file: File): JSONObject {
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -427,7 +538,10 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             .put("fillLightMode", if (torch) JSONArray().put("auto").put("off").put("flash") else JSONArray().put("off"))
     }
 
-    // The agent's picture (§9)
+    // The agent's picture and clip (§9)
+
+    /** The package's one-second clip (`fixture/clip.mp4`), the same bytes on every host. */
+    private fun agentVideo(): ByteArray? = runCatching { java.util.Base64.getDecoder().decode(AGENT_VIDEO) }.getOrNull()
 
     private fun agentBytes(): ByteArray? {
         picture?.let { p -> return runCatching { context.application.assets.open("app/$p").use { it.readBytes() } }.getOrNull() }
@@ -456,3 +570,24 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         return b
     }
 }
+
+/** [CameraModule.agentVideo]'s bytes in Base64: `packages/camera/fixture/clip.mp4`, one second of colour bars, 160×120
+ * H.264 in MP4 (`ffmpeg -f lavfi -i smptebars=size=160x120:rate=1:duration=1 -c:v libx264 -profile:v baseline -g 1
+ * -crf 35 -bsf:v filter_units=remove_types=6 -movflags +faststart`). */
+private val AGENT_VIDEO = listOf(
+    "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAALvbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAA+gAAQAAAQAAAAAAAAAAAAAA",
+    "AAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAj50cmFrAAAAXHRraGQAAAAD",
+    "AAAAAAAAAAAAAAABAAAAAAAAA+gAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAKAAAAB4AAAAAAAk",
+    "ZWR0cwAAABxlbHN0AAAAAAAAAAEAAAPoAAAAAAABAAAAAAG2bWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAABAAAAAQABVxAAAAAAALWhkbHIAAAAA",
+    "AAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABYW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAA",
+    "AQAAAAx1cmwgAAAAAQAAASFzdGJsAAAAvXN0c2QAAAAAAAAAAQAAAK1hdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAKAAeABIAAAASAAAAAAA",
+    "AAABDExhdmMgbGlieDI2NAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAAM2F2Y0MBQsAK/+EAG2dCwArcKEflwFqBAQKgAAADACAAAAMAQeJE8AEA",
+    "BWjOAlLIAAAAEHBhc3AAAAABAAAAAQAAABRidHJ0AAAAAAAADNAAAAAAAAAAGHN0dHMAAAAAAAAAAQAAAAEAAEAAAAAAHHN0c2MAAAAAAAAAAQAA",
+    "AAEAAAABAAAAAQAAABRzdHN6AAAAAAAAAZoAAAABAAAAFHN0Y28AAAAAAAAAAQAAAx8AAAA9dWR0YQAAADVtZXRhAAAAAAAAACFoZGxyAAAAAAAA",
+    "AABtZGlyYXBwbAAAAAAAAAAAAAAAAAhpbHN0AAAACGZyZWUAAAGibWRhdAAAAZZliIQEvJigACKhEQSA4X4gABgCxFREEtHxGKAAIXccAAR3I4AA",
+    "jOxEEgOF+IAAYAsRURBKKNHxGKAAIU8cAAR3I4AAkuREEgOF+IAAYAsRURBKKNHxGKAAIWscAAR3I4AAjO109PT09PT09PT109PT09PT09PT109P",
+    "T09PT09PT109PT09PT09PT8f/+GwRCgACAH5s8QACACISBrBkpZSUvJpN/h8Agg4Z+0AN8J3StXjCC4zwZvgXTsXLALojX/xp6aev8+n3EPgGHQd",
+    "g2mX5cwMGhhACDLBkpZAp5YMlLGS6P+AYhocdeKAD584RGQoQXEb4HW5fWB0xy/+Aa9AuPpwkkYCPgEdckD4Y1KAfiGAaDYoUPiQkeIRIQABAq+N",
+    "PDrOWHWcv4BgHDQLIoPgTMIFhVdvwPRSxaCoVA4EZfaa408Q+IYBoJhYUAAp4OhEbzQWigAFKOAAVmYKlZOwVxwY+KYLN3mv5oLRRYOCjDTIFMES",
+    "bPpWXzoEYpjgAEY4NoNA4X6U3Ig2KADXT09PT09PXXXg",
+).joinToString("")

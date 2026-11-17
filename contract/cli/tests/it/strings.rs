@@ -327,6 +327,36 @@ fn every_table_refusal_is_reported_in_one_run() {
     assert_eq!(app.refusals(), ["strings-base-missing"]);
 }
 
+/// A base with no table is refused with both repairs: its table, or
+/// `strings.base` naming a table the app has.
+#[test]
+fn a_missing_base_table_names_strings_base() {
+    let message = |tables: &[(&str, &str)]| {
+        let app = AppDir::new("component App\n  view\n    text \"x\"\n", tables);
+        let errors = app.compile().expect_err("refused");
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        errors[0].message.clone()
+    };
+    assert_eq!(
+        message(&[("strings/ur.json", r#"{"title": "سلام"}"#)]),
+        "the base locale is `en` (app.json names no `strings.base`), and it has no table: add `strings/en.json`, or make `ur` the base with `\"strings\": { \"base\": \"ur\" }` in app.json"
+    );
+    assert_eq!(
+        message(&[("strings/ur.json", "{}"), ("strings/ar.json", "{}")]),
+        "the base locale is `en` (app.json names no `strings.base`), and it has no table: add `strings/en.json`, or make one of `ar`, `ur` the base, as in `\"strings\": { \"base\": \"ar\" }` in app.json"
+    );
+    assert_eq!(
+        message(&[
+            ("strings/fr.json", "{}"),
+            (
+                "app.json",
+                r#"{"name":"S","app":{"id":"com.exact.s","name":"S"},"strings":{"base":"ur"}}"#,
+            )
+        ]),
+        "the base locale is `ur` (app.json's `strings.base`), and it has no table: add `strings/ur.json`, or make `fr` the base with `\"strings\": { \"base\": \"fr\" }` in app.json"
+    );
+}
+
 /// A child component's loop variable named like the string function does not
 /// hide it: expansion renames the child's locals, never a call's name.
 #[test]
@@ -336,6 +366,20 @@ fn a_loop_variable_named_t_leaves_t_callable_in_a_child() {
         &[("strings/en.json", r#"{"hi": "Hello"}"#)],
     );
     assert!(app.compile().is_ok(), "{:?}", app.refusals());
+}
+
+/// The root's action `t` is in the root's scope only (LLP 1089 D1): a
+/// child's `t("hi")` is still the strings call where the root inlines it.
+#[test]
+fn a_roots_action_named_t_leaves_t_callable_in_a_child() {
+    let app = AppDir::new(
+        "component App\n  state n = 0\n  action t(by: number)\n    n = n + by\n  view\n    column\n      button \"+\" press=t(1)\n      Greeting()\ncomponent Greeting\n  view\n    text t(\"hi\") testId=\"hi\"\n",
+        &[("strings/en.json", r#"{"hi": "Hello"}"#)],
+    );
+    let plan = app
+        .compile()
+        .unwrap_or_else(|_| panic!("{:?}", app.refusals()));
+    assert_eq!(text(&boot(plan), "hi"), "Hello");
 }
 
 #[test]
@@ -457,6 +501,48 @@ fn cldr_direction_follows_the_resolved_script_and_css_overrides_still_win() {
     );
     assert!(r.set_place("not a locale", "UTC", None).is_err());
     assert_eq!(r.resolved_locale(), "en");
+}
+
+#[test]
+fn a_launch_direction_replaces_the_tables_and_css_overrides_still_win() {
+    let app = AppDir::new("component App\n  view\n    column testId=\"root\"\n      text t(\"title\") testId=\"title\"\n      text \"CSS\" direction=\"rtl\" testId=\"override\"\n", &[
+        ("strings/en.json", EN), ("strings/ar.json", EN),
+    ]);
+    let plan = app.compile().unwrap();
+    for host in [exact_kernel::Direction::Ltr, exact_kernel::Direction::Rtl] {
+        let launch = exact_runner::time::Launch {
+            place: Some(exact_runner::time::Place {
+                locale: "ar".into(),
+                ..Default::default()
+            }),
+            direction: Some(host),
+            ..exact_runner::time::Launch::NONE
+        };
+        let r = exact_runner::time::launching_with(launch, || boot(plan.clone()));
+        assert_eq!(r.resolved_locale(), "ar");
+        assert_eq!(r.direction(), host.name());
+        for id in ["root", "title", "override"] {
+            let node = r
+                .kernel()
+                .node_by_key(r.kernel().find_by_test_id(id)[0])
+                .unwrap();
+            let want = if id == "override" {
+                exact_kernel::Direction::Rtl
+            } else {
+                host
+            };
+            assert_eq!(
+                node.computed_style(exact_kernel::StyleMask::INHERITED)
+                    .direction,
+                want,
+                "{}: {id}",
+                host.name()
+            );
+        }
+        let state = exact_runner::agent::state(&r);
+        let language = format!(r#""language":{{"lang":"ar","dir":"{}"}}"#, host.name());
+        assert!(state.contains(&language), "{state}");
+    }
 }
 
 #[test]

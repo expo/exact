@@ -34,7 +34,7 @@ export function motionBytes(facts) {
     for(let i=0;i<6;i++)d.setFloat64(64+i*8,facts.values[i],true);
     d.setFloat64(112,now,true);return bytes;
   }
-  const operations=['begin','move','release','cancel','live','action','height-owner','clear-height-owner','height-begin','height-action','release-measured','gesture','track','pan-sample','pan-velocity'];
+  const operations=['begin','move','release','cancel','live','action','height-owner','clear-height-owner','height-begin','height-action','release-measured','gesture','track','pan-sample','pan-velocity','present','release-overdue'];
   const properties=['translate','scale','rotate','opacity','height'];
   const code=operations.indexOf(op), prop=properties.indexOf(property);
   if(code<0||prop<0) throw Error('invalid motion operation');
@@ -131,8 +131,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // What motion writes over the author's style, which `restore` puts back: the lift's `z-index` and `position`, the
   // `transition` that keeps a held property from animating, and each held property (`scale` as `--exact-scale` on a
   // pressable, `cssProperty`)
-  const overwritten=['z-index','position','transition','translate','scale','--exact-scale','rotate','opacity','height'];
-  const animations=new Map(), held=new Map(), authored=new Map(), drags=new Map();
+  const overwritten=['z-index','position','transition','translate','scale','--exact-scale','--exact-translate-x','--exact-translate-y','--exact-translate-z','rotate','opacity','height'];
+  const animations=new Map(), held=new Map(), authored=new Map(), drags=new Map(), waitingShape=new WeakMap();
   const raised=new Set();
   const active=new Map(), heightBindings=new Map(); let reconciling=false;
   const transformBindings=new Map(), geometryDirty=new Set();
@@ -144,7 +144,12 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A translate frame is `[x,y]` lengths, or `[x,y,px,py]` with percentages
   // of the box, which the browser resolves (chess diary #4).
   const axis=(l,p)=>p?(l?`calc(${l}px + ${p}%)`:`${p}%`):`${l}px`;
-  const css=(property,value)=>property==='translate'?`${axis(value[0],value[2])} ${axis(value[1],value[3])}`:property==='rotate'?`${value[0]}deg`:property==='height'?`${Math.max(0,value[0])}px`:String(value[0]);
+  const css=(property,value)=>property==='translate'?`${axis(value[0],value[2])} ${axis(value[1],value[3])}`:property==='rotate'?`${value[1]||0} ${value[2]||0} ${value[3]||(!(value[1]||value[2])?1:0)} ${value[0]}deg`:property==='height'?`${Math.max(0,value[0])}px`:String(value[0]);
+  const composedTranslate=el=>getComputedStyle(el).getPropertyValue('--exact-translate-composes').trim()==='1';
+  const cssValues=(el,property,value)=>property==='translate'&&composedTranslate(el)
+    ? {translate:css(property,value),'--exact-translate-x':axis(value[0],value[2]),'--exact-translate-y':axis(value[1],value[3]),'--exact-translate-z':'0px'}
+    : {[cssProperty(el,property)]:css(property,value)};
+  const writeValue=h=>{for(const [p,v] of Object.entries(cssValues(h.el,h.property,h.value)))h.el.style.setProperty(p,v);};
   const call=(op,h,value=[0,0],t=now())=>request({op,view:h.view,property:h.property,token:h.token??0,x:value[0],y:value[1],now:t});
   const local=h=>h && h.generation===generation() && views.get(h.view)===h.el && h.el.isConnected && held.get(key(h.view,h.property))===h;
   const eligible=el=>el?.isConnected&&!el.closest('[disabled]')&&!el.matches(':disabled')&&!inert(el)&&el.getClientRects().length>0&&getComputedStyle(el).visibility==='visible';
@@ -413,7 +418,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     }
     // Browser easing is a CSSTransition; other properties continue undisturbed.
     for(const animation of el?.getAnimations()??[]) {
-      if(animation.effect?.target===el && animation.transitionProperty===cssProperty(el,property)) animation.cancel();
+      if(animation.effect?.target===el && Object.hasOwn(cssValues(el,property,[0,0]),animation.transitionProperty)) animation.cancel();
     }
   }
   function overlay(id) {
@@ -422,8 +427,8 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     if(raised.has(id)){el.style.zIndex='2147483647';if(getComputedStyle(el).position==='static')el.style.position='relative';}
     if(!active.length) return;
     const transition=el.style.transition;
-    el.style.transition=[...(transition && transition!=='none'?[transition]:[]), ...active.map(h=>`${cssProperty(el,h.property)} 0s linear 0s`)].join(',');
-    for(const h of active) { el.style.setProperty(cssProperty(el,h.property),css(h.property,h.value)); cancelProperty(id,h.property,el); }
+    el.style.transition=[...(transition && transition!=='none'?[transition]:[]), ...active.flatMap(h=>Object.keys(cssValues(el,h.property,h.value)).map(p=>`${p} 0s linear 0s`))].join(',');
+    for(const h of active) { writeValue(h); cancelProperty(id,h.property,el); }
   }
   function restore(id) {
     const el=views.get(id); if(!el) return;
@@ -616,7 +621,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     followTimelines() { if(typeof document!=='undefined'&&followTimelines())kickTimelines(); },
     presentReorder(view,token,value) {
       const h=held.get(key(view,'translate'));if(!local(h)||h.token!==token)return false;
-      h.value=value;h.el.style.translate=css('translate',value);return true;
+      h.value=value;writeValue(h);return true;
     },
     raiseReorder(id,enabled) {
       const el=views.get(id);if(!el)return;
@@ -637,7 +642,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       const rows=[];
       for(const s of samples){const h=held.get(key(s.view,'translate'));if(!local(h)||h.token!==(s.hold??s.token))continue;
         const r=h.el.getBoundingClientRect();h.value=[h.value[0]+s.visual[0]-r.x,h.value[1]+s.visual[1]-r.y];
-        h.el.style.translate=css('translate',h.value);rows.push({...s,value:h.value});}
+        writeValue(h);rows.push({...s,value:h.value});}
       return rows;
     },
     releaseReorder(samples) {
@@ -690,7 +695,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       if(!local(h)) return false;
       const t=now(),reply=call('move',h,value,t); if(reply.accepted!==true) return false;
       h.t=t;
-      h.value=value; h.el.style.setProperty(cssProperty(h.el,h.property),css(h.property,value));
+      h.value=value; writeValue(h);
       if(reply.batch) applyBatch(reply.batch);
       return true;
     },
@@ -742,11 +747,25 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       el.style.cssText=text; overlay(id);
     },
     animate(op) {
-      const {id,property}=op, k=key(id,property);
+      const {id,property}=op, k=key(id,property), prior=animations.get(k);
+      // The started op for a held spring pins the browser's own animation, which keeps running. Its duration is a
+      // difference of the engine's times, so it can differ from the held op's in the last bits.
+      const near=(a,b)=>Math.abs(a-b)<=1e-6*Math.max(1,Math.abs(a),Math.abs(b));
+      const same=w=>w&&near(w.duration,op.duration)&&w.values.length===op.values.length
+        &&w.values.every((v,i)=>[v].flat().every((x,j)=>near(x,[op.values[i]].flat()[j])));
+      if(!op.held&&Number.isFinite(op.at)&&prior&&same(waitingShape.get(prior))) {
+        waitingShape.delete(prior);
+        const record=followers.get(id);
+        for(const a of [prior,...(record?.driver===prior?record.animations.map(f=>f.animation):[])]) {
+          a.effect.updateTiming({delay:op.delay});
+          a.startTime=performance.now()-now()+op.at;
+        }
+        return;
+      }
       cancelProperty(id,property);
       if(!op.values.length || held.has(k)) return;
       const el=views.get(id); if(!el) return;
-      const animation=el.animate(op.values.map(value=>({[cssProperty(el,property)]:css(property,property==='translate'?value:[value,0])})),
+      const animation=el.animate(op.values.map(value=>cssValues(el,property,Array.isArray(value)?value:[value,0])),
         {delay:op.delay,duration:op.duration,easing:'linear',fill:'backwards'});
       // Started where the engine lowered it (`at`, the host's clock), not
       // when the browser next commits a pending animation, two frames later
@@ -755,6 +774,15 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       // instead.
       if(Number.isFinite(op.at))animation.startTime=performance.now()-now()+op.at;
       animations.set(k,animation);
+      // A spring a commit began waits for the frame that shows it (LLP 1003.001 D9): the browser starts it at its
+      // ready time, which the engine takes as the curve's start, and the started op that follows pins it there. If
+      // none came by `due`, the engine starts it at its commit and says so the same way.
+      if(op.held) {
+        waitingShape.set(animation,{duration:op.duration,values:op.values});
+        const told=t=>{if(animations.get(k)!==animation)return;const r=request({op:'present',view:id,property,x:t,now:now()});if(r.batch)applyBatch(r.batch);};
+        animation.ready.then(a=>{if(a.startTime!==null)told(a.startTime-(performance.now()-now()));},()=>{});
+        if(Number.isFinite(op.due))setTimeout(()=>{if(animations.get(k)!==animation)return;const r=request({op:'release-overdue',view:id,property,now:now()});if(r.batch)applyBatch(r.batch);},Math.max(0,op.due-now())+1);
+      }
       animation.finished.then(()=>{if(animations.get(k)===animation) animations.delete(k);},()=>{});
       if(property==='translate'&&el.style.getPropertyValue('--exact-drag-timeline'))follow(id,el,op,animation);
     },
@@ -835,7 +863,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       }
       function present(d,v) {
         d.value=v;d.pair[0].value=v.slice(0,2);d.pair[1].value=[v[2],0];
-        for(const h of d.pair)if(local(h))h.el.style.setProperty(cssProperty(h.el,h.property),css(h.property,h.value));
+        for(const h of d.pair)if(local(h))writeValue(h);
         if(d.binding.targetEl.style.getPropertyValue('--exact-drag-timeline'))followTimelines();
       }
       function arm(e,extra) {

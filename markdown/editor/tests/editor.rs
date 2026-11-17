@@ -151,12 +151,240 @@ fn bold_input_event_toggles_pending_bold() {
 }
 
 #[test]
-fn a_space_at_the_end_of_bold_goes_outside() {
+fn emphasis_continues_across_spaces() {
     let mut p = Page::open("");
     p.tool("bold");
     p.type_("bold");
-    p.type_(" plain");
-    assert_eq!(p.source(), "**bold** plain");
+    p.type_(" words");
+    assert_eq!(p.source(), "**bold words**");
+}
+
+#[test]
+fn continued_emphasis_keeps_valid_source_and_toolbar_state() {
+    for marker in ["**", "*", "__", "_", "~~", "***"] {
+        for gap in [" ", "  ", "\t", "\u{a0}"] {
+            let mut p = Page::open(&format!("{marker}hello{marker}"));
+            p.caret((marker.len() + 5) as u32);
+            let formats = p.e.facts().formats;
+            p.type_(gap);
+            assert_eq!(p.source(), format!("{marker}hello{marker}{gap}"));
+            assert_eq!(p.e.facts().formats, formats);
+            p.type_("world");
+            assert_eq!(p.source(), format!("{marker}hello{gap}world{marker}"));
+            assert_eq!(p.e.visible_text(), format!("hello{gap}world"));
+            p.tool("undo");
+            assert_eq!(p.source(), format!("{marker}hello{marker}"));
+            p.tool("redo");
+            assert_eq!(p.source(), format!("{marker}hello{gap}world{marker}"));
+        }
+    }
+}
+
+#[test]
+fn continued_emphasis_ends_on_toggle_move_return_or_external_edit() {
+    for end in ["toggle", "move", "return", "value", "range"] {
+        let mut p = Page::open("");
+        p.tool("bold");
+        p.type_("hello ");
+        match end {
+            "toggle" => p.tool("bold"),
+            "move" => {
+                p.caret(2);
+                p.caret(10);
+            }
+            "return" => p.type_("\n"),
+            "value" => {
+                p.e.set_value(&u("**hello**  "));
+            }
+            "range" => {
+                p.e.replace(10, 10, &u(" "), SelectionMode::End, 200.0);
+            }
+            _ => unreachable!(),
+        }
+        p.type_("world");
+        let gap = match end {
+            "return" => " \n",
+            "range" => "  ",
+            _ => " ",
+        };
+        let suffix = if end == "value" { " " } else { "" };
+        assert_eq!(p.source(), format!("**hello**{gap}world{suffix}"), "{end}");
+    }
+}
+
+#[test]
+fn pending_emphasis_skips_leading_and_trailing_whitespace() {
+    for format in ["bold", "italic", "strike"] {
+        let mut p = Page::open("");
+        p.tool(format);
+        p.type_("  ");
+        assert_eq!(p.source(), "  ");
+        assert!(p.e.facts().formats.contains(format));
+        p.input(Input::Paste, "hello world  ");
+        let marker = match format {
+            "bold" => "**",
+            "italic" => "*",
+            _ => "~~",
+        };
+        assert_eq!(p.source(), format!("  {marker}hello world{marker}  "));
+        p.type_("again");
+        assert_eq!(p.source(), format!("  {marker}hello world  again{marker}"));
+    }
+}
+
+#[test]
+fn continued_emphasis_handles_paste_nested_toggles_and_selection_echoes() {
+    let mut p = Page::open("***hello***");
+    p.caret(8);
+    p.input(Input::Paste, " world  ");
+    assert_eq!(p.source(), "***hello world***  ");
+    let sel = p.e.selection();
+    assert_eq!(p.e.select(sel.0, sel.1, Some(sel)), Selected::Ignore);
+    assert!(!p.e.set_value(&u(&p.source())).source);
+    p.tool("italic");
+    p.type_("bold");
+    assert_eq!(p.source(), "***hello world***  **bold**");
+    p.type_(" again");
+    assert_eq!(p.source(), "***hello world***  **bold again**");
+
+    let mut p = Page::open("_hello_ suffix");
+    p.caret(6);
+    p.type_(" ");
+    p.input(Input::Paste, "world");
+    assert_eq!(p.source(), "_hello world_ suffix");
+
+    let mut p = Page::open("**hello**suffix");
+    p.caret(7);
+    p.type_(" ");
+    // A closer between punctuation and a letter is not right-flanking.
+    p.input(Input::Paste, ".");
+    assert_eq!(p.source(), "**hello** .suffix");
+    assert_eq!(p.e.visible_text(), "hello .suffix");
+}
+
+#[test]
+fn continuation_preserves_original_delimiter_pairs() {
+    let mut p = Page::open("**hello**");
+    p.caret(7);
+    p.type_(" ");
+    p.input(Input::Paste, "**world");
+    assert_eq!(p.source(), "**hello** **world");
+    assert_eq!(p.e.visible_text(), "hello **world");
+}
+
+#[test]
+fn continuation_can_toggle_an_inherited_outer_format_off() {
+    for source in ["*a **b** c*", "*a **b**c*", "_a **b** c_"] {
+        let mut p = Page::open(source);
+        p.caret(6);
+        p.type_(" ");
+        assert!(p.e.facts().formats.contains("italic"));
+        p.tool("italic");
+        assert_eq!(p.e.facts().formats, "bold");
+        p.type_("word");
+        assert_eq!(p.e.facts().formats, "bold", "{}", p.source());
+        assert_eq!(
+            p.e.visible_text(),
+            if source.contains("**c") {
+                "a b wordc"
+            } else {
+                "a b word c"
+            }
+        );
+        p.tool("undo");
+        assert_eq!(p.source(), source);
+    }
+}
+
+#[test]
+fn pending_whitespace_preserves_existing_emphasis() {
+    for (marker, format) in [
+        ("**", "italic"),
+        ("**", "strike"),
+        ("_", "bold"),
+        ("~~", "bold"),
+    ] {
+        let source = format!("{marker}hello{marker}");
+        let mut p = Page::open(&source);
+        p.caret(marker.len() as u32 + 5);
+        p.tool(format);
+        p.type_(" ");
+        assert_eq!(p.source(), format!("{source} "));
+        assert!(p.e.facts().formats.contains(format));
+        p.type_("x");
+        assert!(p.source().starts_with(&source));
+        assert_eq!(p.e.visible_text(), "hello x");
+        assert!(p.e.facts().formats.contains(format));
+    }
+}
+
+#[test]
+fn composition_continues_emphasis_after_whitespace() {
+    for word in ["日本", "é", "😀"] {
+        for partial in [false, true] {
+            let mut p = Page::open("before\n**hello**");
+            p.caret(14);
+            p.type_(" ");
+            let before = p.source();
+            let caret = p.e.selection();
+            p.e.compose(100.0);
+            // A cancelled composition leaves continuation available.
+            p.e.reconcile(&u(&before), Some(caret), 110.0);
+            if partial {
+                let line = format!("**hello** {word}");
+                let end = 7 + u(&line).len() as u32;
+                p.e.reconcile_range(
+                    7,
+                    p.e.source().len() as u32,
+                    &u(&line),
+                    Some((end, end)),
+                    120.0,
+                );
+            } else {
+                p.platform_types(word);
+            }
+            assert_eq!(p.source(), format!("before\n**hello {word}**"));
+            assert_eq!(p.e.facts().formats, "bold");
+            p.type_(" next");
+            assert_eq!(p.source(), format!("before\n**hello {word} next**"));
+            p.tool("undo");
+            assert_eq!(p.source(), "before\n**hello**");
+        }
+    }
+}
+
+#[test]
+fn continuation_paste_formats_only_the_first_line() {
+    for (paste, expected) in [
+        ("world\nmore", "**hello world**\nmore"),
+        ("world  \r\nmore", "**hello world**  \nmore"),
+        ("\nmore", "**hello** \nmore"),
+    ] {
+        let mut p = Page::open("**hello**");
+        p.caret(7);
+        p.type_(" ");
+        p.input(Input::Paste, paste);
+        assert_eq!(p.source(), expected);
+        assert!(!p.e.facts().formats.contains("bold"));
+        p.type_(" plain");
+        assert_eq!(p.source(), format!("{expected} plain"));
+        p.tool("undo");
+        assert_eq!(p.source(), "**hello**");
+    }
+}
+
+#[test]
+fn continuation_keeps_link_syntax_outside_emphasis() {
+    for marker in ["**", "_", "~~", "***"] {
+        let mut p = Page::open(&format!("[{marker}hello{marker}](url)"));
+        p.caret(marker.len() as u32 + 6);
+        p.type_(" ");
+        assert_eq!(p.source(), format!("[{marker}hello{marker} ](url)"));
+        p.type_("world");
+        assert_eq!(p.source(), format!("[{marker}hello world{marker}](url)"));
+        assert_eq!(p.e.visible_text(), "hello world");
+        assert_eq!(p.e.facts().link, "url");
+    }
 }
 
 #[test]

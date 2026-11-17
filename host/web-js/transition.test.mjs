@@ -17,6 +17,7 @@ for (const target of ['js', 'wasm']) (target === 'wasm' && !process.env.EXACT_MO
   state changed = false
   state declaration = false
   state next = "none"
+  derive spring = "opacity -exact-spring()"
   action change
     changed = true
   action cancel
@@ -47,7 +48,7 @@ for (const target of ['js', 'wasm']) (target === 'wasm' && !process.env.EXACT_MO
       button "Unset" press=unset testId="unset"
       button "Zero" press=zero testId="zero"
       box testId="ease" opacity=(changed ? 0.2 : 1) transition=(declaration ? next : "opacity 2s linear")
-      box testId="spring" opacity=(changed ? 0.2 : 1) transition=(declaration ? next : "opacity -exact-spring()")
+      box testId="spring" opacity=(changed ? 0.2 : 1) transition=(declaration ? next : spring)
 `);
     const out = resolve(dir, 'dist');
     if (target === 'js') {

@@ -233,7 +233,7 @@ impl Cursor {
     }
 }
 impl State {
-    fn scroll_event(&mut self, view: ViewId, key: NodeKey) {
+    pub(super) fn scroll_event(&mut self, view: ViewId, key: NodeKey) {
         if !self.scroll_events.contains(&(view, key)) {
             self.scroll_events.retain(|(id, _)| *id != view);
             self.scroll_events.push_back((view, key));
@@ -366,8 +366,8 @@ fn containing_width(kernel: &Kernel, view: ViewId, viewport: f64) -> f64 {
             (node.frame.width as f64
                 - left as f64
                 - right as f64
-                - length(kernel, node.id, style.padding_left, basis)
-                - length(kernel, node.id, style.padding_right, basis)
+                - length(kernel, node.id, style.padding_left.clone(), basis)
+                - length(kernel, node.id, style.padding_right.clone(), basis)
                 - covered)
                 .max(0.)
         })
@@ -734,7 +734,7 @@ impl<D: DataSource> Presenter<D> {
         next
     }
 
-    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
     pub(super) fn painted_collection_scroll(
         &self,
         boxes: &[PaintedBox],
@@ -804,6 +804,7 @@ impl<D: DataSource> Presenter<D> {
             height: (port.1 + max.1) as f64,
             client_width: port.0 as f64,
             client_height: port.1 as f64,
+            zoom: self.reported_zoom(view),
         })
     }
 
@@ -1314,6 +1315,21 @@ impl<D: DataSource> Presenter<D> {
                                 } as f64,
                             })
                     })
+                    .chain(snapshot.fixed.iter().enumerate().map(|(side, fixed)| {
+                        RowMeasurement {
+                            view: fixed.view,
+                            epoch: 1,
+                            size: self
+                                .host
+                                .kernel()
+                                .collection_fixed_sizes(
+                                    snapshot.view,
+                                    &snapshot.fixed[0].roots,
+                                    &snapshot.fixed[1].roots,
+                                )
+                                .expect("fixed collection layout")[side],
+                        }
+                    }))
                     .collect(),
                 focus_view: self.focus.filter(|_| {
                     let snapshots = all.get_or_init(|| self.host.collections());

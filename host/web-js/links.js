@@ -12,9 +12,16 @@ function made(e, attrs, rendered) {
 }
 
 /** A bound `rel`, `target` or `href`: a link to an absolute URL leaves the app in a new browsing context unless its
- * `target` is authored (element.rs `leaves_app`, `props_of`; chat F11). */
+ * `target` is authored (element.rs `leaves_app`, `props_of`; chat F11). A bound `target` is written as a literal one
+ * is, except that a name starting with `_` that is not one of HTML's keywords is `_blank`, a window with no name
+ * (LLP 1030.004 D1). */
 function prop(e, name, v) {
-  if (name === "rel") e.$rel = v; else if (name === "target") { e.$target = v != null; e.$external = false; }
+  if (name === "rel") e.$rel = v;
+  else if (name === "target") {
+    e.$target = v != null && v !== ""; e.$external = false;
+    if (e.$target) e.setAttribute("target", /^_(?!(blank|self|parent|top)$)/i.test(v) ? "_blank" : v);
+    else { e.removeAttribute("target"); return prop(e, "href", e.getAttribute("href")); }
+  }
   else if (!e.$target) { const out = v != null && /^\s*(https?:)?\/\//i.test(v); if (out) e.setAttribute("target", "_blank"); else e.removeAttribute("target"); e.$external = out; }
   linkRel(e);
 }
@@ -23,7 +30,7 @@ function prop(e, name, v) {
  * ASCII case-insensitively: `noopener` for a new browsing context, and `external` before it for the one an absolute
  * URL opens by default. The author's are what `rel` last wrote, and the template's (`made`) before that. */
 function linkRel(e) {
-  const own = relTokens(e.$rel), need = e.getAttribute("target") !== "_blank" ? [] : e.$external ? ["external", "noopener"] : ["noopener"];
+  const own = relTokens(e.$rel), need = !/^_blank$/i.test(e.getAttribute("target") ?? "") ? [] : e.$external ? ["external", "noopener"] : ["noopener"];
   const all = own.concat(need.filter(t => !own.some(o => o.toLowerCase() === t))).join(" ");
   if (all) { if (e.getAttribute("rel") !== all) e.setAttribute("rel", all); } else e.removeAttribute("rel");
 }

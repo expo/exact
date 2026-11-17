@@ -4,8 +4,12 @@ use std::rc::Rc;
 
 fn fixture(text: &str) -> Presenter<()> {
     let source = format!("component App\n  view\n    column width=\"100%\" padding=20 box-sizing=\"border-box\"\n{text}");
-    let plan = contract::compile(&source).unwrap();
-    let (presenter, error) = Presenter::boot_with(
+    program(&source)
+}
+
+fn program(source: &str) -> Presenter<()> {
+    let plan = contract::compile(source).unwrap();
+    let (presenter, error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -16,6 +20,30 @@ fn fixture(text: &str) -> Presenter<()> {
     .unwrap();
     assert!(error.is_none(), "{error:?}");
     presenter
+}
+
+#[test]
+fn a_focused_inline_run_composites_its_ring_with_its_ink() {
+    let draw = |opacity| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 color=\"#000000\"\n        text \"HHHH\" tabindex=0 testId=\"run\" opacity={opacity}\n"
+        ));
+        let key = p.host().kernel().find_by_test_id("run")[0];
+        let id = p.host().kernel().node_by_key(key).unwrap().id;
+        assert!(p.set_focus(Some(id), 0.).is_none());
+        p.frame().clone()
+    };
+    let full = draw(1.);
+    for opacity in [0., 0.25, 1.] {
+        let actual = draw(opacity);
+        for (a, s) in actual.data().iter().zip(full.data()) {
+            let expected = (255. - f32::from(255 - s) * opacity).round() as u8;
+            assert!(
+                a.abs_diff(expected) <= 2,
+                "the focus ring takes opacity {opacity}: {a} != {expected}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -41,11 +69,131 @@ fn nested_text_paints_the_same_paragraph_that_layout_measured() {
         let actual = nested.frame();
         assert!(expected
             .data()
-            .chunks_exact(4)
-            .any(|p| p != [255, 255, 255, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| *p != [255, 255, 255, 255]));
         assert!(
             actual.data() == expected.data(),
             "nested run pixels differ despite identical measured paragraph at width {width}"
+        );
+    }
+}
+
+#[test]
+fn inline_opacity_fades_all_run_paints_and_ancestor_lines() {
+    let draw = |outer, opacity, paragraph| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 opacity={paragraph} color=\"#000000\" text-decoration-line=\"underline line-through\"\n        text opacity={outer}\n          text \"HHHH\" opacity={opacity} background-color=\"#ff0000\" text-shadow=\"0px 45px 0px #00ff00\" -webkit-text-stroke=\"1px #0000ff\"\n"
+        ));
+        p.frame().clone()
+    };
+    let solid = draw(1., 1., 1.);
+    assert!(solid
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| *p != [255; 4]));
+    assert!(
+        draw(0., 1., 0.5)
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [255; 4]),
+        "a zero-opacity inline container leaves no glyph, background, shadow, stroke or decoration"
+    );
+    for opacity in [0., 0.25, 1.] {
+        let actual = draw(0.5, opacity, 0.5);
+        for (a, s) in actual.data().iter().zip(solid.data()) {
+            let expected = (255. - f32::from(255 - s) * 0.25 * opacity).round() as u8;
+            assert!(
+                a.abs_diff(expected) <= 2,
+                "opacity {opacity}: {a} instead of {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn glyph_clipped_backgrounds_take_only_their_opacity_groups_runs() {
+    let draw = |opacity| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 color=\"transparent\" background-color=\"red\" background-clip=\"text\"\n        text \"HHHH\"\n        text \"HHHH\" opacity={opacity}\n"
+        ));
+        p.frame().clone()
+    };
+    let solid = draw(1.);
+    let hidden = draw(0.);
+    let half = draw(0.5);
+    let mut faded = 0;
+    for ((full, zero), half) in solid
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(hidden.data().as_chunks::<4>().0)
+        .zip(half.data().as_chunks::<4>().0)
+    {
+        if full == zero {
+            assert_eq!(full, half, "the opaque sibling must paint once");
+        } else {
+            faded += 1;
+            for (h, f) in half.iter().zip(full) {
+                let expected = (255. - f32::from(255 - f) * 0.5).round() as u8;
+                assert!(h.abs_diff(expected) <= 2);
+            }
+        }
+    }
+    assert!(
+        faded > 20,
+        "the transparent-colour run punches a faded glyph clip"
+    );
+}
+
+#[test]
+fn inline_background_belongs_to_its_own_opacity_group() {
+    let draw = |opacity| {
+        let mut p = fixture(&format!(
+            "      text font-size=32 color=\"#000000\"\n        text opacity={opacity} background-color=\"red\"\n          text \"HHHH\" opacity=0.5\n          text \"HHHH\"\n"
+        ));
+        p.frame().clone()
+    };
+    let solid = draw(1.);
+    for opacity in [0., 0.25, 1.] {
+        let actual = draw(opacity);
+        for (a, s) in actual.data().iter().zip(solid.data()) {
+            let expected = (255. - f32::from(255 - s) * opacity).round() as u8;
+            assert!(
+                a.abs_diff(expected) <= 2,
+                "opacity {opacity}: {a} instead of {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_run_opacity_samples_the_animation_clock() {
+    let mut p = program(
+        "keyframes fade\n  from opacity=0\n  to opacity=1\ncomponent App\n  view\n    column width=\"100%\" padding=20 box-sizing=\"border-box\"\n      text font-size=32 color=\"#000000\" opacity=0.5\n        text opacity=0.5\n          text \"HHHH\" animation=\"fade 1s linear both\"\n",
+    );
+    assert!(p.animation_frame(0.).is_none());
+    for time in [0., 250., 1000.] {
+        assert!(p.clock(time).1.is_none());
+        let actual = p.frame().clone();
+        let mut reference = fixture(&format!(
+            "      text \"HHHH\" font-size=32 color=\"#000000\" opacity={}\n",
+            0.25 * time / 1000.
+        ));
+        let expected = reference.frame();
+        assert!(
+            actual
+                .data()
+                .iter()
+                .zip(expected.data())
+                .all(|(a, b)| a.abs_diff(*b) <= 2),
+            "nested inline opacity differs from the paragraph's group opacity at {time} ms"
         );
     }
 }
@@ -58,6 +206,7 @@ fn scene_frame(p: &Presenter<()>, dark: bool, backend: Box<dyn Backend>) -> Fram
         hidden: &|_| false,
         presented: &|_| Presented::IDENTITY,
         paths: &|_| None,
+        filters: &|_| None,
         scroll: &BTreeMap::new(),
         page: (0.0, 0.0),
         images: &BTreeMap::new(),
@@ -92,7 +241,14 @@ fn repainting_an_unchanged_headline_reuses_its_stroke() {
 const COLORS: &str = "      text testId=\"paragraph\" color=\"#00000000\" font-size=24 line-height=1.5\n        text color=\"light-dark(#ff0000,#008000)\"\n          text \"MMMM \" font-weight=700 testId=\"red\"\n        text color=\"light-dark(#0000ff,#800080)\" href=\"https://example.com/\" testId=\"link\"\n          text \"WWWW\" font-family=\"monospace\" font-style=\"italic\" font-size=18 testId=\"blue\"\n";
 
 fn has_color(frame: &tiny_skia::Pixmap, color: [u8; 4]) -> bool {
-    frame.data().chunks_exact(4).filter(|p| *p == color).count() > 10
+    frame
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| **p == color)
+        .count()
+        > 10
 }
 
 #[test]
@@ -188,10 +344,9 @@ fn own_text_suppresses_inline_descendants_in_measurement_and_paint() {
 
 #[test]
 fn identical_fonts_keep_distinct_run_colors_and_source_nodes() {
-    let style = StyleProps {
-        font_size: 24.0,
-        ..StyleProps::default()
-    };
+    let style = StyleProps::default().with_rows(|rows| {
+        rows.font_size = 24.0;
+    });
     let mut spec = text_spec(&style, "MMMM ");
     spec.runs.push(Run::from_style(
         "WWWW",
@@ -207,7 +362,7 @@ fn identical_fonts_keep_distinct_run_colors_and_source_nodes() {
             source: 2,
         },
     ];
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let paragraph = engine.paragraph(&spec, Some(260.0));
     let batches = engine.glyph_runs(&paragraph, &palette);
     assert_eq!(
@@ -257,6 +412,7 @@ fn styled_paragraph_pixels_on_real_gpu_when_available() {
         hidden: &|_| false,
         presented: &|_| Presented::IDENTITY,
         paths: &|_| None,
+        filters: &|_| None,
         scroll: &BTreeMap::new(),
         page: (0.0, 0.0),
         images: &BTreeMap::new(),
@@ -282,8 +438,8 @@ fn styled_paragraph_pixels_on_real_gpu_when_available() {
             );
             let bounds = |pixmap: &Pixmap| {
                 let mut bounds = [u32::MAX, u32::MAX, 0, 0];
-                for (i, pixel) in pixmap.data().chunks_exact(4).enumerate() {
-                    if pixel == color {
+                for (i, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+                    if *pixel == color {
                         let (x, y) = (i as u32 % pixmap.width(), i as u32 / pixmap.width());
                         bounds = [
                             bounds[0].min(x),
@@ -337,7 +493,7 @@ fn a_box_draws_its_lines_through_nested_text_in_its_own_colour() {
     );
     let frame = p.frame();
     let (mut red, mut blue) = (0, 0);
-    for px in frame.data().chunks_exact(4) {
+    for px in frame.data().as_chunks::<4>().0 {
         match (px[0], px[1], px[2], px[3]) {
             (200.., ..160, ..160, 200..) => red += 1,
             (..160, ..160, 200.., 200..) => blue += 1,
@@ -361,7 +517,7 @@ fn the_nearest_box_line_shows_and_hidden_text_draws_none() {
     );
     let frame = p.frame();
     let (mut red, mut green) = (0, 0);
-    for px in frame.data().chunks_exact(4) {
+    for px in frame.data().as_chunks::<4>().0 {
         match (px[0], px[1], px[2], px[3]) {
             (200.., ..160, ..160, 200..) => red += 1,
             (..160, 200.., ..160, 200..) => green += 1,
@@ -391,10 +547,16 @@ fn a_strike_paints_over_the_glyphs_it_crosses() {
     let red = [255, 0, 0, 255];
     let mut covered = 0;
     let mut cut = 0;
-    for (expected, actual) in line.data().chunks_exact(4).zip(text.data().chunks_exact(4)) {
-        if expected == red {
+    for (expected, actual) in line
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(text.data().as_chunks::<4>().0)
+    {
+        if *expected == red {
             covered += 1;
-            cut += usize::from(actual != red);
+            cut += usize::from(*actual != red);
         }
     }
     assert!(covered > 100, "the reference strike must paint");
@@ -414,8 +576,8 @@ fn an_underline_covers_the_text_shadow_and_casts_its_own() {
     let mut covered = 0;
     let mut cut = 0;
     let mut missing = 0;
-    for (i, expected) in line.data().chunks_exact(4).enumerate() {
-        if expected == black {
+    for (i, expected) in line.data().as_chunks::<4>().0.iter().enumerate() {
+        if *expected == black {
             covered += 1;
             cut += usize::from(text.data()[i * 4..i * 4 + 4] != black);
             let shadow = (i + 6 * text.width() as usize) * 4;
@@ -441,8 +603,8 @@ fn decorations_and_glyphs_cast_one_translucent_shadow_beyond_the_line_box() {
         let line = draw("transparent", "none");
         let text = draw("#000000", "0px 70px 0px #ff000080");
         let mut covered = 0;
-        for (i, expected) in line.data().chunks_exact(4).enumerate() {
-            if expected == [0, 0, 0, 255] {
+        for (i, expected) in line.data().as_chunks::<4>().0.iter().enumerate() {
+            if *expected == [0, 0, 0, 255] {
                 covered += 1;
                 let shadow = (i + 70 * text.width() as usize) * 4;
                 assert_eq!(
@@ -477,9 +639,11 @@ fn a_runs_shadow_does_not_shadow_an_ancestors_decoration() {
     );
     let points: Vec<_> = line
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
-        .filter_map(|(i, p)| (p == [0, 0, 0, 255]).then_some(i))
+        .filter_map(|(i, p)| (*p == [0, 0, 0, 255]).then_some(i))
         .collect();
     assert!(points.len() > 100, "the reference underline must paint");
     let width = text.width() as usize;
@@ -517,8 +681,8 @@ fn a_decoration_keeps_its_declaring_boxs_shadow_when_a_child_disables_it() {
     let line = draw("none");
     let text = draw("0px 6px 0px #ff0000");
     let mut covered = 0;
-    for (i, expected) in line.data().chunks_exact(4).enumerate() {
-        if expected == [0, 0, 0, 255] {
+    for (i, expected) in line.data().as_chunks::<4>().0.iter().enumerate() {
+        if *expected == [0, 0, 0, 255] {
             covered += 1;
             assert_eq!(&text.data()[i * 4..i * 4 + 4], expected);
             let shadow = (i + 6 * text.width() as usize) * 4;
@@ -528,8 +692,10 @@ fn a_decoration_keeps_its_declaring_boxs_shadow_when_a_child_disables_it() {
     assert!(covered > 100, "the reference underline must paint");
     let red = text
         .data()
-        .chunks_exact(4)
-        .filter(|p| *p == [255, 0, 0, 255])
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| **p == [255, 0, 0, 255])
         .count();
     assert_eq!(red, covered, "only the underline casts a shadow");
 }
@@ -544,8 +710,8 @@ fn a_nearer_decoration_does_not_remove_an_ancestors_shadow() {
             "      text color=\"#000000\" font-size=40 text-decoration-line=\"{line}\" text-shadow=\"0px 60px 0px #ff0000\"\n        text \"HHHH\" text-decoration-line=\"{line}\" text-shadow=\"none\"\n"
         ));
         let mut covered = 0;
-        for (i, expected) in reference.data().chunks_exact(4).enumerate() {
-            if expected == [0, 0, 0, 255] {
+        for (i, expected) in reference.data().as_chunks::<4>().0.iter().enumerate() {
+            if *expected == [0, 0, 0, 255] {
                 covered += 1;
                 let shadow = (i + 60 * text.width() as usize) * 4;
                 assert_eq!(
@@ -578,11 +744,13 @@ fn nested_decoration_shadows_paint_in_declaring_box_order() {
         let mut overlap = 0;
         for ((earlier, later), actual) in earlier
             .data()
-            .chunks_exact(4)
-            .zip(later.data().chunks_exact(4))
-            .zip(combined.data().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(later.data().as_chunks::<4>().0)
+            .zip(combined.data().as_chunks::<4>().0)
         {
-            if earlier == [255, 0, 0, 255] && later == [0, 255, 0, 255] {
+            if *earlier == [255, 0, 0, 255] && *later == [0, 255, 0, 255] {
                 overlap += 1;
                 assert_eq!(actual, later, "the child's {child} shadow paints last");
             }
@@ -602,8 +770,8 @@ fn a_leaf_restoring_an_ancestors_shadow_keeps_decoration_shadow_order() {
         "          text \"HHHH\" text-shadow=\"0px 60px 0px #ff0000\"\n",
     ));
     let mut covered = 0;
-    for (i, expected) in line.data().chunks_exact(4).enumerate() {
-        if expected == [0, 0, 0, 255] {
+    for (i, expected) in line.data().as_chunks::<4>().0.iter().enumerate() {
+        if *expected == [0, 0, 0, 255] {
             covered += 1;
             let shadow = (i + 60 * text.width() as usize) * 4;
             assert_eq!(
@@ -629,8 +797,10 @@ fn a_partial_shadow_override_does_not_split_a_blurred_decoration() {
     let mut covered = 0;
     for (i, (expected, actual)) in line
         .data()
-        .chunks_exact(4)
-        .zip(text.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(text.data().as_chunks::<4>().0)
         .enumerate()
     {
         if expected[1] < 250 {
@@ -662,8 +832,14 @@ fn a_strike_paints_over_a_later_runs_overlapping_shadow() {
     );
     let mut covered = 0;
     let mut cut = 0;
-    for (expected, actual) in line.data().chunks_exact(4).zip(text.data().chunks_exact(4)) {
-        if expected == [255, 0, 0, 255] {
+    for (expected, actual) in line
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(text.data().as_chunks::<4>().0)
+    {
+        if *expected == [255, 0, 0, 255] {
             covered += 1;
             cut += usize::from(actual != expected);
         }
@@ -685,7 +861,12 @@ fn hidden_markdown_casts_no_decoration_shadow() {
         };
         assert!(has_color(&draw("visible"), [255, 0, 0, 255]));
         assert!(
-            draw("hidden").data().chunks_exact(4).all(|p| p == [255; 4]),
+            draw("hidden")
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255; 4]),
             "hidden Markdown paints neither glyphs nor decoration shadows: {text}"
         );
     }
@@ -696,22 +877,27 @@ fn hidden_markdown_casts_no_decoration_shadow() {
 /// (CSS Text Decoration 3 §4).
 #[test]
 fn a_later_markdown_spans_shadow_paints_over_an_earlier_spans_glyphs() {
-    let draw = |color, shadow| {
+    let draw = |text, color, shadow| {
         decoration_frame(&format!(
-            "      text \"~~HH~~ ~~........~~\" markup=\"markdown\" color=\"{color}\" font-size=40 text-shadow=\"{shadow}\"\n"
+            "      text \"{text}\" markup=\"markdown\" color=\"{color}\" font-size=40 text-shadow=\"{shadow}\"\n"
         ))
     };
-    let glyphs = draw("#000000", "none");
-    let shadows = draw("transparent", "-100px 0px 0px #00ff00");
-    let both = draw("#000000", "-100px 0px 0px #00ff00");
+    let text = "~~HH~~ ~~........~~";
+    // The reference is the earlier span alone: the later span's shadow can
+    // also fall on the later span's own strike, which paints over it.
+    let glyphs = draw("~~HH~~", "#000000", "none");
+    let shadows = draw(text, "transparent", "-100px 0px 0px #00ff00");
+    let both = draw(text, "#000000", "-100px 0px 0px #00ff00");
     let mut overlap = 0;
     for ((glyph, shadow), actual) in glyphs
         .data()
-        .chunks_exact(4)
-        .zip(shadows.data().chunks_exact(4))
-        .zip(both.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(shadows.data().as_chunks::<4>().0)
+        .zip(both.data().as_chunks::<4>().0)
     {
-        if glyph == [0, 0, 0, 255] && shadow == [0, 255, 0, 255] {
+        if *glyph == [0, 0, 0, 255] && *shadow == [0, 255, 0, 255] {
             overlap += 1;
             assert_eq!(actual, shadow, "the later span's shadow paints last");
         }
@@ -757,11 +943,13 @@ fn a_later_siblings_shadow_paints_over_an_earlier_siblings_strike() {
         let mut overlap = 0;
         for ((line, shadow), actual) in line
             .data()
-            .chunks_exact(4)
-            .zip(shadow.data().chunks_exact(4))
-            .zip(combined.data().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(shadow.data().as_chunks::<4>().0)
+            .zip(combined.data().as_chunks::<4>().0)
         {
-            if line == [255, 0, 0, 255] && shadow == [0, 255, 0, 255] {
+            if *line == [255, 0, 0, 255] && *shadow == [0, 255, 0, 255] {
                 overlap += 1;
                 assert_eq!(actual, shadow, "the later sibling covers the strike");
             }
@@ -786,11 +974,13 @@ fn a_later_siblings_decoration_shadow_follows_earlier_content() {
             let mut overlap = 0;
             for ((earlier, later), actual) in earlier
                 .data()
-                .chunks_exact(4)
-                .zip(later.data().chunks_exact(4))
-                .zip(combined.data().chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(later.data().as_chunks::<4>().0)
+                .zip(combined.data().as_chunks::<4>().0)
             {
-                if earlier == [255, 0, 0, 255] && later == [0, 255, 0, 255] {
+                if *earlier == [255, 0, 0, 255] && *later == [0, 255, 0, 255] {
                     overlap += 1;
                     assert_eq!(
                         actual, later,
@@ -809,11 +999,13 @@ fn later_covers(earlier: &Pixmap, later: &Pixmap, combined: &Pixmap, what: &str)
     let mut overlap = 0;
     for ((earlier, later), actual) in earlier
         .data()
-        .chunks_exact(4)
-        .zip(later.data().chunks_exact(4))
-        .zip(combined.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(later.data().as_chunks::<4>().0)
+        .zip(combined.data().as_chunks::<4>().0)
     {
-        if earlier == [255, 0, 0, 255] && later == [0, 255, 0, 255] {
+        if *earlier == [255, 0, 0, 255] && *later == [0, 255, 0, 255] {
             overlap += 1;
             assert_eq!(actual, later, "{what}");
         }
@@ -883,7 +1075,7 @@ fn a_later_runs_glyph_shadow_is_not_painted_with_an_ancestors_decoration_shadow(
 #[test]
 fn html_maxlength_is_enforced_by_linux_typing() {
     let plan = contract::compile("component App\n  state draft = \"\"\n  action edit(value: string)\n    draft = value\n  view\n    input value=draft input=edit maxlength=3 testId=\"limited\"\n").unwrap();
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -918,10 +1110,9 @@ fn paint_ranks_survive_repaints_and_scroll_until_a_kernel_commit() {
     );
     let id = p.host().kernel().find_by_test_id("row")[0];
     let id = p.host().kernel().node_by_key(id).unwrap().id;
-    let mut style = exact_kernel::StyleProps {
-        opacity: 0.5,
-        ..Default::default()
-    };
+    let mut style = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.opacity = 0.5;
+    });
     style.mask.set(exact_kernel::StyleId::Opacity);
     p.host
         .runner_mut()
@@ -1061,7 +1252,7 @@ fn a_clipping_text_keeps_its_own_glyphs_inside_its_padding_box() {
     let mut p = fixture("      text \"MMMMMMMMMMMMMMMM\" width=50 height=30 white-space=\"nowrap\" overflow=\"hidden\" font-size=20 color=\"#000000\"\n");
     let frame = p.frame();
     let ink = |columns: std::ops::Range<usize>| {
-        let pixels = frame.data().chunks_exact(4).enumerate();
+        let pixels = frame.data().as_chunks::<4>().0.iter().enumerate();
         pixels
             .filter(|(i, px)| columns.contains(&(i % 300)) && px[0] < 128)
             .count()
@@ -1105,5 +1296,178 @@ fn a_boxs_padding_is_on_its_side_in_its_paragraph() {
     assert!(
         (at(&padded, 2) - at(&bare, 2) - 5.0).abs() < 0.05,
         "{bare:?} {padded:?}"
+    );
+}
+
+#[test]
+fn a_shadow_follows_aligned_glyphs_past_the_widest_advance() {
+    for align in ["right", "center"] {
+        let draw = |shadow| {
+            let mut p = fixture(&format!(
+                "      text \"H\" width=260 font-size=30 text-align=\"{align}\" color=\"#000000\" text-shadow=\"{shadow}\"\n"
+            ));
+            p.frame().clone()
+        };
+        let reference = draw("none");
+        let pixels = draw("0px 40px 0px #ff0000");
+        let mut covered = 0;
+        for y in 0..reference.height() - 40 {
+            for x in 0..reference.width() {
+                let ink = reference.pixel(x, y).unwrap();
+                if ink.red() == 0 && ink.green() == 0 && ink.blue() == 0 {
+                    let shadow = pixels.pixel(x, y + 40).unwrap();
+                    assert_eq!(
+                        (shadow.red(), shadow.green(), shadow.blue()),
+                        (255, 0, 0),
+                        "text-align={align}: the shadow follows the glyph at {x},{y}"
+                    );
+                    covered += 1;
+                }
+            }
+        }
+        assert!(covered > 20, "text-align={align}: the glyph is drawn");
+    }
+}
+
+/// An inline box's border paints on each of its fragments, over its
+/// background, around its padding box (CSS 2 §8.6, Appendix E). Sliced, as
+/// `box-decoration-break: slice` is, the start border and corners are on the
+/// first line alone and the end ones on the last: left then right under
+/// `ltr`, the other way about under `rtl`. A dashed or dotted side leaves gaps.
+#[test]
+fn an_inline_border_paints_on_each_fragment_sliced() {
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    for (direction, style) in [
+        ("ltr", "solid"),
+        ("rtl", "solid"),
+        ("ltr", "dashed"),
+        ("rtl", "dotted"),
+    ] {
+        let mut p = fixture(&format!(
+            "      text width=110 font-size=20 line-height=\"44px\" color=\"transparent\" direction=\"{direction}\"\n        text \"aaaaaa bbbbbb\" border-width=4 border-style=\"{style}\" border-color=\"#ff0000\" background-color=\"#0000ff\" padding=2 border-radius=10\n"
+        ));
+        let frame = p.frame().clone();
+        let width = frame.width() as usize;
+        let px = |x: usize, y: usize| {
+            let c = frame.pixels()[y * width + x];
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        };
+        let painted = |y: usize| (0..width).filter(move |&x| matches!(px(x, y), RED | BLUE));
+        // Each fragment's rows, top to bottom.
+        let mut bands: Vec<(usize, usize)> = Vec::new();
+        for y in 0..frame.height() as usize {
+            if painted(y).next().is_none() {
+                continue;
+            }
+            match bands.last_mut() {
+                Some(band) if band.1 + 1 == y => band.1 = y,
+                _ => bands.push((y, y)),
+            }
+        }
+        let case = format!("{direction} {style}");
+        assert_eq!(bands.len(), 2, "{case}: one fragment a line: {bands:?}");
+        for (line, &(top, bottom)) in bands.iter().enumerate() {
+            let middle = (top + bottom) / 2;
+            let (left, right) = (
+                painted(middle).next().unwrap(),
+                painted(middle).next_back().unwrap(),
+            );
+            let starts_left = (direction == "ltr") == (line == 0);
+            let (bordered, open) = if starts_left {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            if style == "solid" {
+                assert_eq!(
+                    px(bordered, middle),
+                    RED,
+                    "{case} line {line}: its own side's border"
+                );
+                let across = (left + right) / 2;
+                assert_eq!(
+                    px(across, top + 1),
+                    RED,
+                    "{case} line {line}: the top border"
+                );
+                assert_eq!(
+                    px(across, bottom - 1),
+                    RED,
+                    "{case} line {line}: the bottom border"
+                );
+                assert_eq!(
+                    px(across, middle),
+                    BLUE,
+                    "{case} line {line}: the background inside"
+                );
+                // The rounded corner is on the bordered side; the sliced one is square.
+                assert_eq!(
+                    px(open, top + 1),
+                    RED,
+                    "{case} line {line}: a square sliced corner"
+                );
+                assert_ne!(
+                    px(bordered, top),
+                    RED,
+                    "{case} line {line}: a rounded corner"
+                );
+            } else {
+                let top_row: Vec<_> = (left + 12..right - 12).map(|x| px(x, top + 1)).collect();
+                assert!(
+                    top_row.contains(&RED) && top_row.iter().any(|c| *c != RED),
+                    "{case} line {line}: gaps"
+                );
+            }
+            assert_eq!(
+                px(open, middle),
+                BLUE,
+                "{case} line {line}: no border where it is sliced"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_empty_padded_run_paints_its_box_between_its_neighbours() {
+    // Chrome paints `text ""` with padding 3px 5px and a 2px border as a 14 px
+    // wide box between the words, its background inside its border.
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLUE: [u8; 4] = [0, 0, 255, 255];
+    let mut p = fixture(
+        "      text font-size=20 line-height=\"44px\" color=\"transparent\"\n        text \"Hi\"\n        text \"\" padding=\"3px 5px\" border-width=2 border-style=\"solid\" border-color=\"#ff0000\" background-color=\"#0000ff\"\n        text \" there\"\n",
+    );
+    let frame = p.frame().clone();
+    let width = frame.width() as usize;
+    let px = |x: usize, y: usize| {
+        let c = frame.pixels()[y * width + x];
+        [c.red(), c.green(), c.blue(), c.alpha()]
+    };
+    let rows: Vec<usize> = (0..frame.height() as usize)
+        .filter(|&y| (0..width).any(|x| px(x, y) == RED))
+        .collect();
+    let (top, bottom) = (rows[0], *rows.last().unwrap());
+    let middle = (top + bottom) / 2;
+    // The box may start between pixels; a column it touches is not white.
+    let columns: Vec<usize> = (0..width).filter(|&x| px(x, middle)[1] < 255).collect();
+    let (left, right) = (columns[0], *columns.last().unwrap());
+    assert!(left > 10, "the box follows \"Hi\": {left}");
+    assert_eq!(columns.len(), right + 1 - left, "one box: {columns:?}");
+    assert!(
+        (14..=15).contains(&columns.len()),
+        "its border box is 2 + 5 + 5 + 2 wide: {columns:?}"
+    );
+    assert!(
+        px(left, middle) == RED || px(left + 1, middle) == RED,
+        "its start border"
+    );
+    assert!(
+        px(right, middle) == RED || px(right - 1, middle) == RED,
+        "its end border"
+    );
+    assert_eq!(
+        px((left + right) / 2, middle),
+        BLUE,
+        "its background inside"
     );
 }

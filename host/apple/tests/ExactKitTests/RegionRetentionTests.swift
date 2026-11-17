@@ -110,6 +110,40 @@ import XCTest
             profile: b.profile.bytes,scale: b.scale))
     }
     #if os(macOS)
+    func testFlowFallbackReleasesNativeParagraphsAndAllowsLaterGeometry() throws {
+        let session = ExactApp.shared.makeSession(label: "region-flow-fallback")
+        defer { session.destroy() }
+        func apply(_ ops: [[String: Any]]) {
+            session.apply(batchFixture(ops: ops, timers: false, motion: false, clock: nil, error: nil))
+        }
+        apply([
+            ["op": "create", "id": 1, "kind": "view", "props": [:], "style": [:]],
+            ["op": "create", "id": 2, "kind": "view", "props": [:], "style": [:]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": String(repeating: "x", count: 20_000)],
+             "style": ["font_size": 16.0, "overflow_wrap": "anywhere"]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 2, "ids": [3]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 360, "h": 300],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 360, "h": 300],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 360, "h": 300],
+            ["op": "flow", "id": 3, "shapes": [["kind": "RoundRect", "width": 360, "height": 1e9]]],
+        ])
+        let node = try XCTUnwrap(session.presenter.views[3])
+        session.regions.prepare(batchFixture(ops: [["op": "region", "incarnation": "1", "owner": UInt32(1),
+            "content": UInt32(2), "pending": UInt32(4), "request": "0", "source": "1", "publication": "0",
+            "current": true, "frames": [[String: Any]](), "members": [UInt32(2), UInt32(3)]]],
+            timers: false, motion: false, clock: nil, error: nil))
+        XCTAssertTrue(session.regions.owns(node))
+        apply([["op": "region", "disabled": "incomplete text flow uses native layout"]])
+        XCTAssertFalse(session.regions.owns(node))
+        XCTAssertNil(session.regions.failure)
+        let ordinary = try XCTUnwrap(node.paragraphLayout())
+        XCTAssertTrue(ordinary.flowIncomplete)
+        XCTAssertFalse(ordinary.lines.isEmpty)
+        apply([["op": "flow", "id": 3, "shapes": [["kind": "Circle", "cx": 180, "cy": 60, "r": 20]]]])
+        XCTAssertFalse(try XCTUnwrap(node.paragraphLayout()).flowIncomplete)
+        XCTAssertFalse(session.regions.owns(node))
+    }
     func testOrdinaryBatchesStillAllowRegionRegistrationRefusalAndRetirement() {
         let session = ExactApp.shared.makeSession(label: "region-registration")
         defer { session.destroy() }

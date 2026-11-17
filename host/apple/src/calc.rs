@@ -11,6 +11,11 @@ impl Context {
     /// Read canonical CSS and copy its environment. See `exact_calc_create` in exact.h.
     pub fn new(text: &str, values: &[f64]) -> Option<Box<Self>> {
         let calculation = Comparison::from_css(text)?;
+        // The root font size, which a `rem` multiplies, last
+        let (&root_font_size, values) = values.split_last()?;
+        if !(root_font_size > 0.0 && (root_font_size as f32).is_finite()) {
+            return None;
+        }
         // The layout regions' count, exactly 0 or 20, then the regions (LLP
         // 1123 D10); the title-bar area's, 0 or 4, then the area
         let regions = match values.get(8) {
@@ -41,6 +46,7 @@ impl Context {
             values[2] as f32,
             values[3] as f32,
         );
+        env.root_font_size = root_font_size as f32;
         env.viewport_width = values[4] as f32;
         env.viewport_height = values[5] as f32;
         env.cols = values[6] as u8;
@@ -55,7 +61,9 @@ impl Context {
             _ => None,
         };
         env.segments = values[segments..]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|r| {
                 exact_kernel::style::env::Rect::new(
                     r[0] as f32,
@@ -107,7 +115,7 @@ pub fn write(out: &mut String, c: Comparison, env: &Env) {
     for r in &env.segments {
         let _ = write!(out, ",{},{},{},{}", r.x, r.y, r.width, r.height);
     }
-    out.push_str("]}");
+    let _ = write!(out, ",{}]}}", env.root_font_size);
 }
 
 /// Export the calculation seam from the application's static archive.
@@ -125,8 +133,8 @@ macro_rules! calc_exports {
             count: usize,
         ) -> *mut ::std::ffi::c_void {
             // Eight values, the regions' count and twenty regions, the title-bar
-            // area's count and its four values, then up to 255×255 segments
-            if text.is_null() || values.is_null() || count > 9 + 20 + 1 + 4 + 4 * 255 * 255 {
+            // area's count and its four values, up to 255×255 segments, then the root font size
+            if text.is_null() || values.is_null() || count > 9 + 20 + 1 + 4 + 4 * 255 * 255 + 1 {
                 return ::std::ptr::null_mut();
             }
             // SAFETY: the caller supplies count readable, aligned doubles.
@@ -183,13 +191,14 @@ mod tests {
         super::write(&mut json, c, &exact_kernel::Env::default());
         let survivor = super::Context::new(
             "min(47px, 53%)",
-            &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.],
+            &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0., 16.],
         )
         .unwrap();
         for i in 0..16_000 {
             let text = format!("min({i}px, 52%)");
             let context =
-                super::Context::new(&text, &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.]).unwrap();
+                super::Context::new(&text, &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0., 16.])
+                    .unwrap();
             assert_eq!(context.length(100.), f64::from((i as f32).min(52.)));
             let old = identity(&context.calculation);
             drop(context);
@@ -208,7 +217,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let context = super::Context::new(
             value["calc"].as_str().unwrap(),
-            &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.],
+            &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0., 16.],
         )
         .unwrap();
         drop(value);
@@ -219,11 +228,14 @@ mod tests {
     #[test]
     fn contexts_keep_their_own_environment_and_validate_the_wire() {
         let n = "min(50%, 10vw + env(safe-area-inset-top))";
-        let first = super::Context::new(n, &[3., 0., 0., 0., 300., 600., 1., 1., 0., 0.]).unwrap();
+        let first =
+            super::Context::new(n, &[3., 0., 0., 0., 300., 600., 1., 1., 0., 0., 16.]).unwrap();
         for width in 400..1400 {
-            let other =
-                super::Context::new(n, &[7., 0., 0., 0., width as f64, 600., 1., 1., 0., 0.])
-                    .unwrap();
+            let other = super::Context::new(
+                n,
+                &[7., 0., 0., 0., width as f64, 600., 1., 1., 0., 0., 16.],
+            )
+            .unwrap();
             assert!((other.length(400.) - (width as f64 / 10. + 7.).min(200.)).abs() < 0.0001);
             assert_eq!(first.length(400.), 33.);
         }
@@ -234,10 +246,43 @@ mod tests {
         );
         for bad in [0., 1.5, 256., f64::INFINITY, f64::NAN] {
             assert!(
-                super::Context::new(n, &[0., 0., 0., 0., 300., 600., bad, 1., 0., 0.]).is_none()
+                super::Context::new(n, &[0., 0., 0., 0., 300., 600., bad, 1., 0., 0., 16.])
+                    .is_none()
             );
         }
-        assert!(super::Context::new(n, &[0., 0., 0., 0., 300., 600., 2., 1., 0., 0.]).is_none());
+        assert!(
+            super::Context::new(n, &[0., 0., 0., 0., 300., 600., 2., 1., 0., 0., 16.]).is_none()
+        );
+        for bad in [0., -16., f64::INFINITY] {
+            assert!(
+                super::Context::new(n, &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0., bad])
+                    .is_none(),
+                "a root font size of {bad}"
+            );
+        }
+    }
+
+    /// A deferred calculation's `rem` is the root font size the snapshot
+    /// carries, which a custom property's value can hold (LLP 1123 D5).
+    #[test]
+    fn a_snapshot_carries_the_root_font_size() {
+        let exact_kernel::Dimension::Compare(c) =
+            exact_kernel::Dimension::parse_calc("min(50%, 2rem)").unwrap()
+        else {
+            panic!("expected comparison");
+        };
+        let env = exact_kernel::Env {
+            root_font_size: 20.,
+            ..Default::default()
+        };
+        let mut json = String::new();
+        super::write(&mut json, c, &env);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let values: Vec<f64> = (value["env"].as_array().unwrap().iter())
+            .map(|v| v.as_f64().unwrap())
+            .collect();
+        let context = super::Context::new(value["calc"].as_str().unwrap(), &values).unwrap();
+        assert_eq!(context.length(100.), 40.);
     }
 
     /// LLP 1123 D10: a deferred calculation reads the layout regions the
@@ -343,11 +388,13 @@ mod tests {
     #[test]
     fn a_context_resolves_against_its_basis_as_the_kernel_does() {
         let n = "min(50%, 30px)";
-        let context = super::Context::new(n, &[0., 0., 0., 0., 0., 0., 1., 1., 0., 0.]).unwrap();
+        let context =
+            super::Context::new(n, &[0., 0., 0., 0., 0., 0., 1., 1., 0., 0., 16.]).unwrap();
         assert_eq!(context.length(40.0), 20.0);
         assert_eq!(context.length(200.0), 30.0);
         assert!(
-            super::Context::new("10px", &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.]).is_none()
+            super::Context::new("10px", &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0., 16.])
+                .is_none()
         );
     }
 }
@@ -369,7 +416,7 @@ mod ffi_tests {
     #[test]
     fn the_native_entry_point_owns_its_expression_and_validates_utf8() {
         let text = b"min(47px, 53%)".to_vec();
-        let values = [0., 0., 0., 0., 300., 600., 1., 1., 0., 0.];
+        let values = [0., 0., 0., 0., 300., 600., 1., 1., 0., 0., 16.];
         // SAFETY: both buffers remain readable for the call; create copies them.
         let context =
             unsafe { exact_calc_create(text.as_ptr(), text.len(), values.as_ptr(), values.len()) };

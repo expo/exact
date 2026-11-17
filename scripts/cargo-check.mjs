@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from '../host/apple/toolchain.mjs';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -11,11 +11,15 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 /** Add rustup's tools when a non-interactive shell omitted them from PATH. */
 export function cargoOnPath(env = process.env, home = homedir()) {
-  const dirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
-  if (dirs.some(dir => existsSync(resolve(dir, 'cargo')))) return true;
+  const windows = process.platform === 'win32', separator = windows ? ';' : delimiter;
+  const key = windows ? Object.keys(env).find(key => key.toLowerCase() === 'path') ?? 'PATH' : 'PATH';
+  const dirs = (env[key] ?? '').split(separator).filter(Boolean);
+  const names = windows ? ['cargo.exe', 'cargo'] : ['cargo'];
+  const hasCargo = dir => names.some(name => Bun.which(resolve(dir, name)));
+  if (dirs.some(hasCargo)) return true;
   const rustup = resolve(env.CARGO_HOME ?? resolve(home, '.cargo'), 'bin');
-  if (!existsSync(resolve(rustup, 'cargo'))) return false;
-  env.PATH = [rustup, ...dirs].join(delimiter);
+  if (!hasCargo(rustup)) return false;
+  env[key] = [rustup, ...dirs].join(separator);
   return true;
 }
 
@@ -28,7 +32,7 @@ export function cargoEnvironment(env = process.env) { return withHostDeployment(
  * reads no trap. Everything else builds with rust-toolchain.toml's stable. */
 export const WEB_TOOLCHAIN = 'nightly-2026-08-21';
 export const WEB_STD = ['-Zbuild-std=std,panic_abort', '-Zbuild-std-features=optimize_for_size'];
-// Deprecation is stable's to judge (the six checks' clippy): the nightly
+// Deprecation is stable's to judge (the hourly lane's clippy): the nightly
 // deprecates names, like `fetch_update`, before stable has their successors.
 export const WEB_RUSTFLAGS = ['-Zunstable-options', '-Cpanic=immediate-abort', '-Zlocation-detail=none', '-Adeprecated'];
 export const WEB_SIZE = [...WEB_STD, ...WEB_RUSTFLAGS].join(' ');
@@ -210,13 +214,51 @@ export function claimTargetCrates(target, name, dir) {
 
 /** The generated native workspace of an app that authored none (LLP 1153 D1): under its `.exact/`, which is ignored. */
 export const shellsDir = (dir) => resolve(dir, '.exact/shells');
+/** The generated workspace of the app's GPU crates, which resolve apart from the host's (LLP 1153.003 D5.1). */
+export const gpuShellsDir = (dir) => resolve(dir, '.exact/gpu');
+/** What a crate beside app.json writes as `package.workspace` to join each generated workspace (LLP 1153.003 D1.1). */
+export const MEMBER_OF = { host: '../.exact/shells', gpu: '../.exact/gpu' };
 const readToml = (path) => { try { return Bun.TOML.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 /** The host crates an app writes beside app.json: each one only its host's build reads. */
 export const HOST_CRATES = ['apple', 'ios', 'macos', 'linux', 'web', 'windows', 'android'];
-/** The crates an app writes beside app.json. */
-export const APP_CRATES = [...HOST_CRATES, 'data', 'gpu'];
-/** How an app with Rust of its own gets the workspace it needs (LLP 1153 D1.4: the generated one, copied up). */
-export const NO_WORKSPACE = 'An app with Rust of its own (a gpu/ or data/ crate) copies the generated workspace up from .exact/shells/, which a native verb writes only while no such crate is there: `bun exact.mjs contract vocab gpu-module` says how.';
+/** The crates one level below app.json, each `{ dir, manifest, name, joins }`: `joins` is `host` or `gpu` for a crate
+ * whose `package.workspace` names that generated workspace, else null. A hidden directory, `node_modules` and `target`
+ * hold none of the app's crates. */
+export function appCrates(dir) {
+  let entries = [];
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  return entries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && !['node_modules', 'target'].includes(entry.name))
+    .map(entry => resolve(dir, entry.name)).filter(crate => existsSync(resolve(crate, 'Cargo.toml'))).sort()
+    .map(crate => {
+      const pkg = readToml(resolve(crate, 'Cargo.toml'))?.package;
+      const declared = typeof pkg?.workspace === 'string' ? pkg.workspace.replace(/\/+$/, '') : null;
+      const joins = Object.keys(MEMBER_OF).find(kind => declared === MEMBER_OF[kind]) ?? null;
+      return { dir: crate, manifest: resolve(crate, 'Cargo.toml'), name: pkg?.name ?? null, joins };
+    });
+}
+/** The refusal of a crate beside app.json that joins neither generated workspace, with the line to add. */
+export const notAMember = (crate) => `${crate.manifest}: a crate beside app.json joins the app's generated workspace. Add, under [package], workspace = "${MEMBER_OF.host}" (a GPU crate: workspace = "${MEMBER_OF.gpu}"). An app that writes its own host crates writes their workspace too, a Cargo.toml beside app.json (docs/reference.md, "An authored workspace").`;
+/** The workspace the crates beside app.json name in `package.workspace` (LLP 1153.003 D1): an authored one; the
+ * generated host workspace when they name only the generated ones (host builds use `.exact/shells`, GPU builds
+ * `.exact/gpu`, so a GPU crate alone leaves the host crates generated, D1.2); or null when they name none. */
+export function declaredWorkspace(dir, memberDirs) {
+  const generated = [shellsDir(dir), gpuShellsDir(dir)];
+  const declared = [...new Set(memberDirs.flatMap(member => {
+    const path = resolve(member, 'Cargo.toml');
+    const owner = existsSync(path) ? Bun.TOML.parse(readFileSync(path, 'utf8')).package?.workspace : undefined;
+    if (owner === undefined) return [];
+    const at = resolve(member, owner);
+    return [generated.includes(at) ? at : realpathSync(at)];
+  }))];
+  const authored = declared.filter(at => !generated.includes(at));
+  if (authored.length > 1 || authored.length && authored.length < declared.length) throw new Error(`${dir}: app crates declare different Cargo workspaces: ${declared.join(', ')}${authored.length < declared.length ? `. An app's own crates join ${generated.map(at => relative(dir, at)).join(' or ')}, or all name the app's authored workspace` : ''}`);
+  return authored[0] ?? (declared.length ? shellsDir(dir) : null);
+}
+/** Refuses a crate beside app.json that joins no generated workspace (LLP 1153.003 D1.1). */
+export function refuseLoose(dir) {
+  const loose = appCrates(dir).find(crate => !crate.joins);
+  if (loose) throw new Error(notAMember(loose));
+}
 /** Whether the workspace at `root` owns the package at `path`, as Cargo reads it: a `members` glob names it, or a
  * member depends on it by a path under the root (Cargo's automatic membership), and `exclude` (a prefix or a glob)
  * does not name it. Read from the files alone. */
@@ -252,13 +294,16 @@ function owns(root, workspace, path) {
  * no Cargo, LLP 1153 D2.1), as Cargo would find it: the app's own `Cargo.toml` when it declares `[workspace]`; the
  * workspace a package names (`package.workspace`, the app's or a crate's beside app.json); else the nearest enclosing
  * workspace whose `members` own the app or one of its crates; else the app itself, a root of its own package or
- * crates. `null` when the app authored no Cargo manifest at all: its workspace is generated (scripts/app-shells.mjs).
- * An enclosing workspace that does not list the app (another repository the app sits in) is not the app's. */
+ * crates. `null` when the app authored no Cargo manifest at all, or its crates join the generated workspaces
+ * (LLP 1153.003 D1.1): its workspace is generated (scripts/app-shells.mjs). An enclosing workspace that does not
+ * list the app (another repository the app sits in) is not the app's. */
 export function authoredWorkspace(dir) {
   const own = readToml(resolve(dir, 'Cargo.toml'));
   if (own?.workspace !== undefined) return dir;
   if (own?.package?.workspace) return resolve(dir, own.package.workspace);
-  const crates = APP_CRATES.map(kind => resolve(dir, kind)).filter(crate => existsSync(resolve(crate, 'Cargo.toml')));
+  const listed = appCrates(dir);
+  if (!own && listed.some(crate => crate.joins)) return null;
+  const crates = listed.map(crate => crate.dir);
   for (const crate of crates) { const declared = readToml(resolve(crate, 'Cargo.toml'))?.package?.workspace; if (declared) return resolve(crate, declared); }
   if (!own && !crates.length) return null;
   for (let at = dirname(dir); at !== dirname(at); at = dirname(at)) {
@@ -308,6 +353,13 @@ export function appleCargo(command, arguments_, options = {}) {
     !targets.length && process.platform === 'darwin' && ['build', 'rustc', 'check', 'test', 'clippy'].includes(arguments_[0]));
   if (!apple) return [command, arguments_, options];
   const environment = { ...(options.env ?? process.env) };
+  // LIBSQLITE3_FLAGS is global to a Cargo invocation. Recompute it for each
+  // destination, including a nested Mac bake after an iOS compile.
+  const sqliteFlags = ['-DSQLITE_ENABLE_LOCKING_STYLE=0', '-Dfstatfs=exact_sqlite_fstatfs'];
+  const flags = (environment.LIBSQLITE3_FLAGS ?? '').split(/\s+/).filter(flag => flag && !sqliteFlags.includes(flag));
+  if (targets.some(target => /-apple-(ios|tvos|watchos)(?:-|$)/.test(target))) flags.push(...sqliteFlags);
+  if (flags.length) environment.LIBSQLITE3_FLAGS = flags.join(' ');
+  else delete environment.LIBSQLITE3_FLAGS;
   // No SDKROOT, whatever the caller inherited: rustc and cc-rs ask xcrun for each target's own SDK. One left here
   // reaches the build scripts' C and C++ compiles for the Mac too, where cc-rs passes no -isysroot and clang takes
   // SDKROOT: an iOS SDK there fails `-Werror` (aws-lc-sys's probes) on -Wincompatible-sysroot.
@@ -362,20 +414,25 @@ export function appleCargo(command, arguments_, options = {}) {
  * before r28 align to 4 KB. */
 export const ANDROID_PAGE_SIZE = '-Clink-arg=-Wl,-z,max-page-size=16384';
 
-/** A Cargo run for `aarch64-linux-android` with ANDROID_PAGE_SIZE added to every rustflags source it may use, and none
- * made: CARGO_ENCODED_RUSTFLAGS or RUSTFLAGS when set, the target's own variable when set, and `build.rustflags`
+/** C++ exception support for C++ that a build script compiles (`CXXSTDLIB_aarch64_linux_android`, `androidToolchainEnv`):
+ * the NDK's libc++_static.a leaves `__cxa_throw` and the `std` exceptions' typeinfo to libc++abi.a, and a shared library
+ * links with them undefined, so the device refuses to load it. An archive, so a library without C++ takes nothing. */
+const ANDROID_CXXABI = '-Clink-arg=-lc++abi';
+
+/** A Cargo run for an Android target with ANDROID_PAGE_SIZE and ANDROID_CXXABI added to every rustflags source
+ * it may use, and none made: CARGO_ENCODED_RUSTFLAGS or RUSTFLAGS when set, the target's own variable when set, and `build.rustflags`
  * through `--config`, which Cargo joins with the configuration's array and CARGO_BUILD_RUSTFLAGS. A new target source
  * would displace `build.rustflags` (a game's `-fp-contract=off`), and a variable would reach the host Cargo runs that
  * build scripts start, whose linker refuses the argument. Other runs pass through. */
 export function androidCargo(command, arguments_, options = {}) {
-  const android = command === 'cargo' && arguments_.some((value, index) => value === '--target=aarch64-linux-android' || value === 'aarch64-linux-android' && arguments_[index - 1] === '--target');
-  if (!android) return [command, arguments_, options];
+  const target = arguments_.find((value, index) => value.startsWith('--target=') || arguments_[index - 1] === '--target')?.replace(/^--target=/, '');
+  if (command !== 'cargo' || !target?.endsWith('-linux-android')) return [command, arguments_, options];
   const environment = { ...(options.env ?? process.env) };
-  const add = (value, separator) => value.split(separator).includes(ANDROID_PAGE_SIZE) ? value : [value, ANDROID_PAGE_SIZE].filter(Boolean).join(separator);
+  const add = (value, separator) => [value, ...[ANDROID_PAGE_SIZE, ANDROID_CXXABI].filter((flag) => !value.split(separator).includes(flag))].filter(Boolean).join(separator);
   if (environment.CARGO_ENCODED_RUSTFLAGS !== undefined) environment.CARGO_ENCODED_RUSTFLAGS = add(environment.CARGO_ENCODED_RUSTFLAGS, '\x1f');
   else if (environment.RUSTFLAGS !== undefined) environment.RUSTFLAGS = add(environment.RUSTFLAGS.trim(), ' ');
-  const own = 'CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS';
+  const own = `CARGO_TARGET_${target.toUpperCase().replaceAll('-', '_')}_RUSTFLAGS`;
   if (environment[own] !== undefined) environment[own] = add(environment[own].trim(), ' ');
   const separator = arguments_.indexOf('--'), at = separator < 0 ? arguments_.length : separator;
-  return [command, [...arguments_.slice(0, at), '--config', `build.rustflags=${JSON.stringify([ANDROID_PAGE_SIZE])}`, ...arguments_.slice(at)], { ...options, env: environment }];
+  return [command, [...arguments_.slice(0, at), '--config', `build.rustflags=${JSON.stringify([ANDROID_PAGE_SIZE, ANDROID_CXXABI])}`, ...arguments_.slice(at)], { ...options, env: environment }];
 }

@@ -112,6 +112,36 @@ macro_rules! canvas_jni_extensions {
             with(|h| h.extension_changed(&topic));
         }
 
+        /// A person's act on an extension's own platform UI (a
+        /// notification's tap or action, `Activations.kt`): its event raised
+        /// with a person's origin (LLP 1133.004 D6).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_activate(
+            env: *mut JNIEnv,
+            _class: jclass,
+            extension: jstring,
+            event: jstring,
+            args: jstring,
+            action: jstring,
+        ) {
+            let extension = string(env, extension);
+            let event = string(env, event);
+            let args = string(env, args);
+            let action = (!action.is_null()).then(|| string(env, action));
+            with(|h| h.extension_activated(&extension, &event, &args, action.as_deref()));
+        }
+
+        /// A line for the session's journal (`Exact.journal`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_journal(
+            env: *mut JNIEnv,
+            _class: jclass,
+            line: jstring,
+        ) {
+            let line = string(env, line);
+            with(|h| h.journal(line));
+        }
+
         /// The session's clock, ms (`ExtensionContext.now`).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_now(
@@ -163,6 +193,16 @@ macro_rules! canvas_jni_extensions {
             )))
         }
 
+        /// Whether the session's storage is a drive's
+        /// (`ExtensionContext.scratch`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_scratchStorage(
+            _env: *mut JNIEnv,
+            _class: jclass,
+        ) -> jboolean {
+            flag($crate::picker::scripted())
+        }
+
         /// How a presence check the reader made ended (`Presence.kt`, LLP
         /// 1133.010 D13): on the store's completion path, never journaled.
         #[no_mangle]
@@ -190,15 +230,36 @@ macro_rules! canvas_jni_extensions {
             with(|h| h.orientation_applied(&applied, conflict == JNI_TRUE, line.as_deref()));
         }
 
-        /// The activity started (`false`) or stopped (`true`): the page's
-        /// `visibilityState` (LLP 1133.010 §9).
+        /// Activity visibility and process execution eligibility (LLP 1133.033 D2).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_hidden(
             _env: *mut JNIEnv,
             _class: jclass,
             hidden: jboolean,
+            eligible: jboolean,
         ) {
-            with(|h| h.page_hidden(hidden == JNI_TRUE));
+            with(|h| h.page_hidden(hidden == JNI_TRUE, eligible == JNI_TRUE));
+        }
+
+        /// The reader drew a frame of the running generation, on the exact
+        /// thread: whether to say so again after the next (LLP 1030.006 D5).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_drew(
+            _env: *mut JNIEnv,
+            _class: jclass,
+        ) -> jboolean {
+            flag(with(|h| h.drew()).unwrap_or(true))
+        }
+
+        /// Whether the host's data module is active (`CanvasHost::data_active`):
+        /// 1, 0 while its image loads, -1 when it failed to or no host runs.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_dataActive(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            unshown: jboolean,
+        ) -> jint {
+            with(|h| h.data_active(unshown == JNI_TRUE)).unwrap_or(-1)
         }
 
         /// Waits up to `ms` for the store's writes, which the store's own

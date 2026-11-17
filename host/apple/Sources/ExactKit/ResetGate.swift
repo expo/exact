@@ -54,6 +54,7 @@ enum ResetGate {
         "later(_:done:)": (.page, "a notice's calls, as `tellSoon`'s"),
         "setPage(_:)": (.page, "a key window or activation the teardown moved (a sheet closing) is the page's: it is told again"),
         "setRootFontSize(_:)": (.page, "the page's root font, told with its key window: told again with it"),
+        "preferPresented(_:)": (.page, "the agent's `prefer presented`, told again with the page's facts"),
         "setDisplayScale(_:)": (.page, "the page's display scale, told with its key window: told again with it"),
         "tellSoon(_:)": (.page, "a notice the teardown set off (a key window moving) is the page's: it is told again, at once"),
         "collectionFeedback(_:now:)": (.collections, "a list's report is of its old rows; the new list reports its own port and rows"),
@@ -62,6 +63,7 @@ enum ResetGate {
     /// Held calls dropped, by `Runtime` method, and why; any other held call is dropped too (as about the old tree).
     static let dropped: [String: String] = [
         "holdBegin(_:property:now:)": "a gesture beginning on the old tree",
+        "hostRoot(_:now:)": "a link in another window retargeting this rooted one over the teardown (LLP 1030.004 D2): it keeps its screen, as a press on the old tree would",
         "heightDragBegin(_:targetKey:now:)": "a height drag beginning on the old tree",
         "transformMotion(_:)": "a transform drag's packet for the old tree",
         "holdUpdate(_:x:y:now:)": "a gesture moving on the old tree",
@@ -69,7 +71,8 @@ enum ResetGate {
         "pointer(_:_:_:now:)": "a pointer event on the old tree",
         "pan(_:dx:dy:now:)": "a pan on the old tree",
         "panRelease(_:vx:vy:now:)": "a pan released as its view goes",
-        "scrolled(_:left:top:)": "an old scroller's offset as its view goes",
+        "scrolled(_:left:top:observing:)": "an old scroller's offset as its view goes",
+        "noteCollectionScroll(_:revision:sequence:offset:)": "the old list's travel; the replacement reports its own port",
         "timelineScrolled(_:left:top:)": "an old scroller's timelines as its view goes; the new tree's layout places its own",
         "canvasDrawAsync(done:)": "a draw of the old tree's canvases; the new tree's draw on mount",
         "intrinsics(_:)": "the old views' sizes; the new tree's views measure and report their own",
@@ -83,7 +86,7 @@ enum ResetGate {
         "fieldEvent(_:_:_:now:)": "a field's beforeinput, input or change as the teardown ends its edit: the old field's",
         "submit(_:now:)": "a form the teardown submits (a return key's) is the old tree's",
         "clipboard(_:_:_:now:)": "a copy or a context menu line from the old tree",
-        "blocks(_:placements:shows:)": "an old sheet's block or placement as it goes; the new tree's owners publish their own",
+        "blocks(_:)": "an old sheet's block or placement as it goes; the new tree's owners publish their own",
         "checked(_:_:commit:now:)": "a toggle's state from the old tree",
         "fieldSelect(_:_:_:now:)": "a field's selection from the old tree",
         "press(_:held:at:now:)": "a press on a view going away",
@@ -132,6 +135,7 @@ enum ResetGate {
         "surfaceRecord(_:_:)": "an old canvas publisher released during teardown: its release must not clear a kept launch answer, and the new publishers record their own",
         "canvasPerformanceRecord(_:_:)": "an old canvas publisher's performance sample or release; the new publishers report their own metrics",
         "regionComplete(_:)": "an old generation's region artifact: `RegionController` drops one from another generation before it is told, and the new tree asks its own",
+        "regionFallback(_:)": "an old generation's flow fallback: `RegionController` checks generation and the current request before it is told",
         "fulfillSurface(_:kind:body:now:)": "an old-tree surface completing as its view goes: `completeSurface` drops a completion from another generation before it is told",
         // Told again before the reset returns (Session `presentCommitted`, `applyTogether`): moot.
         "setPreferences(_:)": "the person's preferences: `tellTime` tells the new runtime them again (`tellPreferences`)",
@@ -143,6 +147,7 @@ enum ResetGate {
         "groupedMargins(_:)": "UIKit's grouped-card margins: the new tree's grouped lists measure and report their own",
         "localInsets(_:)": "content owners' local insets (LLP 1123 D9): the navigation's reset clears what was told, and each route and block reports its own as the new tree lays out",
         "resizeBox(_:width:height:)": "a resize grip's drag on the old tree: a restart takes the size back to the plan's, as a reload does the browser's",
+        "setTime(epochAtZero:utcOffset:)": "the date, told by a check an input the teardown sets off makes (`followOffset`): forgotten when held, so the next check tells it again (boot and the agent tell it outside the hold)",
         // Never reached while held: their entry points wait for the replay first.
         "dataReady()": "never held: `activateData` holds first and is replayed (.activation), which asks it",
         "landShare()": "never held: a cold share lands from `activateData`, which holds first and is replayed",
@@ -155,7 +160,6 @@ enum ResetGate {
         "prepareModule(_:module:token:width:height:letGo:)": "a restart's own preparation, before its reset",
         "commitPlan()": "a restart's own commit, before its reset",
         "startOnFrame(_:at:)": "a setting the session gives at boot, outside the hold",
-        "setTime(epochAtZero:utcOffset:)": "the clock's epoch, told at boot and by the agent, outside the hold",
         "setPlace(locale:timeZone:seed:formatLocale:)": "the place, told at boot, by the agent and when the Region or the hour cycle changes, outside the hold",
         "setLaunchPlace(locale:timeZone:seed:formatLocale:)": "the launch place, told at boot, outside the hold",
     ]
@@ -227,7 +231,7 @@ extension ExactSession {
                 view?.needsLayout = true
                 #endif
             case .page: tellPage()
-            case .collections: presenter.collections.flush()
+            case .collections: presenter.collections.flushIfNeeded()
             case .pump: pumpReplies()
             case .activation: if let held = pendingActivation, held.generation == generation { pendingActivation = nil; activateData(held.generation, token: held.token) } // (this turn: its batch, then its module events)
             case .modules: if dataGeneration == generation, !replays.contains(.activation) { deliverModuleEvents() } // (else this generation's activation drains them)

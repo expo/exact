@@ -64,6 +64,8 @@ impl BlockAxis {
 /// A containing block a host gives one node, in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HostBlock {
+    /// The selected position-try transformation, applied before sizing.
+    pub tactic: crate::position_try::BlockTactic,
     /// Its width.
     pub width: BlockAxis,
     /// Its height.
@@ -75,7 +77,12 @@ pub struct HostBlock {
 /// host may give a route with no block of its own: its local insets (LLP
 /// 1123 D2, D9; `owner.rs`).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Blocks(Vec<Held>, Vec<(u32, [f32; 4])>);
+pub(crate) struct Blocks(
+    Vec<Held>,
+    Vec<(u32, [f32; 4])>,
+    /// The owners in `.1`, for a lookup that finds no owner at once.
+    crate::sorted::SlotSet,
+);
 
 /// One node's block: the one in force, the host's or else the one the
 /// kernel implies (a top-layer box's, the viewport: HTML's top layer), its
@@ -97,6 +104,11 @@ impl Blocks {
     /// The block `slot` has, its host's or the kernel's.
     pub(crate) fn get(&self, slot: u32) -> Option<HostBlock> {
         self.held(slot).map(|b| b.block)
+    }
+
+    /// The block `slot`'s host gave it: a content owner's (LLP 1123 D2).
+    pub(crate) fn given(&self, slot: u32) -> Option<HostBlock> {
+        self.held(slot).and_then(|b| b.given)
     }
 
     /// Whether `slot` is the root of a layout of its own.
@@ -146,22 +158,29 @@ impl Blocks {
     /// `slot` gone: neither block stands, nor its local insets.
     pub(crate) fn remove(&mut self, slot: u32) {
         self.0.retain(|b| b.slot != slot);
-        self.1.retain(|(s, _)| *s != slot);
+        self.set_local(slot, None);
     }
 
     /// The local insets a host gave the owner whose root is `slot`.
     pub(crate) fn local(&self, slot: u32) -> Option<[f32; 4]> {
+        if !self.2.contains(slot) {
+            return None;
+        }
         self.1.iter().find(|(s, _)| *s == slot).map(|(_, l)| *l)
     }
 
     pub(crate) fn set_local(&mut self, slot: u32, local: Option<[f32; 4]>) {
         self.1.retain(|(s, _)| *s != slot);
         self.1.extend(local.map(|l| (slot, l)));
+        match local {
+            Some(_) => self.2.insert(slot),
+            None => self.2.remove(slot),
+        };
     }
 
-    /// Whether any owner has local insets.
-    pub(crate) fn has_locals(&self) -> bool {
-        !self.1.is_empty()
+    /// The owners whose hosts set local insets.
+    pub(crate) fn local_slots(&self) -> &crate::sorted::SlotSet {
+        &self.2
     }
 
     fn held(&self, slot: u32) -> Option<&Held> {
@@ -259,6 +278,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         s.display = taffy::style::Display::None;
         return;
     }
+    block.tactic.apply(s);
     let _env = crate::style::LayoutEnv::set(arena.env());
     let in_flow = s.position != Position::Absolute;
     if s.position == Position::Static {
@@ -268,10 +288,10 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let edges = s.padding.resolve_or_zero(basis, resolve_calc)
         + s.border.resolve_or_zero(basis, resolve_calc);
     let content_box = s.box_sizing == BoxSizing::ContentBox;
-    let ceiling = |most: f32, edges: f32, own: Lpa, basis: f32| {
+    let ceiling = |most: f32, edges: f32, own: taffy::Dimension, basis: f32| {
         let most = (most - if content_box { edges } else { 0.0 }).max(0.0);
         let own = own.maybe_resolve(Some(basis), resolve_calc);
-        Lpa::length(own.map_or(most, |own: f32| own.min(most)))
+        taffy::Dimension::length(own.map_or(most, |own: f32| own.min(most)))
     };
     let unplaced = |inset: &mut Lpa, margin: &mut Lpa| {
         *inset = Lpa::auto();
@@ -312,8 +332,8 @@ impl Kernel {
     /// layout its subtree is laid out in the block, or in its parent again
     /// (in the viewport for a top-layer box, the block the kernel implies).
     /// Nonfinite or negative lengths are refused, as is a block for a root
-    /// (the offer is its), for an inline run, and while a content region
-    /// is registered.
+    /// (the offer is its), for an inline run, and for an ordinary box while
+    /// a content region is registered. Top-layer subtrees remain independent.
     pub fn set_host_block(
         &mut self,
         view: ViewId,
@@ -332,8 +352,8 @@ impl Kernel {
                 Some("a root is laid out in its offer")
             } else if self.arena.in_paragraph(slot) {
                 Some("an inline run or image has no box of its own")
-            } else if self.region.is_some() {
-                Some("no block while a content region is registered")
+            } else if self.region.is_some() && !self.arena.top_layer_slots.contains(slot) {
+                Some("only a top-layer block while a content region is registered")
             } else {
                 None
             };
@@ -342,6 +362,11 @@ impl Kernel {
             }
         }
         let before = self.arena.blocks.get(slot);
+        // Measure every reader again when a box gains or gives back a block, which
+        // changes the band its readers observe
+        if self.arena.blocks.given(slot).is_some() != block.is_some() {
+            self.arena.observations.invalidate();
+        }
         self.arena.blocks.set(slot, block);
         self.block_changed(slot, before);
         Ok(())
@@ -353,10 +378,7 @@ impl Kernel {
     /// top layer, where `width: 50%` is half the viewport whatever box the
     /// popover was written in. Before each layout, after the viewport is
     /// the offer's; until a definite offer has given a viewport there is
-    /// none, and a top-layer box stays in its positioned ancestor. One
-    /// exception: under a registered content region a top-layer box stays
-    /// in the region's trial (QUEUE, "A popover under a registered content
-    /// region").
+    /// none, and a top-layer box stays in its positioned ancestor.
     pub(super) fn imply_blocks(&mut self) {
         let (wants, moved) = self.implied_changes();
         for (slot, want) in wants {
@@ -368,6 +390,12 @@ impl Kernel {
         // (its ancestors reparented), is styled again: `apply` reads that.
         for slot in moved {
             self.restyle_block(slot);
+        }
+        // Derive the raw readers again below each box that joined or left the top layer
+        for slot in std::mem::take(&mut self.arena.observations.targets.moved) {
+            if self.arena.is_live(slot) {
+                self.targets_moved(slot);
+            }
         }
     }
 
@@ -381,23 +409,18 @@ impl Kernel {
         let (env, lifted) = (arena.env(), &arena.top_layer_slots);
         let (width, height) = (env.viewport_width, env.viewport_height);
         let viewport = (width > 0.0 && height > 0.0).then_some(HostBlock {
+            tactic: Default::default(),
             width: BlockAxis::Fit(width),
             height: BlockAxis::Fit(height),
         });
         let mut slots = arena.blocks.implied_slots();
         slots.extend(lifted.iter().filter(|s| arena.blocks.implied(*s).is_none()));
-        let region = self.region.as_ref().map(|r| r.binding.owner.index);
         let wants: Vec<_> = slots
             .into_iter()
             .map(|slot| {
-                // One its host replaced whole (a closed popover, a Linux
-                // shell's menu) has no layout to lay out in it. One under a
-                // registered content region stays in the region's trial
-                // (theme2 09:54; the native region captures it: QUEUE).
                 let boxed = !arena.is_root(slot)
                     && !arena.in_paragraph(slot)
-                    && arena.cover(slot) != Some(super::HostCover::Whole)
-                    && region.is_none_or(|owner| !arena.is_ancestor(owner, slot));
+                    && arena.cover(slot) != Some(super::HostCover::Whole);
                 (slot, viewport.filter(|_| lifted.contains(slot) && boxed))
             })
             .filter(|&(slot, want)| arena.blocks.implied(slot) != want)
@@ -407,6 +430,15 @@ impl Kernel {
             .map(|b| b.slot)
             .collect();
         (wants, moved)
+    }
+
+    /// Whether `view` is a top-layer box under its current rows, including
+    /// while its host covers it whole because it is closed. An inline run
+    /// that says `popover` is not: it stays in its paragraph.
+    pub fn is_top_layer(&self, view: ViewId) -> bool {
+        self.arena
+            .slot_of(view)
+            .is_some_and(|s| crate::style::top_layer::is_box(&self.arena, s))
     }
 
     /// `slot`'s block root styled again, as its block or what is above it
@@ -432,6 +464,14 @@ impl Kernel {
         self.restyle_block(slot);
         if before.is_some() == block.is_some() {
             return;
+        }
+        self.targets_moved(slot);
+        if let Some(region) = &mut self.region {
+            if !self.arena.top_layer_slots.contains(slot)
+                && self.arena.is_ancestor(region.binding.content.index, slot)
+            {
+                region.invalidate();
+            }
         }
         // It leaves its parent's layout, or returns to it: published whole
         // in the space it is now in, and its parent's children again.
@@ -669,7 +709,7 @@ impl Kernel {
         Ok(())
     }
 
-    fn used_size(&self, slot: u32) -> (f32, f32) {
+    pub(super) fn used_size(&self, slot: u32) -> (f32, f32) {
         let shown = !self.arena.flags(slot).has(NodeFlags::HIDDEN);
         let tree = self.layout.as_deref().and_then(LayoutMirror::tree_ref);
         let (Some(block), Some(node), Some(tree)) = (

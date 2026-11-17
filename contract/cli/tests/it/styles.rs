@@ -387,13 +387,19 @@ fn flex_grow_is_a_longhand_and_the_later_binding_wins() {
     let r = boot("component App\n  view\n    row\n      view flex-grow=1 testId=\"grow\"\n      view flex=1 flex-grow=3 testId=\"flex-then-grow\"\n      view flex-grow=3 flex=1 testId=\"grow-then-flex\"\n");
     let grow = style_of(&r, "grow");
     assert_eq!(
-        (grow.flex_grow, grow.flex_shrink, grow.flex_basis),
+        (grow.flex_grow, grow.flex_shrink, grow.flex_basis.clone()),
         (1.0, 1.0, Dimension::Auto)
     );
     let a = style_of(&r, "flex-then-grow");
-    assert_eq!((a.flex_grow, a.flex_basis), (3.0, Dimension::Percent(0.0)));
+    assert_eq!(
+        (a.flex_grow, a.flex_basis.clone()),
+        (3.0, Dimension::Percent(0.0))
+    );
     let b = style_of(&r, "grow-then-flex");
-    assert_eq!((b.flex_grow, b.flex_basis), (1.0, Dimension::Percent(0.0)));
+    assert_eq!(
+        (b.flex_grow, b.flex_basis.clone()),
+        (1.0, Dimension::Percent(0.0))
+    );
     for attrs in ["flex-grow=-1", "flex-shrink=-1", "flex=-2"] {
         let e = refused(attrs);
         assert_eq!(e.id, "lower-attr-value", "{attrs}: {e}");
@@ -1198,7 +1204,7 @@ fn css_flex_shorthands_lower_in_order_to_the_longhands() {
         ));
         let s = style_of(&r, "item");
         assert_eq!(
-            (s.flex_grow, s.flex_shrink, s.flex_basis),
+            (s.flex_grow, s.flex_shrink, s.flex_basis.clone()),
             (grow, shrink, basis),
             "{value}"
         );
@@ -1222,7 +1228,7 @@ fn css_flex_shorthands_lower_in_order_to_the_longhands() {
     let r = boot("component App\n  state w = 200\n  view\n    row\n      view flex-grow=1 flex-shrink=0 flex-basis=`${w}px` testId=\"item\"\n");
     let s = style_of(&r, "item");
     assert_eq!(
-        (s.flex_grow, s.flex_shrink, s.flex_basis),
+        (s.flex_grow, s.flex_shrink, s.flex_basis.clone()),
         (1.0, 0.0, Dimension::Points(200.0))
     );
 }
@@ -1413,7 +1419,7 @@ fn css_native_interaction_gaps_are_named_precisely() {
 }
 
 #[test]
-fn css_flex_factor_order_and_intrinsic_basis_refusals_are_precise() {
+fn css_flex_factor_order_and_keyword_bases_are_precise() {
     let source = |value: &str| format!("component App\n  view\n    box flex=\"{value}\"\n");
     assert!(
         contract::compile(&source("0 auto 1")).is_err(),
@@ -1421,14 +1427,14 @@ fn css_flex_factor_order_and_intrinsic_basis_refusals_are_precise() {
     );
     contract::compile(&source("20px 0 1")).unwrap();
     contract::compile(&source("NONE")).unwrap();
-    for basis in ["content", "min-content", "max-content", "fit-content"] {
-        let error = contract::compile(&source(&format!("1 1 {basis}")))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("intrinsic basis sizing") && error.contains("CSS flex-basis"),
-            "{error}"
-        );
+    // A keyword is a basis (LLP 1001.001 D6): `flex: max-content` is `1 1 max-content`.
+    for flex in [
+        "1 1 content",
+        "min-content",
+        "1 max-content",
+        "0 fit-content",
+    ] {
+        contract::compile(&source(flex)).unwrap();
     }
 }
 

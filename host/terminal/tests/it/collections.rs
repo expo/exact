@@ -286,3 +286,55 @@ fn a_keyed_jump_aligns_rows_by_their_margins_in_whole_cells() {
         assert_eq!(last, "row 30", "margin {margin}:\n{text}");
     }
 }
+
+#[test]
+fn fixed_children_match_eager_boxes_and_remain_mounted_at_both_ends() {
+    let source = include_str!("../../../../contract/corpus/list-fixed.contract")
+        .replace("width=300", "width=\"30ch\"")
+        .replace("height=200", "height=\"12lh\"")
+        .replace("height=30", "height=\"2lh\"")
+        .replace(" height=40", " height=\"2lh\"")
+        .replace("margin-bottom=20", "margin-bottom=\"1lh\"")
+        .replace("margin-top=35", "margin-top=\"2lh\"")
+        .replace("tail = 300", "tail = 20")
+        .replace("tail + 200", "tail + 10")
+        .replace("height=tail", "height=`${tail}lh`")
+        .replace("estimated-item-height=40", "estimated-item-height=32");
+    let (mut virtualized, mut vt) = boot(&source, 40, 20);
+    let (mut eager, mut et) = boot(
+        &source
+            .replace("virtualized=true", "virtualized=false")
+            .replace(" estimated-item-height=32", ""),
+        40,
+        20,
+    );
+    for end in [false, true, false] {
+        virtualized.scroll_edge(end);
+        eager.scroll_edge(end);
+        vt.render(&mut virtualized);
+        et.render(&mut eager);
+        for id in ["lead-a", "lead-b", "trail-a", "trail-b", "tail"]
+            .into_iter()
+            .map(str::to_owned)
+            .chain((0..10).map(|i| format!("row-{i}")))
+        {
+            if let Some(actual) = virtualized.by_test_id(&id) {
+                assert_eq!(
+                    virtualized.kernel().node(actual).unwrap().frame,
+                    eager
+                        .kernel()
+                        .node(eager.by_test_id(&id).unwrap())
+                        .unwrap()
+                        .frame,
+                    "{id}"
+                );
+            }
+        }
+    }
+    virtualized.scroll_edge(true);
+    vt.render(&mut virtualized);
+    virtualized.act("grow");
+    vt.render(&mut virtualized);
+    assert!(virtualized.by_test_id("tail").is_some());
+    assert!(virtualized.by_test_id("lead-a").is_some());
+}

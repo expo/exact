@@ -76,6 +76,31 @@ pub struct Admitted {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// The plan's timers at boot. A gated task starts idle; the gate step
+    /// arms the ones whose gate holds, over the settled state (LLP 1092 D8).
+    pub(super) fn boot_timers(&self) -> Vec<Timer> {
+        let now = self.now_ms;
+        self.plan
+            .timers
+            .iter()
+            .map(|t| Timer {
+                next_ms: if t.gated || t.keyed {
+                    f64::INFINITY
+                } else if t.frame {
+                    virtual_frame(now, 1)
+                } else {
+                    now + t.interval_ms as f64
+                },
+                armed: !(t.gated || t.keyed),
+                generation: 0,
+                completion: Default::default(),
+                key: None,
+                base: now,
+                k: 1,
+            })
+            .collect()
+    }
+
     /// Declare supported waits before installing the live clock.
     pub fn hold_waits(&mut self, kinds: WaitKinds) {
         self.clock.waits = kinds;

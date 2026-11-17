@@ -42,7 +42,7 @@ impl FrameStats {
     pub fn of(rgba: &[u8]) -> Self {
         let decode = srgb_table();
         let (mut histogram, mut sum, mut clipped, mut pixels) = ([0u32; BINS], 0f64, 0u32, 0u32);
-        for p in rgba.chunks_exact(4) {
+        for p in rgba.as_chunks::<4>().0 {
             let y = 0.2126 * decode[p[0] as usize]
                 + 0.7152 * decode[p[1] as usize]
                 + 0.0722 * decode[p[2] as usize];

@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test';
+import { resolve } from 'node:path';
 import { historyURL } from './navigation/routes.js';
-import { launchLocation } from './navigation/environment.js';
+import { launchLocation, launchVisits } from './navigation/environment.js';
+import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { renderedPages } from '../web-js/rendered-pages.mjs';
 
 // A drive's launch facts (scripts/agent-launch.mjs) are the carrier's, not the app's: none reaches the launch
 // route, and every History entry keeps them, so a reload relaunches with them. `formatLocale` (#952) among them.
@@ -67,3 +70,82 @@ test('a History entry keeps a route whose first segment is empty, and a reload l
     expect(launchLocation({ location: entry })).toBe('//item/7?q=a#moves');
   } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
 });
+
+test('a reload\'s launch has the visits Back returns to without loading a page, each as the launch reads its own', () => {
+  const entry = (path, sameDocument = true) => ({ url: `http://127.0.0.1:9${path}`, sameDocument });
+  const navigation = (entries, index) => ({ navigation: { entries: () => entries, currentEntry: { index } } });
+  // An entry of another document, which Back loads, and those before it are no visit of this launch.
+  expect(launchVisits(navigation([entry('/elsewhere', false), entry(`/?${DRIVE}`), entry('/settings#top'), entry('/preview')], 3))).toEqual(['/', '/settings#top']);
+  expect(launchVisits(navigation([entry('/')], 0))).toEqual([]);
+  expect(launchVisits({})).toEqual([]);
+});
+
+// #527: after a reload on a deep route, the browser's Back pops to the visit beneath, as before the reload, through the
+// root's `navigate` (`go`), and does not push it over the route Back leaves; the app bar's Back steps back to that entry.
+test('after a reload, the browser\'s Back and the app bar\'s pop to the visit beneath', () => renderedPages(`routes nav
+  home "/"
+    settings "/settings"
+    preview "/preview"
+
+component Visits
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  action follow(url: string)
+    nav = go(nav, url)
+  view
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back" navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=\`\${e.id}\` position="absolute" inset=0 testId=\`route-\${e.name}\`
+          header
+            h1
+              text e.name
+          if e.name == "home"
+            button press=open("/settings") testId="open-settings"
+              text "Settings"
+          if e.name == "settings"
+            button press=open("/preview") testId="open-preview"
+              text "Preview"
+`, async (_, __, dist) => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+    const file = Bun.file(resolve(dist, new URL(req.url).pathname.slice(1)));
+    return await file.exists() && !(await file.stat()).isDirectory() ? new Response(file) : new Response(Bun.file(resolve(dist, 'index.html')));
+  } });
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    const stack = async (path) => {
+      await page.waitForFunction((p) => location.pathname === p && !!globalThis.exact?.ready && !document.querySelector('[data-exiting]'), path);
+      return page.evaluate(() => [...document.querySelectorAll('[data-testid^="route-"]')].map((r) => r.dataset.testid.slice(6)));
+    };
+    await page.goto(server.url.href);
+    await stack('/');
+    await page.click('[data-testid="open-settings"]');
+    await stack('/settings');
+    await page.click('[data-testid="open-preview"]');
+    expect(await stack('/preview')).toEqual(['home', 'settings', 'preview']);
+    await page.reload();
+    expect(await stack('/preview')).toEqual(['home', 'settings', 'preview']);
+    // The app bar's Back steps back to the entry beneath, as the browser's does, and pushes none.
+    const entries = () => page.evaluate(() => [navigation.currentEntry.index, navigation.entries().length]);
+    const [at, count] = await entries();
+    await page.evaluate(() => document.querySelector('[data-testid="route-preview"] > header').shadowRoot.querySelector('button').click());
+    expect(await stack('/settings')).toEqual(['home', 'settings']);
+    expect(await entries()).toEqual([at - 1, count]);
+    await page.evaluate(() => history.back());
+    expect(await stack('/')).toEqual(['home']);
+    await page.evaluate(() => history.forward());
+    expect(await stack('/settings')).toEqual(['home', 'settings']);
+    await page.evaluate(() => history.forward());
+    expect(await stack('/preview')).toEqual(['home', 'settings', 'preview']);
+    await page.reload();
+    expect(await stack('/preview')).toEqual(['home', 'settings', 'preview']);
+    await page.evaluate(() => history.back());
+    expect(await stack('/settings')).toEqual(['home', 'settings']);
+    await page.evaluate(() => history.back());
+    expect(await stack('/')).toEqual(['home']);
+    await page.evaluate(() => history.forward());
+    expect(await stack('/settings')).toEqual(['home', 'settings']);
+  } finally { await browser.close(); server.stop(true); }
+}), 180000);

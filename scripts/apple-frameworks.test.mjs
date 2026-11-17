@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { moduleFrameworks } from '../host/apple/arms.mjs';
 import { assembleIOS, assembleMac } from '../host/apple/bundle.mjs';
 import { codeDigest, plistFile } from '../host/apple/assets.mjs';
@@ -134,7 +134,9 @@ test.skipIf(process.platform !== 'darwin')('module xcframeworks embed and sign o
         const probe = resolve(dir, 'probe');
         const probeSource = resolve(dir, 'probe.c');
         writeFileSync(probeSource, 'extern int answer(void); int main(void) { return answer() != 42; }');
-        run('xcrun', ['clang', '-target', triple, probeSource, source, ...selection.args, ...selection.probeArgs, '-o', probe]);
+        // As a build's roster probe: its frameworks staged beside it, found through `@loader_path/Frameworks`.
+        for (const lib of selection.libraries) cpSync(lib.placed, resolve(dir, 'Frameworks', basename(lib.placed)), { recursive: true, verbatimSymlinks: true });
+        run('xcrun', ['clang', '-target', triple, probeSource, source, ...selection.args, '-Xlinker', '-rpath', '-Xlinker', '@loader_path/Frameworks', '-o', probe]);
         run(probe, []);
       }
       assert.equal(moduleFrameworks([frameworks[1]], { platform, variant, arch }).args.includes('-rpath'), false);

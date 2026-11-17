@@ -481,3 +481,16 @@ fn slots_give_each_word_the_first_free_part_it_can_be() {
     assert_eq!(Slots::default().take("1.2.3s"), None);
     assert!(is_easing("Spring(1, 2, 3)") && is_easing("Steps(") && !is_easing("spin"));
 }
+
+#[test]
+fn a_picture_takes_the_last_animation_of_each_property_over_its_identity() {
+    let mut a = Animations::parse("slide 1s linear, turn 1s linear").unwrap();
+    let slide = Keyframes::parse("from{translate:50% 10px;opacity:0}").unwrap();
+    let turn = Keyframes::parse("to{rotate:90deg;opacity:0.5}").unwrap();
+    a.resolve(|name| Some(if name == "slide" { &slide } else { &turn }));
+    let p = a.picture(0.5, (200.0, 100.0));
+    // A quarter of the width and half of 10, from 50 % and 10 points.
+    assert_eq!(p.translate, (50.0, 5.0));
+    // Opacity is the later animation's, from 1 towards 0.5; the scale rests.
+    assert_eq!((p.opacity, p.scale, p.rotate), (0.75, 1.0, 45.0));
+}

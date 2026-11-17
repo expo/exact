@@ -77,7 +77,7 @@ const SETTINGS: &str = "list appearance=\"auto\" testId=\"list\" flex=1
     button press=go testId=\"profile\"
       image \"symbol:sf/person.circle\"
       text \"Profile\" testId=\"profile-title\"
-      image \"symbol:sf/chevron.right\"
+      image \"symbol:sf/chevron.right\" testId=\"profile-chevron\"
     button press=go testId=\"notes\"
       image \"symbol:sf/bell\"
       text \"Notifications\"
@@ -122,6 +122,7 @@ fn the_kernel_reads_sections_and_rows_as_a_native_list_draws_them() {
             symbol: Some("person.circle".into()),
             title: Some("Profile".into()),
             accessory: Accessory::Disclosure,
+            accessory_view: Some(id(&r, "profile-chevron")),
             pressable: true,
             ..GroupedRow::default()
         }
@@ -726,7 +727,7 @@ fn a_field_goes_under_its_label_when_both_do_not_fit() {
         let style = |t: &str| k.node(id(&r, t)).unwrap().computed_style(StyleMask::ALL);
         let wrap = style("menu-row").flex_wrap;
         assert_eq!(wrap, exact_kernel::FlexWrap::Wrap, "{root}: wraps");
-        let basis = style("aisle").flex_basis;
+        let basis = style("aisle").flex_basis.clone();
         assert_eq!(basis, exact_kernel::Dimension::Auto, "{root}: grown");
         for (label, field) in [("date-label", "date"), ("menu-label", "menu")] {
             let (l, f) = (frame(label), frame(field));

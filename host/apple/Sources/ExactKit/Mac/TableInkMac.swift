@@ -91,7 +91,7 @@ extension NodeView {
         guard let layer = holder.layer else { return }
         if mark.superlayer !== layer {
             mark.removeFromSuperlayer()
-            let paint: [CALayer?] = (holder as? NodeView).map { [$0.shadowCaster, $0.boxFill, $0.boxGradient, $0.insetCaster, $0.imageLayer] } ?? []
+            let paint: [CALayer?] = (holder as? NodeView).map { [$0.shadowCaster, $0.boxFill, $0.boxGradient, $0.boxPattern, $0.insetCaster, $0.imageLayer] } ?? []
             let box = layer.sublayers?.last { sublayer in paint.contains { $0 === sublayer } }
             if let box { layer.insertSublayer(mark, above: box) } else { layer.insertSublayer(mark, at: 0) }
         }

@@ -3,7 +3,7 @@ import ExactKit
 import UIKit
 
 extension GroupedCell {
-    static let activeRows = ["press_background_color", "press_color", "press_opacity", "press_opacity_to", "press_scale"]
+    static let activeRows = ["press_background_color", "press_color", "press_opacity", "press_opacity_to", "press_scale", "press_translate", "press_translate_percent"]
 
     func restorePressPresentation() {
         ActivePresentation.restore(layer)
@@ -11,6 +11,7 @@ extension GroupedCell {
 
     /// Resolve the native state first, then replace only the authored properties.
     func activePaint(_ style: NodeStyle, content: UIListContentConfiguration, enabled: Bool, protected: (title: Bool, secondary: Bool, image: Bool)) {
+        refreshActiveOnLayout = ["press_scale", "press_translate", "press_translate_percent"].contains { style[$0] != nil }
         guard Self.activeRows.contains(where: { style[$0] != nil }) else { restorePressPresentation(); return }
         let background = backgroundConfiguration ?? .clear()
         let nativeUpdate = configurationUpdateHandler

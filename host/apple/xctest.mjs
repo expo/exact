@@ -1,11 +1,11 @@
 // How `build.mjs --test` runs the Swift host tests once they are built:
 // on this Mac, a test class to an `xctest` process; on a simulator, the
 // `.xctestrun` xcodebuild wrote, without the Thread Performance Checker.
-import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from './toolchain.mjs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
-import { resolve } from 'node:path';
-import { iosAssets, plistFile } from './assets.mjs';
+import { dirname, resolve } from 'node:path';
+import { appleAssets, appleAssetCatalogInventory, rasterIconAssets, iosAssets, plistFile } from './assets.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
 const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...opts });
@@ -13,7 +13,31 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
 /** Rebuild fixture plans with `env.EXACT_CONTRACT`; write their paths to `<prefix>_<KEY>_PLAN`.
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {
-  const contract = args => run(env.EXACT_CONTRACT, ['build', ...args]);
+  const contract = args => run(env.EXACT_CONTRACT, ['build', ...args], { env });
+  const watchSync = resolve(dir, 'watch-sync');
+  mkdirSync(watchSync, { recursive: true });
+  writeFileSync(resolve(watchSync, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Watch sync' } }));
+  writeFileSync(resolve(watchSync, 'app.contract'), readFileSync(resolve(root, 'scripts/fixtures/store-refresh.contract')));
+  contract([resolve(watchSync, 'app.contract'), '-o', env[`${prefix}_WATCH_SYNC_PLAN`] = resolve(watchSync, 'app.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/layout-only-row.contract'), '-o', env[`${prefix}_LAYOUT_ONLY_ROW_PLAN`] = resolve(dir, 'layout-only-row.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/layout-only-paint.contract'), '-o', env[`${prefix}_LAYOUT_ONLY_PAINT_PLAN`] = resolve(dir, 'layout-only-paint.plan')]);
+  // Made afresh: a target from before the tamber->forma rename keeps an app.tamber here, which contract refuses.
+  const iconApp = resolve(dir, 'entries/raster-icons');
+  rmSync(iconApp, { recursive: true, force: true });
+  mkdirSync(resolve(iconApp, 'assets'), { recursive: true });
+  writeFileSync(resolve(iconApp, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Raster icons' }, host: { ios: {}, macos: {} } }));
+  writeFileSync(resolve(iconApp, 'app.forma'), 'forma icons\n\nicons\n  icon.two = icon(svg "two.svg")\n');
+  writeFileSync(resolve(iconApp, 'assets/two.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 24 24"><path fill="#ff0000" d="M0 0h12v24H0Z"/><path fill="#0000ff" d="M12 0h12v24H12Z"/></svg>');
+  writeFileSync(resolve(iconApp, 'app.contract'), 'component App\n  view\n    column\n      button\n        image "symbol:icon.two" -exact-symbol-rendering="multicolor"\n        text "Colours"\n      image "symbol:icon.two" -exact-symbol-rendering="multicolor" width=80 testId="raster-wide"\n');
+  contract([resolve(iconApp, 'app.contract'), '-o', env[`${prefix}_RASTER_ICONS_PLAN`] = resolve(dir, 'raster-icons.plan')]);
+  const iconBundle = env[`${prefix}_RASTER_ICONS_BUNDLE`] = resolve(dir, 'RasterIcons.bundle');
+  mkdirSync(iconBundle, { recursive: true });
+  writeFileSync(resolve(iconBundle, 'Info.plist'), plistFile({ CFBundleIdentifier: 'dev.exact.raster-icons', CFBundlePackageType: 'BNDL' }));
+  appleAssets({ dir: iconApp, name: 'Raster icons', manifest: {} }, iconBundle,
+    { platform: prefix === 'EXACT' ? 'macos' : 'ios', icons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] });
+
+  contract([resolve(root, 'host/apple/tests/fixtures/fragment.contract'), '-o', env[`${prefix}_FRAGMENT_PLAN`] = resolve(dir, 'fragment.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/table-access.contract'), '-o', env[`${prefix}_TABLE_ACCESS_PLAN`] = resolve(dir, 'table-access.plan')]);
   if (prefix === 'TEST_RUNNER_EXACT') {
     // LaunchColorIOSTests reads the build's XML and compiled catalogue as an app bundle.
     const fixtures = env[`${prefix}_LAUNCH_COLOR_FIXTURES`] = resolve(dir, 'launch-colors');
@@ -28,18 +52,49 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       writeFileSync(resolve(bundle, 'Info.plist'), plistFile({ CFBundleIdentifier: `dev.exact.launch.${name}`, CFBundlePackageType: 'BNDL', ...keys }));
     }
   }
+  contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/shop-scroll.contract'), '-o', env[`${prefix}_SHOP_SCROLL_PLAN`] = resolve(dir, 'shop-scroll.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/quiet-scroll.contract'), '-o', env[`${prefix}_QUIET_SCROLL_PLAN`] = resolve(dir, 'quiet-scroll.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/quiet-edge.contract'), '-o', env[`${prefix}_QUIET_EDGE_PLAN`] = resolve(dir, 'quiet-edge.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/scroll-facts.contract'), '-o', env[`${prefix}_SCROLL_FACTS_PLAN`] = resolve(dir, 'scroll-facts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/fixed-page.contract'), '-o', env[`${prefix}_FIXED_PAGE_PLAN`] = resolve(dir, 'fixed-page.plan')]);
+  contract([resolve(root, 'scripts/fixtures/collection-fixed-chat.contract'), '-o', env[`${prefix}_COLLECTION_FIXED_PLAN`] = resolve(dir, 'collection-fixed.plan')]);
+  const eagerList = resolve(dir, 'collection-fixed-eager.contract');
+  writeFileSync(eagerList, readFileSync(resolve(root, 'scripts/fixtures/collection-fixed-chat.contract'), 'utf8')
+    .replace('virtualized=true', 'virtualized=false').replace(' estimated-item-height=40', '').replace(' scrollFollowEnd=true', ''));
+  contract([eagerList, '-o', env[`${prefix}_COLLECTION_FIXED_EAGER_PLAN`] = resolve(dir, 'collection-fixed-eager.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/arrangement-sizing.contract'), '-o', env[`${prefix}_ARRANGEMENT_SIZING_PLAN`] = resolve(dir, 'arrangement-sizing.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/canvas-capture.contract'), '-o', env[`${prefix}_CANVAS_CAPTURE_PLAN`] = resolve(dir, 'canvas-capture.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/range-adjust.contract'), '-o', env[`${prefix}_RANGE_ADJUST_PLAN`] = resolve(dir, 'range-adjust.plan')]);
   // A test that writes its own manifest names the app the tests link (`SheetFixture`'s `data`).
   env[`${prefix}_TEST_APP_ID`] = appId;
+  contract([resolve(root, 'host/apple/tests/fixtures/page-freeze.contract'), '-o', env[`${prefix}_PAGE_FREEZE_PLAN`] = resolve(dir, 'page-freeze.plan')]);
+  const clicks = resolve(dir, 'page-freeze-sound');
+  mkdirSync(resolve(clicks, 'assets'), { recursive: true });
+  const wave = Buffer.alloc(44 + 8820);
+  wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8); wave.writeUInt32LE(16, 16);
+  wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22); wave.writeUInt32LE(44100, 24); wave.writeUInt32LE(88200, 28);
+  wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(8820, 40);
+  writeFileSync(resolve(clicks, 'assets/click.wav'), wave);
+  const pulse = readFileSync(resolve(root, 'host/apple/tests/fixtures/page-freeze.contract'), 'utf8')
+    .replace('beats=4', 'beats=1').replace('steps=[]', 'steps=[Step(beat=0, src="assets/click.wav", gain=1, group="pulse", note=-1, velocity=100, channel=0, duration=0.1, haptic="")]')
+    .replace('  view\n', '  action stop\n    playing = false\n  action stopWithSound\n    playing = false\n    playSound("assets/click.wav")\n  view\n')
+    + '      button "Stop" testId="stop" press=stop\n      button "Stop with sound" testId="stop-with-sound" press=stopWithSound\n';
+  writeFileSync(resolve(clicks, 'app.contract'), 'sound "assets/click.wav"\n' + pulse);
+  contract([resolve(clicks, 'app.contract'), '-o', env[`${prefix}_PAGE_FREEZE_SOUND_PLAN`] = resolve(dir, 'page-freeze-sound.plan')]);
+  writeFileSync(resolve(clicks, 'no-sequence.contract'), ('sound "assets/click.wav"\n' + pulse)
+    .replace(/  sequence pulse when playing\n    play\([^\n]+\n/, ''));
+  contract([resolve(clicks, 'no-sequence.contract'), '-o', env[`${prefix}_PAGE_FREEZE_NO_SEQUENCE_PLAN`] = resolve(dir, 'page-freeze-no-sequence.plan')]);
   // A box's length read against the document's environment stops a test (LLP 1123 D9).
   env[`${prefix}_STRICT_LOCAL_INSETS`] = '1';
   contract([resolve(root, 'host/apple/tests/fixtures/headless-reply.contract'), '-o', env[`${prefix}_HEADLESS_REPLY_PLAN`] = resolve(dir, 'headless-reply.plan')]);
-  for (const [name, key] of [['grouped-card', 'GROUPED_CARD'], ['frame-health', 'FRAME_HEALTH'], ['store-refresh', 'STORE_REFRESH'], ['headless', 'HEADLESS'], ['headless-markdown', 'HEADLESS_MARKDOWN'], ['headless-hidden-markdown', 'HEADLESS_HIDDEN_MARKDOWN'], ['headless-live', 'HEADLESS_LIVE'], ['headless-back', 'HEADLESS_BACK'], ['native-navigation-scroll', 'NATIVE_SCROLL'], ['intersect', 'INTERSECT'], ['native-buttons', 'BUTTONS'], ['keyboard-form', 'KEYBOARD'], ['tab-edge', 'TAB_EDGE'], ['repaint', 'REPAINT'], ['still-title', 'STILL_TITLE'], ['navigation-bars', 'NAVIGATION_BARS'], ['large-title', 'LARGE_TITLE'], ['transparent-bar', 'TRANSPARENT_BAR'], ['bar-band', 'BAR_BAND'], ['pad-bar', 'PAD_BAR'], ['pushed-title', 'PUSHED_TITLE'], ['inline-frame', 'INLINE_FRAME'], ['fieldless', 'FIELDLESS'], ['web-documents', 'WEB_DOCUMENTS'], ['iframe-post-messages', 'IFRAME_POST_MESSAGES'], ['iframe-partition', 'IFRAME_PARTITION'], ['iframe-windows', 'IFRAME_WINDOWS'], ['iframe-pdf', 'IFRAME_PDF'], ['iframe-resident-popover', 'IFRAME_RESIDENT_POPOVER'], ['tab-owner', 'TAB_OWNER'], ['grouped-list-reveal', 'GROUPED_REVEAL'], ['due-now', 'DUE_NOW'], ['caret-reveal', 'CARET_REVEAL'], ['cover-scroll', 'COVER_SCROLL'], ['page-edges', 'PAGE_EDGES'], ['barless-route', 'BARLESS_ROUTE'], ['page-edges-grouped', 'PAGE_EDGES_GROUPED'], ['control-bars', 'CONTROL_BARS'], ['cover-tabs', 'COVER_TABS'], ['layout-insert', 'LAYOUT_INSERT'], ['search-scope', 'SEARCH_SCOPE'], ['barless-tab', 'BARLESS_TAB'], ['pull-refresh', 'PULL_REFRESH'], ['edge-effect', 'EDGE_EFFECT'], ['sticky-bar', 'STICKY_BAR'], ['glass-press', 'GLASS_PRESS'], ['surface-pairs', 'SURFACE_PAIRS'], ['prevent-focus', 'PREVENT_FOCUS'], ['accent-bars', 'ACCENT_BARS'], ['accent-tabs', 'ACCENT_TABS'], ['search-tabs', 'SEARCH_TABS'], ['beside-routes', 'BESIDE_ROUTES'], ['bar-insets', 'BAR_INSETS'], ['bar-hero', 'BAR_HERO'], ['tips', 'TIPS']]) {
+  for (const [name, key] of [['saved-scheme', 'SAVED_SCHEME'], ['grouped-card', 'GROUPED_CARD'], ['frame-health', 'FRAME_HEALTH'], ['store-refresh', 'STORE_REFRESH'], ['headless', 'HEADLESS'], ['headless-markdown', 'HEADLESS_MARKDOWN'], ['headless-hidden-markdown', 'HEADLESS_HIDDEN_MARKDOWN'], ['headless-live', 'HEADLESS_LIVE'], ['headless-back', 'HEADLESS_BACK'], ['native-navigation-scroll', 'NATIVE_SCROLL'], ['intersect', 'INTERSECT'], ['native-buttons', 'BUTTONS'], ['keyboard-form', 'KEYBOARD'], ['tab-edge', 'TAB_EDGE'], ['repaint', 'REPAINT'], ['still-title', 'STILL_TITLE'], ['navigation-bars', 'NAVIGATION_BARS'], ['large-title', 'LARGE_TITLE'], ['transparent-bar', 'TRANSPARENT_BAR'], ['bar-band', 'BAR_BAND'], ['pad-bar', 'PAD_BAR'], ['pushed-title', 'PUSHED_TITLE'], ['inline-frame', 'INLINE_FRAME'], ['fieldless', 'FIELDLESS'], ['web-documents', 'WEB_DOCUMENTS'], ['iframe-post-messages', 'IFRAME_POST_MESSAGES'], ['iframe-partition', 'IFRAME_PARTITION'], ['iframe-windows', 'IFRAME_WINDOWS'], ['iframe-pdf', 'IFRAME_PDF'], ['iframe-resident-popover', 'IFRAME_RESIDENT_POPOVER'], ['tab-owner', 'TAB_OWNER'], ['grouped-list-reveal', 'GROUPED_REVEAL'], ['due-now', 'DUE_NOW'], ['caret-reveal', 'CARET_REVEAL'], ['cover-scroll', 'COVER_SCROLL'], ['page-edges', 'PAGE_EDGES'], ['barless-route', 'BARLESS_ROUTE'], ['page-edges-grouped', 'PAGE_EDGES_GROUPED'], ['control-bars', 'CONTROL_BARS'], ['cover-tabs', 'COVER_TABS'], ['layout-insert', 'LAYOUT_INSERT'], ['search-scope', 'SEARCH_SCOPE'], ['barless-tab', 'BARLESS_TAB'], ['pull-refresh', 'PULL_REFRESH'], ['edge-effect', 'EDGE_EFFECT'], ['sticky-bar', 'STICKY_BAR'], ['glass-press', 'GLASS_PRESS'], ['surface-pairs', 'SURFACE_PAIRS'], ['prevent-focus', 'PREVENT_FOCUS'], ['accent-bars', 'ACCENT_BARS'], ['accent-tabs', 'ACCENT_TABS'], ['search-tabs', 'SEARCH_TABS'], ['beside-routes', 'BESIDE_ROUTES'], ['bar-insets', 'BAR_INSETS'], ['bar-hero', 'BAR_HERO'], ['tips', 'TIPS'], ['boot-control-top', 'BOOT_CONTROL_TOP'], ['boot-control-bottom', 'BOOT_CONTROL_BOTTOM'], ['boot-control-tab', 'BOOT_CONTROL_TAB'], ['boot-dialog', 'BOOT_DIALOG'], ['boot-tabs', 'BOOT_TABS'], ['boot-clipboard', 'BOOT_CLIPBOARD'], ['boot-motion', 'BOOT_MOTION'], ['boot-plain', 'BOOT_PLAIN'], ['boot-padded', 'BOOT_PADDED'], ['boot-transform', 'BOOT_TRANSFORM'], ['boot-tip', 'BOOT_TIP']]) {
     contract([resolve(root, `scripts/fixtures/${name}.contract`), '-o', env[`${prefix}_${key}_PLAN`] = resolve(dir, `${name}.plan`)]);
   }
+  // NamedWindowsTests' links that name a window (LLP 1030.004).
+  contract([resolve(root, 'host/apple/tests/fixtures/named-windows.contract'), '-o', env[`${prefix}_NAMED_WINDOWS_PLAN`] = resolve(dir, 'named-windows.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/sticky-transition.contract'), '-o', env[`${prefix}_STICKY_TRANSITION_PLAN`] = resolve(dir, 'sticky-transition.plan')]);
   // SwipeScrollDragTests': swipeleft and swiperight rows and a scroller's drag events.
   contract([resolve(root, 'host/apple/tests/fixtures/swipe-scroll-drag.contract'), '-o', env[`${prefix}_SWIPE_SCROLL_DRAG_PLAN`] = resolve(dir, 'swipe-scroll-drag.plan')]);
@@ -61,8 +116,13 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/more-tabs.contract'), '-o', env[`${prefix}_MORE_TABS_PLAN`] = resolve(dir, 'more-tabs.plan')]);
   // NotificationActionTests': a post's declared actions and the root's handler.
   contract([resolve(root, 'host/apple/tests/fixtures/notification-actions.contract'), '-o', env[`${prefix}_NOTIFICATION_ACTIONS_PLAN`] = resolve(dir, 'notification-actions.plan')]);
-  const noActions = resolve(dir, 'notification-no-actions.contract');
-  writeFileSync(noActions, readFileSync(resolve(root, 'host/apple/tests/fixtures/notification-actions.contract'), 'utf8').replace(/, actions=\[.*\]/, ''));
+  // Written in this checkout, not beside the plan: its `use … from "@exact/notifications"` resolves from a
+  // node_modules above it, which a CARGO_TARGET_DIR outside the checkout lacks. Renamed into place whole: runs with
+  // other target directories share the name, and a compile must never read it half written.
+  const noActions = resolve(root, 'target/fixture-sources', `${prefix}-notification-no-actions.contract`), writing = `${noActions}.${process.pid}`;
+  mkdirSync(dirname(noActions), { recursive: true });
+  writeFileSync(writing, readFileSync(resolve(root, 'host/apple/tests/fixtures/notification-actions.contract'), 'utf8').replace(/, actions=\[.*\]/, ''));
+  renameSync(writing, noActions);
   contract([noActions, '-o', env[`${prefix}_NOTIFICATION_NO_ACTIONS_PLAN`] = resolve(dir, 'notification-no-actions.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/feedback-race.contract'), '-o', env[`${prefix}_FEEDBACK_RACE_PLAN`] = resolve(dir, 'feedback-race.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/async-advance.contract'), '-o', env[`${prefix}_ASYNC_ADVANCE_PLAN`] = resolve(dir, 'async-advance.plan')]);
@@ -78,13 +138,21 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/untitled-bar.contract'), '-o', env[`${prefix}_UNTITLED_BAR_PLAN`] = resolve(dir, 'untitled-bar.plan')]);
   // NavigationBarIOSTests': a header whose controls share and add a control.
   contract([resolve(root, 'host/apple/tests/fixtures/bar-share.contract'), '-o', env[`${prefix}_BAR_SHARE_PLAN`] = resolve(dir, 'bar-share.plan')]);
+  // AgentBarPointerIOSTests': a header of more buttons than an iPad's bar places.
+  contract([resolve(root, 'host/apple/tests/fixtures/bar-overflow.contract'), '-o', env[`${prefix}_BAR_OVERFLOW_PLAN`] = resolve(dir, 'bar-overflow.plan')]);
+  // NavigationBarIOSTests': a header's title drawn as a face, in an ink per scheme.
+  contract([resolve(root, 'host/apple/tests/fixtures/bar-face-scheme.contract'), '-o', env[`${prefix}_BAR_FACE_SCHEME_PLAN`] = resolve(dir, 'bar-face-scheme.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/dialog-sheet-reads.contract'), '-o', env[`${prefix}_DIALOG_SHEET_READS_PLAN`] = resolve(dir, 'dialog-sheet-reads.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/route-backdrop.contract'), '-o', env[`${prefix}_ROUTE_BACKDROP_PLAN`] = resolve(dir, 'route-backdrop.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/trailing-time.contract'), '-o', env[`${prefix}_TRAILING_TIME_PLAN`] = resolve(dir, 'trailing-time.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/intersect-route.contract'), '-o', env[`${prefix}_INTERSECT_ROUTE_PLAN`] = resolve(dir, 'intersect-route.plan')]);
   // KeyboardSheetIOSTests': a sheet's field, its keyboard toolbar and the keyboard's overlap as a value.
   contract([resolve(root, 'host/apple/tests/fixtures/keyboard-sheet.contract'), '-o', env[`${prefix}_KEYBOARD_SHEET_PLAN`] = resolve(dir, 'keyboard-sheet.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/route-overflow.contract'), '-o', env[`${prefix}_ROUTE_OVERFLOW_PLAN`] = resolve(dir, 'route-overflow.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/progress-contexts.contract'), '-o', env[`${prefix}_PROGRESS_CONTEXTS_PLAN`] = resolve(dir, 'progress-contexts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/agent-unmounted.contract'), '-o', env[`${prefix}_AGENT_UNMOUNTED_PLAN`] = resolve(dir, 'agent-unmounted.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/fractional-borders.contract'), '-o', env[`${prefix}_FRACTIONAL_BORDERS_PLAN`] = resolve(dir, 'fractional-borders.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/painted-groups.contract'), '-o', env[`${prefix}_PAINTED_GROUPS_PLAN`] = resolve(dir, 'painted-groups.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/top-layer-pins.contract'), '-o', env[`${prefix}_TOP_LAYER_PINS_PLAN`] = resolve(dir, 'top-layer-pins.plan')]);
   // PositionAreaRegionIOSTests' pages: Chrome's position-area table, and mirrored.
   contract([resolve(root, 'host/apple/tests/fixtures/position-area-region.contract'), '-o', env[`${prefix}_POSITION_AREA_PLAN`] = resolve(dir, 'position-area-region.plan')]);
@@ -149,6 +217,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       writeFileSync(resolve(bundle, 'Contents/Info.plist'), plistFile({ CFBundleIdentifier: id, CFBundlePackageType: bundle === app ? 'APPL' : 'XPC!', CFBundleExecutable: 'Fixture' }));
     writeFileSync(resolve(catalog, 'Contents.json'), JSON.stringify({ info: { version: 1, author: 'xcode' } }));
     writeFileSync(resolve(catalog, 'WidgetInk.colorset/Contents.json'), JSON.stringify({ info: { version: 1, author: 'xcode' }, colors: [{ idiom: 'universal', color: { 'color-space': 'srgb', components: { red: '1.0', green: '0.0', blue: '0.0', alpha: '1.0' } } }] }));
+    const rasterApp = { dir: iconApp, manifest: {}, appleIcons: [{ svg: 'two.svg', viewBox: '0 0 24 24' }] };
+    rasterIconAssets(appleAssetCatalogInventory(rasterApp, 'macos'), rasterApp, catalog);
     run('xcrun', ['actool', '--compile', resources, '--platform', 'macosx', '--minimum-deployment-target', '14.0', '--target-device', 'mac', catalog]);
     writeFileSync(resolve(resources, 'assets/widget.png'), encodePng({ width: 1, height: 1, data: Buffer.from([255, 0, 0, 255]) }));
     env.EXACT_SNAPSHOT_ASSETS_EXTENSION = extension;
@@ -206,7 +276,8 @@ export async function macTests(pkg, scratch, env, canvasGpu, only = null) {
   const one = (group) => new Promise((done) => {
     const gpu = group.includes(gpuClass) ? { EXACT_CANVAS_GPU_DYLIB: canvasGpu } : {};
     const liveStore = group.some(c => c === 'ExactKitTests.LiveStoreObservationTests' || c === 'ExactKitTests.LiveScratchStoreObservationTests') ? { EXACT_AGENT: 'live', EXACT_STORE: 'real', EXACT_AGENT_STORAGE: group.includes('ExactKitTests.LiveScratchStoreObservationTests') ? 'agent2-live' : '' } : {};
-    const testEnv = { ...env, ...gpu, ...liveStore };
+    const behindWeb = group.includes('ExactKitTests.AgentWebWindowMacTests') ? { EXACT_AGENT: '1', EXACT_AGENT_TIMING: 'agent' } : {};
+    const testEnv = { ...env, ...gpu, ...liveStore, ...behindWeb };
     if (group.includes('ExactKitTests.LiveStoreObservationTests')) delete testEnv.EXACT_AGENT_STORAGE;
     const child = spawn('xcrun', ['xctest', '-XCTest', group.join(','), bundle], { cwd: pkg, env: testEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';

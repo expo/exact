@@ -58,6 +58,8 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
 ) -> LayoutOutput {
     let LayoutInput { known_dimensions, parent_size, available_space, run_mode, .. } = inputs;
 
+    // EXACT PATCH 78: the container's own keyword bounds.
+    let own = crate::compute::common::sizing_keyword::own_keyword_bounds(tree, node, inputs);
     let style = tree.get_grid_container_style(node);
     let direction = style.direction();
     let contain = style.contain();
@@ -85,8 +87,8 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
         &style,
         padding_border_size,
         known_dimensions.or(preferred_size),
-        style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
-        style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
+        own.min(style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
+        own.max(style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
         inputs.sizing_mode,
     );
 

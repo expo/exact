@@ -29,8 +29,8 @@ fn a_boundary_writes_its_inherited_token_text_in_its_own_tuple() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  text.primary = light-dark(#0f1419, #e7e9ea)\n    when dark-style=dim: light-dark(#0f1419, #f7f9f9)\n",
+        dir.join("app.forma"),
+        "forma t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  text.primary = light-dark(#0f1419, #e7e9ea)\n    when dark-style=dim: light-dark(#0f1419, #f7f9f9)\n",
     )
     .unwrap();
     std::fs::write(

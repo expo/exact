@@ -1,3 +1,4 @@
+use crate::scratch::Scratch;
 use exact_kernel::Kernel;
 use exact_runner::{DataError, DataSource, Runner, Value};
 struct NoData;
@@ -288,7 +289,9 @@ fn r13_colon_call_refuses_with_equals_hint() {
 /// game's Rust is newer, and never stops `contract rust`.
 #[test]
 fn a_stale_surface_declaration_warns_and_hides_nothing() {
-    let dir = std::env::temp_dir().join(format!("contract-stale-surfaces-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("contract-stale-surfaces-{}", std::process::id())),
+    );
     std::fs::create_dir_all(dir.join(".shells")).unwrap();
     std::fs::create_dir_all(dir.join("logic/src")).unwrap();
     let declaration = dir.join(".shells/surfaces.json");
@@ -390,7 +393,9 @@ fn a_stale_surface_declaration_warns_and_hides_nothing() {
 
 #[test]
 fn file_compilation_checks_surface_arguments_at_the_source() {
-    let dir = std::env::temp_dir().join(format!("contract-surfaces-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("contract-surfaces-{}", std::process::id())),
+    );
     std::fs::create_dir_all(dir.join(".shells")).unwrap();
     let declaration = dir.join(".shells/surfaces.json");
     std::fs::write(
@@ -538,7 +543,9 @@ component App
 /// key no action binds, or a game without the declaration, says nothing.
 #[test]
 fn a_shortcut_on_a_key_the_game_binds_warns() {
-    let dir = std::env::temp_dir().join(format!("contract-shortcut-keys-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("contract-shortcut-keys-{}", std::process::id())),
+    );
     std::fs::create_dir_all(dir.join(".shells")).unwrap();
     let path = dir.join("app.contract");
     std::fs::write(
@@ -729,4 +736,38 @@ component App
         let p = contract::compile(&bad).unwrap();
         assert!(contract::bake(p, NoData).is_err());
     }
+}
+
+#[test]
+fn canvas_performance_follows_live_readers_and_their_when_conditions() {
+    let source = r#"shape Metrics
+  frames: option<number>
+component App
+  state perfHud = false
+  state secondHud = false
+  action toggle
+    perfHud = not perfHud
+  action second
+    secondHud = not secondHud
+  resource metrics = exactCanvasPerformance("world") when perfHud as shape Metrics
+  resource other = exactCanvasPerformance("world") when secondHud as shape Metrics
+  view
+    canvas surface=world
+"#;
+    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    assert!(
+        !r.wants_canvas_performance("world"),
+        "idle readers collect nothing"
+    );
+    r.act("toggle", vec![]).unwrap();
+    assert!(r.wants_canvas_performance("world"));
+    r.act("second", vec![]).unwrap();
+    r.act("toggle", vec![]).unwrap();
+    assert!(
+        r.wants_canvas_performance("world"),
+        "the other reader is still active"
+    );
+    r.act("second", vec![]).unwrap();
+    assert!(!r.wants_canvas_performance("world"));
 }

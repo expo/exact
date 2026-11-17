@@ -232,8 +232,8 @@ pub fn snapshot(structure: &str, tokens: &[Token]) -> Edit {
 }
 
 impl Edit {
-    /// As the dev stream carries it: `kind` `tamber-batch` or
-    /// `tamber-snapshot`.
+    /// As the dev stream carries it: `kind` `forma-batch` or
+    /// `forma-snapshot`.
     pub fn json(&self) -> String {
         let tokens: Vec<serde_json::Value> = self
             .tokens
@@ -241,7 +241,7 @@ impl Edit {
             .map(|t| serde_json::json!({"name": t.name, "value": t.value, "slices": t.slices}))
             .collect();
         let mut v = serde_json::json!({
-            "kind": if self.base.is_some() { "tamber-batch" } else { "tamber-snapshot" },
+            "kind": if self.base.is_some() { "forma-batch" } else { "forma-snapshot" },
             "structure": self.structure,
             "base": self.base,
             "design": self.design,
@@ -260,7 +260,7 @@ impl Edit {
     pub fn parse(text: &str) -> Option<Edit> {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
         let kind = v.get("kind")?.as_str()?;
-        if kind != "tamber-batch" && kind != "tamber-snapshot" {
+        if kind != "forma-batch" && kind != "forma-snapshot" {
             return None;
         }
         let s = |key: &str| v.get(key)?.as_str().map(str::to_string);
@@ -282,7 +282,7 @@ impl Edit {
             })
             .collect::<Option<Vec<_>>>()?;
         let base = match kind {
-            "tamber-batch" => Some(s("base")?),
+            "forma-batch" => Some(s("base")?),
             _ => None,
         };
         // A scrub frame's mark is optional; one malformed is no mark.

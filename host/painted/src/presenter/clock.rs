@@ -41,30 +41,57 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// The Canvas reader's frame turn: timers fire only while the display owns time.
+    /// The Canvas reader's turn: background work advances tasks without a display frame.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_clock(&mut self, now: f64, live: bool) -> Option<String> {
-        let error = if self.wants_frames() && live {
+        let date_error = if self.timers_hidden && live {
+            self.follow_local_offset()
+        } else {
+            None
+        };
+        let due = if self.timers_hidden {
+            self.background_due_ms()
+        } else {
+            self.wake_due_ms()
+        };
+        let error = if !self.timers_hidden && self.wants_frames() && live {
             self.animation_frame(now)
-        } else if live && self.wake_due_ms().is_some_and(|due| due <= now) {
+        } else if live && due.is_some_and(|due| due <= now) {
             self.advance(now)
         } else {
             None
         };
-        if self.needs_animation_frame() {
+        if !self.timers_hidden && self.needs_animation_frame() {
             self.tick(now);
         }
-        error
+        self.release_overdue();
+        // Asked on every turn: a replaced reader ends flights with no tick after.
+        self.focus_landed();
+        date_error.or(error)
+    }
+
+    /// No paint, motion sample or virtual display frame can wake a stopped reader.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn background_due_ms(&self) -> Option<f64> {
+        self.host
+            .timer_due_ms()
+            .into_iter()
+            .chain(self.host.runner().waits().next_check())
+            .chain(self.idle_timer_retry.then_some(self.host.now()))
+            .reduce(f64::min)
     }
 
     /// The runner's clock (timers), from the presenter's loop.
     pub fn advance(&mut self, now_ms: f64) -> Option<String> {
         let (e, paint) = self.host.advance_effects(now_ms);
         self.dirty |= paint;
+        self.release_overdue();
         let after = self.finish_commit();
         self.hatch_timers(now_ms);
+        let held = self.release_held_tap(false);
         let ends = self.deliver_scroll_ends();
         e.or(after)
+            .or(held)
             .or(ends)
             .or(self.admit_timer_waits(now_ms, false))
     }
@@ -117,6 +144,9 @@ impl<D: DataSource> Presenter<D> {
     /// The display's clock owns time (`Some`), or a driver's seekable one
     /// does (`None`): the running runner and every one booted later take it.
     pub fn set_live_clock(&mut self, wall: Option<Wall>) {
+        if wall.is_none() && self.live_clock.is_some() {
+            self.driven_presented();
+        }
         self.live_clock = wall;
         self.give_clock();
     }
@@ -156,6 +186,12 @@ impl<D: DataSource> Presenter<D> {
 
     pub(super) fn give_clock(&mut self) {
         self.clock_generation = self.clock_generation.wrapping_add(1);
+        self.host.flights.enabled = self.brush.backend() == "canvas";
+        // Without a live clock the rule stays as the boot or a takeover left it.
+        if self.live_clock.is_some() {
+            self.dirty |= self.host.frame_clock(self.presents);
+        }
+        self.refresh_presentable();
         self.host.runner_mut().use_native_timers(self.native_timers);
         let wall = self.live_clock.clone();
         let sample = wall.map(|wall| Box::new(move || wall()) as Box<dyn FnMut() -> f64>);
@@ -170,7 +206,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// Whether the carrier reports that this session presents no frames.
     pub fn timer_visibility(&mut self, hidden: bool) {
-        self.timers_hidden = hidden;
+        if self.timers_hidden != hidden {
+            self.timers_hidden = hidden;
+            self.refresh_presentable();
+        }
     }
 
     /// Latest reader report: scrolling, animation sampling, and unapplied publications.
@@ -250,16 +289,17 @@ impl<D: DataSource> Presenter<D> {
                     || self
                         .timer_observations
                         .is_some_and(|(_, sampling, _)| sampling)),
-            applying: self
-                .timer_observations
-                .is_some_and(|(_, _, applying)| applying),
+            applying: self.reader_requests_pending()
+                || self
+                    .timer_observations
+                    .is_some_and(|(_, _, applying)| applying),
             ordinary: waits.frame.held || waits.update.held || waits.scrollend.held,
             next_ms: self
                 .host
                 .runner()
                 .timer_due_ms()
                 .into_iter()
-                .chain(self.host.motion_due_ms())
+                .chain(self.host.motion_due_ms().filter(|_| !self.timers_hidden))
                 .chain(
                     self.host
                         .runner()
@@ -290,8 +330,9 @@ impl<D: DataSource> Presenter<D> {
         // transition), and `after_commit` repaints only for a new epoch.
         self.dirty = true;
         let after = self.after_commit();
+        let held = self.release_held_tap(false);
         let ends = self.deliver_scroll_ends();
-        (landed, e.or(after).or(ends))
+        (landed, e.or(after).or(held).or(ends))
     }
 }
 

@@ -96,12 +96,16 @@ pub(super) fn measure<'a>(
             })
         })
     };
+    let mut pending = false;
     let base = match *natural {
         Some(n) => n,
         None => {
-            let n = at(1.0, AxisOffer::MinContent)?.width;
-            *natural = Some(n);
-            n
+            let metrics = at(1.0, AxisOffer::MinContent)?;
+            pending |= metrics.pending;
+            if !metrics.pending {
+                *natural = Some(metrics.width);
+            }
+            metrics.width
         }
     };
     let least = floor(arena, slot);
@@ -113,6 +117,7 @@ pub(super) fn measure<'a>(
             metrics = at(s, width)?;
         }
     }
+    metrics.pending |= pending;
     Some((metrics, s))
 }
 

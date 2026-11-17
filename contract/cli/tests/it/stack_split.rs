@@ -382,6 +382,7 @@ fn the_list_beside_a_route_in_a_hosts_pane_is_not_inactive() {
     let (row, item) = (view(&r, "row-a"), view(&r, "item-b"));
     assert!(r.inactive(row), "a pushed route covers its list");
     let pane = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(500.0),
         height: BlockAxis::Is(400.0),
     };
@@ -397,6 +398,7 @@ fn the_list_beside_a_route_in_a_hosts_pane_is_not_inactive() {
     assert!(r.inactive(item), "a route under the pane's top is covered");
     // A sheet's block is a maximum: what is under it is covered.
     let sheet = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::AtMost(500.0),
         height: BlockAxis::AtMost(400.0),
     };
@@ -416,6 +418,7 @@ fn a_list_in_a_block_of_its_own_is_covered_by_the_route_over_it() {
     let mut r = boot(&app("", "", LINKS));
     let root = r.kernel().roots()[0];
     let screen = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(402.0),
         height: BlockAxis::Is(874.0),
     };
@@ -431,6 +434,7 @@ fn a_list_in_a_block_of_its_own_is_covered_by_the_route_over_it() {
     r.dispatch(root, Event::Navigate("/".into())).unwrap();
     r.dispatch(view(&r, "add"), Event::Press).unwrap();
     let sheet = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(402.0),
         height: BlockAxis::Is(814.0),
     };
@@ -486,6 +490,7 @@ fn a_shown_placeholder_fills_its_block_and_hides_again() {
         "already shown"
     );
     let pane = HostBlock {
+        tactic: Default::default(),
         width: BlockAxis::Is(500.0),
         height: BlockAxis::Is(400.0),
     };

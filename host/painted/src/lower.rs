@@ -148,6 +148,31 @@ impl<D: DataSource> Host<D> {
                 self.lowered_epoch += 1;
             }
         }
+        // A sibling can make an unchanged animation part of a rasterized SVG.
+        // Return ownership without replacing its play or restarting its phase.
+        let reclaim: Vec<_> = self
+            .lowered
+            .keys()
+            .copied()
+            .filter(|node| {
+                let props: Vec<_> = self
+                    .engine
+                    .animation_plays(*node)
+                    .iter()
+                    .flat_map(|p| p.animation.keyframes.properties())
+                    .collect();
+                self.runner
+                    .kernel()
+                    .node_by_key(exact_kernel::motion::node_key(*node))
+                    .is_none_or(|n| !playable(self.runner.kernel(), &n, &props))
+            })
+            .collect();
+        for node in reclaim {
+            self.engine.set_node_sampled(node, true);
+            self.lowered.remove(&node);
+            self.lowered_epoch += 1;
+            self.lowered_changed.insert(node, self.lowered_epoch);
+        }
         for (node, animations) in &sync.animations {
             let key = NodeKey {
                 index: *node as u32,
@@ -155,17 +180,17 @@ impl<D: DataSource> Host<D> {
             };
             let props = animations.properties();
             let playable = !props.is_empty()
+                && !self.spatial_rotation(*node)
                 && props.iter().all(|p| LOWERED.contains(p))
                 && !animations
                     .0
                     .iter()
                     .any(|a| a.keyframes.0.iter().any(|f| !f.dark.is_empty()))
                 && !self.engine.timeline_bound(*node)
-                && self
-                    .runner
-                    .kernel()
-                    .node_by_key(key)
-                    .is_some_and(|n| playable(&n, &props));
+                && self.runner.kernel().node_by_key(key).is_some_and(|n| {
+                    n.props.str(exact_kernel::PropId::SharedElement).is_none()
+                        && playable(self.runner.kernel(), &n, &props)
+                });
             self.engine.set_node_sampled(*node, !playable);
             let mask = if playable { mask(&props) } else { 0 };
             let old = if mask == 0 {
@@ -204,9 +229,8 @@ impl<D: DataSource> Host<D> {
             return;
         }
         let now = self.engine.now();
-        // A track the reader plays whose node now has something painted over
-        // the property (a press row, a look naming it, set while it played)
-        // is the engine's again, from where its curve is (LLP 1121 D8).
+        // Reclaim tracks when a blend, spatial box, press or look needs
+        // the engine's sampled presentation (LLP 1121 D8).
         for (node, t) in &self.played {
             let Some(n) = self
                 .runner
@@ -216,7 +240,8 @@ impl<D: DataSource> Host<D> {
                 continue;
             };
             for (property, _) in t {
-                if crate::host::press::paints_over(&n, *property) {
+                if !playable(self.runner.kernel(), &n, &[*property]) || self.spatial_rotation(*node)
+                {
                     self.engine.reclaim_played(*node, *property);
                 }
             }
@@ -250,12 +275,26 @@ impl<D: DataSource> Host<D> {
             })
             .collect();
         for (node, property) in keys {
+            if self
+                .engine
+                .transition_ends(node, property)
+                .is_some_and(|t| {
+                    t.waits
+                        || property == Property::Rotate
+                            && !exact_motion::rotation::planar(t.from, t.to)
+                })
+            {
+                continue;
+            }
+            if self.spatial_rotation(node) {
+                continue;
+            }
             let key = exact_kernel::motion::node_key(node);
-            let layered = self
-                .runner
-                .kernel()
-                .node_by_key(key)
-                .is_some_and(|n| playable(&n, &[property]) && recolors(&n, property));
+            let layered = self.runner.kernel().node_by_key(key).is_some_and(|n| {
+                n.props.str(exact_kernel::PropId::SharedElement).is_none()
+                    && playable(self.runner.kernel(), &n, &[property])
+                    && recolors(&n, property)
+            });
             if !layered {
                 continue;
             }
@@ -273,6 +312,19 @@ impl<D: DataSource> Host<D> {
                 self.lowered_changed.insert(node, self.lowered_epoch);
             }
         }
+    }
+
+    // A transition back to Z can still paint a spatial frame. Check both
+    // ends so a delay or a zero-angle first frame cannot hand off a fade.
+    fn spatial_rotation(&self, node: u64) -> bool {
+        let spatial = |v: Value| v.y != 0.0 || v.z != 0.0;
+        self.engine
+            .value(node, Property::Rotate)
+            .is_some_and(spatial)
+            || self
+                .engine
+                .transition_ends(node, Property::Rotate)
+                .is_some_and(|t| spatial(t.from) || spatial(t.to))
     }
 
     /// Sample the reader's curve before a hold takes it. The painter and
@@ -298,7 +350,11 @@ impl<D: DataSource> Host<D> {
         Some(match &t.curve {
             PlayedCurve::Easing { easing, .. } => {
                 let progress = easing.progress(progress);
-                t.from.zip(t.to, |a, b| a + (b - a) * progress)
+                if property == Property::Rotate {
+                    exact_motion::rotation::interpolate(t.from, t.to, progress)
+                } else {
+                    t.from.lerp(t.to, progress)
+                }
             }
             PlayedCurve::Frames { values, .. } => {
                 let position = progress * values.len().saturating_sub(1) as f64;
@@ -382,7 +438,10 @@ impl<D: DataSource> Host<D> {
                         &[(TX, 0), (TY, 1)],
                     ),
                     Property::Scale => (Value::scalar(base.scale as f64), &[(SCALE, 0)]),
-                    Property::Rotate => (Value::scalar(base.rotate as f64), &[(ROTATE, 0)]),
+                    Property::Rotate => (
+                        self.engine.target(node_u64(key), p).unwrap_or(Value::ZERO),
+                        &[(ROTATE, 0)],
+                    ),
                     Property::R => (Value::scalar(r0 as f64), &[(R, 0)]),
                     Property::StrokeDashoffset => (Value::scalar(dash0() as f64), &[(DASH, 0)]),
                     Property::Cx => (Value::scalar(cx0 as f64), &[(CX, 0)]),
@@ -393,8 +452,11 @@ impl<D: DataSource> Host<D> {
                 for &(code, axis) in axes {
                     out.push(code);
                     f(&mut out, play.start);
-                    out.push(play.hold.is_some() as u32);
-                    f(&mut out, play.hold.unwrap_or(0.0));
+                    // A play that waits for its present (LLP 1003.001 D9) holds
+                    // the local time it began at until the present moves it.
+                    let hold = play.hold.or(play.pending.map(|begin| begin - play.start));
+                    out.push(hold.is_some() as u32);
+                    f(&mut out, hold.unwrap_or(0.0));
                     f(&mut out, a.delay);
                     f(&mut out, a.duration);
                     f(&mut out, a.iterations);
@@ -404,6 +466,11 @@ impl<D: DataSource> Host<D> {
                     out.push(track.len() as u32);
                     for (offset, e, v) in &track {
                         f(&mut out, *offset);
+                        let v = if p == Property::Rotate {
+                            exact_motion::rotation::presented(*v)
+                        } else {
+                            *v
+                        };
                         f(&mut out, if axis == 1 { v.y } else { v.x });
                         easing(&mut out, Some(*e));
                     }
@@ -428,7 +495,18 @@ impl<D: DataSource> Host<D> {
                 }
                 _ => continue,
             };
-            let axis = |v: &Value, a: usize| if a == 1 { v.y } else { v.x };
+            let axis = |v: &Value, a: usize| {
+                let v = if *p == Property::Rotate {
+                    exact_motion::rotation::presented(*v)
+                } else {
+                    *v
+                };
+                if a == 1 {
+                    v.y
+                } else {
+                    v.x
+                }
+            };
             for &(code, a) in axes {
                 out.push(code);
                 f(&mut out, t.start);
@@ -672,10 +750,17 @@ fn easing(out: &mut Vec<u32>, e: Option<&Easing>) {
 /// Whether the reader can show these animated properties of `n` as CSS
 /// does: a box's transform and opacity; an SVG element's opacity; a filled
 /// circle's radius as a scale about its centre.
-fn playable(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
+fn playable(
+    kernel: &exact_kernel::Kernel,
+    n: &exact_kernel::NodeRef<'_>,
+    props: &[Property],
+) -> bool {
     // What the host paints over the node's own (a press, a look: LLP 1061 D7,
     // LLP 1121 D8) is composed where the engine samples, so it stays there.
     if props.iter().any(|p| crate::host::press::paints_over(n, *p)) {
+        return false;
+    }
+    if exact_kernel::svg::in_blended_scene(kernel, n) {
         return false;
     }
     let s = n.style;
@@ -684,6 +769,11 @@ fn playable(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
     let turns = props
         .iter()
         .any(|p| matches!(p, Property::Translate | Property::Scale | Property::Rotate));
+    if (!svg || turns) && exact_kernel::motion::rotation_needs_sampling(s)
+        || !svg && s.translate_z != 0.0
+    {
+        return false;
+    }
     if svg {
         // The scene keeps an animated element's transform in parts about its
         // origin; a non-scaling stroke would scale, a clip or effect would not
@@ -695,6 +785,7 @@ fn playable(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
             || s.mix_blend_mode != exact_kernel::MixBlendMode::Normal
             || s.rare.svg_mask.url().is_some()
             || s.rare.clip_path.url().is_some()
+            || s.rare.clip_path.has_path()
             || served(&s.fill)
             || served(&s.stroke)
             || (turns && s.vector_effect == exact_kernel::VectorEffect::NonScalingStroke)

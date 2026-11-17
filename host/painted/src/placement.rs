@@ -160,7 +160,7 @@ fn warp_with(
     }
     let mut out = Pixmap::new((x1 - x0) as u32, (y1 - y0) as u32)?;
     let width = out.width();
-    for (i, pixel) in out.data_mut().chunks_exact_mut(4).enumerate() {
+    for (i, pixel) in out.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = map(
             &inv,
             (x0 + (i as u32 % width) as f32 + 0.5) / scale,
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn rotated_edges_are_opaque_and_sampler_uses_the_inverse() {
         let mut src = Pixmap::new(8, 8).unwrap();
-        for (i, p) in src.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, p) in src.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
             p.copy_from_slice(if i % 8 < 4 {
                 &[240, 20, 10, 255]
             } else {
@@ -263,7 +263,7 @@ mod tests {
         let clip = [[1., 0., -50.], [0., 0., 1.]];
         let (out, rect) = warp_clipped(&src, h, clip, 1., (100., 50.)).unwrap();
         assert_eq!(rect, (50., 0., 50., 50.));
-        assert!(out.data().chunks_exact(4).all(|p| p == [255; 4]));
+        assert!(out.data().as_chunks::<4>().0.iter().all(|p| *p == [255; 4]));
         assert_eq!(
             clipped_bounds(&h, clip, (0., 0., 40., 50.)),
             (0., 0., 0., 0.)
@@ -274,7 +274,7 @@ mod tests {
         let h = [1., 0., 0., 0., 1., 0., 0.02, 0., -0.5];
         let (out, rect) =
             warp_clipped(&src, h, [[1., 0., -30.], [0., 0., 1.]], 1., (400., 400.)).unwrap();
-        assert!(out.data().chunks_exact(4).any(|p| p[3] != 0));
+        assert!(out.data().as_chunks::<4>().0.iter().any(|p| p[3] != 0));
         assert!(rect.0.is_finite() && rect.2 > 0.);
     }
     #[test]
@@ -283,7 +283,11 @@ mod tests {
         src.fill(tiny_skia::Color::from_rgba8(200, 50, 10, 255));
         let (out, _) = warp(&src, [2., 0., 0., 0., 2., 0., 0., 0., 1.], 1., (2., 2.)).unwrap();
         assert!(
-            out.data().chunks_exact(4).all(|p| p == [200, 50, 10, 255]),
+            out.data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [200, 50, 10, 255]),
             "{:?}",
             out.data()
         );
@@ -298,7 +302,7 @@ mod tests {
             [0, 0, 255, 255],
             [255, 255, 0, 255],
         ];
-        for (i, p) in src.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, p) in src.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
             p.copy_from_slice(&colors[usize::from(i % 40 >= 20) + 2 * usize::from(i / 40 >= 20)]);
         }
         let h = [2., 0.3, 10., 0.2, 2., 10., 0.02, 0.005, 1.];

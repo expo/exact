@@ -48,7 +48,10 @@ const MAX_BODY: usize = 64 << 20;
 const MAX_HEADERS: usize = 64 << 10;
 
 type Work = Box<dyn FnOnce() -> Outcome + Send>;
+type ResponseWork = Arc<dyn Fn() -> Outcome + Send + Sync>;
 type Wake = Box<dyn Fn() + Send + Sync>;
+#[cfg(test)]
+type ScheduledRetry = (u32, u64, String);
 struct Job {
     ticket: u64,
     request: Request,
@@ -59,6 +62,8 @@ struct Job {
     charge: usize,
     /// Request buffers in the backlog, excluding a preload waiter's reply reservation.
     waiting_charge: usize,
+    /// A hold's end must not let later hits take this read's room (LLP 1162.000 D1).
+    waited_for_preload: bool,
     /// The ceiling: request buffers plus the response allowance.
     limit: usize,
     /// The runner no longer wants its reply (`Core::forget`).
@@ -66,6 +71,7 @@ struct Job {
     queued_deadline: Option<forget::QueuedDeadline>,
     overlap: bool,
     class: RequestClass,
+    cache_store_withheld: bool,
 }
 /// A job a worker took, until its outcome is complete.
 struct Running {
@@ -91,7 +97,7 @@ struct Running {
     read: bool,
     overlap: bool,
     class: RequestClass,
-    /// The asynchronous core's (LLP 1120 D3, D5); workers leave them be.
+    /// The asynchronous core's lifecycle (LLP 1120 D3, D5).
     /// The outcome is published.
     terminal: bool,
     /// Physical work still running: hops on the wire, a reader.
@@ -109,6 +115,7 @@ struct Running {
     cache_exchange: Option<cache::Exchange>,
     cache_barrier: bool,
     cache_replacing: Option<cache::Key>,
+    refresh: Option<preload::Refresh>,
     invalidates: Option<(String, bool)>,
 }
 struct Completed {
@@ -135,7 +142,7 @@ struct Completed {
 /// A place behind the ordered barrier.
 enum Fenced {
     /// A request, its retained buffers, and whether its outcome is forgotten.
-    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool),
+    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool, bool),
     /// A request refused while the barrier was up: refused when its turn
     /// comes, after the held requests before it are admitted.
     Refused(u64, &'static str),
@@ -220,11 +227,16 @@ struct Shared {
     roots_checked: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     #[cfg(test)]
     deadline_armed: Mutex<Option<std::sync::mpsc::Sender<Deadline>>>,
+    #[cfg(test)]
+    before_stream_release: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// Open two-way sockets by stream ticket (LLP 1016.000 D7; `stream.rs`).
     sockets: Mutex<std::collections::HashMap<u64, stream::Socket>>,
     /// Long polls waiting to ask again, by stream ticket (LLP 1016.000 D8;
     /// `longpoll.rs`): the attempt, when it asks, and what failed.
     retrying: Mutex<std::collections::HashMap<u64, (u32, std::time::Instant, String)>>,
+    fetch_fault: Mutex<Option<exact_runner::runner::faults::FetchFault>>,
+    #[cfg(test)]
+    retry_scheduled: Mutex<Option<std::sync::mpsc::Sender<ScheduledRetry>>>,
     /// What upload streams hold in memory (LLP 1016.000 D10; `stream.rs`).
     uploads: stream::Uploads,
     /// This, for a path that frees room uploads wait for holding only a
@@ -426,8 +438,13 @@ impl Core {
             roots_checked: Mutex::default(),
             #[cfg(test)]
             deadline_armed: Mutex::default(),
+            #[cfg(test)]
+            before_stream_release: Mutex::default(),
             sockets: Mutex::default(),
             retrying: Mutex::default(),
+            fetch_fault: Mutex::default(),
+            #[cfg(test)]
+            retry_scheduled: Mutex::default(),
             uploads: stream::Uploads::default(),
             me: me.clone(),
             processes: process::Processes::new(),
@@ -553,7 +570,7 @@ impl Core {
 
     /// Admit work, or return a refusal without an overflow queue.
     pub fn run_owned(&self, r: RequestOut, work: Option<OwnedWork>) -> Result<(), &'static str> {
-        self.admit(r, work, false, false)
+        self.admit(r, work, false, false, None)
             .map_err(|(reason, _work)| reason)
     }
 
@@ -696,7 +713,7 @@ impl Core {
             let mut state = self.shared.state.lock().unwrap();
             state.retired = true;
             if let Some(cache) = state.cache.as_mut() {
-                preload::cancel_all(cache);
+                preload::close(cache);
             }
             state.cache = None;
             for run in &mut state.running {
@@ -814,7 +831,7 @@ fn fenced_bytes(fenced: &VecDeque<Fenced>) -> usize {
     fenced
         .iter()
         .map(|f| match f {
-            Fenced::Held(_, _, charge, _) => *charge,
+            Fenced::Held(_, _, charge, _, _) => *charge,
             Fenced::Refused(..) => 0,
         })
         .sum()
@@ -861,7 +878,7 @@ fn settle_again(state: &mut State, ticket: u64) -> bool {
 }
 
 /// An ordered request that may wait among the 128: a plain read with no
-/// work beside it (RFC 9110 §9.2.1's safe methods; not auth, a surface, or
+/// opaque work beside it (RFC 9110 §9.2.1's safe methods; not auth, a surface, or
 /// a native call).
 fn read(request: &Request, work: bool) -> bool {
     !work
@@ -1152,7 +1169,7 @@ fn worker(
                 continue;
             }
         }
-        let work = match work {
+        let (work, fixture) = match work {
             Some(OwnedWork::Later(hand)) if handoff(&request) => {
                 let owner = shared.clone();
                 let reply = Reply::new(move |outcome| complete(&owner, ticket, outcome));
@@ -1166,8 +1183,9 @@ fn worker(
                 rouse(&shared, &state);
                 continue;
             }
-            Some(OwnedWork::Now(work)) => Some(work),
-            _ => None,
+            Some(OwnedWork::Now(work)) => (Some(work), None),
+            Some(OwnedWork::HttpResponse(work)) => (None, Some(work)),
+            _ => (None, None),
         };
         // Retirement aborts every job; forgetting aborts a safe read.
         let _retiring = {
@@ -1175,17 +1193,17 @@ fn worker(
             shared.abort.signal().register(move || abort.abort())
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // A source's narrower scope runs on this worker's own transport,
-            // so it reuses the connections that transport keeps.
+            let fixture = fixture.map(|work| outcome::fixture_fetch(&grants, work));
+            let fetch = fixture
+                .as_ref()
+                .or_else(|| bindings.as_ref().map(|b| &b.fetch));
+            // A source's narrower scope uses the selected transport.
             let scoped = match scoped_grants(&grants, request.grants.as_deref()) {
                 Some(Err(message)) => return failed(FailureKind::Refused, message),
-                Some(Ok(scope)) => Some(bindings.as_ref().map(|b| b.fetch.with_grants(scope))),
+                Some(Ok(scope)) => fetch.map(|f| f.with_grants(scope)),
                 None => None,
             };
-            let fetch = match &scoped {
-                Some(scoped) => scoped.as_ref(),
-                None => bindings.as_ref().map(|b| &b.fetch),
-            };
+            let fetch = scoped.as_ref().or(fetch);
             execute(
                 fetch.ok_or(unbound.as_str()),
                 request,
@@ -1254,8 +1272,7 @@ fn execute(
             |work| work(),
         );
     }
-    // Work beside a plain request is a driver fault's failure (LLP 1103 D1):
-    // it runs instead of the transport, so the request never goes out.
+    // A connection fault replaces transport without preparing a response.
     if let Some(work) = work {
         return work();
     }
@@ -1286,9 +1303,10 @@ fn execute(
     ) {
         let _ = armed.send(deadline.clone());
     }
-    // The body from an app file, read now, as late as can be, and refused
-    // before anything is sent (LLP 1108 D6 R2). The deadline or an abort
-    // ends the request while the file is read, and nothing is sent.
+    // The body from an app file, opened now, as late as can be, and refused
+    // before anything is sent (LLP 1108 D6 R2); the transport streams it
+    // (LLP 1133.008.000 D4). The deadline or an abort ends the request while
+    // the file is opened, and nothing is sent.
     let ended = || {
         if deadline.as_ref().is_some_and(Deadline::passed) {
             Some(failed(
@@ -1301,13 +1319,21 @@ fn execute(
             None
         }
     };
-    let roots = match body::prepare(cache_job.0, &request, &ended) {
+    let roots = match body::prepare(cache_job.0, &request, &ended, None) {
         Ok(roots) => roots,
         Err(outcome) => return outcome,
     };
-    if let Err(outcome) = body::resolve(roots.as_ref(), grants, &mut request, &ended) {
-        return outcome;
-    }
+    let body_file = match body::resolve(
+        roots.as_ref(),
+        grants,
+        &mut request,
+        &ended,
+        None,
+        abort.signal(),
+    ) {
+        Ok(file) => file,
+        Err(outcome) => return outcome,
+    };
     // The file a 2xx body goes to (LLP 1108 D6 R2): staged before sending.
     let staged = match body_to::stage(roots.as_ref(), grants, &request) {
         Ok(staged) => staged,
@@ -1342,6 +1368,7 @@ fn execute(
         }
     }
     let mut req = fetch_request(request, forced);
+    req.body_file = body_file;
     cache::observe(cache_job.0, &mut req);
     req.max_body = Some(limit);
     // The platform's idle timeout (URLSession's, 60 s by default) follows
@@ -1371,7 +1398,11 @@ fn execute(
     } else {
         result
     }
-    .and_then(|r| body_to::receive(r, staged, limit, within));
+    .and_then(|r| {
+        body_to::receive(r, staged, limit, within, || {
+            body_to::admit(cache_job.0, cache_job.1, abort, deadline.as_ref())
+        })
+    });
     match result {
         Ok(r) => {
             let mut response = Response {
@@ -1446,3 +1477,6 @@ mod idle_tests;
 mod scope_tests;
 #[cfg(test)]
 mod tests;
+
+/// Session-free file transfers for a native package carrier.
+pub mod transfer;

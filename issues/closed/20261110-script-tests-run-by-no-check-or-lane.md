@@ -31,7 +31,7 @@ What else can run them:
   unlisted file is one more line of a red run.
 
 The unlisted files include `caps`, `deploy`, `verify`, `rust`, `feedback`, `evidence`,
-`help`, `share`, `windows`, `agent-test`, and 29 of the `tamber-*` and `design-tool-*`
+`help`, `share`, `windows`, `agent-test`, and 29 of the `forma-*` and `design-tool-*`
 files. This prints all 68:
 
 ```sh

@@ -23,6 +23,7 @@ impl Painter {
         rect: Rect4,
         ts: Transform,
         reveal: Option<ViewId>,
+        selected: std::ops::Range<usize>,
     ) {
         // The clip is this element's own background. A hidden element paints
         // none, and a hidden run's glyphs do not punch a hole for it.
@@ -61,8 +62,9 @@ impl Painter {
         // not, even though its ink is also clear.
         let opaque: Vec<RunPaint> = palette
             .iter()
-            .map(|r| RunPaint {
-                color: if super::paints(kernel, r.source, reveal) {
+            .enumerate()
+            .map(|(i, r)| RunPaint {
+                color: if selected.contains(&i) && super::paints(kernel, r.source, reveal) {
                     [255; 4]
                 } else {
                     [0; 4]

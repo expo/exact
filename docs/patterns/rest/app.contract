@@ -3,7 +3,9 @@
 // same-persona refresh keeps its last valid list; writes answer refusals for the form.
 // Who is signed in is the bar button that shows their name, a pull-down menu, kept
 // with `persist` across launches; it shows names from the data module, never the token. `bun server.ts` serves the dev loop; `test` and `verify` run it
-// themselves, on an empty database. A smaller app deletes what it doesn't need: the persona
+// themselves, on an empty database for each test (memory-only servers restart too). Remote servers stay shared.
+// Only `test` and `agent --test` share an ancestor's server, saying so; `verify` refuses an answering local server,
+// including an ancestor's. A smaller app deletes what it doesn't need: the persona
 // switcher (`persona`, `people`, `signIn`, its bar button and menu, the `persona` argument of every
 // source), the delete (`askRemove`,
 // `remove`, the dialog, the server's DELETE), the notes (the shape's field, the title's

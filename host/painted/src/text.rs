@@ -26,6 +26,8 @@ pub(crate) mod decorations;
 mod edges_tests;
 mod fallback;
 pub(crate) mod field;
+#[cfg(test)]
+pub(crate) mod fixtures;
 mod flow;
 #[cfg(test)]
 mod flow_tests;
@@ -45,11 +47,12 @@ mod windows_audit;
 use shaping::ShapedSource;
 mod ink;
 mod inline;
+pub(crate) use inline::BoxReach;
 pub(crate) mod markup;
 pub use cache::{HandoffResidency, Residency, RetiringResidency};
 pub(crate) use catalog::scaler_id;
 pub use catalog::FaceId;
-pub use lines::{Face, LayoutGlyph, LayoutLine, Lines};
+pub use lines::{Face, LayoutGlyph, LayoutLine, LayoutRoom, Lines, RoomKind};
 pub use shaping::LayoutRun;
 
 use crate::image::Assets;
@@ -735,10 +738,9 @@ impl TextEngine {
         self.install_plan_assets(plan, &Assets::embedded(assets.to_path_buf()));
     }
 
-    /// A picture owns its stack ids independently of the app's catalog.
-    pub(crate) fn for_svg(families: &[Vec<(bool, String)>]) -> Shared {
-        let mut catalog = catalog::Catalog::new();
-        catalog.install_picture(families);
+    /// A picture owns its stack ids over the session's fonts (LLP 1011.001 §4).
+    pub(crate) fn for_svg(&self, families: &[Vec<(bool, String)>]) -> Shared {
+        let catalog = self.catalog.borrow().for_picture(families);
         Rc::new(RefCell::new(Self::with_catalog(catalog)))
     }
 
@@ -1249,6 +1251,7 @@ fn paragraph_metrics(p: &Paragraph) -> TextMetrics {
     TextMetrics {
         width: p.width,
         height: p.height,
+        pending: false,
         first_baseline: Some(p.first_baseline),
     }
 }
@@ -1399,37 +1402,37 @@ mod tests {
 
     #[test]
     fn installed_normal_monospace_is_used_for_normal_code() {
-        let mut engine = TextEngine::new();
-        let style = exact_kernel::StyleProps {
-            font_family: 5,
-            font_size: 16.0,
-            ..exact_kernel::StyleProps::default()
-        };
+        let mut engine = TextEngine::from_font_files(
+            &[
+                Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/fixtures/fonts/assets/DejaVuSans.ttf"
+                )),
+                Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../docs/site/assets/fonts/JetBrainsMono-Regular.ttf"
+                )),
+            ],
+            "DejaVu Sans",
+        );
+        let style = exact_kernel::StyleProps::default().with_rows(|rows| {
+            rows.font_family = 5;
+            rows.font_size = 16.0;
+        });
         let spec = crate::paint::text_spec(&style, "let section = 0;");
         let paragraph = engine.paragraph(&spec, Some(300.0));
-        let Some(glyph) = paragraph
+        let glyph = paragraph
             .layout_runs()
             .next()
             .and_then(|r| r.glyphs.first().copied())
-        else {
-            eprintln!("no face shapes code; installed-font regression not checked");
-            return;
-        };
+            .expect("code shapes with the fixture fonts");
         let face = &paragraph.lines().faces[glyph.face as usize];
         let font = swash::FontRef::from_index(face.font.data.data(), face.font.index as usize)
             .expect("a face");
-        if !font.metrics(&[]).is_monospace {
-            // Only when one is installed: the configured or listed families.
-            let mut catalog = paragraph.source.catalog.borrow_mut();
-            let any = fonts::family_names(&mut catalog.fonts.collection)
-                .iter()
-                .any(|n| fonts::monospaced(&mut catalog.fonts.collection, n));
-            assert!(
-                !any,
-                "code selected a proportional face beside a monospace one"
-            );
-            return;
-        }
+        assert!(
+            font.metrics(&[]).is_monospace,
+            "code selected a proportional face beside a monospace one"
+        );
         assert_eq!(
             font.attributes().style(),
             swash::Style::Normal,

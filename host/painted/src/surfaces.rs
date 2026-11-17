@@ -19,6 +19,10 @@ use std::{
 #[cfg(target_os = "android")]
 #[path = "surfaces/android.rs"]
 mod android;
+#[cfg(any(target_os = "android", all(test, unix)))]
+mod android_init;
+#[cfg(target_os = "android")]
+pub(crate) use android_init::bind as bind_application;
 #[cfg(any(target_os = "android", test))]
 mod fingers;
 mod performance;
@@ -53,6 +57,8 @@ struct Abi {
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
     device_loaded: bool,
+    #[cfg(any(target_os = "android", all(test, unix)))]
+    initialized: bool,
     shaders: shaders::Pack,
     /// Each symbol's address, looked up once: an animated canvas calls a
     /// handful every frame, and `dlsym` walks the library's hash table.
@@ -117,6 +123,8 @@ impl Abi {
             shaders: Default::default(),
             rendered: std::env::var("EXACT_GPU_RENDER").as_deref() == Ok("1"),
             device_loaded: false,
+            #[cfg(any(target_os = "android", all(test, unix)))]
+            initialized: false,
             symbols: Default::default(),
         };
         unsafe {
@@ -149,6 +157,12 @@ impl Abi {
                 abi.library
                     .get::<*const ()>(name.as_bytes())
                     .map_err(|e| format!("GPU ABI {name}: {e}"))?;
+            }
+            // Before any other call into the module (LLP 1009 D11).
+            #[cfg(any(target_os = "android", all(test, unix)))]
+            {
+                android_init::run(&abi, path)?;
+                abi.initialized = true;
             }
             // Its pages go with the app's own once boot is done (it stays
             // loaded while this host lives).
@@ -292,6 +306,11 @@ impl Abi {
 }
 impl Drop for Abi {
     fn drop(&mut self) {
+        // A refused Android initialization permits no teardown export (LLP 1009 D11).
+        #[cfg(any(target_os = "android", all(test, unix)))]
+        if !self.initialized {
+            return;
+        }
         // A missing symbol can occur during validation of an older artifact.
         if let Ok(unload) = unsafe { self.library.get::<unsafe extern "C" fn()>(b"gpu_unload") } {
             unsafe { unload() };
@@ -554,6 +573,19 @@ impl Surfaces {
         compat: &str,
         assets: &crate::image::Assets,
     ) -> bool {
+        for c in self.canvases.values_mut() {
+            let enabled = c.owner && host.runner().wants_canvas_performance(&c.name);
+            if enabled != c.performance {
+                c.performance = enabled;
+                self.abis[&c.artifact].set_performance(c.id, enabled);
+            }
+        }
+        if self.canvases.values().any(|c| c.performance) {
+            self.performance_due
+                .get_or_insert_with(std::time::Instant::now);
+        } else {
+            self.performance_due = None;
+        }
         let mut changed = self.forward_owed(host);
         let dead: Vec<_> = self
             .canvases
@@ -666,7 +698,7 @@ impl Surfaces {
                 let owner = !self.canvases.values().any(|c| c.name == update.name);
                 let performance = owner && host.runner().wants_canvas_performance(&update.name);
                 if performance {
-                    abi.enable_performance(id);
+                    abi.set_performance(id, true);
                     self.performance_due
                         .get_or_insert_with(std::time::Instant::now);
                 }
@@ -1103,10 +1135,8 @@ impl<D: DataSource> Presenter<D> {
         let Some((ox, oy, _, _)) = self.rect_of(view) else {
             return false;
         };
-        if !self.surfaces.input(
-            view,
-            json!({"t":"wheel","dx":dx,"dy":dy,"x":x-ox,"y":y-oy,"at":at}),
-        ) {
+        let wheel = self.held_keys(json!({"t":"wheel","dx":dx,"dy":dy,"x":x-ox,"y":y-oy,"at":at}));
+        if !self.surfaces.input(view, wheel) {
             self.surfaces
                 .error
                 .get_or_insert_with(|| "GPU surface refused wheel input".into());
@@ -1170,7 +1200,21 @@ impl<D: DataSource> Presenter<D> {
         } else {
             "mouse"
         };
-        self.surfaces.input(view, json!({"t":"pointer","id":1,"phase":phase,"kind":kind,"buttons":buttons,"x":x-ox,"y":y-oy,"dx":dx,"dy":dy,"at":at}))
+        let pointer = self.held_keys(json!({"t":"pointer","id":1,"phase":phase,"kind":kind,"buttons":buttons,"x":x-ox,"y":y-oy,"dx":dx,"dy":dy,"at":at}));
+        self.surfaces.input(view, pointer)
+    }
+    /// `event` with the modifiers held, by the web's names.
+    pub(crate) fn held_keys(&self, mut event: Value) -> Value {
+        let held = self.modifiers();
+        for (name, on) in [
+            ("shiftKey", held.shift),
+            ("ctrlKey", held.ctrl),
+            ("altKey", held.alt),
+            ("metaKey", held.meta),
+        ] {
+            event[name] = on.into();
+        }
+        event
     }
     /// The device's motion for the next canvas pointer event (evdev's
     /// relative axes), so mouse look continues past the screen's edge.

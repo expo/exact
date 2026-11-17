@@ -86,7 +86,7 @@ extension NodeView {
     }
     package var pressIsDown: Bool { holds("active") || pressed && !pressPaint.outside }
     /// The rows of the pressed paint (LLP 1061 D7).
-    static let pressPaintRows = ["press_opacity", "press_opacity_to", "press_background_color", "press_color"]
+    static let pressPaintRows = ["press_translate", "press_translate_percent", "press_opacity", "press_opacity_to", "press_background_color", "press_color"]
     /// Whether the author wrote this node's pressed look: a press scale or
     /// any of the paint (any value, 1 included). It replaces the platform's
     /// unsaid press (LLP 1115.000 D6).
@@ -165,6 +165,7 @@ extension NodeView {
         // takes the press's real progress.
         if still { pressPaint.ease = PressFeedback(from: down ? 1 : 0, to: down ? 1 : 0, start: now) } else { pressPaint.ease.aim(down ? 1 : 0, at: now) }
         installPressFade(pressPaint.depth, still: still)
+        if let layer = paintLayer { PressTranslation.apply(style, to: layer, ease: pressPaint.ease, still: still) }
     }
 
     /// The press's opacity fade for `depth` as the press's ease describes it
@@ -406,6 +407,7 @@ extension NodeView {
     /// at once. The look's opacity is held again first, a native button's too.
     func refreshPressOpacity(_ s: NodeStyle? = nil) {
         applyLookOpacity()
+        refreshPressTranslation(s)
         if isNativeButton { refreshNativeActivePresentation(); return }
         #if os(iOS)
         refreshDimOpacity()
@@ -575,6 +577,7 @@ extension NodeView {
         holdGone()
         endInked(pressPaint.inked.compactMap(\.view).filter { $0 !== self })
         if pressPaint.lookInkLent != nil { endInk(below: self, by: self) }
+        if let layer = paintLayer { PressTranslation.restore(layer) }
         paintLayer?.removeAnimation(forKey: "pressOpacity")
         paintLayer?.removeAnimation(forKey: "lookOpacity")
         paintLayer?.removeAnimation(forKey: "nativeActiveOpacity")

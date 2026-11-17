@@ -170,13 +170,14 @@ impl<D: DataSource> Runner<D> {
         })
     }
 
-    /// After a host's last round: whether the depth rule left a node
-    /// undelivered, which the log says as the browser does; it is
-    /// delivered after the next layout.
-    pub fn resize_settled(&mut self) {
-        if !self.resize_due(0).is_empty() {
+    /// After a host's last round, return whether the depth rule left a node
+    /// undelivered and log it as the browser does. The next layout delivers it.
+    pub fn resize_settled(&mut self) -> bool {
+        let pending = !self.resize_due(0).is_empty();
+        if pending {
             self.log(UNDELIVERED);
         }
+        pending
     }
 }
 

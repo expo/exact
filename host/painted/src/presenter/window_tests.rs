@@ -38,8 +38,10 @@ fn recycling_a_frame_preserves_other_readers_and_reuses_released_storage() {
     assert!(first.data() == old_pixels);
     assert!(second
         .data()
-        .chunks_exact(4)
-        .all(|pixel| pixel == [32, 64, 96, 255]));
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [32, 64, 96, 255]));
     p.recycle_frame(first);
     let reused = p.frame();
     assert_eq!(reused.data().as_ptr(), address);

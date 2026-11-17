@@ -1,0 +1,28 @@
+# Opening a book makes its screen, which asks; what reads its answer asks then.
+tap open-1
+clock settle
+# Its own state changes its arguments; its refresh reaches it alone.
+tap more-1
+clock settle
+tap open-2
+clock settle
+tap reload-2
+clock settle
+# Replace keeps the screen and asks with the new parameters.
+tap swap-3
+clock settle
+# The gate closes: it keeps its answer; reopened, it asks again.
+tap toggle
+clock settle
+tap more-1
+clock settle
+tap toggle
+clock settle
+# Back destroys the top screen and lets its request go.
+tap back
+clock settle
+tap back
+clock settle
+# The instance outside every region asks with the root.
+tap more-outside
+clock settle

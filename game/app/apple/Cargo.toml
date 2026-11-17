@@ -1,0 +1,21 @@
+# The Apple shell that every game without a data crate shares (game/app/shells.mjs).
+# It names no game, so Cargo compiles it once for every such game. Only a game's
+# generated workspace builds it.
+[package]
+name = "exact-game-apple"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+exact-apple = { path = "../../../host/apple" }
+exact-logic = { path = "../../../logic" }
+exact-runner = { path = "../../../runner" }
+ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }
+serde_json = "1"
+
+# Its own root, not a member of the game workspace above (which cannot exclude a
+# directory under its member `app`), so `cargo metadata` and `cargo fmt --all` from a
+# game's workspace can read it.
+[workspace]

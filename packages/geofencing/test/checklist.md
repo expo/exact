@@ -65,7 +65,7 @@ fixture's Android build is that script's.
    minutes, "entered station:pa".
 3. **Arrive, closed.** Close the app (swipe it away), move away and back.
    Open the app: the arrival is delivered then, with its original time
-   (Android's headless session is not built, D14 step 3).
+   (the package boots no session with no view yet, D14 step 3).
 4. **Location off and on.** Turn location off, then on, with the app
    closed; move away and back: nothing (Play services dropped the fence).
    Open the app (it re-arms), move away and back: heard.

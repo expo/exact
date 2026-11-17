@@ -123,8 +123,10 @@ fn archive_miss_starts_with_cpu_pixels_then_replaces_the_whole_frame_with_ink() 
     assert_eq!(presenter.painter_state()["name"], "ink");
     let errors: Vec<_> = first
         .data()
-        .chunks_exact(4)
-        .zip(later.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(later.data().as_chunks::<4>().0)
         .map(|(a, b)| {
             a.iter()
                 .zip(b)

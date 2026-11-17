@@ -122,7 +122,7 @@ impl Writes for Recording {
         }
         let current = &mut self.current;
         fill(&mut |at, bytes| {
-            for (k, b) in bytes.chunks_exact(4).enumerate() {
+            for (k, b) in bytes.as_chunks::<4>().0.iter().enumerate() {
                 current[start + at / 4 + k] = f32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
             }
         });

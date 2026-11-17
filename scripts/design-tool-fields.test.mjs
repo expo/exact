@@ -11,9 +11,9 @@ toolTurns();
 
 test('T1a: an import reviewed through the file picker, overrides off until ticked, every unmapped value listed, accepted as one transaction and undone in one step', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-import-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
-  const original = readFileSync(join(app, 'app.tamber'), 'utf8');
-  const fixtures = resolve(ROOT, 'tamber/tests/import');
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const original = readFileSync(join(app, 'app.forma'), 'utf8');
+  const fixtures = resolve(ROOT, 'forma/tests/import');
   const figma = readdirSync(join(fixtures, 'figma')).map(n => join(fixtures, 'figma', n));
   const tool = await proxied(app);
   try {
@@ -33,7 +33,7 @@ test('T1a: an import reviewed through the file picker, overrides off until ticke
     expect(review.offers.map(o => [o.role, o.on])).toEqual([['-exact-background', false], ['-exact-label', false], ['-exact-secondary-background', false], ['-exact-separator', false], ['AccentColor', false]]);
     expect(states[0].slots.picked).toEqual([]);
     expect(review.unmapped.map(u => u.name)).toEqual(['--radius-sm', '--radius-md', '--radius-xl']);
-    expect(review.unmapped.every(u => u.derived && u.why.startsWith('derived from --radius, and not a length Tamber folds'))).toBe(true);
+    expect(review.unmapped.every(u => u.derived && u.why.startsWith('derived from --radius, and not a length Forma folds'))).toBe(true);
     const id = review.proposal, nth = k => id.replace(/-(\d+)$/, (_, n) => `-${Number(n) + k}`);
     const [edited, kept] = [nth(1), nth(2)];
     // Tick AccentColor, leave shadcn.foreground out, and edit one value: the
@@ -55,10 +55,10 @@ test('T1a: an import reviewed through the file picker, overrides off until ticke
     ], { keepStorage: true });
     const later = more.filter(r => r.resources);
     const after = later[0].resources.changes.held.find(h => h.proposal === edited);
-    // (it begins from the choice the edit carried, recorded on the server, tamber/1.18: `kept`, the card's heading)
+    // (it begins from the choice the edit carried, recorded on the server, forma/1.18: `kept`, the card's heading)
     expect(after).toMatchObject({ from: id, kept: true });
     expect(after.mapped[0].modes[0].value).toBe('light-dark(oklch(0.99 0 0), oklch(0.145 0 0))');
-    // Whole, the choice carried by the server (tamber/1.18): shadcn.foreground still held but left out, every override
+    // Whole, the choice carried by the server (forma/1.18): shadcn.foreground still held but left out, every override
     // offered, AccentColor alone ticked, with no flips of the page's on the new one.
     const flips = later[0].slots.picked;
     expect(after.mapped.map(m => m.name)).toContain('shadcn.foreground');
@@ -112,8 +112,8 @@ test('T1a: an import reviewed through the file picker, overrides off until ticke
 
 test('third pass #6, end to end: ticking a role override then editing a value, and editing then ticking, hold the same import and the same choice, and the override is written', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-reheld-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
-  const css = join(resolve(ROOT, 'tamber/tests/import'), 'shadcn-neutral.css');
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const css = join(resolve(ROOT, 'forma/tests/import'), 'shadcn-neutral.css');
   const value = 'light-dark(oklch(0.99 0 0), oklch(0.145 0 0))';
   const tool = await proxied(app);
   const session = `design-tool-reheld-${process.pid}`;
@@ -161,7 +161,7 @@ test('third pass #6, end to end: ticking a role override then editing a value, a
     expect(written).toContain(`shadcn.background = ${value}`);
     expect(written).not.toContain('shadcn.foreground =');
     expect(written).not.toContain('-exact-background = shadcn.background');
-    // A page loaded again starts from the choice the server keeps (tamber/1.18 choose): order one's, still held, as
+    // A page loaded again starts from the choice the server keeps (forma/1.18 choose): order one's, still held, as
     // ticked, its flips gone with the page.
     st = await step([]);
     const again = heldOf(st, a2);
@@ -173,11 +173,11 @@ test('third pass #6, end to end: ticking a role override then editing a value, a
   }
 }, 900_000);
 
-test('a held import\'s choice is the proposal\'s (tamber/1.18 choose): ticked, then a reload, then accepted; ticked on one page, accepted on another; kept through an edit and a reload', async () => {
+test('a held import\'s choice is the proposal\'s (forma/1.18 choose): ticked, then a reload, then accepted; ticked on one page, accepted on another; kept through an edit and a reload', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-choice-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
-  const original = readFileSync(join(app, 'app.tamber'), 'utf8');
-  const css = join(resolve(ROOT, 'tamber/tests/import'), 'shadcn-neutral.css');
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const original = readFileSync(join(app, 'app.forma'), 'utf8');
+  const css = join(resolve(ROOT, 'forma/tests/import'), 'shadcn-neutral.css');
   const value = 'light-dark(oklch(0.98 0 0), oklch(0.145 0 0))';
   const tool = await proxied(app);
   const settle = ['clock data', 'clock +1', 'clock data', 'clock +1', 'clock data'];
@@ -188,7 +188,7 @@ test('a held import\'s choice is the proposal\'s (tamber/1.18 choose): ticked, t
   const shown = (st, h) => ({ tokens: h.mapped.filter(m => m.on !== st.slots.picked.includes(`${h.proposal}:${m.index}`)).map(m => m.name),
     offers: h.offers.filter(o => o.items !== '' && o.on !== st.slots.picked.includes(`${h.proposal}:${o.items}`)).map(o => o.role) });
   const lastWrite = () => tool.writes.at(-1).after;
-  const reset = () => writeFileSync(join(app, 'app.tamber'), original);
+  const reset = () => writeFileSync(join(app, 'app.forma'), original);
   try {
     // One: tick AccentColor and leave shadcn.foreground out, then load the page again: the card shows that choice
     // (the server's), and accepting it writes it.
@@ -241,8 +241,8 @@ test('a held import\'s choice is the proposal\'s (tamber/1.18 choose): ticked, t
 
 test('typed fields write one line through set-token for each kind: a length, a number, a shadow list with inset and a token colour, a text shadow, a type longhand', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-typed-'));
-  const original = readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.tamber'), 'utf8');
-  writeFileSync(join(app, 'app.tamber'), original);
+  const original = readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.forma'), 'utf8');
+  writeFileSync(join(app, 'app.forma'), original);
   writeFileSync(join(app, 'app.contract'), STUB_APP);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app });
   git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'design');

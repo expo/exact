@@ -253,7 +253,7 @@ final class FrameSampler: NSObject {
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.stop() })
         #else
         observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] note in
-            if let window = note.object as? NSWindow, window === self?.session?.presenter.viewport.window, !window.occlusionState.contains(.visible) { self?.stop() }
+            if let window = note.object as? NSWindow, window === self?.session?.presenter.viewport.window, !window.screenOcclusionState.contains(.visible) { self?.stop() }
         })
         #endif
     }
@@ -284,7 +284,7 @@ final class FrameSampler: NSObject {
         let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
         #else
         let viewport = session.presenter.viewport
-        guard viewport.window?.occlusionState.contains(.visible) == true else { return }
+        guard viewport.window?.screenOcclusionState.contains(.visible) == true else { return }
         let l = viewport.displayLink(target: self, selector: #selector(tick(_:)))
         #endif
         l.add(to: .main, forMode: .common)
@@ -799,6 +799,7 @@ final class FrameObservation {
 }
 
 // @ref LLP 1142 §13 D8 — independent real-time observation, never a clock loan.
+#if EXACT_AGENT
 extension Agent {
     func liveFrames(_ request: [String: Any], completed: @escaping ([String: Any]) -> Void) {
         guard let ms = Agent.integer(request["live"]), (1...120_000).contains(ms) else {
@@ -811,7 +812,7 @@ extension Agent {
         // covered, and AppKit presents no frames to a covered window: it comes forward
         // for the recording, once AppKit reports it visible, and goes back after.
         if let window = session.presenter.viewport.window, window.level == .agentBehind, window.isVisible,
-           !window.occlusionState.contains(.visible) {
+           !window.screenOcclusionState.contains(.visible) {
             var seen: NSObjectProtocol?
             var started = false
             let start = { [self] in
@@ -827,7 +828,7 @@ extension Agent {
                 }
             }
             seen = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { _ in
-                if window.occlusionState.contains(.visible) { start() }
+                if window.screenOcclusionState.contains(.visible) { start() }
             }
             window.level = .normal
             window.orderFrontRegardless()
@@ -860,3 +861,4 @@ extension Agent {
         sampler.observationStopped = { observation.finish($0) }
     }
 }
+#endif

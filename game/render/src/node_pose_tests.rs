@@ -131,7 +131,7 @@ fn clip_then_ik_then_offset_palettes_and_socket_match_at_all_alphas() {
     skin.feed(&gpu.queue, sim.world(), &[e], false); // first Pose was already present from Animation
     assert_eq!(skin.records.len(), 1, "three jobs share one instance span");
     assert_eq!(skin.pose_words.len(), model.nodes.len() * 20);
-    assert!(skin.jobs_words.chunks_exact(4).all(|j| j[1] == 0));
+    assert!(skin.jobs_words.as_chunks::<4>().0.iter().all(|j| j[1] == 0));
     attachments.feed(sim.world(), false, true, None, false);
     for alpha in [0., 0.5, 1.] {
         let mut frame = [0.; 20];
@@ -161,8 +161,10 @@ fn clip_then_ik_then_offset_palettes_and_socket_match_at_all_alphas() {
         }
         for (j, node) in [2, 4, 5].into_iter().enumerate() {
             let actual: Vec<_> = data[j * 64..j * 64 + 64]
-                .chunks_exact(4)
-                .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_ne_bytes(*b))
                 .collect();
             close(
                 Mat4::from_cols_slice(&actual),
@@ -508,7 +510,7 @@ fn socket_matches_span(
     let len = model.nodes.len() * 10;
     for alpha in [0., 0.5, 1.] {
         let mut pose = vec![0.; len];
-        for (i, node) in pose.chunks_exact_mut(10).enumerate() {
+        for (i, node) in pose.as_chunks_mut::<10>().0.iter_mut().enumerate() {
             let a = crate::node_poses::read(&skin.pose_words[i * 10..]);
             let b = crate::node_poses::read(&skin.pose_words[len + i * 10..]);
             crate::node_poses::put(

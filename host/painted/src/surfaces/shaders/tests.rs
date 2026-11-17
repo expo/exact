@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 
-fn shader_fixture() -> (std::path::PathBuf, Value) {
+fn shader_fixture() -> (super::super::tests::Probe, Value) {
     let (path, mut compat) = super::super::tests::fixture();
     let source = path.with_file_name("probe.c");
     let mut text = std::fs::read_to_string(&source).unwrap().replace(
@@ -317,7 +317,7 @@ fn disjoint_module_shaders_are_registered_with_their_owner() {
     let source = path.with_file_name("probe.c");
     let text = std::fs::read_to_string(&source).unwrap();
     let extra = path.with_file_name(format!("libextra.{}", std::env::consts::DLL_EXTENSION));
-    for (library, name) in [(&path, "a"), (&extra, "b")] {
+    for (library, name) in [(&*path, "a"), (&extra, "b")] {
         let text = text
             .replace("(n[0]!='a' && n[0]!='b')", &format!("n[0]!='{name}'"))
             .replace(
@@ -336,7 +336,7 @@ fn disjoint_module_shaders_are_registered_with_their_owner() {
     compat["embedded"]["gpuModules"] = json!({"extra":card});
     compat["inputs"]["gpuModules"] = json!({"extra":["secondary_surface"]});
     let mut surfaces = Surfaces::default();
-    for (artifact, library) in [("", &path), ("extra", &extra)] {
+    for (artifact, library) in [("", &*path), ("extra", &extra)] {
         let mut abi = Abi::open_path(library, &compat, artifact).unwrap();
         abi.load_device().unwrap();
         surfaces.abis.insert(artifact.into(), abi);

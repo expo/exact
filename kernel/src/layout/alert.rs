@@ -61,10 +61,7 @@ pub(super) fn measure(
             invalid.get_or_insert_with(|| arena.local_id(context.slot));
             return Some((Size::ZERO, TextMetrics::default()));
         };
-        if context.measurements.len() == LEAF_OFFERS {
-            context.measurements.remove(0);
-        }
-        context.measurements.push(Measurement {
+        context.remember(Measurement {
             width,
             height,
             metrics,

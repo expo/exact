@@ -22,6 +22,7 @@ use std::sync::Arc;
 pub(crate) mod case;
 pub mod decorations;
 pub mod inline_box;
+pub mod natural;
 
 /// A payload-free lifetime namespace. Allocation identity is valid only while
 /// retained: it is never a wire id, address handle, or serialized cache key.
@@ -218,8 +219,14 @@ pub struct Paragraph {
     pub markup: Markup,
     /// The paragraph strut: minimum line box even when all inline runs are smaller.
     pub strut: TextStyle,
-    /// Base direction.
+    /// Base direction, and the direction `start` and `end` resolve against;
+    /// under `natural`, the layout direction alone.
     pub direction: Direction,
+    /// The direction is unsaid on a host whose text is natural, and the text
+    /// is not Markdown (LLP 1060.000 D3): each paragraph's base is its first
+    /// strong character's, `direction`'s where it has none
+    /// ([`natural::paragraph_bases`]).
+    pub natural: bool,
     /// Horizontal alignment, physical: `start` and `end` are resolved
     /// against `direction` ([`TextAlign::physical`]), so a host never sees them.
     pub text_align: TextAlign,
@@ -287,6 +294,7 @@ impl Paragraph {
             markup: Markup::None,
             strut: t.style(),
             direction: p.direction,
+            natural: false,
             text_align: p.text_align.physical(p.direction),
             line_clamp: p.line_clamp,
             text_overflow: p.text_overflow,
@@ -306,6 +314,7 @@ impl Paragraph {
             markup: Markup::None,
             strut: TextStyle::from_style(s),
             direction: s.direction,
+            natural: false,
             text_align: s.text_align.physical(s.direction),
             line_clamp: s.line_clamp,
             text_overflow: s.text_overflow,
@@ -436,6 +445,9 @@ pub struct TextMetrics {
     pub height: f32,
     /// Distance from the top to the first line's alphabetic baseline, if known.
     pub first_baseline: Option<f32>,
+    /// Geometry is estimated until the host accepts a measurement (LLP 1051.000 D5).
+    /// Pending metrics must not enter a scalar measurement cache.
+    pub pending: bool,
 }
 
 impl TextMetrics {
@@ -824,6 +836,7 @@ impl MonospaceMeasurer {
             width: fragments.iter().map(|f| f.x + f.width).fold(0.0, f32::max),
             height: result.height,
             // No line, no first baseline
+            pending: false,
             first_baseline: (!fragments.is_empty()).then_some(line_height * self.baseline_frac),
         }
     }
@@ -946,6 +959,7 @@ impl MonospaceMeasurer {
         TextMetrics {
             width: laid.lines.iter().map(|l| l.width).fold(0f32, f32::max),
             height: laid.bottoms.last().copied().unwrap_or(0.0),
+            pending: false,
             first_baseline: laid.lines.first().map(|l| l.above),
         }
     }

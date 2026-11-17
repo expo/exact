@@ -1,7 +1,7 @@
 // Child processes a test spawns, ended with what they started however the
 // test ends: its body's own `stop`, a failure, or bun:test's timeout, which
 // skips the rest of the body (a timed-out dev-loop test left its loop, the
-// resident wasm loop, `contract tamber serve` and the filesystem tool running
+// resident wasm loop, `contract forma serve` and the filesystem tool running
 // for two hours, holding the fixture's lock). A test file registers the end:
 //
 //   import { afterEach } from 'bun:test';

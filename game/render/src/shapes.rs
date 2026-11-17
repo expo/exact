@@ -299,7 +299,7 @@ mod tests {
             for vertex in &vertices {
                 assert!((Vec3::from_array(vertex.normal).length() - 1.0).abs() < 1e-5);
             }
-            for triangle in indices.chunks_exact(3) {
+            for triangle in indices.as_chunks::<3>().0 {
                 let [a, b, c] = std::array::from_fn(|i| vertices[triangle[i] as usize]);
                 let cross = (Vec3::from_array(b.position) - Vec3::from_array(a.position))
                     .cross(Vec3::from_array(c.position) - Vec3::from_array(a.position));

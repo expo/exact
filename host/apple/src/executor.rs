@@ -149,8 +149,12 @@ impl Executor {
         self.core.resume_ordered()
     }
     /// Let go of the work for tickets the runner no longer holds.
-    pub fn forget(&self, held: impl Fn(u64) -> bool) {
-        self.core.forget(held);
+    pub fn forget(&self, held: impl Fn(u64) -> bool, suspending: bool) {
+        if suspending {
+            self.core.forget_before_suspend(held);
+        } else {
+            self.core.forget(held);
+        }
     }
     /// The uploads let go that had begun to go out, for
     /// `Runner::uploads_started` (LLP 1016.000 D10).
@@ -204,6 +208,10 @@ impl Executor {
     pub fn retry_reader(&self) -> exact_runner::RetryReader {
         self.core.retry_reader()
     }
+    /// The session's live driver faults for individual long-poll attempts.
+    pub fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        self.core.set_fetch_fault(fault);
+    }
     /// Each listener's address and connections, by its stream ticket, live.
     pub fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         self.core.listen_reader()
@@ -229,7 +237,7 @@ pub trait Io {
     /// [`Executor::resume_ordered`].
     fn resume_ordered(&self) -> Vec<(u64, &'static str)>;
     /// [`Executor::forget`].
-    fn forget(&self, held: &dyn Fn(u64) -> bool);
+    fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool);
     /// [`Executor::let_go_started`].
     fn let_go_started(&self, held: &dyn Fn(u64) -> bool) -> Vec<u64>;
     /// [`Executor::cancel`].
@@ -252,6 +260,8 @@ pub trait Io {
     fn socket_reader(&self) -> exact_runner::SocketReader;
     /// [`Executor::retry_reader`].
     fn retry_reader(&self) -> exact_runner::RetryReader;
+    /// [`Executor::set_fetch_fault`].
+    fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault);
     /// [`Executor::listen_reader`]; none by default.
     fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         std::sync::Arc::new(|_| None)
@@ -273,8 +283,8 @@ impl Io for Executor {
     fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
         Executor::resume_ordered(self)
     }
-    fn forget(&self, held: &dyn Fn(u64) -> bool) {
-        Executor::forget(self, held)
+    fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool) {
+        Executor::forget(self, held, suspending)
     }
     fn let_go_started(&self, held: &dyn Fn(u64) -> bool) -> Vec<u64> {
         Executor::let_go_started(self, held)
@@ -308,6 +318,9 @@ impl Io for Executor {
     }
     fn retry_reader(&self) -> exact_runner::RetryReader {
         Executor::retry_reader(self)
+    }
+    fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        Executor::set_fetch_fault(self, fault)
     }
     fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         Executor::listen_reader(self)
@@ -411,7 +424,9 @@ mod resource_tests {
 
     #[test]
     fn the_declared_resources_are_the_bundle_folder_beside_the_executable() {
-        let app = std::env::temp_dir().join(format!("exact-resources-{}.app", std::process::id()));
+        let app = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-resources-{}.app", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&app);
         std::fs::create_dir_all(&app).unwrap();
         let executable = Some(app.join("App"));

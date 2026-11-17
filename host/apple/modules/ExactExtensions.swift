@@ -1,12 +1,9 @@
-// A package's Swift implementation of a module, composed into the app's one
-// module (LLP 1124 D6, LLP 1133.001 D1, D5). Each package compiles as its own
-// Swift module against `ExactPackage` (ExactPackage.swift, its class's shape
-// and the context it is given), so two packages' types cannot collide; the
-// build writes an adapter for each (`exactExtensions`, beside this file,
-// never committed) over the package's class.
+// Packages compile as separate Swift modules and load at first use
+// (LLP 1067.000.001). ExactPackageLibrary forwards their protocol through
+// this session's adapter; exactExtensions is the generated factory table.
 //
 // A request naming `extension` is the runner's, and goes to that
-// extension's adapter, made once a session on its first request; the app's
+// extension's adapter, made once a session on its first use; the app's
 // own module never sees it:
 //
 // - `{"extension", "source"|"send", "args", "preferred"?, "origin"?,
@@ -42,14 +39,6 @@
 // [AnyHashable: Any]`, the `userInfo` entry for content whose opening
 // raises one (or opens the location given) through the host's delegate.
 //
-// A request naming `extension` is the runner's call of one of its names
-// (`{"extension", "source"|"send", "args"}`), its release of a live source
-// (`{"extension", "release"}`), or data code's synchronous form (`{"extension",
-// "sync", "args"}`, through `call`), and goes to that extension's adapter,
-// made once a session on its first request; the app's own module never sees
-// it. An error is answered as `{"error": code}`. `changed(topic)` asks the
-// topic's readers again; `log` is a journal line in a development build and
-// nothing in a production one.
 import Foundation
 import CoreGraphics
 import Security
@@ -101,6 +90,30 @@ open class ExactExtensionAdapter {
 /// The adapters of each session's module, by extension; main thread only.
 enum ExactExtensions {
     private static var made: [ObjectIdentifier: [String: ExactExtensionAdapter]] = [:]
+    private struct Facts {
+        var preferred: [String: Any]?
+        var permissions: [String: String]?
+        var foreground: Bool?
+    }
+    private static var facts: [ObjectIdentifier: [String: Facts]] = [:]
+    private static var angles: [ObjectIdentifier: Double] = [:]
+
+    static var loadSeconds: Double {
+        #if canImport(ExactPackage)
+        return ExactPackageLibrary.loadSeconds
+        #else
+        return 0
+        #endif
+    }
+
+    private static func disclose(_ m: ExactModule, _ name: String) {
+        #if canImport(ExactPackage)
+        guard m.context.agent, let module = exactPackageModules[name],
+              let json = exactJSON(["extension": name, "state": ["loaded": ExactPackageLibrary.loaded(module)]]) else { return }
+        m.context.changed("exact-state:" + String(decoding: json, as: UTF8.self))
+        #endif
+    }
+
     /// Each session's id, as its adapters' contexts say it.
     private static var sessions: [ObjectIdentifier: String] = [:]
     private static var nextSession = 0
@@ -120,6 +133,7 @@ enum ExactExtensions {
     /// hands over a wake it holds.
     static func created(_ m: ExactModule) {
         modules.append(WeakModule(m))
+        for name in names { disclose(m, name) }
         if dueWakes == nil {
             dueWakes = NotificationCenter.default.addObserver(forName: Notification.Name("exact.wakes.due"), object: nil, queue: .main) { note in
                 guard let offer = note.object as? NSMutableDictionary, let due = offer as? [String: Any],
@@ -163,6 +177,13 @@ enum ExactExtensions {
         }()
         let a = make(m, session)
         made[key, default: [:]][name] = a
+        if let held = facts[key]?[name] {
+            if let states = held.permissions { a.permissions(states) }
+            if let values = held.preferred { a.preferred(values) }
+            if let shown = held.foreground { a.foreground(shown) }
+        }
+        if let angle = angles[key] { a.orientation(angle) }
+        for module in modules.compactMap({ $0.module }) { disclose(module, name) }
         return a
     }
 
@@ -176,14 +197,76 @@ enum ExactExtensions {
         return AppFileWalk.destination(root, Array(parts.dropFirst()))
     }
 
+    /// An `app:/` directory in the session's roots, including one the package
+    /// will create, reached through no symbolic link.
+    static func directory(_ path: String, _ module: ExactModuleContext) -> URL? {
+        guard path.hasPrefix("app:/") else { return nil }
+        let parts = path.dropFirst(5).split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let roots = ["data": module.data, "cache": module.cache, "tmp": module.temporary]
+        guard let root = roots[parts[0]] else { return nil }
+        return AppFileWalk.directory(root, Array(parts.dropFirst()))
+    }
+
+    /// Empty and recreate an admitted `app:/` directory through checked
+    /// descriptors, retaining the new directory for the package's writes.
+    static func replaceDirectory(_ path: String, _ module: ExactModuleContext) -> FileHandle? {
+        guard path.hasPrefix("app:/") else { return nil }
+        let parts = path.dropFirst(5).split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let roots = ["data": module.data, "cache": module.cache, "tmp": module.temporary]
+        guard let name = parts.first, let root = roots[name] else { return nil }
+        return AppFileWalk.replaceDirectory(root, Array(parts.dropFirst()))
+    }
+
     /// A request of the runner's; `false` for one that names no extension.
     static func later(_ m: ExactModule, _ request: [String: Any], reply: ExactReply) -> Bool {
         guard let extensionName = request["extension"] as? String else { return false }
+        guard exactExtensions[extensionName] != nil else {
+            reply.send(["error": "NotSupportedError"])
+            return true
+        }
+        let key = ObjectIdentifier(m)
+        let existing = made[key]?[extensionName]
+        // Facts do not constitute use; teardown has nothing to act on before use.
+        if request["source"] == nil, request["send"] == nil {
+            var held = facts[key]?[extensionName] ?? Facts()
+            var told = false
+            if let states = request["permissions"] as? [String: String] {
+                held.permissions = states
+                existing?.permissions(states)
+                told = true
+            }
+            if let values = request["preferred"] as? [String: Any] {
+                held.preferred = values
+                existing?.preferred(values)
+                told = true
+            }
+            if let shown = request["foreground"] as? Bool {
+                held.foreground = shown
+                existing?.foreground(shown)
+                told = true
+            }
+            if told {
+                facts[key, default: [:]][extensionName] = held
+                reply.send([:])
+                return true
+            }
+            if existing == nil, request["release"] != nil || request["dispose"] != nil || request["cancel"] != nil || request["woke"] != nil {
+                reply.send([:])
+                return true
+            }
+        }
         guard let a = adapter(m, extensionName) else {
             reply.send(["error": "NotSupportedError"])
             return true
         }
         let args = request["args"] as? [String: Any]
+        if let name = request["send"] as? String {
+            for option in (args ?? [:]).keys where !(args?[option] is NSNull) {
+                if let member = exactCredentialMembers["\(extensionName)#\(name).\(option)"] {
+                    _ = adapter(m, member)
+                }
+            }
+        }
         if let view = request["view"] as? String {
             let origin = request["origin"] as? String ?? "app"
             if let shown = request["displayed"] as? Bool { a.displayed(view, shown, origin: origin) }
@@ -195,18 +278,11 @@ enum ExactExtensions {
         } else if let name = request["release"] as? String {
             if let args { a.release(name, args: args) } else { a.release(name) }
             reply.send([:])
-        } else if let values = request["preferred"] as? [String: Any], request["source"] == nil, request["send"] == nil {
-            if let states = request["permissions"] as? [String: String] { a.permissions(states) }
-            a.preferred(values)
-            reply.send([:])
         } else if let ids = request["dispose"] as? [String] {
             a.dispose(ids)
             reply.send([:])
         } else if let cancelled = request["cancel"] as? Int {
             a.cancel(cancelled)
-            reply.send([:])
-        } else if let shown = request["foreground"] as? Bool {
-            a.foreground(shown)
             reply.send([:])
         } else if let id = request["woke"] as? String {
             ended.removeValue(forKey: "\(ObjectIdentifier(m).hashValue) \(extensionName) \(id)")?(request["outcome"] as? String ?? "completed")
@@ -239,6 +315,7 @@ enum ExactExtensions {
 
     /// The session window's angle changed: each adapter made in `m`'s session is told.
     static func orientation(_ m: ExactModule, _ angle: Double) {
+        angles[ObjectIdentifier(m)] = angle
         for a in (made[ObjectIdentifier(m)] ?? [:]).values { a.orientation(angle) }
     }
 
@@ -278,8 +355,13 @@ enum ExactExtensions {
         let key = ObjectIdentifier(m)
         modules.removeAll { $0.module == nil || $0.module === m }
         let adapters = made.removeValue(forKey: key) ?? [:]
+        #if canImport(ExactPackage)
+        if let session = sessions[key] { ExactCredentialMembers.cancelSession(session) }
+        #endif
         sessions[key] = nil
         tables[key] = nil
+        facts[key] = nil
+        angles[key] = nil
         guard !adapters.isEmpty else { return }
         var waiting = Set(adapters.keys)
         for (name, a) in adapters { a.destroy { waiting.remove(name) } }
@@ -363,21 +445,28 @@ private let audioEvent: AudioClaims.EventFn = { ctx, code in
 #if canImport(ExactPackage)
 // Only an artifact that composes packages has their seam to compile against.
 extension ExactExtensions {
+    static func prepareContext(_ m: ExactModule, _ name: String, _ context: ExactPackageContext) {
+        if let shown = facts[ObjectIdentifier(m)]?[name]?.foreground { context.foreground = shown }
+    }
+
     /// The context of extension `name`'s implementation in `m`'s session
     /// (ExactPackage.swift): the session's clock, journal, track table,
     /// files, the host's audio session, its canvases' inputs and the window's angle.
     static func context(_ m: ExactModule, _ name: String, session: String) -> ExactPackageContext {
         let module = m.context, tracks = tables[ObjectIdentifier(m)] as? ExactTracks ?? ExactTracks()
         tables[ObjectIdentifier(m)] = tracks
+        let label = module.poster["session"].flatMap { $0.isEmpty ? nil : $0 }
         return ExactPackageContext(
             agent: module.agent && !real.contains(name), session: session, hostSession: module.poster["owner"] ?? "",
-            label: module.poster["session"].flatMap { $0.isEmpty ? nil : $0 },
+            label: label,
             data: module.data, cache: module.cache, temporary: module.temporary,
             changed: { [weak module] topic in module?.changed(topic) },
             log: { [weak module] line in module?.diagnostics.log(line) },
             now: { [weak module] in module?.now() ?? 0 },
             tracks: tracks,
             file: { [weak module] path in module.flatMap { file(path, $0) } },
+            directory: { [weak module] path in module.flatMap { directory(path, $0) } },
+            replaceDirectory: { [weak module] path in module.flatMap { replaceDirectory(path, $0) } },
             audioSession: ExactAudioSession { [weak m] mode, options, background, events in
                 m?.hatches.flatMap { AudioClaims.claim($0, mode: mode, options: options, background: background, events: events) }
             },
@@ -437,6 +526,11 @@ extension ExactExtensions {
                 let box = NSMutableDictionary(dictionary: ["op": "read"])
                 NotificationCenter.default.post(name: Notification.Name("exact.push"), object: box)
                 return box["reply"] as? [String: Any]
+            },
+            hostEvents: ExactHostEvents { event in
+                let box = NSMutableDictionary(dictionary: ["event": event, "session": label ?? session])
+                NotificationCenter.default.post(name: Notification.Name("exact.hostEvents"), object: box)
+                return (box["reply"] as? [String: Any])?["items"] as? [NSObject] ?? []
             },
             expireWake: { [weak module] id in module?.expireWake(name, id: id) },
             state: { [weak module] fields in

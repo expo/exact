@@ -5,7 +5,8 @@ import android.os.MessageQueue.OnFileDescriptorEventListener.EVENT_ERROR
 import android.os.MessageQueue.OnFileDescriptorEventListener.EVENT_INPUT
 import android.os.ParcelFileDescriptor
 
-/** The host's wake descriptors ([Native.fds]: executor replies, decoded images, the GPU module's acquired images)
+/** The host's wake descriptors ([Native.fds]: executor replies, decoded images, the GPU module's acquired images,
+ * the update store's finished checks)
  * watched on a looper's [queue], each waking [woken] with its index in [Native.fds]. [sync] watches them again when
  * the host's set changes: a dev loop's plan replaces the host's executor, and with it the descriptor (LLP 1122 D4),
  * which is always a new number (the new one is made while the old one is still open). A descriptor that reports an

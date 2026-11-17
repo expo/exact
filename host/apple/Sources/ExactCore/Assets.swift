@@ -58,38 +58,60 @@ public final class AssetResolver {
     deinit { if let directory { try? FileManager.default.removeItem(at: directory) } }
 
     package func bytes(_ name: String) -> Data? {
-        lock.lock(); defer { lock.unlock() }
-        do { return try delivery(name) } catch { lastRefusal = lastRefusal ?? error.localizedDescription; return nil }
+        do { return try delivery(name) } catch { refuse(error.localizedDescription); return nil }
     }
 
-    /// Safe on any thread. A file is read outside the lock, so a texture a
-    /// GPU canvas reads off the main thread holds up no lookup on it.
+    private func refuse(_ why: String) {
+        lock.lock(); defer { lock.unlock() }
+        lastRefusal = lastRefusal ?? why
+    }
+
+    private enum Source {
+        case file(URL, embedded: Bool)
+        case provider((String) throws -> Data?)
+    }
+
+    /// Safe on any thread. The bytes are read outside the lock, from a file or
+    /// the provider, so a read that blocks (a texture a GPU canvas reads off the
+    /// main thread, a file a privacy check holds) holds up no other lookup.
     package func delivery(_ name: String) throws -> Data? {
-        let file: URL, embedded: Bool
+        let source: Source
         do {
             lock.lock(); defer { lock.unlock() }
             guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else { throw CocoaError(.fileReadInvalidFileName) }
             if let bytes = cache[name] { return bytes }
-            if let url = files[name] { file = url; embedded = false }
+            if let url = files[name] { source = .file(url, embedded: false) }
             else if let read {
                 guard names?.contains(name) == true else { return nil }
-                do { let bytes = try read(name); if let bytes, !name.hasSuffix(".tex") { cache[name] = bytes }; return bytes }
-                catch { lastRefusal = lastRefusal ?? error.localizedDescription; return nil }
+                source = .provider(read)
             } else {
                 guard !isComplete, let url = embeddedURL(name) else { return nil }
-                file = url; embedded = true
+                source = .file(url, embedded: true)
             }
         }
-        do { return try Data(contentsOf: file) }
-        catch let error as CocoaError where embedded && error.code == .fileReadNoSuchFile { return nil }
+        switch source {
+        case .provider(let read):
+            let bytes: Data?
+            do { bytes = try read(name) } catch { refuse(error.localizedDescription); return nil }
+            if let bytes, !name.hasSuffix(".tex") { lock.lock(); cache[name] = bytes; lock.unlock() }
+            return bytes
+        case .file(let file, let embedded):
+            do { return try Data(contentsOf: file) }
+            catch let error as CocoaError where embedded && error.code == .fileReadNoSuchFile { return nil }
+        }
     }
 
     package func url(_ name: String, maximumBytes: Int? = nil) -> URL? {
-        lock.lock(); defer { lock.unlock() }
-        guard isComplete else { return embeddedURL(name) }
-        if let url = files[name] { return url }
+        do {
+            lock.lock(); defer { lock.unlock() }
+            guard isComplete else { return embeddedURL(name) }
+            if let url = files[name] { return url }
+        }
+        // Read outside the lock, as `bytes` does; materialize under it.
         guard let bytes = bytes(name) else { return nil }
         if let maximumBytes, bytes.count > maximumBytes { return nil }
+        lock.lock(); defer { lock.unlock() }
+        if let url = files[name] { return url } // another thread materialized it meanwhile
         do {
             if directory == nil {
                 let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).appendingPathComponent("exact-generation-\(UUID().uuidString)", isDirectory: true)

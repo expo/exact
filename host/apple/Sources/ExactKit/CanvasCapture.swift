@@ -1,7 +1,7 @@
 // @ref LLP 1056 D9 (as amended for expo/exact#188) — a canvas capture's
 // presenter half: the runtime names the canvas (`mode: "canvas"` surface
-// work), the presenter encodes the bitmap it keeps, and the runtime writes
-// the PNG to the app file and answers the source (`fulfillSurface` kind 8).
+// work), the presenter encodes the bitmap it keeps as the type asked for,
+// and the runtime writes it to the app file and answers the source (`fulfillSurface` kind 8).
 import Foundation
 import ExactCore
 
@@ -34,13 +34,14 @@ extension ExactSession {
         }
         presenter.canvas2d.capture(UInt32(num("id")), lifetime: num("lifetime"), generation: UInt32(num("generation")), sequence: num("sequence"),
                                    width: Int(num("w")), height: Int(num("h")),
+                                   type: op["type"] as? String ?? "image/png", quality: (op["quality"] as? NSNumber)?.doubleValue,
                                    snapshot: { [weak self] copy in
             DispatchQueue.main.sync {
                 guard let self, self.state != .destroyed, self.generation == owner else { return false }
                 return self.runtime.snapshotCanvas(ticket, copy: copy)
             }
-        }) { [weak self] png in
-            self?.completeSurface(ticket, generation: owner, kind: 8, body: png ?? Data())
+        }) { [weak self] encoded in
+            self?.completeSurface(ticket, generation: owner, kind: 8, body: encoded ?? Data())
         }
     }
 }

@@ -1,4 +1,4 @@
-import { views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
+import { AGENT_ADMITTED, views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
 import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
@@ -105,45 +105,14 @@ function apply(batch) {
           break;
         // the title at once: the head's, else the route's (LLP 1115.000 D4.1)
         case "router":
+          host.fragmentTurn++;
           navigation.apply(op);
           if (op.scroll) {
             op.since = navigation.personScrolls;
             (host.fragmentGlue ??= loadAfterPaint("./fragment.js", "fragment")).then((f) => f.arm(root, op, navigation));
-          }
+          } else host.fragmentGlue?.then((f) => f.cancel());
           break;
         // a scroll to the visit's fragment, made at the runner's `scrollToFragment` once its content has arrived, which a scroll by the person since cancels (LLP 1153 D5)
-        case "sound":
-          if (!agentMode) {
-            (host.soundModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./sound-glue.js", "installSound")).then((install) => install({
-              files: op.files ?? [],
-              log,
-              origin: () => t0
-            }))).then((s) => {
-              host.soundOut = s;
-              if (op.files && op.files !== s.files) {
-                s.reset(op.files);
-              }
-              s.ops(op.ops);
-            }).catch(console.error);
-          }
-          break;
-        case "midi":
-          if (!agentMode) {
-            (host.midiModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./midi-glue.js", "installMidi")).then((install) => install({
-              log,
-              origin: () => t0,
-              deliver: (m) => {
-                if (host.wasm?.exact_midi) {
-                  applyBatch(JSON.parse(readOut(host.wasm.exact_midi(writeIn(JSON.stringify(m))))));
-                }
-              }
-            }))).then((m) => {
-              host.midiOut = m;
-              m.ops(op.ops, op.boot);
-            }).catch(console.error);
-          }
-          break;
-        // LLP 1096 D7: the voice table's ops, after first paint; never under the agent, whose clock is virtual (D10); LLP 1125 D7: the MIDI queue's ops and the ports, after first paint; never under the agent, whose runner answers a request itself
         case "create": {
           // Canvas overlays use a div; data-surface is the host-owned drawing leaf.
           const adopted = host.page?.adopting?.get(op.id);
@@ -359,8 +328,9 @@ function apply(batch) {
           track(p, op.ticket);
           break;
         }
-        // A canvas capture (LLP 1056 D9, as amended for #188): the glue's PNG of the canvas's bitmap, written as a
-        // Rust source's `fs.atomicWriteFile` is; `{path, width, height, scale}` or a refusal by name, both JSON.
+        // A canvas capture (LLP 1056 D9, as amended for #188 and #504): the glue's encoding of the canvas's bitmap,
+        // written as a Rust source's `fs.atomicWriteFile` is; `{path, width, height, scale, type}` or a refusal by
+        // name, both JSON.
         case "canvasCapturePrepare": {
           const owner = host.incarnation;
           // The stylesheet's queued flush precedes this layout read.
@@ -376,13 +346,13 @@ function apply(batch) {
           if (!holds(op.ticket)) break;
           const requestIncarnation = host.incarnation, answer = (status, value) => safelyFulfill(requestIncarnation, op.ticket, 0, status, "", encoder.encode(JSON.stringify(value)));
           const p = new Promise((resolve, reject) => pieces.canvas2d({ capture: op, resolve, reject })).then(async (blob) => {
-            const png = new Uint8Array(await blob.arrayBuffer());
+            const bytes = new Uint8Array(await blob.arrayBuffer());
             const storage = await storageService(requestIncarnation);
             if (!holds(op.ticket, requestIncarnation)) return;
-            await storage.writePng(op.path, png, scopedGrantSet(host.grantSet, op.scope), () => holds(op.ticket, requestIncarnation)).catch((error) => {
+            await storage.writeCapture(op.path, bytes, scopedGrantSet(host.grantSet, op.scope), () => holds(op.ticket, requestIncarnation)).catch((error) => {
               throw Object.assign(error, { name: /denied: /.test(error.message) ? "NotAllowedError" : error.code === "agent" ? "NotSupportedError" : "EncodingError" });
             });
-            answer(200, { path: op.path, width: op.w, height: op.h, scale: op.scale });
+            answer(200, { path: op.path, width: op.w, height: op.h, scale: op.scale, type: blob.type || "image/png" });
           }).catch((error) => answer(400, { name: ["NotAllowedError", "NotSupportedError"].includes(error.name) ? error.name : "EncodingError", message: `${op.path}: ${error.message ?? error}` }));
           track(p, op.ticket);
           break;
@@ -539,7 +509,11 @@ function apply(batch) {
           // `light`/`dark` are the property's own values.
           if (op.name === "setScheme") {
             const s = String(op.args[0] ?? "");
-            document.documentElement.style.colorScheme = s === "system" ? "" : s;
+            const apply = () => { document.documentElement.style.colorScheme = s === "system" ? "" : s; };
+            const x = globalThis.exact;
+            (x.asked ??= {}).scheme = { value: s, apply };
+            const deferred = host.restoringScheme && op.source == null && AGENT_ADMITTED && self !== parent && /^exact-copy-\d{1,2}$/.test(self.name) && !document.getElementById("exact-dev-pin");
+            if (!deferred) apply();
           } else if (op.name === "haptic") {
             navigator.vibrate?.(op.args?.[0] === "selection" ? 5 : 12);
           } else if (op.name === "setRootFontSize") {
@@ -728,14 +702,17 @@ function apply(batch) {
               pending.finally(() => inflight.delete(pending));
             }
           } else if (op.name === "saveFile") {
-            const [id, from, suggestedName, text] = op.args ?? [], r = JSON.parse(readOut(host.wasm.exact_command(writeIn(JSON.stringify({
+            const [id, from, suggestedName, text, startIn] = op.args ?? [], r = JSON.parse(readOut(host.wasm.exact_command(writeIn(JSON.stringify({
               command: "saveFile",
               id,
               from: from ?? undefined,
               suggestedName,
-              text,
+              text: text ?? undefined,
+              startIn: startIn ?? undefined,
               agent: agentMode
-            }))))), chosen = r.present && typeof showSaveFilePicker === "function" ? showSaveFilePicker({ suggestedName: r.suggestedName }) : null;
+            }))))), chosen = r.present && typeof showSaveFilePicker === "function" ? (r.startIn?.startsWith("doc:/")
+              ? documentsGlue().then((m) => m.startIn(r.startIn, "saveFile")).then((at) => showSaveFilePicker({ suggestedName: r.suggestedName, ...(at && { startIn: at }) }))
+              : showSaveFilePicker({ suggestedName: r.suggestedName, ...(r.startIn && { startIn: r.startIn === "screenshots" ? "pictures" : r.startIn }) })) : null;
             // LLP 1069.010 D3: the runner rules; the save picker starts inside the press's activation, else a download
             if (r.present || r.view != null) {
               chosen?.catch(() => {});
@@ -745,11 +722,12 @@ function apply(batch) {
             }
           } else if (/^show(OpenFile|Directory|SaveFile)Picker$/.test(op.name)) {
             // LLP 1069.010 D2: the runner rules; a browser without the picker refuses
-            const [id, second] = op.args ?? [], r = JSON.parse(readOut(host.wasm.exact_command(writeIn(JSON.stringify({
+            const [id, second] = op.args ?? [], directory = op.name === "showDirectoryPicker", r = JSON.parse(readOut(host.wasm.exact_command(writeIn(JSON.stringify({
               command: op.name,
               id,
               multiple: second === true,
-              suggestedName: typeof second === "string" ? second : undefined,
+              suggestedName: !directory && typeof second === "string" ? second : undefined,
+              startIn: op.args?.[directory ? 1 : 2] ?? undefined,
               agent: agentMode,
               available: op.name === "showSaveFilePicker" || typeof globalThis[op.name] === "function"
             })))));
@@ -936,6 +914,7 @@ function apply(batch) {
       // once; the agent's clock cannot seek that animation, so under it the scroll lands at once.
       for (const [name, offset] of Object.entries(offsets)) {
         if (el[name] !== offset) {
+          globalThis.exact?.fragment?.cancel(false);
           if ((name === "scrollTop" || name === "scrollLeft") && lists.has(el)) {
             jumps.push([
               Number(el.dataset.view),
@@ -1007,19 +986,141 @@ function apply(batch) {
   return batch.timers;
 }
 const heldLinks = new WeakMap();
+const heldOutputs = new Map();
 export function applyBatch(batch) {
+  const freeze = batch.freeze === true;
+  if (freeze) delete batch.freeze;
   for (const line of batch.alerts?.splice(0) ?? []) {
     console.error("exact:", line);
   }
+  // Cancellations commit immediately; starts and their timed ends wait for
+  // their tree. A later cancellation removes an older held start, so revealing
+  // it cannot replay it.
+  let output = heldOutputs.get(batch);
+  if (!output) {
+    output = batch.ops?.filter(op => op.op === "sound" || op.op === "midi") ?? [];
+    if (output.length) batch.ops = batch.ops.filter(op => op.op !== "sound" && op.op !== "midi");
+    const stops = [];
+    for (const row of output) {
+      const stop = op => row.op === "sound" ? op.op === "end" || op.op === "unhaptic"
+        : op.op === "retract" || op.op === "send" && (op.data[0] === 0xfc || (op.data[0] & 0xf0) === 0x80 || (op.data[0] & 0xf0) === 0x90 && op.data[2] === 0);
+      const immediate = [];
+      for (const op of [...row.ops]) {
+        if (!stop(op)) continue;
+        if (row.op === "sound" && op.op === "end") {
+          const earlier = [...heldOutputs.values(), output].flat().find(row => row.op === "sound"
+            && row.ops.some(start => start.op === "play" && start.id === op.id && start.at < op.at));
+          // A choke after the start is playback, not cancellation. Keep it
+          // with its pending voice so the output hears Play before End.
+          if (earlier) {
+            if (earlier !== row) {
+              earlier.ops.push(op);
+              row.ops = row.ops.filter(other => other !== op);
+            }
+            continue;
+          }
+        }
+        immediate.push(op);
+        if (op.op === "send") continue;
+        for (const pending of [...heldOutputs.values(), output]) {
+          for (const earlier of pending) {
+            if (earlier.op !== row.op) continue;
+            earlier.ops = earlier.ops.filter(start => start.id !== op.id || !(row.op === "midi" ? start.op === "send"
+              : op.op === "end" ? start.op === "play" || start.op === "set" || start.op === "end" : start.op === "haptic"));
+          }
+        }
+      }
+      row.ops = row.ops.filter(op => !immediate.includes(op));
+      if (immediate.length || row.boot) stops.push({ ...row, ops: immediate });
+      row.boot = false;
+    }
+    outputNow(stops);
+  }
+  function outputNow(output) {
+    if (!agentMode) {
+      for (const op of output) {
+        try {
+          switch (op.op) {
+            case "sound": {
+              if (host.soundOut) {
+                if (op.files && op.files !== host.soundOut.files) host.soundOut.reset(op.files);
+                host.soundOut.ops(op.ops);
+                break;
+              }
+              (host.soundModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./sound-glue.js", "installSound")).then((install) => install({
+                files: op.files ?? [],
+                log,
+                origin: () => t0
+              }))).then((s) => {
+                host.soundOut = s;
+                if (op.files && op.files !== s.files) {
+                  s.reset(op.files);
+                }
+                s.ops(op.ops);
+              }).catch(console.error);
+              break;
+            }
+            case "midi": {
+              if (host.midiOut) {
+                host.midiOut.ops(op.ops, op.boot);
+                break;
+              }
+              (host.midiModule ??= new Promise((r) => requestAnimationFrame(r)).then(() => loadAfterPaint("./midi-glue.js", "installMidi")).then((install) => install({
+                log,
+                origin: () => t0,
+                deliver: (m) => {
+                  if (host.wasm?.exact_midi) {
+                    applyBatch(JSON.parse(readOut(host.wasm.exact_midi(writeIn(JSON.stringify(m))))));
+                  }
+                }
+              }))).then((m) => {
+                host.midiOut = m;
+                m.ops(op.ops, op.boot);
+              }).catch(console.error);
+              break;
+            }
+          }
+        } catch (e) {
+          console.error(`exact: ${op.op} op failed`, e);
+        }
+      }
+    }
+  }
+  if (freeze) {
+    // A freeze settles everything awaiting presentation in its commit:
+    // physical-output starts are discarded and every other operation is
+    // applied in its original order. This marker is consumed on first apply;
+    // a replay or later resume neither settles newer output nor reconstructs it.
+    const pending = [...heldOutputs.values(), output].flat();
+    const starts = (row, op) => {
+      if (row.op === "command") return row.name === "haptic";
+      if (row.op === "sound") return op.op === "play" || op.op === "haptic";
+      if (row.op !== "midi" || op.op !== "send") return false;
+      const [status, , velocity] = op.data ?? [];
+      return status === 0xfa || status === 0xfb || status === 0xf8 || (status & 0xf0) === 0x90 && velocity > 0;
+    };
+    for (const held of new Set([...heldOutputs.keys(), batch])) {
+      held.ops = held.ops?.filter(op => !starts(op, op)) ?? [];
+    }
+    for (const row of pending) row.ops = row.ops.filter(op => !starts(row, op));
+    heldOutputs.clear();
+    outputNow(pending);
+    output = [];
+  }
+  // The runner has already released gated streams; presentation may wait past suspension.
+  letGo();
   const link = heldLinks.get(batch) ?? navigation.holdLink();
   if (host.page?.hold(batch) || presence.hold(batch)) {
     if (link) heldLinks.set(batch, link);
+    heldOutputs.set(batch, output);
     return {
       timers: batch.timers,
       batch
     };
   }
   heldLinks.delete(batch);
+  heldOutputs.delete(batch);
+  outputNow(output);
   host.textflow?.beforeBatch(batch);
   const began = host.frameSampler ? performance.now() : 0;
   // what applying it cost, for the next frame's record (LLP 1079 D3)
@@ -1074,6 +1175,7 @@ export function applyBatch(batch) {
       // After a commit (its `at` op), a held press paints again over the boundaries as they are now (input-glue.js
       // `repaintPress`), as modes.js does after each JS-target commit: a boundary's `data-exact-from` may have moved.
       if (batch.ops?.some((op) => op.op === "at")) globalThis.exact.repaintPress?.();
+      globalThis.exact.gpu?.syncPerformance?.();
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
       globalThis.exact.committed?.();

@@ -21,7 +21,7 @@ function encode(v, t) {
  * `resources` are the plan's declared resources in plan order, as `types` are, and a list writes each element's answer
  * in the list's order. */
 export function answers(resources, types, sourceTypes) {
-  const out = [], open = [], readers = [];
+  const out = [], open = [], readers = [], urls = [];
   const write = (r, type) => {
     // Leave out an answer not yet given, and a runner's own source (the date, the viewport), which is the reader's
     // device: the runtime asks it again, as `Runner::document_checkpoint` leaves it out
@@ -39,10 +39,12 @@ export function answers(resources, types, sourceTypes) {
     if (r.store) {
       readers.push(out.length);
     }
+    if (!globalThis.__exactProduction) urls.push([...(r.renderUrls ?? [])]);
     out.push(`[${JSON.stringify(r.name)},${JSON.stringify(r.source)},[${r.settled.map((a, k) => encode(a, params[k] ?? 's')).join(',')}],${encode(r.value, type)}]`);
   };
-  resources.forEach(({ r }, i) => r.each ? r.members().forEach(element => write(element, types[i][1])) : write(r, types[i]));
-  return { answers: `[${out.join(',')}]`, open, readers };
+  // a child's resource writes each instance's answer, which the boot's instances take by their arguments (LLP 1035.005.004 D8)
+  resources.forEach(({ r }, i) => r.each ? r.members().forEach(element => write(element, types[i][1])) : r.instances ? r.members().forEach(own => write(own, types[i])) : write(r, types[i]));
+  return { answers: `[${out.join(',')}]`, open, readers, ...(!globalThis.__exactProduction ? { urls } : {}) };
 }
 
 // The JS dev loop's checkpoint handoff. Its separate MIME type keeps rt.js's

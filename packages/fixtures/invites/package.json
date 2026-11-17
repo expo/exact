@@ -1,0 +1,10 @@
+{
+  "name": "@fixture/invites",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A package kept outside exact2's standard library, under its own scope, that asks the Apple host for what only the host owns: its names' grants name device.cloudkit and device.shareplay, and its Apple implementation takes the cloudkit-share host event (LLP 1133.001.000 §6 piece 5).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json"
+  }
+}

@@ -275,3 +275,21 @@ fn a_long_select_menu_opens_at_its_choice_and_scrolls() {
         assert!(moved < offset, "{host}: a service scrolls it");
     }
 }
+
+#[test]
+fn rtl_select_uses_its_final_width_for_the_options_labels() {
+    let source = PICK.replace("width=260", "width=300 direction=\"rtl\"");
+    let (mut p, id) = boot(&source, "android", (400., 600.));
+    p.tap(id).unwrap();
+    let open = p.top.open.as_ref().unwrap();
+    assert_eq!(open.layout.size.0, 300.);
+    let labels = open.layout.texts();
+    assert_eq!(labels.len(), 3);
+    for (index, (_, rect)) in labels.iter().enumerate() {
+        let end = if index == 0 { 252. } else { 288. };
+        assert!(
+            (rect.0 + rect.2 - end).abs() < 1.,
+            "option {index}: {rect:?}"
+        );
+    }
+}

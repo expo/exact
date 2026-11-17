@@ -55,7 +55,7 @@ extension NodeView {
     /// What the driver's `state` says of it: the view, and its box in the row.
     var rowBezelObservation: [String: Any]? {
         guard let box = rowBezelRect else { return nil }
-        return ["view": "NSButton(push)", "frame": [Agent.r2(box.minX), Agent.r2(box.minY), Agent.r2(box.width), Agent.r2(box.height)]]
+        return ["view": "NSButton(push)", "frame": [InspectionValue.r2(box.minX), InspectionValue.r2(box.minY), InspectionValue.r2(box.width), InspectionValue.r2(box.height)]]
     }
 }
 #endif

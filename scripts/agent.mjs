@@ -9,10 +9,10 @@
 //   tap <target> [at <x> <y> (a press at a point; plain, it presses what it names) | wheel <dx> <dy> [gesture | fling |
 //     hold] [at <x> <y>] [modifiers <Control…>] | wheel 0 0 release | drop <path…> | dragenter <path…> | dragleave |
 //     into <key> [block <v>] [inline <v>] | hover | hold-state active|hover|focus-visible|none | history <n> |
-//     {"history":n} | mouse | dblclick | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers
+//     {"history":n} | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers
 //     <Shift+Meta…>]) | modifiers <Shift+Meta…> | pinch <scale> [at <x> <y>] | mediasession <action> [seconds] |
 //     pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS) | drag <dx> <dy> [from <x>
-//     <y>] [mouse] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [during "<op>" …, inside the hold under --touch
+//     <y>] [mouse] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard] [during "<op>" …, inside the hold under --touch
 //     platform] [then <dx> <dy> over <ms> hold <ms> during "<op>" …: another leg, same iOS touch] | drag to <target>
 //     [at <x> <y>] […]] | type <target> <text…> (the navigation root: a path or a deep link) | type <target> key <Name>
 //     | type <target> copy|cut|paste <text…> | type <target> paste --file <path…> | type <target> paste --image <png>
@@ -127,6 +127,17 @@ export { open, clockSpan } from './agent-session.mjs';
 export { runTests, textOf } from './agent-test.mjs';
 export { Cdp, browserDiagnosticNoise };
 /** The hosts `open` carries a drive on. */
+/** How long a test runs before `test` says where it is, and how often after. */
+export const HEARTBEAT_MS = 30000;
+
+/** Where a long test is: its line of its last, how long it has run, and, at a drag, why a drag is slow. Not a
+ * `test "…":` line, which conform.mjs reads as a result. */
+export const heartbeat = ({ name, line, last, op, since }, now) => {
+  const s = Math.round((now - since) / 1000), took = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
+  const drag = op === 'drag' ? '; a drag past the viewport is several strokes, each landing before the next' : '';
+  return `still running test "${name}": ${took}, at line ${line} of ${last} (${op})${drag}`;
+};
+
 export const DRIVEN_HOSTS = ['web', 'macos', 'mac', 'ios', 'linux', 'android', 'windows', 'host', 'host-ios'];
 export async function main(argv, injected = {}) {
   const { flags, rest } = parseFlags(argv);
@@ -141,8 +152,10 @@ export async function main(argv, injected = {}) {
     return 2;
   }
   if (flags.live) {
-    if (!['macos', 'mac'].includes(host) || flags.test)
-      throw new Error('--live requires a macOS drive without --test');
+    if (!['macos', 'mac', 'ios'].includes(host) || flags.test)
+      throw new Error('--live requires a macOS or iOS simulator drive without --test');
+    // A phone's carrier forces agent mode, and a real drag there needs an XCTest runner on the phone.
+    if (flags.device) throw new Error('--live drives the iOS simulator, not a phone');
     if (flags.timing && flags.timing !== 'platform')
       throw new Error('--live keeps the platform clock; --timing agent is incompatible');
     flags.timing = 'platform';
@@ -156,11 +169,30 @@ export async function main(argv, injected = {}) {
       throw new Error(
         `--touch ${flags.touch} is not taken with --test: a test's \`drag\` is a real gesture by itself on an iOS simulator; --touch platform makes every tap one too (LLP 1080.000)`,
       );
-    return (await import('./verify.mjs')).withAppServer(
+    // Each test's line as it ends, and, while one runs past HEARTBEAT_MS, where it is every HEARTBEAT_MS: a run of
+    // long tests (a few hundred drags) said nothing after the server's line until the last test ended.
+    const said = new Set(),
+      report = (t) => {
+        said.add(t);
+        console.log(`test "${t.name}": ${t.skipped ? `skipped on ${host} (${t.skipped})` : t.failures.length ? 'FAIL' : 'ok'}`);
+        for (const f of t.failures) console.error('  ' + f);
+        for (const n of t.notes ?? []) console.error(`  note: ${n}`);
+      };
+    let at = null;
+    const atLine = (step) => { at = at?.index === step.index ? { ...at, ...step } : { ...step, since: Date.now() }; };
+    const every = injected.heartbeatMs ?? HEARTBEAT_MS,
+      beat = setInterval(() => {
+        if (at && Date.now() - at.since >= every) console.error(heartbeat(at, Date.now()));
+      }, every);
+    beat.unref?.();
+    return (await import('./app-server.mjs')).withAppServer(
       resolveApp(flags.app).dir,
-      async () => {
+      async (running) => {
         const r = await (injected.runTests ?? runTests)({
+          atLine,
+          atResult: (t) => { at = null; report(t); },
           host,
+          running,
           browser,
           file: flags.test,
           plan: flags.plan,
@@ -181,14 +213,8 @@ export async function main(argv, injected = {}) {
           chrome: flags.chrome,
           scale: flags.scale,
           port: flags.port,
-        });
-        for (const t of r.results) {
-          console.log(
-            `test "${t.name}": ${t.skipped ? `skipped on ${host} (${t.skipped})` : t.failures.length ? 'FAIL' : 'ok'}`,
-          );
-          for (const f of t.failures) console.error('  ' + f);
-          for (const n of t.notes ?? []) console.error(`  note: ${n}`);
-        }
+        }).finally(() => clearInterval(beat));
+        for (const t of r.results) if (!said.has(t)) report(t);
         console.log(`${r.passed} passed, ${r.failed} failed${r.skipped ? `, ${r.skipped} skipped` : ''}`);
         // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
         (await import('./evidence.mjs')).recordRun(flags.app, {
@@ -265,7 +291,7 @@ export async function main(argv, injected = {}) {
             'history <n>',
             '{"history":n}',
             'mouse',
-            'dblclick',
+            "dblclick [touch: a finger's double tap: iOS, Chrome, Android, Windows]",
             'contextmenu',
             'auxclick (the middle button)',
             'clicks <1-3> (each [at <x> <y>: from its top left] [modifiers <Shift+Meta…>])',
@@ -273,13 +299,13 @@ export async function main(argv, injected = {}) {
             'pinch <scale> [at <x> <y>]',
             'mediasession <action> [seconds]',
             "pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS)",
-            'drag <dx> <dy> [from <x> <y>] [mouse: the left button, desktop pointers] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [during "<op>" …: after the move, the finger down; inside the hold under --touch platform] [then <dx> <dy> [over <ms>] [hold <ms>] [during "<op>" …]: another leg, same iOS touch]',
+            'drag <dx> <dy> [from <x> <y>] [mouse: the left button, desktop pointers] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard: iOS --touch platform, keyboard up; end above the screen bottom safe area] [during "<op>" …: after the move, the finger down; inside the hold under --touch platform] [then <dx> <dy> [over <ms>] [hold <ms>] [during "<op>" …]: another leg, same iOS touch]',
             'drag to <target> [at <x> <y>: from its top left] [same options]]',
             'tap <target> down [at <x> <y>] [modifiers <M>], then tap move [by] <x> <y> [over <ms>] [modifiers <M>]',
             'tap hold <ms>',
             'tap up [modifiers <M>]',
             'tap cancel (the target shows pressed until the lift: "tap row down" "screenshot held.png" "tap up"; under --touch platform one real touch at tap up, the holds, reads and clock +<ms> between run inside it; a word a form does not use is refused; a form a carrier cannot deliver answers unsupported)',
-            'type <target> <text…> (a select, date, time, range or checkbox: its value; the navigation root: a path, or a deep link as euxy://p/1, through protocol_handlers on macOS and iOS)',
+            'type <target> <text…> (a select, date, time, range or checkbox: its value; the navigation root: a path, or a deep link as euxy://p/1, through protocol_handlers on macOS, iOS and the Android reader)',
             'type <target> key <Name> [for <ms>]',
             'type <target> copy',
             'cut',
@@ -296,7 +322,7 @@ export async function main(argv, injected = {}) {
             'resize <w> <h> (the window: web, macOS, Linux)',
             "close (the window's close button, asking its beforeunload: web, macOS)",
             "back (the platform's Back: an open dialog's cancel, else the top sheet dismissed, else the pushed route popped)",
-            'prefer <media feature, page fact, posture folded|continuous, segments <cols>x<rows> [gap <points>]> […]',
+            'prefer <media feature, page fact, posture folded|continuous, segments <cols>x<rows> [gap <points>]> […] (visibility-state and frozen substitute facts; neither suspends the driven process)',
             'prefer extension <extension>.<source>=<JSON>|clear (the source of a native module, LLP 1124 D7)',
             "prefer permission.<name> granted|denied|prompt (the permission of a module; --permission <name>=<state> sets it at launch, --bind <extension> answers it from its implementation on Apple and Android; its tickets are `tap @t allow|deny|cancel` and `type @t <value>`, LLP 1133.002 §6; a module's listed entry, `state.notifications`, is `tap @ref`, and --notification '<entry>' hands a relaunch one, LLP 1133.004 §7)",
             'fail fetch <url-prefix> [times <n>]',
@@ -565,7 +591,7 @@ export async function main(argv, injected = {}) {
       case 'url':
       case 'link':
         throw new MalformedOperation(
-          `${op} is not an op: a link arrives as \`type <root> ${args[0] ?? 'euxy://p/abc'}\`, the root being the node with navigate= (its testId or id, from \`tree\`; LLP 1038 D11); on macOS and iOS a URL with a scheme goes through the app's protocol_handlers as the system delivers it, with no "Open in …?" alert`,
+          `${op} is not an op: a link arrives as \`type <root> ${args[0] ?? 'euxy://p/abc'}\`, the root being the node with navigate= (its testId or id, from \`tree\`; LLP 1038 D11); on macOS, iOS and the Android reader a URL with a scheme goes through the app's protocol_handlers as the system delivers it (on iOS, with no "Open in …?" alert)`,
         );
       default:
         throw new MalformedOperation(

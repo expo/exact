@@ -2,8 +2,8 @@
 // run as data code runs it, its calls answered here: what it refuses before a
 // call is sent, call order, and `supports` by target (LLP 1133.006 D2, D7,
 // D8 item 1).
-import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterAll, afterEach, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { moduleBinding } from '../../../js/bake/src/__exact_binding.mjs';
@@ -13,6 +13,7 @@ const declaration = JSON.parse(readFileSync(join(pkg, 'exact.json'), 'utf8'));
 const implementations = ['apple', 'web', 'windows'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
 // Each target's binding, written before any is imported (Bun lists a directory once).
 const dir = mkdtempSync(join(tmpdir(), 'exact-clipboard-binding-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 for (const target of ['ios', 'tvos', 'android', 'web', 'windows']) {
   writeFileSync(join(dir, `clipboard-${target}.ts`), moduleBinding('@exact/clipboard', declaration, implementations, () => [], {}, target));
 }

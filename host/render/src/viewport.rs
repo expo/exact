@@ -197,6 +197,123 @@ mod tests {
     const GRID: &str = "shape Viewport\n  width: number\ncomponent A\n  resource viewport = exactViewport() as shape Viewport\n  derive narrow = viewport.width <= 700\n  view\n    column flex-direction=(narrow ? \"column\" : \"row\")\n      text \"a\"\n";
 
     #[test]
+    fn child_props_preserve_viewport_media_activation_and_cache_classes() {
+        struct Nothing;
+        impl exact_runner::DataSource for Nothing {
+            fn query(
+                &mut self,
+                name: &str,
+                _: &[exact_plan::Value],
+            ) -> Result<exact_plan::Value, exact_runner::DataError> {
+                Err(exact_runner::DataError::UnknownSource(name.into()))
+            }
+        }
+        let source = |child: bool| {
+            let body = if child {
+                "    Child(width=viewport.width)\ncomponent Child\n  props\n    width: number\n  view\n    text (width >= 640 ? \"wide\" : \"narrow\")\n"
+            } else {
+                "    text (viewport.width >= 640 ? \"wide\" : \"narrow\")\n"
+            };
+            format!("shape Viewport\n  width: number\ncomponent App\n  resource viewport = exactViewport() as shape Viewport\n  view\n{body}")
+        };
+        let child = source(true);
+        let sources = [
+            source(false),
+            child.clone(),
+            child.replace("width >= 640", "640 <= width"),
+            child.replace(
+                "  view\n    text (width >= 640",
+                "  derive wide = width >= 640\n  view\n    text (wide",
+            ),
+            child.replace(
+                "  view\n    text (width >= 640",
+                "  derive passed = width\n  view\n    text (passed >= 640",
+            ),
+        ];
+        let plans = sources.map(|source| contract::compile(&source).unwrap());
+        for plan in &plans[1..] {
+            assert!(plan.derives.iter().any(|r| r.unsettled));
+        }
+        let observations = plans.each_ref().map(|plan| {
+            let reads = exact_runner::viewport_reads::Reads::of(plan);
+            let media = reads.media();
+            let keys =
+                [639.0, 640.0, 800.0, 900.0].map(|width| reads.key(&Viewport::sized(width, 900.0)));
+            let rendered = [639.0, 640.0, 800.0, 900.0].map(|width| {
+                let page = crate::render_with_at(
+                    plan,
+                    &|| Nothing,
+                    Viewport::sized(width, 900.0),
+                    "/",
+                    &exact_web::document::Site {
+                        name: "",
+                        origin: None,
+                    },
+                    crate::DEADLINE,
+                    crate::Ids::Any,
+                    crate::Projection::Kernel,
+                    0.0,
+                    &Default::default(),
+                )
+                .unwrap();
+                (page.activate, page.wake, page.document.root)
+            });
+            eprintln!(
+                "media={media:?}, keys={keys:?}, activation={:?}",
+                rendered.each_ref().map(|page| page.0)
+            );
+            (media, keys, rendered)
+        });
+        for observed in &observations[1..] {
+            assert_eq!(&observations[0], observed);
+        }
+        let (media, keys, rendered) = &observations[0];
+        assert_eq!(media.as_ref().unwrap()[0].query, "(width >= 640px)");
+        assert_ne!(keys[0], keys[1]);
+        assert_eq!(keys[1], keys[2]);
+        assert_eq!(keys[2], keys[3]);
+        for (activate, _, _) in rendered {
+            assert_eq!(*activate, exact_plan::ActivatePolicy::Interaction);
+        }
+        assert!(rendered[0].2.contains(">narrow<"));
+        assert!(rendered[1].2.contains(">wide<"));
+    }
+
+    #[test]
+    fn shared_viewport_operands_retain_unrestricted_uses() {
+        for expression in [
+            "width",
+            "width / 2",
+            "`${width >= 640} ${width}`",
+            "(flag ? width : 0) >= 640",
+            "width >= (flag ? 640 : 900)",
+        ] {
+            let source = |child| {
+                let body = if child {
+                    format!("    Child(width=viewport.width, flag=flag)\ncomponent Child\n  props\n    width: number\n    flag: bool\n  view\n    text `${{{expression}}}`\n")
+                } else {
+                    format!(
+                        "    text `${{{}}}`\n",
+                        expression.replace("width", "viewport.width")
+                    )
+                };
+                format!("shape Viewport\n  width: number\ncomponent App\n  state flag = true\n  resource viewport = exactViewport() as shape Viewport\n  view\n{body}")
+            };
+            let reads = [false, true].map(|child| {
+                let plan = contract::compile(&source(child)).unwrap();
+                exact_runner::viewport_reads::Reads::of(&plan)
+            });
+            assert_eq!(reads[0], reads[1], "{expression}");
+            assert!(reads[1].media().is_none(), "{expression}");
+            assert_ne!(
+                reads[1].key(&Viewport::sized(800.0, 900.0)),
+                reads[1].key(&Viewport::sized(900.0, 900.0)),
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
     fn a_width_compared_with_constants_is_one_class_per_side() {
         let r = reads(GRID);
         assert!(r.any());

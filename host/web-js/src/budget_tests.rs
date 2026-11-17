@@ -215,3 +215,94 @@ fn labels_are_only_built_on_the_trap_path() {
         );
     }
 }
+
+#[test]
+fn at_read_rows_share_the_readers_list_and_call_budgets() {
+    let mut plan = contract::compile("component App\n  state xs = [1, 2]\n  derive picked = xs.map(x => x + 1)\n  view\n    text `${picked.length}`\n").unwrap();
+    plan.derives[0].unsettled = true;
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains("const d_0=($budget={s:0,n:0,d:0},$pc)=>"),
+        "{js}"
+    );
+    assert!(js.contains("++$budget.s>65536"), "{js}");
+    assert!(js.contains("d_0(undefined,"), "{js}");
+    assert!(!js.contains("const d_0=memo"), "{js}");
+    assert!(js.contains("finally{$budget.d--}"), "{js}");
+    assert!(!js.contains("const d_0=memo"), "{js}");
+}
+
+#[test]
+fn emitted_row_graphs_stop_at_the_shared_work_and_depth_limits() {
+    let temp = std::env::temp_dir().join(format!("exact-row-bounds-{}", std::process::id()));
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("budget.js"),
+        temp.join("budget.js"),
+    )
+    .unwrap();
+    std::fs::write(temp.join("rt.js"), "export class Refusal extends Error{};export const text=String,segmentOf=()=>null,say=console.log;export const h=()=>({}),mount=f=>f({}),P=(e,k,f)=>f(),x_toString=String;").unwrap();
+    for (length, twice) in [(30, true), (65, false)] {
+        let mut source = "component App\n  derive d0 = 1\n".to_string();
+        for i in 1..length {
+            source.push_str(&format!(
+                "  derive d{i} = 1 + d{}{}\n",
+                i - 1,
+                if twice {
+                    format!(" + d{}", i - 1)
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        source.push_str(&format!("  view\n    text `${{d{}}}`\n", length - 1));
+        let mut plan = contract::compile(&source).unwrap();
+        for row in &mut plan.derives {
+            row.unsettled = true;
+        }
+        let pcs = plan
+            .derives
+            .iter()
+            .flat_map(|r| exact_runner::vm::instructions(plan.code(r.body)).map(Result::unwrap))
+            .filter(|i| i.op == exact_plan::Opcode::LoadDerive)
+            .map(|i| i.pc)
+            .collect::<Vec<_>>();
+        assert!(pcs.iter().all(|pc| *pc > 0));
+        std::fs::write(
+            temp.join("app.js"),
+            crate::emit::emit(&plan, false, false).unwrap().js,
+        )
+        .unwrap();
+        let out =
+            std::process::Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
+                .args(["-e", "import app from './app.js';app();"])
+                .current_dir(&temp)
+                .output()
+                .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let output = String::from_utf8(out.stdout).unwrap();
+        let (kind, bound) = if twice {
+            (
+                "CallLimit",
+                ": past the 65,536 derive calls one evaluation may take",
+            )
+        } else {
+            ("CallDepth", ": past 64 derive call levels")
+        };
+        assert!(
+            pcs.iter().any(|pc| output.trim()
+                == format!("site 0: text trapped Trap({kind} {{ pc: {pc} }}){bound}; unset")),
+            "{length}: {output}"
+        );
+        assert!(
+            pcs.iter()
+                .any(|pc| output.contains(&format!("pc: {pc} }}"))),
+            "{output}"
+        );
+    }
+    std::fs::remove_dir_all(temp).unwrap();
+}

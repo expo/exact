@@ -62,11 +62,11 @@ final class WindowCommandsMacTests: XCTestCase {
 
         let app: [String: Any] = ["ExactWindow": ["keepRunning": true]]
         let documents: [String: Any] = ["ExactWindow": ["keepRunning": true], "ExactLaunchMode": "navigate-new"]
-        XCTAssertTrue(ExactDocuments.keepsWindow(only: true, placesStatusItems: false, app), "keepRunning")
-        XCTAssertFalse(ExactDocuments.keepsWindow(only: false, placesStatusItems: false, app), "one of several windows closes")
-        XCTAssertTrue(ExactDocuments.keepsWindow(only: true, placesStatusItems: true, [:]), "a placed status item reaches the app")
-        XCTAssertFalse(ExactDocuments.keepsWindow(only: true, placesStatusItems: false, [:]), "the default: the app ends with its window")
-        XCTAssertFalse(ExactDocuments.keepsWindow(only: true, placesStatusItems: true, documents), "a document's window closes as a document")
+        XCTAssertTrue(ExactDocuments.keepsWindow(main: true, placesStatusItems: false, app), "keepRunning")
+        XCTAssertFalse(ExactDocuments.keepsWindow(main: false, placesStatusItems: false, app), "a window other than main closes")
+        XCTAssertTrue(ExactDocuments.keepsWindow(main: true, placesStatusItems: true, [:]), "a placed status item reaches the app")
+        XCTAssertFalse(ExactDocuments.keepsWindow(main: true, placesStatusItems: false, [:]), "the default: the app ends with its window")
+        XCTAssertFalse(ExactDocuments.keepsWindow(main: true, placesStatusItems: true, documents), "a document's window closes as a document")
     }
 
     func testLeavingFullScreenLeavesAWindowThatIsNotFullScreenAsItIs() {

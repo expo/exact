@@ -9,6 +9,7 @@ import {filesystem} from '../../../scripts/filesystem.mjs';
 import {devGenerationDigest} from '../serve.mjs';
 import {sealEnvelope} from '../../../scripts/deploy-signing.mjs';
 import {pendingBuildInputs, resolveApp} from '../../../scripts/app.mjs';
+import {cacheBuildInputs} from '../dev-watch.mjs';
 import {driveStore, removeDriveStore} from '../../../scripts/agent-launch.mjs';
 const source = readFileSync(new URL('../dev.mjs', import.meta.url), 'utf8');
 
@@ -25,16 +26,23 @@ test('a table generation publishes with zero spawns and preserves the admitted p
   const plan = Buffer.from('plan'), before = Buffer.from('old'), next = Buffer.from('new');
   const hash = b => createHash('sha256').update(b).digest('hex');
   const start = source.indexOf('const tableGenerations = new Map();'), end = source.indexOf('\nlet dev = null;', start);
-  const make = new Function('createHash','canonicalBytes','webEnvelope','resolve','filesystem','devGenerationDigest','sealEnvelope',`
+  const make = new Function('createHash','canonicalBytes','webEnvelope','resolve','filesystem','devGenerationDigest','sealEnvelope','cacheBuildInputs','pendingBuildInputs','readBuilds',`
     const typescript=true,portableRust=true,currentModule=new Map([['app.plan',Buffer.from('unpublished')],['plans/pending.plan',Buffer.from('pending')]]),currentRust=null,app={},dist='unused';
-    const epoch='a'.repeat(32),program='program',seq=2;let retentionToken=null;const generated=()=>{};
+    const epoch='a'.repeat(32),program='program',buildEnv={},seq=2;let nativePrograms={},retentionToken=null;const generated=()=>{};
+    ${source.slice(source.indexOf('let builtReceipts=readBuilds('), source.indexOf('let previousWeb='))}
+    const compilerContracts={sources:new Set(),files:new Set()};let watchRefreshes=0;
+    const watchCompilerInputs=contract=>{if(contract!==compilerContracts)throw Error('native receipt refresh must reuse the Contract graph');watchRefreshes++;};
+    compilerWatchesReady=true;
     let current={files:new Map([['app.plan',Buffer.from('plan')],['assets/exact-tables.json',Buffer.from('old')],['assets/other',Buffer.from('sibling')],['plans/admitted.plan',Buffer.from('admitted')]]),envelope:{assets:[{name:'assets/exact-tables.json',sha256:'old'},{name:'assets/other',sha256:'sibling'},{name:'plans/admitted.plan',sha256:'admitted'}]}};
     const classifyGeneration=()=>[],announcePlan=()=>{},keepMap=()=>{},console={log(){}};
     const retainDevGeneration=()=>{throw Error('table publication used the disk helper');};
     ${source.slice(start,end)}
-    return {publish(bytes){captureGeneration(true,new Map([['assets/exact-tables.json',bytes]]));return current;}};
+    return {invalidate:path=>nativeValidation.invalidate(path),get watchRefreshes(){return watchRefreshes;},publish(bytes){captureGeneration(true,new Map([['assets/exact-tables.json',bytes]]));return current;}};
   `);
-  const api = make(createHash, x=>Buffer.from(JSON.stringify(x)), (_,bytes,assets)=>({plan:{sha256:hash(bytes),bytes:bytes.length},assets}),resolve,filesystem,devGenerationDigest,sealEnvelope);
+  const input = '/native/input.swift';
+  const build = {compat:{target:'macos',id:'cohort',inputs:{platform:'macos'}},binary:{sha256:'b'.repeat(64),inputs:[{path:input}],directories:[],missing:[]}};
+  let pending = [];
+  const api = make(createHash, x=>Buffer.from(JSON.stringify(x)), (_,bytes,assets)=>({plan:{sha256:hash(bytes),bytes:bytes.length},assets}),resolve,filesystem,devGenerationDigest,sealEnvelope,cacheBuildInputs,()=>pending,()=>[build]);
   let result;
   expect(tableOperation(() => { result = api.publish(next); }).processes).toBe(0);
   expect(result.files.get('app.plan')).toEqual(plan);
@@ -46,7 +54,20 @@ test('a table generation publishes with zero spawns and preserves the admitted p
   expect(result.envelope.module).toBeUndefined();
   // The served envelope names the asset index the generation carries.
   expect(JSON.parse(result.files.get('exact.json')).assets.count).toBe(3);
+  expect(JSON.parse(result.files.get('exact.json')).dev.nativePrograms).toEqual({'macos/cohort':'b'.repeat(64)});
   expect(JSON.parse(result.files.get('assets.json')).assets.map(a => a.name)).toEqual(result.envelope.assets.map(a => a.name));
+  pending = ['native input changed']; api.invalidate(input);
+  let refused;
+  expect(tableOperation(() => { refused = api.publish(Buffer.from('pending native')); }).processes).toBe(0);
+  expect(JSON.parse(refused.files.get('exact.json')).dev.nativePrograms).toEqual({'macos/cohort':null});
+  expect(result.envelope.dev.nativePrograms).toEqual({'macos/cohort':'b'.repeat(64)});
+  pending = []; api.invalidate(input);
+  expect(api.publish(Buffer.from('restored native')).envelope.dev.nativePrograms).toEqual({'macos/cohort':'b'.repeat(64)});
+  build.binary.sha256 = 'c'.repeat(64);
+  let rebuilt;
+  expect(tableOperation(() => { rebuilt = api.publish(Buffer.from('rebuilt native')); }).processes).toBe(0);
+  expect(rebuilt.envelope.dev.nativePrograms).toEqual({'macos/cohort':'c'.repeat(64)});
+  expect(api.watchRefreshes).toBe(1);
 });
 
 test('primary declaration reload validates and publishes current files without a second edit', async () => {

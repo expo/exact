@@ -94,6 +94,7 @@ async function main(argv) {
   if (newLink && force) return fail('share_flags', 'share: --new-link and --force are opposites; pass one.');
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(name);
+  if (app.manifest.variant) return fail('share_variant', `share: variant ${app.manifest.variant.name}: a variant has no AppDrop link of its own (LLP 1030.008 §6); share the app without --variant or EXACT_VARIANT.`);
   const recordPath = resolve(app.dir, '.exact/appdrop.json');
   const record = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) : null;
   const branch = branchOf(app.dir), source = sourceOf(app.dir);
@@ -120,6 +121,9 @@ async function main(argv) {
   const ipa = resolve(app.dir, '.exact/share', `${app.name}.ipa`);
   rmSync(ipa, { force: true });
   mkdirSync(dirname(ipa), { recursive: true });
+  // The bake bundles app.ts with rolldown from this checkout's node_modules; without it Bun spins silently.
+  if (!['rolldown', 'rolldown.exe'].some((bin) => existsSync(resolve(ROOT, 'node_modules/.bin', bin))))
+    return fail('node_modules_missing', `share: exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${ROOT} (every build's type check imports rolldown from it)`);
   say(`share: building ${app.displayName ?? app.name} for iPhone (build ${revision + 1}); the first build takes minutes.`);
   // An app with an update store starts its own stream: this build is a tester's, not a release in one.
   const streamed = app.manifest.deploy?.store?.ios !== '0';

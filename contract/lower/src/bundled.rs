@@ -7,7 +7,8 @@
 //! the app's; a bare word is `lower-image-source`'s warning.
 
 use crate::LowerError;
-use contract_syntax::{Expr, File, Node, Span};
+use contract_checking::View;
+use contract_syntax::{Attr, Expr, File, Node, Span};
 use std::path::Path;
 
 /// The folders the build bundles into the app.
@@ -15,24 +16,27 @@ const BUNDLED: &[&str] = &["assets", "deck"];
 
 /// Literal bundled paths, and SVG image files checked by the native parser
 /// (LLP 1011.001 D5), once per place written.
-pub(crate) fn check(view: &[Node], root: &Path) -> (Vec<LowerError>, Vec<LowerError>) {
+pub(crate) fn check(view: &View<'_>, root: &Path) -> (Vec<LowerError>, Vec<LowerError>) {
     let (mut out, mut warnings) = (Vec::new(), Vec::new());
     let native = crate::icons::shipped_targets(root)
         .iter()
         .any(|t| t != "web");
     let mut images = Vec::new();
-    sources(view, |what, source, span| {
-        if what == "image source" && !images.contains(&(source.clone(), span)) {
-            images.push((source.clone(), span));
-            image_svg(root, native, &source, span, &mut out, &mut warnings);
-        }
-        if let Some(e) = refusal(what, &source, span) {
-            // A component used twice is inlined twice: one refusal for its source.
-            if !out.contains(&e) {
-                out.push(e);
+    sources(
+        view.walk().filter_map(|node| node.element()),
+        |what, source, span| {
+            if what == "image source" && !images.contains(&(source.clone(), span)) {
+                images.push((source.clone(), span));
+                image_svg(root, native, &source, span, &mut out, &mut warnings);
             }
-        }
-    });
+            if let Some(e) = refusal(what, &source, span) {
+                // A component used twice is inlined twice: one refusal for its source.
+                if !out.contains(&e) {
+                    out.push(e);
+                }
+            }
+        },
+    );
     (out, warnings)
 }
 
@@ -41,7 +45,16 @@ pub(crate) fn check(view: &[Node], root: &Path) -> (Vec<LowerError>, Vec<LowerEr
 pub fn image_svg_paths(file: &File) -> Vec<String> {
     let mut paths = Vec::new();
     let view = contract_syntax::inline(file).unwrap_or_default();
-    sources(&view, |what, source, _| {
+    let elements = Node::walk(&view).filter_map(|node| match node {
+        Node::Element {
+            tag,
+            positional,
+            attrs,
+            ..
+        } => Some((tag.as_str(), positional.as_slice(), attrs.as_slice())),
+        _ => None,
+    });
+    sources(elements, |what, source, _| {
         if what == "image source" {
             if let Some(path) = svg_path(&source) {
                 if !paths.iter().any(|p| p == path) {
@@ -53,54 +66,37 @@ pub fn image_svg_paths(file: &File) -> Vec<String> {
     paths
 }
 
-fn sources(view: &[Node], mut visit: impl FnMut(&str, String, Span)) {
-    let mut stack: Vec<&Node> = view.iter().rev().collect();
-    while let Some(node) = stack.pop() {
-        let children: Vec<&Node> = match node {
-            Node::Element {
-                tag,
-                positional,
-                attrs,
-                children,
-                ..
-            } => {
-                let mut sources: Vec<(&str, &Expr)> = Vec::new();
-                let what = match tag.as_str() {
-                    "image" => Some("image source"),
-                    "video" => Some("video source"),
-                    "audio" => Some("audio source"),
-                    _ => None,
-                };
-                if let Some(what) = what {
-                    sources.extend(positional.first().map(|e| (what, e)));
-                }
-                if matches!(tag.as_str(), "video" | "audio") {
-                    for a in attrs {
-                        match a.name.as_str() {
-                            "src" => sources.push((what.unwrap_or_default(), &a.value)),
-                            "poster" => sources.push(("video poster", &a.value)),
-                            _ => {}
-                        }
-                    }
-                }
-                for (what, e) in sources {
-                    let mut found = Vec::new();
-                    literals(e, &mut found);
-                    for (source, span) in found {
-                        visit(what, source, span);
-                    }
-                }
-                children.iter().collect()
-            }
-            Node::When {
-                then, otherwise, ..
-            } => then.iter().chain(otherwise).collect(),
-            Node::Each { body, .. } => body.iter().collect(),
-            Node::Match { some, none, .. } => some.1.iter().chain(none).collect(),
-            Node::Use { children, .. } => children.iter().collect(),
-            Node::Children { .. } => Vec::new(),
+fn sources<'a>(
+    elements: impl IntoIterator<Item = (&'a str, &'a [Expr], &'a [Attr])>,
+    mut visit: impl FnMut(&str, String, Span),
+) {
+    for (tag, positional, attrs) in elements {
+        let mut sources: Vec<(&str, &Expr)> = Vec::new();
+        let what = match tag {
+            "image" => Some("image source"),
+            "video" => Some("video source"),
+            "audio" => Some("audio source"),
+            _ => None,
         };
-        stack.extend(children.into_iter().rev());
+        if let Some(what) = what {
+            sources.extend(positional.first().map(|e| (what, e)));
+        }
+        if matches!(tag, "video" | "audio") {
+            for a in attrs {
+                match a.name.as_str() {
+                    "src" => sources.push((what.unwrap_or_default(), &a.value)),
+                    "poster" => sources.push(("video poster", &a.value)),
+                    _ => {}
+                }
+            }
+        }
+        for (what, e) in sources {
+            let mut found = Vec::new();
+            literals(e, &mut found);
+            for (source, span) in found {
+                visit(what, source, span);
+            }
+        }
     }
 }
 
@@ -188,19 +184,16 @@ fn raster(bytes: &[u8]) -> bool {
 /// The literal strings `e` can be: a string, a template of literals, either
 /// arm of a choice.
 fn literals(e: &Expr, out: &mut Vec<(String, Span)>) {
-    match e {
-        Expr::Str(s, at) => out.push((s.clone(), *at)),
-        Expr::Template(parts, at) => {
-            if let Some(s) = crate::symbols::constant(parts) {
-                out.push((s, *at));
+    for leaf in contract_checking::value_leaves(e) {
+        match leaf {
+            Expr::Str(s, at) => out.push((s.clone(), *at)),
+            Expr::Template(parts, at) => {
+                if let Some(s) = crate::symbols::constant(parts) {
+                    out.push((s, *at));
+                }
             }
+            _ => {}
         }
-        Expr::Ternary(_, a, b, _) => {
-            literals(a, out);
-            literals(b, out);
-        }
-        Expr::Let { body, .. } => literals(body, out),
-        _ => {}
     }
 }
 

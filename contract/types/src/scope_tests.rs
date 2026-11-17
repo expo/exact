@@ -212,8 +212,13 @@ fn a_parameter_shadows_a_state_in_a_large_component() {
     source.push_str("  view\n    text \"ok\"\n");
     let file = contract_syntax::parse(&source).unwrap();
     let mut sink = Sink::default();
-    let ct =
-        crate::component::check_component(&file.components[0], &Types::default(), None, &mut sink);
+    let ct = crate::component::check_component(
+        &file.components[0],
+        &Types::default(),
+        None,
+        &[],
+        &mut sink,
+    );
     assert!(sink.errors.is_empty(), "{:?}", sink.errors);
     assert_eq!(ct.slots[0], Ty::Number);
 }
@@ -602,7 +607,13 @@ fn a_derive_dependency_in_a_let_initializer_is_outside_its_binding() {
             span: d.span,
         };
         let mut sink = Sink::default();
-        crate::component::check_component(&file.components[0], &Types::default(), None, &mut sink);
+        crate::component::check_component(
+            &file.components[0],
+            &Types::default(),
+            None,
+            &[],
+            &mut sink,
+        );
         assert_eq!(sink.errors.len(), 1, "{:?}", sink.errors);
         assert_eq!(sink.errors[0].id, id, "{:?}", sink.errors);
     }

@@ -72,6 +72,7 @@ const sources: Sources = {
     });
   },
   signOut: ([profile], store) => provider(profile).signOut(store),
+  endSession: ([profile], store) => provider(profile).signOut(store, { endSession: true }),
   me: async ([profile, signedIn], store) => {
     if (!signedIn) return { name: '' };
     const person = await provider(profile).json(store, `${at(profile)}/api/me`) as { name?: unknown };

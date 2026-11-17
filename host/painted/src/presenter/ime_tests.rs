@@ -6,7 +6,7 @@ fn id(p: &Presenter<()>, name: &str) -> ViewId {
 }
 
 fn boot(source: &str) -> (Presenter<()>, ViewId) {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (420., 240.),

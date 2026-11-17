@@ -1,57 +1,38 @@
-# On macOS a double-click on the empty part of a page-drawn title row does not zoom the window
+# A page-drawn macOS title row must preserve the title bar's mouse behaviour
 
 **Status:** Open
-**Systems:** host/apple/Sources/ExactKit/Mac/MouseEventsMac.swift, host/apple/Sources/ExactKit/Mac/MouseChainMac.swift, host/apple/Sources/ExactKit/Mac/TitleBarAreaMac.swift, host/apple/Sources/ExactMac/main.swift
+**Systems:** host/apple/Sources/ExactKit/Mac/TitleBarAreaMac.swift, TitleRowTapMacTests.swift
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
 **Date:** 2026-11-13
 **Related:** issues/20261009-titlebar-env-display-mode.md
 
-## What is wrong
+Reproduced on macOS 27.0.1; three fix rounds did not preserve the authored action without the native action.
 
-Under `viewport-fit="cover"` or `window-controls-overlay`, the page underlaps
-the title bar (`coverChrome`, `ExactMac/main.swift:311`) and an app draws its
-own title row in `env(titlebar-area-*)`. Dragging the empty part of that row
-moves the window, as AppKit lets a non-opaque view do. A double-click there
-does nothing: the page's views receive the mouse-down, as the window's hit test
-finds them under the empty toolbar (`TitleRowTapMacTests`), and nothing in the
-host performs the title bar's double-click action. A double-click on the empty
-part of a native toolbar in the same app does zoom, because AppKit's title bar
-view handles it. A hand-built Mac window that draws its own title row zooms or
-minimizes there by the system setting (System Settings ▸ Desktop & Dock,
-"Double-click a window's title bar to"; the `AppleActionOnDoubleClick`
-default).
+## What was wrong
 
-The host already knows where the row is (`TitleBarAreaMac.rect`) and which
-nodes in it are controls; only the action is missing. Contract also has no
-command to zoom the window, so an app cannot do it from its own `dblclick`.
+On `ecdaf06fb`, Caltrain was given `window-controls-overlay` and an authored
+52-point `header` in the title band. A real Quartz HID double click on its empty
+ground changed the window frame from `(510, 137, 900, 640)` to the native zoomed
+frame `(0, 30, 1920, 974)`. The same drive passed with no authored header and
+with a glass root. Current main therefore preserves the person-visible title
+bar action on macOS 27.0.1.
 
-## The failure
+The same title-band ground can have an authored `dblclick`. A real Quartz HID
+drive on that listener runs the authored action once but also performs the
+person's configured title action. With Zoom selected, the window frame changes.
+The authored action therefore does not have precedence.
 
-A window with `display_override` `window-controls-overlay`, `viewport-fit="cover"`
-and `navigationBar="none"` on every route, with a row at `env(titlebar-area-x)`
-and `env(titlebar-area-height)`. A double-click on the row's empty part did not
-zoom the window; a drag there moved it. Seen on exact2 `5434f4325`, macOS 26.
+## What was tried
 
-Checked here by reading the code at `49ae6357`: there is no `performZoom` or
-`AppleActionOnDoubleClick` outside the Window menu (`DevMenuMac.swift:290`).
-Not run.
+Consuming the second down and up in the local event monitor still let AppKit
+zoom. Marking the listener as outside the window's move region still let AppKit
+zoom. Consuming both complete clicks still let AppKit zoom. The last drive in
+each round reported `LISTENER Double 1 frameChanged=true`. These attempts were
+removed rather than changing working empty-ground behaviour.
 
-## Fix
+## What remains
 
-On a second click in the title-bar area that lands on no control and that no
-`dblclick` handler takes (`dblclickTarget`), do what the system setting says:
-`window.performZoom(nil)`, `performMiniaturize(nil)`, or nothing, reading
-`AppleActionOnDoubleClick` from the global domain as AppKit's title bar does.
-This is the drag's existing rule applied to the double-click.
-
-## Fix built, not yet run
-
-`PageScrollView.mouseDown` hands a second click on the page's ground in the
-title bar's band to `TitleBarAreaMac.doubleClicked`, which zooms, minimizes or
-does nothing by `AppleActionOnDoubleClick` (else `AppleMiniaturizeOnDoubleClick`)
-unless a `dblclick` listener takes it. "Fill" zooms: AppKit has no public call
-for it. `TitleRowTapMacTests` covers the ground, a button in the row and the
-setting; it compiles, and has not run: the screen was locked. Close this once
-`bun host/apple/build.mjs --test --only TitleRowTapMacTests` passes on an
-unlocked Mac and a double click on a real title row zooms.
+Give an authored `dblclick` precedence without replacing AppKit's title action
+on adjacent empty ground. Run that proof under Zoom, Minimize and None, then on
+macOS 26.6, where the original report was made.

@@ -17,9 +17,9 @@ use crate::ast::{BinOp, Binding, Component, Expr, Node, Stmt, TemplatePart};
 use crate::parser::SyntaxError;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The derives of `c` that its view, states, or actions read, each with its
-/// resolved expression. A derive read only by other derives is resolved
-/// where they read it.
+/// The derives reachable from `c`'s view, states, or actions, each with
+/// its resolved expression. Dependencies also remain available to lowering
+/// as shared bodies when nothing outside another derive reads them.
 pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxError> {
     let mut indices = BTreeMap::new();
     for (i, derive) in c.derives.iter().enumerate() {
@@ -74,10 +74,22 @@ pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxEr
         resolve: true,
     };
     let read = read_outside_derives(c);
+    let mut reachable: Vec<bool> = c
+        .derives
+        .iter()
+        .map(|d| read.contains(d.name.as_str()))
+        .collect();
+    for &i in order.iter().rev() {
+        if reachable[i] {
+            for &dependency in &reads[i] {
+                reachable[dependency] = true;
+            }
+        }
+    }
     Ok(c.derives
         .iter()
         .enumerate()
-        .filter(|(_, d)| read.contains(d.name.as_str()))
+        .filter(|(i, _)| reachable[*i])
         .map(|(i, derive)| (derive, cx.place(&bodies[i], &mut Vec::new(), true)))
         .collect())
 }
@@ -421,6 +433,10 @@ fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
     }
     for a in &c.actions {
         stmts(&a.body, &mut out);
+    }
+    // A child's own request reads its derives (LLP 1035.005.004 D1).
+    for r in &c.resources {
+        r.args.iter().chain(&r.gate).for_each(|e| expr(e, &mut out));
     }
     out
 }

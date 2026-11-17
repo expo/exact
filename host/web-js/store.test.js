@@ -236,3 +236,16 @@ test('denied secret writes throw ordinary errors', () => {
   expect(denied).toBeInstanceOf(Error);
   expect(denied.refuse).toBeUndefined();
 });
+
+// LLP 1030.004 D2: another tab's write or removal of a key is taken, unless this tab owes its own write of it.
+test("another tab's store write is taken unless this tab's own is owed", () => {
+  Store.map = new Map([["token", "old"], ["gone", "x"]]); Store.writes = []; Store.pending.clear();
+  Store.peer("token", "theirs");
+  expect(Store.get("token")).toBe("theirs");
+  Store.peer("gone", null);
+  expect(Store.get("gone")).toBeUndefined();
+  Store.set("token", "mine");
+  Store.peer("token", "later");
+  expect(Store.get("token")).toBe("mine");
+  Store.writes = [];
+});

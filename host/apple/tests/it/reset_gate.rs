@@ -155,9 +155,10 @@ fn funcs(src: &[u8]) -> Vec<Func> {
     out
 }
 
-/// Every held Runtime call, by the name `heldCalls` gives it: a function that calls `holds()`; a name given to
-/// `runtime.holds("…")`; and a function that calls `on { … }` (any receiver) with a closure that reads a batch
-/// (`read(`), as `Runtime.on(_:caller:)` records its caller. Each with where it is.
+/// Every held Runtime call, by the name `heldCalls` gives it: a function that calls `holds()` or Runtime's `enter()`;
+/// a name given to `runtime.holds("…")`; a typed `post` completion; and a batch-reading `on` closure,
+/// including `on(layout:)`.
+/// Each with where it is.
 fn held_calls(sources: &Path) -> BTreeMap<String, String> {
     let mut files = Vec::new();
     swift_files(sources, &mut files);
@@ -173,13 +174,30 @@ fn held_calls(sources: &Path) -> BTreeMap<String, String> {
                 .min_by_key(|f| f.body.1 - f.body.0)
         };
         let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-        for at in find_all(&src, "holds()") {
-            if at > 0 && ident(src[at - 1]) {
-                continue;
-            }
-            if let Some(f) = innermost(at).filter(|f| !f.sig.starts_with("holds(")) {
-                held.entry(f.sig.clone())
-                    .or_insert(format!("{where_}: holds()"));
+        for guard in [
+            "holds()",
+            "enter()",
+            "post(done:",
+            "post(count:",
+            "post(prepare:",
+        ] {
+            for at in find_all(&src, guard) {
+                if at > 0 && ident(src[at - 1]) {
+                    continue;
+                }
+                if guard != "holds()"
+                    && at > 0
+                    && src[at - 1] == b'.'
+                    && !src[..at].ends_with(b"self.")
+                {
+                    continue;
+                }
+                if let Some(f) = innermost(at)
+                    .filter(|f| !f.sig.starts_with("holds(") && !f.sig.starts_with("enter("))
+                {
+                    held.entry(f.sig.clone())
+                        .or_insert(format!("{where_}: {guard}"));
+                }
             }
         }
         // A name given to `runtime.holds("…")`: the call found where strings are blank (so none inside a string
@@ -199,6 +217,9 @@ fn held_calls(sources: &Path) -> BTreeMap<String, String> {
                 j += 1;
             }
             if j < src.len() && src[j] == b'(' {
+                if src[j + 1..].starts_with(b"layout:") {
+                    j = close(&src, j, b'(', b')');
+                }
                 j += 1;
                 while j < src.len() && src[j].is_ascii_whitespace() {
                     j += 1;
@@ -305,11 +326,14 @@ fn the_scan_reads_each_holding_form_and_no_other() {
     std::fs::create_dir_all(dir.join("ExactCore")).unwrap();
     let swift = r#"package final class Runtime {
     package func holds(_ caller: String = #function) -> Bool { held }
+    private func enter(_ caller: String = #function) -> Bool { holds(caller) }
+    package func admitted() { if self.enter() { return } }
     package func tickAsync(now: Double, capture: UInt64 = 0, done: @escaping (Batch) -> Void) {
-        if holds() { return } // a comment's { brace
+        post(done: done) { read(exact_tick(rt)) } // a comment's { brace
     }
     package func frame(now: Double) -> Batch { on { read(exact_frame(rt, now)) } }
-    package func later(_ calls: [(Runtime) -> Batch], done: @escaping (Batch) -> Void) { if holds() { return } }
+    package func later(_ calls: [(Runtime) -> Batch], done: @escaping (Batch) -> Void) { post(count: calls.count, done: done) { calls[$0](self) } }
+    package func pump(now: Double, done: @escaping (Batch) -> Void) { post(prepare: capture, done: done) { read(exact_pump(rt, now)) } }
     package func generic<T>(_ x: T) -> Batch {
         return self.on {
             read(exact_g(rt))
@@ -317,8 +341,11 @@ fn the_scan_reads_each_holding_form_and_no_other() {
     }
     package func spaced(_ x: Int) -> Batch { on(
         { read(exact_s(rt)) }) }
+    package func layout(_ x: Int) -> Batch { on(layout: true) { read(exact_layout(rt)) } }
     package func setThing(_ x: Int) { on { () -> Void in _ = read(x) } }
     package func asks() -> Bool { on(busy: false) { read(exact_b(rt)) } }
+    package func group() { group.enter() }
+    package func ownerJob() { Owner.shared.post(done: {}) }
     /* package func commented() -> Batch { on { read(x) } } */
     package func script() -> String { """
         on { read(x) } holds() runtime.holds("inString()")
@@ -341,10 +368,13 @@ extension ExactSession {
     assert_eq!(
         held.keys().cloned().collect::<Vec<_>>(),
         [
+            "admitted()",
             "controlTextChanged()",
             "frame(now:)",
             "generic(_:)",
             "later(_:done:)",
+            "layout(_:)",
+            "pump(now:done:)",
             "spaced(_:)",
             "tellSoon(_:)",
             "tickAsync(now:capture:done:)",

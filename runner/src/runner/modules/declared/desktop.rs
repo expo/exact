@@ -88,11 +88,10 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether the target places a `-exact-menu="status"` button outside
-    /// the window: macOS. Windows' notification-area icon is accepted and
-    /// not built (LLP 1133.025 §14, stage 2), so the button stays in its
-    /// window there.
+    /// the window: macOS, in the menu bar, and Windows, in the notification
+    /// area (LLP 1133.025 D4).
     pub fn places_status_items(&self) -> bool {
-        self.host_target() == "macos"
+        matches!(self.host_target(), "macos" | "windows")
     }
 
     /// Whether `row` is answered by this file's forms, here.

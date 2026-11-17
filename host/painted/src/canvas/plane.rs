@@ -63,11 +63,15 @@ mod tests {
     use crate::presenter::{PainterChoice, Presenter};
 
     fn record(app: &str, size: (f32, f32)) -> Vec<u32> {
+        record_at_scale(app, size, 1.)
+    }
+
+    fn record_at_scale(app: &str, size: (f32, f32), scale: f32) -> Vec<u32> {
         let (mut p, error) = Presenter::boot_with(
             &crate::test_plan(app),
             (),
             size,
-            1.,
+            scale,
             std::path::PathBuf::new(),
             PainterChoice::Canvas,
         )
@@ -75,6 +79,515 @@ mod tests {
         assert!(error.is_none(), "{error:?}");
         p.frame();
         FINISHED.with(|f| f.borrow_mut().take()).unwrap()
+    }
+
+    #[test]
+    fn svg_blend_area_limit_falls_back_before_allocating() {
+        let ops = record_at_scale(
+            r##"component App
+  view
+    svg width=200 height=200 overflow="visible"
+      rect width=4000 height=4000 fill="#34f1ec"
+      rect width=4000 height=4000 fill="#fd2f7c" mix-blend-mode="multiply"
+"##,
+            (200., 200.),
+            3.,
+        );
+        let mut at = 0;
+        let mut colors = Vec::new();
+        while at < ops.len() {
+            assert_ne!(
+                ops[at], IMAGE_DEF,
+                "the 144-million-pixel island is refused"
+            );
+            if ops[at] == PATH {
+                colors.push(ops[at + 1]);
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert_eq!(colors, [0xff34f1ec, 0xfffd2f7c]);
+    }
+
+    #[test]
+    fn svg_blend_keeps_overflowing_diagonal_square_caps() {
+        let ops = record(
+            r##"component App
+  view
+    svg width=40 height=40 overflow="visible"
+      path d="M10 10 L30 30" fill="none" stroke="#fd2f7c" stroke-width=20 stroke-linecap="square" stroke-miterlimit=1 mix-blend-mode="multiply"
+"##,
+            (80., 80.),
+        );
+        let mut at = 0;
+        let mut picture = None;
+        let mut destination = None;
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                picture = with_pending(|p| p.remove(&ops[at + 1]));
+            }
+            if matches!(ops[at], IMAGE | IMAGE_RRECT) {
+                destination = Some(
+                    ops[at + 2..at + 6]
+                        .iter()
+                        .map(|v| f32::from_bits(*v))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        let p = picture.unwrap();
+        let d = destination.unwrap();
+        for (x, y) in [(-2., 10.), (10., -2.), (42., 30.), (30., 42.)] {
+            assert!(
+                x >= d[0] && y >= d[1] && x < d[0] + d[2] && y < d[1] + d[3],
+                "cap outside bitmap: {d:?}"
+            );
+            let i = (((y - d[1]) as usize) * p.width() as usize + (x - d[0]) as usize) * 4;
+            assert_eq!(&p.as_ref()[i..i + 4], &[253, 47, 124, 255]);
+        }
+    }
+
+    #[test]
+    fn a_retained_blended_use_repaints_when_its_external_source_animates() {
+        let app = r##"keyframes fade
+  from opacity=1
+  to opacity=0.2
+component App
+  view
+    scroll width=100 height=200
+      column
+        svg width=100 height=100 flex-shrink=0
+          rect id="ink" width=100 height=100 fill="#fd2f7c" animation="fade 1s linear infinite"
+        svg width=100 height=100 flex-shrink=0
+          rect width=100 height=100 fill="#34f1ec"
+          use href="#ink" mix-blend-mode="multiply"
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (100., 200.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        for (time, expected) in [
+            (0., [52, 44, 115, 255]),
+            (250., [52, 84, 139, 255]),
+            (500., [52, 123, 163, 255]),
+        ] {
+            p.tick(time);
+            p.frame();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut at = 0;
+            let mut found = false;
+            while at < ops.len() {
+                if ops[at] == ROW_BEGIN {
+                    at += 6;
+                    continue;
+                }
+                if ops[at] == IMAGE_DEF {
+                    let image = with_pending(|p| p.remove(&ops[at + 1])).unwrap();
+                    let i = (50 * image.width() as usize + 50) * 4;
+                    for (actual, expected) in image.as_ref()[i..i + 4].iter().zip(expected) {
+                        assert!(
+                            actual.abs_diff(expected) <= 2,
+                            "{time}: {:?}",
+                            &image.as_ref()[i..i + 4]
+                        );
+                    }
+                    found = true;
+                }
+                at = stream::end(&ops, at).unwrap();
+            }
+            assert!(found, "consumer's retained row needs new pixels at {time}");
+        }
+    }
+
+    #[test]
+    fn svg_multiply_overprint_records_its_backdrop_in_one_picture() {
+        let ops = record(
+            r##"component App
+  view
+    svg width=200 height=120 viewBox="0 0 200 120"
+      rect width=200 height=120 fill="#f6f2e9"
+      rect x=20 y=40 width=160 height=16 fill="#34f1ec"
+      path d="M60 0 V120" fill="none" stroke="#fd2f7c" stroke-width=16 mix-blend-mode="multiply"
+"##,
+            (200., 120.),
+        );
+        let mut at = 0;
+        let mut pictures = Vec::new();
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                pictures.push(with_pending(|p| p.remove(&ops[at + 1])).unwrap());
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert_eq!(pictures.len(), 1);
+        let picture = &pictures[0];
+        let at = (48 * picture.width() as usize + 60) * 4;
+        assert_eq!(&picture.as_ref()[at..at + 4], &[52, 44, 115, 255]);
+        let web = Pixmap::decode_png(include_bytes!(
+            "../../../apple/tests/ExactKitTests/ColorFixtures/svg-overprint.png"
+        ))
+        .unwrap();
+        assert_eq!(
+            (picture.width(), picture.height()),
+            (web.width(), web.height())
+        );
+        let worst = picture
+            .as_ref()
+            .iter()
+            .zip(web.data())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 1, "Chrome SVG pixel difference {worst}");
+    }
+
+    #[test]
+    fn svg_overprint_with_text_and_clipped_large_paths_records_one_picture() {
+        for artwork in [
+            r##"rect x=20 y=40 width=160 height=16 fill="#34f1ec"
+      path d="M60 0 V120" fill="none" stroke="#fd2f7c" stroke-width=16 mix-blend-mode="multiply"
+      text x=8 y=20 fill="#111111" "ink""##,
+            r##"defs
+        clipPath id="strip"
+          rect x=20 y=40 width=160 height=16
+      g transform="translate(0 0)" clip-path="url(#strip)"
+        rect width=20000 height=120 fill="#34f1ec"
+        rect width=20000 height=120 fill="#fd2f7c" mix-blend-mode="multiply""##,
+            r##"defs
+        clipPath id="strip"
+          rect x=20 y=40 width=160 height=16
+      rect width=20000 height=120 fill="#34f1ec" clip-path="url(#strip)"
+      rect width=20000 height=120 fill="#fd2f7c" mix-blend-mode="multiply" clip-path="url(#strip)""##,
+        ] {
+            let ops = record(
+                &format!(
+                    r##"component App
+  view
+    svg width=200 height=120 overflow="visible" viewBox="0 0 200 120"
+      rect width=200 height=120 fill="#f6f2e9"
+      {artwork}
+"##
+                ),
+                (200., 120.),
+            );
+            let mut at = 0;
+            let mut pictures = Vec::new();
+            let mut destination = None;
+            while at < ops.len() {
+                if ops[at] == IMAGE_DEF {
+                    pictures.push(with_pending(|p| p.remove(&ops[at + 1])).unwrap());
+                }
+                if matches!(ops[at], IMAGE | IMAGE_RRECT) {
+                    destination = Some(
+                        ops[at + 2..at + 6]
+                            .iter()
+                            .map(|v| f32::from_bits(*v))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                at = stream::end(&ops, at).unwrap();
+            }
+            assert_eq!(pictures.len(), 1, "{artwork}");
+            let picture = &pictures[0];
+            let destination = destination.unwrap();
+            let x = (60. - destination[0]) as usize;
+            let y = (48. - destination[1]) as usize;
+            let pixel = (y * picture.width() as usize + x) * 4;
+            assert_eq!(&picture.as_ref()[pixel..pixel + 4], &[52, 44, 115, 255]);
+            if artwork.contains("text") {
+                assert!(
+                    picture
+                        .as_ref()
+                        .as_chunks::<4>()
+                        .0
+                        .contains(&[17, 17, 17, 255]),
+                    "the label is painted too"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn svg_overprint_below_the_window_survives_a_retained_row_scroll() {
+        let app = r##"component App
+  view
+    scroll testId="scroll" width=200 height=120
+      column height=1000 flex-shrink=0
+        box height=700 flex-shrink=0
+        svg width=200 height=120 flex-shrink=0
+          rect width=200 height=120 fill="#34f1ec"
+          rect x=40 width=40 height=120 fill="#fd2f7c" mix-blend-mode="multiply"
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (200., 120.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let first = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut row = None;
+        let mut ink_row = None;
+        while at < first.len() {
+            match first[at] {
+                ROW_BEGIN => {
+                    row = Some(first[at + 1]);
+                    at += 6;
+                    continue;
+                }
+                ROW_END => row = None,
+                IMAGE_DEF => {
+                    let picture = with_pending(|p| p.remove(&first[at + 1])).unwrap();
+                    assert!(
+                        picture
+                            .as_ref()
+                            .as_chunks::<4>()
+                            .0
+                            .contains(&[52, 44, 115, 255]),
+                        "the retained picture contains the crossing 700 points below the window"
+                    );
+                    ink_row = row;
+                }
+                _ => (),
+            }
+            at = stream::end(&first, at).unwrap();
+        }
+        let ink_row = ink_row.expect("the SVG was recorded inside a retained row");
+        let key = p.host().kernel().find_by_test_id("scroll")[0];
+        let scroll = p.host().kernel().node_by_key(key).unwrap().id;
+        assert_eq!(p.scroll_to(scroll, (0., 700.)), Some((0., 700.)));
+        p.frame();
+        let second = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut reused = false;
+        while at < second.len() {
+            if second[at] == ROW_DRAW {
+                reused |= second[at + 1] == ink_row;
+            }
+            assert_ne!(
+                second[at], IMAGE_DEF,
+                "scrolling replays the retained pixels"
+            );
+            at = stream::end(&second, at).unwrap();
+        }
+        assert!(reused, "scrolling reveals the already recorded SVG row");
+    }
+
+    #[test]
+    fn svg_blend_keeps_a_wide_masked_backdrop() {
+        let ops = record(
+            r##"component App
+  view
+    svg width=200 height=100 overflow="visible"
+      defs
+        mask id="wide" maskUnits="userSpaceOnUse" x=0 y=0 width=5000 height=100
+          rect width=5000 height=100 fill="white"
+      rect width=5000 height=100 fill="#34f1ec" mask="url(#wide)"
+      rect x=40 width=40 height=100 fill="#fd2f7c" mix-blend-mode="multiply"
+"##,
+            (200., 100.),
+        );
+        let mut at = 0;
+        let mut pictures = Vec::new();
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                pictures.push(with_pending(|p| p.remove(&ops[at + 1])).unwrap());
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert_eq!(pictures.len(), 1);
+        let picture = &pictures[0];
+        assert_eq!((picture.width(), picture.height()), (5000, 100));
+        for (x, expected) in [
+            (20, [52, 241, 236, 255]),
+            (60, [52, 44, 115, 255]),
+            (4990, [52, 241, 236, 255]),
+        ] {
+            let pixel = (50 * picture.width() as usize + x) * 4;
+            assert_eq!(&picture.as_ref()[pixel..pixel + 4], &expected);
+        }
+    }
+
+    #[test]
+    fn svg_blend_allocation_failure_keeps_every_shape() {
+        let ops = record(
+            r##"component App
+  view
+    svg width=20000 height=100
+      rect width=20000 height=80 fill="#34f1ec"
+      rect width=20000 height=40 fill="#fd2f7c" mix-blend-mode="multiply"
+"##,
+            (crate::raster::MAX_FRAME_SIDE as f32 + 1., 100.),
+        );
+        let mut colors = Vec::new();
+        let mut at = 0;
+        while at < ops.len() {
+            if ops[at] == PATH {
+                colors.push(ops[at + 1]);
+            }
+            assert_ne!(ops[at], IMAGE_DEF);
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert_eq!(
+            colors,
+            [0xff34f1ec, 0xfffd2f7c],
+            "both shapes draw unblended"
+        );
+    }
+
+    #[test]
+    fn svg_overflow_blend_keeps_transformed_paint_outside_the_content_box() {
+        let ops = record(
+            r##"component App
+  view
+    svg width=40 height=40 overflow="visible" viewBox="0 0 20 20"
+      g transform="translate(0 100)"
+        rect width=20 height=20 fill="#34f1ec"
+        rect width=10 height=20 fill="#fd2f7c" mix-blend-mode="multiply"
+"##,
+            (40., 300.),
+        );
+        let mut at = 0;
+        let mut found = false;
+        let mut destination = None;
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                let picture = with_pending(|p| p.remove(&ops[at + 1])).unwrap();
+                assert_eq!((picture.width(), picture.height()), (40, 40));
+                assert!(picture
+                    .as_ref()
+                    .as_chunks::<4>()
+                    .0
+                    .contains(&[52, 44, 115, 255]));
+                found = true;
+            }
+            if matches!(ops[at], IMAGE | IMAGE_RRECT) {
+                destination = Some(
+                    ops[at + 2..at + 6]
+                        .iter()
+                        .map(|v| f32::from_bits(*v))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert!(found);
+        assert_eq!(destination, Some(vec![0., 200., 40., 40.]));
+    }
+
+    #[test]
+    fn svg_marker_blends_with_the_scene_backdrop() {
+        let ops = record(
+            r##"component App
+  view
+    svg width=80 height=80 viewBox="0 0 80 80"
+      defs
+        marker id="ink" markerUnits="userSpaceOnUse" markerWidth=20 markerHeight=20 refX=10 refY=10
+          rect width=20 height=20 fill="#fd2f7c" mix-blend-mode="multiply"
+      rect width=80 height=80 fill="#34f1ec"
+      path d="M20 40 H40" fill="none" stroke="none" marker-end="url(#ink)"
+"##,
+            (80., 80.),
+        );
+        let mut at = 0;
+        let mut pictures = Vec::new();
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                pictures.push(with_pending(|p| p.remove(&ops[at + 1])).unwrap());
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert_eq!(
+            pictures.len(),
+            1,
+            "the marker and backdrop share one picture"
+        );
+        let p = &pictures[0];
+        let at = (40 * p.width() as usize + 40) * 4;
+        assert_eq!(&p.as_ref()[at..at + 4], &[52, 44, 115, 255]);
+    }
+
+    #[test]
+    fn svg_overprint_survives_a_departing_route_recording() {
+        let app = r##"routes nav
+  home "/"
+    ink "/ink"
+keyframes leave
+  to translate="100% 0"
+style Page
+  ::view-transition-old
+    animation="leave 400ms linear both"
+component App
+  action open
+    nav = push(nav, "/ink")
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" width=200 height=120
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            button testId="open" press=open
+              text "Open"
+        if e.name == "ink"
+          column class=Page navigationKey=`${e.id}` testId="ink" position="absolute" inset=0
+            svg width=200 height=120
+              rect width=200 height=120 fill="#34f1ec"
+              rect x=40 width=40 height=120 fill="#fd2f7c" mix-blend-mode="multiply"
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (200., 120.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let button = p.host().kernel().find_by_test_id("open")[0];
+        let button = p.host().kernel().node_by_key(button).unwrap().id;
+        p.tap(button).unwrap();
+        p.run_commands(|| ());
+        p.tick(1000.);
+        p.frame();
+        FINISHED.with(|f| f.borrow_mut().take());
+        assert!(p.system_back(1000.));
+        p.run_commands(|| ());
+        assert!(p.host().kernel().find_by_test_id("ink").is_empty());
+        p.tick(1100.);
+        assert!(p.stage_moving());
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut crossing = false;
+        while at < ops.len() {
+            if ops[at] == IMAGE_DEF {
+                let picture = with_pending(|p| p.remove(&ops[at + 1])).unwrap();
+                crossing |= picture
+                    .as_ref()
+                    .as_chunks::<4>()
+                    .0
+                    .contains(&[52, 44, 115, 255]);
+            }
+            at = stream::end(&ops, at).unwrap();
+        }
+        assert!(
+            crossing,
+            "the retained route still contains the multiplied crossing during Back"
+        );
     }
 
     fn tags(ops: &[u32]) -> Vec<u32> {
@@ -379,6 +892,7 @@ mod measurement {
                                 shown
                             },
                             paths: &|_| None,
+                            filters: &|_| None,
                             scroll: &BTreeMap::new(),
                             page: (0., 0.),
                             images: &BTreeMap::new(),

@@ -63,6 +63,103 @@ impl Margin {
     }
 }
 
+/// Whether an update put a page at a list's start, which re-arms the start
+/// edge as rows put past the last row re-arm the end (@ref LLP 1168.000
+/// D1.1; LLP 1010, the 2026-09-29 ruling's mirror): a reader still at the
+/// start when an older page lands is offered the next one. With `old` the
+/// keys before the update, `len` the rows now, and `position` and `key`
+/// reading them, a page landed when
+///
+/// - the old first row is kept with every row now before it new (a page
+///   put before it), or
+/// - the old first row stays first, a leading row, and the old second row is
+///   kept further down with every row between them new (a page put after the
+///   leading row), or the update gave rows to a leading row that was alone
+///   (the first page).
+///
+/// An arrival at the end, a reorder, an empty or identical answer, a
+/// replaced first row and a window that slid past it are none.
+pub(super) fn page_at_start<'a>(
+    old: &[Rc<str>],
+    len: usize,
+    position: impl Fn(&str) -> Option<usize>,
+    key: impl Fn(usize) -> Option<&'a str>,
+) -> bool {
+    let Some(first) = old.first().and_then(|k| position(k)) else {
+        return false;
+    };
+    // The rows in `range` are new: none is among the old keys. The set holds
+    // only the range; each old key is looked up in it once.
+    let new_between = |range: std::ops::Range<usize>| {
+        let Some(keys) = range
+            .map(&key)
+            .collect::<Option<std::collections::HashSet<&str>>>()
+        else {
+            return false;
+        };
+        !old.iter().any(|k| keys.contains(&**k))
+    };
+    match (first, old.get(1)) {
+        (0, None) => len > 1,
+        (0, Some(second)) => position(second).is_some_and(|q| q > 1 && new_between(1..q)),
+        (p, _) => new_between(0..p),
+    }
+}
+
+/// Whether an update put rows after a leading run at the top of a window
+/// that began at the list's start: the old rows before `bound` (the window's
+/// last row) that kept their places, then rows all new, then the next old
+/// row kept. Order alone also reads an edit inside the window so; only a
+/// `reachstart` still unanswered makes it a page (@ref LLP 1168.000 D1.2).
+pub(super) fn page_after_leading_run<'a>(
+    old: &[Rc<str>],
+    bound: usize,
+    position: impl Fn(&str) -> Option<usize>,
+    key: impl Fn(usize) -> Option<&'a str>,
+) -> bool {
+    let run = (old.iter().take(bound))
+        .enumerate()
+        .take_while(|(i, k)| position(k) == Some(*i))
+        .count();
+    let Some(q) = old.get(run).and_then(|k| position(k)) else {
+        return false;
+    };
+    let Some(keys) = (run..q)
+        .map(&key)
+        .collect::<Option<std::collections::HashSet<&str>>>()
+    else {
+        return false;
+    };
+    q > run && !old.iter().any(|k| keys.contains(&**k))
+}
+
+/// Whether an update answered a `reachstart`: a key put in, taken out or
+/// moved (by its identity), or a row told apart from the one it replaced as
+/// the JS target's `eq` tells them (`host/web-js/shape.js`): signed zero
+/// apart, every NaN equal to every NaN. An answer's other fields, a key's or
+/// a row body's inputs and equal rows do not (@ref LLP 1168.000 D1.2).
+pub(super) fn rows_answered(
+    old: &[Rc<str>],
+    new: &[Rc<str>],
+    was: &[Value],
+    now: &[Value],
+) -> bool {
+    fn eq(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Number(a), Value::Number(b)) => {
+                a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
+            }
+            (Value::Option(Some(a)), Value::Option(Some(b))) => eq(a, b),
+            (Value::List(a), Value::List(b)) | (Value::Record(a), Value::Record(b)) => all(a, b),
+            _ => a == b,
+        }
+    }
+    fn all(a: &[Value], b: &[Value]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| eq(a, b))
+    }
+    old != new || !all(was, now)
+}
+
 impl Collection {
     /// Which edge rows are within the edge band ([`Margin::band`]) of a port
     /// moving at `velocity`. Pins never qualify an edge.
@@ -90,11 +187,27 @@ impl Collection {
                         .index
                         .window_led(g.offset, g.port_main, band, [None, None])
                         .map_err(index_error)?;
+                    if self.fixed.is_some() && g.port_main > 0.0 {
+                        let offset = g.offset.max(0.0);
+                        return Ok([
+                            offset - band[0] <= 0.0,
+                            offset + g.port_main + band[1] >= self.index.total_height(),
+                        ]);
+                    }
                     Ok([0, self.index.len() - 1]
                         .map(|i| reach.segments.iter().any(|range| range.contains(&i))))
                 };
                 reached = within(self.reach.band(g.port_main, velocity))?;
-                if self.edge_armed != [true; 2] && self.index.range_measured(window.overscan) {
+                // With fixed content filling the port, no data row is in
+                // the overscan, and the window's geometry is still known.
+                let fixed_only =
+                    self.fixed.is_some() && g.port_main > 0.0 && window.overscan.is_empty();
+                let measured = self.index.range_measured(window.overscan.clone()) || fixed_only;
+                if self.start_owed && measured {
+                    self.edge_armed[0] = true;
+                    self.start_owed = false;
+                }
+                if self.edge_armed != [true; 2] && measured {
                     let at_rest = within(self.reach.band(g.port_main, 0.0))?;
                     for i in 0..2 {
                         let row = self.index.key([0, self.index.len() - 1][i]);
@@ -102,13 +215,35 @@ impl Collection {
                         self.edge_armed[i] |= !reached[i] || (paged && !at_rest[i]);
                     }
                 }
+                // A start that re-armed asks again when next reached: what
+                // it asked before is no longer outstanding.
+                if self.edge_armed[0] {
+                    self.start_asked = false;
+                }
             }
         }
         Ok(reached)
     }
+    /// Whether an update put a page at the list's start: the rows of `old`
+    /// (the keys before it) against the rows now ([`page_at_start`]).
+    pub(super) fn page_before_start(&self, old: &[Rc<str>]) -> bool {
+        page_at_start(
+            old,
+            self.index.len(),
+            |key| self.index.position(key),
+            |i| self.index.key(i),
+        )
+    }
     /// An edge fired: disarmed until it re-arms ([`Collection::geometric_edges`]).
     pub(super) fn disarm_edge(&mut self, i: usize) {
         self.edge_armed[i] = false;
+        // A start that fired has had its page; one owed before is spent.
+        // Only a list that opens at its end keeps what it asked: no other
+        // list's anchor reads it.
+        if i == 0 {
+            self.start_owed = false;
+            self.start_asked = self.opens_at_end;
+        }
         let row = [0, self.index.len().saturating_sub(1)][i];
         self.edge_fired[i] = self.index.shared_key(row).cloned();
     }
@@ -140,6 +275,82 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LLP 1168.000 D1.1's cases, the keys before an update against after.
+    #[test]
+    fn a_page_at_the_start_is_new_rows_before_the_first_or_after_a_leading_row() {
+        let lands = |old: &[&str], now: &[&str]| {
+            let old: Vec<Rc<str>> = old.iter().map(|&k| Rc::from(k)).collect();
+            page_at_start(
+                &old,
+                now.len(),
+                |k| now.iter().position(|&n| n == k),
+                |i| now.get(i).copied(),
+            )
+        };
+        // A page put before the first row; one put after a leading row; the
+        // first page after a leading row alone.
+        assert!(lands(&["a", "b"], &["x", "y", "a", "b"]));
+        assert!(lands(&["s", "a", "b"], &["s", "x", "y", "a", "b"]));
+        assert!(lands(&["s"], &["s", "a", "b"]));
+        // Accepted: one row that gains rows after it, and an unrelated row
+        // put before a kept first row, read as pages.
+        assert!(lands(&["a"], &["a", "b"]));
+        assert!(lands(&["a", "b"], &["z", "a", "b"]));
+        // None: an arrival at the end, a reorder, an identical or empty
+        // answer, a replaced first row, a window that slid, rows of the old
+        // list put before the first row.
+        assert!(!lands(&["a", "b"], &["a", "b", "c"]));
+        assert!(!lands(&["a", "b"], &["b", "a"]));
+        assert!(!lands(&["a", "b"], &["a", "b"]));
+        assert!(!lands(&["a", "b"], &[]));
+        assert!(!lands(&[], &["a"]));
+        assert!(!lands(&["a", "b"], &["c", "b"]));
+        assert!(!lands(&["s", "a", "b"], &["s", "c", "d"]));
+        assert!(!lands(&["a", "b", "c"], &["c", "a", "b"]));
+    }
+
+    /// LLP 1168.000 D1.2's leading run: rows after old rows that kept their
+    /// places, before the window's last row (`bound`).
+    #[test]
+    fn rows_after_a_leading_run_before_the_bound() {
+        let after = |old: &[&str], now: &[&str], bound: usize| {
+            let old: Vec<Rc<str>> = old.iter().map(|&k| Rc::from(k)).collect();
+            page_after_leading_run(
+                &old,
+                bound,
+                |k| now.iter().position(|&n| n == k),
+                |i| now.get(i).copied(),
+            )
+        };
+        let old = ["l", "s", "a", "b", "c"];
+        assert!(after(&old, &["l", "s", "x", "y", "a", "b", "c"], 4));
+        assert!(after(&old, &["x", "l", "s", "a", "b", "c"], 4));
+        assert!(after(&old, &["l", "s", "a", "x", "b", "c"], 4));
+        // Rows after the window's last row, none, a replaced row, a reorder.
+        assert!(!after(&old, &["l", "s", "a", "b", "x", "c"], 3));
+        assert!(!after(&old, &old, 4));
+        assert!(!after(&old, &["l", "s", "x", "b", "c"], 4));
+        assert!(!after(&old, &["l", "s", "b", "a", "c"], 4));
+    }
+
+    /// What answers a `reachstart`: keys by identity, rows as the JS
+    /// target's `eq`, NaN payloads included (LLP 1168.000 D1.2).
+    #[test]
+    fn rows_answer_by_key_or_by_value_as_eq() {
+        let keys = |ks: &[&str]| -> Vec<Rc<str>> { ks.iter().map(|&k| Rc::from(k)).collect() };
+        let row = |x: f64| Value::List(vec![Value::from("a"), Value::Number(x)].into());
+        let (ab, ba) = (keys(&["a", "b"]), keys(&["b", "a"]));
+        let answers = |was: f64, now: f64| rows_answered(&ab, &ab, &[row(was)], &[row(now)]);
+        assert!(!answers(1.0, 1.0), "a fresh equal row");
+        assert!(!answers(f64::NAN, f64::NAN), "NaN is itself");
+        assert!(!answers(f64::NAN, -f64::NAN), "every NaN is equal");
+        let payload = |bits: u64| f64::from_bits(0x7ff8_0000_0000_0000 | bits);
+        assert!(!answers(payload(1), payload(2)), "whatever its payload");
+        assert!(answers(0.0, -0.0), "signed zero apart");
+        assert!(answers(1.0, 2.0));
+        assert!(rows_answered(&ab, &ba, &[], &[]), "a key moved");
+    }
 
     #[test]
     fn a_margin_is_one_or_two_nonnegative_lengths() {

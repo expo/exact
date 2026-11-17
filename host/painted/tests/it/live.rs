@@ -10,13 +10,13 @@ fn a_running_build_paints_a_batch_in_place() {
     let dir = std::env::temp_dir().join(format!("exact-painted-live-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let view = "component App\n  state n = 0\n  action bump\n    n = n + 1\n  view\n    column width=200 height=100 background-color=\"page\"\n      button press=bump testId=\"bump\"\n        text `${n}` testId=\"count\"\n      box width=40 height=20 background-color=\"ink\" testId=\"swatch\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  ink = #111111\n  page = #ffffff\n");
-    let b = plan("tamber t\n\ntheme\n  ink = #ff0000\n  page = #ffffff\n");
+    let a = plan("forma t\n\ntheme\n  ink = #111111\n  page = #ffffff\n");
+    let b = plan("forma t\n\ntheme\n  ink = #ff0000\n  page = #ffffff\n");
     let _ = std::fs::remove_dir_all(&dir);
     let batch =
         design::batch(&design::shape(&a), &design::tokens(&a), &design::tokens(&b)).unwrap();
@@ -70,13 +70,13 @@ fn a_running_build_repaints_a_role_override_edit_in_place() {
     let dir = std::env::temp_dir().join(format!("exact-painted-live-role-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let view = "component App\n  view\n    column width=200 height=100\n      box width=40 height=20 background-color=\"AccentColor\" testId=\"swatch\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  AccentColor = #0a7aff\n");
-    let b = plan("tamber t\n\ntheme\n  AccentColor = #ff0000\n");
+    let a = plan("forma t\n\ntheme\n  AccentColor = #0a7aff\n");
+    let b = plan("forma t\n\ntheme\n  AccentColor = #ff0000\n");
     let _ = std::fs::remove_dir_all(&dir);
     let batch =
         design::batch(&design::shape(&a), &design::tokens(&a), &design::tokens(&b)).unwrap();
@@ -114,13 +114,13 @@ fn a_reload_adopts_its_paint_under_its_own_roles() {
         std::env::temp_dir().join(format!("exact-painted-live-reload-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let view = "component App\n  view\n    column width=200 height=100\n      box width=40 height=20 background-color=\"AccentColor\" transition=\"background-color 1s\" testId=\"swatch\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  AccentColor = #0a7aff\n");
-    let b = plan("tamber t\n\ntheme\n  AccentColor = #ff0000\n");
+    let a = plan("forma t\n\ntheme\n  AccentColor = #0a7aff\n");
+    let b = plan("forma t\n\ntheme\n  AccentColor = #ff0000\n");
     let _ = std::fs::remove_dir_all(&dir);
     let (mut p, err) = Presenter::boot_with(
         &a.encode(),

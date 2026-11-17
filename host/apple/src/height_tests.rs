@@ -449,6 +449,7 @@ fn failed_projected_layout_keeps_published_frames_and_recovery_remeasures() {
                 TextMetrics {
                     width: f32::NAN,
                     height: 0.,
+                    pending: false,
                     first_baseline: None,
                 }
             } else {
@@ -919,6 +920,7 @@ fn accordion_measurement_refusal_preserves_frames_and_retries_without_panicking(
                 TextMetrics {
                     width: f32::NAN,
                     height: 0.,
+                    pending: false,
                     first_baseline: None,
                 }
             } else {

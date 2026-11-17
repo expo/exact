@@ -20,6 +20,9 @@
       "flashMode": "enum<auto|on|off>",
       "isAutoRedEyeReductionEnabled": "bool",
       "isShutterSoundSuppressionEnabled": "bool"
+    },
+    "recordVideoWithCameraApp": {
+      "videoQuality": "enum<typeHigh|typeMedium|typeLow|type640x480|typeIFrame1280x720|typeIFrame960x540>"
     }
   },
   "names": [],

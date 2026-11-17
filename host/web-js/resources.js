@@ -83,7 +83,10 @@ const sameReq = (a, b) =>
   a.http === b.http &&
   a.cache === b.cache &&
   JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
-const send = (t, land) => sendRequest(t, land, Out, data, inflight, say);
+const send = (t, land) => {
+  if (globalThis.__exactRender && !globalThis.__exactProduction && t.r && /^https?:/.test(t.req?.url)) (t.r.renderUrls ??= new Set()).add(t.req.url);
+  return sendRequest(t, land, Out, data, inflight, say);
+};
 
 function ask(source, args, name, mutation, forced, owner = mutation) {
   checkArguments(name, args);
@@ -301,6 +304,7 @@ export function res(
             }
             return;
           }
+          if (globalThis.__exactRender && !globalThis.__exactProduction) for (const url of t.call?.urls ?? []) (r.renderUrls ??= new Set()).add(url);
           if (t.baked) say(revalidated(name, eq(p.v, r.value)));
           t.baked = false;
           take(p.v, t.args, t.origin, t.generation);
@@ -384,6 +388,7 @@ export function res(
         const refresh = forced && waited !== true;
         // Device re-asks keep the reader's last ask origin, but belong to no invocation (LLP 1133.023 D7): a call's ask
         // they let go, however they answer, supersedes the call.
+        if (globalThis.__exactRender && !globalThis.__exactProduction) r.renderUrls = new Set();
         const invocation = reasking ? 0 : Invocation.id, origin = reasking ? r.askOrigin ?? 'app' : Origin.now();
         try {
           ans = Origin.run(origin, () => Invocation.run(invocation, () => ask(source, a, name, false, refresh, r)));

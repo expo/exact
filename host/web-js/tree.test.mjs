@@ -195,3 +195,31 @@ test.each(['earlier', 'parsed'])('a rendered field awaiting adoption is a candid
   // Offered at mount, the waiting field takes the focus (or keeps the parser's); the field after it waits its turn.
   expect(result).toEqual({ atMount: 'waiting', afterCommit: mode === 'parsed' ? 'after' : 'waiting', identity: true });
 }));
+
+// expo/exact#543: a box whose transform changes frame after frame is its own compositor layer while it changes, and
+// is not once the transform has held for 200 ms; one change, or another property's, promotes nothing.
+test('a box whose transform changes every frame is promoted while it changes', () => fixture(async page => {
+  const result = await page.evaluate(async () => {
+    const { css } = await import('/host/web-js/rt.js');
+    const box = document.getElementById('exact-root').appendChild(document.createElement('div'));
+    const frame = () => new Promise(ok => requestAnimationFrame(() => ok()));
+    const hint = () => box.style.getPropertyValue('will-change').split(', ').sort().join(', ');
+    css(box, 'scale', '', 1.5);
+    await frame();
+    css(box, 'width', 'px', 10);
+    await frame();
+    css(box, 'width', 'px', 20);
+    const once = hint();
+    for (let i = 0; i < 4; i++) {
+      await frame();
+      css(box, 'scale', '', 1.5 + i / 10);
+      css(box, 'translate', '', `${i}px 0px`);
+    }
+    const moving = hint();
+    await new Promise(ok => setTimeout(ok, 120));
+    const held = hint();
+    await new Promise(ok => setTimeout(ok, 200));
+    return { once, moving, held, settled: hint() };
+  });
+  expect(result).toEqual({ once: '', moving: 'scale, translate', held: 'scale, translate', settled: '' });
+}), 60_000);

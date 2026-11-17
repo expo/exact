@@ -1387,3 +1387,60 @@ component App
         }
     }
 }
+
+/// A comments package: its module declares `commentsLoad`, and its
+/// `Comments` component owns a request to it (LLP 1035.005.004 D7).
+fn comments(dir: &Dir, component: &str) {
+    let at = "app/node_modules/@scratch/comments";
+    dir.write(
+        &format!("{at}/package.json"),
+        r#"{"name":"@scratch/comments","version":"1.0.0","exports":{".":"./exact.json","./ui":{"contract":"./ui.contract"}}}"#,
+    );
+    dir.write(
+        &format!("{at}/exact.json"),
+        r#"{
+  "kind": "interface", "name": "@scratch/comments", "version": "1.0.0",
+  "shapes": {"Thread": {"count": "number"}},
+  "names": [{"source": "commentsLoad", "options": {"post": "string"}, "answers": "Thread"}]
+}"#,
+    );
+    dir.write(&format!("{at}/ui.contract"), component);
+}
+
+#[test]
+fn a_package_component_owns_requests_to_its_own_packages_sources() {
+    let dir = Dir::new("owned-source");
+    comments(
+        &dir,
+        "use commentsLoad, Thread from \"@scratch/comments\"\ncomponent Comments\n  props\n    post: string\n  resource thread = commentsLoad(post=post) as shape Thread\n  view\n    text `${thread.count}` testId=\"count\"\n",
+    );
+    let root = dir.write(
+        "app/app.contract",
+        "use Comments from \"@scratch/comments/ui\"\ncomponent App\n  view\n    Comments(post=\"p1\")\n",
+    );
+    contract::compile_path(&root).unwrap_or_else(|e| panic!("{e}"));
+    // A source the app declares is not the package's to ask.
+    comments(
+        &dir,
+        "shape Thread\n  count: number\ncomponent Comments\n  props\n    post: string\n  resource thread = appThreads(post) as shape Thread\n  view\n    text `${thread.count}`\n",
+    );
+    let e = contract::compile_path(&root).unwrap_err();
+    assert_eq!(e.id, "type-package-source", "{e}");
+    assert!(
+        e.message.starts_with("`Comments` comes from the package `@scratch/comments`, and its `resource thread` asks `appThreads`"),
+        "{}",
+        e.message
+    );
+    // Nor is it the package's to send to (D6).
+    comments(
+        &dir,
+        "use commentsLoad, Thread from \"@scratch/comments\"\ncomponent Comments\n  props\n    post: string\n  mutation posted as shape Thread\n  action post\n    send posted = appPost(post)\n  view\n    button press=post\n      text \"Post\"\n",
+    );
+    let e = contract::compile_path(&root).unwrap_err();
+    assert_eq!(e.id, "type-package-source", "{e}");
+    assert!(
+        e.message.starts_with("`Comments` comes from the package `@scratch/comments`, and its `send posted` asks `appPost`"),
+        "{}",
+        e.message
+    );
+}

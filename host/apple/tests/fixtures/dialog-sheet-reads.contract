@@ -44,3 +44,5 @@ component App
           column height=2000 flex-shrink=0
           button id="painted-deep-close" commandfor="painted-deep" command="close"
             text "Close"
+      dialog id="painted-point" width=100 height=100 background-color="-exact-secondary-grouped-background" pointer-events="none" pointermove=read
+        column id="point-pop" popover="manual" pointer-events="auto" position="absolute" left=20 top=120 width=50 height=50

@@ -83,7 +83,14 @@ final class PointerRecognizer: UIGestureRecognizer {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
+        // A held touch that ended unseen goes first, so the new one resolves
+        // its own paragraph or listener, not the old touch's.
+        releaseEnded()
         let source = touches.first.flatMap(Self.source)
+        // A pointer callback can retire a hit before the view receives this touch.
+        let layoutHit = touches.first.flatMap { touch in
+            source.flatMap { LayoutHits.touched($0, at: touch.location(in: nil)) }
+        }
         if touch == nil, let selection, let first = touches.first {
             node = selection.paragraph(at: first.location(in: selection.surface)).flatMap { paragraph in
                 guard let owner = selection.owner else { return nil }
@@ -124,6 +131,7 @@ final class PointerRecognizer: UIGestureRecognizer {
         dispatch(path.compactMap(\.node).filter { $0.handlers.contains("pointerdown") }) { n in
             if !n.disabled { n.presenter?.pointer(n.id, .down, sample(first, button: Self.domButton(buttons), at: n)) }
         }
+        if layoutHit?.isLive == false { presenter?.cancelledPressTouches.add(first) }
         // Prevented, the view it went down on takes no focus from this touch (LLP 1005 §3).
         if presenter?.defaultPrevented == true { presenter?.preventedTouches.add(first) }
         presenter?.defaultPrevented = false
@@ -198,7 +206,26 @@ final class PointerRecognizer: UIGestureRecognizer {
         lift(touches)
     }
     private func lift(_ touches: Set<UITouch>) {
-        guard let held = touch, touches.contains(held) else { return }
+        releaseEnded()
+        guard let held = touch, touches.contains(held) else {
+            // A touch it never took (another was held, or none listened)
+            // ends: holding none, it is done. Left possible, it keeps UIKit
+            // from resetting the touch's other recognizers, and a scroll
+            // view's pan never begins again.
+            if touch == nil { state = .failed }
+            return
+        }
+        release(held)
+        state = .failed
+    }
+    /// The held touch, if it has ended or been cancelled without its end
+    /// reaching this recognizer (a menu that took the tap that opened it),
+    /// lifted as its end would have lifted it.
+    private func releaseEnded() {
+        guard let held = touch, held.phase == .ended || held.phase == .cancelled else { return }
+        release(held)
+    }
+    private func release(_ held: UITouch) {
         touch = nil
         // A turn later, once UIKit's own tap (a field's focus) has had the lift.
         if presenter?.preventedTouches.contains(held) == true { DispatchQueue.main.async { [weak presenter] in presenter?.preventedTouches.remove(held) } }
@@ -207,7 +234,6 @@ final class PointerRecognizer: UIGestureRecognizer {
         path = []
         dispatch(nodes) { n in n.presenter?.pointer(n.id, .up, sample(held, lifted: true, button: Self.domButton(buttons), at: n)) }
         if relay != nil { node = nil }
-        state = .failed
     }
     override func reset() {
         super.reset()
@@ -286,6 +312,7 @@ final class PressContact {
     /// not its listeners from the bubbling), unless authored inert.
     var bubbled = false
     var path: PressPath?
+    var layoutHit: LayoutHit?
     init(_ touch: UITouch, incarnation: UInt64) {
         self.touch = touch; self.incarnation = incarnation
     }
@@ -349,6 +376,7 @@ extension NodeView {
     private func currentPressContact(_ touches: Set<UITouch>) -> PressContact? {
         guard let contact = pressContact, contact.incarnation == incarnation, let held = contact.touch,
               touches.contains(where: { $0 === held }) else { return nil }
+        if contact.layoutHit?.isLive == false { cancelPressContact() }
         if let path = contact.path, let presenter {
             if !path.isLive(in: presenter) { cancelPressContact() }
         } else if disabled || (contact.bubbled ? authoredInert : inert) { cancelPressContact() }
@@ -358,6 +386,9 @@ extension NodeView {
     /// identities are still available. A late terminal callback cannot clear
     /// a new contact or a new incarnation's feedback.
     func cancelPressContact(reparenting: Bool = false) {
+        let hit = promotedLayoutHit
+        promotedLayoutHit = nil
+        hit?.cancel()
         if !reparenting { pressCancellationEpoch &+= 1 }
         recognizedPress?.cancel()
         guard let contact = pressContact, !contact.cancelled, contact.incarnation == incarnation else { return }
@@ -396,7 +427,12 @@ extension NodeView {
     // bubbles. A pan cancels it (the scroll view's `canCancelContentTouches`):
     // scroll always wins.
     package override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if ExactEnv.agentMode { TouchLog.reach(touches) }
+        #if EXACT_AGENT
+        if ExactEnv.agentCarried { TouchLog.reach(touches) }
+        #endif
+        let layoutHit = touches.first.flatMap { touch in
+            touch.view.flatMap { LayoutHits.touched($0, at: touch.location(in: nil)) }
+        }
         HeldState.input(at: self) // (ExactWindow's too: a contact on a held node lets its hold go, HeldState.swift)
         presenter?.supersedePress()
         if touches.contains(where: { presenter?.cancelledPressTouches.contains($0) == true }) { cancelPressContact(); return }
@@ -406,6 +442,9 @@ extension NodeView {
         let contact = PressContact(touch, incarnation: incarnation)
         contact.bubbled = touch.view.flatMap { start in presenter.map { $0.pressBox(of: self, from: start) !== self } } ?? false
         pressContact = contact
+        contact.layoutHit = layoutHit
+        if touch.view === self { contact.layoutHit?.capture(contact, at: self) }
+        if layoutHit?.isLive == false { cancelPressContact(); return }
         if contact.bubbled, let presenter, let start = touch.view {
             let path = PressPath(from: start, to: self, presenter: presenter)
             contact.path = path
@@ -514,8 +553,10 @@ extension NodeView {
         let row = lands ? cells?.select(self) : nil
         pressed = overlayHoldsPress
         if lands {
-            presenter?.menus.activating(from: touched, pressing: self) {
-                presenter?.press(id, held: KeyCodes.held(event?.modifierFlags ?? []), at: touches.first?.location(in: nil), bubbled: contact.bubbled)
+            let held = KeyCodes.held(event?.modifierFlags ?? []), at = touches.first?.location(in: nil), bubbled = contact.bubbled
+            pressAfterDoubleTap(from: touched) { [weak self] in
+                guard let self, let presenter = self.presenter else { return }
+                presenter.menus.activating(from: touched, pressing: self) { presenter.press(self.id, held: held, at: at, bubbled: bubbled) }
             }
         }
         if let row { cells?.ran(row, on: screen) }

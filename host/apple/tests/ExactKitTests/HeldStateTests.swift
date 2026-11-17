@@ -746,7 +746,7 @@ final class HeldStateTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        if let design { try design.write(to: dir.appendingPathComponent("app.tamber"), atomically: true, encoding: .utf8) }
+        if let design { try design.write(to: dir.appendingPathComponent("app.forma"), atomically: true, encoding: .utf8) }
         try """
         component App
           state n = 0
@@ -776,7 +776,7 @@ final class HeldStateTests: XCTestCase {
         _ = NSApplication.shared
         let app = ExactApp.shared, session = app.makeSession(label: "held-tokens")
         defer { session.destroy() }
-        let first = try plan("Glow", look: ":hover\n          background-color = \"glow\"", design: "tamber t\n\ntheme\n  glow = #ffff00\n")
+        let first = try plan("Glow", look: ":hover\n          background-color = \"glow\"", design: "forma t\n\ntheme\n  glow = #ffff00\n")
         XCTAssertNil(session.boot(plan: first, size: CGSize(width: 400, height: 300)).error)
         let view = ExactView(session: session)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)

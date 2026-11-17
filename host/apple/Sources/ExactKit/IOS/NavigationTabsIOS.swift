@@ -25,7 +25,10 @@ import UIKit
 /// straight to the app's delegate.
 final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
     weak var host: NavigationHost?
-    weak var app: UITabBarControllerDelegate?
+    /// The app's delegate, held strongly until the app gives another or nil,
+    /// or the container leaves Exact (`NavigationHost.tabController`), as
+    /// `NavigationDelegateProxy.app` is.
+    var app: UITabBarControllerDelegate?
 
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         if app?.tabBarController?(tabs, shouldSelect: controller) == false { return false }
@@ -52,9 +55,8 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
         super.responds(to: selector) || (app?.responds(to: selector) ?? false)
     }
 
-    override func forwardingTarget(for selector: Selector!) -> Any? {
-        app?.responds(to: selector) == true ? app : nil
-    }
+    // Send the app's delegate each call Exact does not implement, as `NavigationDelegateProxy` does
+    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 extension NavigationHost {
@@ -98,7 +100,7 @@ extension NavigationHost {
         let owned = askTabContainer(tabs, selected: p.at)
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
         let holder: UIViewController = owned ?? {
-            let container = UITabBarController()
+            let container = TabController()
             tabProxy.host = self
             if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
                 buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
@@ -150,9 +152,10 @@ extension NavigationHost {
             holder.view.accessibilityIdentifier = "exact-navigation-\(UUID().uuidString)"
         }
         // Sized before it enters the window, where UIKit lays it out.
-        holder.view.frame = ownerFrame(holder, in: root)
+        let mount = ownerMount(root)
+        holder.view.frame = ownerFrame(holder, in: mount)
         holder.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        root.addSubview(holder.view)
+        mount.addSubview(holder.view)
         holder.view.setPaintForeground(aboveAuthored: false)
         fitOwner()
         holder.didMove(toParent: parent)
@@ -217,6 +220,56 @@ extension NavigationHost {
 
     private func hideTabBar(_ container: UITabBarController) {
         if #available(iOS 18.0, tvOS 18.0, *) { container.setTabBarHidden(true, animated: false) } else { container.tabBar.isHidden = true }
+        (container as? TabController)?.syncBarAccessibility()
+    }
+
+    /// Rows below the panels stay in CSS flow while UIKit's container fills the page: the root's
+    /// children and, within each child that holds panels, the panels' siblings, at any depth.
+    /// The highest top of those rows, rather than the hidden native bar, bounds the routes'
+    /// bottom safe area. `rows` are those of them that are the root's children, which
+    /// `clearBesideRoutes` paints over the container.
+    func rowsBelowTabs(in area: CGRect, routes: [CGRect], skipping owned: Set<UInt32>, hidden: Bool? = nil) -> (bottom: CGFloat, rows: [NodeView]) {
+        guard !ExactEnv.authoredChrome, let tabs = tabController, tabOwner === tabs, let root = container, !routes.isEmpty else { return (0, []) }
+        if #available(iOS 18.0, tvOS 18.0, *) {
+            guard hidden ?? tabs.isTabBarHidden else { return (0, []) }
+        } else if !(hidden ?? tabs.tabBar.isHidden) { return (0, []) }
+        let panels = tabPanels.compactMap { presenter.views[$0] }
+        var bottom: CGFloat = 0, rows: [NodeView] = []
+        func visit(_ children: [NodeView]) {
+            let holding = children.filter { child in panels.contains { $0 === child || $0.isDescendant(of: child) } }
+            guard let end = holding.map({ $0.convert($0.bounds, to: root).maxY }).max() else { return }
+            for child in children where !holding.contains(child) && !owned.contains(child.id) && Self.inFlow(child) && !child.isHidden {
+                let box = child.convert(child.bounds, to: root)
+                guard !box.isEmpty, box.intersects(area), box.minY >= end - 0.5,
+                      routes.contains(where: { $0.minX < box.maxX && $0.maxX > box.minX }) else { continue }
+                bottom = max(bottom, area.maxY - box.minY)
+                if child.superview === ownerMount(root) { rows.append(child) }
+            }
+            for branch in holding where !panels.contains(branch) {
+                visit(branch.container.subviews.compactMap { $0 as? NodeView })
+            }
+        }
+        visit(ownerMount(root).subviews.compactMap { $0 as? NodeView })
+        return (bottom, rows)
+    }
+
+    /// Swap a replacement row's clearance with the native bar in one layout.
+    /// Showing the bar with the row's inset still installed makes UIKit retain both.
+    @available(iOS 18.0, tvOS 18.0, *)
+    func setTabBarHidden(_ hidden: Bool, in tabs: UITabBarController, animated: Bool) {
+        let before = besideOwner === tabs ? besideInsets.bottom : 0
+        clearBesideRoutes(tabBarHidden: hidden)
+        let replacesRow = before > 0 || (besideOwner === tabs && besideInsets.bottom > 0)
+        if replacesRow {
+            UIView.performWithoutAnimation {
+                tabs.setTabBarHidden(hidden, animated: false)
+                tabs.view.layoutIfNeeded()
+                for stack in primaryStacks { stack.viewIfLoaded?.layoutIfNeeded() }
+            }
+        } else {
+            tabs.setTabBarHidden(hidden, animated: animated)
+        }
+        (tabs as? TabController)?.syncBarAccessibility()
     }
 
     /// Before installing: a root that gains, loses or changes its tabs gets
@@ -252,8 +305,11 @@ extension NavigationHost {
             tablistHidBar = false
             if let container = tabController, tabOwner === container, !ExactEnv.authoredChrome {
                 let hidden = authored || tabs.tablist.style["display"]?.string == "none"
-                if #available(iOS 18.0, tvOS 18.0, *) { container.setTabBarHidden(hidden, animated: false) }
-                else { container.tabBar.isHidden = hidden }
+                if #available(iOS 18.0, tvOS 18.0, *) { setTabBarHidden(hidden, in: container, animated: false) }
+                else {
+                    container.tabBar.isHidden = hidden
+                    (container as? TabController)?.syncBarAccessibility()
+                }
                 tablistHidBar = hidden && !authored
             }
         }
@@ -306,14 +362,14 @@ extension NavigationHost {
         return presenter.session?.app.resolver?.url(source, maximumBytes: 4 << 20).flatMap { UIImage(contentsOfFile: $0.path) }
     }
 
-    /// The items, from the authored tabs: each tab's own item, written in
-    /// place when its face changes, so what else the app set on it (a badge)
-    /// and a handle to it stay good.
     /// The items again, from the tabs they were last made from (a size class change).
     func resyncTabItems() {
         if let tabs = tabItemsSource { syncItems(tabs) }
     }
 
+    /// The items, from the authored tabs: each tab's own item, written in
+    /// place when its face changes, so what else the app set on it (a badge)
+    /// and a handle to it stay good.
     private func syncItems(_ tabs: NavigationTabs) {
         tabItemsSource = tabs
         for tab in tabs.tabs { tab.rejectNativeActiveProperties(on: "UITabBarItem") }
@@ -321,7 +377,7 @@ extension NavigationHost {
         let faces = tabs.tabs.map(TabFace.init)
         // A tab's test id is its item's identifier, which XCUITest and
         // Maestro address it by (LLP 1116 D2); without one, its symbol or title.
-        let ids = zip(tabs.tabs, faces).map { tab, face in tab.props["testId"] ?? face.base.flatMap { FaceSymbol.isPath($0) ? nil : $0 } ?? face.title }
+        let ids = zip(tabs.tabs, faces).map { tab, face in tab.props["testId"] ?? face.base.flatMap { FaceSymbol.isCustom($0) ? nil : $0 } ?? face.title }
         // The idiom and the size class size a path's glyph (`FaceSymbol.tabBarPoints`).
         // The bar's traits once it is in its window; before, the page's.
         let traits = tabController.flatMap { $0.tabBar.window == nil ? nil : $0.tabBar.traitCollection }
@@ -425,9 +481,12 @@ extension NavigationHost {
         return tabController?.tabBar.items?.contains(where: { $0 === item }) == true ? item : nil
     }
 
-    /// The tab a route belongs to, by its tabpanel.
+    /// The tab a route belongs to, by the tabpanel that holds its node. A node
+    /// that has left the tree while UIKit still holds its controller, such as
+    /// a root More holds that the app replaced or removed, takes the tabpanel
+    /// it was last projected from, if that is still a tab.
     func tabIndex(ofRoute route: RouteController) -> Int? {
-        logicalParent(of: route.node).flatMap { tabPanels.firstIndex(of: $0.id) }
+        (logicalParent(of: route.node)?.id ?? route.panel).flatMap { tabPanels.firstIndex(of: $0) }
     }
 
     /// More shows a controller. A tab UIKit selected that the router is not
@@ -709,8 +768,9 @@ extension NavigationHost {
         releaseMore()
         if tabsHatched, tabController != nil { presenter.session?.natives.tabsHatch(tabController, event: 1) }
         if tabController == nil, tabOwner != nil { presenter.session?.natives.tabsHatch(nil, event: 3) }
+        // Leave the slot of a container the app owns as it is; Exact's own container's is emptied as
+        // `tabController` changes
         if let holder = tabOwner {
-            (holder as? UITabBarController)?.delegate = nil
             holder.willMove(toParent: nil)
             holder.view.removeFromSuperview()
             holder.removeFromParent()
@@ -736,6 +796,10 @@ extension NavigationHost {
     /// authored tablist's covers.
     func batchApplied(_ batch: Batch, rowsOnly: Bool) {
         if !rowsOnly || syncOwed { sync(batch) }
+        else if batch.ops.isEmpty {
+            // Page facts can carry no ops after UIKit sized an inactive owner.
+            fitOwner()
+        }
         presenter.modals.inheritFromAncestors()
         followAuthoredTablist()
     }

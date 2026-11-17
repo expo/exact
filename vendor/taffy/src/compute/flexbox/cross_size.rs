@@ -82,14 +82,34 @@ pub(super) fn determine_hypothetical_cross_size(
             .cross(constants.dir)
             .map(|val| constants.divided_cross_space(val))
             .maybe_sub(child.margin.cross_axis_sum(constants.dir));
-        let child_available_cross = match resolve_sizing_keyword(
+        let cross_keyword = resolve_sizing_keyword(
             child.size_style.cross(constants.dir),
             cross_stretch_size,
             constants.node_inner_size.cross(constants.dir),
-        ) {
+        );
+        let child_available_cross = match cross_keyword {
             Some(SizingKeywordResolution::Measure(available)) => available,
+            Some(SizingKeywordResolution::Fit(stretch)) if constants.is_row => AvailableSpace::Definite(stretch),
             _ => child_available_cross,
         };
+        // EXACT PATCH 77: a column item's `fit-content` width is CSS's clamp, not the
+        // width its content wraps to at the stretch size.
+        let child_cross = child_cross.or_else(|| match cross_keyword {
+            Some(SizingKeywordResolution::Fit(stretch)) if !constants.is_row => Some(
+                crate::compute::common::fit_content_width(
+                    tree,
+                    child.node,
+                    Size { width: None, height: Some(child.target_size.height) },
+                    item_known_dimension_definiteness(constants, child),
+                    constants.node_inner_size,
+                    stretch,
+                    SizingMode::InherentSize,
+                )
+                .maybe_clamp(transferred_min_cross, transferred_max_cross)
+                .max(padding_border_sum),
+            ),
+            _ => None,
+        });
 
         let child_cross = child_cross.or_else(|| {
             if !constants.is_row && child.size_style.width.is_auto() && child.aspect_ratio.is_none()
@@ -363,10 +383,13 @@ pub(super) fn determine_used_cross_size(
                     let box_sizing_adjustment =
                         if child_style.box_sizing() == BoxSizing::ContentBox { pb_sum } else { Size::ZERO };
 
+                    // EXACT PATCH 78: a keyword maximum, which resolves to none here,
+                    // is the item's resolved one.
                     let max_size_ignoring_aspect_ratio = child_style
                         .max_size()
                         .maybe_resolve(constants.node_inner_size, |val, basis| tree.calc(val, basis))
-                        .maybe_add(box_sizing_adjustment);
+                        .maybe_add(box_sizing_adjustment)
+                        .or(child.max_size);
 
                     // EXACT PATCH 50: keep the ratio's automatic inline minimum
                     // for intrinsic measurement, but a column's final stretched

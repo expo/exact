@@ -10,7 +10,14 @@ pub use widgets::{Configuration, Parameter, Widget};
 mod activities;
 pub use activities::Activity;
 mod watch;
-pub use watch::{WatchEntry, WATCH_KIND};
+pub use watch::{WatchEntry, WatchSync, WATCH_KIND};
+mod variant;
+
+/// The unsuffixed id of the selected variant whose id is `id` (LLP 1030.008
+/// D2), for a check that admits a data source naming its product.
+pub fn selected_base(id: &str) -> Option<String> {
+    variant::base_of(id)
+}
 
 /// The app manifest (`app.json`, LLP 1030 D2; 1030.000 D7) as the bake
 /// reads it — the JSON, and the identity every platform derives from it.
@@ -28,6 +35,12 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// The unsuffixed `app.id` when a variant is selected (LLP 1030.008 D2).
+    pub fn variant_base(&self) -> Option<&str> {
+        self.json
+            .pointer("/variant/base")
+            .and_then(serde_json::Value::as_str)
+    }
     /// Resolve the replacement executor baked into a platform/environment.
     /// Matches `scripts/app.mjs::rustPolicy` (LLP 1029.000 §2): global,
     /// environment, platform, then platform environment; true means auto.
@@ -126,6 +139,11 @@ impl Manifest {
     /// `app.json` in `app_dir`, or the derived defaults: `com.exact.<name>`
     /// and the directory's name capitalized.
     pub fn read(app_dir: &Path) -> Result<Manifest, String> {
+        let selected = variant::selected(app_dir)?;
+        Self::read_selected(app_dir, selected.as_deref())
+    }
+
+    fn read_selected(app_dir: &Path, selected: Option<&str>) -> Result<Manifest, String> {
         let name = app_dir
             .canonicalize()
             .ok()
@@ -151,6 +169,9 @@ impl Manifest {
             app_dir.join("app.json")
         };
         if !path.exists() {
+            if let Some(name) = selected {
+                variant::resolve(&mut serde_json::json!({}), name)?;
+            }
             return Ok(Manifest {
                 json: serde_json::json!({}),
                 id: format!("com.exact.{name}"),
@@ -160,8 +181,17 @@ impl Manifest {
         }
         let text =
             std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let json: serde_json::Value =
+        let mut json: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        if let Some(name) = selected {
+            variant::resolve(&mut json, name).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        canonicalize_document_handlers(&mut json).map_err(|problem| {
+            format!(
+                "{} does not conform to scripts/app.schema.json:\n  {problem}",
+                path.display()
+            )
+        })?;
         let app = json.get("app").and_then(|a| a.as_object());
         let id = app
             .and_then(|a| a.get("id"))
@@ -392,6 +422,14 @@ impl Manifest {
             .to_string()
     }
 
+    /// `rust.data` (LLP 1153.003 D2): the data crate the host crates link, or `None` when the manifest names none.
+    pub fn rust_data(&self) -> Result<Option<RustData>, String> {
+        match self.json.pointer("/rust/data") {
+            None => Ok(None),
+            Some(value) => RustData::from_json(value).map(Some),
+        }
+    }
+
     /// `deploy.store.<platform>`: `"A"` (an update store) or `"0"` (none);
     /// Native defaults to `"A"`; the web host links no updater (LLP 1030 D4).
     pub fn store(&self, platform: &str) -> String {
@@ -403,6 +441,134 @@ impl Manifest {
             .unwrap_or(if platform == "web" { "0" } else { "A" })
             .to_string()
     }
+}
+
+/// `rust.data` (LLP 1153.003 D2): the crate that answers the app's sources, its `DataSource` type and the
+/// constructor the hosts and the web's module run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustData {
+    /// The data crate's Cargo package (`pinapp-data`).
+    pub krate: String,
+    /// The source type, by its path from the crate's library (`pinapp_data::Pins`).
+    pub ty: String,
+    /// The constructor: `source`, or `<type>::default()` when the manifest names none.
+    pub source: String,
+}
+
+impl RustData {
+    fn from_json(value: &serde_json::Value) -> Result<RustData, String> {
+        let object = value.as_object().ok_or("rust.data must be an object")?;
+        if let Some(key) = object
+            .keys()
+            .find(|k| !matches!(k.as_str(), "crate" | "type" | "source"))
+        {
+            return Err(format!("rust.data takes crate, type and source, not {key}"));
+        }
+        let text = |key: &str| {
+            object.get(key).map(|v| {
+                v.as_str()
+                    .ok_or(format!("rust.data.{key} must be a string"))
+            })
+        };
+        let krate = text("crate")
+            .ok_or("rust.data requires the data crate's Cargo package in `crate`")??;
+        if krate.is_empty()
+            || !krate
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+        {
+            return Err(format!(
+                "rust.data.crate is not a Cargo package name: {krate}"
+            ));
+        }
+        let ty = text("type").ok_or("rust.data requires the source type's path in `type`")??;
+        let segments: Vec<&str> = ty.split("::").collect();
+        if segments.len() < 2 || !segments.iter().all(|s| identifier(s)) {
+            return Err(format!(
+                "rust.data.type is a path from the data crate's library, as `pinapp_data::Pins`: {ty}"
+            ));
+        }
+        let source = match text("source").transpose()? {
+            None => format!("{ty}::default()"),
+            Some(source) if constructs(ty, source) => source.to_string(),
+            Some(source) => {
+                return Err(format!(
+                    "rust.data.source is `{ty}`, `{ty}::default()` or `{ty}::new(…)` with literal arguments, not {source}; a source built from anything else is a module of its own (rust.module.package)"
+                ))
+            }
+        };
+        Ok(RustData {
+            krate: krate.to_string(),
+            ty: ty.to_string(),
+            source,
+        })
+    }
+}
+
+fn identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether `source` constructs `ty` in the grammar the web build copies into a module of its own: the type itself
+/// (a unit struct), its `default()`, or its `new(…)` with literal arguments (`host/web-js/module.mjs`).
+fn constructs(ty: &str, source: &str) -> bool {
+    let Some(rest) = source.strip_prefix(ty) else {
+        return false;
+    };
+    if rest.is_empty() || rest == "::default()" {
+        return true;
+    }
+    let Some(args) = rest
+        .strip_prefix("::new(")
+        .and_then(|r| r.strip_suffix(')'))
+    else {
+        return false;
+    };
+    literal_arguments(args)
+}
+
+/// Comma-separated literals: numbers (with an optional suffix), strings, characters, `true` and `false`.
+fn literal_arguments(args: &str) -> bool {
+    let mut items = Vec::new();
+    let (mut start, mut quote, mut escaped) = (0, None, false);
+    for (i, c) in args.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if c == '\\' => escaped = true,
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == ',' => {
+                items.push(&args[start..i]);
+                start = i + 1;
+            }
+            None => {}
+        }
+    }
+    if quote.is_some() {
+        return false;
+    }
+    items.push(&args[start..]);
+    if items.len() == 1 && items[0].trim().is_empty() {
+        return true;
+    }
+    items.iter().map(|item| item.trim()).all(|item| {
+        matches!(item, "true" | "false")
+            || (item.len() >= 2
+                && (item.starts_with('"') && item.ends_with('"')
+                    || item.starts_with('\'') && item.ends_with('\'')))
+            || item
+                .trim_start_matches('-')
+                .starts_with(|c: char| c.is_ascii_digit())
+                && item
+                    .trim_start_matches('-')
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '-'))
+    })
 }
 
 /// Standard base64 with padding, as `keys` validated it.
@@ -480,6 +646,9 @@ fn validate_rust_policy(value: &serde_json::Value, depth: u8) -> Result<(), Stri
                             );
                         }
                     }
+                    "data" if depth == 2 => {
+                        RustData::from_json(value)?;
+                    }
                     _ => return Err(format!("invalid rust policy key or value: {key}")),
                 }
             }
@@ -542,6 +711,77 @@ fn validate_placement_policy(value: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+fn canonicalize_document_handlers(json: &mut serde_json::Value) -> Result<(), String> {
+    let Some(declared) = json.get_mut("file_handlers") else {
+        return Ok(());
+    };
+    if !declared.is_array() {
+        return Err(format!("file_handlers: {declared} is not an array"));
+    }
+    let handlers = declared.as_array_mut().unwrap();
+    for (handler_index, handler) in handlers.iter_mut().enumerate() {
+        if !handler.is_object() {
+            return Err(format!(
+                "file_handlers[{handler_index}]: {handler} is not an object"
+            ));
+        }
+        let handler = handler.as_object_mut().unwrap();
+        if let Some(name) = handler.get("name") {
+            let name = name.as_str().ok_or_else(|| {
+                format!("file_handlers[{handler_index}].name: {name} is not a string")
+            })?;
+            if name.is_empty() || name.chars().any(char::is_control) {
+                return Err(format!(
+                    "file_handlers[{handler_index}].name: {} is not a label: use a non-empty string with no control character",
+                    serde_json::to_string(name).unwrap_or_default()
+                ));
+            }
+        }
+        let accept = handler
+            .get_mut("accept")
+            .ok_or_else(|| format!("file_handlers[{handler_index}].accept: is required"))?;
+        if !accept.is_object() {
+            return Err(format!(
+                "file_handlers[{handler_index}].accept: {accept} is not an object"
+            ));
+        }
+        let accept = accept.as_object_mut().unwrap();
+        for (mime, extensions) in accept {
+            if !extensions.is_array() {
+                return Err(format!(
+                    "file_handlers[{handler_index}].accept.{mime}: {extensions} is not an array"
+                ));
+            }
+            let extensions = extensions.as_array_mut().unwrap();
+            for (extension_index, extension) in extensions.iter_mut().enumerate() {
+                let written = extension.as_str().map(str::to_owned).ok_or_else(|| {
+                    format!(
+                        "file_handlers[{handler_index}].accept.{mime}[{extension_index}]: {extension} is not a string"
+                    )
+                })?;
+                let canonical = format!(
+                    "{}{}",
+                    if written.starts_with('.') { "" } else { "." },
+                    written.to_ascii_lowercase()
+                );
+                let valid = canonical.len() <= 16
+                    && !canonical.ends_with('.')
+                    && canonical
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.'));
+                if !valid {
+                    return Err(format!(
+                        "file_handlers[{handler_index}].accept.{mime}[{extension_index}]: {} is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot",
+                        serde_json::to_string(&written).unwrap_or_default()
+                    ));
+                }
+                *extension = serde_json::Value::String(canonical);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod placement_tests {
     use super::Manifest;
@@ -578,6 +818,89 @@ mod placement_tests {
             m.placement("typescript", "ios"),
             Err("invalid typescript policy key: aliases".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod document_extension_tests {
+    use super::Manifest;
+
+    #[test]
+    fn rust_and_javascript_share_document_suffix_cases() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scripts/fixtures/document-suffixes.json"
+        )))
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "exact-manifest-document-suffixes-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            for case in cases.as_array().unwrap() {
+                let declaration = case["declaration"].as_str().unwrap();
+                std::fs::write(
+                    dir.join("app.json"),
+                    serde_json::json!({
+                        "name": "Suffixes",
+                        "app": {"id": "test.suffixes", "name": "Suffixes"},
+                        "file_handlers": [{"action": "/", "accept": {"text/markdown": [declaration]}}]
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+                match case.get("canonical").and_then(serde_json::Value::as_str) {
+                    Some(canonical) => assert_eq!(
+                        Manifest::read(&dir).unwrap().json["file_handlers"][0]["accept"]
+                            ["text/markdown"][0],
+                        canonical,
+                        "{declaration:?}"
+                    ),
+                    None => {
+                        let error = Manifest::read(&dir).unwrap_err();
+                        assert!(error.contains(case["error"].as_str().unwrap()), "{error}");
+                    }
+                }
+            }
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+
+    #[test]
+    fn a_selected_variant_has_canonical_document_handlers() {
+        let dir = std::env::temp_dir().join(format!(
+            "exact-manifest-variant-document-suffixes-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            std::fs::write(
+                dir.join("app.json"),
+                serde_json::json!({
+                    "name": "Reader",
+                    "app": {"id": "test.reader", "name": "Reader"},
+                    "variants": {"dev": {"idSuffix": ".dev", "name": "Reader Dev"}},
+                    "file_handlers": [{"action": "/", "accept": {"text/markdown": ["MD"]}}]
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let manifest = Manifest::read_selected(&dir, Some("dev")).unwrap();
+            assert_eq!(manifest.id, "test.reader.dev");
+            assert_eq!(manifest.variant_base(), Some("test.reader"));
+            assert_eq!(
+                manifest.json["file_handlers"][0]["accept"]["text/markdown"][0],
+                ".md"
+            );
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
     }
 }
 
@@ -682,5 +1005,76 @@ mod windows_tests {
         let wrong =
             manifest(serde_json::json!({"host": {"windows": {"window": {"keepRunning": 1}}}}));
         assert!(wrong.windows_window().unwrap_err().contains("keepRunning"));
+    }
+}
+
+#[cfg(test)]
+mod rust_data_tests {
+    use super::{Manifest, RustData};
+
+    fn manifest(data: serde_json::Value) -> Manifest {
+        Manifest {
+            json: serde_json::json!({"rust": {"mode": "off", "data": data}}),
+            id: "test.app".into(),
+            name: "Test".into(),
+            declared: true,
+        }
+    }
+
+    /// LLP 1153.003 D2: the source defaults to the type's `default()`, and is otherwise in the grammar the web
+    /// build copies into a module of its own.
+    #[test]
+    fn rust_data_names_a_crate_a_type_and_a_constructor() {
+        let data = |json| manifest(json).rust_data();
+        assert_eq!(
+            data(serde_json::json!({"crate": "pins-data", "type": "pins_data::Pins"})).unwrap(),
+            Some(RustData {
+                krate: "pins-data".into(),
+                ty: "pins_data::Pins".into(),
+                source: "pins_data::Pins::default()".into(),
+            })
+        );
+        for source in [
+            "pins_data::Pins",
+            "pins_data::Pins::new()",
+            "pins_data::Pins::new(3, \"a, b\", true, -1.5f32, 'x')",
+        ] {
+            let named = data(
+                serde_json::json!({"crate": "pins-data", "type": "pins_data::Pins", "source": source}),
+            );
+            assert_eq!(named.unwrap().unwrap().source, source);
+        }
+        for (json, said) in [
+            (serde_json::json!({"type": "pins_data::Pins"}), "`crate`"),
+            (
+                serde_json::json!({"crate": "pins-data", "type": "Pins"}),
+                "rust.data.type",
+            ),
+            (
+                serde_json::json!({"crate": "pins-data", "type": "pins_data::Pins", "source": "pins_data::Pins::new(path())"}),
+                "rust.data.source",
+            ),
+            (
+                serde_json::json!({"crate": "pins-data", "type": "pins_data::Pins", "source": "other::Pins"}),
+                "rust.data.source",
+            ),
+            (
+                serde_json::json!({"crate": "pins-data", "type": "pins_data::Pins", "mode": "off"}),
+                "not mode",
+            ),
+        ] {
+            let refused = data(json).unwrap_err();
+            assert!(refused.contains(said), "{refused}");
+        }
+        // The policy reader validates it as it validates the rest of `rust`.
+        assert!(manifest(serde_json::json!({"crate": "pins-data"}))
+            .rust_mode("ios", true)
+            .is_err());
+        assert_eq!(
+            manifest(serde_json::json!({"crate": "pins-data", "type": "pins_data::Pins"}))
+                .rust_mode("ios", true)
+                .unwrap(),
+            "off"
+        );
     }
 }

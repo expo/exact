@@ -1,5 +1,5 @@
 // The Android manifest fragment's allow-list (LLP 1133.030 D9): what a package may add, and each refusal by name.
-import { test } from 'bun:test';
+import { test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,19 @@ test('package implementation filters use the supplied identities and ignore unus
     writeFileSync(resolve(app, 'app.contract'), '// exact-map\ncomponent App\n  view\n    text "plain"\n');
     assert.deepEqual([...packageConfig(app, 'web', { extensions: {} })], []);
     assert.throws(() => packageConfig(app, 'web', { extensions: { maps: '@exact/maps' } }), /maps-tiles-missing/);
+  } finally { rmSync(app, { recursive: true, force: true }); }
+});
+
+test("push's Android configuration is the path of google-services.json, never required by packageConfig (LLP 1133.004.000 D6)", () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-push-config-'));
+  try {
+    mkdirSync(resolve(app, 'node_modules/@exact'), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, '../packages/push'), resolve(app, 'node_modules/@exact/push'), 'dir');
+    writeFileSync(resolve(app, 'app.contract'), 'component App\n  view\n    text "plain"\n');
+    const extensions = { push: '@exact/push' };
+    assert.deepEqual(packageConfig(app, 'android', { extensions, release: true }).get('push'), {});
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ packages: { '@exact/push': { android: { googleServices: 'ci/firebase.json' } } } }));
+    assert.deepEqual(packageConfig(app, 'android', { extensions, release: true }).get('push'), { googleServices: 'ci/firebase.json' });
   } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
@@ -191,17 +204,51 @@ test("payments' callbacks service is exported only to Play services' binder, wit
 test('a meta-data is only a listed name with its value, both strings', () => {
   const pay = 'com.google.android.gms.wallet.api.enabled';
   const refuses = (metadata, what) => assert.throws(() => manifestFragment(impl({ metadata })), (e) => e.message.includes(what) && e.message.includes("alarms's Android implementation"));
-  refuses([{ name: 'review.unknown' }], 'without a string name and value');
+  refuses([{ name: 'review.unknown' }], 'without a string name and one string value or resource');
   refuses([{ name: 'review.unknown', value: 'true' }], 'review.unknown');
-  refuses([{ value: 'true' }], 'without a string name and value');
-  refuses([{ name: pay }], 'without a string name and value');
-  refuses([{ name: pay, value: true }], 'without a string name and value');
+  refuses([{ value: 'true' }], 'without a string name and one string value or resource');
+  refuses([{ name: pay }], 'without a string name and one string value or resource');
+  refuses([{ name: pay, value: true }], 'without a string name and one string value or resource');
   refuses([{ name: pay, value: 'false' }], 'not on the list');
   refuses([{ name: 'a"/><provider android:name="x', value: 'true' }], 'not on the list');
   refuses([{ name: '__proto__', value: 'true' }], 'not on the list');
-  refuses([null], 'without a string name and value');
-  refuses([7], 'without a string name and value');
+  refuses([null], 'without a string name and one string value or resource');
+  refuses([7], 'without a string name and one string value or resource');
   assert.match(manifestFragment(impl({ metadata: [{ name: pay, value: 'true' }] })), /<meta-data android:name="com\.google\.android\.gms\.wallet\.api\.enabled" android:value="true" \/>/);
+  // A resource is its own field: never a value's text, and never both.
+  const icon = 'com.google.firebase.messaging.default_notification_icon';
+  refuses([{ name: icon, value: '@drawable/exact_notification' }], 'not on the list');
+  refuses([{ name: icon, resource: '@drawable/other' }], 'not on the list');
+  refuses([{ name: pay, resource: 'true' }], 'not on the list');
+  refuses([{ name: icon, resource: '@drawable/exact_notification', value: 'x' }], 'one string value or resource');
+  assert.match(manifestFragment(impl({ metadata: [{ name: icon, resource: '@drawable/exact_notification' }] })), /<meta-data android:name="com\.google\.firebase\.messaging\.default_notification_icon" android:resource="@drawable\/exact_notification" \/>/);
+});
+
+test("Firebase's messaging service is unexported for its own receiver, and its start-up provider is removed (LLP 1133.004.000 D6)", () => {
+  const push = (manifest) => manifestFragment([{ extension: 'push', className: 'exact.push.PushModule', manifest }]);
+  const service = { name: 'exact.push.PushService', actions: ['com.google.firebase.MESSAGING_EVENT'] };
+  // The push package's own fragment.
+  const xml = push(JSON.parse(readFileSync(resolve(import.meta.dir, '../packages/push/android/exact.json'), 'utf8')).manifest);
+  assert.equal(xml, ['    <application>',
+    '        <service android:name="exact.push.PushService" android:exported="false">', '            <intent-filter>',
+    '                <action android:name="com.google.firebase.MESSAGING_EVENT" />', '            </intent-filter>', '        </service>',
+    '        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />',
+    '        <meta-data android:name="firebase_messaging_installation_id_enabled" android:value="true" />',
+    '        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="default" />',
+    '        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/exact_notification" />',
+    '        <provider android:name="com.google.firebase.provider.FirebaseInitProvider" tools:node="remove" />',
+    '    </application>'].join('\n'));
+  const refuses = (manifest, what) => assert.throws(() => push(manifest), (e) => e.message.includes(what) && e.message.includes("push's Android implementation"));
+  refuses({ services: [{ ...service, actions: ['android.intent.action.MAIN'] }] }, 'not one library');
+  refuses({ services: [{ ...service, actions: [...service.actions, ...service.actions] }] }, 'not one library');
+  refuses({ services: [{ ...service, actions: [] }] }, 'not one library');
+  refuses({ services: [{ ...service, directBootAware: true }] }, 'direct boot');
+  refuses({ services: [{ ...service, foregroundServiceType: 'systemExempted' }] }, 'foreground type');
+  refuses({ services: [{ ...service, name: 'com.google.firebase.messaging.FirebaseMessagingService' }] }, 'not a class in exact.push');
+  refuses({ metadata: [{ name: 'firebase_messaging_auto_init_enabled', value: 'true' }] }, 'not on the list');
+  refuses({ metadata: [{ name: 'firebase_messaging_installation_id_enabled', value: 'false' }] }, 'not on the list');
+  // A package that declares no such service removes no provider.
+  assert.doesNotMatch(push({ services: [{ name: 'exact.push.Other' }] }), /provider/);
 });
 
 test('app and package Maven coordinates share validation and refuse conflicting versions by owner', async () => {
@@ -265,4 +312,70 @@ test('Android auth filters schemes but retains complete callback endpoints', asy
   assert.match(withShare, /dev.exact.auth.callbacks/);
   assert.match(withShare, /android.intent.action.SEND/);
   assert.equal((withShare.match(/<activity /g) ?? []).length, 1);
+});
+
+test('Android registers each custom protocol_handlers scheme on the one activity (LLP 1038 D8)', async () => {
+  const { androidProtocolHandlers, withProtocolHandlers, withAuthCallbacks, withMetaData } = await import('./android-manifest.mjs');
+  const manifest = { protocol_handlers: [{ protocol: 'SSControl', url: '/open?u=%s' }, { protocol: 'packaged', url: '/p?u=%s', distribution_only: true },
+    { protocol: 'http', url: '/w?u=%s' }, { protocol: 'https', url: '/w?u=%s' }] };
+  // Never the web's pair; a packaged-only scheme only in a production build; schemes lowercased, as Android matches them.
+  assert.deepEqual(androidProtocolHandlers(manifest), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
+  assert.deepEqual(androidProtocolHandlers(manifest, true).map((h) => h.protocol), ['sscontrol', 'packaged']);
+  assert.equal(withProtocolHandlers('unchanged', []), 'unchanged');
+  const xml = withProtocolHandlers('', androidProtocolHandlers(manifest));
+  assert.equal((xml.match(/<activity /g) ?? []).length, 1);
+  assert.match(xml, /android:launchMode="singleTask"/);
+  assert.match(xml, /<category android:name="android.intent.category.BROWSABLE" \/>\n\s*<data android:scheme="sscontrol" \/>/);
+  assert.doesNotMatch(xml, /android:scheme="http|packaged/);
+  const handlers = xml.match(/dev.exact.protocol_handlers" android:value="([^"]+)"/);
+  assert.deepEqual(JSON.parse(handlers?.[1].replaceAll('&quot;', '"')), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
+  // A share target, a handler and an auth callback of the same scheme: one activity, the scheme filtered once.
+  const { androidShareActivity } = await import('./share-target.mjs');
+  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), [{ protocol: 'app.test', url: '/open?u=%s' }]), ['app.test:/cb', 'other.test:/cb']);
+  assert.equal((all.match(/<activity /g) ?? []).length, 1);
+  assert.equal((all.match(/android:scheme="app.test"/g) ?? []).length, 1);
+  assert.match(all, /android:scheme="other.test"/);
+  assert.match(all, /dev.exact.auth.callbacks/);
+  assert.match(all, /android.intent.action.SEND/);
+});
+
+test('transfer fragments name only WorkManager dataSync and a protected package job', () => {
+  const impl = { extension: 'background-transfer', className: 'exact.backgroundtransfer.Module', manifest: {
+    services: [{ name: 'androidx.work.impl.foreground.SystemForegroundService', foregroundServiceType: 'dataSync' },
+      { name: 'exact.backgroundtransfer.TransferJob', permission: 'android.permission.BIND_JOB_SERVICE' }],
+    permissions: ['android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'],
+  } };
+  const xml = manifestFragment([impl]);
+  expect(xml).toContain('android:foregroundServiceType="dataSync" tools:node="merge"');
+  expect(xml).toContain('android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE"');
+  expect(fragmentPermissions([impl])).toEqual(impl.manifest.permissions);
+  for (const service of [
+    { name: 'androidx.work.impl.foreground.SystemForegroundService' },
+    { name: 'androidx.work.impl.foreground.SystemForegroundService', foregroundServiceType: 'camera' },
+    { name: 'androidx.work.impl.foreground.SystemForegroundService', foregroundServiceType: 'dataSync', directBootAware: true },
+    { name: 'other.library.Service', foregroundServiceType: 'dataSync' },
+    { name: 'exact.backgroundtransfer.TransferJob', permission: 'android.permission.BIND_JOB_SERVICE', directBootAware: true },
+  ]) expect(() => manifestFragment([{ ...impl, manifest: { services: [service] } }])).toThrow();
+});
+
+test('background transfers export only their imported Android implementation', () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-transfer-export-'));
+  try {
+    mkdirSync(resolve(app, 'node_modules/@exact'), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, '../packages/background-transfer'), resolve(app, 'node_modules/@exact/background-transfer'), 'dir');
+    writeFileSync(resolve(app, 'app.contract'), 'component App\n  view\n    text "plain"\n');
+    assert.deepEqual(androidImplementations(app, {}), []);
+    const bound = androidImplementations(app, { 'background-transfer': '@exact/background-transfer' });
+    assert.equal(bound.length, 1);
+    assert.equal(bound[0].className, 'exact.backgroundtransfer.BackgroundTransferModule');
+    assert.deepEqual(bound[0].maven, ['androidx.work:work-runtime:2.12.0']);
+    assert.ok(fragmentPermissions(bound).includes('android.permission.RUN_USER_INITIATED_JOBS'));
+    assert.ok(!fragmentPermissions(bound).includes('android.permission.POST_NOTIFICATIONS'));
+    const fragment = manifestFragment(bound);
+    assert.match(fragment, /exact\.backgroundtransfer\.TransferJob.*android:permission="android.permission.BIND_JOB_SERVICE"/);
+    assert.match(fragment, /SystemForegroundService.*android:foregroundServiceType="dataSync"/);
+    assert.match(fragment, /exact\.backgroundtransfer\.TransferBoot/);
+    assert.match(fragment, /android.intent.action.BOOT_COMPLETED/);
+    assert.match(fragment, /android.intent.action.MY_PACKAGE_REPLACED/);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });

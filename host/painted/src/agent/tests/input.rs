@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn the_clipboard_events_reach_the_nearest_handler() {
     let plan = contract::compile("component App\n  state log = \"\"\n  action pasted(at: string, e: ClipboardEvent)\n    log = `${log}${at}:${e.text};`\n  action copied\n    log = `${log}copy;`\n  action seen\n    log = log\n  view\n    column width=300 paste=pasted(\"grid\") copy=copied testId=\"grid\"\n      box testId=\"cell\" width=50 height=20 focus=seen\n      text log testId=\"log\" height=20\n").unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -108,7 +108,7 @@ fn a_paste_is_ctrl_v_and_a_prevented_chord_skips_the_clipboard() {
             ""
         };
         let plan = contract::compile(&format!("{head}{guard}{tail}")).unwrap();
-        let (mut p, boot_error) = Presenter::boot_with(
+        let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
             &plan.encode(),
             (),
             (300.0, 300.0),
@@ -163,7 +163,7 @@ fn a_paste_is_ctrl_v_and_a_prevented_chord_skips_the_clipboard() {
 #[test]
 fn a_tap_holds_its_modifiers_for_the_press() {
     let plan = contract::compile("component App\n  state log = \"\"\n  action pick(e: MouseEvent)\n    log = `${log}${e.shiftKey}${e.metaKey}${e.altKey};`\n  view\n    column width=300\n      button press=pick testId=\"b\" width=50 height=20\n      text log testId=\"log\" height=20\n").unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -224,7 +224,7 @@ fn refused_keys_preserve_modifiers(chords: bool) {
 "#,
     )
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -367,7 +367,7 @@ fn a_partly_refused_chord_releases_only_its_new_modifiers() {
 "#,
         )
         .unwrap();
-        let (mut p, boot_error) = Presenter::boot_with(
+        let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
             &plan.encode(),
             (),
             (300.0, 300.0),
@@ -448,7 +448,7 @@ fn a_jump_names_the_requests_it_left_in_flight() {
         "component App\n  resource item = item() as shape number\n  view\n    text `${item}` testId=\"log\"\n",
     )
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         Stalled,
         (300.0, 300.0),
@@ -477,7 +477,7 @@ fn a_jump_names_the_requests_it_left_in_flight() {
 #[test]
 fn a_mouse_contact_goes_down_holds_and_lifts() {
     let plan = contract::compile("component App\n  state log = \"\"\n  action at(kind: string, e: PointerEvent)\n    log = `${log}${kind}:${e.pointerType};`\n  view\n    column width=300\n      box testId=\"pad\" width=200 height=100 touch-action=\"none\" pointerdown=at(\"down\") pointerup=at(\"up\")\n      text log testId=\"log\" height=20\n").unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -559,7 +559,7 @@ fn a_drag_keeps_runner_time_and_measures_pan_velocity_on_event_time() {
     )
     .unwrap();
     for (ms, hold) in [(80., 0.), (160., 0.), (80., 100.)] {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &plan.encode(),
             (),
             (400., 300.),
@@ -690,7 +690,7 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
 "#,
     )
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 600.0),
@@ -783,7 +783,7 @@ fn keyup_hears_a_release_and_both_carry_code_and_repeat() {
 "#,
     )
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -853,7 +853,7 @@ fn a_named_tap_presses_what_it_names_never_a_control_inside_it() {
         "      text log testId=\"log\" height=20\n",
     ))
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 400.0),
@@ -952,7 +952,7 @@ fn a_named_tap_never_toggles_focuses_or_follows_what_is_inside_it() {
         "      text log testId=\"log\" height=20\n",
     ))
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 400.0),
@@ -1033,7 +1033,7 @@ fn a_checkbox_runs_its_own_press_before_its_change() {
         "      text log testId=\"log\" height=20\n",
     ))
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -1079,7 +1079,7 @@ fn a_checkbox_runs_its_own_press_before_its_change() {
 #[test]
 fn media_seek_time_is_malformed_before_ownership_is_checked() {
     let plan = contract::compile("component App\n  view\n    text \"ready\"\n").unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -1117,7 +1117,7 @@ fn into_alignment_is_malformed_before_any_delivery() {
         "component App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    button press=go testId=\"go\"\n      text \"ready\"\n",
     )
     .unwrap();
-    let (mut p, boot_error) = Presenter::boot_with(
+    let (mut p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -1156,7 +1156,7 @@ fn into_alignment_is_malformed_before_any_delivery() {
 fn a_post_is_held_for_its_surface_and_refused_past_the_bound() {
     let plan =
         contract::compile("component App\n  view\n    text \"title\" testId=\"title\"\n").unwrap();
-    let (mut p, _) = Presenter::boot_with(
+    let (mut p, _) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),
@@ -1302,7 +1302,7 @@ const POLLED: &str = "component App\n  state n = 0\n  resource item = item() as 
 
 fn boot_polled(data: Polled) -> Presenter<Polled> {
     let plan = contract::compile(POLLED).unwrap();
-    let (p, boot_error) = Presenter::boot_with(
+    let (p, boot_error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         data,
         (300.0, 300.0),
@@ -1398,7 +1398,7 @@ fn an_unmarked_long_hold_is_waited_on_before_a_timer() {
 #[test]
 fn datetime_type_accepts_htmls_space_separator_and_optional_seconds() {
     let plan = contract::compile("component App\n  state value = \"\"\n  action changed(next: string)\n    value = next\n  view\n    input type=\"datetime-local\" value=value change=changed testId=\"when\"\n").unwrap();
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         (),
         (300.0, 300.0),

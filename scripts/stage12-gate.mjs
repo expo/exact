@@ -574,7 +574,7 @@ const skipped = OPTIONAL_HOSTS.map(h => `  ${h}: skipped (no runner on this mach
 function libraryPlan(dir) {
   const app = join(dir, 'app');
   mkdirSync(app, { recursive: true });
-  for (const f of ['app.contract', 'app.tamber']) writeFileSync(join(app, f), readFileSync(join(LIBRARY_GATE, f)));
+  for (const f of ['app.contract', 'app.forma']) writeFileSync(join(app, f), readFileSync(join(LIBRARY_GATE, f)));
   const plan = join(dir, 'library-gate.plan');
   return compiled(buildPlan(join(app, 'app.contract'), plan), plan);
 }
@@ -765,7 +765,7 @@ const box = (L, id) => {
 };
 const right = (L, id) => { const n = box(L, id); return n.x + n.w; };
 
-/** A design server for `dir` (`contract tamber serve --stdio`, as the dev
+/** A design server for `dir` (`contract forma serve --stdio`, as the dev
  * loops run it), asked one request at a time. A request it doesn't answer
  * in `deadline` ms, an answer it can't tie to a request, or the server's
  * exit or failure ends every request still waiting, and every later one,
@@ -773,7 +773,7 @@ const right = (L, id) => { const n = box(L, id); return n.x + n.w; };
 function designServer(dir, deadline = 300_000) {
   // Its own process group, so closing it ends cargo's child too, which
   // holds the design's lock.
-  const child = spawn('cargo', ['run', '-q', '-p', 'contract', '--', 'tamber', 'serve', '--stdio', dir], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+  const child = spawn('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'serve', '--stdio', dir], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   const waiting = new Map();
   let buf = '', next = 0, err = '', closed = null;
   const end = why => {
@@ -821,7 +821,7 @@ function restylePlan(dir, design = null) {
   const app = join(dir, 'app');
   mkdirSync(app, { recursive: true });
   writeFileSync(join(app, 'app.contract'), readFileSync(join(LIBRARY_GATE, 'app.contract')));
-  writeFileSync(join(app, 'app.tamber'), design ?? readFileSync(join(LIBRARY_GATE, 'app.tamber')));
+  writeFileSync(join(app, 'app.forma'), design ?? readFileSync(join(LIBRARY_GATE, 'app.forma')));
   const plan = join(dir, 'library-gate.plan');
   return compiled(buildPlan(join(app, 'app.contract'), plan), plan);
 }
@@ -833,7 +833,7 @@ function restylePlan(dir, design = null) {
 export async function restyleWrites(dir, list = RESTYLE) {
   const work = join(dir, 'server');
   restylePlan(work);
-  const design = join(work, 'app', 'app.tamber'), original = readFileSync(design, 'utf8');
+  const design = join(work, 'app', 'app.forma'), original = readFileSync(design, 'utf8');
   const server = designServer(join(work, 'app'));
   const client = 'agent:stage12-gate';
   try {
@@ -890,8 +890,8 @@ export async function restyle(opts) {
   const broken = Object.entries(plans).filter(([, p]) => !p).map(([k]) => k);
   if (broken.length) return fail(`library-gate did not compile: ${broken.join(', ')}`, compileSaid);
   const schema = JSON.parse(readFileSync(join(ROOT, 'kernel/tables/schema.json'), 'utf8'));
-  const irFile = join(dir, 'base', 'tamber.json');
-  if (!run('cargo', ['run', '-q', '-p', 'contract', '--', 'tamber', 'ir', join(dir, 'base', 'app'), '-o', irFile]).ok) return fail('library-gate\'s design did not read (contract tamber ir)');
+  const irFile = join(dir, 'base', 'forma.json');
+  if (!run('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'ir', join(dir, 'base', 'app'), '-o', irFile]).ok) return fail('library-gate\'s design did not read (contract forma ir)');
   const ir = JSON.parse(readFileSync(irFile, 'utf8'));
   const overrides = overridesOf(ir, []);
   // A name's length on a host: a px token's, or the base name a package
@@ -1043,7 +1043,7 @@ export function readExact(host, exact, plans, app, drive = (plan, ids) => driveP
  * design), built inside this checkout so the packages resolve. */
 export function s13cPlan(name) {
   const c = exactCases().find(x => x.name === name);
-  const design = readFileSync(join(LIBRARY_GATE, 'app.tamber'), 'utf8').trimEnd();
+  const design = readFileSync(join(LIBRARY_GATE, 'app.forma'), 'utf8').trimEnd();
   const lines = c.set.map(t => (c.param ? null : `  ${t.name}${t.kind === 'color' ? '' : `: ${t.kind}`} = ${t.value}`)).filter(Boolean);
   return restylePlan(join(ROOT, 'target', 'stage12-gate', 'boot', name.replace(/\W+/g, '-')), `${design}\n${lines.join('\n')}\n`);
 }
@@ -1056,13 +1056,13 @@ export function mutationFails(dir, host = 'linux', drive = undefined) {
   if (!text.includes(MUTATION.from)) throw new Error(`${MUTATION.file} no longer says ${MUTATION.from}: the mutation needs another use`);
   writeFileSync(file, text.replace(MUTATION.from, MUTATION.to));
   const c = exactCases().find(x => x.name === MUTATION.case);
-  const design = readFileSync(join(LIBRARY_GATE, 'app.tamber'), 'utf8').trimEnd();
+  const design = readFileSync(join(LIBRARY_GATE, 'app.forma'), 'utf8').trimEnd();
   const lines = c.set.map(t => `  ${t.name}${t.kind === 'color' ? '' : `: ${t.kind}`} = ${t.value}`);
-  const plan = (name, tamber) => {
+  const plan = (name, forma) => {
     const app = join(dir, name, 'app');
     mkdirSync(app, { recursive: true });
     writeFileSync(join(app, 'app.contract'), readFileSync(join(LIBRARY_GATE, 'app.contract')));
-    writeFileSync(join(app, 'app.tamber'), tamber);
+    writeFileSync(join(app, 'app.forma'), forma);
     const out = join(dir, name, 'library-gate.plan');
     const r = buildPlan(join(app, 'app.contract'), out);
     if (!r.ok) throw new Error(`the mutated library-gate did not compile (${name}): ${r.out.slice(-400)}`);
@@ -1259,7 +1259,7 @@ export function durationMs(text) {
 }
 
 /** The slot check's time (the lead's 10:15Z ask; rt1's stage 12 D2 tests in
- * tamber_serve_slots.rs): the clone's design alone, and with the real
+ * forma_serve_slots.rs): the clone's design alone, and with the real
  * @exact/cards and @exact/actions (an ignored test, which needs this
  * checkout's node_modules), each a touched name's check and every chain's,
  * under 10 ms. */
@@ -1380,11 +1380,11 @@ export function lines(opts) {
     ['anatomy', 'C\'s compiler tests: every anatomy, slot, library-literal, library-platform and library-control refusal with its span', () => {
       // C's own suites (reload1's stage 12 C), run by name.
       // And a library package's params held in range in every scale column,
-      // the terminal's included (tamber_base_expression's column ranges).
-      const r = run('cargo', ['test', '-q', '-p', 'contract', '--test', 'it', '--', 'anatomy::', 'anatomy_slot::', 'library_rules::', 'library_packages::', 'tamber_base_expression::']);
+      // the terminal's included (forma_base_expression's column ranges).
+      const r = run('cargo', ['test', '-q', '-p', 'contract', '--test', 'it', '--', 'anatomy::', 'anatomy_slot::', 'library_rules::', 'library_packages::', 'forma_base_expression::']);
       const counts = [...r.out.matchAll(/test result: (\w+)\. (\d+) passed; (\d+) failed/g)];
       const passed = counts.reduce((n, m) => n + Number(m[2]), 0), failed = counts.reduce((n, m) => n + Number(m[3]), 0);
-      const said = `contract tests anatomy::, anatomy_slot::, library_rules::, library_packages::, tamber_base_expression::: ${passed} passed, ${failed} failed`;
+      const said = `contract tests anatomy::, anatomy_slot::, library_rules::, library_packages::, forma_base_expression::: ${passed} passed, ${failed} failed`;
       return r.ok && passed > 0 && failed === 0 ? pass(said) : fail(said, r.out.trim().split('\n').slice(-4).join(' / ').slice(0, 400));
     }],
     ['slot-rendered', 'Every variant cell of apps/library-gate renders its slot\'s marker, both glyphs, on every required host', () => slotRendered(opts)],

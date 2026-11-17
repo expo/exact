@@ -15,6 +15,9 @@ pub enum HostError {
     /// generation asks again, and after [`LET_GO_AFTER`] lets them go
     /// (`reload_module`'s `let_go`), as the web's dev loop does (LLP 1007 §6).
     RequestsPending,
+    /// A delivered generation needs what this binary was not composed with
+    /// (LLP 1030.006 D4a): a new binary, never this update.
+    Unlinked(String),
 }
 
 /// How long a dev generation waits for requests in flight.

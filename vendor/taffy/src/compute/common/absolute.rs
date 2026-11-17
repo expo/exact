@@ -303,6 +303,17 @@ impl AbsoluteBox {
                 .then_some(inset_space.height),
         };
         let parent_size = area_size.map(Some);
+        // EXACT PATCH 78: keyword bounds, which resolve to none as lengths; `fit-content`
+        // against the space the insets and margins leave.
+        let (keyword_min, keyword_max) = super::sizing_keyword::keyword_bounds(
+            tree,
+            node,
+            parent_size,
+            self.size,
+            AvailableSpace::Definite(inset_space.width),
+        );
+        self.min_size = self.min_size.or(keyword_min);
+        self.max_size = self.max_size.or(keyword_max);
 
         if let Some(min) = crate::compute::ratio::minimum_ratio_width(tree, node, parent_size, None) {
             self.min_size.width = Some(min).maybe_max(self.min_size.width);

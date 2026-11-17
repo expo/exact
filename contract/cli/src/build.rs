@@ -2,7 +2,7 @@
 
 use std::{io::Write, path::Path, process::ExitCode};
 
-pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
+pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin | --stdin-as <used.contract>] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
 
 struct Options<'a> {
     input: &'a str,
@@ -13,6 +13,9 @@ struct Options<'a> {
     /// The file's text is stdin's, read as if saved at `input` (an editor's
     /// unsaved buffer): its `use` lines and diagnostics name that path.
     stdin: bool,
+    /// `--stdin-as`: stdin's text is instead read as if saved at this file,
+    /// one the input uses (the unsaved buffer of a file built with its app).
+    stdin_as: Option<&'a str>,
     /// A widget entry's kind (LLP 1126 D2): its plan instead of the app's,
     /// compiled as the bake compiles it from `app.json` beside the input.
     entry: Option<&'a str>,
@@ -25,6 +28,7 @@ struct Options<'a> {
 fn options(args: &[String]) -> Option<Options<'_>> {
     let (mut input, mut output, mut json, mut map, mut entry) = (None, None, false, false, None);
     let (mut errors_only, mut stdin, mut profile) = (false, false, None);
+    let mut stdin_as = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -32,6 +36,13 @@ fn options(args: &[String]) -> Option<Options<'_>> {
             "--errors-only" if !errors_only => errors_only = true,
             "--map" if !map => map = true,
             "--stdin" if !stdin => stdin = true,
+            "--stdin-as" if !stdin => {
+                stdin = true;
+                stdin_as = Some(args.next()?.as_str());
+                if stdin_as?.starts_with('-') {
+                    return None;
+                }
+            }
             "-o" if output.is_none() => {
                 output = Some(args.next()?.as_str());
                 if output?.starts_with('-') {
@@ -68,6 +79,7 @@ fn options(args: &[String]) -> Option<Options<'_>> {
         errors_only,
         map,
         stdin,
+        stdin_as,
         entry,
         profile: profile.unwrap_or_default(),
     })
@@ -156,10 +168,33 @@ fn report_all(
 
 /// The warnings as text, in their rank's order (`contract::warning_rank`),
 /// with the SF Symbols only the web draws blank in one line
-/// (`contract::web_only_line`).
+/// (`contract::web_only_line`), and the literal colours that stay one in
+/// dark mode in one line past one (`warning_rank::one_scheme_line`).
 fn print_warnings(warnings: &[contract::CompileError]) {
+    use contract_lower::warning_rank::{one_scheme_close, one_scheme_line, one_scheme_site};
     let (web, rest): (Vec<_>, Vec<_>) = warnings.iter().partition(|w| contract::web_only(w));
+    let sites: Vec<String> = rest
+        .iter()
+        .filter(|w| one_scheme_site(&w.id, &w.message))
+        .map(|w| w.to_string())
+        .collect();
+    let close = rest.iter().find(|w| one_scheme_close(&w.id, &w.message));
+    let one = match close {
+        Some(close) if sites.len() > 1 => Some(one_scheme_line(&close.to_string(), &sites)),
+        _ => None,
+    };
+    let mut said = false;
     for warning in rest {
+        if let Some(line) = one.as_ref().filter(|_| {
+            one_scheme_site(&warning.id, &warning.message)
+                || one_scheme_close(&warning.id, &warning.message)
+        }) {
+            if !said {
+                eprintln!("{line}{}", contract::excerpt(warning));
+                said = true;
+            }
+            continue;
+        }
         eprintln!("{warning}{}", contract::excerpt(warning));
     }
     if let Some(first) = web.first() {
@@ -194,7 +229,8 @@ pub(super) fn run(args: &[String]) -> ExitCode {
             1,
         );
     }
-    contract::with_contract_texts(vec![(options.input.into(), text)], || build(&options))
+    let held = options.stdin_as.unwrap_or(options.input);
+    contract::with_contract_texts(vec![(held.into(), text)], || build(&options))
 }
 
 fn build(options: &Options) -> ExitCode {
@@ -324,6 +360,21 @@ fn build(options: &Options) -> ExitCode {
         );
         // Every use is inlined: name what the plan's size is made of.
         if let Some(map) = &map {
+            let code = map.component_code_costs(&plan);
+            let top: Vec<_> = code
+                .iter()
+                .take(5)
+                .map(|(name, instances, bytes)| {
+                    format!(
+                        "{name}: {bytes} B ({instances} instance{})",
+                        if *instances == 1 { "" } else { "s" }
+                    )
+                })
+                .collect();
+            println!(
+                "  own plan code by component (shared bodies counted per use): {}",
+                top.join(", ")
+            );
             let costs = map.component_costs();
             if !costs.is_empty() {
                 let top: Vec<String> = costs

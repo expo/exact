@@ -28,6 +28,7 @@ struct ReadoutFacts: Equatable {
 /// A readout's custom view: its face's parts in a row.
 final class ReadoutView: UIView {
     let stack = UIStackView()
+    private let bundle: Bundle
     private(set) var face: ChipFace?
     private(set) var spoken: String?
     private(set) var facts = ReadoutFacts()
@@ -36,7 +37,8 @@ final class ReadoutView: UIView {
     // Physical, as CSS's `padding-left` is in either direction.
     private var edges: [NSLayoutConstraint] = []
 
-    init() {
+    init(bundle: Bundle = .main) {
+        self.bundle = bundle
         super.init(frame: .zero)
         stack.axis = .horizontal
         stack.alignment = .center
@@ -83,7 +85,7 @@ final class ReadoutView: UIView {
             self.face = face
             for view in stack.arrangedSubviews { view.removeFromSuperview() }
             for i in face.parts.indices {
-                let view = Self.view(of: face.parts[i], share: face.shares[i])
+                let view = Self.view(of: face.parts[i], share: face.shares[i], bundle: bundle)
                 // A part in the tint takes its node's accent as its own tint, which it draws
                 if face.shares[i] != nil { view.tintColor = face.accents[i] }
                 view.alpha = face.opacities[i]
@@ -113,7 +115,7 @@ final class ReadoutView: UIView {
     }
 
     /// The view of a part, in UIKit's tint where its colour is the tint (`share`, `SystemColor.tint`)
-    private static func view(of part: ChipFace.Part, share: Double?) -> UIView {
+    private static func view(of part: ChipFace.Part, share: Double?, bundle: Bundle) -> UIView {
         switch part {
         case .dot(let size, let fill, let corners):
             let dot = ReadoutDot(color: share.map(SystemColor.tint) ?? ink(fill), corners: corners)
@@ -121,12 +123,12 @@ final class ReadoutView: UIView {
             NSLayoutConstraint.activate([dot.widthAnchor.constraint(equalToConstant: size.width), dot.heightAnchor.constraint(equalToConstant: size.height)])
             return dot
         case .symbol(let name, let points, let tint):
-            let image = UIImageView(image: FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points)))
-            // The tint, which UIKit draws and dims, a share of it as a palette's colour (a view's own
-            // tint made from the one above it is not followed); a colour of its own, which UIKit leaves as it is
+            let image = UIImageView(image: FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points), bundle: bundle))
+            // A share of the tint stays dynamic; explicit ink belongs to the image, not its view's tint.
+            if FaceSymbol.isOriginal(name) { return image }
             if let share {
                 if share < 1 { image.preferredSymbolConfiguration = UIImage.SymbolConfiguration(paletteColors: [SystemColor.tint(share)]) }
-            } else { image.tintColor = ink(tint); image.tintAdjustmentMode = .normal }
+            } else { image.image = image.image?.withTintColor(ink(tint), renderingMode: .alwaysOriginal) }
             return image
         case .text(let text, let font, let color):
             let label = UILabel()

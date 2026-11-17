@@ -128,13 +128,17 @@ fn clock_advice(file: &File, sources: &sources::Sources) -> Vec<CompileError> {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/it/scratch.rs"]
+mod scratch;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn shared_loading_keeps_the_independent_passes_results() {
-        let dir = std::env::temp_dir().join(format!("contract-advice-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = super::scratch::Scratch::new(format!("contract-advice-{}", std::process::id()));
         let path = dir.join("app.contract");
         let diagnostics =
             |errors: &[CompileError]| errors.iter().map(CompileError::to_json).collect::<Vec<_>>();
@@ -170,6 +174,5 @@ mod tests {
             }
             assert_eq!(diagnostics(&resource_clock_warnings(&path).unwrap_or_default()), diagnostics(&advised.clocks));
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

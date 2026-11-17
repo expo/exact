@@ -5,8 +5,8 @@
 //! one row naming the token. A token's family is a stack the plan declares,
 //! as a literal `font-family`'s is, and a bound table holds its id.
 use super::*;
+use exact_forma as forma;
 use exact_kernel::style::theme::typeface;
-use exact_tamber as tamber;
 
 /// The rows a type value writes, in `font`'s order.
 fn longhands(value: &str) -> Option<Vec<StyleId>> {
@@ -33,7 +33,7 @@ impl Lowerer<'_> {
     /// type or family token's family as the stack it declares here (`#12`),
     /// every tuple's declared so the runner finds each in the plan.
     pub(super) fn theme_stacks(&mut self) -> Vec<String> {
-        let entries: Vec<(tamber::Kind, Vec<String>, Span)> = self
+        let entries: Vec<(forma::Kind, Vec<String>, Span)> = self
             .theme
             .iter()
             .map(|e| {
@@ -51,8 +51,8 @@ impl Lowerer<'_> {
         let mut out = Vec::new();
         for (kind, values, span) in entries {
             let kernel = match kind {
-                tamber::Kind::Type => exact_kernel::style::theme::Kind::Type,
-                tamber::Kind::Family => exact_kernel::style::theme::Kind::Family,
+                forma::Kind::Type => exact_kernel::style::theme::Kind::Type,
+                forma::Kind::Family => exact_kernel::style::theme::Kind::Family,
                 _ => {
                     out.push(values[0].clone());
                     continue;
@@ -60,7 +60,7 @@ impl Lowerer<'_> {
             };
             for value in &values {
                 let family = match kind {
-                    tamber::Kind::Family => Some(value.trim()),
+                    forma::Kind::Family => Some(value.trim()),
                     _ => typeface::parts(value).and_then(|p| p.family),
                 };
                 let Some(family) = family else { continue };
@@ -99,7 +99,7 @@ impl Lowerer<'_> {
     ) -> Result<bool, LowerError> {
         let Some(rows) = tokens_named(
             a,
-            tamber::Kind::Type,
+            forma::Kind::Type,
             font,
             &self.declared_fonts,
             self.element_children,
@@ -131,7 +131,7 @@ impl Lowerer<'_> {
     ) -> Result<bool, LowerError> {
         if tokens_named(
             a,
-            tamber::Kind::Family,
+            forma::Kind::Family,
             &[],
             &self.declared_fonts,
             self.element_children,
@@ -219,7 +219,7 @@ fn bundled_faces(
 /// not inherited type).
 pub(crate) fn tokens_named(
     a: &Attr,
-    kind: tamber::Kind,
+    kind: forma::Kind,
     font: &[FontUse],
     declared: &BTreeMap<String, DeclaredFont>,
     element_children: bool,
@@ -239,17 +239,17 @@ pub(crate) fn tokens_named(
     // name or text style here: refused, naming the row that names it.
     for e in &leaves {
         if let Expr::Str(text, span) = e {
-            if let Some((other @ (tamber::Kind::Type | tamber::Kind::Family), _)) =
+            if let Some((other @ (forma::Kind::Type | forma::Kind::Family), _)) =
                 crate::theme::measure_values(text)
             {
                 if other != kind {
-                    let row = if other == tamber::Kind::Type {
+                    let row = if other == forma::Kind::Type {
                         "font"
                     } else {
                         "font-family"
                     };
                     return err(
-                        "tamber-kind",
+                        "forma-kind",
                         format!(
                             "`{}=\"{}\"`: `{}` is a {} token, which `{row}` names",
                             a.name,
@@ -266,26 +266,26 @@ pub(crate) fn tokens_named(
     if named.is_empty() {
         return Ok(None);
     }
-    let what = if kind == tamber::Kind::Type {
+    let what = if kind == forma::Kind::Type {
         "type"
     } else {
         "family"
     };
     if named.len() != leaves.len() {
         return err(
-            "tamber-kind",
+            "forma-kind",
             format!("`{}` names a {what} token in one arm and something else in another: each arm names a {what} token", a.name),
             a.value.span(),
         );
     }
     let mut rows: Option<Vec<StyleId>> = None;
     for (name, values, span) in &named {
-        if kind == tamber::Kind::Type {
+        if kind == forma::Kind::Type {
             for value in values {
                 let written = longhands(value);
                 if written.is_none() {
                     return err(
-                        "tamber-kind",
+                        "forma-kind",
                         format!(
                             "`{name}` is `{value}`, which no `font` longhand reads as a type value"
                         ),
@@ -295,7 +295,7 @@ pub(crate) fn tokens_named(
                 bundled_faces(name, value, font, declared, *span)?;
                 if rows.is_some() && written != rows {
                     return err(
-                        "tamber-type-longhands",
+                        "forma-type-longhands",
                         format!("`{name}` writes other longhands than another value `{}` may be (`{value}`): a type token's tuples, and the tokens one row chooses between, write the same longhands, since which rows a token writes is lowered (D6)", a.name),
                         *span,
                     );
@@ -312,7 +312,7 @@ pub(crate) fn tokens_named(
             .expect("varies")
             .0;
         return err(
-            "tamber-inherited-axis",
+            "forma-inherited-axis",
             format!("`{}=\"{name}\"`: `{name}` varies by an app axis, and its rows are inherited by this node's children, which a mode boundary would not choose again: write it on the text, not its container (a pin would not reach inherited type)", a.name),
             a.value.span(),
         );

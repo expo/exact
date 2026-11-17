@@ -27,11 +27,16 @@
   var StringCtor = String;
   var NumberCtor = Number;
   var WeakMapCtor = WeakMap;
-  var performanceObject = global.performance;
+  // An embedder that publishes the engine hooks (`InstallOptions::events_hooks`)
+  // installs these events with no clock: its realm may refuse one to its code
+  // (Exact's data module, exact2 LLP 1175 D1), so `timeStamp` is 0.
+  var embedded = global.__ibex2_events_embedded === true;
+  delete global.__ibex2_events_embedded;
+  var performanceObject = embedded ? null : global.performance;
   var performanceNow = performanceObject && typeof performanceObject.now === "function"
     ? performanceObject.now
     : null;
-  var dateNow = Date.now;
+  var dateNow = embedded ? null : Date.now;
 
   // @ref LLP 0057.000#l3--events-abort-and-the-second-direction — private records have no prototype, so inherited setters never see them
   function privateRecord(fields) {
@@ -53,6 +58,10 @@
   var nativeReport = global.__ibex2_report_error;
   delete global.__ibex2_report_error;
   var reportingException = false;
+  // The embedder's `{ report, result, during }` (`configure`): every report,
+  // cancelled or not, in place of `nativeReport`; each listener's return
+  // value; and the host's own dispatches, run inside `during`.
+  var embedder = null;
 
   function domString(value) {
     if (typeof value === "symbol") throw new TypeError("cannot convert a Symbol to a string");
@@ -96,7 +105,7 @@
       trusted: false,
       timeStamp: performanceNow
         ? functionCall(performanceNow, performanceObject)
-        : dateNow()
+        : dateNow ? dateNow() : 0
     }));
     // Web IDL's [LegacyUnforgeable] isTrusted is an own accessor. Keep the
     // getter shared across instances, as the platform descriptor requires.
@@ -385,11 +394,13 @@
       if (entry.once) removeEntry(target, entry);
       state.passive = entry.passive;
       try {
-        if (typeof entry.callback === "function") functionCall(entry.callback, target, event);
+        var result;
+        if (typeof entry.callback === "function") result = functionCall(entry.callback, target, event);
         else {
           var handleEvent = entry.callback.handleEvent;
-          if (typeof handleEvent === "function") functionCall(handleEvent, entry.callback, event);
+          if (typeof handleEvent === "function") result = functionCall(handleEvent, entry.callback, event);
         }
+        if (embedder) embedder.result(result);
       } catch (error) {
         reportException(error);
       }
@@ -442,11 +453,25 @@
     }
   }
 
+  // What the host does with a report: the embedder's, told whether a
+  // listener cancelled it, or the native console's, for one none did.
+  function told(type, value, text, cancelled) {
+    if (embedder) embedder.report(type, value, text, cancelled);
+    else if (!cancelled) nativeReport(text);
+  }
+
+  // The host's own dispatch of an error event on the global.
+  function hostDispatch(event, trusted) {
+    if (!embedder) return dispatch(global, event, trusted);
+    return embedder.during(function () { return dispatch(global, event, trusted); });
+  }
+
+  // Whether a listener cancelled the event.
   function reportException(error) {
     var text = errorText(error);
     if (reportingException) {
-      nativeReport(text);
-      return;
+      told("error", error, text, false);
+      return false;
     }
     reportingException = true;
     try {
@@ -455,7 +480,9 @@
         message: error && typeof error.message === "string" ? error.message : text,
         error: error
       });
-      if (dispatch(global, event, true)) nativeReport(text);
+      var cancelled = !hostDispatch(event, true);
+      told("error", error, text, cancelled);
+      return cancelled;
     } finally {
       reportingException = false;
     }
@@ -510,6 +537,7 @@
           if ((errorHandler && result === true) || (!errorHandler && result === false)) {
             event.preventDefault();
           }
+          if (embedder) embedder.result(result);
         };
         functionCall(EventTarget.prototype.addEventListener, global, type, wrapper);
       }
@@ -567,11 +595,21 @@
         cancelable: true, promise: promise, reason: reason
       });
       // @ref LLP 0059.000#310-atob--btoa-structuredclone-blob--file--formdata-customevent--pure-ungated — stock Hermes exposes callable Promise tracker slots, so their events cannot authenticate host provenance
-      if (dispatch(global, event, false)) nativeReport(errorText(reason));
+      var cancelled = !hostDispatch(event, false);
+      told("unhandledrejection", reason, errorText(reason), cancelled);
+      return cancelled;
     },
     onHandled: function (_, reason, promise) {
-      dispatch(global,
+      hostDispatch(
         new PromiseRejectionEvent("rejectionhandled", { promise: promise, reason: reason }), false);
+    },
+    // Once, by the embedder that asked for the hooks, before any application code.
+    configure: function (hooks) {
+      if (!embedded) throw new TypeError("the events binding was installed without engine hooks");
+      if (embedder) throw new TypeError("the events binding is already configured");
+      if (!hooks || typeof hooks.report !== "function" || typeof hooks.result !== "function" ||
+          typeof hooks.during !== "function") throw new TypeError("invalid event embedder hooks");
+      embedder = privateRecord({ report: hooks.report, result: hooks.result, during: hooks.during });
     }
   };
 })(globalThis);

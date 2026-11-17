@@ -4,6 +4,7 @@
 //! keyframes, computed times and `for` positions — proven on the rows the
 //! runner resolves after boot, and on what the compiler refuses.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, StyleId};
 use exact_motion::{Animations, Direction, Easing, FillMode, Property, Value};
 use exact_plan::{Plan, Value as PlanValue};
@@ -22,12 +23,48 @@ fn fixture() -> String {
     std::fs::read_to_string(path).unwrap()
 }
 
+#[test]
+fn keyframes_accept_a_rotation_axis_and_angle_units() {
+    for rotation in ["-90deg x", "y -0.25turn", "1 1 0 100grad", "1.5rad"] {
+        let source = format!("keyframes fold\n  to rotate=\"{rotation}\"\ncomponent App\n  view\n    view animation=\"fold 1s linear both\"\n");
+        contract::compile(&source).unwrap_or_else(|e| panic!("{rotation}: {e}"));
+    }
+}
+
+#[test]
+fn spatial_keyframes_on_svg_elements_name_the_unsupported_hosts() {
+    let source = "keyframes fold\n  to rotate=\"-90deg x\"\ncomponent App\n  view\n    svg viewBox=\"0 0 100 100\"\n      rect width=100 height=100 animation=\"fold 1s linear both\"\n";
+    let e = contract::compile(source).unwrap_err();
+    assert_eq!(e.id, "lower-animation-target");
+    assert!(
+        e.message.contains("Apple or painted hosts"),
+        "{}",
+        e.message
+    );
+    assert!(e.message.contains("box around the `svg`"), "{}", e.message);
+}
+
+#[test]
+fn svg_angle_keyframes_refuse_an_inherited_spatial_axis() {
+    for row in ["0deg x", "0deg y", "1 1 0 0deg", "0deg z"] {
+        let source = format!("keyframes fold\n  to rotate=-90\ncomponent App\n  view\n    svg\n      rect rotate=\"{row}\" animation=\"fold 1s linear\"\n");
+        let result = contract::compile(&source);
+        if row == "0deg z" {
+            result.unwrap();
+        } else {
+            let e = result.unwrap_err();
+            assert_eq!(e.id, "lower-animation-target");
+            assert!(e.message.contains("Apple or painted hosts"));
+        }
+    }
+}
+
 fn animation(r: &Runner<NoData>, test_id: &str) -> (bool, Animations) {
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap();
     (
         node.style.mask.has(StyleId::Animation),
-        node.style.animation.clone(),
+        (*node.style.animation).clone(),
     )
 }
 
@@ -541,12 +578,13 @@ fn a_bare_hex_color_is_its_quoted_string_and_another_hash_says_why() {
 }
 
 /// Chess diary #4: `translate` takes percentages of the box's own border
-/// box, as CSS does — in an attribute, bound to state, and in a keyframe —
-/// and the engine's `translate` carries them beside the lengths (x, y, then
-/// percentages), interpolated componentwise as CSS interpolates `calc()`.
+/// box, as CSS does — in an attribute, bound to state, and in a keyframe,
+/// alone or in a `calc()` with px — and the engine's `translate` carries them
+/// beside the lengths (x, y, then percentages), interpolated componentwise as
+/// CSS interpolates `calc()`.
 #[test]
 fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
-    let source = "keyframes slide\n  from translate=\"-50% 0\"\n  to translate=\"10px 25%\"\ncomponent App\n  state wide = false\n  action widen\n    wide = true\n  view\n    column\n      box testId=\"centred\" position=\"absolute\" left=\"50%\" top=\"50%\" width=120 height=40 translate=\"-50% -50%\"\n      box testId=\"one\" position=\"absolute\" left=\"50%\" width=20 height=10 translate=\"-50%\"\n      box testId=\"bound\" width=80 height=10 translate=wide ? \"12px -100%\" : \"0\"\n      box testId=\"slides\" width=10 height=10 animation=\"slide 1s\"\n      button testId=\"widen\" press=widen\n        text \"w\"\n";
+    let source = "keyframes slide\n  from translate=\"calc(-50% + 4px) 0\"\n  to translate=\"10px 25%\"\ncomponent App\n  state wide = false\n  action widen\n    wide = true\n  view\n    column\n      box testId=\"centred\" position=\"absolute\" left=\"50%\" top=\"50%\" width=120 height=40 translate=\"-50% -50%\"\n      box testId=\"one\" position=\"absolute\" left=\"50%\" width=20 height=10 translate=\"-50%\"\n      box testId=\"bound\" width=80 height=10 translate=wide ? \"12px calc(-100% + 3px)\" : \"0\"\n      box testId=\"slides\" width=10 height=10 animation=\"slide 1s\"\n      button testId=\"widen\" press=widen\n        text \"w\"\n";
     let mut r = booted(source);
     let rows = |r: &Runner<NoData>, id: &str| {
         let k = r.kernel();
@@ -574,9 +612,9 @@ fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
     assert_eq!(
         rows(&r, "bound"),
         (
-            (12.0, 0.0),
+            (12.0, 3.0),
             (0.0, -100.0),
-            Value::four(12.0, 0.0, 0.0, -100.0)
+            Value::four(12.0, 3.0, 0.0, -100.0)
         )
     );
     let (_, row) = animation(&r, "slides");
@@ -584,7 +622,7 @@ fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
     assert_eq!(
         frames,
         [
-            (Property::Translate, Value::four(0.0, 0.0, -50.0, 0.0)),
+            (Property::Translate, Value::four(4.0, 0.0, -50.0, 0.0)),
             (Property::Translate, Value::four(10.0, 0.0, 0.0, 25.0)),
         ]
     );
@@ -597,7 +635,7 @@ fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
         exact_motion::animation::value_css(Property::Translate, Value::four(-4.0, 0.0, -50.0, 0.0)),
         "calc(-4px + -50%) 0px"
     );
-    for refused in ["-50%%", "calc(10px + 5%)", "50% 50% 10%"] {
+    for refused in ["-50%%", "calc(1rem + 5%)", "calc(5% * 5%)", "50% 50% 10%"] {
         let error = contract::compile(&format!(
             "component App\n  view\n    box translate=\"{refused}\"\n"
         ))
@@ -655,11 +693,10 @@ fn a_colour_keyframe_takes_the_designs_tokens() {
     let from = &row.0[0].keyframes.0[0];
     assert_eq!(get(&from.values, Property::Color), Some([255, 0, 0, 255]));
     assert_eq!(get(&from.dark, Property::Color), Some([255, 255, 255, 255]));
-    let dir = std::env::temp_dir().join(format!("keyframe-token-axis-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("keyframe-token-axis-{}", std::process::id()));
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\naxes\n  tone = calm | loud\n\ntheme\n  c.chip = #cfced4\n    when tone=loud: #ff0000\n",
+        dir.join("app.forma"),
+        "forma t\n\naxes\n  tone = calm | loud\n\ntheme\n  c.chip = #cfced4\n    when tone=loud: #ff0000\n",
     )
     .unwrap();
     std::fs::write(
@@ -678,7 +715,7 @@ fn a_colour_keyframe_takes_the_designs_tokens() {
     .unwrap_err();
     assert_eq!(scale.id, "lower-keyframes");
     assert!(
-        scale.message.contains("one factor for both axes"),
+        scale.message.contains("one factor for both axes") && scale.message.contains("-90deg x"),
         "{scale}"
     );
 }

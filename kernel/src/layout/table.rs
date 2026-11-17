@@ -60,6 +60,9 @@ struct Formed {
     padding: Option<taffy::geometry::Rect<taffy::style::LengthPercentage>>,
     /// The anonymous tables inside a block table or blockified table part.
     anon: Vec<Anonymous>,
+    /// Each grid's captions and rows, in `anon`'s order; a table laid out
+    /// as a grid has one, its own.
+    rows: Vec<(u32, u32)>,
     /// A block owner's shown children that are not its parts: each ends a
     /// run of parts, and so an anonymous table.
     boxes: Vec<u32>,
@@ -146,6 +149,63 @@ impl Tables {
     pub(super) fn find(&mut self, arena: &NodeArena, slots: &[u32]) {
         let tables = slots.iter().filter(|s| context(arena, **s).is_some());
         self.stale.extend(tables);
+    }
+
+    /// Where `slot`, a row or a cell, stands in its table, counted in the
+    /// order the table is drawn (CSS 2.2 §17.2, [`form`]): the table, and
+    /// the part's area among the table's rows, a caption's row not one. The
+    /// rows of a block table's later anonymous tables follow its earlier
+    /// ones'.
+    fn place(&self, arena: &NodeArena, slot: u32) -> Option<(u32, Area)> {
+        if !matches!(Part::of(arena, slot), Some(Part::Row | Part::Cell)) {
+            return None;
+        }
+        let p = self.placed.get(&slot)?;
+        let rows = &self.formed.get(&p.table)?.rows;
+        let before: u32 = rows.iter().take(p.grid).map(|(_, r)| r).sum();
+        let (captions, _) = *rows.get(p.grid)?;
+        let mut area = p.area;
+        area.row = area.row - captions + before;
+        Some((p.table, area))
+    }
+
+    /// `owner`'s children in the order its table draws them ([`form`]), as
+    /// each one's index among them as written; a child it does not place
+    /// keeps its index. `None` when that is the written order.
+    fn order(&self, arena: &NodeArena, owner: u32) -> Option<Vec<usize>> {
+        let parts = &self.formed.get(&owner)?.parts;
+        let children = arena.children(owner);
+        let written: IdMap<u32, usize> =
+            children.iter().enumerate().map(|(i, s)| (*s, i)).collect();
+        let drawn: Vec<usize> = (parts.iter())
+            .filter_map(|s| written.get(s).copied())
+            .collect();
+        let mut placed = vec![false; children.len()];
+        for &i in &drawn {
+            placed[i] = true;
+        }
+        let mut drawn = drawn.into_iter();
+        let order: Vec<usize> = (0..children.len())
+            .map(|i| {
+                if placed[i] {
+                    drawn.next().unwrap_or(i)
+                } else {
+                    i
+                }
+            })
+            .collect();
+        order
+            .iter()
+            .enumerate()
+            .any(|(i, at)| i != *at)
+            .then_some(order)
+    }
+
+    /// How many rows and columns `table`'s grids have, captions aside.
+    fn size(&self, table: u32) -> Option<(u32, u32)> {
+        let f = self.formed.get(&table).filter(|f| !f.rows.is_empty())?;
+        let columns = (f.anon.iter().map(|g| g.columns)).fold(f.columns, u32::max);
+        Some((f.rows.iter().map(|(_, r)| r).sum(), columns))
     }
 
     /// The first anonymous table holding `slot`'s parts, when it has one.
@@ -439,6 +499,7 @@ fn form(arena: &NodeArena, table: u32) -> (Formed, Vec<Item>) {
             item.grid = formed.anon.len();
         }
         formed.parts.extend(&grid.parts);
+        formed.rows.extend(&grid.rows);
         formed.anon.push(Anonymous {
             columns: grid.columns,
             parts: grid.parts,
@@ -469,6 +530,7 @@ fn form_grid(
         out.push(Item::new(c, whole(y, 1), (1, 1)));
         y += 1;
     }
+    let captions = y;
     // Each group: its node, if it is one, and its rows; a run of rows the
     // table holds itself is a group of its own.
     let mut groups: Vec<(Option<u32>, Vec<u32>)> = Vec::new();
@@ -565,6 +627,7 @@ fn form_grid(
         columns,
         parts,
         context: ctx,
+        rows: vec![(captions, y - captions)],
         ..Formed::default()
     };
     (formed, out)
@@ -779,6 +842,34 @@ impl LayoutTree {
             }
         }
         true
+    }
+
+    /// Where `slot`, a row or a cell, stands in its table, from the last
+    /// layout: the table's slot, and the part's area among its rows and
+    /// columns from 0 (a row's `columns` 0: every column).
+    pub(crate) fn table_place(&self, arena: &NodeArena, slot: u32) -> Option<(u32, Area)> {
+        self.tables.place(arena, slot)
+    }
+
+    /// `slot`'s children in the order its table draws them, from the last
+    /// layout, as each one's index among them as written; `None` when that
+    /// is the written order.
+    pub(crate) fn table_order(&self, arena: &NodeArena, slot: u32) -> Option<Vec<usize>> {
+        self.tables.order(arena, slot)
+    }
+
+    /// How many rows and columns `slot`'s table has, from the last layout;
+    /// `None` when `slot` is no table laid out as one.
+    pub(crate) fn table_size(&self, slot: u32) -> Option<(u32, u32)> {
+        self.tables.size(slot)
+    }
+
+    /// Every slot table formation has a record of, from the last layout:
+    /// each owner of a grid and each part placed in one, in no order.
+    pub(crate) fn table_slots(&self) -> impl Iterator<Item = u32> + '_ {
+        (self.tables.formed.keys())
+            .chain(self.tables.placed.keys())
+            .copied()
     }
 
     /// Whether table formation has a record of `slot`: a grid it owns or

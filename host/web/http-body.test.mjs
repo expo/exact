@@ -6,7 +6,7 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {boundedHttpBody as readBody, longPollTiming, request, waitForInflight} from './http-body.js';
-import {admittingGrant, scopedGrantSet} from './grant-admission.js';
+import {admittingGrant, createGrantSet, grantError, scopedGrantSet} from './grant-admission.js';
 import {createRequestExecutor} from '../web-js/admission.js';
 
 const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),sets=new Map();
@@ -25,6 +25,13 @@ function responseAt(url, body, init) {
   return Object.defineProperty(new Response(body, init), 'url', { value: String(url) });
 }
 
+// LLP 1153.002 D2: the bake's line for a setting a launch may give is exact2's own; the page admits the set, and the
+// line grants nothing there.
+test('an env.launch line is admitted as an exact-only line and grants no I/O',()=>{
+  const set=createGrantSet(structuredClone(normalized('net.fetch https://api.example\nenv.launch API_BASE_URL')));
+  expect(grantError(set)).toBeNull();
+  expect(set.entries[1]).toEqual([2,'env.launch API_BASE_URL',null,null]);
+});
 test('independent HTTP collects only a bounded complete response',async()=>{
   assert.deepEqual(await readBody(new Response('four'),4),new TextEncoder().encode('four'));
   assert.deepEqual(await readBody(new Response(null),4),new Uint8Array());
@@ -131,6 +138,27 @@ test('the event-stream line ceiling counts invalid UTF-8 as received bytes', asy
     if (size === 5) assert.deepEqual(parse(bytes), [{ event: '', id: '', data: '\ufffd'.repeat(5) }]);
     else assert.throws(() => parse(bytes), /ceiling/);
   }
+});
+
+// #771: a line is assembled by slices, so where the reads split it, a CRLF or a surrogate pair cannot matter.
+test('the event-stream parser gives the same events however the bytes are split', async () => {
+  const { eventStream } = await import('./http-body.js');
+  const enc = s => new TextEncoder().encode(s), big = 'x'.repeat(2 << 20);
+  const parts = ['data: {"a":1}', '\r\n', '\r', '\n', 'event: é語😀', 'id: 7', 'data:', ': c', 'data: 😀😀', '\uFEFF'];
+  let seed = 771;
+  const next = n => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+  const corpora = [`data: {"p":"${big}"}\r\n\r\n`];
+  for (let k = 0; k < 200; k++) corpora.push(Array.from({ length: 30 }, () => parts[next(parts.length)]).join(''));
+  for (const text of corpora) {
+    const bytes = enc(text), whole = eventStream(4 << 20)(bytes, true);
+    for (const step of text.length > 4096 ? [65536, 65537] : [1, 2, 3, 1 + next(16)]) {
+      const parse = eventStream(4 << 20), out = [];
+      for (let i = 0; i < bytes.length; i += step) out.push(...parse(bytes.subarray(i, i + step)));
+      out.push(...parse(new Uint8Array(), true));
+      assert.deepEqual(out, whole, `step ${step}`);
+    }
+  }
+  assert.deepEqual(eventStream(4 << 20)(enc(corpora[0]), true), [{ event: '', id: '', data: `{"p":"${big}"}` }]);
 });
 
 // LLP 1016.000 D4: every event, in order; those of one read are one batch,

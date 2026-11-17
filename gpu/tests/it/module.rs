@@ -102,6 +102,10 @@ fn device_event_json_preserves_every_variant_and_refuses_fields_by_name() {
                     dy: 0.5,
                     kind: device,
                     buttons: 1,
+                    shift_key: false,
+                    ctrl_key: false,
+                    alt_key: false,
+                    meta_key: false,
                     at_ms: 2.0
                 }
             );
@@ -114,9 +118,33 @@ fn device_event_json_preserves_every_variant_and_refuses_fields_by_name() {
             dy: -120.0,
             x: 2.0,
             y: 3.0,
+            shift_key: false,
+            ctrl_key: false,
+            alt_key: false,
+            meta_key: false,
             at_ms: 4.0
         }
     );
+    // The modifiers held, the web's names; a pinch is a wheel with Control.
+    assert_eq!(
+        parse_input(r#"{"t":"wheel","dx":0,"dy":-8,"x":2,"y":3,"ctrlKey":true,"at":4}"#).unwrap(),
+        InputEvent::Wheel {
+            dx: 0.0,
+            dy: -8.0,
+            x: 2.0,
+            y: 3.0,
+            shift_key: false,
+            ctrl_key: true,
+            alt_key: false,
+            meta_key: false,
+            at_ms: 4.0
+        }
+    );
+    assert!(matches!(
+        parse_input(r#"{"t":"pointer","phase":"down","id":1,"x":0,"y":0,"dx":0,"dy":0,"kind":"mouse","buttons":1,"shiftKey":true,"altKey":false,"metaKey":true,"at":2}"#).unwrap(),
+        InputEvent::Pointer { shift_key: true, ctrl_key: false, alt_key: false, meta_key: true, .. }
+    ));
+    assert!(parse_input(r#"{"t":"wheel","dx":0,"dy":0,"x":0,"y":0,"ctrlKey":1,"at":4}"#).is_err());
     assert_eq!(
         parse_input(r#"{"t":"blur","at":5}"#).unwrap(),
         InputEvent::Blur { at_ms: 5.0 }
@@ -883,17 +911,17 @@ fn lifecycle_and_clock_reach_surfaces_without_a_device() {
     m.set_seekable(true); // only changes are delivered
     let agent = m.create_headless("probe").unwrap();
     for id in [live, agent] {
-        for code in [0, 1, 2, 3, 999] {
+        for code in [0, 1, 2, 3, 4, 999] {
             m.lifecycle(id, code);
         }
     }
     assert_eq!(
         m.agent(live, "").unwrap(),
-        "clock:false,clock:true,Hidden,Visible,Interrupted,Resumed"
+        "clock:false,clock:true,Hidden,Visible,Interrupted,Resumed,Activated"
     );
     assert_eq!(
         m.agent(agent, "").unwrap(),
-        "clock:true,Hidden,Visible,Interrupted,Resumed"
+        "clock:true,Hidden,Visible,Interrupted,Resumed,Activated"
     );
     m.set_seekable(false);
     assert!(m.agent(agent, "").unwrap().ends_with("clock:false"));

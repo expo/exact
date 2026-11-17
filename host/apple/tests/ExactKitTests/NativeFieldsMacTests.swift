@@ -125,7 +125,7 @@ final class NativeFieldsMacTests: XCTestCase {
         let standard = NSTextField()
         XCTAssertEqual(field.isBezeled, standard.isBezeled)
         node.appearance = NSAppearance(named: .aqua)
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Field": [[12, 200, 40, 255], [200, 12, 40, 255]]]]]), root: p.root)
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Field": [[12, 200, 40, 255], [200, 12, 40, 255]]]]]).ops[0], root: p.root)
         p.applyThemeTint()
         XCTAssertFalse(field.isBezeled)
         XCTAssertFalse(field.drawsBackground)
@@ -138,7 +138,7 @@ final class NativeFieldsMacTests: XCTestCase {
         node.viewDidChangeEffectiveAppearance()
         XCTAssertEqual(node.layer?.backgroundColor, node.fieldGround, "Field chrome follows appearance without an authored scheme color")
         XCTAssertEqual(field.stringValue, "Keep this text")
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]), root: p.root)
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0], root: p.root)
         p.applyThemeTint()
         XCTAssertNil(node.fieldGround)
         XCTAssertEqual(field.isBezeled, standard.isBezeled)
@@ -510,8 +510,8 @@ final class NativeFieldsMacTests: XCTestCase {
     /// author-drawn and Markdown editors keep their transparent native views.
     func testTextareaThemeBackgroundAndRemoval() throws {
         _ = NSApplication.shared
-        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]])) }
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Field": [[204, 255, 204, 255], [0, 51, 0, 255]]]]]))
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0]) }
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Field": [[204, 255, 204, 255], [0, 51, 0, 255]]]]]).ops[0])
         let session = ExactApp.shared.makeSession(label: "textarea-theme")
         defer { session.destroy() }
         let node = NodeView(id: 1, kind: "textarea", presenter: session.presenter)
@@ -536,14 +536,14 @@ final class NativeFieldsMacTests: XCTestCase {
         XCTAssertTrue(editor.drawsBackground)
         XCTAssertTrue(scroll.drawsBackground)
         XCTAssertEqual(scroll.borderType, .bezelBorder)
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]))
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0])
         node.applyStyle([:])
         XCTAssertEqual(editor.backgroundColor, NSTextView().backgroundColor)
         XCTAssertEqual(scroll.backgroundColor, NSScrollView().backgroundColor)
         XCTAssertEqual(editor.string, "Keep this text")
         XCTAssertEqual(editor.selectedRange(), NSRange(location: 5, length: 4))
         XCTAssertEqual(editor.textContainerInset, inset)
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Field": [255, 0, 0, 255]]]]))
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Field": [255, 0, 0, 255]]]]).ops[0])
         node.applyStyle(["appearance": .string("none"), "background_color": .array([.number(0), .number(0), .number(255), .number(255)])])
         XCTAssertFalse(editor.drawsBackground)
         XCTAssertFalse(scroll.drawsBackground)

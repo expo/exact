@@ -528,6 +528,9 @@ extension NodeView {
     /// Parked (`NodePool`): what `forget` drops, except the view's presenter
     /// and its empty text hierarchy or symbol glyph view, which the next row reuses.
     func recycle() {
+        layoutHits = nil
+        trackClipboardHandlers(false)
+        trackIntersections(listening: false)
         holdGone() // a held state goes with its node, parked under its row (HeldState.swift)
         cancelPressContact()
         pressContact = nil
@@ -571,6 +574,7 @@ extension NodeView {
     /// list's scroll, with its delegate detached while it resets.
     func recycleScroll() {
         guard let sv = scroll else { return }
+        dropZoom()
         let delegate = sv.delegate
         sv.delegate = nil
         sv.setContentOffset(.zero, animated: false)
@@ -599,7 +603,7 @@ extension NodeView {
         // UIKit's setters are not free, even to the same value.
         if isHidden { isHidden = false }
         if alpha != 1 || boxFilter != nil { presentOpacity(1) }
-        translatePx = .zero; translatePercent = .zero; layoutOffset = .zero; layoutResize = .zero; endSurface(); scale = 1; rotate = 0; stopPressEase(); press = PressFeedback(); dropPressPaint()
+        translatePx = .zero; translatePercent = .zero; layoutOffset = .zero; zoomFactor = 1; zoomShift = .zero; layoutResize = .zero; endSurface(); scale = 1; rotate = 0; rotationAxis = [0, 0, 0]; stopPressEase(); press = PressFeedback(); dropPressPaint()
         if !transform.isIdentity { transform = .identity }
         if !isUserInteractionEnabled { isUserInteractionEnabled = true }
         // With assistive technology's runtime loaded every accessibility
@@ -612,6 +616,7 @@ extension NodeView {
         if accessibilityHint != nil { accessibilityHint = nil }
         if accessibilityViewIsModal { accessibilityViewIsModal = false }
         props = [:]
+        layoutHits = nil
         // The presenter's indexes for the new id (LLP 1068 §4.0): each is
         // filled by a property observer a rebind does not fire.
         if scroll != nil { presenter?.scrollers.insert(newID) }

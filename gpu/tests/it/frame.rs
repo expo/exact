@@ -112,6 +112,7 @@ static REGISTRY: Registry = Registry {
         ("b", 0, || Box::new(Clear("b"))),
         ("f", 0, || Box::new(Fails(Clear("f"), false))),
         ("p", 0, || Box::new(Pending(Clear("p"), false))),
+        ("v", 0, || Box::<crate::validation::Misfit>::default()),
     ],
     shaders: &[],
 };
@@ -317,6 +318,41 @@ fn a_frame_with_a_failed_canvas_presents_the_others_once_and_it_never() {
     );
     assert_eq!(after.presented_alone, before.presented_alone);
     assert!(m.sync());
+}
+
+/// A canvas whose commands fail validation is refused alone (#658): the
+/// other canvas in its frame is submitted and presented, and the refused one
+/// is neither, frame after frame, until its commands are valid again.
+#[test]
+fn a_canvas_that_fails_validation_is_refused_and_the_others_present() {
+    let Some((mut m, [a, v], _layers)) = on_layers(["a", "v"]) else {
+        return;
+    };
+    take();
+    for _ in 0..6 {
+        let before = counts(&m);
+        assert_eq!(m.render(a, &frame()), Some(true));
+        assert_eq!(m.render(v, &frame()), None, "the failure is reported");
+        let error = m.take_error();
+        assert!(error.contains("misfit"), "{error}");
+        assert!(m.flush(), "nothing reached the uncaptured handler");
+        assert_eq!(take(), ["render a", "submitted a"]);
+        let after = counts(&m);
+        assert_eq!(
+            after.presented_with_submit + after.presented_alone
+                - before.presented_with_submit
+                - before.presented_alone,
+            1,
+            "the healthy canvas, once; the refused one never"
+        );
+    }
+    assert!(m.sync());
+    assert!(m.seen(a) && !m.seen(v));
+    assert!(m.bind(v, &[Value::Bool(true)], None));
+    assert_eq!(m.render(v, &frame()), Some(true));
+    assert!(m.flush());
+    assert!(m.sync());
+    assert!(m.seen(v), "valid again, it is shown");
 }
 
 /// A presenter that reuses a layer keeps it hidden until the canvas's first

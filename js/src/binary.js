@@ -1102,20 +1102,25 @@
   });
 })(globalThis);
 
-// `captureCanvas(surface, path)` (LLP 1056 D9, as amended for #188): the host
-// that keeps the one mounted 2D canvas of `surface` writes what it has drawn
-// as a PNG at `path`, an `app:/` file under `fs.write`, and answers `{path,
-// width, height, scale}`; a refusal rejects with a DOMException by name
-// (runner/src/canvas_capture.rs). It is a request to `exact-canvas:`, made with
-// the prelude's `fetch`, which the runner turns into the host's work.
+// `captureCanvas(surface, path, type, quality)` (LLP 1056 D9, as amended for
+// #188 and #504): the host that keeps the one mounted 2D canvas of `surface`
+// writes what it has drawn at `path`, an `app:/` file under `fs.write`,
+// encoded as `toBlob` would encode it (`type` and `quality` are its; a type
+// the host's system encoder does not write is a PNG), and answers `{path,
+// width, height, scale, type}`; a refusal rejects with a DOMException by name
+// (runner/src/canvas_capture.rs). It is a request to `exact-canvas:`, made
+// with the prelude's `fetch`, which the runner turns into the host's work.
 (function (global) {
   "use strict";
-  global.captureCanvas = function captureCanvas(surface, path) {
-    if (typeof surface !== "string" || typeof path !== "string") return Promise.reject(new TypeError("captureCanvas(surface, path): a surface name and an app:/ path"));
-    return global.fetch("exact-canvas:", { method: "POST", body: JSON.stringify({ surface: surface, path: path }), exactIndependentHttp: { maxResponseBytes: 65536 } })
+  global.captureCanvas = function captureCanvas(surface, path, type, quality) {
+    if (typeof surface !== "string" || typeof path !== "string") return Promise.reject(new TypeError("captureCanvas(surface, path, type, quality): a surface name and an app:/ path"));
+    var body = { surface: surface, path: path };
+    if (type !== undefined) body.type = String(type);
+    if (typeof quality === "number") body.quality = quality;
+    return global.fetch("exact-canvas:", { method: "POST", body: JSON.stringify(body), exactIndependentHttp: { maxResponseBytes: 65536 } })
       .then(function (r) {
         return r.json().then(function (j) {
-          if (r.status === 200) return { path: j.path, width: j.width, height: j.height, scale: j.scale };
+          if (r.status === 200) return { path: j.path, width: j.width, height: j.height, scale: j.scale, type: j.type };
           throw new DOMException("captureCanvas: " + j.message, j.name);
         });
       });

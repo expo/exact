@@ -4,18 +4,17 @@
 //! @ref LLP 1001 §5–6 (layout is a host call; text measurement is injected)
 //! @ref LLP 1002 D2, §4 (every host but the web runs `exact-motion`)
 //!
-//! One rule, the web host's: **the view tree mirrors the kernel tree.** The
-//! runner and kernel run natively; after every commit the host lays the tree
-//! out with the kernel's own layout (Taffy, measuring text through a callback
-//! the app registered at boot), seeks the motion engine to the app's clock,
-//! and emits a batch — create, props, style, children, destroy, roots, plus
-//! `frame` (parent-relative layout frames that changed), `content` (a scroll
-//! container's content size), and `present` (a motion property's presentation
-//! value) — that makes the presenter's views equal to the tree. Style rows
-//! cross as a typed dictionary keyed by the row's name, so a row added to
-//! `schema.json` reaches the presenter with no change here. The presenter
-//! (AppKit today, `host/apple/macos`) is host glue: it knows nothing about
-//! the app, and nothing in it runs per frame unless motion is running.
+//! The runner and kernel run natively. After each commit the host lays out
+//! the kernel tree, seeks motion to the app's clock and emits changed
+//! presentation facts. An opted-in iOS presenter omits layout-only wrappers
+//! strictly inside quiet virtualized list rows. Their children attach to
+//! the nearest presented ancestor at composed frames (LLP 1171 D4).
+//! macOS mirrors these boxes; inline runs and SVG elements belong to their
+//! paragraph or scene on both hosts.
+//!
+//! Style rows cross as a typed dictionary keyed by the row's name, so a
+//! row added to `schema.json` reaches the presenter with no change here.
+//! The UIKit and AppKit presenters know nothing about the app.
 //!
 //! - [`style`] — style rows → the typed dictionary.
 //! - [`batch`] — the JSON the presenter applies.
@@ -75,7 +74,35 @@ pub mod store;
 pub mod style;
 pub mod svg_image;
 pub mod textflow;
+pub mod watch_sync;
 
 pub use host::{Host, HostError};
 
 pub mod time;
+
+/// A test's directory, removed when dropped, so a test that fails or panics
+/// leaves nothing in the system temp directory.
+#[cfg(test)]
+pub(crate) struct TempDir(pub(crate) std::path::PathBuf);
+
+#[cfg(test)]
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

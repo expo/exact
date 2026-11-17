@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readd
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileDependencies, installDifference, installedFileDependencies } from './file-dependencies.mjs';
-import { withInstallLock } from './filesystem.mjs';
+import { installLock, withInstallLock } from './filesystem.mjs';
 
 /** An app at `<dir>/app` with `@x/p` from `file:<spec>` (relative to the app), installed by the pinned Bun. */
 function installed(spec) {
@@ -21,6 +21,13 @@ function installed(spec) {
   const bun = spawnSync(process.execPath, ['install'], { cwd: app, encoding: 'utf8' });
   assert.equal(bun.status, 0, bun.stderr);
   return { dir, app, source, copy: resolve(app, 'node_modules/@x/p') };
+}
+
+/** `dir` removed, and the install lock each directory in it may have left in TMPDIR (filesystem.mjs `installLock`). */
+function removeFixture(dir) {
+  const dirs = [dir, ...readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => resolve(e.parentPath, e.name))];
+  for (const each of dirs) rmSync(installLock(each), { force: true });
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /** The real install, counted. */
@@ -63,7 +70,7 @@ for (const [layout, spec] of [['a copy (inside the app)', './packages/p'], ['lin
       assert.ok(!readdirSync(copy).includes('README.md'));
       installedFileDependencies(app, run);
       assert.equal(run.calls.length, 2, 'once installed, nothing differs');
-    } finally { rmSync(dir, { recursive: true, force: true }); }
+    } finally { removeFixture(dir); }
   }, 30_000);
 }
 
@@ -84,7 +91,7 @@ test('a copy differing only in its time is the same; one of the same size and ti
     const t = new Date(1_700_000_000_000);
     utimesSync(resolve(source, 'apple/P.swift'), t, t); utimesSync(resolve(copy, 'apple/P.swift'), t, t);
     assert.equal(installDifference(fileDependencies(app)[0]), null);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeFixture(dir); }
 }, 30_000);
 
 test('an install that leaves a package differing is said; one that fails refuses the build with the remedy', () => {
@@ -101,7 +108,7 @@ test('an install that leaves a package differing is said; one that fails refuses
     assert.throws(() => installedFileDependencies(app, { install: () => false }), /bun install --frozen-lockfile failed .*run bun install there/);
     // The stale install was set aside for Bun to make again, so what is left is no package: the resolver's to report.
     assert.deepEqual(fileDependencies(app), []);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeFixture(dir); }
 }, 30_000);
 
 test('a declared directory that is gone refuses the build, though its last install is still in node_modules', () => {
@@ -112,7 +119,7 @@ test('a declared directory that is gone refuses the build, though its last insta
     assert.throws(() => installedFileDependencies(app, run), /@x\/p is file:\.\/packages\/p in .*package\.json, and .*packages\/p is not a directory, so the build would read the copy .* restore the directory/);
     assert.equal(run.calls.length, 0);
     assert.equal(readFileSync(resolve(copy, 'apple/P.swift'), 'utf8'), 'let a = 1\n', 'nothing was removed');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeFixture(dir); }
 }, 30_000);
 
 test('an install lock is waited for while its holder lives, however long it holds it, and is free once the holder is killed', async () => {
@@ -136,7 +143,7 @@ test('an install lock is waited for while its holder lives, however long it hold
     const started = Date.now();
     withInstallLock(lock, () => assert.ok(!existsSync(done)));
     assert.ok(Date.now() - started < 10_000);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeFixture(dir); }
 }, 30_000);
 
 // The package suites' fixtures install packages packed as a registry carries them; every build of one was refused.
@@ -157,7 +164,7 @@ test('a file: tarball is no directory to keep installed: the build goes on, befo
     rmSync(packed, { recursive: true });
     installedFileDependencies(app, run);
     assert.equal(run.calls.length, 0);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeFixture(dir); }
 }, 30_000);
 
 // Two installs outside the app's own node_modules directory: a Bun workspace member's package, which Bun 1.4.2 links
@@ -191,5 +198,5 @@ test('a file: package installed in a workspace store or an ancestor node_modules
       assert.deepEqual(readdirSync(resolve(installedAt, 'apple')), ['Q.swift'], layout);
       assert.equal(installDifference(fileDependencies(app)[0]), null, layout);
     }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeFixture(dir); }
 }, 60_000);

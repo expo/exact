@@ -152,7 +152,7 @@ pub struct RendererWithAssets<const ASSETS: bool> {
 
 // Use the uploaded affine records and the same presence test as transform.wgsl.
 fn attachment_matrix(words: &[f32], slot: u32) -> Option<glam::Mat4> {
-    let values = words.chunks_exact(16).nth(slot as usize)?;
+    let values = words.as_chunks::<16>().0.get(slot as usize)?;
     (values[15] == 1.).then(|| glam::Mat4::from_cols_slice(values))
 }
 
@@ -584,7 +584,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         if self.grid.len() < first + values.len() / 12 {
             self.grid.resize(first + values.len() / 12, false);
         }
-        for (k, record) in values.chunks_exact(12).enumerate() {
+        for (k, record) in values.as_chunks::<12>().0.iter().enumerate() {
             let grid = record[3] < 0.;
             if grid != self.grid[first + k] {
                 self.grid[first + k] = grid;

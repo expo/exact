@@ -19,14 +19,7 @@ The starter's planet page is `render=request`: its figures are a live API's, and
 makes a parameterised route's pages only from a `pages=` list. `serve` sends it whole, with
 its data.
 
-## Serving
-
-`bun exact.mjs web-build --out dist` writes the site to `dist/`, and `bun exact.mjs serve
-dist` serves it on 127.0.0.1:8765 (`--port`, else `PORT`), rebuilding it when you edit.
-A page it renders asks the API: start the stand-in (`bun server.ts`) first, or set
-`API_BASE_URL` to one that answers.
-`npm run build` and `npm start` do the same, as hosts run them. A static host serves
-`dist/` by the rule `serve --help` states.
+See [serving and hosting](website-hosting.md) for the build, development server and static hosting, including a mount such as `/app/`.
 
 ## The markup
 

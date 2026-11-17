@@ -8,7 +8,7 @@ struct MacBarFace {
     private let parts: [(CGSize, CGFloat, (CGRect) -> Void)]
     private let gap: CGFloat
 
-    init?(_ node: NodeView, readout: Bool = false) {
+    init?(_ node: NodeView, readout: Bool = false, bundle: Bundle = .main) {
         guard !node.isNativeButton else { return nil }
         var parts: [(CGSize, CGFloat, (CGRect) -> Void)] = []
         var dotted = false, typed = false, valid = true, gap: CGFloat?
@@ -43,9 +43,9 @@ struct MacBarFace {
                     { rect in (text as NSString).draw(at: rect.origin, withAttributes: attrs) }))
             } else if child.kind == "image", let symbol = child.faceSymbol {
                 let color = ink(child, "tint_color", authored: inked || child.wrote("tint_color"))
-                let image = FaceSymbol.image(symbol, points: child.number("font_size", 13))
+                let image = FaceSymbol.image(symbol, points: child.number("font_size", 13), bundle: bundle)
                 parts.append((image?.size ?? .zero, alpha, { rect in
-                    if let image { FaceSymbol.tinted(image, color).draw(in: rect) }
+                    if let image { (FaceSymbol.isOriginal(symbol) ? image : FaceSymbol.tinted(image, color)).draw(in: rect) }
                 }))
             } else if children(child).isEmpty, child.kind == "view", child.channels("background_color") != nil,
                       let width = child.style["width"]?.number, let height = child.style["height"]?.number, width > 0, height > 0 {

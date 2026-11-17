@@ -119,7 +119,7 @@ impl LayoutTree {
                     self.field_minima.remove(&node);
                 }
                 if let Some(&minimum) = self.field_minima.get(&node) {
-                    style.min_size.height = taffy::LengthPercentageAuto::length(minimum);
+                    style.min_size.height = taffy::Dimension::length(minimum);
                 }
                 self.set_style(node, style);
             } else {
@@ -146,7 +146,7 @@ impl LayoutTree {
         for (node, minimum) in minima {
             self.field_minima.insert(node, minimum);
             let mut style = self.taffy.style(node).expect("measured node").clone();
-            let next = taffy::LengthPercentageAuto::length(minimum);
+            let next = taffy::Dimension::length(minimum);
             if style.min_size.height != next {
                 style.min_size.height = next;
                 self.set_style(node, style);

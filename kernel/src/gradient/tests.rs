@@ -517,7 +517,7 @@ fn length_fix_up_uses_the_painted_size_and_repetition_keeps_its_period() {
     )
     .unwrap();
     let (ramp, _) = hatch.gradient().unwrap().placed(100.0, 70.0, false);
-    for pair in ramp.stops.chunks_exact(4).collect::<Vec<_>>().windows(2) {
+    for pair in ramp.stops.as_chunks::<4>().0.windows(2) {
         assert_eq!(pair[0][3].at, pair[1][0].at);
     }
     assert!(ramp.stops.windows(2).all(|pair| pair[0].at <= pair[1].at));
@@ -671,4 +671,68 @@ fn legacy_stops_interpolate_as_written() {
         parse("linear-gradient(rgb(255 0 0), #00f)").interpolation(false),
         None
     );
+}
+
+#[test]
+fn a_repeating_gradients_cycle_is_one_period_of_what_placed_expands() {
+    let hatch =
+        parse("repeating-linear-gradient(-45deg, transparent 0 4.243px, #e6e6e6 4.243px 5.657px)");
+    for (width, height) in [(100.0, 70.0), (402.0, 874.0), (1.0, 300.0)] {
+        let (cycle, line) = hatch.cycle(width, height, false).unwrap();
+        let Geometry::Linear { start, end } = line else {
+            panic!()
+        };
+        assert!(((end.0 - start.0).hypot(end.1 - start.1) - 5.657).abs() < 1e-3);
+        let at: Vec<_> = cycle.stops.iter().map(|s| s.at).collect();
+        assert_eq!((at[0], at[3]), (0.0, 100.0));
+        assert!(
+            at[1] == at[2] && (at[1] - 4.243 / 5.657 * 100.0).abs() < 1e-3,
+            "{at:?}"
+        );
+        // The period starts where the expanded ramp has a cycle start.
+        let (ramp, Geometry::Linear { start: a, end: b }) = hatch.placed(width, height, false)
+        else {
+            panic!()
+        };
+        let length = (b.0 - a.0).hypot(b.1 - a.1);
+        let offset = ((start.0 - a.0) * (b.0 - a.0) + (start.1 - a.1) * (b.1 - a.1)) / length;
+        let first = ramp.stops[0].at / 100.0 * length;
+        let phase = (offset - first) / 5.657;
+        assert!(
+            (phase - phase.round()).abs() < 1e-3,
+            "{width}x{height}: {phase}"
+        );
+    }
+    let percent = parse("repeating-linear-gradient(90deg, red 10%, blue 30%)");
+    for width in [100.0, 300.0] {
+        let (_, Geometry::Linear { start, end }) = percent.cycle(width, 10.0, false).unwrap()
+        else {
+            panic!()
+        };
+        let near =
+            |p: (f32, f32), q: (f32, f32)| (p.0 - q.0).abs() < 1e-3 && (p.1 - q.1).abs() < 1e-3;
+        assert!(
+            near(start, (width * 0.1, 5.0)) && near(end, (width * 0.3, 5.0)),
+            "{start:?} {end:?}"
+        );
+    }
+    // No period: the colour `placed` paints, over one CSS pixel.
+    let (solid, line) = parse("repeating-linear-gradient(to right, red 0px, blue 0px)")
+        .cycle(100.0, 70.0, false)
+        .unwrap();
+    assert_eq!(
+        solid.resolved(false),
+        parse("repeating-linear-gradient(to right, red 0px, blue 0px)")
+            .placed(100.0, 70.0, false)
+            .0
+            .resolved(false)
+    );
+    let Geometry::Linear { start, end } = line else {
+        panic!()
+    };
+    assert!((start.0, end.0) == (0.0, 1.0) && (start.1 - 35.0).abs() < 1e-3 && start.1 == end.1);
+    assert!(parse("linear-gradient(red, blue)")
+        .cycle(100.0, 70.0, false)
+        .is_none());
+    assert!(hatch.cycle(0.0, 0.0, false).is_none());
 }

@@ -28,7 +28,7 @@ pub use location::{
     canonical, encode_uri_component, fragment_id, fragment_of, location_of, protocol_location_of,
     search_param,
 };
-pub use router::{back, depth, go, open, params, push, replace, select, stack, top};
+pub use router::{back, depth, go, open, params, push, replace, root, select, stack, top};
 pub use table::encode_route_segment;
 
 /// Every table parameter, including unbound names as `""`. JSON keys are sorted;
@@ -231,7 +231,8 @@ pub struct Tab {
 pub struct Router {
     /// The selected tab's name.
     pub tab: String,
-    /// All retained tabs, in declaration order.
+    /// All retained tabs, in declaration order: every declared tab, except
+    /// after a rooted launch ([`root`]), which retains the tabs selected since.
     pub tabs: Vec<Tab>,
     /// The next visit id. A fresh value begins at zero.
     pub next: u64,

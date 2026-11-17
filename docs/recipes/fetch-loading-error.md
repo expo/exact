@@ -70,7 +70,8 @@ test "a failed refresh retains rows and retries"
 ```
 
 `fail fetch` rejects before `tap` returns. To assert loading, hold a reply with a
-[test server](rest-backend.md), which can also supply an HTTP status/body.
+[test server](rest-backend.md). For a status/body, use
+`answer fetch "<prefix>" with 200 {"text":"Hello"}`.
 
 For private data, gate by principal and auth generation, including after an await
 before caching: A → B → A must reject the first A's answers. Await prerequisites
@@ -78,6 +79,6 @@ in the source; dependencies do not sequence requests ([guide](../contract-for-ag
 
 **Across launches:** reading `native.available` or calling `native.call` makes a
 resource read device state; its answer can be kept and shown before the next fetch.
-Resolve a launch endpoint once in a mount mutation, then pass it as a resource
-argument; keep native access out of fetch sources. Copy [a native module](native-module.md).
+Keep native access out of fetch sources ([a native module](native-module.md)); an endpoint a
+launch gives is a setting (`contract vocab env`).
 `with` controls boot admission, not persistence. `state.resourceStatus` explains retained answers.

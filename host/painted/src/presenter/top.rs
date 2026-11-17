@@ -23,8 +23,8 @@
 //!
 //! **What crosses.** Out, on the one channel (`requests.rs`, kind 7): the
 //! surface as a statement, told when it is not what the shell was last told
-//! (it opened, a press lit a row, a type or colour preference changed, it
-//! closed), with its size, its place and its stream. In, one call
+//! (it opened, a press lit a row or its ripple moved, a type or colour
+//! preference changed, it closed), with its size, its place and its stream. In, one call
 //! ([`Presenter::surface_event`]): a touch in the window at the surface's
 //! own points, a key, that the system dismissed the window (a tap outside a
 //! menu, Back, Escape), or that the shell could not make it.
@@ -41,6 +41,7 @@
 //! to itself. System Back closes it before any route is asked
 //! ([`Presenter::system_back`]).
 use super::*;
+use crate::paint::ripple::Ripple;
 use exact_kernel::invocation::Action;
 use exact_kernel::NodeKey;
 
@@ -51,9 +52,11 @@ pub(super) mod look;
 mod overlay;
 mod select;
 pub(crate) mod shape;
+mod status;
 pub use look::Target;
 use look::{Inputs, Layout};
 pub use shape::{Entry, Plan, Row};
+pub use status::{StatusItem, StatusMenu, EXIT};
 
 /// What a shell's windows are drawn from: it records what `paint` draws
 /// for a surface of `size` points at `scale` pixels a point, and returns
@@ -166,6 +169,10 @@ struct Open {
     origin: u32,
     /// The row under the finger, and the row a keyboard focused.
     pressed: Option<usize>,
+    /// The ripple of the last row a finger held (LLP 1115.001 D9), and the
+    /// clock the shell was last told it at.
+    ripple: Option<(usize, Ripple)>,
+    rippled: Option<f64>,
     /// Where a finger that went down in a scrolling menu went down and
     /// last was, and whether it has moved far enough to scroll it.
     drag: Option<(f32, f32, bool)>,
@@ -173,6 +180,8 @@ struct Open {
     hovered: Option<usize>,
     /// The kernel epoch its plan was read at.
     epoch: u64,
+    /// A status item's menu, in its host's window of its own, not the page's.
+    detached: bool,
 }
 
 impl Open {
@@ -202,6 +211,10 @@ pub(super) struct State {
     /// How many long presses a node has taken ([`Presenter::long_press`]):
     /// a reader that compares it across a contact knows whether its own was.
     long_presses: u32,
+    /// The status item's menu that is open or opening (`top/status.rs`).
+    status: Option<status::Menu>,
+    /// Its Exit was chosen, and the host has not yet taken it.
+    exited: bool,
 }
 
 /// The open surface, for a driver and a test.
@@ -291,6 +304,7 @@ impl<D: DataSource> Presenter<D> {
         self.alert = None;
         self.brush.alert = None;
         self.host.top_layer(self.has_windows());
+        self.top.status = None;
         if self.top.open.take().is_some() {
             self.surface_changed();
         }
@@ -319,7 +333,7 @@ impl<D: DataSource> Presenter<D> {
         let runner = self.host.runner();
         let pressed = |id: ViewId| runner.handlers_of(id).contains(&EventKind::Press);
         let kernel = self.host.kernel();
-        shape::alert(kernel, pop, &pressed, modal).or_else(|| {
+        let plan = shape::alert(kernel, pop, &pressed, modal).or_else(|| {
             if self.top.overlay.enabled {
                 let role = kernel.node(pop)?.props.str(PropId::AccessibilityRole);
                 let menu = role == Some("menu")
@@ -332,12 +346,16 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
             shape::menu(kernel, pop, &pressed)
-        })
+        });
+        self.with_exit(pop, plan)
     }
 
     /// The window the shell told, and how far a menu keeps from its top and
     /// bottom: Material's 48, or the system's bars where they are taller.
     fn surface_window(&self) -> ((f32, f32), (f32, f32)) {
+        if let Some(status) = &self.top.status {
+            return (status.room, (0.0, 0.0));
+        }
         if self.top.overlay.enabled {
             return (self.viewport, (4.0, 4.0));
         }
@@ -350,10 +368,17 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    fn surface_inputs(&self) -> Inputs {
+    fn surface_inputs(&self, node: ViewId) -> Inputs {
         let scale = self.text_scale;
         let (window, margins) = self.surface_window();
         Inputs {
+            direction: self
+                .host
+                .kernel()
+                .node(node)
+                .map_or(exact_kernel::Direction::Ltr, |n| {
+                    n.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
+                }),
             dark: self.dark(),
             contrast: self.colors.contrast.palette,
             bold_text: self.host.kernel().bold_text_weights(0),
@@ -375,8 +400,15 @@ impl<D: DataSource> Presenter<D> {
             Layout::of
         };
         let mut layout = measure(&mut self.text.borrow_mut(), plan, pop, inputs);
+        // A status menu's window is the system's to round, border and shadow.
+        if self.top.status.is_some() {
+            layout.radius = 0.0;
+        }
         if let Some(width) = self.select_width(pop) {
-            layout.widen(width.min(inputs.window.0));
+            layout.widen(
+                width.min(inputs.window.0),
+                !self.top.overlay.enabled && inputs.direction == exact_kernel::Direction::Rtl,
+            );
         }
         layout
     }
@@ -510,7 +542,7 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         let serial = self.next_surface_serial();
-        let inputs = self.surface_inputs();
+        let inputs = self.surface_inputs(id);
         let layout = self.measure_surface(&plan, id, &inputs);
         self.top.open = Some(Open {
             serial,
@@ -533,10 +565,13 @@ impl<D: DataSource> Presenter<D> {
             scale: self.brush.scale,
             origin: 0,
             pressed: None,
+            ripple: None,
+            rippled: None,
             drag: None,
             focused: None,
             hovered: None,
             epoch: self.host.kernel().epoch(),
+            detached: self.top.status.is_some(),
         });
         let anchor = self.surface_anchor();
         if let Some(open) = self.top.open.as_mut() {
@@ -568,6 +603,9 @@ impl<D: DataSource> Presenter<D> {
         let Some(open) = self.top.open.take() else {
             return;
         };
+        if open.detached {
+            self.top.status = None;
+        }
         self.report_top_layer();
         self.queue_surface_closed(open.key, open.modal);
         let back = open.restore.filter(|id| {
@@ -646,6 +684,8 @@ impl<D: DataSource> Presenter<D> {
             return;
         };
         let (invoker, point, menu) = (open.invoker, open.point, open.key);
+        let status = self.top.status.clone().filter(|_| open.detached);
+        self.top.exited |= status.is_some() && row.node == EXIT;
         let key = self.host.kernel().node(row.node).map(|node| node.key);
         self.close_surface(now_ms);
         if self
@@ -677,15 +717,23 @@ impl<D: DataSource> Presenter<D> {
         if let Some(i) = opens {
             let name = self.name_of(i.target);
             let modal = i.action == Action::ShowModal;
+            // A status menu's submenu takes its place in its window.
+            self.top.status = status.filter(|_| !modal);
             self.present(Some(i.target), &name, invoker, point, modal, now_ms);
+            if self.top.open.as_ref().is_none_or(|open| !open.detached) {
+                self.top.status = None;
+            }
         }
     }
 
-    /// A touch in the surface: a row is lit while a finger holds it, and
+    /// A touch in the surface: a row ripples while a finger holds it, and
     /// chosen when the finger lifts in it. A finger that leaves its row
     /// lets go of it. In a menu taller than its window, a finger that moves
     /// past the touch slop scrolls the rows instead, and chooses none.
     fn surface_touch(&mut self, action: i32, x: f32, y: f32, now_ms: f64) {
+        // Material's surfaces ripple; WinUI's do not.
+        let ripples = !self.top.overlay.enabled;
+        let now = now_ms.max(self.host.now());
         let Some(open) = self.top.open.as_mut() else {
             return;
         };
@@ -697,6 +745,11 @@ impl<D: DataSource> Presenter<D> {
             0 => {
                 open.pressed = at;
                 open.drag = open.layout.menu_scroll().map(|_| (y, y, false));
+                if let Some(index) = at.filter(|_| ripples) {
+                    let point = open.layout.targets[index].held_at(x, y);
+                    open.ripple = Some((index, Ripple::new(Some(point), now)));
+                    open.rippled = None;
+                }
             }
             2 if open.drag.is_some() => {
                 let (start, last, moving) = open.drag.unwrap();
@@ -719,6 +772,15 @@ impl<D: DataSource> Presenter<D> {
                 open.drag = None;
             }
         }
+        if before.is_some() && open.pressed.is_none() {
+            // A finger that scrolled the rows, or was taken, pressed none.
+            let cancelled = scrolled || action == 3;
+            if let Some((_, ripple)) = &mut open.ripple {
+                if !ripple.release(now, cancelled) {
+                    open.ripple = None;
+                }
+            }
+        }
         if open.pressed != before || scrolled {
             open.revision += 1;
             self.executor.notify();
@@ -736,7 +798,7 @@ impl<D: DataSource> Presenter<D> {
 
     #[cfg(windows)]
     pub(super) fn desktop_surface_access(&self) -> Option<(Option<ViewId>, (f32, f32))> {
-        let open = self.top.open.as_ref()?;
+        let open = self.top.open.as_ref().filter(|open| !open.detached)?;
         let focused = open
             .focused
             .and_then(|i| open.layout.targets.get(i))
@@ -777,6 +839,9 @@ impl<D: DataSource> Presenter<D> {
         if let Some(taken) = self.select_surface_key(name, now_ms) {
             return taken;
         }
+        if self.surface_type_ahead(name, now_ms) {
+            return true;
+        }
         match name {
             "Escape" => {
                 self.dismiss_surface(now_ms);
@@ -802,7 +867,9 @@ impl<D: DataSource> Presenter<D> {
             return;
         };
         if open.kind == SurfaceKind::Alert {
-            self.surface_step(backward);
+            let mirrored =
+                !self.top.overlay.enabled && open.inputs.direction == exact_kernel::Direction::Rtl;
+            self.surface_step(backward != mirrored);
         } else if !backward {
             let index = open.focused.filter(|index| {
                 open.plan
@@ -878,6 +945,52 @@ impl<D: DataSource> Presenter<D> {
             open.revision += 1;
             self.executor.notify();
         }
+    }
+
+    /// A printable key in a menu focuses the row it starts, by the kernel's
+    /// type-ahead (`Kernel::role_type_ahead`), from the focused row or, with
+    /// none, from the first. Whether a row took it: one that starts none, or
+    /// Space with no search under way, goes on to the menu's other keys.
+    fn surface_type_ahead(&mut self, name: &str, now_ms: f64) -> bool {
+        let held = self.modifiers();
+        let Some(open) = self
+            .top
+            .open
+            .as_ref()
+            .filter(|open| open.kind == SurfaceKind::Menu)
+        else {
+            return false;
+        };
+        if held.ctrl || held.alt || held.meta {
+            return false;
+        }
+        let from = open
+            .focused
+            .map_or(open.node, |i| open.layout.targets[i].node);
+        let mut typed = std::mem::take(&mut self.type_ahead);
+        let step = self
+            .host
+            .kernel()
+            .role_type_ahead(from, name, now_ms, &mut typed);
+        self.type_ahead = typed;
+        let (Some(step), Some(open)) = (step, self.top.open.as_mut()) else {
+            return false;
+        };
+        let targets = &open.layout.targets;
+        let Some(next) = step.order.iter().find_map(|id| {
+            targets
+                .iter()
+                .position(|row| row.node == *id && row.enabled)
+        }) else {
+            return false;
+        };
+        let revealed = open.layout.reveal_menu_target(next);
+        if open.focused != Some(next) || revealed {
+            open.focused = Some(next);
+            open.revision += 1;
+            self.executor.notify();
+        }
+        true
     }
 
     fn surface_edge(&mut self, last: bool) {
@@ -1054,7 +1167,7 @@ impl<D: DataSource> Presenter<D> {
             self.close_surface(now);
             return;
         };
-        let inputs = self.surface_inputs();
+        let inputs = self.surface_inputs(pop);
         let anchor = self.surface_anchor();
         let again = (self.top.open.as_ref()).is_some_and(|o| plan != o.plan || inputs != o.inputs);
         let layout = again.then(|| self.measure_surface(&plan, pop, &inputs));
@@ -1068,6 +1181,7 @@ impl<D: DataSource> Presenter<D> {
             open.layout = layout;
             (open.plan, open.inputs) = (plan, inputs);
             open.pressed = None;
+            open.ripple = None;
             open.hovered = None;
             let targets = &open.layout.targets;
             open.focused = focused.and_then(|node| targets.iter().position(|t| t.node == node));
@@ -1099,8 +1213,14 @@ impl<D: DataSource> Presenter<D> {
                 0,
             ),
             SurfaceKind::Alert => ((0.0, 0.0), 0),
+            SurfaceKind::Menu if open.detached => ((0.0, 0.0), 0),
             SurfaceKind::Menu => {
-                let at = look::place(open.anchor, open.layout.size, window, margins);
+                let direction = if self.top.overlay.enabled {
+                    exact_kernel::Direction::Ltr
+                } else {
+                    open.inputs.direction
+                };
+                let at = look::place(open.anchor, open.layout.size, window, margins, direction);
                 (at, look::origin(open.anchor, at, open.layout.size))
             }
         };
@@ -1132,6 +1252,8 @@ impl<D: DataSource> Presenter<D> {
         };
         let rect = match open.kind {
             SurfaceKind::Alert => [0.0; 4],
+            // In its host's window, which the page's points do not reach.
+            SurfaceKind::Menu if open.detached => [0.0; 4],
             SurfaceKind::Menu => {
                 let [px, py, ..] = self.chrome().frame;
                 let [x, y, w, h] = open.frame.map(|v| f64::from(v) / f64::from(open.scale));
@@ -1150,10 +1272,14 @@ impl<D: DataSource> Presenter<D> {
         let open = self.top.open.as_ref()?;
         let scale = open.scale;
         let layout = &open.layout;
+        let (now, still) = self.surface_clock();
         let feedback = look::Feedback {
             pressed: open.pressed,
             focused: open.focused,
             hovered: open.hovered,
+            ripple: open
+                .ripple
+                .map(|(index, ripple)| (index, ripple, now, still)),
         };
         let painter = self.top.painter.as_mut()?;
         let stream = painter.record(layout.size, scale, &mut |backend| {
@@ -1182,6 +1308,7 @@ impl<D: DataSource> Presenter<D> {
             return;
         }
         self.sync_surface();
+        self.ripple_surface();
         let now = self
             .top
             .open
@@ -1210,6 +1337,57 @@ impl<D: DataSource> Presenter<D> {
         self.top.told = now;
     }
 
+    /// The host's clock, and whether motion is removed, for a surface's ripple.
+    fn surface_clock(&self) -> (f64, bool) {
+        let still = self.host.runner().viewport().preferences.reduced_motion;
+        (self.host.now(), still)
+    }
+
+    /// A surface's ripple moves on: its picture is made again at each new
+    /// instant of the clock while it moves, once more at rest, and once
+    /// gone without it, as a bar's is (`bars.rs`).
+    fn ripple_surface(&mut self) {
+        let (now, still) = self.surface_clock();
+        let Some(open) = self.top.open.as_mut() else {
+            return;
+        };
+        let Some((_, ripple)) = open.ripple else {
+            return;
+        };
+        let told = open.rippled;
+        if ripple.gone(now, still) {
+            open.ripple = None;
+            open.revision += 1;
+        } else if told != Some(now)
+            && (ripple.moving(now, still) || told.is_none_or(|t| ripple.moving(t, still)))
+        {
+            open.rippled = Some(now);
+            open.revision += 1;
+        }
+    }
+
+    /// Whether a surface's ripple owes a frame: it moves, or is to be taken away.
+    pub(super) fn surface_ripple_moving(&self) -> bool {
+        let (now, still) = self.surface_clock();
+        (self.top.open.as_ref())
+            .and_then(|open| open.ripple)
+            .is_some_and(|(_, r)| r.moving(now, still) || r.gone(now, still))
+    }
+
+    /// The agent's clock: a surface's held ripple is at rest, a released one gone.
+    pub(super) fn land_surface_ripple(&mut self) {
+        let now = self.host.now();
+        let Some(open) = self.top.open.as_mut() else {
+            return;
+        };
+        if let Some((_, ripple)) = &mut open.ripple {
+            if !ripple.land(now) {
+                open.ripple = None;
+            }
+            open.revision += 1;
+        }
+    }
+
     /// The open surface for the agent's `state`: what it is, the authored
     /// node, what it says, and each row's node and box in the window.
     pub fn surface_json(&self) -> serde_json::Value {
@@ -1235,7 +1413,7 @@ impl<D: DataSource> Presenter<D> {
         let headers: Vec<&str> = match shown.plan {
             Plan::Menu(entries) => (entries.iter())
                 .filter_map(|e| match e {
-                    shape::Entry::Header(title, _) => Some(title.as_str()),
+                    shape::Entry::Header(title, _, _) => Some(title.as_str()),
                     _ => None,
                 })
                 .collect(),

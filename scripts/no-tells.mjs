@@ -27,7 +27,7 @@
  * literals are the palette, not tells, and a colour property naming an entry
  * (`color="brand"`, `light-dark(brand, ink)`) names what the colour is. Lowering
  * refuses an entry spelled as a CSS colour name, so a name here is never one.
- * So is an app's design (`app.tamber`, or the file `app.json`'s `"tamber"`
+ * So is an app's design (`app.forma`, or the file `app.json`'s `"forma"`
  * names, LLP 1121): a token name is not a literal, and neither is an
  * expression over tokens and roles (`color-mix(in oklab, accent.fill 40%,
  * surface.card)`, `rgb(from surface.card r g b / 0.5)`), which the build folds.
@@ -401,14 +401,14 @@ function contractBlocks(text) {
 }
 
 /** The token names of the design beside `file`'s app (LLP 1121 D2): the
- * `"tamber"` file `app.json` names, else `app.tamber`, in the nearest
+ * `"forma"` file `app.json` names, else `app.forma`, in the nearest
  * directory up that has either. Its `theme` block's entries, each `name = …`
  * at the block's own indent, with or without a kind (`name: color = …`). */
 export function designTokens(file) {
   for (let dir = resolve(file, '..'); ; dir = resolve(dir, '..')) {
     let named = null;
-    try { named = JSON.parse(readFileSync(join(dir, 'app.json'), 'utf8')).tamber ?? null; } catch {}
-    const path = named ? join(dir, named) : join(dir, 'app.tamber');
+    try { named = JSON.parse(readFileSync(join(dir, 'app.json'), 'utf8')).forma ?? null; } catch {}
+    const path = named ? join(dir, named) : join(dir, 'app.forma');
     if (existsSync(path)) {
       // The block's entries share one indent, its first's; a `when` line is deeper.
       const names = new Set();
@@ -444,7 +444,7 @@ screenshot had, which miss dark mode, Increased Contrast, Dynamic Type and the n
   Leave the accent unsaid too (the platform's); if written, a role or one
   light-dark(light, dark) pair on accent-color (docs/contract-for-agents.md, "Colours:
   say a role, not a value").
-  An app's own palette is its design (app.tamber, LLP 1121) or its root \`theme\`
+  An app's own palette is its design (app.forma, LLP 1121) or its root \`theme\`
   block, and rows name its tokens.
 - Type: leave body text unsaid; say a heading (h1 .. h4) or
   a text style (font="-exact-footnote", -exact-headline, -exact-caption1 …)

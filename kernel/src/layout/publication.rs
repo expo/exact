@@ -9,6 +9,11 @@ pub(super) fn publish(
     measurer: &mut dyn TextMeasurer,
     root: u32,
 ) -> LayoutReceipt {
+    for (node, _) in tree.pending_text_changes.drain() {
+        if let Some(context) = tree.taffy.get_node_context(node) {
+            arena.layout_dirty.insert(context.slot);
+        }
+    }
     #[cfg(test)]
     {
         tree.publication_visits = 0;
@@ -90,6 +95,11 @@ pub(super) fn publish(
         }
         let own_hidden = arena.style(slot).display == crate::Display::None;
         let hidden = hidden || own_hidden;
+        if !hidden && tree.text_pending(arena, slot) {
+            arena.flags_mut(slot).insert(NodeFlags::TEXT_PENDING);
+        } else {
+            arena.flags_mut(slot).remove(NodeFlags::TEXT_PENDING);
+        }
         // Its paragraph placed an image in its text, published (below), or,
         // holding a string, has none to place.
         if !hidden && arena.is_inline_image(slot) {

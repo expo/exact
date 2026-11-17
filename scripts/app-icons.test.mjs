@@ -9,7 +9,15 @@ import { crc32, deflateSync } from 'node:zlib';
 import { appIconProblems, iconFile, opaque, pickIcon, placeRgba, pngAlpha, readPng, resize, webIconLinks, webThemeColors, WINDOWS_ICON_SIZES, windowsIconRes, writeTinted } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
 
-const inDir = (body) => { const dir = mkdtempSync(resolve(tmpdir(), 'exact-icons-')); try { return body(dir); } finally { rmSync(dir, { recursive: true, force: true }); } };
+// An async body's directory goes when its promise settles, not when it returns one.
+const inDir = (body) => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-icons-')), done = () => rmSync(dir, { recursive: true, force: true });
+  let result;
+  try { result = body(dir); } catch (error) { done(); throw error; }
+  if (result instanceof Promise) return result.finally(done);
+  done();
+  return result;
+};
 /** A `width` × `height` image of one RGBA colour. */
 const image = (width, height, colour = [255, 255, 255, 255]) => ({ width, height, data: Uint8Array.from({ length: width * height * 4 }, (_, i) => colour[i % 4]) });
 const put = (dir, src, bytes) => { mkdirSync(resolve(dir, src, '..'), { recursive: true }); writeFileSync(resolve(dir, src), bytes); return resolve(dir, src); };

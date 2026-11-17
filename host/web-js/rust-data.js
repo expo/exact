@@ -154,10 +154,18 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // an in-flight request is not kept for newer arguments whose request differs only in being held.
       return { req: { method, url, headers, cache, ...(prefetch ? { prefetch: true } : {}), held, body: text.decode(body), raw: body, http: held ? `${http} held` : http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, cancel: tag < 9 && /^(GET|HEAD)$/i.test(method), socket: tag === 11, protocols, longPoll } };
     }
-    if (tag === 16) {
-      const surface = r.str(), path = r.str(), scoped = r.u8(), scope = r.str();
+    // A canvas capture; tag 17 adds the type and quality asked for (`toBlob`'s).
+    if (tag === 16 || tag === 17) {
+      const surface = r.str(), path = r.str(), canvas = { surface, path };
+      if (tag === 17) {
+        canvas.type = r.str();
+        const quality = r.u8(), value = r.f64();
+        if (quality > 1) throw new Error('invalid canvas quality tag');
+        if (quality) canvas.quality = value;
+      }
+      const scoped = r.u8(), scope = r.str();
       if (scoped > 1) throw new Error('invalid grant scope tag');
-      return { req: { canvas: { surface, path }, scope: scoped ? scope : null } };
+      return { req: { canvas, scope: scoped ? scope : null } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
@@ -271,7 +279,8 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     if (r.u8() !== 2) throw new Error('expected a call reply');
     const observed = r.u8() === 1, topics = [];
     for (let n = r.u32(); n--;) topics.push(r.str());
-    r.u32(); // draws of randomness, which only a bake reads (LLP 1069.005 D2)
+    // Draws of randomness, which make a server render's page its reader's alone (render.mjs, LLP 1069.005 D2)
+    if (r.u32() > 0) globalThis.__exactDrew?.();
     const writes = [];
     // A write's tag: bit 0, a value follows; bit 1, written under a lease (the page's store keeps no lease).
     for (let n = r.u32(); n--;) {

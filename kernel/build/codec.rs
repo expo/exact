@@ -262,6 +262,12 @@ fn parse_codec(s: &str) -> Codec {
             variant: "TimelineScope",
             error: "BadTimelineScope",
         },
+        // @ref LLP 1123 D5 — runtime custom properties, CSS Variables 1.
+        "safe-area-properties" => Codec::CssValue {
+            path: "crate::style::safe_area_properties::SafeAreaProperties",
+            variant: "SafeAreaProperties",
+            error: "BadSafeAreaProperties",
+        },
         other => match other.strip_prefix("enum:") {
             Some(name) => Codec::Enum(name.to_string()),
             None => panic!("schema: unknown codec `{other}`"),

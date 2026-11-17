@@ -39,6 +39,7 @@
     }
   },
   "rust": {
+    "data": { "crate": "canvas-gallery-data", "type": "canvas_gallery_data::Capture", "source": "canvas_gallery_data::Capture" },
     "module": {
       "package": "canvas-gallery-logic"
     }

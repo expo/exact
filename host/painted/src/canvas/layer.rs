@@ -61,6 +61,9 @@ struct Open {
 }
 
 impl Layers {
+    pub(super) fn shared_ancestors(&self) -> Vec<u32> {
+        self.open.iter().map(|layer| layer.id).collect()
+    }
     pub(super) fn needs_world(&self) -> bool {
         self.sent
             .values()

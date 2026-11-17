@@ -1,6 +1,7 @@
 //! One submit per tick (LLP 1009 D7): every canvas the host renders records
-//! into one encoder the module owns; [`Module::flush`] submits it once and
-//! then presents each canvas's drawable.
+//! its commands into an encoder of its own (a [`Recording`]), and
+//! [`Module::flush`] submits them all at once and then presents each
+//! canvas's drawable.
 //!
 //! On Metal a submit commits wgpu's pending writes and the frame's commands,
 //! and each present commits one more command buffer: three per canvas when
@@ -12,15 +13,63 @@ use crate::{shaders, Frame, Module, SurfaceError};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// The tick's recorded commands and the canvases that recorded them.
+/// The canvases rendered since the last submit, with their commands.
+#[derive(Default)]
 pub(crate) struct Open {
-    encoder: wgpu::CommandEncoder,
     canvases: Vec<Rendered>,
+}
+
+/// One canvas's commands for a frame, recorded inside a validation error
+/// scope that stays open through `finish`: wgpu validates a pass only when
+/// its encoder finishes, and without a scope the error reaches the device's
+/// uncaptured-error handler, whose default aborts the process. A canvas whose
+/// commands fail validation is refused alone, which is why each canvas has
+/// an encoder of its own: in a shared one, its error would invalidate every
+/// canvas's commands and could not be told apart. On Metal this costs no
+/// command buffer, since each pass already commits one.
+///
+/// On the web the scope is left out: its pop resolves only once the
+/// browser's event loop turns, which [`crate::block_on`] cannot wait for.
+/// WebGPU never aborts on an error, and the module's uncaptured-error handler
+/// keeps it for the next flush ([`Module::set_gpu`]).
+pub(crate) struct Recording {
+    pub(crate) encoder: wgpu::CommandEncoder,
+    #[cfg(not(target_arch = "wasm32"))]
+    scope: wgpu::ErrorScopeGuard,
+}
+
+impl Recording {
+    pub(crate) fn begin(device: &wgpu::Device) -> Recording {
+        #[cfg(not(target_arch = "wasm32"))]
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        Recording {
+            encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("exact canvas"),
+            }),
+            #[cfg(not(target_arch = "wasm32"))]
+            scope,
+        }
+    }
+
+    /// The commands, or the validation error that refuses them: submitting
+    /// invalid commands is another error.
+    pub(crate) fn finish(self) -> Result<wgpu::CommandBuffer, String> {
+        let commands = self.encoder.finish();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(error) = crate::block_on(self.scope.pop()) {
+            return Err(error.to_string());
+        }
+        Ok(commands)
+    }
 }
 
 /// A canvas rendered into the open frame.
 struct Rendered {
     id: u32,
+    /// What it recorded, until the submit.
+    commands: Option<wgpu::CommandBuffer>,
+    /// Validation refused what it recorded: nothing of it is submitted.
+    refused: bool,
     complete: bool,
     /// The surface drew a complete frame of its picture (`frame_ready`),
     /// which `complete` cannot say on the web, where every frame is shown.
@@ -214,38 +263,43 @@ impl Module {
             headroom: if inst.hdr { inst.headroom } else { 1.0 },
             ..*frame
         };
-        let open = self.open.get_or_insert_with(|| Open {
-            encoder: gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("exact canvases"),
-                }),
-            canvases: Vec::new(),
-        });
+        let mut recording = Recording::begin(&gpu.device);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(s) = inst.scratch.as_mut().filter(|s| retry && !s.continues) {
-            s.clear(&mut open.encoder);
+            s.clear(&mut recording.encoder);
         }
         inst.surface.timing(&timing);
         let wants = inst.surface.render(
             &frame,
             &gpu.device,
             &gpu.queue,
-            &mut open.encoder,
+            &mut recording.encoder,
             scratch.as_ref().unwrap_or(&view),
             format,
         );
         inst.drain();
-        let failure = inst.surface.take_error();
+        let mut failure = inst.surface.take_error();
         let ready = cfg!(target_arch = "wasm32") || inst.surface.frame_ready();
         let cap = inst.surface.max_fps();
         inst.cadence
             .after(cap, frame.now_ms, self.period_ms, wants || !ready);
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(s) = inst.scratch.as_mut().filter(|_| retry) {
-            if ready && failure.is_none() {
-                s.copy(&mut open.encoder, &view);
+        if let Some(s) = inst
+            .scratch
+            .as_mut()
+            .filter(|_| retry && ready && failure.is_none())
+        {
+            s.copy(&mut recording.encoder, &view);
+        }
+        let commands = match recording.finish() {
+            Ok(commands) => Some(commands),
+            Err(e) => {
+                failure.get_or_insert(SurfaceError(e));
+                None
             }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(s) = inst.scratch.as_mut().filter(|_| retry) {
             s.continues = !ready && failure.is_none();
         }
         let (texture, failed) = if failure.is_some() {
@@ -256,8 +310,11 @@ impl Module {
             inst.held = Some(texture);
             (None, None)
         };
+        let open = self.open.get_or_insert_with(Open::default);
         open.canvases.push(Rendered {
             id,
+            refused: commands.is_none(),
+            commands,
             complete: ready,
             drawn: inst.surface.frame_ready() && failure.is_none(),
             texture,
@@ -320,31 +377,34 @@ impl Module {
             headroom: 1.0,
             ..*frame
         };
-        let open = self.open.get_or_insert_with(|| Open {
-            encoder: gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("exact canvases"),
-                }),
-            canvases: Vec::new(),
-        });
+        let mut recording = Recording::begin(&gpu.device);
         inst.surface.timing(&timing);
         let wants = inst.surface.render(
             &frame,
             &gpu.device,
             &gpu.queue,
-            &mut open.encoder,
+            &mut recording.encoder,
             &view,
             format,
         );
         inst.drain();
-        let failure = inst.surface.take_error();
+        let mut failure = inst.surface.take_error();
+        let commands = match recording.finish() {
+            Ok(commands) => Some(commands),
+            Err(e) => {
+                failure.get_or_insert(SurfaceError(e));
+                None
+            }
+        };
         let ready = inst.surface.frame_ready();
         let cap = inst.surface.max_fps();
         inst.cadence
             .after(cap, frame.now_ms, self.period_ms, wants || !ready);
+        let open = self.open.get_or_insert_with(Open::default);
         open.canvases.push(Rendered {
             id,
+            refused: commands.is_none(),
+            commands,
             complete: ready,
             drawn: ready && failure.is_none(),
             texture: None,
@@ -365,12 +425,13 @@ impl Module {
     /// is presented on its acquiring thread instead, after this returns and
     /// in no order with the others. `false`, with the reason in
     /// [`Module::take_error`], when a surface failed after its commands were
-    /// submitted; nothing open is `true`.
+    /// submitted or the device reported an error no scope caught; else
+    /// nothing open is `true`.
     pub fn flush(&mut self) -> bool {
         self.check_device();
         self.reap();
-        let Some(open) = self.open.take() else {
-            return true;
+        let Some(mut open) = self.open.take() else {
+            return !self.take_uncaptured();
         };
         let Some(gpu) = self.gpu.as_ref() else {
             return true;
@@ -405,9 +466,11 @@ impl Module {
             .map(|c| c.id)
             .filter(|id| (self.instances.get(id)).is_some_and(|i| i.performance.enabled()))
             .collect();
-        let submit = |encoder: wgpu::CommandEncoder| {
-            let commands = encoder.finish();
-            crate::performance::time(!timed.is_empty(), || gpu.queue.submit([commands])).1
+        let commands: Vec<_> = (open.canvases.iter_mut())
+            .filter_map(|c| c.commands.take())
+            .collect();
+        let submit = |commands: Vec<wgpu::CommandBuffer>| {
+            crate::performance::time(!timed.is_empty(), || gpu.queue.submit(commands)).1
         };
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
         let mut first = first;
@@ -421,7 +484,7 @@ impl Module {
             let before = ride
                 .then(|| ride_next_submit(&gpu.queue, std::mem::take(&mut first)))
                 .flatten();
-            let submit_ms = submit(open.encoder);
+            let submit_ms = submit(commands);
             // Every drawable of the frame, or none: a surface that drew
             // nothing into its target is in no command buffer, and then each
             // is presented the ordinary way (one already scheduled is not
@@ -430,7 +493,7 @@ impl Module {
             (rode, submit_ms)
         };
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
-        let rode = (false, submit(open.encoder));
+        let rode = (false, submit(commands));
         let (rode, submit_ms) = rode;
         if let Some(ms) = submit_ms {
             for id in &timed {
@@ -484,7 +547,9 @@ impl Module {
             }
             #[cfg(not(target_os = "android"))]
             let _ = c.buffer;
-            inst.surface.submitted();
+            if !c.refused {
+                inst.surface.submitted();
+            }
             inst.drain();
             if let Some(SurfaceError(e)) = inst.surface.take_error() {
                 self.error = e;
@@ -521,7 +586,9 @@ impl Module {
         if !first.is_empty() {
             shown(first);
         }
-        ok
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        self.pipeline_cache.save_metal();
+        ok && !self.take_uncaptured()
     }
 
     /// Whether a canvas's first frame has been handed to the compositor: a

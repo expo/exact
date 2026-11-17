@@ -91,7 +91,7 @@ fn readback_scissors_uploads_mips_and_retirement() {
     d.upload_texture(image, [0, 0], [8, 8], &data).unwrap();
     d.generate_mips(image).unwrap();
     for level in 1..4 {
-        for p in d.readback_level(image, level).unwrap().chunks_exact(4) {
+        for p in d.readback_level(image, level).unwrap().as_chunks::<4>().0 {
             assert!(
                 p.iter()
                     .zip([64u8, 0, 64, 128])

@@ -27,8 +27,9 @@ test.each(['TypeScript', 'Rust'])('the JS target leaves a held %s fetch out of e
   const dir = heldApp(root, server.origin, language);
   let browser, page;
   try {
+    // A Rust module builds into the checkout's target, warm from the last run, rather than cold into the app's own.
     const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'held-test', '--out', resolve(dir, 'dist'), '--render', 'none'], {
-      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? resolve(root, 'target') }, stdout: 'pipe', stderr: 'pipe',
     });
     const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
     expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });

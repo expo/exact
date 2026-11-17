@@ -200,6 +200,63 @@ final class AlertMacTests: XCTestCase {
         XCTAssertEqual(closed, [3, 3])
     }
 
+    /// HTML's close request (Escape, Command-period, the agent's `back`)
+    /// fires `cancel` at a modal dialog, then `close`. A click of its Cancel
+    /// is its `command="close"`, as an action and the page's `close(id)`
+    /// are: `close` alone. A popover hears no `cancel`.
+    func testACloseRequestFiresCancelBeforeCloseAndTheCancelButtonCloseAlone() throws {
+        func keyDown(_ chars: String, _ ignoring: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                             characters: chars, charactersIgnoringModifiers: ignoring, isARepeat: false, keyCode: code)!
+        }
+        // Which keys that press the cancel are a close request: Command-period in either layout too, not Space or Return.
+        XCTAssertTrue(DialogHost.isCloseRequest(keyDown("\u{1b}", "\u{1b}", 53)))
+        XCTAssertTrue(DialogHost.isCloseRequest(keyDown(".", ".", 47, .command)))
+        XCTAssertTrue(DialogHost.isCloseRequest(keyDown(".", "v", 47, .command)), "Dvorak - QWERTY Command")
+        XCTAssertFalse(DialogHost.isCloseRequest(keyDown(" ", " ", 49)))
+        XCTAssertFalse(DialogHost.isCloseRequest(keyDown("\r", "\r", 36)))
+        for popover in [false, true] {
+            let p = fixture(popover: popover)
+            let dialog = try XCTUnwrap(p.views[3])
+            if popover { dialog.props["semanticTag"] = "dialog" }
+            dialog.handlers.formUnion(["close", "cancel"])
+            var events: [String] = []
+            p.onCancel = { events.append("cancel \($0)") }
+            p.onClose = { events.append("close \($0)") }
+            p.onPress = { events.append("press \($0)") }
+            func run(_ end: (AlertHost.Presented) throws -> Void) throws -> [String] {
+                events = []
+                if popover { p.press(2) } else { p.dialogCommand("showModal", "ask") }
+                let owner = try XCTUnwrap(p.alerts.presented)
+                try end(owner)
+                XCTAssertNil(p.alerts.presented)
+                turn()
+                turn()
+                return events
+            }
+            // Through the event queue, as a person's key comes: `NSApp.currentEvent` is then the key.
+            func send(_ chars: String, _ ignoring: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags, to owner: AlertHost.Presented) {
+                let sheet = owner.alert.window
+                sheet.makeKey()
+                NSApp.postEvent(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: sheet.windowNumber, context: nil, characters: chars, charactersIgnoringModifiers: ignoring,
+                                                 isARepeat: false, keyCode: code)!, atStart: true)
+                if let event = NSApp.nextEvent(matching: .keyDown, until: Date(timeIntervalSinceNow: 1), inMode: .default, dequeue: true) { NSApp.sendEvent(event) }
+            }
+            // A popover's own events are not this test's: only that no `cancel` comes.
+            func heard(_ events: [String]) -> [String] { popover ? events.filter { $0.hasPrefix("cancel") } : events }
+            let request = popover ? [] : ["cancel 3", "close 3"], close = popover ? [] : ["close 3"]
+            XCTAssertEqual(heard(try run { send("\u{1b}", "\u{1b}", 53, [], to: $0) }), request, "Escape (popover: \(popover))")
+            XCTAssertEqual(heard(try run { _ in XCTAssertTrue(p.alerts.key("Escape")) }), request, "the agent's Escape (popover: \(popover))")
+            XCTAssertEqual(heard(try run { $0.alert.buttons[1].performClick(nil) }), close, "a click of Cancel (popover: \(popover))")
+            XCTAssertEqual(heard(try run { _ in XCTAssertEqual(p.alerts.click(try XCTUnwrap(p.views[30])), true) }), close,
+                           "the agent's tap of Cancel (popover: \(popover))")
+            XCTAssertEqual(heard(try run { $0.alert.buttons[0].performClick(nil) }), popover ? [] : ["press 10", "close 3"], "an action (popover: \(popover))")
+            if !popover { XCTAssertEqual(try run { _ in p.dialogCommand("close", "ask") }, close, "the page's close(id)") }
+            window.close()
+        }
+    }
+
     func testDismissalStillClosesWhenTheChosenActionChangesBeforeItsTurn() throws {
         let p = fixture()
         p.views[3]?.handlers.insert("close")

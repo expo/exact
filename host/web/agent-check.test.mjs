@@ -1,7 +1,7 @@
 // @ref LLP 1116.003 D8 — `check`: what is wrong with the presented screen, in text (scripts/agent-check.mjs judging
 // host/web-js/check.js's observations and a capture's pixels): one fixture view per finding class, found on the page in
 // each scheme and absent from a page that has none; and a screenshot shows a transition where it ends, unless filmed.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -261,11 +261,16 @@ const TOAST = `component ToastFixture
       text "Past the screen's bottom" position="absolute" left=16 bottom=-24 height=48 pointer-events="none" testId="low"
 `;
 
+const fixtures = [];
+afterAll(() => { for (const dir of fixtures) rmSync(dir, { recursive: true, force: true }); });
+
 const built = (() => {
   const ready = new Map();
   return (name, source) => {
     if (!ready.has(name)) ready.set(name, (async () => {
-      const dir = mkdtempSync(join(tmpdir(), `exact-check-${name}-`)), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+      const dir = mkdtempSync(join(tmpdir(), `exact-check-${name}-`));
+      fixtures.push(dir);
+      const contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
       writeFileSync(contract, source);
       const compile = spawnSync(compiler, ['build', contract, '-o', plan], { encoding: 'utf8' });
       if (compile.status !== 0) throw new Error(compile.stderr);
@@ -631,6 +636,7 @@ test('a text is judged on the fill under it in each scheme, and a row its scroll
   const session = await open({ host: 'web', url: await built('bubbles', BUBBLES) });
   try {
     const dir = mkdtempSync(join(tmpdir(), 'exact-check-bubbles-'));
+    fixtures.push(dir);
     const [light, dark] = (await checkOp(session, ['both'], { shots: (_, scheme) => join(dir, `${scheme}.png`) })).check;
     expect(kinds(light)).toEqual({}); // white on the indigo bubble reads, though its box's corners show the white page
     expect(kinds(dark)).toEqual({ own: ['contrast'], in: ['contrast'], 'own-light': ['contrast'] }); // on the pale bubbles, not the black page
@@ -693,6 +699,7 @@ test('a screenshot shows a transition where it ends, the clock unmoved; a film\'
   const session = await open({ host: 'web', url: await built('broken', BROKEN) });
   try {
     const dir = mkdtempSync(join(tmpdir(), 'exact-check-shot-'));
+    fixtures.push(dir);
     const swatch = (await session.layout('swatch')).node.space.viewport;
     const at = (file) => { const png = decodePng(readFileSync(file)), x = Math.floor(swatch.x + swatch.w / 2), y = Math.floor(swatch.y + swatch.h / 2), i = (y * png.width + x) * 4; return [...png.data.slice(i, i + 3)]; };
     await session.tap('swatch');

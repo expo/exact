@@ -144,19 +144,20 @@ final class TimerAdmissions {
             if ExactSession.asyncFills, !frame, !idle, s.frames.link == nil {
                 pending = (cutoff, update)
                 s.advanceInFlight = true
-                let token = generation, epoch = s.generation
+                let token = generation, lease = s.runtime.completionLease
                 let kinds = observe().kinds
                 DispatchQueue.main.async { [weak self, weak s] in
                     guard let s else { return }
-                    guard let self, self.generation == token, s.generation == epoch, s.state != .destroyed else {
+                    guard let self, self.generation == token, s.runtime.accepts(lease) else {
                         s.advanceInFlight = false
                         if let self, self.generation == token { self.pending = nil }
                         return
                     }
-                    s.runtime.timerWaitsAsync(kinds: kinds, cutoff: cutoff) { [weak self, weak s] batch in
-                        s?.publish(.advance, batch, epoch)
+                    s.runtime.timerWaitsAsync(kinds: kinds, cutoff: cutoff) { [weak self, weak s] completion in
+                        s?.publish(.advance, completion)
                         DispatchQueue.main.async { [weak self, weak s] in
-                            guard let self, let s, self.generation == token, s.generation == epoch, s.state != .destroyed else { return }
+                            guard let self, let s, self.generation == token, s.runtime.accepts(completion.lease) else { return }
+                            let batch = completion.batch
                             if batch.waitContinue, !batch.busy, !batch.held { self.check() }
                             else { self.pending = nil; self.scheduleRecentWake() }
                         }
@@ -199,7 +200,7 @@ final class TimerAdmissions {
 
 #if canImport(UIKit)
 // Observe touches without recognizing, delaying, cancelling or preventing gestures
-private final class TimerScrollTouch: UIGestureRecognizer, UIGestureRecognizerDelegate {
+class TimerScrollTouch: UIGestureRecognizer, UIGestureRecognizerDelegate {
     private var touches: Set<ObjectIdentifier> = []
     private let changed: () -> Void
     var held: Bool { !touches.isEmpty }
@@ -217,7 +218,11 @@ private final class TimerScrollTouch: UIGestureRecognizer, UIGestureRecognizerDe
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) { finish(touches) }
     private func finish(_ touches: Set<UITouch>) {
         for touch in touches { self.touches.remove(ObjectIdentifier(touch)) }
-        if self.touches.isEmpty { DispatchQueue.main.async { [weak self] in self?.changed() } }
+        if self.touches.isEmpty {
+            // finish the sequence so uikit can reset recognizers after a system gesture cancels it.
+            state = .failed
+            DispatchQueue.main.async { [weak self] in self?.changed() }
+        }
     }
     override func reset() { super.reset(); touches.removeAll(); DispatchQueue.main.async { [weak self] in self?.changed() } }
 }

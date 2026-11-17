@@ -22,6 +22,8 @@ use std::fmt::Write as _;
 
 mod lineage;
 mod looks;
+mod owned;
+pub(crate) use owned::declared_name;
 mod pending;
 mod row;
 /// A row's value as `node` prints it: the JS target's inspect table (LLP 1122 T2b) writes the same words.
@@ -84,7 +86,7 @@ pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         // development page outlines by, without a node's whole explanation.
         Some("sites") => runner.view_sites_json(),
         // A view and each logical ancestor to the root with its plan site (null for none): what a development
-        // page walks to move a selection up its call sites (tamber/1.16 `inspect` `select`), with no node's rows.
+        // page walks to move a selection up its call sites (forma/1.16 `inspect` `select`), with no node's rows.
         Some("ancestors") => match field_num(request, "id") {
             Some(n) if n >= 0.0 && n == n.trunc() => lineage::ancestors(runner, n as u32),
             _ => error("ancestors needs a numeric id"),
@@ -624,7 +626,7 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
                 let b = plan.binding(b);
                 b.kind == BindingKind::Style
                     && StyleId::from_bit(b.id as u32) == Some(row)
-                    && !crate::vm::is_literal(plan.code(b.expr))
+                    && !crate::vm::is_literal(plan, plan.code(b.expr))
             })
         })
     };
@@ -748,9 +750,9 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
 }
 
 /// The state: the clock and every slot, derive, and resource by the name the
-/// plan declares, as typed JSON (records carry their field names); the
-/// requests in flight; the names the store holds (LLP 1018); the active
-/// head's fields (LLP 1048.003 D1).
+/// plan declares, as typed JSON (records carry their field names); a child's
+/// resources by instance path; the requests in flight; the names the store
+/// holds (LLP 1018); the active head's fields (LLP 1048.003 D1).
 pub fn state<D: DataSource>(runner: &Runner<D>) -> String {
     state_with(runner, "{}")
 }
@@ -842,6 +844,8 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         page.restores,
         page.in_background()
     );
+    let _ = write!(s, ",\"frozen\":{}", page.frozen);
+    let _ = write!(s, ",\"presented\":{}", runner.presented().value());
     s.push_str(",\"gpuTier\":");
     quote(page.gpu_tier(), &mut s);
     s.push('}');
@@ -851,9 +855,14 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         s.push_str(&runner.faults().json());
     }
     s.push_str(",\"derives\":{");
-    for (i, row) in plan.derives.iter().enumerate() {
+    for (i, row) in plan
+        .derives
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| !r.unsettled)
+    {
         let name = plan.str(row.name);
-        if i > 0 {
+        if !s.ends_with('{') {
             s.push(',');
         }
         quote(name, &mut s);
@@ -865,11 +874,14 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     }
     s.push_str("},\"resources\":{");
     for (i, row) in runner.declared_resources().iter().enumerate() {
-        let name = plan.str(row.name);
-        if i > 0 {
+        if row.owner.is_some() {
+            // Each instance has its own, listed under it below.
+            continue;
+        }
+        if !s.ends_with('{') {
             s.push(',');
         }
-        quote(name, &mut s);
+        quote(plan.str(row.name), &mut s);
         s.push(':');
         match runner.shown_resource_at(i) {
             Some(v) => typed_json(plan, row.ty, v, &mut s),
@@ -877,6 +889,7 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         }
     }
     s.push('}');
+    owned::state(runner, &mut s);
     // The writes shown over resources until they end or are answered.
     let writes = runner.writes();
     if !writes.is_empty() {
@@ -1093,6 +1106,7 @@ fn delivery<D: DataSource>(runner: &Runner<D>, s: &mut String) {
     quote(&d.version, s);
     s.push_str(",\"buildNumber\":");
     quote(&d.build_number, s);
+    let _ = write!(s, ",\"production\":{}", d.production);
     s.push_str(",\"L\":");
     quote(&d.store.to_string(), s);
     s.push_str(",\"E\":[");
@@ -1331,8 +1345,17 @@ fn ids(ids: &[u32], out: &mut String) {
 /// neither, the reply is the session's table as `state.faults` shows it.
 fn faults<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     let table = runner.faults();
+    let full_request = request;
     let request = after_key(request, "faults").unwrap_or("{}");
-    if let Some(prefix) = field_str(request, "fail") {
+    if let Some(prefix) = field_str(request, "answer") {
+        let value: serde_json::Value = match serde_json::from_str(full_request) {
+            Ok(v) => v,
+            Err(e) => return error(&e.to_string()),
+        };
+        if let Err(e) = table.answer(&prefix, &value["faults"]["response"]) {
+            return error(&e);
+        }
+    } else if let Some(prefix) = field_str(request, "fail") {
         let times = match after_key(request, "times") {
             None => None,
             Some(_) => match field_num(request, "times") {

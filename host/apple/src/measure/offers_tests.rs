@@ -30,6 +30,27 @@ fn fixture() -> Kernel {
     k
 }
 
+#[test]
+fn pending_reader_geometry_is_provisional_at_the_kernel_seam() {
+    extern "C" fn pending(_: *mut c_void, _: *const CRequest) -> CMetrics {
+        CMetrics {
+            width: 200.0,
+            height: 1000.0,
+            baseline: -2.0,
+        }
+    }
+    let mut k = fixture().rehydrate(Box::new(CallbackMeasurer::new(
+        pending,
+        std::ptr::null_mut(),
+        None,
+    )));
+    k.compute_layout(1, exact_kernel::Offer::definite(200.0, 400.0))
+        .unwrap();
+    let key = k.arena().key_of(1).unwrap();
+    assert!(k.laid_out_frame(key).unwrap().1);
+    assert!(k.measure_auto_height(key).unwrap().1);
+}
+
 fn metrics(w: f32, h: f32) -> CMetrics {
     // Deterministic full-tuple oracle, sensitive to BOTH exact bit patterns.
     CMetrics {
@@ -432,6 +453,7 @@ mod storage {
             && actual.text_wrap_style == expected.text_wrap_style
             && actual.atoms_len == expected.atoms_len
             && actual.faces_len == expected.faces_len
+            && actual.natural == expected.natural
             && same_run(&actual.strut, &expected.strut)
             && !actual.runs.is_null();
         if probe.exact {
@@ -638,6 +660,7 @@ mod storage {
                 atoms_len: 0,
                 faces: "".as_ptr(),
                 faces_len: 0,
+                natural: 0,
             },
             calls: 0,
             exact: true,
@@ -667,6 +690,7 @@ mod storage {
             TextMetrics {
                 width: 73.125,
                 height: 17.5,
+                pending: false,
                 first_baseline: Some(9.25),
             }
         );

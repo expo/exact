@@ -103,8 +103,13 @@ impl Shown {
 
 /// Whether a node writes any of the pressed paint (LLP 1061 D7).
 pub(crate) fn paints(style: &exact_kernel::StyleProps) -> bool {
-    use exact_kernel::StyleId::{PressBackgroundColor, PressColor, PressOpacity, PressOpacityTo};
+    use exact_kernel::StyleId::{
+        PressBackgroundColor, PressColor, PressOpacity, PressOpacityTo, PressTranslate,
+        PressTranslatePercent,
+    };
     [
+        PressTranslate,
+        PressTranslatePercent,
         PressOpacity,
         PressOpacityTo,
         PressBackgroundColor,
@@ -120,6 +125,9 @@ pub(crate) fn paints(style: &exact_kernel::StyleProps) -> bool {
 pub(crate) fn paints_over(node: &exact_kernel::NodeRef<'_>, property: Property) -> bool {
     use exact_kernel::StyleId::*;
     let (rows, row): (&[exact_kernel::StyleId], _) = match property {
+        Property::Translate | Property::Scale | Property::Rotate => {
+            (&[PressTranslate, PressTranslatePercent], None)
+        }
         Property::Opacity => (&[PressOpacity, PressOpacityTo], Some(Opacity)),
         Property::BackgroundColor => (&[PressBackgroundColor], Some(BackgroundColor)),
         Property::Color => (&[PressColor], None),
@@ -191,6 +199,13 @@ pub(crate) fn present(
     shown.press = scale(node.style.press_scale, progress);
     shown.press_paint = progress;
     let s = node.style;
+    shown.press_translate = [
+        s.press_translate.x,
+        s.press_translate_percent.x,
+        s.press_translate.y,
+        s.press_translate_percent.y,
+    ]
+    .map(|v| v * progress);
     if s.mask.has(StyleId::PressOpacityTo) {
         shown.opacity += (s.press_opacity_to.clamp(0., 1.) - shown.opacity) * progress;
     } else if s.mask.has(StyleId::PressOpacity) {

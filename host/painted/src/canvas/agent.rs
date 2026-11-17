@@ -151,6 +151,15 @@ pub fn waiting() -> bool {
 }
 
 impl<D: DataSource + Default> CanvasHost<D> {
+    /// The reader's handler cannot run while the agent holds this thread.
+    /// Service only its request handoff and answers until the operation returns.
+    pub fn agent_with_reader(&mut self, line: &str, turn: crate::presenter::AgentTurn) -> String {
+        let previous = self.p.set_agent_turn(Some(turn));
+        let reply = self.agent(line);
+        self.p.set_agent_turn(previous);
+        reply
+    }
+
     /// One request of the agent API, answered: a JSON line in, a JSON line
     /// out. `{"op":"ready"}` is the line the stdio carrier writes first.
     pub fn agent(&mut self, line: &str) -> String {
@@ -183,7 +192,16 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
             _ => {}
         }
-        let reply = crate::agent::handle(&mut self.p, line);
+        let scroll = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .filter(|r| r["op"] == "tap" && r.get("scrollDrag").is_some());
+        let reply = match scroll {
+            Some(request) => self
+                .p
+                .agent_scroll_drag(&request)
+                .unwrap_or_else(|e| error(&e)),
+            None => crate::agent::handle(&mut self.p, line),
+        };
         // One display turn, a paint whatever changed: what the request made
         // is admitted to the next one, and its stream follows the handler's.
         self.p.repaint();

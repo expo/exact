@@ -93,6 +93,11 @@ raw-window-handle = "0.6"
 jni-sys = "0.3"
 mimalloc = { version = "0.1", default-features = false, features = ["local_dynamic_tls", "v2"] }
 
+# A canvas capture's JPEG where the host links no system encoder
+# (src/canvas2d/capture.rs): Linux, and this host's development builds on a Mac.
+[target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
+jpeg-encoder = "0.7"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # The font directories and generic families fontconfig's own files name,
 # read as files (no fontconfig library is linked).
@@ -103,7 +108,7 @@ fontconfig-parser = "0.5"
 exact-listen = { path = "../listen" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_UI_Controls_RichEdit", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Controls_RichEdit", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement"] }
 chrono = "0.4"
 chrono-tz = "0.10"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_System_Com"] }
@@ -113,6 +118,7 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 test-budget = []
 
 [dev-dependencies]
+exact-bake = { path = "../../bake" }
 exact-js = { path = "../../js" }
 messages-stress-data = { path = "../../apps/messages-stress/data" }
 exact-update = { path = "../../update" }
@@ -123,3 +129,5 @@ caltrain-data = { path = "../../apps/caltrain/data" }
 contract = { path = "../../contract/cli" }
 # A scripted socket transport names the URL type its trait takes.
 url = "2.5"
+# A stand-in Java VM's function tables (src/surfaces/android_init_tests.rs).
+jni-sys = "0.3"

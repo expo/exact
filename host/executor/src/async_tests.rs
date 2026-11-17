@@ -179,6 +179,7 @@ pub(super) fn core_with_upload_copy(
 
 fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "test".into(),
@@ -581,6 +582,49 @@ fn an_upload_that_cannot_fit_beside_the_requests_behind_it_is_refused() {
     script.wait(1);
     script.answer("https://b.example.test/", b"b");
     assert_eq!(collect(&core, &woke, 1)[0].0, 4);
+    eventually(|| bytes(&core) == [0, 0]);
+}
+
+/// This executor reads a file body whole, so it keeps the 64 MiB bound the
+/// blocking executor's stream dropped, and refuses past it unsent, naming
+/// itself (LLP 1133.008.000 D4). A sparse file: nothing is read to refuse.
+#[test]
+fn a_file_body_over_64_mib_is_refused_unsent_naming_the_executor() {
+    let _turn = one_at_a_time();
+    let files = Files::new();
+    let big = std::fs::File::create(files.0.join("tmp/big.mov")).unwrap();
+    big.set_len((64 << 20) + 1).unwrap();
+    drop(big);
+    let script = Arc::new(Script::default());
+    let (core, woke) = core(
+        &script,
+        "net.fetch https://*.example.test\nfs.read app:/tmp",
+    );
+    core.set_app_roots(files.roots());
+    for fixture in [false, true] {
+        core.run_owned(
+            job(
+                1,
+                upload("https://a.example.test/", "app:/tmp/big.mov", 1 << 20),
+            ),
+            fixture.then(|| {
+                OwnedWork::HttpResponse(Arc::new(|| {
+                    Outcome::Response(Response {
+                        status: 200,
+                        headers: vec![],
+                        body: vec![],
+                    })
+                }))
+            }),
+        )
+        .unwrap();
+        let outcomes = collect(&core, &woke, 1);
+        assert!(
+            matches!(&outcomes[0], (1, Outcome::Failed { kind: FailureKind::Unsupported, message })
+            if message.contains("the asynchronous executor reads a file body whole, at most 67108864 bytes")),
+            "{outcomes:?}"
+        );
+    }
     eventually(|| bytes(&core) == [0, 0]);
 }
 

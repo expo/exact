@@ -51,6 +51,7 @@ extension CanvasesHost {
         return input(e, m, ["t":"control", "name":owner.name, "phase":phase, "id":contact, "x":owner.position.x, "y":owner.position.y], timestamp:timestamp)
     }
 
+    #if EXACT_AGENT
     /// The agent's `world` op on a surface (LLP 1046.001).
     func world(_ agent: Agent, _ request: [String: Any]) -> [String: Any] {
         let id = request["id"] as? UInt32
@@ -118,4 +119,5 @@ extension CanvasesHost {
         if let phase { reply["phase"] = phase }
         return reply
     }
+    #endif
 }

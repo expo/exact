@@ -28,8 +28,8 @@ impl<D: DataSource> Host<D> {
     }
 
     /// The page's word (`exact_auth`): `{"op":"arm","ticket","agent",
-    /// "origin","popup"}` → `{"settled":true}` | `{"held":true}` |
-    /// `{"present":{"url","callback","state"}}` (a page that can't open a popup —
+    /// "origin","popup","fixture"}` → `{"settled":true}` | `{"held":true}` |
+    /// `{"present":{"url","callback","state","logout","prepared"}}` (a page that can't open a popup —
     /// no activation, or the glue not loaded — is 428 `popup blocked`);
     /// `{"op":"done","ticket","url"}` or `{…,"status","message"}` →
     /// `{"settled":true}`.
@@ -52,12 +52,13 @@ impl<D: DataSource> Host<D> {
                 let out = self.auth_out.remove(at);
                 let origin = field_str(json, "origin");
                 let agent = field_bool(json, "agent");
-                match auth::arm(
+                match auth::arm_with_fixture(
                     &mut self.runner,
                     &out,
                     agent,
                     Browser::Web,
                     origin.as_deref(),
+                    field_str(json, "fixture").as_deref(),
                 ) {
                     Arm::Settled => "{\"settled\":true}".into(),
                     Arm::Held => "{\"held\":true}".into(),
@@ -72,6 +73,11 @@ impl<D: DataSource> Host<D> {
                         quote(&session.callback, &mut s);
                         s.push_str(",\"state\":");
                         quote(&session.state, &mut s);
+                        s.push_str(&format!(",\"logout\":{}", session.logout));
+                        if let Some(prepared) = &session.prepared {
+                            s.push_str(",\"prepared\":");
+                            quote(prepared, &mut s);
+                        }
                         s.push_str("}}");
                         s
                     }

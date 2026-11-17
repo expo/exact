@@ -16,9 +16,9 @@
 //! - `EXACT_UPDATE_DIR=<dir>` — the store's directory, instead of the
 //!   app's container.
 //! - Under `EXACT_AGENT=1` with no `EXACT_UPDATE_DIR`, the store is a fresh
-//!   temporary directory: a scripted drive starts from nothing and leaves
-//!   nothing selected in a developer's container — the rule the secret
-//!   store has under `EXACT_STORE`.
+//!   temporary directory, removed at the process's exit: a scripted drive
+//!   starts from nothing and leaves nothing selected in a developer's
+//!   container — the rule the secret store has under `EXACT_STORE`.
 
 use crate::binary::{Activate, Baked};
 use crate::envelope::sha256_hex;
@@ -378,14 +378,30 @@ fn store_dir(base: Option<&Path>, app_id: &str) -> Result<PathBuf, String> {
     if let Some(dir) = std::env::var_os("EXACT_UPDATE_DIR").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(dir));
     }
-    if std::env::var_os("EXACT_AGENT").is_some() {
-        let dir = std::env::temp_dir().join(format!("exact-update-agent-{}", std::process::id()));
+    if let Some(dir) = agent_store_dir() {
         let _ = std::fs::remove_dir_all(&dir);
         return Ok(dir);
     }
     let base = base.ok_or("no data directory for the update store")?;
     let id = if app_id.is_empty() { "app" } else { app_id };
     Ok(base.join("exact").join(id).join("update"))
+}
+
+/// The fresh temporary directory a store under `EXACT_AGENT=1` takes when
+/// no `EXACT_UPDATE_DIR` names one.
+fn agent_store_dir() -> Option<PathBuf> {
+    (std::env::var_os("EXACT_UPDATE_DIR").is_none_or(|v| v.is_empty())
+        && std::env::var_os("EXACT_AGENT").is_some())
+    .then(|| std::env::temp_dir().join(format!("exact-update-agent-{}", std::process::id())))
+}
+
+/// Remove the store's fresh temporary directory, if it has one. A host
+/// registers this to run at the process's exit (`ibex2::process::wait_at_exit`),
+/// so a drive's store goes with the process.
+pub fn remove_agent_store() {
+    if let Some(dir) = agent_store_dir() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// The asset the binary embeds under `name`, hashed, or `None`. The

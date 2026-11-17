@@ -888,7 +888,8 @@ pub unsafe extern "C" fn ibex2_async_begin(
         return 1;
     };
     if op == AsyncOp::FsCompressImage {
-        // Exact patch 9 (exact2 LLP 1069.002 A1.11): a fifth, the media type.
+        // Exact patch 9 (exact2 LLP 1069.002 A1.11): a fifth, the media type;
+        // (A1.12) the fourth, `maxBytes`, undefined or null when unsaid.
         // Patch 9a (exact2 LLP 1133.019 D17): a sixth, the edit's JSON; or
         // `transformImage`'s three, its options' JSON third.
         let transform = raw.len() == 3;
@@ -900,6 +901,7 @@ pub unsafe extern "C" fn ibex2_async_begin(
                 (0 | 1, Ok(HostArg::Str(text))) if text.len() <= 32_768 => {}
                 (2, Ok(HostArg::Str(text))) if transform && text.len() <= 4096 => {}
                 (2 | 3, Ok(HostArg::Number(_))) if !transform => {}
+                (3, Ok(HostArg::Undefined | HostArg::Null)) if !transform => {}
                 (4, Ok(HostArg::Str(text))) if text.len() <= 32 => {}
                 (5, Ok(HostArg::Str(text))) if text.len() <= 4096 => {}
                 _ => return 1,
@@ -1010,16 +1012,22 @@ fn prepare_image_args(
             },
         );
     }
+    // Exact patch 9 (exact2 LLP 1069.002 A1.12): `maxBytes` may be
+    // undefined or null, a call with a `quality` and no byte target.
     let (
         Some(HostValue::Str(from)),
         Some(HostValue::Str(to)),
         Some(HostValue::Number(dimension)),
-        Some(HostValue::Number(bytes)),
+        Some(bytes @ (HostValue::Number(_) | HostValue::Undefined | HostValue::Null)),
     ) = (args.first(), args.get(1), args.get(2), args.get(3))
     else {
         return Err(HostError::InvalidArgument(
             "compressImage expects from, to, maxDimension, maxBytes".into(),
         ));
+    };
+    let bytes = match bytes {
+        HostValue::Number(n) => Some(*n),
+        _ => None,
     };
     // Exact patch 9 (exact2 LLP 1069.002 A1.11): an optional media type last.
     let format = match args.get(4) {
@@ -1036,10 +1044,9 @@ fn prepare_image_args(
         || dimension.fract() != 0.0
         || *dimension <= 0.0
         || *dimension > u32::MAX as f64
-        || !bytes.is_finite()
-        || bytes.fract() != 0.0
-        || *bytes <= 0.0
-        || *bytes > 9_007_199_254_740_991.0
+        || bytes.is_some_and(|n| {
+            !n.is_finite() || n.fract() != 0.0 || n <= 0.0 || n > 9_007_199_254_740_991.0
+        })
     {
         return Err(HostError::InvalidArgument("invalid image bounds".into()));
     }
@@ -1050,7 +1057,7 @@ fn prepare_image_args(
         to,
         crate::stdlib::fs_image::ImageRequest {
             max_dimension: *dimension as u32,
-            max_bytes: *bytes as u64,
+            max_bytes: bytes.map(|n| n as u64),
             format,
             options: options(args.get(5))?,
             transform: false,

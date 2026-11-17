@@ -86,10 +86,13 @@ fn baked_preloads_reach_typescript_rust_and_mixed_accessors_without_an_engine() 
     fn check(source: &dyn DataSource) {
         assert_eq!(source.preloads(), DEFINITIONS);
         let request = source.preloads()[1]
-            .fill(|name| {
-                assert_eq!(name, "session");
-                Some("present".into())
-            })
+            .fill(
+                |name| {
+                    assert_eq!(name, "session");
+                    Some("present".into())
+                },
+                exact_executor::preload::preload_url,
+            )
             .unwrap();
         assert_eq!(
             request.headers,

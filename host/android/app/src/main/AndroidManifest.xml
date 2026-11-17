@@ -28,7 +28,7 @@
          launch theme its `background_color` where it names one (LLP 1115.001 D3.6). -->
     <application android:label="${appName}" android:theme="${appTheme}" android:hardwareAccelerated="true"
         android:icon="${appIcon}" android:roundIcon="${appIcon}" android:banner="${appBanner}"
-        android:enableOnBackInvokedCallback="true"
+        android:enableOnBackInvokedCallback="true" android:supportsRtl="true"
         android:fullBackupContent="@xml/exact_backup" android:dataExtractionRules="@xml/exact_data_extraction">
         <meta-data android:name="dev.exact.audioSession" android:value="${audioSession}" />
         <profileable android:shell="true" />
@@ -50,6 +50,9 @@
             <!-- The app manifest's `shortcuts` (app/build.gradle.kts writes the list; LLP 1133.023 D3). -->
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/exact_shortcuts" />
         </activity>
+        <!-- What a notification's tap starts (LLP 1133.004.000 D4): the activity under a name no other app may start, so
+             an activation is read only from an intent to it, and needs no secret (`Activations.kt`). -->
+        <activity-alias android:name=".Notify" android:targetActivity=".MainActivity" android:exported="false" />
         <!-- The app's files as content URIs an intent carries under a read grant (LLP 1133.024 D22 item 2): a mail's
              attachments. Unexported: only a URI the app granted opens. -->
         <provider android:name="dev.exact.canvas.Files" android:authorities="${applicationId}.exact.files"

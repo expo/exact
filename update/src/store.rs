@@ -13,7 +13,7 @@
 //! record.json                              { codec, selected, lastGood, failures, stream, bad }
 //! blobs/<sha256>                            each file's bytes, once, verified before reuse
 //! entries/<canonical envelope sha256>/exact.json  the head, as it arrived
-//! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy where refused)
+//! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy on Android or where refused)
 //! entries/<envelope sha256>/assets.json     the asset index, likewise
 //! entries/<envelope sha256>/assets/<name>   likewise
 //! entries/.tmp-<something>/                 an entry being built; never selected
@@ -188,6 +188,22 @@ impl AssetSet {
     /// also the tombstone boundary for embedded or predecessor assets.
     pub fn names(&self) -> Vec<String> {
         self.cards.keys().cloned().collect()
+    }
+
+    /// The directory the names resolve under (`entries/<entry>/assets`).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Read every asset and check it against its signed card, for a reader
+    /// that opens files by path rather than through [`AssetSet::resolve`].
+    /// The first mismatch is the error; no bytes are kept.
+    pub fn verify(&self) -> Result<(), String> {
+        for (name, card) in self.cards.iter() {
+            safe_name(name)?;
+            read_card(&self.root.join(name), card)?;
+        }
+        Ok(())
     }
 
     /// Resolve one name. `Ok(None)` means the complete roster omits it;
@@ -377,13 +393,8 @@ impl Store {
             .write(true)
             .open(dir.join("owner.lock"))
             .map_err(|e| format!("cannot open update store lock {}: {e}", dir.display()))?;
-        let reader = match owner.try_lock() {
-            Ok(()) => false,
-            Err(std::fs::TryLockError::WouldBlock) => true,
-            Err(std::fs::TryLockError::Error(e)) => {
-                return Err(format!("cannot lock update store {}: {e}", dir.display()))
-            }
-        };
+        let reader = !disk::try_lock(&owner, true)
+            .map_err(|e| format!("cannot lock update store {}: {e}", dir.display()))?;
         let entries = dir.join("entries");
         std::fs::create_dir_all(&entries)
             .map_err(|e| format!("cannot make {}: {e}", entries.display()))?;

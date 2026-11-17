@@ -56,7 +56,7 @@ fn wide(css: &str) -> u16 {
 }
 
 fn has(frame: &[u8], rgba: [u8; 4]) -> bool {
-    frame.chunks_exact(4).any(|px| px == rgba)
+    frame.as_chunks::<4>().0.contains(&rgba)
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn a_retained_region_paints_after_its_wide_colours_are_swept() {
         return;
     }
     let _service = crate::content_region::test_service();
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 500.),

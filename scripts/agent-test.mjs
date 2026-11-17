@@ -2,18 +2,19 @@
 // turns a file's `test` blocks into steps, and this drives them through the
 // session the operations use (`agent.mjs`'s `open`). `agent.mjs` re-exports it.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { faultRequest as rawFaultRequest, PREFERENCES, preferGroups } from './agent-prefer.mjs';
+import { faultRequest as rawFaultRequest, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
 import { perfDelta } from './agent-inspect.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
+import { macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
-import { onThisMachine, serverUrl } from './verify.mjs';
+import { onThisMachine, serverUrl } from './app-server.mjs';
 import { backendOrigin, backendOriginSelection, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, inlineSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
 import { createRequire } from 'node:module';
@@ -80,6 +81,30 @@ export function disabledExpectation(nodes, target, disabled) {
   const n = targetNode(nodes, target), word = disabled ? 'disabled' : 'enabled';
   if (!n) return { message: `expected "${target}" ${word}, no view carries that testId` };
   return readsDisabled(n) === disabled ? null : { message: `expected "${target}" ${word}, it was ${disabled ? 'enabled' : 'disabled'}` };
+}
+
+/** `expect focused <target>`: null when a node the target names holds the focus, which every host's tree marks
+ * (`focused`), else `{ message }` naming what holds it. */
+export function focusedExpectation(nodes, target) {
+  if (nodes.some((n) => n.props.testId === target && n.focused)) return null;
+  const holder = nodes.find((n) => n.focused);
+  const was = !targetNode(nodes, target) ? 'no view carries that testId' : !holder ? 'nothing has the focus' : `${holder.props.testId != null ? JSON.stringify(holder.props.testId) : `${holder.type}#${holder.id}`} has it`;
+  return { message: `expected "${target}" focused, ${was}` };
+}
+
+/** `expect layout <target> width|height ==|<=|>= <points>`: null when the size holds, else `{ message }`. The
+ * size is the box `layout <target>` reports, `node.space.viewport` (LLP 1012: viewport points, presentation transforms
+ * folded in), at the reply's two decimals. A node the shipped app does not show fails as `expect text` has it; a host
+ * with no box for the node says why (`space.unavailable`: an iOS swipe action not revealed). */
+export async function layoutExpectation(s, nodes, st) {
+  const n = targetNode(nodes, st.target), said = `${st.dimension} of "${st.target}"`;
+  if (!n) return { message: `${said} is absent (no view carries that testId${unopenedHint(nodes)})` };
+  if (n.unshown) return { message: `testId "${st.target}" is in the tree, but ${n.unshown}`, unshown: true };
+  const space = (await s.layout(n.id)).node?.space, box = space?.viewport;
+  if (!box) return { message: `${said} is unknown: ${space?.unavailable ?? 'the host reports no box for it'}` };
+  const r2 = (v) => Math.round(v * 100) / 100, w = r2(box.w), h = r2(box.h), got = st.dimension === 'width' ? w : h;
+  if (stateHolds(got, st)) return null;
+  return { message: `${said} is ${got}, expected ${{ equal: '', 'at-least': '>= ', 'at-most': '<= ' }[st.comparison]}${st.value} (its box is ${w}×${h})` };
 }
 
 /** A press on a disabled control does nothing, and each host said so its own way (the web's silently, a native one in the words of the view
@@ -160,9 +185,10 @@ export const pickHint = (host) => host === 'web'
   : '; first tap a button whose action calls showPicker("<input id>"); the file input needs id as well as testId';
 
 /** Where a native host keeps a drive's scratch stores (host/apple and host/painted `configure_storage`), or
- * null where the driver cannot reach them: an iOS simulator's are in its app container and go with the app. */
-export function storeBase(appId, host, env = process.env, home = homedir()) {
-  if (host === 'macos' || host === 'mac') return resolve(home, 'Library/Caches/exact', appId, 'agent');
+ * null where the driver cannot reach them: an iOS simulator's are in its app container and go with the app; a
+ * sandboxed Mac build's (`sandboxed`: `mac --sandbox`, LLP 1030.005 D4) are in its container, whose HOME it takes. */
+export function storeBase(appId, host, env = process.env, home = homedir(), sandboxed = false) {
+  if (host === 'macos' || host === 'mac') return resolve(home, ...(sandboxed ? ['Library/Containers', appId, 'Data'] : []), 'Library/Caches/exact', appId, 'agent');
   if (host === 'linux') return resolve(env.XDG_CACHE_HOME?.startsWith('/') ? env.XDG_CACHE_HOME : resolve(home, '.cache'), 'exact', appId, 'agent');
   return null;
 }
@@ -302,7 +328,7 @@ export function sweepTestStores(base, storage) {
 export function backendFetchPrefixes(tests, origins) {
   const unique = [...new Set(origins.map(o => o.replace(/\/+$/, '')))];
   for (const t of tests) for (const step of t.steps) {
-    if (!['fail-fetch', 'pass-fetch'].includes(step.op)) continue;
+    if (!['fail-fetch', 'answer-fetch', 'pass-fetch'].includes(step.op)) continue;
     step.prefix = resolveFaultPrefix(step.prefix, unique);
   }
   return tests;
@@ -351,7 +377,7 @@ export async function failureMark(s) {
   return {
     failures: Object.fromEntries(Object.entries(state.failures ?? {}).map(([name, f]) => [name, f.count])),
     failed: state.failed ?? {}, mutations: state.mutationFailures ?? {},
-    faults: Object.fromEntries((state.faults ?? []).map((f) => [f.prefix, f.hits])), journal,
+    faults: Object.fromEntries((state.faults ?? []).map((f) => [f.prefix, f.failureHits ?? (f.response ? 0 : f.hits)])), journal,
   };
 }
 
@@ -619,6 +645,8 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * earlier run sees another's writes. The app's data lands before the first step (and after a `reload`), unless
  * the test says `before data`. A failed expect names the test, the line, and what
  * was seen. Returns `{ passed, failed, results }`, each result `{ name, failures, notes }`: notes are advice, never a failure.
+ * `testIndex` selects one test by its zero-based ordinal in the compiled file, before name or host filtering.
+ * Results keep that ordinal as `index`, including skipped tests.
  * `atEnd(s, { name, index, size, store, failures, reload, launch, reached, restart, typed, touched })` (verify's, LLP 1116.005 D7; `launch`: the epoch, zone, locale
  * and seed the test launched with, LLP 1116.007 D3.4; `reached`: the epoch a relaunch starts at, the date it launched at plus the virtual
  * time it reached, as a `reload` relaunches, LLP 1116.009 D1; `restart`: on the web, the `reload` step itself, run on the session so the page loads
@@ -626,9 +654,14 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * `end.keep` keeps the test's store for a later launch (the result's `store`), which the caller then removes.
  * `atStep(s, { name, line, op })` runs on the session after each input step (and `reload`) lands; returning 'stop' ends
  * that test there, 'done' every test from there (verify's tour of the screens the tests pass through).
+ * `atLine({ name, index, line, last, op })` runs before each step of a test, `atResult(result)` as each test's result
+ * lands: a run's caller says where a long test is and what each test did as it goes, not only at the run's end.
  */
-export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
+export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, atLine, atResult, port, running, only, testIndex, replayLaunch, replayShots } = {}) {
   const root = resolve(fileURLToPath(new URL('..', import.meta.url))), selected = resolveApp(app);
+  // The APK carrier runs at the phone's size (agent-stdio.mjs reads `reader` the same way).
+  const apk = host === 'android' && (reader ?? !!process.env.EXACT_ANDROID_READER);
+  if (apk && size) throw new Error('test android: --size does not reach the APK, which runs at the phone\'s size; --headless takes it');
   webDist ??= defaultWebDist(selected);
   if (host === 'web' && !url) await backendPreflight(selected, resolve(webDist));
   // A fetch prefix outside every grant fails nothing (sb4 farm wave 4, lane 070: an origin moved in app.ts only).
@@ -652,14 +685,15 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   const unchecked = authored.properties.filter(p => p.kind !== 'always').reduce((n, p) => n + Math.max(1, p.lines.length), 0);
   if (unchecked) console.error(`properties on ${host}: ${unchecked} lines not checked (after, its frames and commands, and never refuses); the driver exposes no commit trace`);
   let propertyChecks = 0, propertyFalse = 0;
-  const tests = backendFetchPrefixes(authored.tests, granted.length ? granted : appOrigins);
+  const tests = backendFetchPrefixes(authored.tests.map((t, index) => ({ ...t, index }))
+    .filter(t => (only == null || t.name === only) && (testIndex == null || t.index === testIndex)), granted.length ? granted : appOrigins);
   const reseeded = tests.filter(t => t.steps.some(s => s.op === 'fresh')).length;
   if (reseeded) console.error(`fresh: reseeding before each of ${reseeded} tests`);
-  const results = [];
+  const results = [], landed = (result) => { results.push(result); atResult?.(result); };
   // Where the host keeps its stores, as it will see its environment (a drive's env overrides the driver's).
   const launched = { ...process.env, ...(env ?? {}) };
   const id = selected.id, chrome = host === 'web' && (browser ?? launched.EXACT_WEB_BROWSER ?? 'chrome') === 'chrome';
-  const base = device ? null : chrome ? driveStore(selected, storage, env).base : host === 'web' ? null : storeBase(id, host, launched, launched.HOME || homedir());
+  const base = device ? null : chrome ? driveStore(selected, storage, env).base : host === 'web' ? null : storeBase(id, host, launched, launched.HOME || homedir(), (host === 'macos' || host === 'mac') && macSandboxed(selected));
   // A run's own names where the driver can remove them; a simulator's (one drive at a time: a launch ends the
   // last) reuse one store a test, emptied at launch, so they cannot pile up in its app container.
   // Android's stores are on the device, out of the driver's reach, but a run's names stay its own there too (LLP 1107).
@@ -671,10 +705,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   const server = chosen && onThisMachine(chosen) ? chosen.replace(/\/+$/, '') : serverUrl(selected.dir);
   let done = false;
   const scope = testScope(host), timing = launched.EXACT_AGENT_TIMING;
-  for (const [n, t] of tests.entries()) {
+  for (const t of tests) {
+    const n = t.index;
     if (done) break;
-    if (t.hosts && !t.hosts.includes(scope)) { results.push({ name: t.name, failures: [], notes: [], skipped: `on ${t.hosts.join(', ')}` }); continue; }
-    const failures = [], expectedRefusals = [];
+    if (t.hosts && !t.hosts.includes(scope)) { landed({ name: t.name, index: n, failures: [], notes: [], skipped: `on ${t.hosts.join(', ')}` }); continue; }
+    const failures = [], expectedRefusals = [], index = n;
     const refusalCursors = new Map();
     let end = null;
     // The app's server is the auth fixture: a sign-in held for its origin shows its whole URL, for `authorize` (LLP 1146 D4).
@@ -684,7 +719,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // The drive's `--fail-fetch` is every test's, with its own leading `fail fetch` lines added (LLP 1103 D3).
     const facts = { size, seed, locale, formatLocale, timeZone, epoch, failFetch };
     const lines = [], preferences = [];
-    const media = {};
+    const media = {}, permissions = {}; // the latest of each, which a `reload` applies again
     let beforeData = false, leading = 0, reset = null, opensAt = null; // `at`'s location, where the app opens (LLP 1153 D5)
     // `fail fetch` lines that lead the steps are armed before the app's first data load (LLP 1103 D3).
     const armed = new Map(); // prefix -> the line that armed it with a count
@@ -697,6 +732,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       if (st.op === 'before-data') beforeData = true;
       else if (st.op === 'fresh') reset = st;
       else if (st.op === 'fail-fetch') { early(st); facts.failFetch = [facts.failFetch, st.times == null ? st.prefix : `${st.prefix}\t${st.times}`].filter(Boolean).join('\n'); if (st.times != null) armed.set(st.prefix, st.line); }
+      else if (st.op === 'answer-fetch') facts.failFetch = [facts.failFetch, faultSpecOf([{prefix: st.prefix, hits: 0, armed: true, response: st.response}])].filter(Boolean).join('\n');
       else if (st.op === 'size') facts.size = [st.width, st.height];
       else if (st.op === 'at') opensAt = st.value;
       else if (st.op === 'prefer') preferences.push(st);
@@ -705,20 +741,31 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       lines.push(st.line);
       leading++;
     }
+    if (host === 'web' && opensAt && /^https?:\/\//.test(url ?? '')) opensAt = new URL(opensAt, url).href;
+    // Replay uses the already-resolved facts, including an authored `epoch now` (LLP 1116.007 D3.4).
+    if (replayLaunch) Object.assign(facts, replayLaunch);
+    // A size the carrier cannot give: run at another, the test would fail on what that size was to show.
+    if (apk && facts.size) { landed({ name: t.name, index: n, failures: [], notes, skipped: `size ${facts.size.join('x')}: the APK runs at the phone's size; --headless takes it` }); continue; }
     // A zone or locale the driver refuses fails this test at its line, not the run. `epoch now` is read here, once
     // a test, so a `reload` relaunches from the same date on every host. `facts.epoch` is the date at the clock's zero
     // of the launch now running: a `reload` moves it on by the virtual time that launch reached (LLP 1116.009 D1).
     try { facts.epoch = launchFacts({ ...facts, env: env ?? {} }).epoch; } catch (e) {
-      results.push({ name: t.name, failures: [`${t.name}: ${lines.length ? `line ${lines.join(', ')}` : "the drive's launch flags"}: ${e.message}`] });
+      landed({ name: t.name, index: n, failures: [`${t.name}: ${lines.length ? `line ${lines.join(', ')}` : "the drive's launch flags"}: ${e.message}`] });
       continue;
     }
     for (const [i, origin] of shared.entries()) {
       const warning = backendClockNote(facts.epoch, clocks[i], origin);
       if (warning) notes.push(warning);
     }
+    try {
+      await running?.beforeTest();
+    } catch (e) {
+      landed({ name: t.name, index: n, failures: [`${t.name}: ${e.message}`], notes });
+      continue;
+    }
     // `fresh`: the backend emptied (and seeded) before the app opens; a refusal fails this test at its line.
     if (reset) try { await resetBackends(backends, freshRows(file, reset.seed), 10000, selected); } catch (e) {
-      results.push({ name: t.name, failures: [`${t.name}: line ${reset.line}: ${e.message}`], notes });
+      landed({ name: t.name, index: n, failures: [`${t.name}: line ${reset.line}: ${e.message}`], notes });
       continue;
     }
     const heads = await Promise.all(shared.map((o) => backendHead(o)));
@@ -732,16 +779,25 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     const first = facts.epoch; // the test's launch date, which a `reload` moves `facts.epoch` on from
     const reached = async () => { const { clock } = await s.op({ op: 'tags' }).catch(() => ({})); return facts.epoch + Math.floor(Number.isFinite(clock) ? clock : s.now); };
     const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port });
-    let s = await launch(fresh);
+    let s;
+    try { s = await launch(fresh); } catch (e) {
+      if (!running) throw e;
+      let why = e.message;
+      try { running.check(); } catch (dead) { why = dead.message; }
+      landed({ name: t.name, index: n, failures: [`${t.name}: ${why}`], notes });
+      continue;
+    }
     const prefer = async (st) => {
-      const facts = { [st.name]: st.value };
-      preferGroups(facts); // Keep the driver's diagnostic for a bad name or value.
-      if (!Object.hasOwn(PREFERENCES, st.name)) throw new Error(`test prefer: expected a CSS media feature: ${Object.keys(PREFERENCES).join(', ')}`);
+      const name = st.name.toLowerCase().replace(/[^a-z]/g, '').replace(/^prefers?/, '');
+      if (['posture', 'segments', 'gap', 'mode', 'extension'].includes(name)) throw new Error(`test prefer: ${st.name} is drive-only for now; authored tests cannot set folds (posture, segments, gap), mode pins or extension substitutes`);
+      const parsed = preferGroups({ [st.name]: st.value });
+      if (Object.keys(parsed.midi).length) throw new Error('test prefer: use prefer midi inside a test for MIDI facts');
+      const facts = { ...parsed.media, ...parsed.page, ...Object.fromEntries(Object.entries(parsed.extension.permission ?? {}).map(([name, value]) => [`permission.${name}`, value])) };
       const r = await s.prefer(facts);
       if (r?.error) throw new Error(r.error);
+      const retained = parsed.extension.permission ? permissions : media;
       // Preserve last-application order: pointer and hover emulation affect each other.
-      delete media[st.name];
-      Object.assign(media, facts);
+      for (const [name, value] of Object.entries(facts)) { delete retained[name]; retained[name] = value; }
     };
     const mutationClock = testMutationClock();
     // The app's data lands before the first step, as `clock data` lands it: activation and every request in flight,
@@ -768,9 +824,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const now = await s.state().catch((e) => { throw new Error(`reload: could not read the fault table to carry: ${e.message}`); });
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
-      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); s.notes = notes; return; }
-      await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port }); s.notes = notes;
-      for (const [name, value] of Object.entries(media)) {
+      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); }
+      else { await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, reader, url, storage: store, touch: fingers, chrome: bars, scale, port }); }
+      s.notes = notes;
+      // A module's permission is the runner's, which starts again, as a phone keeps a granted one across a restart.
+      for (const [name, value] of Object.entries({ ...media, ...permissions })) {
         const r = await s.prefer({ [name]: value });
         if (r?.error) throw new Error(r.error);
       }
@@ -850,7 +908,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       let measured = null, mark = NO_FAILURES;
       const refusals = t.steps.filter((x) => x.op === 'expect-refusal').map((x) => x.target);
       // One step: an input, a read, an expect, or a `perf` block, whose steps run here in turn (LLP 1146 D3).
+      // The test's last line, a `perf` block's steps included.
+      const last = Math.max(...t.steps.flatMap((x) => [x.line, ...(x.steps ?? []).map((y) => y.line)]));
       const runStep = async (st, n, at) => {
+        atLine?.({ name: t.name, index, line: st.line, last, op: st.op });
         if (INPUTS.has(st.op)) await settleFired();
         if (st.op === 'type') { typed.add(st.target); touched.add(st.target); } else if (INPUTS.has(st.op) || st.op === 'reload') typed.clear();
         switch (st.op) {
@@ -865,6 +926,13 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             const r = await s.op({ op: 'prefer', faults: { fail: st.prefix, ...(st.times != null ? { times: st.times } : {}) } });
             if (r?.error) throw new Error(r.error);
             if (st.times != null) armed.set(st.prefix, st.line);
+            break;
+          }
+          case 'answer-fetch': {
+            if (n < leading) break;
+            await unfired(st.prefix);
+            const r = await s.op({ op: 'prefer', faults: { answer: st.prefix, response: st.response } });
+            if (r?.error) throw new Error(r.error);
             break;
           }
           case 'pass-fetch': { const r = await s.op({ op: 'prefer', faults: { pass: st.prefix } }); if (r?.error) throw new Error(r.error); break; }
@@ -884,6 +952,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'tap-midi': delivered(await s.tap(null, { midi: st.clock ? { input: st.input, clock: st.clock } : { input: st.input, data: st.data } })); input = st.line; break;
           case 'drag': {
             const drag = { ...(st.to != null ? { to: st.to, ...(st.at ? { at: st.at } : {}) } : { dx: st.dx, dy: st.dy }), ...(st.from ? { from: st.from } : {}), ...(st.mouse ? { mouse: true } : {}), ...(st.press != null ? { press: st.press } : {}), ...(st.over != null ? { over: st.over } : {}), ...(st.hold != null ? { hold: st.hold } : {}) };
+            if (st.into != null) drag.into = st.into;
             if (st.during?.length) drag.during = st.during.map((op) => () => duringOp(s, op));
             delivered(await s.tap(st.target, { drag })); input = st.line; break;
           }
@@ -936,7 +1005,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           // The platform's Back (LLP 1116.006 D4): an open dialog's cancel, else the top sheet's dismissal, else the pushed
           // route popped. Nothing to go back from fails the step; a Back the app refuses (a disabled control, closedby="none") is a note.
           case 'back': { const r = await s.back(); delivered(r); if (r?.refused) notes.push(`line ${st.line}: back refused: ${r.refused}`); input = st.line; break; }
-          case 'screenshot': await s.screenshot(st.path); shots.push(resolve(st.path)); break;
+          case 'screenshot': {
+            const path = replayShots ? resolve(replayShots, `t${n}-s${t.steps.indexOf(st)}-${basename(st.path)}`) : resolve(st.path);
+            if (replayShots) mkdirSync(replayShots, { recursive: true });
+            await s.screenshot(path); shots.push(path); break;
+          }
           case 'expect-tree': {
             const tree = await s.tree();
             const f = treeExpectation(tree.nodes, st.target, st.present);
@@ -956,6 +1029,17 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'expect-disabled': {
             const f = disabledExpectation((await s.tree()).nodes, st.target, st.disabled);
             if (f) await fail(`${at}: ${f.message}`);
+            break;
+          }
+          case 'expect-focused': {
+            const f = focusedExpectation((await s.tree()).nodes, st.target);
+            if (f) await fail(`${at}: ${f.message}`);
+            break;
+          }
+          case 'expect-layout': {
+            const f = await layoutExpectation(s, (await s.tree()).nodes, st);
+            if (f?.unshown) failures.push(`${at}: ${f.message}`);
+            else if (f) await fail(`${at}: ${f.message}`);
             break;
           }
           case 'expect-text': {
@@ -1052,7 +1136,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             break;
           }
           case 'expect-perf': {
-            const f = perfExpectation(measured, st, Object.keys((await s.state()).resources ?? {}));
+            // A child's resources are listed under each instance (LLP 1035.005.004 D8).
+            const state = await s.state();
+            const names = [...Object.keys(state.resources ?? {}), ...(state.owned ?? [])];
+            const f = perfExpectation(measured, st, [...new Set(names)]);
             if (f) failures.push(`${at}: ${f}`);
             break;
           }
@@ -1097,7 +1184,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         const pending = (state.pending ?? []).filter((p) => !p.device && !p.held && !p.stream).map((p) => p.name);
         if (pending.length) notes.push(`ended with ${pending.length} request${pending.length === 1 ? '' : 's'} in flight (${pending.join(', ')}): a reply lands at a clock step, so what the test read last may not include it`);
       } catch { /* advice only */ }
-      if (atEnd && closedAt == null) end = await atEnd(s, { name: t.name, index: n, size: facts.size, store, failures, reload: t.steps.some((st) => st.op === 'reload'), launch: { ...launchFacts({ ...facts, epoch: first, env: env ?? {} }), media: { ...media } }, reached: await reached(), typed: [...typed], touched: [...touched], expectedRefusals: [...expectedRefusals], ...(s.host === 'web' ? { restart: async () => { await reload(); await data(); } } : {}) }).catch((e) => ({ error: e.message }));
+      if (atEnd && closedAt == null) end = await atEnd(s, { name: t.name, index: n, size: facts.size, store, failures, reload: t.steps.some((st) => st.op === 'reload'), launch: { ...launchFacts({ ...facts, epoch: first, env: env ?? {} }), media: { ...media }, permissions: { ...permissions } }, reached: await reached(), typed: [...typed], touched: [...touched], expectedRefusals: [...expectedRefusals], ...(s.host === 'web' ? { restart: async () => { await reload(); await data(); } } : {}) }).catch((e) => ({ error: e.message }));
       // A failed test shows what the data module logged, the last lines of it (sb4 farm wave 7, E1: 093 rendered
       // values into the view to see them; `logs` had them all along). Advice only.
       if (failures.length && closedAt == null) try {
@@ -1113,8 +1200,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       // A window the test closed took its session (on macOS, the app) with it: nothing is left to close but the carrier.
       await s.close().catch((e) => { if (closedAt == null) throw e; });
     }
+    try { running?.check(); } catch (e) { failures.push(`${t.name}: ${e.message}`); }
     if (failures.length && !reset) shared.forEach((o, i) => { if (heads[i] > 0 && atStart[i] != null) notes.push(sharedBackendNote(o, atStart[i], heads[i] - atStart[i])); });
-    results.push({ name: t.name, failures, notes, ...(shots.length ? { shots } : {}), ...(end ? { end } : {}), ...(end?.keep ? { store } : {}) });
+    landed({ name: t.name, index: n, failures, notes, ...(shots.length ? { shots } : {}), ...(end ? { end } : {}), ...(end?.keep ? { store } : {}) });
     if (base && !end?.keep) rmSync(resolve(base, store), { recursive: true, force: true });
   }
   const failed = results.filter((r) => r.failures.length).length, skipped = results.filter((r) => r.skipped).length;

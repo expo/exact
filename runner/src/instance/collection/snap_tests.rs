@@ -435,3 +435,115 @@ fn snap_reads_two_alignments_and_scroll_margin() {
     let h = Harness::from_parts(contract::compile(&none).unwrap(), vec![]);
     assert_eq!(query(&h, 30020.0), None, "no alignment along y");
 }
+
+fn fixed_snap(lead: f64, trail: f64, count: usize, offset: f64) -> Harness {
+    let source = format!(
+        r#"component App
+  view
+    list virtualized=true appearance="none" height=300 estimated-item-height=40 scroll-snap-type="y mandatory"
+      view height={lead}
+      for n in range({count}) key=n
+        view height=40 scroll-snap-align="start" scroll-snap-stop="always"
+      view height={trail}
+"#
+    );
+    let mut h = Harness::from_parts(contract::compile(&source).unwrap(), vec![]);
+    let mut feedback = h.feedback(offset);
+    feedback.port_main = 300.;
+    feedback.measurements = h
+        .snapshot()
+        .fixed
+        .iter()
+        .zip([lead, trail])
+        .map(|(item, size)| RowMeasurement {
+            view: item.view,
+            epoch: 1,
+            size,
+        })
+        .collect();
+    h.send(feedback);
+    assert!(
+        h.snapshot().rows.is_empty(),
+        "the measurement must retire the data window"
+    );
+    h
+}
+
+#[test]
+fn snap_search_wholly_inside_the_lead_has_no_data_target() {
+    let h = fixed_snap(1000., 0., 400, 200.);
+    assert_eq!(query(&h, 200.), None);
+    assert_eq!(
+        query(&h, 600.),
+        Some(1000.),
+        "a window crossing into the data keeps row zero"
+    );
+}
+
+#[test]
+fn snap_search_wholly_inside_the_trail_has_no_data_target() {
+    let h = fixed_snap(0., 1000., 3, 500.);
+    assert_eq!(
+        query(&h, -1000.),
+        None,
+        "a window before the content has no row either"
+    );
+    assert_eq!(query(&h, 500.), None);
+    assert_eq!(
+        query(&h, 400.),
+        Some(80.),
+        "a window crossing the data's end keeps the final row"
+    );
+}
+
+#[test]
+fn snap_stop_search_wholly_inside_fixed_content_has_no_data_target() {
+    for (lead, trail, count, offset, travel) in [
+        (1000., 0., 400, 200., [200., 400.]),
+        (0., 1000., 3, 500., [900., 700.]),
+    ] {
+        let h = fixed_snap(lead, trail, count, offset);
+        let mut ids = Ids::default();
+        let mut u = Update::new(env_with(&h.plan, &h.slots, h.strings), &h.sites, &mut ids);
+        assert_eq!(
+            h.tree
+                .collection_snap_stop(
+                    &mut u,
+                    &h.kernel,
+                    h.snapshot().view,
+                    [
+                        travel[0],
+                        travel[1],
+                        300.,
+                        0.,
+                        h.snapshot().total_extent - 300.
+                    ]
+                )
+                .unwrap(),
+            None
+        );
+    }
+}
+
+#[test]
+fn snap_caps_from_the_data_boundary_when_the_projection_is_in_fixed_content() {
+    for (lead, trail, offset, projection) in [(1000., 0., 200., 900.), (0., 1000., 40500., 40100.)]
+    {
+        let h = fixed_snap(lead, trail, 1000, offset);
+        // A direct area query gives the cap a window wider than its allowance.
+        let mut ids = Ids::default();
+        let mut u = Update::new(env_with(&h.plan, &h.slots, h.strings), &h.sites, &mut ids);
+        let areas = h
+            .tree
+            .collection_snap_areas(
+                &mut u,
+                &h.kernel,
+                h.snapshot().view,
+                (projection, [0., 42000.], 32),
+                [300., 0., h.snapshot().total_extent - 300.],
+            )
+            .unwrap();
+        assert_eq!(areas.len(), 32);
+        assert_eq!(u.work.nodes_visited, 32);
+    }
+}

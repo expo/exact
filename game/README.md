@@ -417,6 +417,7 @@ device mid-hold neither presses again nor drops.
 | Move with keys, a stick or touch | `Stick::wasd().or_arrows().or_pad(Pad::Left).or_touch(Region::Left)`; `.dead_zone(0.15)` (radial, the default) and `.curve(Curve::Power(1.5))` shape the pad's reading (Beacons) |
 | Throttle and brake | `Stick::pad(Pad::Triggers)`: forward is `GamepadR2`'s travel less `GamepadL2`'s |
 | Move by tilting the device | `Stick::wasd().or_tilt(Tilt { max_degrees: 20.0, dead_zone: 2.0 })`, fed by the app's `startSensorInput(surface="world", sensor="gravity")` (LLP 1133.013 D6): full deflection at `max_degrees` from level, nothing within `dead_zone` degrees, nothing before the first sample or after the input ends (`exact_game::tilt_stick` is the map). Level is the first sample, or what the tick sets with `w.set_tilt_neutral("move", gravity)` from a posted reading, from the next tick (Beacons' `tilt x y z`) |
+| Read a component for many entity handles | `let rows = world.components::<Health>();` then `rows.get(entity)` or `rows.has(entity)`; resolves the column once, keeps reads live and leases only each returned row. Drop the handle before spawning, removing or restoring. Ordinary `get` and `has` work as before. |
 | Read a sensor every frame | `input.sensor(SensorKind::Gyroscope)`, the latest sample, which holds through ticks that receive none and is gone after the input ends; `input.sensor_samples(kind)`, this tick's own samples, every one the host delivered |
 | Sprint after holding a key | `.hold("sprint", &["ShiftLeft", "GamepadL1"], 0.2)`: `pressed` when held 200 ms, `held` until release; a shorter press fires nothing (Beacons) |
 | A double tap | `.double("roll", &["Space"], 0.25)`: `pressed` on a second press within 250 ms |
@@ -548,7 +549,7 @@ nothing yet.
 | A painted, visible sky | The same `EnvironmentMap` with `visible: true` (and `rotation` to turn it) |
 | Mouse look | `input.pointer()`'s `delta` is the device's motion this tick, not a difference of positions. Mark the canvas `data-pointer-lock="true"` (declared in `app.json`'s `data`) and a mouse press captures the mouse on the web, macOS and iPadOS (`GCMouse`) until Escape or blur, so the delta never stops at an edge; the Linux host always sends evdev's relative motion. |
 | Turn the drawn camera between ticks | Put `MouseLook { yaw_per_point, pitch_per_point, pitch_limit }` on the camera at the rates the tick turns it by: the drawn camera and its children turn by `Sim::unshown_motion()`, so a turn shows at the next frame whatever the tick and display rates (`engine/tests/look.rs`). Presentation only; insert it in `setup` or register it. |
-| Frame the launch camera for the canvas's size | `fn first_frame(w: &mut World, input: &Input, args: &Self::Args)` on the `Game`: it runs once for each world `setup` made, with `input.viewport()` the canvas's size, before the first tick and before the first frame is drawn, so that frame already shows the framed pose. A restored world never runs it (its save holds what it wrote), nor does a world that ticked before it had a canvas. It writes the simulation as `setup` does, so the same size frames the same world (`engine/tests/first_frame.rs`) |
+| Frame the launch camera for the canvas's size | `fn first_frame(w: &mut World, input: &Input, args: &Self::Args)` on the `Game`: it runs once for each world `setup` made, with `input.viewport()` the canvas's size, before the first tick and before the first frame is drawn, so that frame already shows the framed pose. A restored world never runs it (its save holds what it wrote), nor does a world that ticked before it had a canvas. Calling `World::invalidate_presentation()` does not rerun it. It writes the simulation as `setup` does, so the same size frames the same world (`engine/tests/first_frame.rs`) |
 | Right or middle mouse button | Bind it as a key: `.button("aim", &["MouseRight"])`; `MouseLeft` and `MouseMiddle` too (`MOUSE_BUTTONS`). Touch contacts press none. |
 | Start a selection rectangle | `input.pointer().and_then(\|p\| p.press_origin)` is the latest MouseLeft/touch Down point, even if movement and Up reach the same tick. Gate commands on your action's pressed/released edges. The origin survives normal Up and saves; Cancel, Blur or replacement clears it. |
 | Several fingers at once | `input.pointers()` (every contact down, by id) and `input.pointer_events()` (this tick's Down, Up and Cancel edges, in order); [Controls](#controls) has a multi-finger grab |
@@ -596,7 +597,10 @@ again; no app data module is needed. The whole record may be up to 16 MiB of JSO
 the limit, or one the shape refuses, leaves the last accepted one standing and is
 named, with its size and the limit, in the app's log and the agent's
 `state.surfaceRefusals`.
-Only the first live canvas owns a given surface's public record.
+A surface may have more than one live canvas, on two routes at once (a table and a
+preview pushed over it): each canvas runs a world of its own, and the first live one
+alone publishes the surface's record. When that canvas goes, the record clears, and the
+next canvas of the surface to mount publishes it; one already live stays silent.
 
 The record also carries `presented: bool`, which the host adds and the game cannot
 publish (`publish("presented", …)` panics): true once a complete frame of the
@@ -605,7 +609,17 @@ launch, and again after a restore, a restart or a lost GPU device, until the nex
 such frame; a loading cover over the canvas waits on it, since a value published
 from `setup` means only that the declared assets loaded, not that a frame drew
 (`if !hud.presented` in the view). It changes only at those moments, never per
-frame.
+frame. After applying app data inside the same world, call
+`w.invalidate_presentation()` to declare a new picture. It uses the same
+`presented` reset as restore: `presented` is true again only after a complete
+frame whose shown models and textures are delivered and prepared, so a look
+whose bytes have not arrived does not count as presented. Until then no frame
+of the new picture is drawn, but the world keeps ticking and taking input and
+messages, so a later message can still replace or cancel the look; a game that
+should pause meanwhile binds its pause to `presented`. It also resets draw
+histories, without changing simulation state, saves or hashes. Call it once
+after the replacement, not every tick. It does not rerun `Game::first_frame`,
+which remains limited to a world made by `setup`.
 
 A performance HUD reads the canvas's renderer, memory and audio facts through a
 separate resource, `exactCanvasPerformance("world")`, updated about once a
@@ -1008,7 +1022,12 @@ storage work starts after first pixel. This linked composition uses `rust: false
 Keep saves, scores and settings in app storage (SQLite or files under `app:/data`,
 with `exact-data.workspace = true`), not under `secret.keep`, which is for secrets;
 `docs/reference.md`, "Rust data sources", has the requests and a best-times example.
-Games without `game.data` add no data-source dependency.
+Games without `game.data` add no data-source dependency. Their Apple builds take one shared host
+(`game/app/apple`, `exact-game-apple`), and the game's own Apple crate holds only its plan and
+compat.json. Two cases keep the game's own host: a `Cargo.lock` captured before that crate existed
+(`bun exact.mjs lock` refreshes it with the shared host), and a game whose entry differs from the
+generated one, for example because it has preloads. Games reuse
+the compiled host only when their builds share a build directory (`CARGO_BUILD_BUILD_DIR`, below).
 
 [Tennis](games/tennis/README.md) uses one for HTTP: the world publishes a numbered
 question, `resource plan = jev(hud.ask)` posts it, and the answer returns as a

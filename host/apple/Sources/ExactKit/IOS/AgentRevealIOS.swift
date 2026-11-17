@@ -15,27 +15,35 @@ extension Agent {
     /// first (LLP 1084 D8): with no cell, its views wait in the hidden
     /// authored scroll, which moves nothing on screen (r5 password generator).
     func reveal(_ req: [String: Any]) -> [String: Any] {
-        guard let v = view(req) else { return miss(req) }
         settleForPress()
-        // Where it is seen: a row a list draws is its cell (none while off the list's port).
-        let seen = { () -> CGRect? in
-            if case .view(let drawn, _)? = self.presenter.groupedLists?.shown(v) { return self.box(drawn) }
-            return self.presenter.groupedLists?.draws(v.id) == true || v.window == nil ? nil : self.box(v)
+        guard let requested = req["id"] as? Int else { return miss(req) }
+        typealias Target = (node: NodeView, view: UIView, rect: CGRect?)
+        func locate() -> Target? {
+            if let flat = flatBoxForRequest(req) { return (flat.host, flat.host.container, flat.rect) }
+            return view(req).map { ($0, $0, nil) }
         }
-        let from = seen()
+        func seen(_ target: Target) -> CGRect? {
+            if target.rect == nil, case .view(let drawn, _)? = presenter.groupedLists?.shown(target.node) { return box(drawn) }
+            if target.node.window == nil || target.rect == nil && presenter.groupedLists?.draws(target.node.id) == true { return nil }
+            return box(target.view, region: target.rect)
+        }
+        guard let initial = locate() else { return miss(req) }
+        let id = initial.rect == nil ? initial.node.id : UInt32(requested), from = seen(initial)
         var scrolled = false
         // A second pass when the first one's scroll moved things on: a list's
         // cells sizing themselves, a large title collapsing.
         for _ in 0..<2 {
-            guard scrollIn(v) else { break }
+            guard let target = locate() else { return miss(req) }
+            guard scrollIn(target.node, target: target.view, rect: target.rect,
+                           logical: target.rect == nil ? nil : UInt32(requested)) else { break }
             scrolled = true
-            settleBox(v)
+            settleBox(target.view, region: target.rect)
         }
-        guard v.window != nil else { return miss(req) }
-        guard scrolled else { return ["revealed": Int(v.id), "scrolled": false] }
-        presenter.settlePump()
-        let to = seen() ?? box(v)
-        var reply: [String: Any] = ["revealed": Int(v.id), "scrolled": from.map { to.origin != $0.origin } ?? true,
+        if scrolled { presenter.settlePump() }
+        guard let final = locate(), final.node.window != nil else { return miss(req) }
+        guard scrolled else { return ["revealed": Int(id), "scrolled": false] }
+        let to = seen(final) ?? box(final.view, region: final.rect)
+        var reply: [String: Any] = ["revealed": Int(id), "scrolled": from.map { to.origin != $0.origin } ?? true,
                                     "to": [Agent.r2(to.midX), Agent.r2(to.midY)]]
         if let from { reply["from"] = [Agent.r2(from.midX), Agent.r2(from.midY)] }
         return reply
@@ -43,13 +51,13 @@ extension Agent {
 
     /// One pass of `reveal`: the list first, then each enclosing scroller.
     /// Whether anything scrolled.
-    private func scrollIn(_ v: NodeView) -> Bool {
+    private func scrollIn(_ v: NodeView, target: UIView, rect: CGRect?, logical: UInt32?) -> Bool {
         var scrolled = presenter.groupedLists?.reveal(v.id, port: { self.visiblePort($0) }) ?? false
         guard v.window != nil else { return scrolled }
         // A hidden scroller (the authored one under a grouped list) shows nothing where it scrolls.
-        for case let sv as UIScrollView in sequence(first: v.superview, next: { $0?.superview }).compactMap({ $0 }) where sv.isScrollEnabled && !sv.isHidden {
-            let frame = v.convert(v.bounds, to: sv), mid = CGPoint(x: frame.midX, y: frame.midY), i = sv.adjustedContentInset
-            let port = visiblePort(sv, for: v)
+        for case let sv as UIScrollView in sequence(first: rect == nil ? target.superview : target, next: { $0?.superview }).compactMap({ $0 }) where sv.isScrollEnabled && !sv.isHidden {
+            let frame = target.convert(rect ?? target.bounds, to: sv), mid = CGPoint(x: frame.midX, y: frame.midY), i = sv.adjustedContentInset
+            let port = visiblePort(sv, for: target, region: rect, logical: logical)
             // (No band left between the covers: nothing to scroll the middle into, so nothing moves.)
             if port.height <= 0 { continue }
             var o = sv.contentOffset
@@ -70,8 +78,8 @@ extension Agent {
 
     /// The sticky (or fixed) box of `sv`'s content a finger at `at` (in the window) lands in, by the window's own hit
     /// test (as the tap's): none holding `v`, none of a scroller inside `sv`, none in a popover.
-    private func stickyCover(at: CGPoint, over v: UIView, in sv: UIScrollView) -> NodeView? {
-        guard let hit = v.window?.hitTest(at, with: nil), hit !== v, !hit.isDescendant(of: v) else { return nil }
+    private func stickyCover(at: CGPoint, over v: UIView, in sv: UIScrollView, logical: UInt32?) -> NodeView? {
+        guard let hit = v.window?.hitTest(at, with: nil), hit !== v, logical != nil || !hit.isDescendant(of: v) else { return nil }
         var up: UIView? = hit, found: NodeView?
         while let u = up, u !== sv {
             if u is UIScrollView { return nil }
@@ -81,7 +89,10 @@ extension Agent {
             }
             up = u.superview
         }
-        guard up === sv, let found, !v.isDescendant(of: found) else { return nil }
+        guard up === sv, let found else { return nil }
+        if let logical {
+            if logicalContains(logical, found.id) || logicalContains(found.id, logical) { return nil }
+        } else if v.isDescendant(of: found) { return nil }
         return found
     }
 
@@ -89,15 +100,15 @@ extension Agent {
     /// over the next turns a list's cells size themselves and a large title
     /// collapses, moving what the scroll brought in (a real touch's two aims
     /// disagreed).
-    private func settleBox(_ v: NodeView) {
+    private func settleBox(_ v: UIView, region: CGRect?) {
         presenter.settlePump()
         let deadline = Date(timeIntervalSinceNow: 0.5)
-        var last = box(v), still = 0
+        var last = box(v, region: region), still = 0
         while still < 2, Date() < deadline {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.016))
             v.window?.layoutIfNeeded()
             presenter.settlePump()
-            let now = box(v)
+            let now = box(v, region: region)
             if now == last { still += 1 } else { still = 0; last = now }
         }
     }
@@ -114,7 +125,7 @@ extension Agent {
     /// With a target (`v`, the agent's `reveal`), also clear of each sticky box of `sv`'s content that a finger at its
     /// middle lands on and that doesn't hold `v` (the design tool's edit dock; theme2's 14:49 ruling): a person scrolls
     /// a row out from under it. Never a popover or a top-layer box, which no scroll takes away.
-    func visiblePort(_ sv: UIScrollView, for v: UIView? = nil) -> CGRect {
+    func visiblePort(_ sv: UIScrollView, for v: UIView? = nil, region: CGRect? = nil, logical: UInt32? = nil) -> CGRect {
         var port = sv.pageBounds.inset(by: sv.adjustedContentInset)
         guard let window = sv.window else { return port }
         var covers = bars(over: sv).map { $0.convert($0.bounds, to: nil) }
@@ -125,10 +136,11 @@ extension Agent {
         // The target's covers: the sticky box at its middle, then each one at the middle of the band that leaves (a
         // header across from a dock), by the window's hit test, as the tap's.
         if let v {
-            let x = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: sv).x, mid = port.midY
-            var at = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
+            let bounds = region ?? v.bounds, middle = CGPoint(x: bounds.midX, y: bounds.midY)
+            let x = v.convert(middle, to: sv).x, mid = port.midY
+            var at = v.convert(middle, to: nil)
             for _ in 0..<4 {
-                guard port.height > 0, let cover = stickyCover(at: at, over: v, in: sv) else { break }
+                guard port.height > 0, let cover = stickyCover(at: at, over: v, in: sv, logical: logical) else { break }
                 let r = cover.convert(cover.bounds, to: sv).intersection(port)
                 guard !r.isNull, r.height > 0 else { break }
                 if r.midY < mid { port = CGRect(x: port.minX, y: r.maxY, width: port.width, height: max(0, port.maxY - r.maxY)) }

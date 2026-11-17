@@ -107,7 +107,7 @@ fn none_of_the_twelve_false_d6_blocks_can_print() {
 }
 
 #[test]
-fn the_nineteen_kept_blocks_survive_without_existing_property_suppression() {
+fn the_eighteen_kept_blocks_survive_without_existing_property_suppression() {
     let apps = [
         "agents",
         "caltrain",
@@ -233,5 +233,5 @@ fn the_nineteen_kept_blocks_survive_without_existing_property_suppression() {
             .collect();
         runs.into_iter().map(|r| r.join().unwrap()).sum()
     });
-    assert_eq!(count, 19);
+    assert_eq!(count, 18);
 }

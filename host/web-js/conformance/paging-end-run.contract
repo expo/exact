@@ -1,0 +1,31 @@
+// Synthetic conformance plan: paging-end's transcript with a leading run of
+// two rows, "Loading earlier messages" and today's separator, which stays
+// put while a page of today's older messages lands after it. While the
+// `reachstart` that asked for the page is unanswered, rows that land after
+// that run are its page (LLP 1168.000 D1.2), so the last visible row holds
+// and the reader is left a page down, off the top; the start then waits for
+// them to scroll again.
+component PagingEndRun
+  state older = 0
+  state loading = false
+  state pages = 0
+  state top = false
+  action more
+    if not loading
+      loading = true
+  action land
+    if loading and pages < 5
+      older = older + 30
+      loading = false
+      pages = pages + 1
+  action moved(x: number, y: number, e: ScrollEvent)
+    top = e.scrollTop < 1
+  task arrive mount
+    every(300, land)
+  view
+    column testId="root" height="100%" display="flex" flex-direction="column"
+      text `${pages} ${pages == 1 ? "page" : "pages"}${loading ? ", loading" : ""}${top ? ", at the top" : ""}` testId="summary" flex-shrink=0 padding=8
+      list virtualized=true scroll-start="end" reachstart=more scroll=moved estimated-item-height=44 testId="feed" flex=1 min-height=0 width="100%" overflow-x="hidden"
+        for x in ["loading", "today"].concat(range(60 + older).map(i => `${i - older}`)) key=x
+          row testId=`row-${x}` height=44 box-sizing="border-box" padding-left=12 align-items="center"
+            text (x == "loading" ? "Loading earlier messages" : x == "today" ? "Today" : `Message ${x}`) font-size=14

@@ -254,6 +254,16 @@ fn brush(v: Vertex, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
             if (v.data.x >> 16u) == 3u {
                 c = textureSampleGrad(picture, filtering, uv, dx / v.param.zw, dy / v.param.zw);
             }
+            if (flags & 67108864u) != 0u {
+                let size = vec2<f32>(textureDimensions(picture));
+                let n = max(v.param.xy, vec2<f32>(1.0));
+                let at = uv * size * n - vec2<f32>(0.5);
+                let lo = floor(at);
+                let a = floor(lo / n);
+                let b = floor((lo + vec2<f32>(1.0)) / n);
+                let sample_uv = (a + vec2<f32>(0.5) + fract(at) * (b - a)) / size;
+                c = textureSampleLevel(picture, filtering, sample_uv, 0.0);
+            }
             if (flags & 16u) != 0u {
                 let size = vec2<i32>(textureDimensions(picture));
                 var at = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - vec2<i32>(1));

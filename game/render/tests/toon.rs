@@ -332,15 +332,17 @@ fn nonuniform_node_hull_matches_forward_offset_geometry() {
         hull.material = 1;
         for (p, n) in hull
             .positions
-            .chunks_exact_mut(3)
-            .zip(hull.normals.chunks_exact(3))
+            .as_chunks_mut::<3>()
+            .0
+            .iter_mut()
+            .zip(hull.normals.as_chunks::<3>().0)
         {
             let offset = node.transform_vector3(Vec3::from_slice(n) * reach);
             let world = node.transform_point3(Vec3::from_slice(p))
                 + offset.normalize() * 0.2f32.min(offset.length());
             p.copy_from_slice(&world.to_array());
         }
-        for triangle in hull.indices.chunks_exact_mut(3) {
+        for triangle in hull.indices.as_chunks_mut::<3>().0 {
             triangle.swap(0, 2);
         }
         hull.bounds = [-2., -2., -2., 2., 2., 2.];
@@ -763,8 +765,10 @@ fn compatible_outlined_parts_merge_surface_hull_and_caster_draws() {
         println!("outlined parts (animated={animated}): surface 64 -> 1, hull 64 -> 1, caster per cascade 64 -> 1; total {} -> {}", before_stats.draws, after_stats.draws);
         let changed = before
             .data
-            .chunks_exact(4)
-            .zip(after.data.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(after.data.as_chunks::<4>().0)
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 8))
             .count();
         assert!(
@@ -804,14 +808,16 @@ fn nonuniform_instances_push_in_the_castle_direction() {
     let mut hull = reference.meshes[0].clone();
     for (p, n) in hull
         .positions
-        .chunks_exact_mut(3)
-        .zip(hull.normals.chunks_exact(3))
+        .as_chunks_mut::<3>()
+        .0
+        .iter_mut()
+        .zip(hull.normals.as_chunks::<3>().0)
     {
         let expanded =
             Vec3::from_slice(p) * scale + (Vec3::from_slice(n) * scale).normalize() * 0.2;
         p.copy_from_slice(&expanded.to_array());
     }
-    for triangle in hull.indices.chunks_exact_mut(3) {
+    for triangle in hull.indices.as_chunks_mut::<3>().0 {
         triangle.swap(1, 2);
     }
     hull.material = 1;

@@ -10,13 +10,11 @@ use std::time::{Duration, Instant};
 const BIN: &str = env!("CARGO_BIN_EXE_exact-terminal");
 
 /// An entry `source` in a directory of its own.
-fn entry(name: &str, source: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("exact-command-line-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("app.contract");
-    std::fs::write(&path, source).unwrap();
-    path
+fn entry(name: &str, source: &str) -> crate::Temp {
+    crate::Temp::entry(
+        format!("exact-command-line-{}-{name}", std::process::id()),
+        source,
+    )
 }
 
 fn todo() -> PathBuf {

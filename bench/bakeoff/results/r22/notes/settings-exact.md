@@ -11,7 +11,7 @@ On iOS, light and dark are clean and nothing spills at the largest text size.
   "‹ Settings" back button and the edge swipe return to the list. Each font in the font list
   is drawn in its own face.
 - The preview paragraph follows the font, the size slider (12–32 pt), the line spacing
-  (a segmented control) and the theme. Sepia gives it paper and ink colours from `app.tamber`.
+  (a segmented control) and the theme. Sepia gives it paper and ink colours from `app.forma`.
 - The Theme setting applies the scheme to the whole app: System, Light or Dark. Sepia uses
   Light. A launch task re-applies the saved theme.
 - Sign Out, Clear Cache, Rate the App and Reset All Settings each ask first in an alert.

@@ -40,30 +40,36 @@ export function appleCrossReport(env = process.env, execute = spawnSync) {
   ];
 }
 
-/** Install the watch simulator SDK from the same Xcode input used for `xtool sdk install`. */
-export function installWatchSimulatorSDK(xcode, env = process.env) {
-  const base = crossSdk('iphonesimulator', env), source = resolve(xcode, 'Contents/Developer/Platforms/WatchSimulator.platform');
+/** The watch SDKs a cross SDK can add: the platform directory in Xcode, the Swift SDK triple and the iOS SDK whose
+ * compiler configuration it shares. */
+const WATCH_SDKS = {
+  watchsimulator: { platform: 'WatchSimulator.platform', key: 'arm64-apple-watchos-simulator', base: 'iphonesimulator', label: 'watch simulator' },
+  watchos: { platform: 'WatchOS.platform', key: 'arm64-apple-watchos', base: 'iphoneos', label: 'watchOS device' },
+};
+/** Install a watch SDK (`watchsimulator` or `watchos`) from the same Xcode input used for `xtool sdk install`. */
+export function installWatchSDK(xcode, name, env = process.env) {
+  const watch = WATCH_SDKS[name], base = crossSdk(watch.base, env), source = resolve(xcode, 'Contents/Developer/Platforms', watch.platform);
   const sdks = resolve(source, 'Developer/SDKs');
-  if (!existsSync(sdks)) throw new Error(`host/apple: ${xcode} has no watch simulator SDK`);
+  if (!existsSync(sdks)) throw new Error(`host/apple: ${xcode} has no ${watch.label} SDK`);
   const choices = readdirSync(sdks, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.endsWith('.sdk'))
     .map(entry => ({ name: entry.name, settings: JSON.parse(readFileSync(resolve(sdks, entry.name, 'SDKSettings.json'), 'utf8')) }))
     .sort((a, b) => String(b.settings.Version).localeCompare(String(a.settings.Version), 'en', { numeric: true }));
   const selected = choices[0];
   if (!selected) throw new Error(`host/apple: ${sdks} has no versioned SDK directory`);
-  const target = resolve(base.root, 'Developer/Platforms/WatchSimulator.platform');
+  const target = resolve(base.root, 'Developer/Platforms', watch.platform);
   const metadataPath = resolve(base.root, 'swift-sdk.json'), metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
-  const stage = mkdtempSync(resolve(base.root, '.exact-watch-sdk-')), staged = resolve(stage, 'WatchSimulator.platform');
+  const stage = mkdtempSync(resolve(base.root, '.exact-watch-sdk-')), staged = resolve(stage, watch.platform);
   const backup = resolve(stage, 'previous'), temporary = resolve(stage, 'swift-sdk.json');
   let replaced = false, published = false;
   try {
     cpSync(source, staged, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
-    for (const [name, path] of [['Developer/usr/bin/swift-plugin-server', 'OpenAppleMacrosServer'], ['Developer/usr/lib/swift/host/plugins', 'OpenAppleMacrosPlugins']]) {
-      const copy = resolve(staged, name), final = resolve(target, name);
+    for (const [link, path] of [['Developer/usr/bin/swift-plugin-server', 'OpenAppleMacrosServer'], ['Developer/usr/lib/swift/host/plugins', 'OpenAppleMacrosPlugins']]) {
+      const copy = resolve(staged, link), final = resolve(target, link);
       mkdirSync(dirname(copy), { recursive: true }); rmSync(copy, { recursive: true, force: true });
       symlinkSync(relative(dirname(final), resolve(base.root, path)), copy);
     }
     const developer = resolve(target, 'Developer');
-    metadata.targetTriples['arm64-apple-watchos-simulator'] = { ...base.definition,
+    metadata.targetTriples[watch.key] = { ...base.definition,
       sdkRootPath: relative(base.root, resolve(developer, 'SDKs', selected.name)),
       includeSearchPaths: [relative(base.root, resolve(developer, 'usr/lib'))],
       librarySearchPaths: [relative(base.root, resolve(developer, 'usr/lib'))],
@@ -78,16 +84,16 @@ export function installWatchSimulatorSDK(xcode, env = process.env) {
     if (replaced) renameSync(backup, target);
     throw error;
   } finally { rmSync(stage, { recursive: true, force: true }); }
-  return crossSdk('watchsimulator', env);
+  return crossSdk(name, env);
 }
 
-/** A full xtool installation retains Xcode.app; copy its watch SDK only when a watch build needs it. */
-export function ensureWatchSimulatorSDK(env = process.env) {
-  try { return crossSdk('watchsimulator', env); } catch {
-    const base = crossSdk('iphonesimulator', env), xcode = resolve(base.root, 'Xcode.app');
-    if (!existsSync(resolve(xcode, 'Contents/Developer/Platforms/WatchSimulator.platform/Developer/SDKs')))
-      throw new Error('host/apple: watch companions need the retained WatchSimulator SDK; reinstall with `xtool sdk install /path/to/Xcode_27.1.xip` without --slim');
-    return installWatchSimulatorSDK(xcode, env);
+/** A full xtool installation retains Xcode.app; copy its watch SDK (`watchsimulator` or `watchos`) only when a watch build needs it. */
+export function ensureWatchSDK(name, env = process.env) {
+  try { return crossSdk(name, env); } catch {
+    const watch = WATCH_SDKS[name], xcode = resolve(crossSdk(watch.base, env).root, 'Xcode.app');
+    if (!existsSync(resolve(xcode, 'Contents/Developer/Platforms', watch.platform, 'Developer/SDKs')))
+      throw new Error(`host/apple: watch companions need the retained ${watch.platform.replace('.platform', '')} SDK; reinstall with \`xtool sdk install /path/to/Xcode_27.1.xip\` without --slim`);
+    return installWatchSDK(xcode, name, env);
   }
 }
 

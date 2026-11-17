@@ -94,7 +94,9 @@ impl Scratch {
             for (out, span) in row.pixels.iter_mut().zip(&self.horizontal) {
                 *out = [0.; 4];
                 for (x, pixel) in source[span.start * 4..span.end * 4]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .enumerate()
                 {
                     #[cfg(test)]
@@ -244,7 +246,7 @@ pub(super) fn draw(
             } else {
                 let start = (source_y * source.width() as usize + columns.start) * 4;
                 let row = &source.data()[start..start + columns.len() * 4];
-                for (sum, pixel) in scratch.vertical.iter_mut().zip(row.chunks_exact(4)) {
+                for (sum, pixel) in scratch.vertical.iter_mut().zip(row.as_chunks::<4>().0) {
                     for c in 0..4 {
                         sum[c] += f64::from(pixel[c]) * weight;
                     }
@@ -271,7 +273,13 @@ pub(super) fn draw(
             }
         }
         let row = &mut target.data_mut()[row_start * 4..(row_start + width) * 4];
-        for (x, (out, color)) in row.chunks_exact_mut(4).zip(&mut accumulated).enumerate() {
+        for (x, (out, color)) in row
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(&mut accumulated)
+            .enumerate()
+        {
             let cover = coverage.map_or(255, |m| m[x]);
             if cover == 0 {
                 continue;

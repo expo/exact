@@ -65,7 +65,10 @@ final class IconPathTests: XCTestCase {
 
     private func tint(_ v: NodeView?) -> PlatformColor? {
         #if os(iOS)
-        return (v?.symbolView as? UIImageView)?.tintColor
+        guard let image = v?.symbolView else { return nil }
+        image.frame.size = CGSize(width: 24, height: 24)
+        guard let c = try? symbolInkChannels(image, original: image.image?.renderingMode == .alwaysOriginal) else { return nil }
+        return UIColor(red: c[0] / 255, green: c[1] / 255, blue: c[2] / 255, alpha: c[3] / 255)
         #else
         // A path icon fills its paths in its tint (stage 14 C1, IconShapeMac.swift).
         if let fill = v?.symbolShape?.shapes.first?.fillColor { return NSColor(cgColor: fill) }
@@ -202,10 +205,7 @@ final class IconPathTests: XCTestCase {
         p.viewport.layer.render(in: ctx)
         #else
         p.viewport.layoutSubtreeIfNeeded()
-        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: w, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                                                 isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: w * 4, bitsPerPixel: 32))
-        rep.size = p.viewport.bounds.size
-        Capture.draw(p.viewport, to: rep) // as IconShapeMacTests captures C1's layers
+        let rep = try XCTUnwrap(Capture.picture(of: p.viewport, scale: scale))
         let cg = try XCTUnwrap(rep.cgImage)
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: w))
         #endif

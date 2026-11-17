@@ -1,5 +1,61 @@
 import { lstatSync, readdirSync, readlinkSync, statSync, watch } from 'node:fs';
 import { resolve } from 'node:path';
+import { within } from '../../scripts/paths.mjs';
+
+// Resource inventories include empty directories, hidden entries and links;
+// compiler directory filters would omit some of these binary inputs.
+export function nativeResourceInputs(build) {
+  const { nativeResourceApp, metadata } = build.binary;
+  return nativeResourceApp ? (metadata?.nativeResources ?? []).map(entry => ({
+    path: resolve(nativeResourceApp.dir, entry.from, entry.name), directory: !!entry.directory,
+  })) : [];
+}
+
+/** What a dev loop watches for its native build receipts: their resource
+ * directories, the files a native build reads, and the subset of those paths
+ * and the receipts' directories, missing and optional inputs that lie in
+ * skipped trees (`outside`). A change to that subset can only invalidate cached
+ * native admission (`cacheBuildInputs`), because nothing else watches it. Cargo's
+ * registry and git sources (`cargo`) are left out: Cargo never rebuilds them on
+ * an edit. */
+export function nativeWatchPaths(receipts, outside, cargo) {
+  const resources = receipts.flatMap(nativeResourceInputs);
+  const directories = new Set(resources.filter(r => r.directory).map(r => r.path));
+  const native = receipts.filter(r => r.compat?.inputs?.platform !== 'web');
+  const files = [...resources.filter(r => !r.directory).map(r => r.path), ...native.flatMap(r => [...r.binary.inputs, ...(r.binary.links ?? [])].map(f => f.path))];
+  const nativeOnly = new Set([...files, ...directories, ...native.flatMap(r => [...r.binary.missing, ...(r.optionalInputs ?? []), ...r.binary.directories.map(d => d.path)])]
+    .filter(p => outside(p) && !cargo(p)));
+  return { directories, files, nativeOnly };
+}
+
+// Receipt validation reads the full native graph only after an input event or
+// a changed receipt. The compiler's metadata polls cover lost notifications.
+export function cacheBuildInputs(validate) {
+  const records = new Map();
+  return {
+    pending(build) {
+      const key = build.compat.target + '/' + build.compat.id;
+      const identity = JSON.stringify([build.binary, build.settings, build.optionalInputs]);
+      let record = records.get(key);
+      if (record?.identity !== identity) {
+        const resources = nativeResourceInputs(build);
+        record = {identity, files: new Set([...build.binary.inputs, ...(build.binary.links ?? []), ...resources.filter(r => !r.directory)].map(f => f.path)),
+          roots: [...build.binary.missing, ...(build.optionalInputs ?? []), ...build.binary.directories.map(d => d.path), ...resources.filter(r => r.directory).map(r => r.path)]};
+        records.set(key, record);
+      }
+      return record.pending ??= validate(build);
+    },
+    invalidate(path) {
+      for (const record of records.values()) {
+        if (record.files.has(path) || record.roots.some(root => within(root, path) || within(path, root))) delete record.pending;
+      }
+    },
+    retain(builds) {
+      const keys = new Set(builds.map(b => b.compat.target + '/' + b.compat.id));
+      for (const key of records.keys()) if (!keys.has(key)) records.delete(key);
+    },
+  };
+}
 
 // Direct file watchers avoid recursive-directory event coalescing on macOS.
 // The directory watcher discovers new paths; file metadata suppresses its
@@ -35,8 +91,8 @@ export function watchModuleSources(directory, ignore, changed) {
             continue;
           }
           if (stat.isDirectory()) { walk(path,name+'/',depth+1); continue; }
-          // A design (`.tamber`) is a source: a value-only edit goes as a batch (LLP 1121 stage 4).
-          if (!/\.(ts|contract|json|tamber)$/.test(name) && !['.exact/backend-origin', '.env.local', '.env'].includes(name)) continue;
+          // A design (`.forma`) is a source: a value-only edit goes as a batch (LLP 1121 stage 4).
+          if (!/\.(ts|contract|json|forma)$/.test(name) && !['.exact/backend-origin', '.env.local', '.env'].includes(name)) continue;
           if (!stat.isFile()) { state.push([name,'not-regular']); continue; }
           bytes += Number(stat.size);
           if (stat.size > 16n*1024n*1024n || bytes > 64*1024*1024 || next.size >= 2048) throw new Error('module watcher source graph exceeds its file/byte budget');
@@ -86,7 +142,7 @@ export function watchDirectoryInputs(directory, changed, { readNames = readdirSy
     try {
       const stat = lstatSync(path, { bigint: true });
       // Directory mtimes change on child saves and would widen GPU-only rebuilds.
-      return stat.isDirectory() ? `directory:${stat.dev}:${stat.ino}`
+      return stat.isDirectory() ? `directory:${stat.dev}:${stat.ino}:${stat.mode}`
         : ['file', stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
     } catch { return null; }
   };

@@ -28,7 +28,7 @@ fn read_pack(compat: &Value, assets: &Assets, names: &[String]) -> Result<Pack, 
         let bytes = if assets.is_selected() {
             // The selected resolver owns its signed roster and integrity. Never
             // fall back to entry zero, even on a tombstone or integrity error.
-            assets.read_asset(&asset).map_err(&refuse)?
+            assets.read_asset(&asset).map_err(refuse)?
         } else if let Some(path) = assets.path(&asset) {
             let file = std::fs::File::open(path).map_err(|e| refuse(e.to_string()))?;
             if file.metadata().map_err(|e| refuse(e.to_string()))?.len() > remaining as u64 {

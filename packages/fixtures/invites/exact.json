@@ -1,0 +1,41 @@
+{
+  "kind": "interface",
+  "name": "@fixture/invites",
+  "version": "1.0.0",
+  "substitute": "implementation",
+  "start": "load",
+  "shapes": {
+    "Invites": {
+      "taken": "string",
+      "count": "number",
+      "atStart": "number"
+    }
+  },
+  "names": [
+    {
+      "source": "invites",
+      "live": true,
+      "answers": "Invites",
+      "grants": [],
+      "substitute": { "default": { "taken": "", "count": 0, "atStart": 0 } }
+    },
+    {
+      "send": "deliverInvite",
+      "options": { "text": "string" },
+      "answers": "Invites",
+      "grants": []
+    },
+    {
+      "source": "shareStatus",
+      "answers": "bool",
+      "grants": ["device.cloudkit"],
+      "substitute": { "default": false }
+    },
+    {
+      "source": "sharePlayStatus",
+      "answers": "bool",
+      "grants": ["device.shareplay"],
+      "substitute": { "default": false }
+    }
+  ]
+}

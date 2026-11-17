@@ -39,6 +39,19 @@ enum Field {
     Time23Periods,
     DateTime,
     Days,
+    WeekdayDate,
+    WeekdayDateNames,
+    WeekdayYear,
+    WeekdayYearNames,
+    WeekdayLabels,
+    MonthDay,
+    MonthDayNames,
+    Time2Digit,
+    Time2DigitPeriods,
+    Time2Digit12,
+    Time2Digit12Periods,
+    Time2Digit23,
+    Time2Digit23Periods,
 }
 
 struct Record<'a>(Vec<&'a str>);
@@ -124,22 +137,29 @@ pub(super) fn formatting(
     let num = |i: usize| args.get(i).and_then(Value::as_number);
     let style = |i: usize| args.get(i).and_then(Value::as_str);
     let text = match f {
-        Stdlib::FormatTime => match style(2)? {
-            "short" => match wall_ms(num(0)?, num(1)?) {
-                Some(wall) => time(&r, wall, cycle),
+        Stdlib::FormatTime => {
+            let two_digit = match style(2)? {
+                "short" => false,
+                "2-digit" => true,
+                _ => return None,
+            };
+            match wall_ms(num(0)?, num(1)?) {
+                Some(wall) => time(&r, wall, cycle, two_digit),
                 None => String::new(),
-            },
-            _ => return None,
-        },
+            }
+        }
         Stdlib::FormatDate => {
             let style = style(2)?;
             let wall = super::date_wall(args.first()?, num(1)?);
             match (style, wall) {
-                (_, None) if matches!(style, "medium" | "month-year" | "iso") => String::new(),
+                (_, None) if matches!(style, "medium" | "month-year" | "month-day" | "iso") => {
+                    String::new()
+                }
                 ("medium", Some(wall)) => date(&r, wall, Field::Medium, Field::MediumNames),
                 ("month-year", Some(wall)) => {
                     date(&r, wall, Field::MonthYear, Field::MonthYearNames)
                 }
+                ("month-day", Some(wall)) => date(&r, wall, Field::MonthDay, Field::MonthDayNames),
                 // `toISOString`'s, in every locale.
                 ("iso", Some(wall)) => super::date(wall, super::Style::Iso),
                 _ => return None,
@@ -147,16 +167,17 @@ pub(super) fn formatting(
         }
         Stdlib::FormatDay => {
             let mode = style(3)?;
-            if !matches!(mode, "day" | "day-time" | "list") {
+            if !matches!(mode, "day" | "day-time" | "list" | "section") {
                 return None;
             }
             day(&r, num(0)?, num(1)?, num(2)?, mode, cycle)
         }
         Stdlib::FormatNumber => {
             let n = num(0)?;
-            match style(1)? {
-                "compact" => compact(&r, n),
-                other => styled(&r, n, other, style(2).unwrap_or(""))?,
+            match (style(1)?, args.get(2).and_then(Value::as_number)) {
+                ("compact", _) => compact(&r, n),
+                ("decimal", Some(d)) => styled_digits(&r, n, super::digits(d, 100)? as usize),
+                (other, _) => styled(&r, n, other, style(2).unwrap_or(""))?,
             }
         }
         _ => return None,
@@ -170,6 +191,16 @@ struct Symbols<'a> {
     decimal: &'a str,
     group: &'a str,
     grouping: &'a str,
+}
+
+/// `decimal` with exactly `digits` fraction digits, in the locale's template.
+fn styled_digits(r: &Record<'_>, n: f64, digits: usize) -> String {
+    if !n.is_finite() {
+        return String::new();
+    }
+    let (int, frac) = rounded(n, 0, digits, digits);
+    r.signed(r.get(Field::DecimalStyle), n.is_sign_negative())
+        .replace("{#}", &r.body(&int, &frac, 1))
 }
 
 /// `decimal`, `percent` and `currency`: [`super::styled`]'s digits in the
@@ -326,6 +357,12 @@ fn fill(r: &Record<'_>, template: &str, wall: f64, names: &str, periods: &str) -
                 out.push_str(names.split('\u{1f}').nth(month as usize - 1).unwrap_or(""));
                 continue;
             }
+            // After the twelve months, the seven weekdays, Sunday's first.
+            "E" => {
+                let weekday = ((wall / 86_400_000.0).floor() as i64 + 4).rem_euclid(7) as usize;
+                out.push_str(names.split('\u{1f}').nth(12 + weekday).unwrap_or(""));
+                continue;
+            }
             "a" => {
                 let name = periods
                     .split('\u{1f}')
@@ -353,12 +390,16 @@ fn date(r: &Record<'_>, wall: f64, template: Field, names: Field) -> String {
     fill(r, r.get(template), wall, r.get(names), "")
 }
 
-/// The short time, in the hour cycle the viewer forced, else the locale's.
-fn time(r: &Record<'_>, wall: f64, cycle: Option<&str>) -> String {
-    let (template, periods) = match cycle {
-        Some("h12") => (Field::Time12, Field::Time12Periods),
-        Some("h23") => (Field::Time23, Field::Time23Periods),
-        _ => (Field::Time, Field::TimePeriods),
+/// The short time, or with `two_digit` the two-digit hour's, in the hour
+/// cycle the viewer forced, else the locale's.
+fn time(r: &Record<'_>, wall: f64, cycle: Option<&str>, two_digit: bool) -> String {
+    let (template, periods) = match (cycle, two_digit) {
+        (Some("h12"), false) => (Field::Time12, Field::Time12Periods),
+        (Some("h23"), false) => (Field::Time23, Field::Time23Periods),
+        (_, false) => (Field::Time, Field::TimePeriods),
+        (Some("h12"), true) => (Field::Time2Digit12, Field::Time2Digit12Periods),
+        (Some("h23"), true) => (Field::Time2Digit23, Field::Time2Digit23Periods),
+        (_, true) => (Field::Time2Digit, Field::Time2DigitPeriods),
     };
     fill(r, r.get(template), wall, "", r.get(periods))
 }
@@ -378,9 +419,24 @@ fn day(
     };
     let day = |w: f64| (w / 86_400_000.0).floor() as i64;
     let (days, apart) = (day(wall), day(wall) - day(today));
+    // Its capitals are the data's (`formats.rs`): no host maps case.
+    if mode == "section" {
+        return match apart {
+            0 => r.item(Field::Days, 0).to_owned(),
+            -1 => r.item(Field::Days, 1).to_owned(),
+            1 => r.item(Field::Days, 2).to_owned(),
+            -6..=6 => r
+                .item(Field::WeekdayLabels, (days + 4).rem_euclid(7) as usize)
+                .to_owned(),
+            _ if super::same_year(wall, today) => {
+                date(r, wall, Field::WeekdayDate, Field::WeekdayDateNames)
+            }
+            _ => date(r, wall, Field::WeekdayYear, Field::WeekdayYearNames),
+        };
+    }
     if mode == "list" {
         return match apart {
-            0 => time(r, wall, cycle),
+            0 => time(r, wall, cycle, false),
             -1 => r.item(Field::Days, 1).to_owned(),
             -6..=-2 => r
                 .item(Field::Weekdays, (days + 4).rem_euclid(7) as usize)
@@ -398,6 +454,6 @@ fn day(
         return label;
     }
     r.get(Field::DateTime)
-        .replace("{T}", &time(r, wall, cycle))
+        .replace("{T}", &time(r, wall, cycle, false))
         .replace("{D}", &label)
 }

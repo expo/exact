@@ -34,6 +34,18 @@ pub fn cos(x: f64) -> f64 {
     libm::cos(x)
 }
 
+/// Deterministic inverse cosine for axis-angle interpolation.
+#[inline]
+pub fn acos(x: f64) -> f64 {
+    libm::acos(x)
+}
+
+/// Deterministic polar angle for a rotation quaternion.
+#[inline]
+pub fn atan2(y: f64, x: f64) -> f64 {
+    libm::atan2(y, x)
+}
+
 /// Deterministic software natural logarithm (LLP 1099 D2, amending LLP 1003
 /// §7): UIKit spring conversions solve with it.
 #[inline]
@@ -81,5 +93,7 @@ mod tests {
         assert_eq!(sin(1.0).to_bits(), libm::sin(1.0).to_bits());
         assert_eq!(cos(1.0).to_bits(), libm::cos(1.0).to_bits());
         assert_eq!(ln(2.0).to_bits(), libm::log(2.0).to_bits());
+        assert_eq!(acos(0.5).to_bits(), libm::acos(0.5).to_bits());
+        assert_eq!(atan2(1.0, 2.0).to_bits(), libm::atan2(1.0, 2.0).to_bits());
     }
 }

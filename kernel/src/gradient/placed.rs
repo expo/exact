@@ -23,9 +23,8 @@ impl Gradient {
         wide: Lookup<'_>,
     ) -> (Self, Geometry) {
         let mut geometry = self.geometry(width, height);
-        let mut ramp = self.clone();
         if !self.needs_box() {
-            return (ramp, geometry);
+            return (self.clone(), geometry);
         }
         let length = match geometry {
             Geometry::Linear { start, end } => (end.0 - start.0).hypot(end.1 - start.1),
@@ -33,29 +32,13 @@ impl Gradient {
             Geometry::Conic { .. } => 1.0,
         }
         .max(1e-6);
-        for stop in &mut ramp.stops {
-            if stop.unit == StopUnit::Px {
-                stop.at = stop.at / length * 100.0;
-                stop.unit = StopUnit::Percent;
-            }
-        }
-        fix_up(&mut ramp.stops);
-        ramp.repeating = false;
+        let mut ramp = self.fixed_up(length);
         if self.repeating {
-            let first = ramp.stops[0].at;
+            let (first, period) = match ramp.period(length, dark, wide) {
+                Ok(cycle) => cycle,
+                Err(solid) => return (solid, geometry),
+            };
             let last = ramp.stops.last().unwrap().at;
-            let period = last - first;
-            if period <= 0.0 {
-                // Chrome paints the last stop for a zero-length repetition.
-                let stop = *ramp.stops.last().unwrap();
-                ramp.stops = [0.0, 100.0].map(|at| Stop { at, ..stop }).to_vec();
-                return (ramp, geometry);
-            }
-            // CSS Images 3 §3.3: unresolved repetitions are the average
-            // colour. Bound the expanded native ramp for microscopic periods.
-            if period * length / 100.0 < 0.01 || 100.0 / period > 8192.0 {
-                return (ramp.average(dark, wide), geometry);
-            }
             let begin = (-first / period).floor() as i32;
             let end = ((100.0 - last) / period).ceil() as i32;
             let stops = ramp.stops.clone();
@@ -97,6 +80,94 @@ impl Gradient {
             Geometry::Conic { .. } => {}
         }
         (ramp, geometry)
+    }
+
+    /// One period of a repeating linear gradient in a `width` × `height`
+    /// box: its ramp over the period (stops 0–100%) and the line from the
+    /// period's first stop to its last, which a native host rasterizes once
+    /// and tiles (#661). Where there is no period to repeat, the solid colour
+    /// [`placed`](Self::placed) paints, over one CSS pixel. `None` for any
+    /// other gradient, or a box with no extent along the line.
+    pub fn cycle(&self, width: f32, height: f32, dark: bool) -> Option<(Self, Geometry)> {
+        self.cycle_with(width, height, dark, &crate::style::wide::wide)
+    }
+
+    /// [`cycle`](Self::cycle), each wide stop's colour read through `wide`.
+    pub fn cycle_with(
+        &self,
+        width: f32,
+        height: f32,
+        dark: bool,
+        wide: Lookup<'_>,
+    ) -> Option<(Self, Geometry)> {
+        let Geometry::Linear { start, end } = self.geometry(width, height) else {
+            return None;
+        };
+        let length = (end.0 - start.0).hypot(end.1 - start.1);
+        if !self.repeating || length < 1e-6 {
+            return None;
+        }
+        let at = |percent: f32| {
+            (
+                start.0 + (end.0 - start.0) * percent / 100.0,
+                start.1 + (end.1 - start.1) * percent / 100.0,
+            )
+        };
+        let mut ramp = self.fixed_up(length);
+        let (first, period) = match ramp.period(length, dark, wide) {
+            Ok(cycle) => cycle,
+            Err(solid) => {
+                let line = Geometry::Linear {
+                    start,
+                    end: at(100.0 / length),
+                };
+                return Some((solid, line));
+            }
+        };
+        for stop in &mut ramp.stops {
+            stop.at = (stop.at - first) / period * 100.0;
+        }
+        let line = Geometry::Linear {
+            start: at(first),
+            end: at(first + period),
+        };
+        Some((ramp, line))
+    }
+
+    /// Length stops as percentages of a line `length` CSS px long, then
+    /// CSS's fix-up: a ramp that no longer needs the box.
+    fn fixed_up(&self, length: f32) -> Self {
+        let mut ramp = self.clone();
+        for stop in &mut ramp.stops {
+            if stop.unit == StopUnit::Px {
+                stop.at = stop.at / length * 100.0;
+                stop.unit = StopUnit::Percent;
+            }
+        }
+        fix_up(&mut ramp.stops);
+        ramp.repeating = false;
+        ramp
+    }
+
+    /// A fixed-up repeating ramp's first stop and period, in percent of a
+    /// line `length` CSS px long; or, where it has none to repeat, the solid
+    /// colour Chrome paints.
+    fn period(&self, length: f32, dark: bool, wide: Lookup<'_>) -> Result<(f32, f32), Self> {
+        let first = self.stops[0].at;
+        let period = self.stops.last().unwrap().at - first;
+        if period <= 0.0 {
+            // Chrome paints the last stop for a zero-length repetition.
+            let stop = *self.stops.last().unwrap();
+            let mut solid = self.clone();
+            solid.stops = [0.0, 100.0].map(|at| Stop { at, ..stop }).to_vec();
+            return Err(solid);
+        }
+        // CSS Images 3 §3.3: unresolved repetitions are the average
+        // colour. Bound the expanded native ramp for microscopic periods.
+        if period * length / 100.0 < 0.01 || 100.0 / period > 8192.0 {
+            return Err(self.clone().average(dark, wide));
+        }
+        Ok((first, period))
     }
 
     fn average(mut self, dark: bool, wide: Lookup<'_>) -> Self {

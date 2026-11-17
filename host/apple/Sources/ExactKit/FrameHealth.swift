@@ -11,9 +11,9 @@ import AppKit
 /// Bounded callback and apply timing. Presentation is unmeasured; the optional native-scroll
 /// source reports deadlines with unknown cadence.
 final class FrameHealth {
-    /// When a collector collects: from the start, in a development build or where `app.json` says `"core"`; while
-    /// the card shows, in a production build, which no agent can attach to (LLP 1079.000 §9); or never, where it says
-    /// `"off"`.
+    /// When a collector collects: from the start, in a development build or where `app.json` says `"core"`; on
+    /// demand, in a production build (LLP 1079.000 §9): while the card shows or, where an agent can attach, its
+    /// capture or scroll track holds a lease; or never, where it says `"off"`.
     enum Policy { case always, onDemand, off }
     static let policy: Policy = switch ExactEnv.appMetadata["ExactFrameHealthMode"] as? String {
     case "off": .off
@@ -27,7 +27,7 @@ final class FrameHealth {
     static let developmentObserver = false
     #endif
     let policy: Policy
-    /// Whether the card shows, so an on-demand collector collects
+    /// Whether the card shows or an agent's lease holds, so an on-demand collector collects
     private var demanded = false
     private(set) var handle: UInt32
     let source: String
@@ -93,6 +93,12 @@ final class FrameHealth {
     var enabled: Bool { handle != 0 && (policy != .onDemand || demanded) }
     /// Whether it collects now or can when asked
     var available: Bool { unavailableCode == nil }
+    /// Why it does not collect now, nil when it does: the agent's clock, else its unavailable code, else (an
+    /// on-demand collector nothing has asked for) `collection-disabled`
+    var blocked: String? { virtual ? "virtual-clock" : enabled ? nil : unavailableCode ?? "collection-disabled" }
+    /// Why an agent's lease is refused, nil when it may take one: the agent's clock, else its unavailable code. An
+    /// on-demand collector is not refused: the lease asks it to collect, as the card does.
+    var leaseBlocked: String? { virtual ? "virtual-clock" : unavailableCode }
     /// Whether it may observe native scrolling now: in a development build, while it collects (LLP 1079.000 §6.1)
     var observesNativeScrolling: Bool { enabled && Self.developmentObserver }
 
@@ -125,9 +131,9 @@ final class FrameHealth {
         return ("Frame Health Is Unavailable", unavailableReason ?? "This session does not collect frame timing.")
     }
 
-    /// Collect while the card shows, for an on-demand collector: its collector is made the first time and kept, and
-    /// each demand starts a new generation, so nothing collected before mixes with what this one does. Without
-    /// demand, every hook returns at its first check.
+    /// Collect while the card shows or an agent's lease holds, for an on-demand collector: its collector is made the
+    /// first time and kept, and each demand starts a new generation, so nothing collected before mixes with what this
+    /// one does. Without demand, every hook returns at its first check.
     func demand(_ wanted: Bool) {
         guard policy == .onDemand, available, wanted != demanded else { return }
         if wanted {
@@ -135,7 +141,10 @@ final class FrameHealth {
             guard handle != 0 else { (unavailableCode, unavailableReason) = ("collector-capacity", Self.capacityReason); return }
             let (hertz, period) = (requestedHertz, requestedPeriodNs)
             demanded = true
-            reset()
+            // A scroll track that asked for this demand keeps its lease
+            restart()
+            running = false
+            publish()
             // The rate requested before this demand still governs the frames it collects
             (requestedHertz, requestedPeriodNs) = (hertz, period)
             if period > 0 { exact_frame_health_requested_period(handle, period) }
@@ -168,7 +177,7 @@ final class FrameHealth {
         for name in [NSWindow.didMiniaturizeNotification, NSWindow.didChangeOcclusionStateNotification] {
             lifecycle.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self, weak session] notification in
                 guard let window = session?.presenter.viewport.window, notification.object as? NSWindow === window,
-                      window.isMiniaturized || !window.occlusionState.contains(.visible) else { return }
+                      window.isMiniaturized || !window.screenOcclusionState.contains(.visible) else { return }
                 self?.stop()
             })
         }
@@ -205,7 +214,8 @@ final class FrameHealth {
             pending[index] = work
             finish(index)
         }
-        guard valid else { return }
+        // A lease that expired as a frame finished can have ended the demand
+        guard valid, enabled else { return }
         running = true
         (publicationOwner ?? self).markPublication()
     }
@@ -255,6 +265,7 @@ final class FrameHealth {
     private func finish(_ index: Int) -> Bool {
         guard let work = pending[index], work.returned, work.waiting == 0 else { return false }
         expireCapture(at: work.finished)
+        guard enabled else { pending[index] = nil; return false }
         exact_frame_health_worked(handle, Self.nanoseconds(work.start), Self.nanoseconds(work.deadline), Self.nanoseconds(work.finished))
         chart?.work(start: work.start, deadline: work.deadline, finished: work.finished)
         pending[index] = nil
@@ -297,11 +308,19 @@ final class FrameHealth {
 
     func reset() {
         guard enabled else { return }
+        track = nil
+        restart()
+        updateCapture(at: CACurrentMediaTime())
+        running = false
+        publish()
+    }
+
+    /// Start a new generation of the collector and of what is kept beside it.
+    private func restart() {
         #if (os(iOS) || os(tvOS)) && !targetEnvironment(macCatalyst)
         stopScroll()
         #endif
         nativeHealth?.clockChanged(virtual: virtual)
-        track = nil
         exact_frame_health_reset(handle)
         chart?.reset()
         pending = [Pending?](repeating: nil, count: 3)
@@ -309,9 +328,6 @@ final class FrameHealth {
         requestedHertz = 0
         nativeSampleLoss = 0
         if captureID != 0 { FrameHealthEnvironment.release(); captureID = 0 }
-        updateCapture(at: CACurrentMediaTime())
-        running = false
-        publish()
     }
 
     func clockChanged(virtual: Bool) {

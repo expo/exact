@@ -6,7 +6,7 @@
 //! Parley's re-breaking is cheap and a layout's breaking state is its own —
 //! and copies out what painting needs ([`super::lines`]). The line box is
 //! the host's: the strut plus each face's ascent, descent and gap.
-use super::lines::{self, LayoutGlyph, LayoutLine, Lines};
+use super::lines::{self, LayoutGlyph, LayoutLine, Lines, Room, RoomKind};
 use super::*;
 use parley::{
     Alignment, AlignmentOptions, BaseDirection, IndentOptions, LineBreakContext, RangedBuilder,
@@ -205,9 +205,9 @@ pub(super) struct HardLine {
     inset: (f32, f32),
     /// The first visual line's indent as Parley applies it.
     indent: f32,
-    /// The room before a run's first cluster and before an image's box,
-    /// which its glyphs or its box are drawn past (`run_edges`).
-    leads: Vec<(usize, f32)>,
+    /// The inline boxes' room beside its runs (`run_edges`), in logical
+    /// order, and before its images' boxes.
+    rooms: Vec<Room>,
     box_leads: Vec<(u32, f32)>,
 }
 
@@ -244,22 +244,29 @@ pub(super) struct ShapeData {
 type Pieces = Vec<(Range<usize>, usize)>;
 /// A hard line's inline boxes: (byte offset in the line, run index).
 type Boxes = Vec<(usize, usize)>;
+/// A hard line's runs with no text: (byte offset in the line, run index).
+type Empties = Vec<(usize, usize)>;
 
 /// The paragraph's text split into hard lines as cosmic-text split it: at
 /// each paragraph separator (`\r\n` one), the last empty piece dropped,
 /// and one empty line for no text. Each line keeps its byte offset and
 /// pieces: (range in the line, run index). An inline box's run has no text,
-/// only its place in the line (LLP 1011.002).
-fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes)> {
-    let mut out: Vec<(usize, String, Pieces, Boxes)> =
-        vec![(0, String::new(), Vec::new(), Vec::new())];
+/// only its place in the line (LLP 1011.002), and so has a run with no text.
+fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes, Empties)> {
+    let mut out: Vec<(usize, String, Pieces, Boxes, Empties)> =
+        vec![(0, String::new(), Vec::new(), Vec::new(), Vec::new())];
     let mut offset = 0;
     let mut after_cr = false;
     for (index, run) in spec.runs.iter().enumerate() {
         if run.inline.is_some() {
             after_cr = false;
-            let (_, text, _, boxes) = out.last_mut().expect("one line");
+            let (_, text, _, boxes, _) = out.last_mut().expect("one line");
             boxes.push((text.len(), index));
+            continue;
+        }
+        if run.text.is_empty() {
+            let (_, text, _, _, empties) = out.last_mut().expect("one line");
+            empties.push((text.len(), index));
             continue;
         }
         let mut rest = run.text.as_str();
@@ -277,7 +284,7 @@ fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes)> {
             let consumed = sep.map_or(rest.len(), |(at, ch)| at + ch.len_utf8());
             if !piece.is_empty() {
                 after_cr = false;
-                let (_, text, pieces, _) = out.last_mut().expect("one line");
+                let (_, text, pieces, _, _) = out.last_mut().expect("one line");
                 let start = text.len();
                 text.push_str(piece);
                 pieces.push((start..text.len(), index));
@@ -289,7 +296,7 @@ fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes)> {
                     if ch == '\n' && after_cr && piece.is_empty() {
                         out.last_mut().expect("one line").0 = next;
                     } else {
-                        out.push((next, String::new(), Vec::new(), Vec::new()));
+                        out.push((next, String::new(), Vec::new(), Vec::new(), Vec::new()));
                     }
                     after_cr = ch == '\r';
                     rest = &rest[at + ch.len_utf8()..];
@@ -299,25 +306,30 @@ fn hard_lines(spec: &Spec) -> Vec<(usize, String, Pieces, Boxes)> {
             offset += consumed;
         }
     }
-    if out.len() > 1 && out.last().is_some_and(|l| l.1.is_empty() && l.3.is_empty()) {
+    if out.len() > 1
+        && out
+            .last()
+            .is_some_and(|l| l.1.is_empty() && l.3.is_empty() && l.4.is_empty())
+    {
         out.pop();
     }
     out
 }
 
-/// A hard line's inline-box room (`Run::edges`): advance after the cluster
-/// holding a run's last character (its end), and before the cluster
-/// holding its first (its start), kept with that cluster where a line
-/// breaks, as Chrome keeps a `<span>`'s padding with its text; and for an
-/// image, its start before its box, by run.
+/// A hard line's inline-box room (`Run::edges`), each room shaped as advance
+/// on one cluster, which line breaking keeps it with: a run's start on the
+/// cluster holding its first character, so that it goes to the next line
+/// with its text wherever the line breaks before it, as Chrome keeps a
+/// `<span>`'s padding with its text, and its end on the cluster holding its
+/// last; and for an image, its start before its box, by run. Where the room
+/// is drawn is the line's to decide once it is broken ([`lines::extract`]).
 #[derive(Default)]
 struct Edges {
-    after: Vec<(usize, f32)>,
-    leads: Vec<(usize, f32)>,
+    rooms: Vec<Room>,
     box_leads: Vec<(u32, f32)>,
 }
 
-fn run_edges(spec: &Spec, pieces: &[(usize, String, Pieces, Boxes)]) -> Vec<Edges> {
+fn run_edges(spec: &Spec, pieces: &[(usize, String, Pieces, Boxes, Empties)]) -> Vec<Edges> {
     let mut out: Vec<Edges> = (0..pieces.len()).map(|_| Edges::default()).collect();
     if spec.runs.iter().all(|r| r.edges.is_empty()) {
         return out;
@@ -325,12 +337,24 @@ fn run_edges(spec: &Spec, pieces: &[(usize, String, Pieces, Boxes)]) -> Vec<Edge
     // Each run's first and last place: its hard line and its byte range there.
     let mut first: Vec<Option<(usize, usize)>> = vec![None; spec.runs.len()];
     let mut last: Vec<Option<(usize, usize)>> = vec![None; spec.runs.len()];
-    for (h, (_, _, runs, _)) in pieces.iter().enumerate() {
+    for (h, (_, _, runs, _, empties)) in pieces.iter().enumerate() {
         for (range, index) in runs {
             first[*index].get_or_insert((h, range.start));
             last[*index] = Some((h, range.end));
         }
+        for &(at, index) in empties {
+            first[index] = Some((h, at));
+        }
     }
+    // A run's bytes in hard line `h`: the characters its room is drawn beside.
+    let span = |h: usize, index: usize| {
+        let mut owned = pieces[h].2.iter().filter(|(_, i)| *i == index);
+        let lo = owned.next().map(|(r, _)| r.clone());
+        lo.map(|lo| {
+            let hi = owned.last().map_or(lo.end, |(r, _)| r.end);
+            lo.start..hi
+        })
+    };
     for (index, run) in spec.runs.iter().enumerate() {
         if run.inline.is_some() {
             if run.edges.start != 0.0 {
@@ -340,21 +364,58 @@ fn run_edges(spec: &Spec, pieces: &[(usize, String, Pieces, Boxes)]) -> Vec<Edge
             }
             continue;
         }
-        if run.edges.end != 0.0 {
-            if let Some((h, end)) = last[index] {
-                if let Some((at, _)) = pieces[h].1[..end].char_indices().last() {
-                    out[h].after.push((at, run.edges.end));
-                }
+        if run.text.is_empty() {
+            let room = run.edges.start + run.edges.end;
+            if let Some((h, at)) = first[index].filter(|_| room != 0.0) {
+                let text = &pieces[h].1;
+                let (at, kind) = if at < text.len() {
+                    (at, RoomKind::Before)
+                } else if let Some((before, _)) = text[..at].char_indices().last() {
+                    (before, RoomKind::After)
+                } else {
+                    continue;
+                };
+                out[h].rooms.push(Room {
+                    at,
+                    w: room,
+                    run: index as u32,
+                    kind,
+                    span: at..at,
+                });
             }
+            continue;
         }
         if run.edges.start != 0.0 {
             if let Some((h, start)) = first[index] {
-                out[h].leads.push((start, run.edges.start));
+                if let Some(span) = span(h, index) {
+                    out[h].rooms.push(Room {
+                        at: start,
+                        w: run.edges.start,
+                        run: index as u32,
+                        kind: RoomKind::Start,
+                        span,
+                    });
+                }
+            }
+        }
+        if run.edges.end != 0.0 {
+            if let Some((h, end)) = last[index] {
+                let at = pieces[h].1[..end].char_indices().last().map(|(at, _)| at);
+                if let (Some(at), Some(span)) = (at, span(h, index)) {
+                    out[h].rooms.push(Room {
+                        at,
+                        w: run.edges.end,
+                        run: index as u32,
+                        kind: RoomKind::End,
+                        span,
+                    });
+                }
             }
         }
     }
     for edges in &mut out {
-        edges.leads.sort_by_key(|l| l.0);
+        // In logical order: by place, then by run (a stable sort).
+        edges.rooms.sort_by_key(|r| r.at);
     }
     out
 }
@@ -414,7 +475,7 @@ impl ShapedSource {
         let pieces = hard_lines(&spec);
         let mut edges = run_edges(&spec, &pieces);
         let mut lines = Vec::with_capacity(pieces.len());
-        for (h, (start, text, runs, boxes)) in pieces.into_iter().enumerate() {
+        for (h, (start, text, runs, boxes, _)) in pieces.into_iter().enumerate() {
             #[cfg(test)]
             SHAPE_LINES.with(|n| n.set(n.get() + 1));
             text_bytes += text.len();
@@ -468,16 +529,9 @@ impl ShapedSource {
             });
             builder.set_line_break_override(Some(CHROME));
             let mut layout = builder.build(&text);
-            let Edges {
-                after,
-                leads,
-                box_leads,
-            } = std::mem::take(&mut edges[h]);
-            for &(index, amount) in &after {
-                layout.add_advance_after(index, amount);
-            }
-            for &(index, amount) in &leads {
-                layout.add_lead(index, amount);
+            let Edges { rooms, box_leads } = std::mem::take(&mut edges[h]);
+            for room in &rooms {
+                layout.add_lead(room.at, room.w);
             }
             let inset = line_inset(&spec, &runs, &mut layout);
             // CSS `text-indent`: the paragraph's first line only.
@@ -502,7 +556,7 @@ impl ShapedSource {
                 }),
                 inset,
                 indent,
-                leads,
+                rooms,
                 box_leads,
             });
         }
@@ -651,7 +705,11 @@ impl ShapedSource {
                     &line,
                     styles,
                     shift,
-                    (&hard.leads, &hard.box_leads),
+                    lines::Rooms {
+                        rooms: &hard.rooms,
+                        boxes: &hard.box_leads,
+                        rtl,
+                    },
                     &mut out,
                 );
                 let m = line.metrics();
@@ -780,7 +838,7 @@ impl ShapedSource {
         let mut ink = Lines::default();
         let mut advance = 0.0;
         if let Some(l) = symbol.lines().next() {
-            advance = lines::extract(&l, symbol.styles(), 0.0, (&[], &[]), &mut ink);
+            advance = lines::extract(&l, symbol.styles(), 0.0, lines::Rooms::NONE, &mut ink);
         }
         // Visual clusters, kept from the line's start edge.
         let extent = |g: &LayoutGlyph| (g.x, g.x + g.w);
@@ -1102,6 +1160,8 @@ pub struct LayoutRun<'a> {
     pub line_height: f32,
     /// Its width.
     pub line_w: f32,
+    /// Its inline boxes' room beside their text, as it draws them.
+    pub rooms: &'a [lines::LayoutRoom],
 }
 
 pub(super) struct Runs<'a> {
@@ -1145,6 +1205,11 @@ impl<'a> Iterator for Runs<'a> {
             line_top,
             line_height,
             line_w: line.w,
+            rooms: {
+                let from = record.rooms.partition_point(|r| (r.line as usize) < i);
+                let to = record.rooms.partition_point(|r| (r.line as usize) <= i);
+                &record.rooms[from..to]
+            },
         })
     }
 }

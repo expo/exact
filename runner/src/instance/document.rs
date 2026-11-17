@@ -164,7 +164,7 @@ impl DocTree {
                 && n.props.str(PropId::SemanticTag) == Some("header")
                 && up.is_some_and(|p| p.props.get(PropId::NavigationKey).is_some())
                 || alert(n)
-                || up.is_some_and(&alert) && !button(n)
+                || up.is_some_and(alert) && !button(n)
                 || surface(n)
         };
         let mut at = Some(node);
@@ -332,7 +332,9 @@ impl Build<'_> {
             Some(list) => list
                 .iter()
                 .map(|child| match child {
-                    ListChild::Spacer(view, _) | ListChild::Row(view, ..) => *view,
+                    ListChild::Fixed(view, _)
+                    | ListChild::Spacer(view, _)
+                    | ListChild::Row(view, ..) => *view,
                 })
                 .collect(),
             None => roots_of(&n.children),
@@ -366,9 +368,37 @@ impl Build<'_> {
             )));
         }
         for child in list {
+            if let ListChild::Fixed(view, hidden) = child {
+                if let Some(root) = super::find::locate(&n.children, view, &mut Vec::new(), &mut 0)
+                {
+                    self.node(root, here, depth + 1)?;
+                    if hidden {
+                        let index = self
+                            .doc
+                            .index
+                            .get(&view)
+                            .copied()
+                            .expect("fixed root emitted");
+                        self.doc.nodes[index as usize].props.set(
+                            exact_kernel::PropId::Inert,
+                            exact_kernel::PropValue::Bool(true),
+                        );
+                        self.doc.nodes[index as usize].props.set(
+                            exact_kernel::PropId::AccessibilityElementsHidden,
+                            exact_kernel::PropValue::Bool(true),
+                        );
+                    }
+                }
+                continue;
+            }
             let (view, style, props, roots) = match child {
+                ListChild::Fixed(..) => unreachable!(),
                 ListChild::Spacer(view, style) => {
                     let mut props = PropList::new();
+                    props.set(
+                        exact_kernel::PropId::Dataset,
+                        exact_kernel::PropValue::Str(r#"{"exact-list-spacer":""}"#.into()),
+                    );
                     props.set(
                         exact_kernel::PropId::AccessibilityElementsHidden,
                         exact_kernel::PropValue::Bool(true),
@@ -476,6 +506,16 @@ impl Build<'_> {
                         }
                         Ok(StyleId::ExitAnimation) => {
                             self.sites.keyframes.resolve(&mut patch.rare.exit_animation);
+                        }
+                        Ok(StyleId::ViewTransitionNew) => {
+                            self.sites
+                                .keyframes
+                                .resolve(&mut patch.rare.view_transition_new);
+                        }
+                        Ok(StyleId::ViewTransitionOld) => {
+                            self.sites
+                                .keyframes
+                                .resolve(&mut patch.rare.view_transition_old);
                         }
                         Ok(_) => {}
                         // A value its row refuses is unset, its declaration's

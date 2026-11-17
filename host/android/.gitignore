@@ -5,3 +5,7 @@ build/
 local.properties
 gradle/verification-metadata.xml
 settings-gradle.lockfile
+# JVM crash reports beside the root project.
+/hs_err_pid*.log
+/hs_err_pid*.mdmp
+/replay_pid*.log

@@ -8,7 +8,7 @@
   "theme_color": "#ffffff",
   "background_color": "#ffffff",
   "app": { "id": "dev.exact.xheavy.exact2", "name": "XHeavy Exact2" },
-  "rust": { "mode": "off" },
+  "rust": { "mode": "off", "data": { "crate": "exact-xheavy-data", "type": "exact_xheavy_data::XHeavy" } },
   "modules": ["native-map"],
   "host": {
     "ios": { "minimumOS": "17.0", "deviceFamily": ["iphone", "ipad"] },

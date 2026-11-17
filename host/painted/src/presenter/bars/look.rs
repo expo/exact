@@ -30,11 +30,13 @@
 //! names each one's symbol).
 use crate::paint::{Backend, Rect4, Shape};
 use crate::presenter::palette::{material, Material};
-use crate::presenter::top::look::{paragraph, symbol, Role, Type, LABEL_LARGE, STATE_LAYER};
+use crate::presenter::top::look::{
+    directed_paragraph, label_x, paragraph, symbol, text_rect, Role, Type, LABEL_LARGE, STATE_LAYER,
+};
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::generated::metric;
 use exact_kernel::style::metrics::{self, Column};
-use exact_kernel::ViewId;
+use exact_kernel::{Direction, ViewId};
 use std::rc::Rc;
 use tiny_skia::Transform;
 
@@ -115,6 +117,8 @@ pub struct Button {
     pub node: ViewId,
     /// What it says: its title, else its label.
     pub title: String,
+    /// The title's computed text direction.
+    pub direction: Direction,
     /// Its symbol role, which makes it an icon button.
     pub symbol: Option<String>,
     /// Not `disabled`.
@@ -132,8 +136,12 @@ pub struct Top {
     pub route: ViewId,
     /// The heading: none for a header of buttons alone, whose bar has no title.
     pub heading: Option<ViewId>,
+    /// The header's computed direction.
+    pub direction: Direction,
     /// The title.
     pub title: String,
+    /// The heading's computed text direction, independent of the header's placement.
+    pub title_direction: Direction,
     /// Whether it has the Up arrow: the route is pushed.
     pub up: bool,
     /// The buttons before the heading, and those after it.
@@ -151,6 +159,8 @@ pub struct Tab {
     pub node: ViewId,
     /// Its label.
     pub label: String,
+    /// The label's computed text direction.
+    pub direction: Direction,
     /// Its symbol role.
     pub symbol: Option<String>,
     /// `aria-selected`.
@@ -166,6 +176,8 @@ pub struct Tab {
 pub struct Bottom {
     /// The authored `tablist`.
     pub tablist: ViewId,
+    /// The tablist's computed direction.
+    pub direction: Direction,
     /// Its destinations, in order.
     pub tabs: Vec<Tab>,
 }
@@ -230,19 +242,46 @@ enum Item {
     Symbol(String, Rect4, [u8; 4]),
 }
 
+/// Resolve inline positions into physical boxes without reflecting glyphs.
+fn mirror(items: &mut [Item], targets: &mut [Target], width: f32) {
+    let rect = |r: &mut Rect4| r.0 = width - r.0 - r.2;
+    for item in items {
+        match item {
+            Item::Text(p, at, ..) => {
+                let bounds = text_rect(p, *at);
+                at.0 = label_x(p, width - bounds.0, 1.);
+            }
+            Item::Fill(shape, _) => rect(&mut shape.rect),
+            Item::Symbol(_, r, _) => rect(r),
+        }
+    }
+    for target in targets {
+        rect(&mut target.rect);
+        rect(&mut target.layer.0.rect);
+    }
+}
+
 /// A bar measured: its size, its colour and what it draws.
 pub struct Layout {
     /// Width and height, points: the system's bar it reaches under included.
     pub size: (f32, f32),
     container: [u8; 4],
+    direction: Direction,
     items: Vec<Item>,
     /// What can be touched, in order.
     pub targets: Vec<Target>,
 }
 
 /// One line of `style`, cut with an ellipsis where it is wider than `max`.
-fn line(engine: &mut TextEngine, text: &str, style: Type, scale: f32, max: f32) -> Rc<Paragraph> {
-    let line = paragraph(engine, text, style, scale, None);
+fn line(
+    engine: &mut TextEngine,
+    text: &str,
+    style: Type,
+    scale: f32,
+    max: f32,
+    direction: Direction,
+) -> Rc<Paragraph> {
+    let line = directed_paragraph(engine, text, style, scale, None, direction);
     line.ellipsized(max.max(1.0)).unwrap_or(line)
 }
 
@@ -262,7 +301,7 @@ impl Layout {
     pub fn texts(&self) -> Vec<(ViewId, Rect4)> {
         (self.items.iter())
             .filter_map(|item| match item {
-                Item::Text(p, at, _, source) => Some((*source, (at.0, at.1, p.width, p.height))),
+                Item::Text(p, at, _, source) => Some((*source, text_rect(p, *at))),
                 _ => None,
             })
             .collect()
@@ -320,6 +359,7 @@ impl Layout {
                     *color,
                     exact_kernel::SymbolSet::Material,
                     400,
+                    self.direction == Direction::Rtl && role == "back",
                 ),
             }
         }
@@ -327,6 +367,14 @@ impl Layout {
 
     /// Material's small top app bar for `top`.
     pub fn top(engine: &mut TextEngine, top: &Top, inputs: &Inputs) -> Layout {
+        let inputs = if top.direction == Direction::Rtl {
+            &Inputs {
+                sides: (inputs.sides.1, inputs.sides.0),
+                ..*inputs
+            }
+        } else {
+            inputs
+        };
         let (dark, scale) = (inputs.dark, inputs.font_scale);
         let (y0, h) = (inputs.edge, top_height());
         // What leads and what trails keep `edge` from the bar's sides, and
@@ -363,7 +411,7 @@ impl Layout {
             };
             let label = (b.symbol.is_none()).then(|| {
                 let room = (inputs.width / 2.0 - 2.0 * TEXT_BUTTON_PADDING).max(1.0);
-                line(engine, &b.title, LABEL_LARGE, scale, room)
+                line(engine, &b.title, LABEL_LARGE, scale, room, b.direction)
             });
             let w = match &label {
                 Some(p) => (p.width + 2.0 * TEXT_BUTTON_PADDING).max(TEXT_BUTTON.0),
@@ -389,7 +437,7 @@ impl Layout {
                 }
                 (None, Some(p)) => {
                     let tall = (p.height + 20.0).max(TEXT_BUTTON.1);
-                    let text = (at + (w - p.width) / 2.0, middle(p.height));
+                    let text = (label_x(p, at + w / 2.0, 0.5), middle(p.height));
                     items.push(Item::Text(p.clone(), text, ink, b.node));
                     Shape::new((at, middle(tall), w, tall), [tall / 2.0; 4])
                 }
@@ -419,10 +467,24 @@ impl Layout {
         // would reach it (`TopAppBarLayout`).
         let room = right - left - 2.0 * edge;
         if let Some(heading) = top.heading.filter(|_| !top.title.is_empty() && room > 0.0) {
-            let p = line(engine, &top.title, TITLE_LARGE, scale, room);
+            let p = line(
+                engine,
+                &top.title,
+                TITLE_LARGE,
+                scale,
+                room,
+                top.title_direction,
+            );
             let x = (inputs.sides.0 + dp(metric::TOP_TITLE_INSET)).max(left) + edge;
-            let at = (x.min(right - edge - p.width), middle(p.height));
+            let bounds = text_rect(&p, (0., 0.));
+            let at = (
+                label_x(&p, x.min(right - edge - bounds.2), 0.),
+                middle(p.height),
+            );
             items.push(Item::Text(p, at, Role::OnSurface.color(dark), heading));
+        }
+        if top.direction == Direction::Rtl {
+            mirror(&mut items, &mut targets, inputs.width);
         }
         let container = match top.scrolled {
             true => Role::SurfaceContainer,
@@ -430,6 +492,7 @@ impl Layout {
         };
         Layout {
             size: (inputs.width, y0 + h),
+            direction: top.direction,
             container: container.color(dark),
             items,
             targets,
@@ -462,12 +525,23 @@ impl Layout {
         let fill = told(Material::Error, dark, 0xFFB3_261E, 0xFFF2_B8B5);
         items.push(Item::Fill(Shape::new(pill, [h / 2.0; 4]), fill));
         let ink = told(Material::OnError, dark, 0xFFFF_FFFF, 0xFF60_1410);
-        let at = (pill.0 + (w - p.width) / 2.0, pill.1 + (h - p.height) / 2.0);
+        let at = (
+            label_x(&p, pill.0 + w / 2.0, 0.5),
+            pill.1 + (h - p.height) / 2.0,
+        );
         items.push(Item::Text(p, at, ink, node));
     }
 
     /// Material's navigation bar for `bottom`.
     pub fn bottom(engine: &mut TextEngine, bottom: &Bottom, inputs: &Inputs) -> Layout {
+        let inputs = if bottom.direction == Direction::Rtl {
+            &Inputs {
+                sides: (inputs.sides.1, inputs.sides.0),
+                ..*inputs
+            }
+        } else {
+            inputs
+        };
         let (dark, scale, nav) = (inputs.dark, inputs.font_scale, nav());
         let h = nav_height(scale);
         let content = nav.icon + nav.indicator_padding + nav.label_gap + LABEL_MEDIUM.1 * scale;
@@ -500,7 +574,7 @@ impl Layout {
                 (true, false) => (inactive, inactive),
             };
             let label = (!tab.label.is_empty())
-                .then(|| line(engine, &tab.label, LABEL_MEDIUM, scale, cell));
+                .then(|| line(engine, &tab.label, LABEL_MEDIUM, scale, cell, tab.direction));
             let pill = (
                 middle - nav.indicator.0 / 2.0,
                 padding - nav.indicator_padding,
@@ -523,7 +597,7 @@ impl Layout {
                         let y = padding + nav.icon + nav.indicator_padding + nav.label_gap;
                         items.push(Item::Text(
                             p.clone(),
-                            (middle - p.width / 2.0, y),
+                            (label_x(p, middle, 0.5), y),
                             text,
                             tab.node,
                         ));
@@ -531,8 +605,14 @@ impl Layout {
                 }
                 // A destination with no symbol is its label, in the middle.
                 (None, Some(p)) => {
-                    let at = (middle - p.width / 2.0, (h - p.height) / 2.0);
-                    let around = (at.0 - 12.0, at.1 - 8.0, p.width + 24.0, p.height + 16.0);
+                    let at = (label_x(p, middle, 0.5), (h - p.height) / 2.0);
+                    let bounds = text_rect(p, at);
+                    let around = (
+                        bounds.0 - 12.0,
+                        at.1 - 8.0,
+                        bounds.2 + 24.0,
+                        p.height + 16.0,
+                    );
                     layer = Shape::new(around, [around.3 / 2.0; 4]);
                     if tab.selected {
                         let fill = Role::SecondaryContainer.color(dark);
@@ -541,7 +621,7 @@ impl Layout {
                     items.push(Item::Text(p.clone(), at, text, tab.node));
                     // A destination of a label alone: the label is the badge's anchor, as the icon is.
                     if let Some(badge) = &tab.badge {
-                        let anchor = (at.0, at.1, p.width, p.height);
+                        let anchor = text_rect(p, at);
                         Self::badge(engine, badge, anchor, tab.node, inputs, &mut items);
                     }
                 }
@@ -562,8 +642,12 @@ impl Layout {
                 layer: (layer, Role::OnSurface.color(dark)),
             });
         }
+        if bottom.direction == Direction::Rtl {
+            mirror(&mut items, &mut targets, inputs.width);
+        }
         Layout {
             size: (inputs.width, h + inputs.edge),
+            direction: bottom.direction,
             container: Role::SurfaceContainer.color(dark),
             items,
             targets,
@@ -598,6 +682,7 @@ mod tests {
         let tab = |node, label: &str, selected, enabled| Tab {
             node,
             label: label.into(),
+            direction: Direction::Ltr,
             symbol: symbols.then(|| "star".into()),
             selected,
             enabled,
@@ -605,6 +690,7 @@ mod tests {
         };
         let bottom = Bottom {
             tablist: 1,
+            direction: Direction::Ltr,
             tabs: vec![
                 tab(2, "Home", true, true),
                 tab(3, "Starred", false, true),
@@ -622,6 +708,211 @@ mod tests {
     }
 
     #[test]
+    fn truncated_rtl_bar_labels_fit_and_center_in_their_targets() {
+        let mut engine = TextEngine::from_font_files(
+            &[std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scripts/fixtures/fonts/assets"
+            ))],
+            "DejaVu Sans",
+        );
+        let title = "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة";
+        let top = Top {
+            route: 1,
+            heading: Some(2),
+            direction: Direction::Rtl,
+            title: title.into(),
+            title_direction: Direction::Rtl,
+            up: false,
+            leading: vec![],
+            trailing: vec![Button {
+                node: 3,
+                title: title.into(),
+                direction: Direction::Rtl,
+                symbol: None,
+                enabled: true,
+                destructive: false,
+                tint: None,
+            }],
+            scrolled: false,
+        };
+        for font_scale in [1., 2.] {
+            let inputs = Inputs {
+                dark: false,
+                font_scale,
+                width: 300.,
+                edge: 0.,
+                sides: (0., 0.),
+            };
+            for symbol in [None, Some("star".into())] {
+                let bottom = Bottom {
+                    tablist: 4,
+                    direction: Direction::Rtl,
+                    tabs: vec![Tab {
+                        node: 5,
+                        label: title.repeat(2),
+                        direction: Direction::Rtl,
+                        symbol,
+                        selected: true,
+                        enabled: true,
+                        badge: None,
+                    }],
+                };
+                let layout = Layout::bottom(&mut engine, &bottom, &inputs);
+                for item in &layout.items {
+                    let Item::Text(p, at, ..) = item else {
+                        continue;
+                    };
+                    assert!(p
+                        .layout_runs()
+                        .flat_map(|r| r.glyphs)
+                        .any(|g| g.start == g.end));
+                    let (left, _, width, _) = text_rect(p, *at);
+                    assert!(left >= -0.01 && left + width <= inputs.width + 0.01);
+                    assert!((left + width / 2. - inputs.width / 2.).abs() < 0.01);
+                }
+            }
+            let layout = Layout::top(&mut engine, &top, &inputs);
+            for item in &layout.items {
+                let Item::Text(p, at, _, node) = item else {
+                    continue;
+                };
+                assert!(p
+                    .layout_runs()
+                    .flat_map(|r| r.glyphs)
+                    .any(|g| g.start == g.end));
+                let (left, _, width, _) = text_rect(p, *at);
+                let target = layout.targets[0].rect;
+                if *node == 3 {
+                    assert!(
+                        (left + width / 2. - (target.0 + target.2 / 2.)).abs() < 0.01,
+                        "button label must be centered at scale {font_scale}"
+                    );
+                    assert!(left >= target.0 + TEXT_BUTTON_PADDING - 0.01);
+                    assert!(left + width <= target.0 + target.2 - TEXT_BUTTON_PADDING + 0.01);
+                } else {
+                    assert!(left >= target.0 + target.2 + dp(metric::TOP_EDGE) - 0.01);
+                    assert!(left + width <= inputs.width - 2. * dp(metric::TOP_EDGE) + 0.01);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rtl_bars_keep_each_labels_authored_direction() {
+        let source = r#"routes nav
+  tab home "/"
+  tab other "/other"
+component App
+  state edited = false
+  action edit
+    edited = !edited
+  view
+    main navigationKey=`${top(nav).id}` direction="rtl"
+      column role="tabpanel" id="panel-home"
+        column navigationKey=`${top(nav).id}`
+          header
+            text "Beginning of a very long English heading ending here" role="heading" direction="ltr"
+            button press=edit
+              text "Beginning of a very long English action ending here" direction="ltr"
+          text "Body"
+      column role="tabpanel" id="panel-other"
+        text "Other body"
+      row role="tablist"
+        button role="tab" aria-controls="panel-home" aria-selected=true
+          text "Beginning of a very long English destination ending here" direction="ltr"
+        button "Other" role="tab" aria-controls="panel-other" aria-selected=false
+"#;
+        for rtl in [false, true] {
+            let source = if rtl {
+                ["heading", "action", "destination"]
+                    .into_iter()
+                    .fold(source.to_string(), |s, kind| {
+                        s.replace(
+                            &format!("Beginning of a very long English {kind} ending here"),
+                            "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة",
+                        )
+                    })
+                    .replace("direction=\"ltr\"", "direction=\"rtl\"")
+            } else {
+                source.to_string()
+            };
+            let (mut p, error) = crate::presenter::Presenter::boot_with(
+                &crate::test_plan(&source),
+                (),
+                (300., 600.),
+                1.,
+                std::path::PathBuf::new(),
+                crate::presenter::PainterChoice::Cpu,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.host.set_bar_room(Some((64., 80., 80.))).unwrap();
+            let (top, bottom) = p.read_bars(false);
+            let inputs = Inputs {
+                dark: false,
+                font_scale: 1.,
+                width: 300.,
+                edge: 0.,
+                sides: (0., 0.),
+            };
+            let mut engine = TextEngine::from_font_files(
+                &[std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/fixtures/fonts/assets"
+                ))],
+                "DejaVu Sans",
+            );
+            let top = Layout::top(&mut engine, &top.unwrap(), &inputs);
+            let bottom = Layout::bottom(&mut engine, &bottom.unwrap(), &inputs);
+            let mut checked = 0;
+            for layout in [&top, &bottom] {
+                let texts = layout.texts();
+                for item in &layout.items {
+                    if let Item::Text(p, at, _, node) = item {
+                        let rect = texts.iter().find(|(id, _)| id == node).unwrap().1;
+                        for glyph in p.layout_runs().flat_map(|r| r.glyphs) {
+                            assert!(at.0 + glyph.x >= rect.0 - 0.01);
+                            assert!(at.0 + glyph.x + glyph.w <= rect.0 + rect.2 + 0.01);
+                        }
+                        for run in p.layout_runs() {
+                            if !run
+                                .text
+                                .starts_with(if rtl { "بداية" } else { "Beginning" })
+                            {
+                                continue;
+                            }
+                            assert_eq!(run.rtl, rtl, "the label keeps its authored direction");
+                            let first = run
+                                .glyphs
+                                .iter()
+                                .find(|g| g.start == 0 && g.end > 0)
+                                .expect("the first cluster survives truncation");
+                            let ellipsis = run
+                                .glyphs
+                                .iter()
+                                .find(|g| g.start == g.end)
+                                .expect("the long label has an ellipsis");
+                            for glyph in run.glyphs {
+                                if rtl {
+                                    assert!(glyph.x <= first.x, "first cluster at the right");
+                                    assert!(glyph.x >= ellipsis.x, "ellipsis at the left");
+                                } else {
+                                    assert!(glyph.x >= first.x, "first cluster at the left");
+                                    assert!(glyph.x <= ellipsis.x, "ellipsis at the right");
+                                }
+                            }
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(checked, 3);
+            assert!(bottom.targets[0].rect.0 > bottom.targets[1].rect.0);
+        }
+    }
+
+    #[test]
     fn a_title_has_the_room_what_leads_and_trails_leave_it() {
         let mut engine = TextEngine::from_font_files(
             &[std::path::Path::new(concat!(
@@ -631,10 +922,13 @@ mod tests {
             "DejaVu Sans",
         );
         let title = "A title nearly as wide as its bar";
-        let wide = paragraph(&mut engine, title, TITLE_LARGE, 1.0, None).width;
+        let wide =
+            crate::presenter::top::look::paragraph(&mut engine, title, TITLE_LARGE, 1.0, None)
+                .width;
         let button = Button {
             node: 3,
             title: "Star".into(),
+            direction: Direction::Ltr,
             symbol: Some("star".into()),
             enabled: true,
             destructive: false,
@@ -643,7 +937,9 @@ mod tests {
         let top = Top {
             route: 1,
             heading: Some(2),
+            direction: Direction::Ltr,
             title: title.into(),
+            title_direction: Direction::Ltr,
             up: false,
             leading: Vec::new(),
             trailing: vec![button],
@@ -669,7 +965,8 @@ mod tests {
             .expect("the title");
         assert_eq!(p.width, wide, "not cut");
         // Moved back from the button: it ends 4 before the button's target.
-        assert_eq!(at.0 + p.width, width - 4.0 - 48.0 - 4.0);
+        let bounds = text_rect(&p, at);
+        assert!((bounds.0 + bounds.2 - (width - 4.0 - 48.0 - 4.0)).abs() < 0.01);
     }
 
     #[test]
@@ -749,7 +1046,7 @@ mod tests {
             .iter()
             .find_map(|item| match item {
                 Item::Text(p, at, color, 3) if *color != [255, 255, 255, 255] => {
-                    Some((at.0, at.1, p.width, p.height))
+                    Some(text_rect(p, *at))
                 }
                 _ => None,
             })

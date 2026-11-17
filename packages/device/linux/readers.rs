@@ -389,8 +389,22 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// A directory removed when dropped, so a failing test leaves nothing behind.
+    struct Tree(std::path::PathBuf);
+    impl std::ops::Deref for Tree {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// A tree of files under a new directory: `(relative path, contents)`.
-    fn tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    fn tree(name: &str, files: &[(&str, &str)]) -> Tree {
         let root = std::env::temp_dir().join(format!("exact-device-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         for (path, text) in files {
@@ -398,7 +412,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, text).unwrap();
         }
-        root
+        Tree(root)
     }
 
     #[test]
@@ -446,9 +460,6 @@ mod tests {
         );
         assert_eq!(sysfs_battery(&energy).map(|b| b.level), Some(0.5));
         assert_eq!(sysfs_battery(Path::new("/no/such/sys")), None);
-        for root in [laptop, desktop, mouse, energy] {
-            let _ = fs::remove_dir_all(root);
-        }
     }
 
     #[test]
@@ -484,7 +495,6 @@ mod tests {
             .map(|n| link_type(&net, n))
             .collect();
         assert_eq!(kinds, ["wifi", "ethernet", "other", "other", "other", "cellular", "other"]);
-        let _ = fs::remove_dir_all(net);
     }
 
     /// A route reply as the kernel writes it: nlmsghdr, rtmsg, then RTA_TABLE and RTA_OIF.

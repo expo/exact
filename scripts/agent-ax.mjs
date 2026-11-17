@@ -119,6 +119,9 @@ function collectWeb(nodes, snapshot, limit) {
       // An aria-pressed toggle's state (Chrome's `pressed`), as `checked` is kept.
       const pressed = prop(n, 'pressed'); if (pressed != null) states.pressed = pressed === 'mixed' ? 'mixed' : pressed === true || pressed === 'true';
       const level = prop(n, 'level'); if (level != null) states.level = Number(level);
+      // The option a focused field names as active (LLP 1166.001 D2), as the view Chrome resolved it to.
+      const active = n.properties?.find(p => p.name === 'activedescendant')?.value?.relatedNodes?.[0]?.backendDOMNodeId;
+      if (active != null && dom.has(active)) { const view = stamp(dom.get(active)); if (view != null) states.activedescendant = view; }
       const el = d !== undefined && isElement(d) ? attrs(d) : {};
       const tag = d !== undefined ? str(doc.nodes.nodeName[d]) : null;
       if (tag === 'INPUT' && el.type === 'password') states.protected = true;

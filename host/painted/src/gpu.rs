@@ -740,15 +740,84 @@ impl Backend for Gpu {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
+        if rendering == exact_kernel::ImageRendering::Pixelated && !self.rows.capture.is_empty() {
+            // Visible tiles depend on the replay's viewport, row offset and layer transform.
+            self.record(rows::Op::Pixelated {
+                image: image.clone(),
+                dst,
+                clips: clips.to_vec(),
+                ts: self.record_transform(ts),
+                tint,
+            });
+            return;
+        }
+        let a = self.affine(ts);
+        let bounds = shape(&Shape::rect(dst));
+        let mut isolated = false;
+        let tiled = crate::image::sampling::pixelated(
+            image.pixels(),
+            dst,
+            Transform::from_scale(self.scale, self.scale).pre_concat(ts),
+            [self.width * self.scale, self.height * self.scale],
+            rendering,
+            |pixels, tile, core| {
+                if !isolated {
+                    self.scene
+                        .push_layer(Fill::NonZero, Mix::Normal, 1.0, a, &bounds);
+                    isolated = true;
+                }
+                let mut clips = clips.to_vec();
+                clips.push(core);
+                // Adjacent antialiased tile clips partition coverage. Add their
+                // premultiplied pixels before compositing the image as a whole.
+                self.scene.push_layer(
+                    Fill::NonZero,
+                    vello::peniko::BlendMode {
+                        mix: Mix::Normal,
+                        compose: vello::peniko::Compose::Plus,
+                    },
+                    1.0,
+                    a,
+                    &bounds,
+                );
+                self.canvas(&pixels, tile, &clips, ts);
+                self.scene.pop_layer();
+            },
+        );
+        if tiled {
+            if isolated {
+                if let Some(tint) = tint {
+                    self.scene.push_layer(
+                        Fill::NonZero,
+                        vello::peniko::BlendMode {
+                            mix: Mix::Normal,
+                            compose: vello::peniko::Compose::SrcIn,
+                        },
+                        1.0,
+                        a,
+                        &bounds,
+                    );
+                    self.scene
+                        .fill(Fill::NonZero, a, color(tint), None, &bounds);
+                    self.scene.pop_layer();
+                }
+                self.scene.pop_layer();
+            }
+            return;
+        }
         let (nw, nh) = (image.width() as f64, image.height() as f64);
         if nw <= 0.0 || nh <= 0.0 || dst.2 <= 0.0 || dst.3 <= 0.0 {
             return;
         }
-        let Some(brush) = self.brush(image) else {
+        let Some(mut brush) = self.brush(image) else {
             self.image_refused = true;
             return;
         };
+        if rendering == exact_kernel::ImageRendering::CrispEdges {
+            brush.sampler.quality = vello::peniko::ImageQuality::Low;
+        }
         let a = self.affine(ts);
         for c in clips {
             self.scene.push_clip_layer(Fill::NonZero, a, &shape(c));

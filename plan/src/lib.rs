@@ -29,6 +29,7 @@ pub mod builder;
 pub mod bytes;
 mod entry;
 pub mod pool;
+mod unsettled;
 pub use entry::entry_identifier;
 /// ActivityKit's ordered placement identities (LLP 1126.001 WP8).
 pub const ACTIVITY_PLACEMENTS: [&str; 8] = [
@@ -196,6 +197,11 @@ pub enum PlanError {
         available: usize,
     },
     BadMagic,
+    /// An executable derive references itself or a later executable row.
+    DeriveOrder {
+        row: u32,
+        dependency: u32,
+    },
     /// A running host received a snapshot, or the snapshot reader received another entry.
     WrongEntry,
     /// A plan compiled for another surface than the host's (LLP 1101.003
@@ -254,7 +260,9 @@ pub enum PlanError {
     FrameTimer {
         timer: u32,
     },
-    /// A mutation's result slot is row-owned, but mutation results are global.
+    /// A mutation's result slot is owned otherwise than the mutation: a
+    /// root mutation's is a root slot, a child's its arm's (LLP
+    /// 1035.005.004 D6).
     MutationSlotOwned {
         mutation: u32,
         slot: u32,
@@ -374,6 +382,7 @@ impl Plan {
     /// progress. Called by the generated `validate`, so every loaded or built
     /// plan has passed it.
     pub fn validate_semantics(&self) -> Result<(), PlanError> {
+        self.validate_unsettled()?;
         let activity = !self.activity_slots.is_empty();
         if self.snapshot_entry.is_empty() {
             if self.snapshot_refresh.is_some() || activity {
@@ -834,7 +843,7 @@ impl Plan {
     pub fn validate_mutation_slot(&self, mutation: MutationsId) -> Result<(), PlanError> {
         let row = self.mutation(mutation);
         let slot = self.slot(row.slot);
-        if slot.owner.is_some() {
+        if slot.owner != row.owner {
             return Err(PlanError::MutationSlotOwned {
                 mutation: mutation.0,
                 slot: row.slot.0,

@@ -58,8 +58,37 @@ public enum ExactTools {
                 if let cancellation = body["cancellation"] as? Cancellation { cancellation.cancel() } else { body["cancelled"] = true }
             }
         }
+        #if EXACT_INTENT_FILES
+        NotificationCenter.default.addObserver(forName: Notification.Name("exact.tools.pickedPath"), object: nil, queue: nil) { note in
+            guard let body = note.object as? NSMutableDictionary, let name = body["name"] as? String,
+                  let reply = body["reply"] as? ([String: Any]) -> Void else { return }
+            body["taken"] = true
+            DispatchQueue.main.async { pickedPath(name: name, reply: reply) }
+        }
+        #endif
         ExactContentIndex.install()
     }
+
+    #if EXACT_INTENT_FILES
+    // Activation clears the previous launch's landing before a new intent writes there.
+    static func pickedPath(name: String, reply: @escaping ([String: Any]) -> Void) {
+        let started = Date()
+        func land() {
+            guard let session = ExactApp.shared.sessions.first(where: { $0.state != .destroyed }) else {
+                boot?()
+                if Date().timeIntervalSince(started) > bootBound { return reply(["error": "The app has no session to import a file."]) }
+                return DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: land)
+            }
+            if !session.dataActivated { boot?() }
+            guard session.booted && session.dataActivated else {
+                if Date().timeIntervalSince(started) > bootBound { return reply(["error": "The app's file storage did not start in time."]) }
+                return DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: land)
+            }
+            reply(json(session.agent(text(["op": "pickedPath", "name": name]))))
+        }
+        land()
+    }
+    #endif
 
     /// A call's cancellation by its caller, on the main thread (LLP 1133.023
     /// D7). Before the runner has the call, the door refuses it `cancelled`;
@@ -123,7 +152,7 @@ public enum ExactTools {
     /// reload's runner numbers its calls from the start again, so asking
     /// the next one would read another call's outcome.
     static func runner(_ session: ExactSession) -> (String) -> String? {
-        let issued = GenerationStamp(session)
+        let issued = SessionLease(session)
         return { issued.session?.agent($0) }
     }
 
@@ -160,7 +189,7 @@ public enum ExactTools {
         #if os(iOS)
         return UIApplication.shared.applicationState == .background
         #elseif os(macOS)
-        return !NSApp.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
+        return !NSApp.windows.contains { $0.isVisible && $0.screenOcclusionState.contains(.visible) }
         #else
         return false
         #endif

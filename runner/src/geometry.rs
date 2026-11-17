@@ -15,7 +15,8 @@
 //! `elementFromPoint(x, y)` and `elementsFromPoint(x, y)` (LLP 1094 D10)
 //! test the same boxes front to back: the former names the first hit by its
 //! nearest `id`, the latter lists each hit's own `id`. Natively both use the
-//! kernel's boxes, transform rows and [`Scrolled`]; the web uses its hit test.
+//! kernel's boxes, transform rows and [`Scrolled`], including the host's
+//! modal-backdrop hit region; the web uses its hit test.
 //! `querySelectorAll` (LLP 1075.003 §9.1) lists nodes by a declared data word.
 //!
 //! An action runs against a read-only runner, so `frame` reads through a
@@ -29,6 +30,7 @@ mod hit_slop_tests;
 #[cfg(test)]
 mod inline_tests;
 mod intersection;
+mod modal;
 #[cfg(test)]
 mod modal_tests;
 #[cfg(test)]
@@ -36,6 +38,7 @@ mod placement_tests;
 #[cfg(test)]
 mod top_layer_tests;
 pub(crate) use intersection::{block_clip, intersection, Root as IntersectionRoot};
+use modal::{behind_modal, modal_dialog, modal_live};
 
 use exact_kernel::{
     Display, Frame, Kernel, NodeFlags, NodeKey, Overflow, PointerEvents, PropId, StyleId, ViewId,
@@ -123,6 +126,9 @@ pub trait InlineGeometry: std::fmt::Debug {
 /// LLP 1123 D2). The clip bounds reads without changing the frame's mapping.
 pub type TopLayerFrame = (ViewId, [f64; 4], Option<[f64; 4]>);
 
+/// A modal backdrop's view, viewport bounds and optional excluded rectangle.
+pub type TopLayerBackdrop = (ViewId, [f64; 4], Option<[f64; 4]>);
+
 #[derive(Debug, Clone)]
 struct TopLayerBox {
     key: NodeKey,
@@ -153,6 +159,7 @@ pub struct Scrolled {
     /// The index in `top_layer` of the frontmost modal presentation's
     /// first box, as its host reports it.
     modal: Option<usize>,
+    backdrop: Option<modal::Backdrop>,
     placed: Vec<PlacedBlock>,
     pub(crate) inline: Option<std::rc::Rc<dyn InlineGeometry>>,
 }
@@ -214,6 +221,7 @@ impl Scrolled {
             })
             .collect();
         self.modal = None;
+        self.backdrop = None;
     }
 
     /// The presenter's front-to-back-independent stack order and viewport
@@ -242,6 +250,7 @@ impl Scrolled {
                 })
         };
         self.top_layer = frames.iter().filter_map(entry).collect();
+        self.backdrop = None;
         // The boxes ignored before it are not counted
         self.modal = modal.map(|i| {
             frames[..i.min(frames.len())]
@@ -624,9 +633,17 @@ fn own_transform(s: &exact_kernel::StyleProps, at: Frame) -> Affine {
     let (w, h) = (f64::from(at.width), f64::from(at.height));
     let (ox, oy) = s.transform_origin.resolve(at.width, at.height);
     let (ox, oy) = (f64::from(ox), f64::from(oy));
-    let turn = if s.rotate_axis.is_3d() { 0.0 } else { s.rotate };
+    let turn = if s.rotate_axis.is_3d() {
+        0.0
+    } else {
+        exact_motion::rotation::presented(exact_motion::rotation::value(
+            f64::from(s.rotate),
+            s.rotate_axis.0.map(f64::from),
+        ))
+        .x
+    };
     let k = f64::from(s.scale);
-    let (sin, cos) = f64::from(turn).to_radians().sin_cos();
+    let (sin, cos) = turn.to_radians().sin_cos();
     let (tx, ty) = (
         f64::from(s.translate.x) + f64::from(s.translate_percent.x) / 100.0 * w,
         f64::from(s.translate.y) + f64::from(s.translate_percent.y) / 100.0 * h,
@@ -1045,38 +1062,6 @@ fn data_matches(
     out
 }
 
-/// The live part of the top layer starts at the frontmost modal dialog or
-/// the first box of the host's frontmost presentation (`top_layer_frames`):
-/// whichever of its routes it shows, and what is open above it.
-/// Everything else, below it in the top layer or in the document, is
-/// behind it and inert to structural reads, as UIKit's dimming view and
-/// the host's `inertBehind` make it to touch. None while no presentation
-/// is open.
-fn modal_live(kernel: &Kernel, scrolled: &Scrolled) -> Option<Vec<u32>> {
-    let arena = kernel.arena();
-    let dialog = scrolled.top_layer.iter().rposition(|open| {
-        arena
-            .resolve(open.key)
-            .is_some_and(|slot| modal_dialog(kernel, slot))
-    });
-    let from = scrolled.modal.into_iter().chain(dialog).max()?;
-    Some(
-        scrolled.top_layer[from.min(scrolled.top_layer.len())..]
-            .iter()
-            .filter_map(|open| arena.resolve(open.key))
-            .collect(),
-    )
-}
-
-/// Whether `slot` is behind an open presentation (`modal_live`).
-fn behind_modal(kernel: &Kernel, scrolled: &Scrolled, slot: u32) -> bool {
-    let Some(live) = modal_live(kernel, scrolled) else {
-        return false;
-    };
-    let arena = kernel.arena();
-    !std::iter::successors(Some(slot), |&s| arena.parent(s)).any(|s| live.contains(&s))
-}
-
 fn kernel_shown(kernel: &Kernel, scrolled: &Scrolled, view: ViewId, _: bool) -> bool {
     if crate::head::inactive(kernel, view) {
         return false;
@@ -1120,7 +1105,7 @@ fn kernel_shown(kernel: &Kernel, scrolled: &Scrolled, view: ViewId, _: bool) -> 
     }
 }
 
-/// The front-most laid-out box at viewport `(x, y)` (LLP 1094 D10): every
+/// The front-most hit at viewport `(x, y)` (LLP 1094 D10): every
 /// root from the last, each node's children front to back by LLP 1083.000's
 /// rank and then tree order, a child before its parent. Boxes are `frame`'s,
 /// through every transform (LLP 1051.000 D1, changed 2026-10-04), each
@@ -1129,7 +1114,9 @@ fn kernel_shown(kernel: &Kernel, scrolled: &Scrolled, view: ViewId, _: bool) -> 
 /// (`StyleProps::hit_slop`); a scroller or a box that clips cuts
 /// its rendering descendants to its padding box; `pointer-events: none` and
 /// `visibility` other than `visible` (both inherited) are passed over, and
-/// `display: none` takes its subtree.
+/// `display: none` takes its subtree. The front modal's host-reported
+/// backdrop is a hit where it contains the point, beneath live content
+/// boxes. Nothing behind that modal is read.
 fn kernel_point(kernel: &Kernel, scrolled: &Scrolled, x: f64, y: f64) -> Option<ViewId> {
     kernel_hits(kernel, scrolled, x, y, true).into_iter().next()
 }
@@ -1206,6 +1193,11 @@ fn kernel_hits(
             return hits;
         }
     }
+    if let Some(view) = modal::backdrop_hit(kernel, scrolled, live.as_deref(), x, y) {
+        if !hits.contains(&view) {
+            hits.push(view);
+        }
+    }
     if live.is_some() {
         return hits;
     }
@@ -1260,11 +1252,6 @@ fn inherited_hit_state(kernel: &Kernel, slot: u32) -> Option<(PointerEvents, Vis
         pointer.unwrap_or(PointerEvents::Auto),
         visibility.unwrap_or(Visibility::Visible),
     ))
-}
-
-fn modal_dialog(kernel: &Kernel, slot: u32) -> bool {
-    let props = kernel.arena().props(slot);
-    props.str(PropId::SemanticTag) == Some("dialog") && props.str(PropId::Popover).is_none()
 }
 
 struct Point<'a> {
@@ -1450,7 +1437,7 @@ fn measure_ahead(
 ) -> Measured {
     let mut answers: Measured = Vec::new();
     let mut literal = None;
-    for instruction in crate::vm::instructions(code).map_while(Result::ok) {
+    for instruction in crate::vm::instructions(plan.read_code(code).0).map_while(Result::ok) {
         match instruction.op {
             Opcode::Str => literal = Some(instruction.args[0] as u32),
             Opcode::Call

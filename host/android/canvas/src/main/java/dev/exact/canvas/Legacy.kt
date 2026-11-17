@@ -99,8 +99,8 @@ object Legacy {
     internal fun node(host: View): AccessibilityNodeInfo = AccessibilityNodeInfo.obtain(host)
     internal fun node(host: View, id: Int): AccessibilityNodeInfo = AccessibilityNodeInfo.obtain(host, id)
     internal fun event(type: Int): AccessibilityEvent = AccessibilityEvent.obtain(type)
-    internal fun item(row: Int, column: Int, selected: Boolean): AccessibilityNodeInfo.CollectionItemInfo =
-        AccessibilityNodeInfo.CollectionItemInfo.obtain(row, 1, column, 1, false, selected)
+    internal fun item(row: Int, rows: Int, column: Int, columns: Int, heading: Boolean, selected: Boolean): AccessibilityNodeInfo.CollectionItemInfo =
+        AccessibilityNodeInfo.CollectionItemInfo.obtain(row, rows, column, columns, heading, selected)
     internal fun collection(rows: Int, columns: Int, selection: Int): AccessibilityNodeInfo.CollectionInfo =
         AccessibilityNodeInfo.CollectionInfo.obtain(rows, columns, false, selection)
     internal fun range(min: Float, max: Float, now: Float): AccessibilityNodeInfo.RangeInfo =

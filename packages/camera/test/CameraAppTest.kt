@@ -2,10 +2,15 @@ package exact.camera
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import dev.exact.canvas.ExtensionContext
@@ -25,12 +30,14 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowMediaMetadataRetriever
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 
-/** `takePhotoWithCameraApp` on Android (expo/exact#381): the system's camera app over a Robolectric activity standing
- * for the reader's, the camera app played by the test through the reader's `Files` provider. */
+/** `takePhotoWithCameraApp` (expo/exact#381) and `recordVideoWithCameraApp` (expo/exact#633, LLP 1133.008.000) on
+ * Android: the system's camera app over a Robolectric activity standing for the reader's, the camera app played by the
+ * test through the reader's `Files` provider. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [CameraAppTest.Host::class])
 class CameraAppTest {
@@ -50,6 +57,21 @@ class CameraAppTest {
     class NoCameraApp : Activity() {
         @Deprecated("Activity's own") override fun startActivityForResult(intent: Intent, requestCode: Int) =
             throw android.content.ActivityNotFoundException()
+    }
+
+    /** A camera app's own media store, which answers a video it recorded there instead of at `EXTRA_OUTPUT`. */
+    class Gallery : ContentProvider() {
+        companion object {
+            var type: String? = "video/mp4"
+            lateinit var file: File
+        }
+        override fun onCreate() = true
+        override fun getType(uri: Uri) = type
+        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        override fun query(uri: Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): Cursor? = null
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+        override fun delete(uri: Uri, s: String?, a: Array<out String>?) = 0
+        override fun update(uri: Uri, values: ContentValues?, s: String?, a: Array<out String>?) = 0
     }
 
     private val application = RuntimeEnvironment.getApplication()
@@ -77,11 +99,34 @@ class CameraAppTest {
         Extensions.front = { null }
     }
 
-    private fun take(args: JSONObject = JSONObject(), tap: String? = null) =
-        CameraModule(ExtensionContext(application, "camera")).let { module ->
-            module.later("takePhotoWithCameraApp", args, tap?.let { JSONObject().put("tap", it) }) { answers += it }
+    private fun take(args: JSONObject = JSONObject(), tap: String? = null, send: String = "takePhotoWithCameraApp", request: Int? = null) =
+        CameraModule(ExtensionContext(application, "camera").also { it.request = request }).let { module ->
+            module.later(send, args, tap?.let { JSONObject().put("tap", it) }) { answers += it }
             module
         }
+
+    private fun record(args: JSONObject = JSONObject(), tap: String? = null, request: Int? = null) =
+        take(args, tap, "recordVideoWithCameraApp", request)
+
+    /** The kept file is read and published off the main thread, then answered on it: wait for the answer. */
+    private fun settled(): JSONObject {
+        val end = System.currentTimeMillis() + 10_000
+        while (answers.isEmpty() && System.currentTimeMillis() < end) {
+            Thread.sleep(5)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        return answers.single()
+    }
+
+    /** The staged video's facts as the platform's retriever would read them. */
+    private fun facts(width: Int, height: Int, rotation: Int, ms: Long) {
+        val staged = File(application.cacheDir, "exact.camera-app/video.mp4").path
+        ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_MIMETYPE, "video/mp4")
+        ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH, "$width")
+        ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT, "$height")
+        ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION, "$rotation")
+        ShadowMediaMetadataRetriever.addMetadata(staged, MediaMetadataRetriever.METADATA_KEY_DURATION, "$ms")
+    }
 
     private fun jpeg(width: Int, height: Int): ByteArray =
         ByteArrayOutputStream().also { Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
@@ -120,7 +165,7 @@ class CameraAppTest {
         assertEquals("the last visitor", visitor.readText())
 
         Extensions.activityResult(code, Activity.RESULT_OK, null)
-        val answer = answers.single()
+        val answer = settled()
         assertEquals("app:/data/visitor.jpg", answer.getString("path"))
         assertEquals("image/jpeg", answer.getString("type"))
         assertEquals(photo.size.toLong(), answer.getLong("size"))
@@ -141,6 +186,100 @@ class CameraAppTest {
         assertEquals("AbortError", answers.single().getString("error"))
         assertEquals("kept", visitor.readText())
         assertFalse(File(out.path!!).exists())
+    }
+
+    /** A video: the camera app's video intent with the call's limits as its extras, and no permission asked, the
+     * microphone's included, though the app declares it; the file it writes through the URI, opened `rw` as a muxer
+     * opens it, replaces the path once kept and is answered with its size as it plays and its length. */
+    @Test fun aKeptVideoIsAnsweredWithItsRotatedSizeAndLength() {
+        shadowOf(application.packageManager).getInternalMutablePackageInfo(application.packageName).requestedPermissions = arrayOf(Manifest.permission.RECORD_AUDIO)
+        shadowOf(application).denyPermissions(Manifest.permission.RECORD_AUDIO)
+        val clip = File(Host.root, "data/clip.mp4").apply { parentFile!!.mkdirs(); writeText("the last clip") }
+        val android = JSONObject().put("videoQuality", "low").put("sizeLimit", 50_000_000)
+        record(JSONObject().put("path", "app:/data/clip").put("maxDuration", 30.2).put("facingMode", "environment").put("android", android))
+        assertNull("no permission is asked", shadowOf(activity).lastRequestedPermission)
+        val (intent, code) = started()
+        assertEquals(MediaStore.ACTION_VIDEO_CAPTURE, intent.action)
+        assertEquals(31, intent.getIntExtra(MediaStore.EXTRA_DURATION_LIMIT, -1))
+        assertEquals(0, intent.getIntExtra(MediaStore.EXTRA_VIDEO_QUALITY, -1))
+        assertEquals(50_000_000L, intent.getLongExtra(MediaStore.EXTRA_SIZE_LIMIT, -1))
+        assertEquals(0, intent.getIntExtra("android.intent.extras.CAMERA_FACING", -1))
+        val bytes = ByteArray(4096) { it.toByte() }
+        provider.openFile(output(intent), "rw").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(bytes) } }
+        facts(1920, 1080, 90, 31_500)
+        assertEquals("the last clip", clip.readText())
+
+        Extensions.activityResult(code, Activity.RESULT_OK, null)
+        val answer = settled()
+        assertEquals("app:/data/clip.mp4", answer.getString("path"))
+        assertEquals("video/mp4", answer.getString("type"))
+        assertEquals(4096L, answer.getLong("size"))
+        assertEquals(31.5, answer.getDouble("duration"), 0.0)
+        assertEquals(1080, answer.getInt("width"))
+        assertEquals(1920, answer.getInt("height"))
+        assertArrayEquals(bytes, clip.readBytes())
+    }
+
+    /** A camera app that records into its own store and answers that URI has the video copied in, when its type is a
+     * video's; any other type, or a URI naming one of the app's own files, is read never and answered `UnknownError`,
+     * the path keeping what it had. */
+    @Test fun aCameraAppsOwnVideoIsCopiedInOnlyWhenItIsAVideoOfAnotherApp() {
+        val authority = "test.camera.media"
+        Robolectric.setupContentProvider(Gallery::class.java, authority)
+        Gallery.file = File(application.filesDir, "gallery.mp4").apply { writeBytes(ByteArray(200_000) { (it % 251).toByte() }) }
+        val theirs = Intent().setData(Uri.parse("content://$authority/video/7"))
+
+        Gallery.type = "video/mp4"
+        record()
+        var (_, code) = started()
+        Extensions.activityResult(code, Activity.RESULT_OK, theirs)
+        val copied = settled()
+        assertEquals("app:/tmp/camera/1.mp4", copied.getString("path"))
+        assertArrayEquals(Gallery.file.readBytes(), File(Host.root, "tmp/camera/1.mp4").readBytes())
+
+        answers.clear()
+        Gallery.type = "image/jpeg"
+        val kept = File(Host.root, "tmp/camera/1.mp4").apply { writeText("kept") }
+        record()
+        code = started().second
+        Extensions.activityResult(code, Activity.RESULT_OK, theirs)
+        assertEquals("UnknownError", settled().getString("error"))
+        assertEquals("kept", kept.readText())
+
+        answers.clear()
+        val secret = File(Host.root, "data/secret.mp4").apply { parentFile!!.mkdirs(); writeText("the app's own") }
+        record()
+        code = started().second
+        Extensions.activityResult(code, Activity.RESULT_OK, Intent().setData(Files.uri(application, secret)))
+        assertEquals("UnknownError", settled().getString("error"))
+        assertEquals("kept", kept.readText())
+        assertFalse(File(application.cacheDir, "exact.camera-app/video.mp4").exists())
+    }
+
+    /** A call let go while the camera app is up (LLP 1133.008.000 D7): what the person keeps there is not written, the
+     * path keeps what it had, nothing stays staged, and the next call opens the camera app again. */
+    @Test fun aCallLetGoWritesNothingOfWhatThePersonKeeps() {
+        val clip = File(Host.root, "tmp/camera/1.mp4").apply { parentFile!!.mkdirs(); writeText("kept") }
+        val module = record(request = 7)
+        val (intent, code) = started()
+        provider.openFile(output(intent), "rw").use { pfd -> FileOutputStream(pfd.fileDescriptor).use { it.write(ByteArray(10)) } }
+        module.cancel(8)
+        module.cancel(7)
+        Extensions.activityResult(code, Activity.RESULT_OK, null)
+        assertEquals("AbortError", settled().getString("error"))
+        assertEquals("kept", clip.readText())
+        assertFalse(File(application.cacheDir, "exact.camera-app/video.mp4").exists())
+        answers.clear()
+        module.later("takePhotoWithCameraApp", JSONObject(), null) { answers += it }
+        assertEquals(MediaStore.ACTION_IMAGE_CAPTURE, started().first.action)
+    }
+
+    /** One camera app at a time, a photo's or a video's. */
+    @Test fun aSecondCallWhileTheCameraAppIsUpIsInvalidStateError() {
+        val module = record()
+        started()
+        module.later("takePhotoWithCameraApp", JSONObject(), null) { answers += it }
+        assertEquals("InvalidStateError", answers.single().getString("error"))
     }
 
     /** With no camera app nothing starts, the call is `NotFoundError`, and the next call starts afresh. */
@@ -193,6 +332,19 @@ class CameraAppTest {
         assertTrue(File(Host.root, "tmp/camera/1.jpg").length() > 0)
         take(tap = "cancel")
         assertEquals("AbortError", answers.last().getString("error"))
+        assertNull(shadowOf(activity).peekNextStartedActivityForResult())
+    }
+
+    /** … and a video's `take` writes the package's clip, the same bytes as `fixture/clip.mp4`. */
+    @Test fun underTheAgentTakeWritesTheClip() {
+        Host.agent = true
+        record(tap = "take")
+        val answer = answers.single()
+        assertEquals("app:/tmp/camera/1.mp4", answer.getString("path"))
+        assertEquals("video/mp4", answer.getString("type"))
+        val fixture = File("../../../packages/camera/fixture/clip.mp4")
+        assertArrayEquals(fixture.readBytes(), File(Host.root, "tmp/camera/1.mp4").readBytes())
+        assertEquals(fixture.length(), answer.getLong("size"))
         assertNull(shadowOf(activity).peekNextStartedActivityForResult())
     }
 }

@@ -16,7 +16,8 @@
       "available": "bool",
       "state": "enum<granted|prompt|denied|unknown>",
       "badge": "bool",
-      "apple": "option<AppleNotificationSettings>"
+      "apple": "option<AppleNotificationSettings>",
+      "android": "option<AndroidNotificationSettings>"
     },
     "NotificationEvent": {
       "tag": "string",
@@ -61,7 +62,6 @@
         "unsupported": [
           "linux",
           "tvos",
-          "android",
           "windows",
           "terminal"
         ],
@@ -100,7 +100,6 @@
         "unsupported": [
           "linux",
           "tvos",
-          "android",
           "windows",
           "terminal"
         ],
@@ -180,8 +179,8 @@
             "badge": false
           },
           "android": {
-            "available": false,
-            "state": "unknown",
+            "available": true,
+            "state": "prompt",
             "badge": false
           },
           "windows": {
@@ -208,7 +207,6 @@
         "unsupported": [
           "linux",
           "tvos",
-          "android",
           "windows",
           "terminal"
         ],

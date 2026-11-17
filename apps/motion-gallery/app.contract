@@ -5,8 +5,10 @@
 // host at fixed clock times and compares it with Chrome's.
 //
 // Everything starts at the first clock: the keyframes when the page mounts,
-// each image when it first shows. Each image is a flat-coloured frame with a
-// white quarter, so a frame off by one is a whole quarter off.
+// each image when it first shows, and the filter transitions when a timer
+// sharpens them 1 ms in (LLP 1003.002), after the browser has drawn them.
+// Each image is a flat-coloured frame with a white quarter, so a frame off
+// by one is a whole quarter off.
 
 routes nav
   tab home "/"
@@ -49,10 +51,15 @@ keyframes tour
 
 component Gallery
   state page = 1
+  state sharp = false
   action fixtures
     page = 1
   action shimmer
     page = 2
+  action sharpen
+    sharp = true
+  task sharpening when !sharp
+    after(1, sharpen)
   view
     main testId="gallery" width="100%" height="100%" box-sizing="border-box" display="flex" flex-direction="column" gap=12 padding=12 background-color="#ffffff" color="#0f172a" font-family="system-ui"
       row gap=8
@@ -61,11 +68,13 @@ component Gallery
         button press=shimmer testId="page-2" padding-left=10 padding-right=10 padding-top=4 padding-bottom=4 border-radius=6 background-color=(page == 2 ? "#e2e8f0" : "#f8fafc")
           text "Shimmer" font-size=13
       if page == 1
-        Fixtures()
+        Fixtures(sharp=sharp)
       if page == 2
         Shimmer()
 
 component Fixtures
+  props
+    sharp: bool
   view
     column gap=12
       text "Images" font-size=15 font-weight=600
@@ -94,6 +103,17 @@ component Fixtures
           box class=Ink height=8 transform-origin="0% 0%" animation="spin 2s linear infinite"
         box testId="fx-held" class=Tile display="flex" align-items="center" justify-content="center"
           box class=Ink animation="spin 1s linear -250ms paused"
+      text "Filter transitions" font-size=15 font-weight=600
+      row flex-wrap="wrap" gap=8
+        box testId="fx-blur" class=Tile display="flex" align-items="center" justify-content="center"
+          box class=Ink filter=(sharp ? "blur(0px)" : "blur(4px)") transition="filter 1s linear"
+        box testId="fx-padded" class=Tile display="flex" align-items="center" justify-content="center"
+          box class=Ink background-color="#16a34a" filter=(sharp ? "blur(0px) grayscale(1)" : "blur(4px)") transition="filter 1s ease-in-out"
+        box testId="fx-shadow" class=Tile display="flex" align-items="center" justify-content="center"
+          box class=Ink width=24 height=24 filter=(sharp ? "drop-shadow(6px 6px 3px #2563eb)" : "none") transition="filter 1s cubic-bezier(0.3, 0.1, 0.2, 1)"
+        box testId="fx-svgblur" class=Tile
+          svg viewBox="0 0 64 64" width=64 height=64
+            circle cx=32 cy=32 r=14 fill="#0f172a" filter=(sharp ? "blur(0px)" : "blur(4px)") transition="filter 1s linear"
 
 // A feed's loading skeleton: every bar swept by a translating highlight,
 // forever — the display link's measure (LLP 1055.001): on iOS Core

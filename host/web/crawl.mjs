@@ -43,14 +43,14 @@ export function buildPageFiles(dir, pages, routes, paths = path, platform = proc
 /** Writes crawler files for built `pages` against the manifest's `origin`. A route declared at either file's path
  * keeps it, whether rendered at build or per request; a route with a parameter does not claim it. Without an origin,
  * or a page to list, there is no sitemap. */
-export function writeCrawlerFiles(dir, pages, origin, routes) {
+export function writeCrawlerFiles(dir, pages, origin, routes, base = '/') {
   const site = origin?.replace(/\/+$/, '');
   const claimed = path => routes.some(r => !r.notfound && canonical(r.pattern) === path);
   const excluded = robots => (robots ?? '').split(',').some(directive => /^(noindex|none)$/i.test(directive.split(':', 1)[0].trim()));
   const listed = !site ? [] : pages.filter(p => !p.notfound && (p.status === 200 || p.status === 503)
     && !excluded(p.robots))
-    .map(p => p.location);
+    .map(p => base === '/' ? p.location : base.slice(0, -1) + p.location);
   const sitemap = listed.length > 0 && !claimed('/sitemap.xml') && !existsSync(resolve(dir, 'sitemap.xml'));
   if (sitemap) writeFileSync(resolve(dir, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${listed.map(l => `  <url><loc>${xml(site + l)}</loc></url>\n`).join('')}</urlset>\n`);
-  if (!claimed('/robots.txt') && !existsSync(resolve(dir, 'robots.txt'))) writeFileSync(resolve(dir, 'robots.txt'), `User-agent: *\nAllow: /\n${sitemap ? `Sitemap: ${site}/sitemap.xml\n` : ''}`);
+  if (!claimed('/robots.txt') && !existsSync(resolve(dir, 'robots.txt'))) writeFileSync(resolve(dir, 'robots.txt'), `User-agent: *\nAllow: ${base}\n${sitemap ? `Sitemap: ${site}${base}sitemap.xml\n` : ''}`);
 }

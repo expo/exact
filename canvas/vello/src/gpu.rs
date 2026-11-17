@@ -9,7 +9,7 @@
 //! from `previous` unless the lists cover the canvas, and waits for the GPU.
 
 use crate::kernels;
-use crate::replay::{Frame, Host, Replayer, ShadowJob};
+use crate::replay::{Frame, Host, MaskJob, Replayer, ShadowJob};
 use crate::surface::{self, Surface};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Instant;
@@ -24,6 +24,7 @@ pub struct Gpu {
     blur: [(wgpu::ComputePipeline, wgpu::BindGroupLayout); 2],
     /// A 1×1 transparent texture: the backdrop of a canvas with no pixels.
     empty: wgpu::TextureView,
+    empty_masks: wgpu::Buffer,
 }
 
 /// How long the context took to make, for the cold-start report.
@@ -111,6 +112,7 @@ fn make() -> Result<(Mutex<Gpu>, Startup), String> {
             wgpu::TextureUsages::TEXTURE_BINDING,
         ))
         .create_view(&Default::default());
+    let empty_masks = mask_buffer(&device, 4)?;
     let startup = Startup {
         context_ms: (t1 - t0).as_secs_f64() * 1e3,
         pipelines_ms: t1.elapsed().as_secs_f64() * 1e3,
@@ -122,6 +124,7 @@ fn make() -> Result<(Mutex<Gpu>, Startup), String> {
             renderer,
             blur,
             empty,
+            empty_masks,
         }),
         startup,
     ))
@@ -249,6 +252,7 @@ pub struct Canvas {
     surfaces: Vec<Surface>,
     /// A copy of `previous` when the host passes it as the target too.
     scratch: Option<(wgpu::Texture, wgpu::TextureView)>,
+    masks: Option<wgpu::Buffer>,
     /// The last replay's milliseconds: CPU encode, GPU, wall.
     pub stats: [f64; 3],
 }
@@ -259,6 +263,7 @@ impl Canvas {
             replayer: Replayer::new(w, h, scale),
             surfaces: Vec::new(),
             scratch: None,
+            masks: None,
             stats: [0.0; 3],
         }
     }
@@ -279,13 +284,14 @@ impl Canvas {
             scene: Scene::new(),
             keep: !previous.is_null(),
             shadows: Vec::new(),
+            masks: Vec::new(),
         };
         self.replayer.begin(&mut frame.scene);
         let mut bad = false;
         for l in lists {
             bad |= self.replayer.apply(l, &mut frame, host).is_err();
         }
-        self.replayer.end(&mut frame.scene);
+        self.replayer.close(&mut frame);
         let encoded = t0.elapsed().as_secs_f64() * 1e3;
         let mut g = gpu().map_err(Failed::Gpu)?;
         let g = &mut *g;
@@ -300,11 +306,47 @@ impl Canvas {
         if backdrop_ix == Some(target_ix) {
             self.copy_to_scratch(g, target_ix);
         }
-        let scope = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let mut outs = Vec::new();
         let mut gpu_ms = 0.0;
         let mut failed = None;
+        let stride = u64::from(self.replayer.width.max(1).next_multiple_of(64))
+            * u64::from(self.replayer.height.max(1))
+            * 4;
+        // The kept masks, copied to their slots, and this replay's new
+        // ones after them: the scene reads only the kept ones.
+        let arena = if frame.masks.is_empty() {
+            None
+        } else {
+            let size = stride * u64::from(self.replayer.mask_count());
+            let arena = mask_buffer(&g.device, size).map_err(Failed::Gpu)?;
+            if let Some(previous) = &self.masks {
+                let mut encoder = g.device.create_command_encoder(&Default::default());
+                encoder.copy_buffer_to_buffer(previous, 0, &arena, 0, previous.size());
+                g.queue.submit([encoder.finish()]);
+            }
+            Some(arena)
+        };
+        let scope = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        for job in &frame.masks {
+            match mask(
+                g,
+                job,
+                self.replayer.width,
+                self.replayer.height,
+                arena.as_ref().expect("mask arena"),
+                stride,
+            ) {
+                Ok(ms) => gpu_ms += ms,
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
         for job in &frame.shadows {
+            if failed.is_some() {
+                break;
+            }
             match shadow(g, job) {
                 Ok((out, ms)) => {
                     gpu_ms += ms;
@@ -345,6 +387,10 @@ impl Canvas {
                         &frame.scene,
                         &self.surfaces[target_ix].view,
                         backdrop,
+                        arena
+                            .as_ref()
+                            .or(self.masks.as_ref())
+                            .unwrap_or(&g.empty_masks),
                         true,
                         &params,
                     )
@@ -363,6 +409,26 @@ impl Canvas {
         let stats = result?;
         if let Some(e) = error {
             return Err(Failed::Gpu(format!("wgpu: {e}")));
+        }
+        let slots = self.replayer.finish_masks();
+        let source = arena.as_ref().or(self.masks.as_ref());
+        if slots.is_empty() {
+            self.masks = None;
+        } else if arena.is_some() || source.is_some_and(|b| b.size() != stride * slots.len() as u64)
+        {
+            let kept = mask_buffer(&g.device, stride * slots.len() as u64).map_err(Failed::Gpu)?;
+            let mut encoder = g.device.create_command_encoder(&Default::default());
+            for (to, from) in slots.iter().enumerate() {
+                encoder.copy_buffer_to_buffer(
+                    source.expect("mask source"),
+                    u64::from(*from) * stride,
+                    &kept,
+                    to as u64 * stride,
+                    stride,
+                );
+            }
+            g.queue.submit([encoder.finish()]);
+            self.masks = Some(kept);
         }
         gpu_ms += stats.gpu_ms;
         self.stats = [
@@ -418,12 +484,87 @@ impl Canvas {
         g.queue.submit([enc.finish()]);
     }
 
-    /// Bytes this canvas holds of its own (the scratch copy).
+    /// Bytes this canvas holds of its own (scratch and clip masks).
     pub fn bytes(&self) -> u64 {
         self.scratch
             .as_ref()
             .map_or(0, |(t, _)| u64::from(t.width()) * u64::from(t.height()) * 4)
+            + self.masks.as_ref().map_or(0, wgpu::Buffer::size)
     }
+}
+
+fn mask_buffer(device: &wgpu::Device, size: u64) -> Result<wgpu::Buffer, String> {
+    let limit = device
+        .limits()
+        .max_storage_buffer_binding_size
+        .min(device.limits().max_buffer_size);
+    if size > limit {
+        return Err(format!(
+            "canvas clip masks need {size} bytes; GPU limit is {limit}"
+        ));
+    }
+    Ok(device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("canvas clip masks"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    }))
+}
+
+fn mask(
+    g: &mut Gpu,
+    job: &MaskJob,
+    width: u32,
+    height: u32,
+    arena: &wgpu::Buffer,
+    stride: u64,
+) -> Result<f64, String> {
+    let width = width.max(1);
+    let height = height.max(1);
+    let out = g.device.create_texture(&texture_desc(
+        width,
+        height,
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+    ));
+    // The fine stage writes coverage's f32 bits into RGBA8. Copying those
+    // bits to the storage buffer preserves coverage across intersections.
+    let params = RenderParams {
+        base_color: Color::new([1.0, 0.0, 1.0, 1.0]),
+        width,
+        height,
+        antialiasing_method: AaConfig::Area,
+    };
+    let stats = g
+        .renderer
+        .render_exact(
+            &g.device,
+            &g.queue,
+            &job.scene,
+            &out.create_view(&Default::default()),
+            &g.empty,
+            arena,
+            false,
+            &params,
+        )
+        .map_err(|e| format!("vello clip mask: {e}"))?;
+    let mut encoder = g.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        out.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: arena,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: u64::from(job.slot) * stride,
+                bytes_per_row: Some(width.next_multiple_of(64) * 4),
+                rows_per_image: Some(height),
+            },
+        },
+        out.size(),
+    );
+    g.queue.submit([encoder.finish()]);
+    Ok(stats.gpu_ms)
 }
 
 /// Draw a shadow job's paint offscreen, blur it and colour it; the texture
@@ -459,7 +600,14 @@ fn shadow(g: &mut Gpu, job: &ShadowJob) -> Result<(wgpu::Texture, f64), String> 
     let stats = g
         .renderer
         .render_exact(
-            &g.device, &g.queue, &job.scene, &cv, &g.empty, false, &params,
+            &g.device,
+            &g.queue,
+            &job.scene,
+            &cv,
+            &g.empty,
+            &g.empty_masks,
+            false,
+            &params,
         )
         .map_err(|e| format!("vello shadow: {e}"))?;
     let mut uniform = [0u8; 32];

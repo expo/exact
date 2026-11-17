@@ -294,7 +294,7 @@ impl<D: DataSource> Runner<D> {
                 let mut progress = false;
                 let mut all = true;
                 for i in 0..self.plan.derives.len() {
-                    if derives[i].is_some() {
+                    if self.plan.derives[i].unsettled || derives[i].is_some() {
                         continue;
                     }
                     // Unchanged inputs, unchanged value: no evaluation.
@@ -387,6 +387,18 @@ impl<D: DataSource> Runner<D> {
                 }
                 for i in 0..self.resources.len() {
                     if settled_res[i] {
+                        continue;
+                    }
+                    // @ref LLP 1035.005.004 D2 — what an instance owns
+                    // settles in its own row (`owned.rs`).
+                    if self.settles_to_nothing(i) {
+                        if self.owned_row(i).is_some() || self.plan.resources[i].owner.is_some() {
+                            states[i] = None;
+                            self.resources[i].store_reader = false;
+                        }
+                        settled_res[i] = true;
+                        current_res[i] = false;
+                        progress = true;
                         continue;
                     }
                     // A member settles once its family has read its list, and
@@ -540,7 +552,13 @@ impl<D: DataSource> Runner<D> {
                     let row = self.resource_row(i).clone();
                     let ready = self.source_ready(self.plan.str(row.source));
                     // @ref LLP 1161.002 D2 — a closed gate asks nothing.
+                    // An instance's request has the gate its frames read.
+                    let want = self.owned_row(i).map(|o| o.want.clone());
+                    // A launch instance's request takes the bake's answer as
+                    // the root's does at boot; a later instance's asks (D8).
+                    let launch = self.owned_row(i).map_or(boot, |o| o.launch);
                     let open = match row.gate.iter().next() {
+                        _ if want.is_some() => want.as_ref().is_some_and(|w| w.open),
                         None => true,
                         Some(gate) => {
                             let code = self.plan.arg(gate).expr;
@@ -673,10 +691,14 @@ impl<D: DataSource> Runner<D> {
                     let kept_args = self
                         .settled
                         .as_ref()
-                        .filter(|_| self.member(i).is_none() && !waking)
+                        .filter(|_| self.member(i).is_none() && want.is_none() && !waking)
                         .filter(|_| self.unchanged(&self.sites.deps().resource_args[i], &now))
-                        .map(|s| s.resource_args[i].clone());
-                    for (k, a) in row.args.iter().filter(|_| kept_args.is_none()).enumerate() {
+                        .map(|s| s.resource_args[i].clone())
+                        // A `late` row the last settlement left alone, before
+                        // its slots existed, kept no arguments to reuse.
+                        .filter(|a| a.len() == row.args.len as usize);
+                    let evaluated = kept_args.is_none() && want.is_none();
+                    for (k, a) in row.args.iter().filter(|_| evaluated).enumerate() {
                         let code = self.plan.arg(a).expr;
                         let result = {
                             let env = Env {
@@ -743,6 +765,9 @@ impl<D: DataSource> Runner<D> {
                     if let Some(kept) = kept_args {
                         args = kept;
                     }
+                    if let Some(want) = want {
+                        args = want.args;
+                    }
                     resource_args[i] = args.clone();
                     // @ref LLP 1048.000 D6 — give an element that a boot from
                     // a page makes the page's answer at its arguments, and
@@ -800,6 +825,16 @@ impl<D: DataSource> Runner<D> {
                             p.args.clone_from(&args);
                         }
                     }
+                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed, or
+                    // an entry waiting for its identity, ignores context, and
+                    // only for known, equal identifying arguments (`kept_wait`).
+                    // A refused commit restores `states` and the resource row.
+                    let kept = self.admit_kept(i, &args, valid_args, ready, &mut states);
+                    let (kept_seed, hold) = (kept.kept_seed, kept.hold);
+                    if kept.admitted_early {
+                        pending_res[i] = false;
+                        awaiting[i] = false;
+                    }
                     // The value may still answer older arguments while a
                     // request is in flight. Reuse follows the current ask;
                     // the standing value keeps its own provenance.
@@ -814,41 +849,6 @@ impl<D: DataSource> Runner<D> {
                             .find(|p| p.target == Target::Resource(i))
                             .map(|p| &p.args),
                     };
-                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed
-                    // ignores context, and only until its source is ready.
-                    // Consume the mark on mismatch or activation even when
-                    // the old value stands during an asynchronous request.
-                    // `states` is tentative, so a refused pass restores both.
-                    // A seed whose identity reads a resource still on its
-                    // fallback is not this launch's answer yet: it is
-                    // neither admitted nor reused (LLP 1027.005 D3, 2026-10-10).
-                    let unknown = states[i].as_ref().is_some_and(|s| s.kept_seed)
-                        && !ready
-                        && self.identity_unknown(i, &states);
-                    let kept_seed = valid_args
-                        && !unknown
-                        && states[i].as_ref().is_some_and(|s| {
-                            s.kept_seed
-                                && (if super::kept::kept_surface(&self.plan, i) {
-                                    self.surface_seed_waiting(i)
-                                } else {
-                                    !ready
-                                })
-                                && s.args
-                                    == args[..row.args.len as usize - usize::from(row.context)]
-                        });
-                    if let Some(state) = states[i].as_mut().filter(|s| s.kept_seed && !kept_seed) {
-                        // Refused before readiness, not consumed by it: say so.
-                        if !ready {
-                            let identity = row.args.len as usize - usize::from(row.context);
-                            let kept = state.args.clone();
-                            let now = (!unknown).then(|| &args[..identity]);
-                            super::kept::refuse(&mut self.keeping, &self.plan, i, &kept, now);
-                        }
-                    }
-                    if let Some(state) = &mut states[i] {
-                        state.kept_seed = kept_seed;
-                    }
                     // A store-reading resource is reusable only at the exact
                     // store revision it observed. `answer` and `parse` both
                     // write through Store, so this is the one dirtying point.
@@ -858,7 +858,7 @@ impl<D: DataSource> Runner<D> {
                     let reuse = states[i]
                         .as_ref()
                         .filter(|_| valid_args || failed)
-                        .filter(|_| !unknown)
+                        .filter(|_| !hold)
                         .filter(|s| {
                             kept_seed
                                 || failed
@@ -926,7 +926,7 @@ impl<D: DataSource> Runner<D> {
                     let value = match reuse {
                         Some(v) => v,
                         None if valid_args
-                            && (boot || !ready)
+                            && (launch || !ready && self.owned_row(i).is_none())
                             && !exact_plan::runner_owned_source(self.plan.str(row.source))
                             && row.initial.len > 0
                             && !self.secrets_unseen(i, &row, &resources)
@@ -1471,7 +1471,7 @@ impl<D: DataSource> Runner<D> {
 /// `ty`'s zero (LLP 1054.000.002 D1): `0`, `""`, `false`, `()`, `none`, `[]`,
 /// and a record's fields' zeros in order — the compiler's
 /// `contract_types::placeholder::zero`, over the plan's tables.
-pub(super) fn zero(plan: &exact_plan::Plan, ty: exact_plan::TypesId) -> Option<Value> {
+pub(crate) fn zero(plan: &exact_plan::Plan, ty: exact_plan::TypesId) -> Option<Value> {
     let row = plan.types.get(ty.0 as usize)?;
     Some(match row.kind {
         TypeKind::Number => Value::Number(0.0),

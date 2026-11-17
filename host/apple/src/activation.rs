@@ -14,6 +14,18 @@ impl<D: DataSource> Host<D> {
                 .is_some_and(|store| store.pending())
     }
 
+    /// Take the mark a launch function's durable write left. The write reached the
+    /// store without a runner store write, so the batch that adopts it says
+    /// `stored`: the presenter relays that to whatever replicates the store.
+    pub(crate) fn take_launch_store_change(&mut self) -> bool {
+        let changed = self
+            .launch_store
+            .as_ref()
+            .is_some_and(|store| store.take_changed());
+        self.stored |= changed;
+        changed
+    }
+
     /// The common post-pixel activation order for committed sources.
     pub(crate) fn activate_source(source: &mut D) -> Result<(), exact_runner::DataError> {
         Self::configure_storage(source)?;
@@ -36,13 +48,25 @@ impl<D: DataSource> Host<D> {
             Some(Self::activate_source(self.runner.data()).map_err(|e| format!("{e:?}")));
     }
 
+    /// Whether `prepare_data` evaluates a TypeScript module on this thread,
+    /// so the presenter may post it from the first draw's own callback (LLP
+    /// 1027.008 D1, D3). A Rust source's activation runs no module, and a
+    /// worker-placed module's engine is made on its worker when it
+    /// activates: both take the path after the main thread's first turn. So
+    /// does a module that keeps documents (on a Mac): its engine opens its
+    /// storage session with the document owner when it loads, after the
+    /// kept documents are restored. A source with a native slot is one that
+    /// has a TypeScript module: only TypeScript calls `native`.
+    pub fn evaluates_from_draw(&self) -> bool {
+        let data = self.runner.data_ref();
+        data.native().is_some()
+            && data.placement() == exact_runner::Placement::Main
+            && !crate::documents::keeps(data.grants())
+    }
+
     /// Load deferred app logic only after the presenter reports first pixel.
     pub fn activate_data(&mut self) -> String {
-        if self
-            .launch_store
-            .as_ref()
-            .is_some_and(|store| store.take_changed())
-        {
+        if self.take_launch_store_change() {
             self.store_refresh_pending = true;
         }
         if self.data_activated {
@@ -195,7 +219,13 @@ impl<D: DataSource> Host<D> {
         allow_unchanged: bool,
     ) -> String {
         if allow_unchanged && receipt.is_none() && error.is_none() {
-            return format!("{{\"ops\":[],\"unchanged\":true,\"storeReadPending\":{},\"storeActivationPending\":{}}}", self.store_refresh_pending, self.store_activation_pending);
+            // A store write this session does not read is still one to relay.
+            let stored = if std::mem::take(&mut self.stored) {
+                ",\"stored\":true"
+            } else {
+                ""
+            };
+            return format!("{{\"ops\":[],\"unchanged\":true{stored},\"storeReadPending\":{},\"storeActivationPending\":{}}}", self.store_refresh_pending, self.store_activation_pending);
         }
         let mut batch = Batch::new();
         batch.store_status = Some((self.store_refresh_pending, self.store_activation_pending));

@@ -150,7 +150,12 @@ fn malformed_radii_paint_like_sanitized_css_radii() {
                     for mode in [Draw::Fill, Draw::Gradient, Draw::Clip] {
                         let actual = draw(&input, ts, alpha, mode);
                         let reference = draw(&expected, ts, alpha, mode);
-                        assert!(reference.data().chunks_exact(4).any(|p| p != [255; 4]));
+                        assert!(reference
+                            .data()
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|p| *p != [255; 4]));
                         assert!(
                             actual.data() == reference.data(),
                             "{corners:?}, {radius}, {ts:?}, {alpha}, {mode:?}"
@@ -209,7 +214,12 @@ fn malformed_border_radii_paint_like_sanitized_css_radii() {
                             ring: None,
                         };
                         let reference = draw_border(&part(&reference_ops), ts);
-                        assert!(reference.data().chunks_exact(4).any(|p| p != [255; 4]));
+                        assert!(reference
+                            .data()
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|p| *p != [255; 4]));
                         if draw_border(&part(&actual_ops), ts).data() != reference.data() {
                             changed.push(format!(
                                 "{corners:?}, {radius}, {ts:?}, {alpha}, field {field}"
@@ -299,7 +309,12 @@ fn large_covering_boxes_preserve_original_pixels() {
                 let mut reference = Pixmap::new(200, 100).unwrap();
                 reference.fill(Color::WHITE);
                 reference.fill_path(&path, &solid(color), FillRule::Winding, ts, None);
-                assert!(reference.data().chunks_exact(4).any(|p| p != [255; 4]));
+                assert!(reference
+                    .data()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| *p != [255; 4]));
                 for mode in 0..5 {
                     let mut raster = Raster::new();
                     raster.begin(200.0, 100.0, 1.0);
@@ -362,8 +377,10 @@ fn sheared_border_regions_and_clips_preserve_original_pixels() {
         reference.fill(Color::WHITE);
         reference.fill_path(&path, &solid(color), FillRule::EvenOdd, ts, None);
         assert!(reference.data()[..200 * 64 * 4]
-            .chunks_exact(4)
-            .all(|p| p != [255; 4]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p != [255; 4]));
         assert!(reference.data()[200 * 64 * 4..].iter().all(|v| *v == 255));
         for field in 0..3 {
             let mut raster = Raster::new();

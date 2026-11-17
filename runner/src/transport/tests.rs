@@ -11,7 +11,6 @@ use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use std::path::PathBuf;
 
 pub(crate) const SOURCE: &str = r#"sound "assets/kick.wav"
 sound "assets/hat.wav"
@@ -209,11 +208,11 @@ fn compiled(source: &str) -> Plan {
     if let Some((_, plan)) = plans.iter().find(|(s, _)| s == source) {
         return plan.clone();
     }
-    let dir: PathBuf = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-transport-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
-    ));
+    )));
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     wav(&dir.join("assets/kick.wav"), 250);
     wav(&dir.join("assets/hat.wav"), 100);
@@ -968,7 +967,7 @@ fn the_background_stops_it_until_its_gate_turns_true_again() {
     r.act("start", vec![]).unwrap();
     r.advance(1000.0).unwrap();
     let page = crate::Page {
-        suspended: true,
+        frozen: true,
         ..r.page()
     };
     assert!(r.set_page(page).unwrap().is_some());
@@ -981,7 +980,7 @@ fn the_background_stops_it_until_its_gate_turns_true_again() {
         .count();
     assert_eq!(waiting, 0);
     let page = crate::Page {
-        suspended: false,
+        frozen: false,
         ..r.page()
     };
     r.set_page(page).unwrap();
@@ -1020,14 +1019,14 @@ fn a_refused_background_stop_stops_nothing() {
     let before = (voices(&r), r.transport().answer());
     let page = crate::Page {
         hidden: true,
-        suspended: true,
+        frozen: true,
         ..r.page()
     };
     assert!(r.set_page(page).is_err());
     assert!(r.transport().playing());
     assert_eq!((voices(&r), r.transport().answer()), before);
     assert!(r.take_sounds().is_empty(), "no End reached the output");
-    assert!(!r.page().suspended);
+    assert!(!r.page().frozen);
 }
 
 /// Review A1: a refused commit with a keyed sequence and no gated task puts

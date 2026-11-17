@@ -301,3 +301,99 @@ impl Kernel {
         )
     }
 }
+
+impl Kernel {
+    /// Occupied lead and trail extents in a vertical collection. Authored
+    /// children stay in their formatting context; no measuring wrapper is
+    /// inserted. The window's first/last physical child delimit its flow,
+    /// independently of any logical row position or authored padding.
+    pub fn collection_fixed_sizes(
+        &self,
+        list: ViewId,
+        lead: &[ViewId],
+        trail: &[ViewId],
+    ) -> Option<[f64; 2]> {
+        let node = self.node(list)?;
+        let (_, padding, _, _) = self.resolved_padding(node.key)?;
+        let (_, border, _, _) = self.resolved_border(node.key)?;
+        let origin = f64::from(node.frame.y + padding + border);
+        let bounds = |id: ViewId| {
+            self.node(id)
+                .filter(|n| {
+                    n.style.display != crate::Display::None
+                        && n.layout_position() != crate::PositionType::Absolute
+                })
+                .map(|n| {
+                    let margins = self.resolved_margins(n.key).unwrap_or_default();
+                    (
+                        f64::from(n.frame.y - margins[0]),
+                        f64::from(n.frame.y + n.frame.height + margins[2]),
+                    )
+                })
+        };
+        let middle: Vec<_> = node
+            .children()
+            .iter()
+            .filter(|v| !lead.contains(v) && !trail.contains(v))
+            .filter_map(|v| bounds(*v))
+            .collect();
+        let bottom = lead
+            .iter()
+            .chain(trail)
+            .filter_map(|v| bounds(*v))
+            .map(|b| b.1)
+            .fold(origin, f64::max);
+        let start = middle
+            .first()
+            .map(|b| b.0)
+            .or_else(|| trail.iter().find_map(|v| bounds(*v)).map(|b| b.0))
+            .unwrap_or(bottom);
+        let end = middle.last().map_or(start, |b| b.1);
+        Some([(start - origin).max(0.0), (bottom - end).max(0.0)])
+    }
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use crate::{Kernel, NodeType, Offer, Op, StyleId, StyleProps, StyleValue};
+
+    #[test]
+    fn fixed_sizes_ignore_out_of_flow_boxes_on_both_sides_and_in_the_window() {
+        let mut k = Kernel::with_monospace();
+        let mut ops = Vec::new();
+        for (id, height, absolute) in [
+            (1, 200., false),
+            (2, 1000., true),
+            (3, 300., false),
+            (4, 40., false),
+            (5, 2000., true),
+            (6, 3000., true),
+        ] {
+            ops.push(Op::CreateView {
+                id,
+                node_type: NodeType::View,
+            });
+            let mut patch = StyleProps::default();
+            patch
+                .set_dynamic(StyleId::Height, &StyleValue::Number(height))
+                .unwrap();
+            if absolute {
+                patch
+                    .set_dynamic(StyleId::PositionType, &StyleValue::Text("absolute".into()))
+                    .unwrap();
+            }
+            ops.push(Op::SetStyle {
+                id,
+                patch: Box::new(patch),
+            });
+        }
+        ops.push(Op::SetChildren {
+            id: 1,
+            children: vec![2, 3, 5, 4, 6],
+        });
+        ops.push(Op::AttachRoot { id: 1 });
+        k.apply(0, 1, &ops).unwrap();
+        k.compute_layout(1, Offer::definite(300., 200.)).unwrap();
+        assert_eq!(k.collection_fixed_sizes(1, &[2], &[4, 6]), Some([0., 40.]));
+    }
+}

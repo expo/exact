@@ -11,10 +11,10 @@ import android.os.SystemClock
 /** Only the wait lives in this process. Recreating the activity preserves it; killing the process does not. */
 internal object Auth {
     private val handler = Handler(Looper.getMainLooper())
-    private class Wait(val callback: Uri, val state: String, val timeout: Runnable, val expires: Long, var stopped: Boolean = false)
+    private class Wait(val callback: Uri, val state: String, val logout: Boolean, val timeout: Runnable, val expires: Long, var stopped: Boolean = false)
     private val waits = HashMap<Int, Wait>()
 
-    fun open(activity: ExactActivity, id: Int, url: String, callback: String, state: String) {
+    fun open(activity: ExactActivity, id: Int, url: String, callback: String, state: String, logout: Boolean = false) {
         end(id)
         try {
             SystemBrowser.launch(activity, Uri.parse(url), browserOnly = true)
@@ -28,7 +28,7 @@ internal object Auth {
         }
         val timeout = Runnable { waits.remove(id); Exact.answer(id, "cancelled") }
         val bound = 10 * 60 * 1000L
-        waits[id] = Wait(Uri.parse(callback), state, timeout, SystemClock.elapsedRealtime() + bound)
+        waits[id] = Wait(Uri.parse(callback), state, logout, timeout, SystemClock.elapsedRealtime() + bound)
         handler.postDelayed(timeout, bound)
         Exact.answer(id, "opened")
     }
@@ -84,7 +84,11 @@ internal object Auth {
                 fun decode(text: String) = Uri.decode(text.replace("+", " "))
                 if (decode(pair.substringBefore('=')) == "state") decode(pair.substringAfter('=', "")) else null
             }
-            if (waiting.any { it.state in states }) Exact.open(uri.toString())
+            val names = uri.encodedQuery.orEmpty().split('&').map { pair -> Uri.decode(pair.substringBefore('=')) }
+            val hasResponse = names.any { it == "code" || it == "error" }
+            if (waiting.any { it.state in states && (!it.logout || !hasResponse) } || states.isEmpty() && !hasResponse && waiting.any { it.logout }) {
+                Exact.open(uri.toString())
+            }
         }
         return true
     }

@@ -6,8 +6,9 @@ import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { PLIST_KEYS, appleMetadataProblem, modulePlist, packageKeys } from './plist.mjs';
-import { entitlements, infoPlist, macInfoPlist } from './build.mjs';
+import { HOST_EVENTS, PLIST_KEYS, appleMetadataProblem, hostEventKeys, modulePlist, packageEvents, packageKeys } from './plist.mjs';
+import { signsGrant } from './presence.mjs';
+import { entitlements, infoPlist, macInfoPlist, writeUsageStrings } from './build.mjs';
 import { buildPainted } from '../apple-painted/build.mjs';
 
 const packages = resolve(import.meta.dir, '../../packages');
@@ -15,6 +16,37 @@ const purchases = JSON.parse(readFileSync(resolve(packages, 'purchases/apple/exa
 const impl = (plistKeys) => [{ extension: 'purchases', plistKeys }];
 const flat = (plist) => plist.replace(/>\s+</g, '><');
 const KEY = /<key>SKIncludeConsumableInAppPurchaseHistory<\/key><true\/>/;
+
+test('Bluetooth usage is localized on Apple and its background mode is iOS only', () => {
+  const app = { id: 'dev.exact.strap', displayName: 'Strap', name: 'strap', manifest: {} };
+  const reach = { base: 'en', locales: ['en', 'fr'], usage: {
+    NSBluetoothAlwaysUsageDescription: { en: 'Reads your heart rate.', fr: 'Lit votre fréquence cardiaque.' },
+  }, backgroundModes: ['bluetooth-central'] };
+  const ios = flat(infoPlist(app, false, { reach }));
+  const mac = flat(macInfoPlist(app, { reach }));
+  for (const plist of [ios, mac]) assert.match(plist, /<key>NSBluetoothAlwaysUsageDescription<\/key><string>Reads your heart rate\.<\/string>/);
+  assert.match(ios, /<key>UIBackgroundModes<\/key><array><string>bluetooth-central<\/string><\/array>/);
+  assert.doesNotMatch(mac, /UIBackgroundModes/);
+  assert.doesNotMatch(infoPlist(app, false, { reach, tv: true }), /bluetooth-central/);
+  assert.doesNotMatch(infoPlist(app, false, { reach: { ...reach, backgroundModes: [] } }), /UIBackgroundModes/);
+  assert.doesNotMatch(infoPlist(app), /NSBluetoothAlwaysUsageDescription|bluetooth-central/);
+  assert.throws(() => infoPlist({ ...app, manifest: { host: { ios: { backgroundModes: ['bluetooth-central'] } } } }), /device.bluetooth-background.*device.bluetooth purpose/);
+  for (const platform of ['ios', 'macos']) {
+    const path = `host.${platform}.infoPlist.NSBluetoothAlwaysUsageDescription`;
+    assert.equal(appleMetadataProblem(`${path}: not a known key`), `${path}: refused; write \`device.bluetooth purpose.<key>\``);
+  }
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-bluetooth-plist-'));
+  try {
+    writeFileSync(resolve(dir, 'ios.plist'), ios);
+    writeFileSync(resolve(dir, 'macos.plist'), mac);
+    writeUsageStrings(reach, dir);
+    assert.match(readFileSync(resolve(dir, 'fr.lproj/InfoPlist.strings'), 'utf8'), /<key>NSBluetoothAlwaysUsageDescription<\/key><string>Lit votre fréquence cardiaque\.<\/string>/);
+    for (const file of process.platform === 'darwin' ? ['ios.plist', 'macos.plist', 'fr.lproj/InfoPlist.strings'] : []) {
+      const lint = childProcess.spawnSync('plutil', ['-lint', resolve(dir, file)], { encoding: 'utf8' });
+      assert.equal(lint.status, 0, lint.stdout + lint.stderr);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('location metadata advice chooses one grant and keeps prerequisites beside it', () => {
   const key = 'NSLocationWhenInUseUsageDescription';
@@ -155,6 +187,58 @@ test('an app that grants no device still gets its packages\' keys and dictionari
     writeFileSync(resolve(app.dir, 'strings/en.json'), JSON.stringify({ nav: '  ' }));
     assert.throws(() => modulePlist(app, null, 'ios', { geolocation: '@exact/geolocation' }), /names "nav", which strings\/en.json lacks or leaves blank/);
   });
+});
+
+// LLP 1133.001.000 D2: a host event is taken where a bound package declares it and its grant is signed.
+test('a host event on the list is declared by one package, and anything else is refused by name', () => {
+  assert.deepEqual(HOST_EVENTS.get('cloudkit-share'), { platforms: ['ios', 'macos'], needs: 'device.cloudkit', writes: { CKSharingSupported: true } });
+  const taker = (hostEvents, extension = 'cloudkit') => ({ extension, hostEvents });
+  for (const target of ['ios', 'macos']) assert.deepEqual(packageEvents([taker(['cloudkit-share'])], target), [{ extension: 'cloudkit', event: 'cloudkit-share' }]);
+  assert.deepEqual(packageEvents([taker(['cloudkit-share'])], 'tvos'), []);
+  assert.deepEqual(packageEvents([taker(null)], 'ios'), []);
+  const refuses = (bound, what) => assert.throws(() => packageEvents(bound, 'ios'),
+    (e) => e.message.startsWith(`${bound.at(-1).extension}'s Apple implementation: its hostEvents ${what}`) && e.message.includes('the list has cloudkit-share'));
+  refuses([taker(['url-open'])], 'names url-open, which is not on the list');
+  refuses([taker('cloudkit-share')], 'is not a list of names');
+  refuses([taker(['cloudkit-share']), taker(['cloudkit-share'], 'other')], "names cloudkit-share, which cloudkit's implementation takes too");
+});
+
+test('a taken event writes its key and ExactHostEvents; a grant with no taker, or a taker with no signed grant, writes neither', () => {
+  const declared = [{ extension: 'cloudkit', event: 'cloudkit-share' }];
+  assert.deepEqual(hostEventKeys(declared, (line) => line === 'device.cloudkit'), [
+    { extension: 'cloudkit', key: 'CKSharingSupported', value: true }, { extension: 'cloudkit', key: 'ExactHostEvents', value: ['cloudkit-share'] }]);
+  assert.deepEqual(hostEventKeys([], () => true), []);
+  assert.deepEqual(hostEventKeys(declared, () => false), []);
+  const edit = (json) => ({ ...json, hostEvents: ['cloudkit-share'] });
+  withApp('import { purchase } from "@exact/purchases";\n', ['purchases'], (app) => {
+    const reach = (target, signed) => modulePlist(app, null, target, { purchases: '@exact/purchases' }, [], signed);
+    const SHARING = /<key>CKSharingSupported<\/key><true\/>/, EVENTS = /<key>ExactHostEvents<\/key><array><string>cloudkit-share<\/string><\/array>/;
+    for (const plist of [infoPlist(app, false, { reach: reach('ios', (line) => line === 'device.cloudkit') }), macInfoPlist(app, { reach: reach('macos', (line) => line === 'device.cloudkit') })]) {
+      assert.match(flat(plist), SHARING);
+      assert.match(flat(plist), EVENTS);
+    }
+    for (const plist of [infoPlist(app, false, { reach: reach('ios') }), macInfoPlist(app, { reach: reach('macos', () => false) }), infoPlist(app, false, { reach: reach('tvos', () => true), tv: true })]) {
+      assert.doesNotMatch(plist, /CKSharingSupported|ExactHostEvents/);
+    }
+  }, edit);
+  // An app may not write the key itself: the build owns it.
+  assert.match(appleMetadataProblem('host.ios.infoPlist.CKSharingSupported: not a known key'), /Exact writes this key itself/);
+}, 60_000);
+
+test("ExactKit's host events are the build's list (HostEvents.swift)", () => {
+  const swift = readFileSync(resolve(import.meta.dir, 'Sources/ExactKit/HostEvents.swift'), 'utf8');
+  assert.deepEqual([...swift.matchAll(/Event\(name: "([^"]+)"/g)].map((m) => m[1]).sort(), [...HOST_EVENTS.keys()].sort());
+});
+
+test('a grant is signed where it is granted, and on the Mac where the chosen profile signed its row', () => {
+  const key = 'com.apple.developer.group-session', compat = { inputs: { grantCeiling: 'net.fetch https://x\ndevice.shareplay' } };
+  assert.equal(signsGrant('device.shareplay', compat), true);
+  assert.equal(signsGrant('device.cloudkit', compat), false);
+  assert.equal(signsGrant('device.shareplay', compat, null), false, 'a Mac build with no profile');
+  assert.equal(signsGrant('device.shareplay', compat, { entitlements: { [key]: true } }), true);
+  assert.equal(signsGrant('device.shareplay', compat, { entitlements: {} }), false);
+  // A row no profile authorizes needs only its line.
+  assert.equal(signsGrant('device.tracking', { inputs: { grantCeiling: 'device.tracking purpose.ads' } }, null), true);
 });
 
 test('a literal purpose key in a loaded Contract library reaches the plist', () => {

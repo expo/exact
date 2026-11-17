@@ -37,5 +37,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "video-player-data", "type": "video_player_data::Player", "source": "video_player_data::Player" } }
 }

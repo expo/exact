@@ -18,9 +18,10 @@ namespace Contract.ExpandFrame
 open Contract Components CompSem CompSemFacts Expand ExpandSubst
 
 /-- The names an instance's frame reads besides locals: its component's
-derives, states and device resources, and its props and injects. -/
+derives, states and resources, and its props and injects. -/
 def frameNames (C : CComponent) (binds : List (String × Expr × Frame × Locals)) : List String :=
-  C.derives.map (·.name) ++ C.states.map (·.name) ++ (binds.map (·.1) ++ C.deviceResources.map (·.name))
+  C.derives.map (·.name) ++ C.states.map (·.name) ++
+    (binds.map (·.1) ++ (C.deviceResources.map (·.name) ++ C.ownedResources.map (·.name)))
 
 open Classical in
 /-- What name `x` reads in the frame, if it reads anything. -/
@@ -103,9 +104,10 @@ theorem cvar_mem {n ce c id binds x v} {C : CComponent} (hC : ce.comp c = .ok C)
       exact .inl (.inl ⟨d, List.mem_of_find?_eq_some hd, by simpa using List.find?_some hd⟩)
     · split at h
       · rename_i hs
-        simp only [List.any_eq_true, beq_iff_eq] at hs
-        obtain ⟨s, hs, rfl⟩ := hs
-        exact .inl (.inr ⟨s, hs, rfl⟩)
+        simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq] at hs
+        rcases hs with ⟨s, hs, rfl⟩ | ⟨r, hr, rfl⟩
+        · exact .inl (.inr ⟨s, hs, rfl⟩)
+        · exact .inr (.inr (.inr ⟨r, hr, rfl⟩))
       · split at h
         · rename_i e f' ls' hb
           right
@@ -121,7 +123,7 @@ theorem cvar_mem {n ce c id binds x v} {C : CComponent} (hC : ce.comp c = .ok C)
             · obtain ⟨b', hb', hb'x⟩ := ih hb; exact ⟨b', by simp [hb'], hb'x⟩
         · split at h
           · rename_i hr
-            right; right
+            right; right; left
             simpa only [List.any_eq_true, beq_iff_eq] using hr
           · simp at h
 

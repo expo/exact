@@ -51,11 +51,10 @@ project repositories.
 
 `EXACT_VERSION` becomes `versionName`; the resolved number becomes
 `versionCode`. A bundle requires all four signing inputs and bakes
-production update trust (LLP 1030.003 D6, D8). Android uses the Linux bake:
-set `deploy.store.linux` to `"0"` for a binary without Exact updates;
-`deploy.store.android` does not disable the bake's update checks. Otherwise,
-supply the update signing keys and `EXACT_UPDATE_RECEIPT` (or genesis for a new stream);
-the build checks this first.
+production update trust (LLP 1030.003 D6, D8). With `deploy.store.android`
+absent or `"0"` the APK has no update store, so it needs no update signing
+keys or receipt; every change ships as a new build. At `"A"` it needs both
+(LLP 1030.006).
 For an APK, set `EXACT_UPDATE_TRUST=production` and use
 `android --release --no-install --json`; its path is
 `target/android/app/outputs/apk/release/app-release.apk`. Neither command

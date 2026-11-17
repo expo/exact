@@ -115,7 +115,8 @@ style         = "style" IDENT block(style-line | part) ;
 decoration    = "decoration" IDENT ( style-line | block(style-line) ) ;
 atom          = "atom" IDENT style-line [ block(style-line | state) ] ;
 style-line    = { FIELD "=" style-literal } NL ;
-part          = "::" "placeholder" NL block(style-line) ;
+part          = "::" ( "placeholder" | "backdrop" | "view-transition-new"
+                     | "view-transition-old" ) NL block(style-line) ;
 style-literal = STRING | NUMBER | "-" NUMBER | "true" | "false" ;
 keyframes     = "keyframes" IDENT block(keyframe-line) ;
 keyframe-line = selector { "," selector } { FIELD "=" frame-value } NL ;
@@ -149,16 +150,33 @@ or event props. In a conditional class, each prop must be set in both styles or
 neither, unless the node supplies its own value. Each arm's literal is checked
 as a direct attribute would be.
 
-A part is CSS's pseudo-element as a block: `::placeholder`, then its
-declarations indented beneath it, in a `style` (literal) or under an `input` or
-`textarea` before its children (where a value may compute, as the element's own
-attributes do). It admits `color` alone (CSS `::placeholder { color }`, LLP 1104
-D3), its alpha its own; the field's own block wins over its class's, and without
-one the placeholder keeps the platform's colour. Another property in it is
-`lower-unknown-attr`; on another element `lower-attr-tag`; `::before` and
-`::after` are `syntax-part` (Contract has no generated box: write a child), as
-is any other part. `placeholder-color` and `-exact-placeholder-color` are
-refused with the block to write.
+A part is CSS's pseudo-element as a block: `::placeholder`, `::backdrop`,
+`::view-transition-new` or `::view-transition-old`, then its declarations
+indented beneath it, in a `style` (literal) or under its element before its
+children (where a value may compute, as the element's own attributes do).
+`::placeholder`, under an `input` or `textarea`, admits `color` alone (CSS
+`::placeholder { color }`, LLP 1104 D3); `::backdrop`, under a `dialog`, admits
+`background-color` alone (CSS `::backdrop { background-color }`, LLP 1035.001
+D11: what lies over the page beneath the modal dialog, fading in and out with
+it). Each colour's alpha is its own; the element's own block wins over its
+class's, and without one the platform's colour or dim stays. Another property
+in either is `lower-unknown-attr`; on another element `lower-attr-tag`.
+
+On a route (an element with `navigationKey`), `::view-transition-new` is its
+entrance, when a push or a full-screen presentation adds it, and
+`::view-transition-old` its exit, when a pop or the dismissal removes it (CSS
+View Transitions' pseudo-elements, LLP 1013.001 D1). Each admits the
+`animation` shorthand alone, naming keyframes that move only `opacity`,
+`translate`, `scale` and `rotate`; it must end (not `infinite` or `paused`),
+and each arm of a computed value is a literal. `none` cuts, and a part left
+unset keeps the platform's transition. A sheet's route, a route with a literal
+`navigationSource`, and an element that is no route refuse them
+(`lower-route-part`); the other `::view-transition-*` parts have nothing to
+style.
+
+`::before` and `::after` are `syntax-part` (Contract has no generated box:
+write a child), as is any other part. `placeholder-color` and
+`-exact-placeholder-color` are refused with the block to write.
 
 A state part is a block of one state's rows (LLP 1121 D8): `:active`, `:hover`,
 `:focus-visible`, `:disabled` or `:checked` alone on its line, then rows indented
@@ -168,10 +186,12 @@ combined (`syntax-state`). `:disabled` and `:checked` (when `checked`,
 `aria-checked`, `aria-selected` or `aria-pressed` is true) take
 `background-color`, `color`, `border-color` (each side), `opacity`, `box-shadow`
 and `-exact-tint-color`, and fold into the node's own rows, `:checked` under
-`:disabled`; `:active` takes `background-color`, `color`, `opacity` and
+`:disabled`; `:active` takes `background-color`, `color`, `opacity`, `translate` and
 `-exact-press-scale` and lowers to the press paint (LLP 1061 D7: its `opacity` an
-absolute target), `:hover` and `:focus-visible` take `background-color`,
-`color`, `border-color`, `opacity`, `box-shadow` and `scale` (which stands in for the
+absolute target, its `translate` a 2D offset added to the node’s own translation
+without changing layout; the web hit area moves with the paint, while native
+hosts keep the unpressed hit area). `:hover` and `:focus-visible`
+take `background-color`, `color`, `border-color`, `opacity`, `box-shadow` and `scale` (which stands in for the
 node's and moves on its `transition`). Active targets may compute or clear
 with `none`; hover and focus targets are literals (`lower-state-literal`; a
 token's name is one). Another row is `lower-state-row`;
@@ -365,13 +385,25 @@ calls (a shape, a `fn`, a component) comes from its own `use` lines or is
 declared in it, beside the block; another file, the root among them, names
 such a declaration on a `use` line. The
 component's rules hold for its members wherever they are written: a child's
-members file declares no resource.
+members file declares no mutation or task.
 
 There is one `props`, `inject`, `provide`, `slot`, and `view` section at most in
-a component. Only the root may own resources, mutations, and tasks, except that
-any component may read the device's facts, `exactViewport()` and `exactPage()`
-with no arguments (`EmptyState` reads `accessibilityTextSize`): they open no
-request, and every instance reads the root's one answer. A task's
+a component. Only the root may own tasks. Any component may own resources and
+mutations (LLP 1035.005.004): each instance of a child asks for its own
+resources, after the render that makes it, and lets go when the render destroys
+it. Each instance sends its own mutations: its own `pending`, failure, queue and
+answer, and its `then` runs in that instance, where it may call an action prop.
+A child's `refreshes` names its own resources. A send in flight when the render
+destroys the instance stays sent, but its answer changes nothing and its `then`
+does not run, and its waiting sends are dropped. A child's resource is not a
+resource over a list, and a child that owns requests is used where its instances
+are bounded: outside every region, under `if` and `match`, or in a row of
+`stack(nav)`, `t.stack` or `nav.tabs`, never under another `for` or in a
+virtualized list (`type-child-resource`). Its state initializers do not read its
+own resources (`type-state-reads-request`). The device's facts,
+`exactViewport()` and `exactPage()` with no arguments (`EmptyState` reads
+`accessibilityTextSize`), open no request: every instance reads the root's one
+answer. A task's
 body has exactly one schedule. A gated task (`when cond`, LLP 1092) has its
 timer only while `cond` holds, armed from the commit that made it true; `key=`
 re-arms it from the commit that changed the key (compared as a `for` key),
@@ -740,7 +772,8 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "seed" NUMBER NL                     (* 0 through 2^32 - 1 *)
               | "fresh" [ STRING ] NL                (* the Snapback dev server emptied first, seeded from the file *)
               | "before" "data" NL                   (* the first step does not wait for data *)
-              | "prefer" IDENT IDENT NL              (* CSS media feature and value, before observations *)
+              | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
+                                                     (* media feature, page fact, or permission.<module>; before observations *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
@@ -753,7 +786,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "tap" STRING "drag" ( "to" STRING [ "at" NUMBER NUMBER ]
                   | [ "-" ] NUMBER [ "-" ] NUMBER )
                   { ( "press" | "over" | "hold" ) NUMBER
-                  | "from" NUMBER NUMBER | "mouse" }
+                  | "from" NUMBER NUMBER | "mouse" | "into" "keyboard" }
                   [ "during" { STRING } ] NL
               | "type" STRING ( STRING [ "append" ]
                   | "key" STRING [ "down" | "up" | "for" NUMBER ]
@@ -766,11 +799,13 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "clock" "until" "state" IDENT { "." ( IDENT | NUMBER ) } "==" scalar "within" NUMBER NL
                                                      (* real time, the clock frozen, until it holds *)
               | "resize" NUMBER "x" NUMBER NL        (* the window, mid-test: 800x600 *)
-              | "prefer" IDENT IDENT NL              (* change a media preference now *)
+              | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
+                                                     (* change a media preference, page fact or module permission now *)
               | "prefer" midi-fact { midi-fact } NL  (* each fact at most once *)
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
+              | "prefer" IDENT STRING NL             (* quoted media preference or root-font-size *)
               | "request" METHOD STRING [ json ] [ "as" ( IDENT | STRING ) ] [ "expect" NUMBER ] NL
                                                      (* the driver writes through the app's server *)
               | "close" NL                           (* the window's close button *)
@@ -782,6 +817,9 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "expect" "no" "failures" NL           (* nothing failed that the test did not arrange *)
               | "expect" "tree" ( "has" | "missing" ) STRING NL
               | "expect" ( "disabled" | "enabled" ) STRING NL  (* a control's `disabled` (LLP 1116.010 D3) *)
+              | "expect" "focused" STRING NL         (* the node that holds the keyboard focus *)
+              | "expect" "layout" STRING ( "width" | "height" ) ( "==" | "<=" | ">=" ) NUMBER NL
+                                                     (* its laid-out size, in points *)
               | "expect" "refusal" STRING NL          (* one observed refusal of the named mutation slot *)
               | "expect" "text" STRING "==" STRING NL
               | "expect" "state" IDENT { "." ( IDENT | NUMBER ) }
@@ -910,16 +948,33 @@ or message as well.
 Targets are driver test ids. `expect disabled "send"` (`enabled`) reads the control's
 `disabled`, which every host's tree carries (LLP 1116.010 D3). A `tap` on a disabled control
 does nothing, and fails its step on every host, `send is disabled`: say what the app refuses
-with `expect disabled`, then `expect enabled` once what enables it has happened. Each test is a session of its own, opened with its
+with `expect disabled`, then `expect enabled` once what enables it has happened. `expect
+focused "picker"` passes when that node holds the keyboard focus, as every host's tree marks it
+(`[focused]` in `agent <host> tree`): after a key moves the focus, or a dialog returns it.
+
+`expect layout "status-mark" height <= 24` bounds a node's laid-out `width` or `height` with
+`==`, `<=` or `>=`. The size is that of the box `agent <host> layout <target>` prints as `space
+viewport`: points (CSS pixels on the web) at two decimals, with a presentation transform folded
+in (LLP 1012). A failure names the size and the box, so an image a column stretched to its own
+width fails its test: `height of "status-mark" is 310, expected <= 24 (its box is 420×310)`.
+A size that comes from text, a platform control or the window differs by host: bound it, and
+keep `==` for a size the app sets.
+
+Each test is a session of its own, opened with its
 launch lines: `size 1200x800`, `epoch "2026-09-21T12:00:00Z"`, `time-zone
 "America/New_York"`, `locale "fr-FR"` and `seed 7` are the driver's `--size`,
 `--epoch`, `--time-zone`, `--locale` and `--seed`, so they lead the test's steps,
 each once; `at "/item/7#moves"` opens the app at that location, fragment included,
 as `--url` with a path does. Written at the top of the file they apply to every test that does not
 name its own; either way they override the drive's flags. Media preferences
-(`prefer prefers-color-scheme dark`) also lead a test or the file, and may
-change between steps. Defaults merge by feature name; duplicate names among
-leading lines are errors. A bad name or value fails that test at its line.
+(`prefer prefers-color-scheme dark`), text size (`prefer root-font-size "24"`) and
+a module's permission (`prefer permission.notifications granted`, `denied` or
+`prompt`) also lead a test or the file, and may change between steps. Other
+single-value page facts, such as `prefer online false`, use the drive's parser
+and aliases; quote numeric values. Folds (`posture`, `segments`, `gap`), mode
+pins and extension substitutes are drive-only for now. Defaults
+merge by resolved fact name, so aliases override each other; duplicate leading
+lines for one fact are errors. A bad name or value fails that test at its line.
 The latest values survive `reload` and verify's relaunch. A file whose
 assertions depend on the date says so in the file. `epoch now` is the machine's
 clock, read once as each test launches, for a test whose app talks to a live
@@ -945,8 +1000,41 @@ be armed; the longest matching prefix decides, and arming a prefix again
 replaces it. A file's line applies to every test that does not arm the same
 prefix itself. A counted fault that matched no fetch by the test's end (or
 before it is armed again) fails the test at the line that armed it, and
-`reload` relaunches with the table as it is then. A stream (`exactStream`, a
-WebSocket) is not matched. `request POST "/polls/1/votes" {"option": 2} as bob`
+`reload` relaunches with the table as it is then. Each HTTP attempt of a long
+poll (`exactStream` with `exactLongPoll`) takes a matching fault and retries as
+a network failure. Event streams, byte streams and WebSockets are not matched.
+`answer fetch "<prefix>" with <status> [header "<name>" "<value>"]… [<body>]`
+supplies an immediate HTTP response, with no request to the service. It may lead
+a test or the file, like `fail fetch`, so the first resource load receives it.
+A later line replaces the current answer or failure at that prefix. A test's
+leading answer or failure overrides the file's entry for the same prefix.
+JSON bodies are sent as `application/json`; a quoted string is sent as
+`text/plain; charset=utf-8`, and an omitted body is empty. An explicit
+`content-type` header overrides that default. The status is 200 through 599,
+excluding redirects 301, 302, 303, 307 and 308. Statuses 204, 205 and 304
+require an empty body. A response has at most 1,024 headers and a body of at most
+64 KiB; the complete encoded fixture table must also fit 64 KiB, including headers
+and URL prefixes. An answer that exceeds a limit is refused before arming. `set-cookie` and `set-cookie2` headers are
+refused because browsers hide them. Request validation, grants, file-body
+preparation, aborts, deadlines and response-size limits still apply. A refused fixture records no hit
+or answered journal line.
+
+Answers use the same longest-live-prefix rule as failures. `fail fetch` replaces
+an answer, and `pass fetch` clears either at that prefix; a shorter live prefix
+may then match. Long polls ignore answer entries when choosing a failure, so
+a longer answer prefix does not hide a shorter failure. Otherwise the request
+goes to the network. Each test starts with its own table; `reload` keeps the
+current answers and cleared entries. On the web, only the top-level document on
+the original app origin receives the table; child frames and other origins do not.
+Development render servers apply the table before fetching request-time data.
+A web launch revalidates only matching checkpoint answers through the real source;
+unrelated rendered answers stay settled.
+The real source parses the response, so an HTTP error status is a response,
+where `fail fetch` is a rejected connection. These fixtures cover buffered HTTP
+requests, including a worker's; streams, long polls, redirects, `exactBodyTo`,
+delays and response files are not supported.
+
+`request POST "/polls/1/votes" {"option": 2} as bob`
 (LLP 1116.006 D8) is the driver, not the app, writing through the app's server as
 another person: a method, a path in quotes under the server URL app.ts calls (its
 first local one, `http://127.0.0.1:8787`; or a whole `http://` URL), an optional JSON
@@ -958,8 +1046,11 @@ after the persona (a status from 100 through 599, LLP 1116.010 D3) is the test o
 refusal: that status passes it, any other (a success too) fails it. The app
 shows the write when it next reads, so follow it with `clock +<its poll's ms>` and
 `clock data` before the `expect` (a failed `expect` before the clock moved says so).
-`test`, `verify` and `agent --test` run the server on an empty database (one already
-answering there, your dev server, is refused). Runs take the server's port in turn (another checkout's
+`test`, `verify` and `agent --test` restart an owned server empty for each test,
+including memory-only servers (`database: false`). Remote servers stay shared.
+Only `test` and `agent --test` share an ancestor's server, saying so;
+`verify` refuses an answering local server, including an ancestor's.
+A dev server already answering at an owned server's address is refused. Runs take the server's port in turn (another checkout's
 run on it is waited for, and named). `fail fetch` does not reach a `request`: the driver sends
 it, not the app. Arguments after the entry in app.json's `commands.server` are passed
 through in order. For a server that keeps no database, set `"server": { "database": false }`
@@ -980,7 +1071,20 @@ is down, after the move and before the hold. `press` and `hold` advance the
 virtual clock by those milliseconds (a game's ticks), except under
 `--timing platform`, where the platform's own clock owns the gesture.
 `tap "id" pinch <scale> [at x y]` is the driver's pinch: `scale` greater than 0,
-about the node's middle or about `at` in its box.
+about the node's middle or about `at` in its box. A canvas that takes raw input
+receives it as a real pinch arrives there: two touch contacts on the web and iOS,
+a Control-held wheel on macOS. A zoomable scroll (`-exact-max-zoom`, LLP
+1057.001.000) is left zoomed as the platform's pinch leaves it at rest, its
+`scrollZoom` times `scale` within its range; the iOS agent's `--touch platform`
+plays it as two real fingers, which UIKit's own recognizer reads. On Android and
+Windows it is the pinch the reader's recognizer or the second contact tells the
+presenter, in steps about the point; Linux answers it unsupported. The agent's
+`tap <t> dblclick touch` is a finger's double tap rather than a mouse's: on iOS,
+the web, Android and Windows it zooms a zoomable scroll where no `dblclick`
+handler takes it (two real taps under `--touch platform`, two touch points in
+Chrome, two touch contacts on Android and Windows), and macOS and Linux answer it
+unsupported. On the web, Android, Windows and Linux, `tap <t> wheel 0 <dy>
+modifiers Control` is a trackpad's pinch, as the platform delivers one.
 `tap "id" wheel <dx> <dy>` is the driver's wheel (the agent's `tap <t> wheel
 dx dy`) at the node's middle, in points (CSS pixels on the web): a positive `dy`
 scrolls on toward the content's end, so its offset grows, and a negative one back
@@ -995,7 +1099,11 @@ report unsupported. Scope these tests with `on web`.
 list's row into view by its key, so a row outside the rendered window can be
 tapped by its own id on the next step. `type "id" "text"` sets the field's
 value, as Playwright's `fill`; `append` adds the text after the value the tree
-shows (a prefilled reply). `type "id" key "Name"` presses the key;
+shows (a prefilled reply). `type "id" key "Name"` presses the key (on iOS,
+ArrowRight or ArrowLeft at an `input type="range"` that shows its `UISlider`
+is the slider's accessibility increment or decrement, the call VoiceOver's
+swipe makes; its halves are that step's keydown with the move, then its
+keyup, and a held key's repeats move it again);
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
 web page reloads its current URL in the same profile, keeping Back and Forward
@@ -1111,11 +1219,11 @@ says. Every roster function has a row and an example, and each example written
 | Call | Result / restriction | Example |
 | --- | --- | --- |
 | `performanceNow()` | Milliseconds on the runner's clock since this launch of the app (it restarts at 0 on every launch; the driver's clock under the agent, from 0), as the web's `performance.now()`, not `Date.now()`: the date is `time.epochAtZero + performanceNow()`, with `resource time = exactTime() as shape T` declared, and that sum is what anything stored or sent takes ([timer recipe](recipes/timer-that-survives-relaunch.md)). `now()` is refused (`type-now-renamed`, LLP 1109 D1) with both repairs. A read does not schedule a render, and a derive that reads it is not read again as time passes (when it is depends on the host's clock), so a value that follows the clock comes from a timer: keep the time in state that a `task … every` action writes | `performanceNow() - startedAt`, in a timer's action, is the milliseconds since `startedAt` |
-| `formatTime(ms, offsetMinutes, "short")` | String; fixed offset east of UTC, in the [format locale](#formatting-by-locale) (`exactTime().utcOffset` is the zone's offset now, answered again when it changes) | `formatTime(1790000000000, 0, "short")` is `"2:13 PM"` |
-| `formatDate(msOrDayKey, offsetMinutes, "medium" or "month-year" or "iso")` | String; format is a literal choice, not an expression containing `or`. A number is epoch milliseconds shifted by the offset; `"iso"` is the date at that wall time, `toISOString`'s date part at a whole-minute offset (a fractional offset's sub-millisecond wall time is not clipped again) (LLP 1102 §3.4). A string must be exactly `YYYY-MM-DD` in ASCII digits and a real Gregorian date in years 0001–9999; it keeps its calendar day regardless of the offset. Every style prints `""` for invalid input, years outside 1–9999, or a non-finite offset or one outside ±1080 minutes ([dates recipe](recipes/dates-and-days.md)) | `formatDate("2026-10-16", 0, "medium")` is `"Oct 16, 2026"` in en-US |
-| `formatDay(then, now, offsetMinutes, "day" or "day-time" or "list")` | String; `then`'s day named from `now`'s, both at the one offset (its calendar days, so a DST change between them is not applied), in the [format locale](#formatting-by-locale) (LLP 1116.020 D8); in en-US: `"day"` is `Today`, `Yesterday`, `Tomorrow`, else `formatDate`'s `"medium"`; `"day-time"` adds ` at ` and `formatTime`'s time (`Today at 4:42 PM`, `Oct 11, 2026 at 4:42 PM`); `"list"` is Mail's and Notes' list label: the time today, `Yesterday`, the weekday two to six days back, else `10/11/26` (a later day too). Pure: `now` is the app's ticked clock ([dates recipe](recipes/dates-and-days.md)); `""` when either instant is outside years 1–9999 | `formatDay(1790000000000, 1790000000000 + 86400000, 0, "day")` is `"Yesterday"` |
+| `formatTime(ms, offsetMinutes, "short" or "2-digit")` | String; fixed offset east of UTC, in the [format locale](#formatting-by-locale) (`exactTime().utcOffset` is the zone's offset now, answered again when it changes). `"short"` is `Intl.DateTimeFormat`'s `{ timeStyle: "short" }`; `"2-digit"` is `{ hour: "2-digit", minute: "2-digit" }`, each locale's own pattern for it (`01:02 AM` in en-US, `凌晨01:02` in zh-TW) | `formatTime(1790000000000, 0, "short")` is `"2:13 PM"`; `formatTime(3720000, 0, "2-digit")` is `"01:02 AM"` |
+| `formatDate(msOrDayKey, offsetMinutes, "medium" or "month-year" or "month-day" or "iso")` | String; format is a literal choice, not an expression containing `or`. `"medium"` is `Intl.DateTimeFormat`'s `{ dateStyle: "medium" }`, `"month-year"` `{ month: "long", year: "numeric" }`, `"month-day"` `{ month: "short", day: "numeric" }` (`Sep 21`, `21. Sept.` in de). A number is epoch milliseconds shifted by the offset; `"iso"` is the date at that wall time, `toISOString`'s date part at a whole-minute offset (a fractional offset's sub-millisecond wall time is not clipped again) (LLP 1102 §3.4). A string must be exactly `YYYY-MM-DD` in ASCII digits and a real Gregorian date in years 0001–9999; it keeps its calendar day regardless of the offset. Every style prints `""` for invalid input, years outside 1–9999, or a non-finite offset or one outside ±1080 minutes ([dates recipe](recipes/dates-and-days.md)) | `formatDate("2026-10-16", 0, "medium")` is `"Oct 16, 2026"` in en-US |
+| `formatDay(then, now, offsetMinutes, "day" or "day-time" or "list" or "section")` | String; `then`'s day named from `now`'s, both at the one offset (its calendar days, so a DST change between them is not applied), in the [format locale](#formatting-by-locale) (LLP 1116.020 D8); in en-US: `"day"` is `Today`, `Yesterday`, `Tomorrow`, else `formatDate`'s `"medium"`; `"day-time"` adds ` at ` and `formatTime`'s time (`Today at 4:42 PM`, `Oct 11, 2026 at 4:42 PM`); `"list"` is Mail's and Notes' list label: the time today, `Yesterday`, the weekday two to six days back, else `10/11/26` (a later day too); `"section"` is a chat's day separator (LLP 1168.000 D5): `Today`, `Yesterday`, `Tomorrow`, the weekday two to six days either side, else `Thu, Oct 15`, with the year when it is not `now`'s (`Sun, May 4, 2025`). Pure: `now` is the app's ticked clock ([dates recipe](recipes/dates-and-days.md)); `""` when either instant is outside years 1–9999 | `formatDay(1790000000000, 1790000000000 + 86400000, 0, "day")` is `"Yesterday"` |
 | `formatNumber(n, "compact")` | String; admitted deterministic compact format (`1.2K`) | `formatNumber(1249, "compact")` is `"1.2K"` |
-| `formatNumber(n, "decimal")`, `formatNumber(n, "percent")`, `formatNumber(n, "currency", "USD")` | String; `Intl.NumberFormat`'s deterministic forms in the [format locale](#formatting-by-locale) (LLP 1116 D8), in en-US: `"decimal"` is grouped with at most three fraction digits (`1,234.567`), `"percent"` multiplies by 100 with none (`0.256` is `26%`), `"currency"` takes an ISO 4217 code literal and prints its symbol and fraction digits (`$1,481.47`, `-$5.00`, `¥1,235`, `CHF 5.00`; the codes are USD, EUR, GBP, JPY, CNY, INR, CAD, AUD, NZD, HKD, SGD, CHF, SEK, NOK, DKK, PLN, MXN, BRL, KRW, ZAR, TWD, ILS, PHP and VND). Each rounds the value's shortest decimal digits half away from zero, as `Intl` does (`1.005` is `$1.01`, where `toFixed` says `1.00`), and signs a negative zero (`-0`); `NaN` and the infinities print `""`. The code is written with `"currency"` only (`type-format-style`) | `formatNumber(1481.47, "currency", "USD")` is `"$1,481.47"` |
+| `formatNumber(n, "decimal")`, `formatNumber(n, "decimal", digits)`, `formatNumber(n, "percent")`, `formatNumber(n, "currency", "USD")` | String; `Intl.NumberFormat`'s deterministic forms in the [format locale](#formatting-by-locale) (LLP 1116 D8), in en-US: `"decimal"` is grouped with at most three fraction digits (`1,234.567`), and with `digits`, a whole-number literal from 0 to 100, exactly that many (`minimumFractionDigits` and `maximumFractionDigits` both `digits`: `formatNumber(1, "decimal", 1)` is `1.0`, `1,0` in de), `"percent"` multiplies by 100 with none (`0.256` is `26%`), `"currency"` takes an ISO 4217 code literal and prints its symbol and fraction digits (`$1,481.47`, `-$5.00`, `¥1,235`, `CHF 5.00`; the codes are USD, EUR, GBP, JPY, CNY, INR, CAD, AUD, NZD, HKD, SGD, CHF, SEK, NOK, DKK, PLN, MXN, BRL, KRW, ZAR, TWD, ILS, PHP and VND). Each rounds the value's shortest decimal digits half away from zero, as `Intl` does (`1.005` is `$1.01`, where `toFixed` says `1.00`), and signs a negative zero (`-0`); `NaN` and the infinities print `""`. The code is written with `"currency"` only (`type-format-style`) | `formatNumber(1481.47, "currency", "USD")` is `"$1,481.47"` |
 | `n.toFixed(digits)` | String; JavaScript's `Number.prototype.toFixed`: the binary value rounded (`(1.005).toFixed(2)` is `"1.00"`), a tie away from zero, `-0.001` at 2 is `"-0.00"`, `1e21` and up as `toString` prints; one declared difference: `NaN` and the infinities print `""` (LLP 1054.000.003 D7). `digits` is a whole-number literal 0–100 (LLP 1102 §3.2) | `(3.14159).toFixed(2)` is `"3.14"` |
 | `formatDecimal(units, digits)` | String; an integer count of a smallest unit as a decimal, exactly: `formatDecimal(1234, 2)` is `"12.34"`, `formatDecimal(-5, 2)` is `"-0.05"`, `-0` is `"0.00"`; a count that is not an integer, or not finite, is `""`, so money is a count of cents, or `formatDecimal(round(price * 100), 2)` for a price of at most two decimals under a trillion. `digits` is a whole-number literal 0–20 (LLP 1102 §3.2) | `formatDecimal(1234, 2)` is `"12.34"` |
 | `value.length` | Number; list item count or string UTF-16 code-unit count | `[4, 5, 6].length` is `3` |
@@ -1167,13 +1275,13 @@ says. Every roster function has a row and an example, and each example written
 | `params(router, parameterName)` | `string[]`: that parameter's non-empty values over the selected stack, bottom first, duplicates kept (one entry's own value is `entry.params.<name>`, `""` where its route does not bind it; the name must be a parameter of some route) | `params(push(nav, "/item/7"), "id")` is `["7"]` |
 | `searchParam(entry, name)` | String | `searchParam(top(push(nav, "/item/7?tab=notes")), "tab")` is `"notes"` |
 | `fragment(entry)` | String: what the entry's location had after `#`, fragment-encoded as the browser's `hash` is, `""` when none. It is no part of the screen: `/item/7#moves` is the visit to `/item/7`, and a `push`, `replace` or `go` that changes only the fragment changes it on that visit. Written as `path("item", id) + "#moves"`, or `href="#moves"` on a `link` to the screen shown. Once the route's content has arrived, each host scrolls to the element with that `id` in the entry's route, as a browser scrolls to a fragment (`top`, or no such element: the route's top) (LLP 1153 D5) | `fragment(top(push(nav, "/item/7#moves")))` is `"moves"` |
-| `sharedFiles(entry, name)` | `SharedFiles`: `{files: Picked[], dropped, pending}`, the files a received share carried, by the token in the entry's `name` parameter; `pending` counts those still being copied, and a token the host did not set this launch answers no files (LLP 1133.024 D3) | `sharedFiles(top(nav), "files").files.length` is the count of shared files that have landed |
+| `sharedFiles(entry, name)` | `SharedFiles`: `{files: Picked[], dropped, pending}`, the files a received share carried, by the token in the entry's `name` parameter; `pending` counts those still being copied, and a token the host did not set this launch answers no files (LLP 1133.024 D3; [`share_target`](reference.md#shares-from-other-apps-share_target)) | `sharedFiles(top(nav), "files").files.length` is the count of shared files that have landed |
 | `t("key", name=value, …)` | Localized string; validates tables/placeholders | `t("greeting", name=user.name)` is the `greeting` string of the app's locale with `{name}` filled |
 | `frame(id)` | `Geometry`, actions only; last layout where the viewer sees it, as `getBoundingClientRect`: in the viewport, every scroll offset and transform applied | `frame("card").height`, in an action, is the card's height as drawn |
 | `rangeFrame(id, start, end)` | `Geometry`, actions only; a textarea's UTF-16 range as `Range.getBoundingClientRect()` (on a `text markup="markdown"`, the union of the atom pills the range meets, [inline atoms](#inline-atoms-atom-atoms-atomfaces-atompress)): collapsed, the caret's rectangle; unavailable past the text, while composing, or with no host reader ([decorations](#plain-textarea-decorations), LLP 1114.007) | `rangeFrame("composer", caret, caret)`, in an action, is where a mention popover goes |
 | `measure("id")` | `Geometry`, actions only; literal id, the border box as if `height` were `auto`, other styles kept (padding, border, `min-height`, `max-height`, insets): 0 for a bare box whose children are all absolutely positioned (a navigation root); `frame` is the laid-out box | `measure("note").height`, in an action, is the note's natural height |
-| `elementFromPoint(x, y)` | `option<string>`, actions only; the `id` of the front-most of `frame`'s boxes at the viewport point, or of its nearest ancestor with one (DOM's `elementFromPoint(x, y)?.closest("[id]")?.id`): a box reaches as far as its `-exact-hit-slop`, ancestors' overflow clips apply, `pointer-events: none` and hidden boxes are passed over | `elementFromPoint(x, y)`, in a pointer action, is `some("card-3")` over that card |
-| `elementsFromPoint(x, y)` | `string[]`, actions only; own ids of every hit box, including hit ancestors, front to back; id-less boxes skipped, with `elementFromPoint`'s clips, transforms and skips | `elementsFromPoint(e.clientX, e.clientY)` sees through an Inspect overlay |
+| `elementFromPoint(x, y)` | `option<string>`, actions only; the `id` of the front-most of `frame`'s boxes at the viewport point, or of its nearest ancestor with one (DOM's `elementFromPoint(x, y)?.closest("[id]")?.id`): a box reaches as far as its `-exact-hit-slop`, ancestors' overflow clips apply, `pointer-events: none` and hidden boxes are passed over. The front modal's host-reported backdrop also hits where it accepts input, beneath later top-layer content | `elementFromPoint(x, y)`, in a pointer action, is `some("card-3")` over that card |
+| `elementsFromPoint(x, y)` | `string[]`, actions only; own ids of every hit box, including hit ancestors, front to back; id-less boxes skipped, with `elementFromPoint`'s clips, transforms and skips. The front modal's host-reported backdrop includes its own id once where it accepts input, beneath later top-layer content | `elementsFromPoint(e.clientX, e.clientY)` sees through an Inspect overlay |
 | `querySelectorAll(selector)` | `string[]`, actions only; only `[data-word~="value"]` for a declared `data-*` word; own ids of mounted, displayed, non-inert matches in tree order, excluding covered routes and unselected tabs; any other dynamic selector gives `[]` | `querySelectorAll("[data-paint~=\"accent\"]")` lists the accent nodes |
 
 On Apple, Linux and Windows, `frame` of an inline `text` run returns the
@@ -1195,6 +1303,10 @@ equal to `elementFromPoint`'s nearest-id answer; LLP 1001 §1 declares the
 rare difference from Chrome's raw filtered list.
 An id-less hit inside that box is skipped even when it covers a named sibling.
 Both point reads skip covered navigation routes, inert subtrees, and closed dialogs or popovers. Open painted top-layer content uses its presented frame and escapes clips on its authored ancestors. A macOS alert projected as an `NSAlert` sheet or an iOS UIKit confirmation has no authored hit boxes.
+The front modal's host-reported backdrop names its dialog or presented route
+where it accepts input, below any later popover. Its hit region is independent
+of the content's clip and pointer events. Native sheet chrome outside authored
+content is not part of the backdrop; neither read exposes the page or a lower modal.
 For `querySelectorAll`, a closed popover or dialog is hidden by its presenter;
 an open one is included when it matches. A wide split list is included only
 where the host presents it (on the web); native hosts hide the unselected route.
@@ -1312,7 +1424,9 @@ plan; a host carries none.
   their platforms default to another calendar.
 - **`formatDay`'s words** are CLDR's relative day names with a capital first letter
   (`Heute`, `Gestern`, `Morgen`), in the date's place in the medium date and short
-  time (`Heute, 13:02`; en-US `Today at 1:02 PM`).
+  time (`Heute, 13:02`; en-US `Today at 1:02 PM`). A `"section"` label begins with a
+  capital as a line does, the locale's first letter upper-cased (`Mercredi`,
+  `Jeu. 15 oct.`, `Dim. 4 mai 2025`); its dates are CLDR's `MMMEd` and `yMMMEd`.
 - **`"iso"`** is `YYYY-MM-DD` in every locale.
 
 ## Built-in tags
@@ -1320,6 +1434,9 @@ plan; a host carries none.
 The compiler's built-in tag vocabulary is grouped here by use. It is not an
 HTML parser: arbitrary HTML names outside this table are not implicitly accepted.
 Several tags share a kernel node type with different fixed properties.
+`radiogroup`, `tablist` and `menu` have group keys; other composite widget roles
+warn with `lower-role-keys` unless they handle keys, another element names their
+literal `id` with `aria-controls`, or a toolbar has `toolbarPlacement`.
 
 | Family | Names |
 | --- | --- |
@@ -1339,6 +1456,7 @@ bake checks it against `app.json`'s `modules` list or a dependency's `exact.json
 element's own props, pass to the module as one object. A package view accepts only
 its declared props and events beyond standard box attributes and common module
 events; an undeclared attribute is `lower-native-attr`.
+A literal `role` must name a concrete ARIA role, or it is refused.
 A known attribute binds to the module's box, and the box takes only layout,
 box and paint rows, handlers, `testId`, `id`, `class`, `data-*`, `role`, ARIA,
 `disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`)
@@ -1427,7 +1545,7 @@ included.
 
 An `image` takes no `loading` attribute: Exact decides when its picture is fetched
 (LLP 1048.007 D5). On the web a lone image loads with the page, and the page's first
-one is preloaded. An image a `for` repeats is written `loading="lazy"`, the first
+one is preloaded at high priority. An image a `for` repeats is written `loading="lazy"`, the first
 screen's rows included: the browser fetches those at the page's first layout, not
 while it parses the document, and the rest as they come near. Native hosts fetch the
 picture of every image that is mounted.
@@ -1458,9 +1576,23 @@ app: natively it opens in the system browser (the Linux host has none and
 logs it), and on the web in a new
 browsing context (`target="_blank" rel="external noopener"`), so the app is
 still there when the reader comes back. On the web, `target="_self"` keeps
-such a link in the page (it replaces the app) and `target="_blank"` opens a
-path in a new one; natively `target` changes nothing, an app having no
-other tab. `mailto:` and `tel:` links go to their handlers everywhere.
+such a link in the page (it replaces the app). `mailto:` and `tel:` links go
+to their handlers everywhere.
+
+A link to one of the app's paths goes where its `target` says, as HTML's does
+(LLP 1030.004). Empty, `_self`, `_parent` and `_top`, in any case, navigate in
+place; `_blank` opens a new window at the path each press; any other name opens
+the window of that name there, or brings it forward, navigated to the path when
+it shows another. A literal name that starts with `_` and is no keyword, or is
+`window-<n>` (the agent's label for a window with no name), is refused
+(`lower-attr-value`); a bound one that starts with `_` acts as `_blank`. On the
+web these are the browser's windows and tabs. On the Mac each window is a
+session of its own, rooted at its path (that screen alone, no sidebar or other
+tab beneath it), and the windows share the app's store; the window named
+`settings` is Settings…, which a `Meta+,` link opens without a `target`. The
+other native hosts have one window and navigate in place. `exactPage().name`
+says which window a page runs in ([a second window](recipes/second-window.md),
+[a Settings window](recipes/settings-window.md)).
 
 An unset `appearance` is `auto`: the platform's button, unless a background,
 border, radius, rich children or a row the native control cannot carry makes it
@@ -1507,8 +1639,11 @@ On the web and Apple, decoration updates wait until composition ends. The web pa
 `createValueRange()` and `CSS.highlights` and leaves the `<textarea>` in place; a browser
 without `createValueRange` paints nothing. macOS, iOS and tvOS paint TextKit 2 rendering
 attributes; Linux and Windows paint colour runs with unchanged advances; Android and the
-terminal paint nothing yet. Only the web paints `text-shadow`. `input` and
-`textarea markup="markdown"` refuse `decorations`.
+terminal paint nothing yet. The web and the Linux/Windows painter draw `text-shadow`.
+Decoration shadows remain unavailable on Apple: macOS 27.0.1 and scene-backed iOS 27.0
+draw `.shadow` in text storage but not as a TextKit 2 rendering attribute. Decorations
+leave text storage, layout and undo untouched.
+`input` and `textarea markup="markdown"` refuse `decorations`.
 
 The agent's `tree` keeps the authored `decorations` record. `state.decorations` on the
 web, Apple, Linux and Windows reports each field's `id` and `applied` snapshot: `source`,
@@ -1899,7 +2034,8 @@ recently started playing owns the session (else the latest mounted).
 `scroll` appends left then top offsets, and to an action that takes one more
 parameter a `ScrollEvent`: the scroller's own `scrollLeft`, `scrollTop`,
 `scrollWidth`, `scrollHeight`, `clientWidth` and `clientHeight` as the event
-fires, what a web handler reads off `event.target`. "At the end" is the web's
+fires, what a web handler reads off `event.target`, and `scrollZoom`, a
+zoomable scroller's zoom (1 on any other; LLP 1057.001.000). "At the end" is the web's
 arithmetic, on every host and on a virtualized list too (chat F4, a
 jump-to-latest pill); a native host's `scrollHeight` is its port plus the range
 it clamps to:
@@ -2620,6 +2756,22 @@ macOS, iOS and iPadOS with a hardware keyboard, Linux):
   Tab moves the focus, arrows move the caret; on the web arrows, Space and
   the page keys also scroll the page or the focus's scroller (a native
   scroller does not scroll by key, so there is nothing there to prevent).
+  On a native host a screen reader's step of an `input type="range"`
+  (VoiceOver's swipe up or down; the increment and decrement macOS and
+  Windows offer; Android's scroll forward and backward) is its arrow keydown
+  first, ArrowRight to raise and ArrowLeft to lower (swapped where its
+  `direction` is `rtl`): a handler that calls `preventDefault()` makes the
+  move itself, as it does for a keyboard's arrow on the web, and otherwise
+  the host steps the range.
+  Where Exact paints the group (on the web, Linux, Windows and Android's
+  reader always; on the Mac and iOS where no segmented control, sidebar,
+  toolbar or tab bar stands in for it), a
+  `radiogroup` of `button role="radio"` has one Tab stop and arrows move and
+  press the next eligible radio; a `tablist` has one stop and arrows move
+  without pressing (Left/Right, mirrored in RTL, or Up/Down with
+  `aria-orientation="vertical"`), with Home/End reaching its ends. A `role="menu"`
+  painted in the page moves by Up/Down and Home/End among its buttons, links
+  and `menuitem`s without pressing, and each item stays a Tab stop.
 - **Claiming a key.** An action run by a `key` event that calls the host
   command `preventDefault()` is the handler's `event.preventDefault()`: that
   default does not happen. Ancestors' handlers still hear the key, as they do
@@ -2772,25 +2924,26 @@ the virtual clock).
   fails `lower-menu-status`) and presents the button as the app's
   `NSStatusItem` on macOS, taking its place in the page; its `popovertarget`
   menu is the item's menu. A click opens the menu when there is one and runs
-  `press` when there is none. Windows' notification-area icon is accepted and
-  not built (LLP 1133.025 §14): there, as on every other host, the button
-  stays an ordinary button in the window. With
+  `press` when there is none. On Windows the button is a notification-area
+  icon and likewise leaves the page: a left click or a keyboard
+  selection runs `press`, or opens the menu when there is none, and a right
+  click opens the menu, which ends with Exit unless `status-quit` is removed.
+  Every other host keeps the button an ordinary button in the window. With
   `host.macos.activationPolicy: "accessory"` the app has no Dock tile and
   opens no window at launch. Bare `focus()` is the window's, as the web's
   `window.focus()`: on macOS and Windows it shows the session's window if
   hidden, brings it forward and activates the app; Linux brings no window
   forward and logs it as unsupported. `focus(id)` stays an element's.
   `hideWindow()` puts the session's window away as the person's close does
-  while a status item is placed or under `keepRunning`, and the app keeps
-  running; the next `focus()` shows it.
+  under `keepRunning`, or on macOS while a status item is placed, and the
+  app keeps running; the next `focus()` shows it.
   On Windows `host.windows.window.keepRunning: true` makes closing the window
   hide it, as on the Mac, and a login item registered `hidden` opens no
   window at that launch. A Windows app is one process: launching it again
   shows the window it has, and a location on that command line (a
-  jump-list task) opens in it. Windows' notification-area icon is not built
-  (LLP 1133.025 §14), so an app that keeps running there gives the person
-  its own way back (a global shortcut whose action calls `focus()`) and its
-  own way out (a button whose action calls `close()`).
+  jump-list task) opens in it. A placed status item does not make the close
+  hide the window there, as Windows' guidelines advise; it is a way back to a
+  window `keepRunning` hid, and its menu's Exit a way out.
 
   `@exact/global-shortcuts` on Windows accepts `PrintScreen` and modified
   chords such as `Control+PrintScreen`. Bare `PrintScreen` answers
@@ -2918,7 +3071,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, macOS and iOS open declared schemes (a browser asks first) and journal one nothing could open, and under the agent journal them instead (`openURL vscode: …`). Under the agent an `http` or `https` URL opens in the driver's browser on the web, in a tab the drive does not control, while macOS and iOS journal it and open nothing, so a test cannot go on in the opened page. `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened` A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; the web writes no such `href` (its link policy keeps the four schemes). `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |
 | `setScheme(scheme)`: the app's scheme, `"light"`, `"dark"` or `"system"` (follow the system's appearance) | [Caltrain](../apps/caltrain/app.contract), [Markdown](../apps/markdown/app.contract) |
 | `setLocale(tag)`: the language the app's strings read, over the host's locale: `t(…)` texts, `lang`, `dir` and `exactTime().resolvedLocale` follow the table `tag` resolves to, by the lookup the host's locale takes (`"de-AT"`, then `"de"`, then the base). `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and applies before the first frame of the next; `setLocale("")` forgets it and follows the host's locale. A literal tag is checked here (`type-set-locale`), a computed one in the log when it runs; an app with no strings tables is refused (`type-strings-missing`) | [strings tests](../contract/cli/tests/it/strings.rs) |
-| `setMode(axis, value)`: sets one of the window's app modes, an axis of the app's design (`app.tamber`) to one of its values, as `setMode("dark-style", "dim")`; a subtree pins its own with `-exact-mode` (LLP 1121 D5) | [Tamber recipe](recipes/tamber.md), [compiler tests](../contract/cli/tests/it/tamber.rs) |
+| `setMode(axis, value)`: sets one of the window's app modes, an axis of the app's design (`app.forma`) to one of its values, as `setMode("dark-style", "dim")`; a subtree pins its own with `-exact-mode` (LLP 1121 D5) | [Forma recipe](recipes/forma.md), [compiler tests](../contract/cli/tests/it/forma.rs) |
 | `setRootFontSize(px)`, `setRootFontSize("125%")`, `setRootFontSize("medium")`: CSS's `:root { font-size }`, the root font size every `rem` follows, in px above 0, laid out in the action's own commit; `px` lengths stay. It stands over the host's own size (the browser's setting, iOS Dynamic Type, 16 on macOS and Linux), as an author's `html { font-size: 20px }` stands over a browser's font-size setting, and `"medium"` hands the size back to the host. A percentage (CSS's number syntax, above 0) is that share of the host's size and follows it as the host's changes (LLP 1121 D6). A literal of 0 or less is refused here, a computed one in the log when it runs. Not kept across a launch: set it again from a mount task (LLP 1069.000 D3) | [rem tests](../contract/cli/tests/it/rem.rs) |
 | `setPageZoom(factor)`: the window's page zoom, as View ▸ Zoom In sets it and Electron's `webContents.setZoomFactor`: a CSS px is `factor` points, so the viewport, media queries, `px` and `rem` all follow; `setPageZoom(1)` is Actual Size, and a factor is clamped to 0.25–5. For an app whose own ⌘0, ⌘= and ⌘- commands keep their own steps ([The Mac's menu bar](#keys)). The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1) | [`PageZoomMacTests`](../host/apple/tests/ExactKitTests/PageZoomMacTests.swift) |
 | `exitFullscreen()`, `setWindowOpacity(opacity)`: what a quit the app holds does to its window before it quits, as Electron's `setFullScreen(false)` and `setOpacity(0)`. `exitFullscreen()` is the web's `document.exitFullscreen()`: on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s); nothing happens when nothing is full screen. `setWindowOpacity` draws the session's window at an opacity from 0 (unseen, still key and still hearing keys) to 1 (`NSWindow.alphaValue`); a literal outside 0–1 is refused here (`type-window-opacity`). The Mac's; the web refuses `setWindowOpacity`, and iOS and Linux refuse both, in the journal. The agent's `state.windows` shows each window's `fullScreen` and `opacity` (LLP 1069.010) | [calls tests](../contract/cli/tests/it/calls.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
@@ -2928,6 +3081,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `showOpenFilePicker(id[, multiple])` | [file-picker corpus](../contract/corpus/file-pickers.contract) |
 | `showDirectoryPicker(id)` | Same corpus |
 | `showSaveFilePicker(id, suggestedName)` | Same corpus |
+| `startIn=` on the three pickers and `saveFile`: where the panel opens, the File System Access API's option. A well-known folder, `"desktop"`, `"documents"`, `"downloads"`, `"music"`, `"pictures"`, `"videos"` or `"screenshots"`, or a `doc:/` path the person chose earlier (its folder, or a chosen file's folder). A literal outside the names fails the build (`type-file-picker-argument`, `type-save-file-argument`); at run time a value that is neither, or a handle the session does not hold, is journalled (`<command>: startIn: refused: …`) and the panel opens where it would. macOS opens the folder each time, Linux's portal and Chromium likewise (Chromium's `screenshots` is `pictures`), and iOS opens a handle's folder and ignores a name (LLP 1173 D2) | Same corpus, [picker tests](../contract/cli/tests/it/picker.rs) |
 | `requestPermission(id, path, mode)`: a kept document's access asked for again, `mode` `"read"` or `"readwrite"`, from a press (the web asks the browser under its activation; a native host answers `granted` for a document that resolves); `change` at `id` hears `granted` or `denied` ([documents kept across launches](reference.md#documents-the-person-chose-doc)) | No app fixture; [the web's kept documents test](../host/web/documents-kept.test.mjs) |
 | `scrollIntoView(id, block=, inline=, behavior=)`: `Element.scrollIntoView()` on any element by its `id` (a string, dynamic as `focus`'s): every scroll container above it, innermost first, then the page, align it by the web's `ScrollIntoViewOptions` (`block` default `start`, `inline` `nearest`). `scrollIntoView("list-id", key, …, row=, offset=)`: a virtualized list's row by key, built and measured first (LLP 1070.000). macOS, iOS and tvOS animate the element form with the platform's scroll animation unless `behavior="instant"` (LLP 1115.000 D8.4), landing immediately under reduced motion; `scrollend` comes once the animation ends. Linux and Android glide the element form the same way while the display owns the clock, and land it at once under the agent's (LLP 1070.000 §14). Either form owns its scrollers until it settles: `scrollFollowEnd` moves nothing meanwhile, and follows afterwards only where it rests at the end (LLP 1070.000 §15) | [collection tests](../contract/cli/tests/it/collection_into_view.rs) |
 | `scrollBy(id, x, y)`: `Element.scrollBy(x, y)` on a scroll container by its `id`, in pixels (a terminal's row is 16, its column 8), clamped to its travel; an element that does not scroll does not move. A reader's `j` and `k`. The terminal, Linux and the web's JS target take it; Apple and the wasm web host do not yet | [the LLP terminal reader](../apps/llp/terminal.contract), [`reading.rs`](../host/terminal/tests/it/reading.rs) |
@@ -3023,9 +3177,9 @@ Syntax is only the first layer. In particular:
   called `name(x)`, as it is declared) but not take a declared shape's constructor name.
 - Action reads see the starting snapshot. Writes land together. Locals are
   immutable and cannot shadow visible names or escape their block.
-- Resources/mutations/tasks are root-owned, but a child may read the device's
-  facts (`exactViewport()`, `exactPage()`, no arguments). A child may own
-  ordinary state, derives, and actions. An action writes only its own admitted slots.
+- Tasks are root-owned. A child may own ordinary state, derives, actions,
+  resources and mutations, each instance its own, where its instances are
+  bounded (`type-child-resource`). An action writes only its own admitted slots.
 - A `then` handler takes no parameters and must not send its own mutation.
 - A state's initializer reads only props, injects and the states above it; a
   resource, derive, mutation, action or later state it names is

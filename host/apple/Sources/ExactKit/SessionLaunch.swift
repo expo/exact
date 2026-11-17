@@ -49,7 +49,7 @@ struct LaunchPlace: Equatable {
             epoch = Double(environment["EXACT_AGENT_EPOCH"] ?? "1767225600000") ?? 1_767_225_600_000
         } else {
             epoch = nil
-            locale = Locale.preferredLanguages.first ?? Locale.current.identifier(.bcp47)
+            locale = SessionFacts.viewerLocale()
             timeZone = TimeZone.current.identifier
             seed = UInt64(UInt32.random(in: .min ... .max))
             formatLocale = SessionFacts.currentFormatLocale

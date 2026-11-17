@@ -4,3 +4,6 @@
 # Android 10 and 11's code (Legacy.kt, LegacyGlyphs.kt) is the app's to keep, below Android 12 only
 # (app/proguard-legacy.pro); for any other app R8 folds each SDK_INT check that leads there and drops it.
 -keep class !dev.exact.canvas.Legacy*,dev.exact.canvas.** { *; }
+
+# The verifier is called through JNI.
+-keep,includedescriptorclasses class org.rustls.platformverifier.** { *; }

@@ -38,6 +38,37 @@ fn view(h: &Host<()>, name: &str) -> u32 {
 }
 
 #[test]
+fn a_derive_bound_spring_moves_on_the_native_clock() {
+    let plan = contract::compile(
+        r#"component Repro
+  state open = false
+  derive spring = "translate -exact-spring(140, 10, 1)"
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      view width=40 height=40 testId="box" translate=(open ? "100px 0px" : "0px 0px") transition=spring
+"#,
+    ).unwrap().encode();
+    let (mut host, _) = Host::boot(
+        &plan,
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        420.,
+        900.,
+    )
+    .unwrap();
+    let node = view(&host, "box");
+    host.dispatch_at(view(&host, "toggle"), Event::Press, 0.);
+    host.tick(50.);
+    let x = host.presented(node).translate.0;
+    assert!(x > 0. && x < 100., "{x}");
+    host.tick(10_000.);
+    assert_eq!(host.presented(node).translate.0, 100.);
+}
+
+#[test]
 fn catch_uses_current_presentation_and_retains_newest_authored_target() {
     let mut h = fixture();
     let row = view(&h, "row");

@@ -1,4 +1,4 @@
-// The design tool's held choice (apps/design-tool/choice.ts, tamber/1.18 `choose`), pure: a card's base and the
+// The design tool's held choice (apps/design-tool/choice.ts, forma/1.18 `choose`), pure: a card's base and the
 // page's flips over it, a rebase by another client's choice making the page's flips obsolete before anything sends
 // them, a newer record kept while the page's own choose is on its way and settled when it lands, an undone tick still
 // sending its card's choice, a failed choose said, an override's items turned over together, and a new server run.

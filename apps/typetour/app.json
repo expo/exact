@@ -14,5 +14,6 @@
     "web": {},
     "linux": {}
   },
-  "deploy": { "store": { "web": "0", "macos": "0", "ios": "0", "linux": "0" } }
+  "deploy": { "store": { "web": "0", "macos": "0", "ios": "0", "linux": "0" } },
+  "rust": { "data": { "crate": "typetour-data", "type": "typetour_data::Tour", "source": "typetour_data::Tour" } }
 }

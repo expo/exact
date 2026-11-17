@@ -60,12 +60,12 @@ fn svg(package: &str, name: &str) -> String {
 /// draws the path, not an SF Symbol).
 fn assert_declared(package: &str, name: &str) {
     let design =
-        std::fs::read_to_string(repo().join(format!("packages/{package}/{package}.tamber")))
+        std::fs::read_to_string(repo().join(format!("packages/{package}/{package}.forma")))
             .unwrap();
     let line = format!("  {package}.{name} = icon(svg \"{name}.svg\")\n");
     assert!(
         design.contains(&line),
-        "{package}.tamber has no `{}`",
+        "{package}.forma has no `{}`",
         line.trim()
     );
 }

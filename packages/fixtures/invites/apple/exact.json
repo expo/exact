@@ -1,0 +1,14 @@
+{
+  "kind": "implementation",
+  "implements": "@fixture/invites@^1.0",
+  "platform": "apple",
+  "targets": ["ios", "macos"],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "hatches": [],
+  "sources": { "swift": ["Invites.swift"] },
+  "artifacts": [],
+  "hostEvents": ["cloudkit-share"],
+  "class": "InvitesModule"
+}

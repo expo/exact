@@ -19,7 +19,7 @@ impl DataSource for NoData {
 /// navigation root, of each route and of a box inside each.
 fn stack(root: &str, route: &str, inner: &str) -> String {
     format!(
-        "routes nav\n  home \"/\"\n    viewer \"/viewer\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\" {root}\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` testId=`route-${{e.name}}` position=\"absolute\" inset=0 {route}\n          column {inner}\n            text e.name\n"
+        "routes nav\n  home \"/\"\n    viewer \"/viewer\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` {root}\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` testId=`route-${{e.name}}` position=\"absolute\" inset=0 {route}\n          column {inner}\n            text e.name\n"
     )
 }
 
@@ -121,6 +121,10 @@ fn a_header_button_that_presses_nothing_is_named() {
         "{says}"
     );
     assert!(says.contains("give it `role=\"status\"`"), "{says}");
+    assert!(
+        says.contains("say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md"),
+        "{says}"
+    );
     // A disabled one is UIKit's disabled bar item, shown dimmed: no warning.
     let disabled = src.replace("button aria-label", "button disabled=true aria-label");
     let (result, warnings) = contract::compile_warned(&disabled);

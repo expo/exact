@@ -223,6 +223,7 @@ fn logical_copy_omits_control_labels_in_unmounted_rows() {
         // A native button's title is a paragraph on the web, none on the Mac.
         let web = policy == crate::ListTextPolicy::Web;
         let at = |key, offset| crate::ListTextPosition {
+            fixed: None,
             key,
             paragraph: if web { 3 } else { 2 },
             offset,
@@ -335,6 +336,7 @@ fn logical_copy_omits_hidden_and_inert_text() {
         assert_eq!(copied, rows(0..128), "{policy:?}");
         // "Again" is each row's third paragraph: after the number and the card.
         let at = |key, paragraph, offset| crate::ListTextPosition {
+            fixed: None,
             key,
             paragraph,
             offset,
@@ -392,6 +394,7 @@ fn logical_text_reads_unmounted_rows_and_wrappers_publish_their_place() {
     assert!(all.starts_with("row 0\n\nrow 1\n\n"), "{}", &all[..40]);
     assert!(all.ends_with("row 127"));
     let position = |key, offset| crate::ListTextPosition {
+        fixed: None,
         key,
         paragraph: 0,
         offset,

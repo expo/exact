@@ -137,6 +137,7 @@ fn same_metrics(a: TextMetrics, b: TextMetrics) -> bool {
     a.width.to_bits() == b.width.to_bits()
         && a.height.to_bits() == b.height.to_bits()
         && a.first_baseline.map(f32::to_bits) == b.first_baseline.map(f32::to_bits)
+        && a.pending == b.pending
 }
 
 /// Explicit direct children of an independently sized, clipped View.
@@ -187,8 +188,15 @@ impl PartialEq for TextKey {
 }
 /// One immutable first-missing request. Cloning shares its snapshot; no worker
 /// sees the arena or computes geometry. Only the current request may complete.
+/// Equality identifies that private request; cloning preserves its identity.
 #[derive(Clone)]
 pub struct RegionTextRequest(Arc<RequestData>);
+impl PartialEq for RegionTextRequest {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for RegionTextRequest {}
 struct RequestData {
     ticket: RegionTicket,
     key: TextKey,
@@ -449,6 +457,34 @@ impl RegionPublication {
     /// live arena styles or aliases a node whose slot was reused.
     pub fn field_content_rect(&self, node: NodeKey) -> Option<Frame> {
         self.geometry.facts.field_content.get(&node).copied()
+    }
+    /// Origin-zero content box from the accepted pass, including its resolved
+    /// padding and border. It never reads the live candidate's style.
+    pub fn content_rect(&self, node: NodeKey) -> Option<Frame> {
+        let frame = self.frames().iter().find(|f| f.node == node)?.frame;
+        let inset = self
+            .geometry
+            .facts
+            .insets
+            .get(&node)
+            .copied()
+            .unwrap_or_default();
+        Some(Frame {
+            x: frame.x + inset.padding[0] + inset.border[0],
+            y: frame.y + inset.padding[1] + inset.border[1],
+            width: (frame.width
+                - inset.padding[0]
+                - inset.padding[2]
+                - inset.border[0]
+                - inset.border[2])
+                .max(0.),
+            height: (frame.height
+                - inset.padding[1]
+                - inset.padding[3]
+                - inset.border[1]
+                - inset.border[3])
+                .max(0.),
+        })
     }
     /// Default: all retained offers. Split profile: final paint owners only.
     pub fn artifacts(&self) -> &[RegionArtifact] {

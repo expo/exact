@@ -2,6 +2,7 @@ import { MalformedOperation, inputJSON } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { renderAx } from './agent-ax.mjs';
 import { decodePng, encodePng, shrink } from './png.mjs';
@@ -433,7 +434,7 @@ function renderNode(n) {
   if (n.visible) out.push(`  visible ${sorted(n.visible).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   if (n.native) out.push(`  native ${sorted(n.native).filter(([k]) => k !== 'subviews').map(([k, v]) => `${k}=${typeof v === 'string' ? v : q(v)}`).join(' ')}`);
   if (n.browser) out.push(`  browser ${sorted(n.browser).map(([k, v]) => `${k}=${q(v)}`).join(' ')}`);
-  // A pressed paint, on the page's images, which the computed opacity and background don't show (LLP 1061 D7).
+  // A pressed paint, which the computed opacity and background don't show where it is on the page's images (LLP 1061 D7).
   if (n.press_shown) out.push(`  press shows opacity=${n.press_shown.opacity} background=${q(n.press_shown.backgroundColor)} color=${q(n.press_shown.color)} (paint ${n.press_shown.paint})`);
   if (n.native?.subviews) out.push(...renderSubviews(n.native.subviews));
   return out;
@@ -569,12 +570,15 @@ export async function perfOp(s, args, line, step) {
     if (live !== undefined && !(Number.isInteger(live) && live > 0 && live <= 120000)) throw new MalformedOperation('perf frames live <ms>: a whole number of milliseconds, 1–120000');
     if (live !== undefined && ['ios', 'host-ios', 'macos', 'host'].includes(s.host)) {
       if (live > 30000 || late !== undefined || args.length !== 3 || args[1] !== 'live') throw new MalformedOperation('perf frames live <1–30000 ms> on Apple; use report for hitch detail');
-      const before = await s.op({ op: 'perf', frames: true, health: true });
-      if (before.error || !before.available) return before;
-      if (before.capture?.agentLeaseRemainingMs > 0) throw new MalformedOperation('a live frame capture is already active; read health or stop that capture first');
+      const current = await s.op({ op: 'perf', frames: true, health: true });
+      if (current.error) return current;
+      if (current.capture?.agentLeaseRemainingMs > 0) throw new MalformedOperation('a live frame capture is already active; read health or stop that capture first');
+      // The lease starts an on-demand collector in a new generation, so the baseline is read once it holds.
       const capture = await s.op({ op: 'perf', frames: true, capture: 'start', durationMs: live + 5000 });
       if (!capture.capture) return capture;
       try {
+        const before = await s.op({ op: 'perf', frames: true, health: true });
+        if (before.error || !before.available) return before;
         await new Promise(resolve => setTimeout(resolve, live));
         return await s.op({ op: 'perf', frames: true, health: true, cursor: before.cursor });
       } finally { await s.op({ op: 'perf', frames: true, capture: 'stop' }); }
@@ -860,8 +864,12 @@ export async function pidTrace(pid, dest, run = spawnSync, timeout = 10000) {
     if (container.status !== 0) throw new Error(`trace --pid ${pid}: ${container.stderr.trim() || 'simctl get_app_container failed'}`);
     dir = resolve(container.stdout.trim(), 'tmp');
   } else {
-    // A Mac app here is unsandboxed: its temporary directory is this user's.
-    dir = run('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout?.trim();
+    // A sandboxed app's temporary directory is its container's (`mac --sandbox`, LLP 1030.005 D4); another's, this user's.
+    const app = exe.match(/^(.*?\.app)\/Contents\/MacOS\//)?.[1];
+    const signed = app ? run('codesign', ['-d', '--entitlements', '-', '--xml', app], { encoding: 'utf8' }).stdout ?? '' : '';
+    const id = /<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/.test(signed)
+      && run('plutil', ['-extract', 'CFBundleIdentifier', 'raw', resolve(app, 'Contents/Info.plist')], { encoding: 'utf8' }).stdout?.trim();
+    dir = id ? resolve(homedir(), 'Library/Containers', id, 'Data/tmp') : run('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout?.trim();
   }
   const ready = resolve(dir, `exact-trace-${pid}.ready`), started = Date.parse(ps('lstart'));
   if (!existsSync(ready) || (Number.isFinite(started) && statSync(ready).mtimeMs < started - 1000)) {
@@ -1371,4 +1379,13 @@ export async function lookPicture(s, path, target, view = {}) {
   const { tick, hash, w, h, look, bounds } = reply, from = Object.fromEntries(Object.entries(view).filter(([k]) => k !== 'resolution'));
   // `bounds`: the scene's centre and radius an orbit or plan view was drawn within.
   return { screenshot: resolve(path), w, h, tick, hash, canvas: at.id, look, ...(bounds ? { bounds } : {}), ...(Object.keys(from).length ? { view: from } : {}) };
+}
+
+/** A presented box, including a layout-only node read from its logical layout. */
+export async function layoutBox(s, id, layout) {
+  const box = layout.nodes.find(n => n.id === id);
+  if (box) return box;
+  if (!['ios', 'host-ios'].includes(s.host)) return undefined;
+  const node = (await s.layout(id)).node;
+  return node?.native?.layoutOnly === true ? node.space?.viewport : undefined;
 }

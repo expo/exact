@@ -171,10 +171,9 @@ fn unsupported_height_and_untouched_ancestor_retire_only_height() {
     // Drive the host's documented mutable-runner seam to clear the height.
     // The next input boundary must consume retirement even without a receipt.
     let k = host.runner_mut().kernel_mut();
-    let mut patch = exact_kernel::StyleProps {
-        height: exact_kernel::Dimension::Auto,
-        ..Default::default()
-    };
+    let mut patch = exact_kernel::StyleProps::default().with_rows(|rows| {
+        rows.height = exact_kernel::Dimension::Auto;
+    });
     patch.mask.set(exact_kernel::StyleId::Height);
     k.apply(
         0,

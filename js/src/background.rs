@@ -198,15 +198,18 @@ impl Module {
         self.host.between_answers = false;
     }
 
-    /// The module's journal (LLP 1097 D8): the runtime's own lines as they
-    /// are, its `console` marked as the app's.
+    /// The module's journal (LLP 1097 D8): the runtime's own lines, those
+    /// through its door as they are and the rest as `console: …`, each line
+    /// the app's `console` wrote marked with its method (LLP 1027.009 D1:
+    /// [`exact_runner::Console::mark`]), and each uncancelled error event's
+    /// line for the platform's log alone (LLP 1175 D5).
     pub(crate) fn journal_lines(&mut self) -> Vec<String> {
         let mut lines = std::mem::take(&mut self.host.journal);
-        lines.extend(
-            self.take_logs()
-                .into_iter()
-                .map(|line| format!("console: {line}")),
-        );
+        lines.extend(self.take_lines().into_iter().map(|(by, line)| match by {
+            crate::Writer::App(method) => method.mark(&line),
+            crate::Writer::Uncaught => exact_runner::Console::Error.mark_unjournaled(&line),
+            crate::Writer::Runtime => format!("console: {line}"),
+        }));
         lines
     }
 }

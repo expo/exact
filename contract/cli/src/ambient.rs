@@ -12,7 +12,7 @@ pub(crate) fn check(input: &Path) -> Vec<contract::CompileError> {
     if !app.join("app.ts").is_file() {
         return Vec::new();
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = contract::root::sdk_root();
     let bun = std::env::var_os("BUN")
         .map(PathBuf::from)
         .or_else(|| {

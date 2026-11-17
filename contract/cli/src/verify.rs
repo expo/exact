@@ -1,10 +1,10 @@
 //! `contract verify`: the app against the Lean semantics
 //! (semantics/README.md, "Using it day to day").
 //! The work is `difftest verify`'s; this runs it through Cargo from the
-//! exact2 checkout this binary was built from, so the compiler never
+//! exact2 checkout in use (LLP 1174 D1), so the compiler never
 //! depends on the tester and nothing but this command needs Lean.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, ExitCode};
 
 pub(crate) const USAGE: &str = "usage: contract verify <file.contract> [--runner-only] [--js] [--walks N] [--steps M] [--walk-seed N] [--confirm N] [--types] [--prove <Module>]
@@ -17,11 +17,6 @@ Without Lean or with --runner-only, the receipt says the semantics did not run.
 --js also compares every search script on the web JS target and checks always lines.
 --types runs the Lean type checker; --prove <Module> regenerates the embedding
 and builds semantics/Apps/Proofs/<Module>.lean.";
-
-/// The checkout this binary was built in.
-fn repository() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
 
 pub fn run(args: &[String]) -> ExitCode {
     let mut file = None;
@@ -59,10 +54,10 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let root = repository();
+    let root = contract::root::sdk_root();
     if !root.join("semantics/lakefile.toml").is_file() {
         eprintln!(
-            "contract verify: the semantics are not at {} (this binary was built from a checkout that has moved)",
+            "contract verify: the semantics are not at {}",
             root.join("semantics").display()
         );
         return ExitCode::from(2);

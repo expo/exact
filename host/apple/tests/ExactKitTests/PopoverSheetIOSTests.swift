@@ -117,6 +117,15 @@ final class PopoverSheetIOSTests: XCTestCase {
         XCTAssertEqual(outside["hit"] as? String, "none")
         XCTAssertEqual(outside["hits"] as? String, "")
         XCTAssertTrue(content.isDescendant(of: sheet.scroller))
+        let container = try XCTUnwrap(sheet.presentationController?.containerView)
+        let dimmed = CGPoint(x: container.bounds.minX + 5, y: container.bounds.minY + 5)
+        let native = try XCTUnwrap(container.hitTest(dimmed, with: nil))
+        XCTAssertFalse(native.isDescendant(of: sheet.view), "UIKit delivers the point to the backdrop outside the sheet")
+        let at = p.viewportPoints(container.convert(CGRect(origin: dimmed, size: .zero), to: p.viewport)).origin
+        XCTAssertFalse(clip.contains(at))
+        let backdrop = try read(at)
+        XCTAssertEqual(backdrop["hit"] as? String, "form")
+        XCTAssertEqual(backdrop["hits"] as? String, "form")
     }
 
     /// A route presentation whose routes show no box yet (not in the window
@@ -845,7 +854,7 @@ final class PopoverSheetIOSTests: XCTestCase {
             dialog.handlers.formUnion(["close", "cancel"])
             var closed: [UInt32] = [], cancelled: [UInt32] = []
             p.onClose = { closed.append($0) }
-            p.menus.sheets.onCancel = { cancelled.append($0) }
+            p.onCancel = { cancelled.append($0) }
             let sheet = try show(in: p)
             XCTAssertTrue(sheet.presentingViewController === route, "authored in the route: \(authoredInRoute)")
             p.menus.action("showPopover", ["choices", "opener"])
@@ -895,7 +904,7 @@ final class PopoverSheetIOSTests: XCTestCase {
         for dialog in dialogs { dialog.handlers.formUnion(["close", "cancel"]) }
         var closed: [UInt32] = [], cancelled: [UInt32] = []
         p.onClose = { closed.append($0) }
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         let owner = try XCTUnwrap(route.presentingViewController)
         let dismissed = expectation(description: "the embedder dismissed the stack")
         owner.dismiss(animated: true) { dismissed.fulfill() }
@@ -955,7 +964,7 @@ final class PopoverSheetIOSTests: XCTestCase {
         dialog.handlers.formUnion(["close", "cancel"])
         var closed: [UInt32] = [], cancelled: [UInt32] = []
         p.onClose = { closed.append($0) }
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         sheet.dismiss(animated: true)
         settle { sheet.transitionCoordinator?.isInteractive == true && transition.started }
         transition.interaction.update(0.4)
@@ -1310,7 +1319,7 @@ final class PopoverSheetIOSTests: XCTestCase {
             let presentation = try XCTUnwrap(sheet.presentationController)
             var closed: [UInt32] = [], cancelled: [UInt32] = []
             p.onClose = { closed.append($0) }
-            p.menus.sheets.onCancel = { cancelled.append($0) }
+            p.onCancel = { cancelled.append($0) }
             sheet.dismiss(animated: true)
             settle { sheet.transitionCoordinator?.isInteractive == true && transition.started }
             let coordinator = try XCTUnwrap(sheet.transitionCoordinator)

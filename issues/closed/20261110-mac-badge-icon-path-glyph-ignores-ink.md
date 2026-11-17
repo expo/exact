@@ -19,7 +19,7 @@ A header button whose one child is a filled box holding a symbol is a bar item's
 
 ```
 icons
-  icon.logo = icon(svg "icons/logo.svg")        // app.tamber: no `sf`
+  icon.logo = icon(svg "icons/logo.svg")        // app.forma: no `sf`
 ```
 ```
 header

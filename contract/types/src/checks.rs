@@ -12,6 +12,7 @@ mod midi;
 mod observe;
 mod open_url;
 mod permission;
+mod pickers;
 mod sounds;
 
 /// Whether a roster parameter admits `t`. The roster table spells three
@@ -36,7 +37,9 @@ pub(super) fn roster_spelling(f: exact_plan::Stdlib, spec: &str) -> &str {
         (Stdlib::ToString, "any") => "number | string | bool",
         (Stdlib::First | Stdlib::At, "any") => "list",
         // The ISO 4217 codes `"currency"` takes (LLP 1116 D8), too many to spell here.
-        (Stdlib::FormatNumber, code) if code.starts_with("\"USD\"") => "\"USD\" | \"EUR\" | …",
+        (Stdlib::FormatNumber, code) if code.starts_with("\"USD\"") => {
+            "\"USD\" | \"EUR\" | … | 0..=100"
+        }
         _ => spec,
     }
 }
@@ -352,6 +355,20 @@ fn owner_scopes(
     (scopes, complete)
 }
 
+/// The scopes of the arms a child's lifted requests are owned by, which
+/// read their arguments and gates there (LLP 1035.005.004 D1).
+pub(super) fn owned_scopes(
+    c: &Component,
+    ct: &ComponentTypes,
+    types: &Types,
+    owners: &[Owner],
+) -> BTreeMap<(u32, u8), Scope> {
+    if !owners.iter().any(|o| matches!(o, Owner::Arm { .. })) {
+        return BTreeMap::new();
+    }
+    owner_scopes(c, ct, types).0
+}
+
 /// Infer each lifted child state's initializer where its instance is
 /// created: in its use site's scope, after derives and resources have
 /// types, so it may read them, a row's item, a `match` binding, and every
@@ -510,109 +527,6 @@ fn collect_owner_scopes(
         }
     }
     complete
-}
-
-/// The three pickers' positional arguments (LLP 1069.010 D2): an element
-/// id, then `multiple` (a bool) for `showOpenFilePicker` or
-/// `suggestedName` (a string) for `showSaveFilePicker`.
-fn picker_args(
-    name: &str,
-    args: &[Expr],
-    scope: &Scope,
-    shapes: &Shapes,
-    span: Span,
-) -> Result<(), TypeError> {
-    let (usage, second) = match name {
-        "showOpenFilePicker" => (
-            "showOpenFilePicker(id) or showOpenFilePicker(id, multiple)",
-            Some((Ty::Bool, false)),
-        ),
-        "showSaveFilePicker" => (
-            "showSaveFilePicker(id, suggestedName)",
-            Some((Ty::String, true)),
-        ),
-        _ => ("showDirectoryPicker(id)", None),
-    };
-    let wrong = |at| {
-        err(
-            "type-file-picker-argument",
-            format!("`{name}` takes `{usage}`"),
-            at,
-        )
-    };
-    let most = if second.is_some() { 2 } else { 1 };
-    let least = match second {
-        Some((_, true)) => 2,
-        _ => 1,
-    };
-    if args.len() < least
-        || args.len() > most
-        || args.iter().any(|a| matches!(a, Expr::NamedArg(..)))
-    {
-        return wrong(span);
-    }
-    for (i, arg) in args.iter().enumerate() {
-        let want = if i == 0 {
-            Ty::String
-        } else {
-            second.as_ref().map_or(Ty::String, |(t, _)| t.clone())
-        };
-        let t = infer(arg, scope, shapes)?;
-        if want.unify(&t).is_none() {
-            return wrong(arg.span());
-        }
-    }
-    Ok(())
-}
-
-/// `saveFile(id, from, suggestedName)` (LLP 1069.010 D3): three strings,
-/// positional. Whether `from` is granted is the host's to refuse. Or the
-/// file's text itself, `saveFile(id, text=…, suggestedName=…)`, so
-/// exporting what is on screen is one press (x2apps notes #4): the names
-/// are `share`'s `text` and `showSaveFilePicker`'s `suggestedName`.
-fn save_file_args(
-    args: &[Expr],
-    scope: &Scope,
-    shapes: &Shapes,
-    span: Span,
-) -> Result<(), TypeError> {
-    let named = |want: &str| {
-        args.iter()
-            .filter(|a| matches!(a, Expr::NamedArg(n, ..) if n == want))
-            .count()
-    };
-    let positional = args
-        .iter()
-        .filter(|a| !matches!(a, Expr::NamedArg(..)))
-        .count();
-    let file = args.len() == 3 && positional == 3;
-    let text = args.len() == 3
-        && positional == 1
-        && named("text") == 1
-        && named("suggestedName") == 1
-        && !matches!(args[0], Expr::NamedArg(..));
-    if !file && !text {
-        return err(
-            "type-save-file-argument",
-            "`saveFile` takes three strings, `saveFile(\"export-file\", \"app:/data/export.json\", \"export.json\")`, or the text to save, `saveFile(\"export-file\", text=body, suggestedName=\"note.md\")`",
-            span,
-        );
-    }
-    for arg in args {
-        let arg = match arg {
-            Expr::NamedArg(_, value, _) => value.as_ref(),
-            arg => arg,
-        };
-        let t = infer(arg, scope, shapes)?;
-        if Ty::String.unify(&t).is_none() {
-            return err(
-                "type-save-file-argument",
-                format!("`saveFile`'s arguments are strings, not `{t}`"),
-                arg.span(),
-            );
-        }
-    }
-    Ok(())
 }
 
 /// `share(title=, text=, url=, files=)` (LLP 1069.003 D1; LLP 1125 D12):
@@ -915,7 +829,7 @@ pub(super) fn check_command(
         return share_args(args, scope, shapes, span);
     }
     if name == "saveFile" {
-        return save_file_args(args, scope, shapes, span);
+        return pickers::save_file_args(args, scope, shapes, span);
     }
     if name == "requestPermission" {
         return permission::args(args, scope, shapes, span);
@@ -924,7 +838,7 @@ pub(super) fn check_command(
         return open_url::args(args, scope, shapes, span);
     }
     if name.starts_with("show") && name.ends_with("Picker") && name != "showPicker" {
-        return picker_args(name, args, scope, shapes, span);
+        return pickers::picker_args(name, args, scope, shapes, span);
     }
     if name == "scrollIntoView" {
         return into_view_args(args, scope, shapes, span);

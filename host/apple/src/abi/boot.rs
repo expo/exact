@@ -100,6 +100,7 @@ impl<D: DataSource> Bridge<D> {
         // menu may use this fresh-state path to reload the baked plan.
         // A fresh named drive empties leftover secrets before that read.
         // An archive that links no I/O binds nothing (LLP 1047.001).
+        crate::watch_sync::startup(data.grants(), data.app_id())?;
         let launch_store = self
             .links
             .io
@@ -183,6 +184,7 @@ impl<D: DataSource> Bridge<D> {
                 self.presenter_hooks(&mut host, &hooks);
                 self.executor = executor;
                 let batch = Host::ending(self.host.replace(host), batch);
+                self.launch_layout.insets = None;
                 self.parked.clear();
                 Ok(batch)
             }

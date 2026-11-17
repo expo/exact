@@ -263,17 +263,21 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// `blur()` drops the focus; `blur(id)` only when that node holds it.
+    /// A node a `focus()` waits to focus once it lands (`flights.focus`)
+    /// holds it, as on the web, where the `focus()` has already moved it
+    /// there: a blur that applies drops the wait too.
     pub(crate) fn blur_command(&mut self, args: &[exact_plan::Value]) {
-        let holds = |name: &str| {
-            self.focus
-                .and_then(|id| self.host.kernel().node(id))
-                .is_some_and(|n| n.props.str(PropId::Id) == Some(name))
+        let kernel = self.host.kernel();
+        let holder = match self.host.flights.focus {
+            Some(key) => kernel.node_by_key(key),
+            None => self.focus.and_then(|id| kernel.node(id)),
         };
-        if args
+        let applies = args
             .first()
             .and_then(exact_plan::Value::as_str)
-            .is_none_or(holds)
-        {
+            .is_none_or(|name| holder.is_some_and(|n| n.props.str(PropId::Id) == Some(name)));
+        if applies {
+            self.host.flights.focus = None;
             self.blur();
         }
     }
@@ -292,6 +296,10 @@ impl<D: DataSource> Presenter<D> {
         let (hidden, inert) = self.host.route_visibility_to(id, shown);
         if hidden || inert {
             return Some("not rendered");
+        }
+        // A flight's content takes no input until it lands, pointer or key.
+        if self.host.flying(id) {
+            return Some(crate::host::flights::IN_FLIGHT);
         }
         let region = self.host.content_region();
         let content = region.map(|r| r.binding().content);
@@ -367,6 +375,11 @@ impl<D: DataSource> Presenter<D> {
             Some(id) if !self.focusable(id) => "not focusable",
             Some(id) => {
                 if let Some(reason) = self.focus_refusal(id) {
+                    // A flying node is focused when it lands (`focus_landed`).
+                    if reason == crate::host::flights::IN_FLIGHT {
+                        self.host.flights.focus = self.host.kernel().node(id).map(|n| n.key);
+                        return None;
+                    }
                     self.host.log(format!("focus \"{name}\" refused: {reason}"));
                     return None;
                 }
@@ -431,6 +444,16 @@ impl<D: DataSource> Presenter<D> {
                 false,
                 Some("focus refused: page under the open surface is inert".into()),
             );
+        }
+        // Every way to the focus ends here: a flight's content takes none.
+        if next.is_some_and(|id| self.host.flying(id)) {
+            let refused = format!("focus refused: {}", crate::host::flights::IN_FLIGHT);
+            return (false, Some(refused));
+        }
+        // A focus put on a node supersedes a `focus()` waiting for its node
+        // to land, as the later of two `focus()` calls wins on the web.
+        if next.is_some() {
+            self.host.flights.focus = None;
         }
         let previous = self.focus;
         if previous == next {
@@ -590,6 +613,19 @@ impl<D: DataSource> Presenter<D> {
             .focus
             .or_else(|| self.alert_root().filter(|_| self.alert_inert()))
             .or_else(|| self.host.roots().first().copied());
+        self.key_event_at(target, kind, name, code, repeat, now_ms)
+    }
+
+    /// [`Self::key_event`] at `target` rather than the focus.
+    pub(crate) fn key_event_at(
+        &mut self,
+        target: Option<ViewId>,
+        kind: EventKind,
+        name: &str,
+        code: &str,
+        repeat: bool,
+        now_ms: f64,
+    ) -> (Option<String>, bool) {
         let mut path = Vec::new();
         let mut at = target.and_then(|id| self.handler_target(id, kind));
         while let Some(id) = at {

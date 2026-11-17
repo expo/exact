@@ -72,3 +72,39 @@ fn the_commands_are_checked_by_name() {
         assert!(error.contains("type-media-command"), "{statement}: {error}");
     }
 }
+
+// @ref LLP 1042.000 D2 — a rendition's bound is spelt as HLS spells a
+// variant's RESOLUTION; an `audio` has no picture to bound.
+#[test]
+fn a_resolution_is_width_x_height_on_a_video() {
+    let video = |attrs: &str| {
+        format!("component App\n  view\n    video \"https://example.com/a.m3u8\" {attrs}\n")
+    };
+    for good in [
+        "preferredMaximumResolution=\"1920x1080\" startsOnFirstEligibleVariant=true",
+        "preferredMaximumResolution=\"640x360\"",
+    ] {
+        contract::compile(&video(good)).unwrap_or_else(|e| panic!("{good}: {e}"));
+    }
+    for bad in [
+        "1920",
+        "1920x",
+        "x1080",
+        "0x1080",
+        "1920X1080",
+        "1920 x 1080",
+        "-1x2",
+        "1.5x2",
+    ] {
+        let error = contract::compile(&video(&format!("preferredMaximumResolution=\"{bad}\"")))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("lower-attr-value"), "{bad}: {error}");
+    }
+    let audio = APP.replace(
+        "paused=hush",
+        "paused=hush preferredMaximumResolution=\"640x360\"",
+    );
+    let error = contract::compile(&audio).unwrap_err().to_string();
+    assert!(error.contains("lower-attr-tag"), "{error}");
+}

@@ -131,7 +131,7 @@ impl Engine {
                 continue;
             }
             if !busy || !self.clocks.origins.contains_key(&name) {
-                if self.start_on_frame {
+                if self.holds() {
                     self.clocks.pending.insert(name.clone(), now);
                 }
                 self.clocks.origins.insert(name, now);
@@ -230,20 +230,31 @@ impl Engine {
         !self.clocks.pending.is_empty()
     }
 
-    /// The frame at `frame` moves every waiting origin set at or before it
-    /// (with `all`, every one) by the wait; its members move with their own
-    /// pending starts.
-    pub(super) fn start_clocks(&mut self, frame: f64, all: bool) {
+    /// Start the waiting origins `start_at` takes (it maps an origin's begin
+    /// to its start, or `None` to leave it waiting): each moves by its wait;
+    /// its members move with their own pending starts.
+    pub(super) fn start_clocks(&mut self, start_at: impl Fn(f64) -> Option<f64>) {
         let origins = &mut self.clocks.origins;
         self.clocks.pending.retain(|name, begin| {
-            if *begin > frame && !all {
+            let Some(t) = start_at(*begin) else {
                 return true;
-            }
+            };
             if let Some(origin) = origins.get_mut(name) {
-                *origin += (frame - *begin).max(0.0);
+                *origin += (t - *begin).max(0.0);
             }
             false
         });
+    }
+
+    /// The earliest and latest begins of the clock origins that wait.
+    pub(super) fn clocks_held(&self) -> Option<(f64, f64)> {
+        let begins = self.clocks.pending.values().copied();
+        Some((begins.clone().reduce(f64::min)?, begins.reduce(f64::max)?))
+    }
+
+    /// The earliest begin of a clock origin that waits.
+    pub(super) fn clock_held_since(&self) -> Option<f64> {
+        self.clocks.pending.values().copied().reduce(f64::min)
     }
 
     pub(super) fn forget_clock(&mut self, node: u64) {

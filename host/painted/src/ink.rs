@@ -310,6 +310,10 @@ impl Backend for Ink {
             &[],
             Transform::identity(),
             None,
+            (
+                exact_kernel::ImageRendering::Auto,
+                [w.ceil() as u32, h.ceil() as u32],
+            ),
         );
         true
     }
@@ -330,6 +334,13 @@ impl Backend for Ink {
             .accept(result)
             .ok_or_else(|| self.error.clone().unwrap())?;
         Ok(())
+    }
+    #[cfg(windows)]
+    fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
+        match &self.device {
+            Selected::D3d11(device) => device.present_statistics(),
+            _ => None,
+        }
     }
     #[cfg(windows)]
     fn displayed_process_ms(&self) -> std::result::Result<Option<f64>, String> {
@@ -549,16 +560,21 @@ impl Backend for Ink {
         clips: &[Shape],
         ts: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
         self.observe_transform(ts);
-        let size = images::sampling_size(
-            [image.width(), image.height()],
-            dst,
-            self.device_transform(ts),
-        );
+        let size = if rendering == exact_kernel::ImageRendering::Auto {
+            images::sampling_size(
+                [image.width(), image.height()],
+                dst,
+                self.device_transform(ts),
+            )
+        } else {
+            [image.width(), image.height()]
+        };
         let result = self.images.bitmap(&mut self.device, image, size);
         if let Some(texture) = self.accept(result) {
-            self.picture(texture, dst, clips, ts, tint);
+            self.picture(texture, dst, clips, ts, tint, (rendering, size));
         }
     }
 
@@ -576,9 +592,22 @@ impl Backend for Ink {
     }
     fn canvas(&mut self, pixels: &Arc<Pixmap>, dst: Rect4, clips: &[Shape], ts: Transform) {
         self.observe_transform(ts);
-        let result = self.images.pixmap(&mut self.device, pixels);
+        let size = [pixels.width(), pixels.height()];
+        // A canvas is drawn at its own device-pixel size: no mip chain unless shrunk.
+        let mipmapped = images::minified(size, dst, self.device_transform(ts));
+        let result = self.images.pixmap(&mut self.device, pixels, mipmapped);
         if let Some(texture) = self.accept(result) {
-            self.picture(texture, dst, clips, ts, None);
+            self.picture(
+                texture,
+                dst,
+                clips,
+                ts,
+                None,
+                (
+                    exact_kernel::ImageRendering::Auto,
+                    [pixels.width(), pixels.height()],
+                ),
+            );
         }
     }
 

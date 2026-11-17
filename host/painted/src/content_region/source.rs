@@ -14,6 +14,9 @@ pub(super) struct PaintSource {
     pub dark: bool,
     pub runs: Box<[TextSourceRun]>,
     pub palette: Box<[RunPaint]>,
+    /// Each run's inline boxes and their committed opacity, as accepted
+    /// with this source.
+    pub opacity: Box<[crate::paint::inline_opacity::Chain]>,
     /// Each run's colour under the other appearance, resolved at capture: it
     /// keeps no `ColorValue`, so no wide colour id outlives the commit that
     /// made it (the wide table's sweep, LLP 1121 stage 4).
@@ -83,6 +86,9 @@ impl PaintSource {
             return Err("paragraph source extent mismatch");
         }
         Ok(Self {
+            opacity: crate::paint::inline_opacity::chains(kernel, &capture.palette, |id| {
+                kernel.node(id).map_or(1., |n| n.style.opacity)
+            }),
             source: request.source().clone(),
             dark,
             runs: capture.runs.into_boxed_slice(),

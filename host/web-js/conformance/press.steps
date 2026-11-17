@@ -4,3 +4,10 @@ down shrinks
 up
 down plain
 up
+tap toggle
+clock +100
+clock settle
+down chip
+up
+clock +100
+clock settle

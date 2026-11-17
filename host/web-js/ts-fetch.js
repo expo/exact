@@ -10,6 +10,8 @@ import { tsGrantSet } from './admission-data.js';
 // captured when called and starts after its source returns, so a refused
 // one never starts; a module with none fetches at once, as before.
 export const SOCKET_AND_FETCH = 'a mutation cannot both send on a socket and fetch';
+// Set by the build where no module app.ts reaches spells `exactStream`: the page has no stream reader (LLP 1047.003 D5).
+export const STREAM_REFUSAL = null;
 // `exactHeld` (LLP 1016.000 D9), with Hermes's words (js/src/fetch.js): the server may hold the reply. Each
 // fetch is counted on its answer, held (`call.held`) or not (`call.plain`), or as tied to no answer
 // (`answering.loose`); an answer with only held fetches out counts for no clock (held.js `counted`, whose
@@ -28,7 +30,15 @@ export function responseFor(response) {
   return response;
 }
 function fetchInCall(input, options) {
+  if (globalThis.__exactRender && !globalThis.__exactProduction) {
+    const call = currentContext();
+    if (call && call !== backgroundCall && !call.mutation) {
+      try { (call.urls ??= new Set()).add(new URL(input instanceof Request ? input.url : String(input)).href); }
+      catch { /* Invalid URLs still reach the executor's ordinary refusal. */ }
+    }
+  }
   // Checked before any path, a mutation's captured fetch included (LLP 1016.000 D8).
+  if (STREAM_REFUSAL && options?.exactStream !== undefined) return Promise.reject(new TypeError(STREAM_REFUSAL));
   if (options?.exactLongPoll !== undefined && options.exactStream === undefined)
     return Promise.reject(new TypeError('exactLongPoll asks again for an answer that keeps coming: give exactStream too'));
   const upload = options?.exactUploadProgress; // LLP 1016.000 D10
@@ -297,11 +307,18 @@ function arm(api, run, ms, args) {
 }
 // Run `run` as `call`'s turn, as its timers run: in flight until the page's next task, so the agent's jump lands what it
 // started (its microtasks, the answer's continuation) before the next timer fires, as a browser runs them between tasks.
+// A callback's throw is journaled and reported to the page as a browser reports a timer's (LLP 1175 D2), with no answer
+// current, as natively.
 function runAs(call, run) {
   const { clock, journal } = answering.page;
   call.firing = (call.firing ?? 0) + 1; call.recount?.();
   globalThis.setTimeout(() => { call.firing--; call.recount?.(); });
-  asCall(call, () => { try { run(); } catch (e) { journal.push(`t=${clock.now} data: a timer's callback threw: ${e?.message ?? e}`); } });
+  let thrown = null;
+  asCall(call, () => { try { run(); } catch (e) { thrown = { e }; } });
+  if (thrown) {
+    journal.push(`t=${clock.now} data: a timer's callback threw: ${thrown.e?.message ?? thrown.e}`);
+    globalThis.reportError?.(thrown.e);
+  }
   // What the callback sent on a socket goes now, before the next timer of the same advance (ts-stream.js `later`).
   answering.later?.(call);
 }

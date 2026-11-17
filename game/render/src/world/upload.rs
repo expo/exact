@@ -16,10 +16,10 @@ pub(super) fn hash(floats: &[f32]) -> u64 {
         P.rotate_left(53),
     ];
     let bytes = bytes(floats);
-    let mut chunks = bytes.chunks_exact(64);
-    for chunk in &mut chunks {
-        for (lane, word) in lanes.iter_mut().zip(chunk.chunks_exact(8)) {
-            *lane = (*lane ^ u64::from_le_bytes(word.try_into().unwrap()))
+    let (blocks, rest) = bytes.as_chunks::<64>();
+    for block in blocks {
+        for (lane, word) in lanes.iter_mut().zip(block.as_chunks::<8>().0) {
+            *lane = (*lane ^ u64::from_le_bytes(*word))
                 .rotate_left(27)
                 .wrapping_mul(P);
         }
@@ -28,8 +28,8 @@ pub(super) fn hash(floats: &[f32]) -> u64 {
     for lane in lanes {
         h = (h ^ lane).rotate_left(27).wrapping_mul(P);
     }
-    for word in chunks.remainder().chunks_exact(8) {
-        h = (h ^ u64::from_le_bytes(word.try_into().unwrap()))
+    for word in rest.as_chunks::<8>().0 {
+        h = (h ^ u64::from_le_bytes(*word))
             .rotate_left(27)
             .wrapping_mul(P);
     }

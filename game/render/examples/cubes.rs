@@ -362,8 +362,10 @@ impl Queries {
         g.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         let data = self.read.slice(..).get_mapped_range().unwrap();
         let stamps: Vec<u64> = data
-            .chunks_exact(8)
-            .map(|b| u64::from_ne_bytes(b.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|b| u64::from_ne_bytes(*b))
             .collect();
         drop(data);
         self.read.unmap();
@@ -372,7 +374,9 @@ impl Queries {
             let first = stamps.iter().copied().filter(|&s| s > 0).min().unwrap_or(0);
             let names = exact_game_render::GPU_PASS_NAMES;
             let line: Vec<String> = stamps
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
                 .filter(|(_, p)| p[0] > 0)
                 .map(|(i, p)| {
@@ -387,7 +391,9 @@ impl Queries {
             eprintln!("timeline {}", line.join(" "));
         }
         let mut ms: Vec<f64> = stamps
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| {
                 if p[0] > 0 && p[1] >= p[0] {
                     (p[1] - p[0]) as f64 * period

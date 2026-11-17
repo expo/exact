@@ -16,7 +16,7 @@ use tiny_skia::{Pixmap, Transform};
 const MAX_SIDE: f32 = 4096.0;
 
 /// `r` (x, y, w, h) mapped by `ts`: its bounds.
-fn bounds(ts: Transform, r: (f32, f32, f32, f32)) -> Rect4 {
+pub(super) fn bounds(ts: Transform, r: (f32, f32, f32, f32)) -> Rect4 {
     let mut pts = [
         tiny_skia::Point::from_xy(r.0, r.1),
         tiny_skia::Point::from_xy(r.0 + r.2, r.1),
@@ -32,6 +32,118 @@ fn bounds(ts: Transform, r: (f32, f32, f32, f32)) -> Rect4 {
         y1 = y1.max(p.y);
     }
     (x0, y0, x1 - x0, y1 - y0)
+}
+
+/// Conservative paint bounds in the recording's space, independent of the
+/// window. Text uses the same shaped glyphs and placement as the painter.
+pub(super) fn blend_bounds(
+    painter: &mut Painter,
+    items: &[Item],
+    ts: Transform,
+    origin: Transform,
+) -> Option<Rect4> {
+    use exact_kernel::svg::scene::Kind;
+    let mut area: Option<Rect4> = None;
+    for item in items {
+        let own = item
+            .transform
+            .as_ref()
+            .map_or(ts, |t| ts.pre_concat(super::affine(t.affine())));
+        let mut rect = if let Some(filter) = &item.filter {
+            bounds(own, filter.region)
+        } else if let Some(mask) = &item.mask {
+            bounds(own, mask.region)
+        } else {
+            match &item.kind {
+                Kind::Group(children) => blend_bounds(painter, children, own, origin)?,
+                Kind::Viewport {
+                    rect,
+                    view,
+                    clip,
+                    children,
+                } => {
+                    let Some(view) = view else { continue };
+                    if *clip {
+                        bounds(own, *rect)
+                    } else {
+                        blend_bounds(
+                            painter,
+                            children,
+                            own.pre_concat(super::affine(*view)),
+                            origin,
+                        )?
+                    }
+                }
+                Kind::Shape(shape) => {
+                    let mut rect = shape.path.bounds().unwrap_or_default();
+                    let mut space = own;
+                    if shape.stroke.is_some() {
+                        if shape.non_scaling {
+                            rect = bounds(super::affine(item.ctm), rect);
+                            space = origin;
+                        }
+                        // Square caps can reach sqrt(2) half-widths from an
+                        // endpoint, independently of the join's miter limit.
+                        let pad = shape.width * shape.miter.max(std::f32::consts::SQRT_2) / 2.0;
+                        rect = (
+                            rect.0 - pad,
+                            rect.1 - pad,
+                            rect.2 + 2.0 * pad,
+                            rect.3 + 2.0 * pad,
+                        );
+                    }
+                    let mut rect = bounds(space, rect);
+                    if !shape.markers.is_empty() {
+                        rect = union(rect, blend_bounds(painter, &shape.markers, own, origin)?);
+                    }
+                    rect
+                }
+                Kind::Text(text) => bounds(own, painter.svg_text_bounds(text)?),
+            }
+        };
+        if let Some(clip) = &item.clip {
+            rect = intersect(rect, clip_bounds(clip, own));
+        }
+        if rect.2 > 0. && rect.3 > 0. {
+            area = Some(area.map_or(rect, |a| union(a, rect)));
+        }
+    }
+    Some(area.unwrap_or_default())
+}
+
+fn intersect(a: Rect4, b: Rect4) -> Rect4 {
+    let x = a.0.max(b.0);
+    let y = a.1.max(b.1);
+    (
+        x,
+        y,
+        ((a.0 + a.2).min(b.0 + b.2) - x).max(0.),
+        ((a.1 + a.3).min(b.1 + b.3) - y).max(0.),
+    )
+}
+
+fn clip_bounds(clip: &exact_kernel::svg::scene::Clip, ts: Transform) -> Rect4 {
+    let area = clip
+        .shapes
+        .iter()
+        .filter_map(|s| s.path.bounds())
+        .map(|r| bounds(ts, r))
+        .reduce(union)
+        .unwrap_or_default();
+    clip.then
+        .as_ref()
+        .map_or(area, |next| intersect(area, clip_bounds(next, ts)))
+}
+
+pub(super) fn union(a: Rect4, b: Rect4) -> Rect4 {
+    let x = a.0.min(b.0);
+    let y = a.1.min(b.1);
+    (
+        x,
+        y,
+        (a.0 + a.2).max(b.0 + b.2) - x,
+        (a.1 + a.3).max(b.1 + b.3) - y,
+    )
 }
 
 impl Painter {
@@ -65,7 +177,9 @@ impl Painter {
         let y0 = (rect.1 * s).floor().max(0.0);
         let x1 = ((rect.0 + rect.2) * s).ceil().min(vw * s);
         let y1 = ((rect.1 + rect.3) * s).ceil().min(vh * s);
-        (x1 > x0 && y1 > y0 && x1 - x0 <= MAX_SIDE && y1 - y0 <= MAX_SIDE)
+        // A mask inside a blend picture may be wide but shallow. Keep the
+        // same pixel budget without rejecting a side the parent already holds.
+        (x1 > x0 && y1 > y0 && (x1 - x0) * (y1 - y0) <= MAX_SIDE * MAX_SIDE)
             .then(|| (x0 / s, y0 / s, (x1 - x0) / s, (y1 - y0) / s))
     }
 

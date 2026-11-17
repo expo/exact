@@ -325,11 +325,11 @@ final class AtomCatcher: NSView {
 /// (`NodeView.withAtoms`), and its parent is the element that lists it
 /// (`NodeView.atomParent`). The agent joins it to the field's node, as iOS's
 /// container does.
-package final class AtomElement: NSAccessibilityElement, AgentOwned {
+package final class AtomElement: NSAccessibilityElement, InspectionOwned {
     weak var field: TextArea?
     let range: NSRange
     var atom: MarkupAtom
-    package var agentViewId: UInt32? { field?.owner?.id }
+    package var inspectionViewId: UInt32? { field?.owner?.id }
     init(field: TextArea, range: NSRange, atom: MarkupAtom) {
         (self.field, self.range, self.atom) = (field, range, atom)
         super.init()
@@ -498,7 +498,8 @@ extension NodeView {
             frame = rects.reduce(frame) { $0.union($1) }
         }
         if start == end, !frame.isNull {
-            let x = leading != (spec.direction == 1) ? frame.minX : frame.maxX
+            let rtl = paragraphLayout()?.insets.rtl(at: start) ?? (spec.direction == 1)
+            let x = leading != rtl ? frame.minX : frame.maxX
             return CGRect(x: x, y: frame.minY, width: 0, height: frame.height)
         }
         return frame.isNull ? nil : frame

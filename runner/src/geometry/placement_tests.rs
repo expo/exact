@@ -36,6 +36,7 @@ fn scene(panel: &str, route: &str, before: &str, after: &str) -> (Runner<()>, Sc
             .set_host_block(
                 view,
                 Some(HostBlock {
+                    tactic: Default::default(),
                     width: BlockAxis::Is(200.0),
                     height: BlockAxis::Is(height),
                 }),
@@ -273,5 +274,40 @@ fn an_allocation_without_a_block_keeps_agent_absolute_in_layout_space() {
         let (_, _, inside, ratio) = intersection(r.kernel(), &scrolled, row);
         assert!(inside);
         assert_eq!(ratio, if placement.is_some() { 0.2 } else { 1. });
+    }
+}
+
+#[test]
+fn negative_z_bounds_and_hits_follow_the_presented_turn() {
+    for rotate in ["0 0 -1 90deg", "-90deg"] {
+        let source = format!(
+            r#"component App
+  view
+    box id="target" width=100 height=100 rotate="{rotate}" transform-origin="0 0"
+"#
+        );
+        let mut r = Runner::boot(
+            contract::compile(&source).unwrap(),
+            (),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let root = r.roots()[0];
+        r.kernel_mut()
+            .compute_layout(root, Offer::definite(400., 400.))
+            .unwrap();
+        let scrolled = Scrolled::default();
+        let target = view_of(r.kernel(), "target").unwrap();
+        let rect = kernel_frame(r.kernel(), &scrolled, target);
+        for (actual, expected) in [rect.x, rect.y, rect.width, rect.height]
+            .into_iter()
+            .zip([0., -100., 100., 100.])
+        {
+            assert!((actual - expected).abs() < 1e-5, "{rotate}: {rect:?}");
+        }
+        read(&r, &scrolled, 50., -50., &["target"]);
+        read(&r, &scrolled, -50., 50., &[]);
     }
 }

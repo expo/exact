@@ -58,8 +58,8 @@ fn a_web_boot_folds_a_shadow_over_base_names_in_the_neutral_column() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  card.shadow: box-shadow = 0 space.md calc(space.sm * 2) #000\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  card.shadow: box-shadow = 0 space.md calc(space.sm * 2) #000\n",
     )
     .unwrap();
     std::fs::write(

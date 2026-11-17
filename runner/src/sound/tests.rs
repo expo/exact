@@ -7,7 +7,6 @@ use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use std::path::PathBuf;
 
 const SOURCE: &str = r#"sound "assets/kick.wav"
 sound "assets/hat.wav"
@@ -154,7 +153,7 @@ fn wav(path: &std::path::Path, ms: u32) {
 }
 
 /// The app's directory: the source and a 250 ms kick and 100 ms hat.
-fn app(source: &str) -> PathBuf {
+fn app(source: &str) -> crate::TempDir {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -166,7 +165,7 @@ fn app(source: &str) -> PathBuf {
     wav(&dir.join("assets/kick.wav"), 250);
     wav(&dir.join("assets/hat.wav"), 100);
     std::fs::write(dir.join("app.contract"), source).unwrap();
-    dir
+    crate::TempDir(dir)
 }
 
 /// The plan of `source` in an app directory with the kit's sounds, compiled once per source
@@ -284,6 +283,26 @@ fn a_group_cuts_by_start_time_whatever_the_order_of_calls() {
     let ops = r.take_sounds();
     assert!(ops.contains(&SoundOp::End { id: 1, at: 100.0 }));
     assert!(ops.contains(&SoundOp::End { id: 3, at: 120.0 }));
+
+    let source = SOURCE.replace(
+        "  action three\n",
+        "  action grouped\n    playSound(\"assets/kick.wav\", group=\"hat\")\n    playSound(\"assets/kick.wav\", at=performanceNow() + 100, group=\"hat\")\n  action three\n",
+    );
+    let mut r = boot_with(&source, 0.0);
+    r.act("grouped", vec![]).unwrap();
+    // The wasm host must keep this timed end behind its play in the same batch.
+    assert!(matches!(
+        r.take_sounds().as_slice(),
+        [
+            SoundOp::Play { id: 1, at: 0.0, .. },
+            SoundOp::End { id: 1, at: 100.0 },
+            SoundOp::Play {
+                id: 2,
+                at: 100.0,
+                ..
+            }
+        ]
+    ));
 }
 
 #[test]

@@ -126,6 +126,8 @@ impl Painter {
         paragraph: &Paragraph,
         palette: &[RunPaint],
         reveal: Option<ViewId>,
+        selected: std::ops::Range<usize>,
+        run_shadows: Option<&[Option<Shadow>]>,
     ) -> Decorations {
         // CSS Text Decoration 3 §2.1: a box's lines are drawn through its
         // descendants' visible text in the box's own colour, whatever the
@@ -136,7 +138,7 @@ impl Painter {
             .iter()
             .enumerate()
             .map(|(index, run)| {
-                if !super::paints(kernel, run.source, reveal) {
+                if !selected.contains(&index) || !super::paints(kernel, run.source, reveal) {
                     return Vec::new();
                 }
                 let mut current = Some(run.source);
@@ -162,7 +164,10 @@ impl Painter {
                                 source: id,
                                 depth: 0,
                                 color,
-                                shadow: self.text_shadow(&node, color),
+                                shadow: run_shadows
+                                    .is_none()
+                                    .then(|| self.text_shadow(&node, color))
+                                    .flatten(),
                             },
                         ));
                     }
@@ -188,7 +193,13 @@ impl Painter {
         // A Markdown piece's lines are its span's, as an element's are: the
         // runs on either side of it with the same lines and link.
         let runs = paragraph.runs();
-        let lines_of = |i: usize| (runs[i].mark & (UNDERLINE | STRIKE), runs[i].href.as_str());
+        let lines_of = |i: usize| {
+            (
+                runs[i].mark & (UNDERLINE | STRIKE),
+                runs[i].href.as_str(),
+                run_shadows.map(|shadows| shadows[i]),
+            )
+        };
         let mut spans: Vec<(usize, usize)> = (0..runs.len()).map(|i| (i, i)).collect();
         for i in 1..runs.len() {
             if lines_of(i) == lines_of(i - 1) {
@@ -202,7 +213,7 @@ impl Painter {
         }
         let mut lines = Vec::new();
         for (glyph, baseline, paint) in paragraph.paint_glyphs(palette) {
-            if !super::paints(kernel, paint.source, reveal) {
+            if !selected.contains(&glyph.run()) || !super::paints(kernel, paint.source, reveal) {
                 continue;
             }
             // A Markdown piece's own: a followed link, `~~strike~~`.
@@ -221,9 +232,14 @@ impl Painter {
                         source: paint.source,
                         depth: declarations.len(),
                         color: paint.color,
-                        shadow: kernel
-                            .node(paint.source)
-                            .and_then(|node| self.text_shadow(&node, paint.color)),
+                        shadow: run_shadows.map_or_else(
+                            || {
+                                kernel
+                                    .node(paint.source)
+                                    .and_then(|node| self.text_shadow(&node, paint.color))
+                            },
+                            |shadows| shadows[glyph.run()],
+                        ),
                     },
                     spans[glyph.run()],
                 )

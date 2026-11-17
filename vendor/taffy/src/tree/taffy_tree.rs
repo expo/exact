@@ -1871,7 +1871,7 @@ mod tests {
             style,
             |_, _| 0.0,
             |known_dimensions, _available_space| {
-                known_dimensions.unwrap_or(node_context.cloned().unwrap_or(Size::ZERO))
+                known_dimensions.unwrap_or(node_context.as_deref().cloned().unwrap_or(Size::ZERO))
             },
         )
     }

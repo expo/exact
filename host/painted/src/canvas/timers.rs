@@ -2,6 +2,29 @@
 use super::*;
 
 impl<D: DataSource + Default> CanvasHost<D> {
+    /// Service a stopped reader without recording paint or firing frame tasks.
+    /// Commands still reach the platform; unpublished paint does not prevent idle.
+    pub fn background(&mut self, applying: bool) -> Option<f64> {
+        self.p.timer_visibility(true);
+        self.p.timer_observation(false, false, applying);
+        let now = self.now();
+        let live = agent::clock(&self.p).is_none();
+        if let Some(e) = self.p.reader_clock(now, live) {
+            eprintln!("exact: {e}");
+        }
+        self.p.run_commands(D::default);
+        if !live {
+            return None;
+        }
+        if let Some(e) = self.p.admit_idle_timer(now) {
+            eprintln!("exact: {e}");
+        }
+        self.p.run_commands(D::default);
+        self.p
+            .background_due_ms()
+            .map(|due| (due - self.now()).max(0.0))
+    }
+
     /// Receive the current reader's activity and publication acknowledgement.
     /// Return whether admission made a batch the owner needs to publish.
     pub fn timer_observation(

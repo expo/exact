@@ -5,6 +5,7 @@
 //! component here is written through [`spell`], r6's spelling (LLP 1139 §9
 //! Q7 is open): a change of spelling changes that one function.
 
+use crate::scratch::Scratch;
 use contract::CompileError;
 use std::path::Path;
 
@@ -264,14 +265,12 @@ fn a_native_controls_part_is_the_control_group_alone() {
     assert!(with(&src, id).is_empty(), "{:?}", with(&src, id));
 }
 
-/// LLP 1139 D5: the Tamber IR file's `library` block, each component that
+/// LLP 1139 D5: the Forma IR file's `library` block, each component that
 /// names parts with its parts (groups, and the slot's holder) and its
 /// variant props (an enum or bool a class condition or a row's `?:` reads).
 #[test]
 fn the_ir_lists_parts_slot_and_variants() {
-    let dir = std::env::temp_dir().join(format!("exact2-anatomy-ir-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-anatomy-ir-{}", std::process::id()));
     let card = STYLES.to_string()
         + "component Card\n  props\n    tone: enum<\"plain\", \"quiet\">\n    dense: bool\n    title: string\n  slot\n  parts\n    surface: paint shape space\n    body: space\n  view\n    column part=\"surface\" class=(tone == \"quiet\" ? Quiet : Plain)\n      text title\n      column part=\"body\" gap=(dense ? \"4px\" : \"8px\")\n        children\n";
     std::fs::write(
@@ -280,8 +279,8 @@ fn the_ir_lists_parts_slot_and_variants() {
     )
     .unwrap();
     std::fs::write(dir.join("card.contract"), card).unwrap();
-    let app = contract::tamber_params::params_of(&dir.join("app.contract"));
-    let ir = contract::tamber_params::library(&app, None);
+    let app = contract::forma_params::params_of(&dir.join("app.contract"));
+    let ir = contract::forma_params::library(&app, None);
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         ir,
@@ -370,9 +369,7 @@ fn round_1_edges() {
 /// another attribute reads, nor a name a `for` binds over a prop's.
 #[test]
 fn variants_are_read_by_classes_and_rows() {
-    let dir = std::env::temp_dir().join(format!("exact2-anatomy-var-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-anatomy-var-{}", std::process::id()));
     let card = "component Card\n  props\n    loud: bool\n    tone: enum<\"red\", \"blue\">\n    active: bool\n    items: string[]\n    dense: bool\n  parts\n    surface: paint\n  view\n    column part=\"surface\" aria-label=(loud ? \"a\" : \"b\") background-color=(active ? tone : \"blue\")\n      for dense in items key=dense\n        text dense padding=(dense == \"x\" ? \"1px\" : \"2px\")\n";
     std::fs::write(
         dir.join("app.contract"),
@@ -380,8 +377,8 @@ fn variants_are_read_by_classes_and_rows() {
     )
     .unwrap();
     std::fs::write(dir.join("card.contract"), card).unwrap();
-    let app = contract::tamber_params::params_of(&dir.join("app.contract"));
-    let ir = contract::tamber_params::library(&app, None);
+    let app = contract::forma_params::params_of(&dir.join("app.contract"));
+    let ir = contract::forma_params::library(&app, None);
     let _ = std::fs::remove_dir_all(&dir);
     let props: Vec<&str> = ir[0]["variants"]
         .as_array()
@@ -421,9 +418,7 @@ fn round_2_edges() {
 
 #[test]
 fn a_match_arms_binding_is_no_variant() {
-    let dir = std::env::temp_dir().join(format!("exact2-anatomy-var2-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-anatomy-var2-{}", std::process::id()));
     let card = "component Card\n  props\n    dense: bool\n    pick: option<string>\n  parts\n    surface: paint\n  view\n    column part=\"surface\" padding=(match pick { case some(dense) => dense, case none => \"1px\" })\n      text \"a\"\n";
     std::fs::write(
         dir.join("app.contract"),
@@ -431,8 +426,8 @@ fn a_match_arms_binding_is_no_variant() {
     )
     .unwrap();
     std::fs::write(dir.join("card.contract"), card).unwrap();
-    let app = contract::tamber_params::params_of(&dir.join("app.contract"));
-    let ir = contract::tamber_params::library(&app, None);
+    let app = contract::forma_params::params_of(&dir.join("app.contract"));
+    let ir = contract::forma_params::library(&app, None);
     let _ = std::fs::remove_dir_all(&dir);
     let props: Vec<&str> = ir[0]["variants"]
         .as_array()

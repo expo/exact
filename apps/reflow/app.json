@@ -12,6 +12,7 @@
     "name": "Reflow"
   },
   "rust": {
+    "data": { "crate": "reflow-data", "type": "reflow_data::Reflow" },
     "mode": "off"
   },
   "host": {

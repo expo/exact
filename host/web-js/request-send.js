@@ -46,8 +46,9 @@ export function sendRequest(t, land, out, data, inflight, say) {
   });
 }
 
-// Pin the mounted canvas when the requesting commit has applied its tree.
-export function committedCanvas(surface, active, finishes, canvas, mounts) {
+// Pin the mounted canvas when the requesting commit has applied its tree, and
+// start encoding it as `encoding.type` at `encoding.quality` (`toBlob`'s).
+export function committedCanvas(surface, active, finishes, canvas, mounts, encoding = {}) {
   return new Promise((resolve, reject) => {
     const done = ok => {
       if (!ok) return reject(new DOMException("the capture's commit was refused", "InvalidStateError"));
@@ -57,7 +58,7 @@ export function committedCanvas(surface, active, finishes, canvas, mounts) {
         if (!active()) throw new DOMException("the capture's ticket is no longer held", "AbortError");
         const c = globalThis.exact?.canvas2dCapture?.(surface, targets) ?? { name: "NotFoundError", message: `no canvas of surface ${JSON.stringify(surface)} is mounted` };
         if (c.name) return resolve(c);
-        const png = c.png(); png.catch(() => {}); resolve({ ...c, png: () => png });
+        const blob = c.encode(encoding.type, encoding.quality); blob.catch(() => {}); resolve({ ...c, encoded: () => blob });
       }).catch(reject);
     };
     if (finishes) finishes.push(done); else done(true);

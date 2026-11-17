@@ -52,6 +52,17 @@ final class UIKitTabFactsIOSTests: XCTestCase {
         settle()
     }
 
+    /// UIKit gives More no delegate of its own: More's slot is empty until
+    /// someone sets one, also while More shows its list.
+    func testMoreHasNoDelegateOfUIKits() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "More shows its list as in an app only in a scene's window") }
+        build(scene, watching: false)
+        XCTAssertNil(tabs.moreNavigationController.delegate, "More starts with no delegate")
+        tabs.selectedViewController = tabs.moreNavigationController
+        waitFor("More shows its list") { tabs.moreNavigationController.viewIfLoaded?.window != nil && tabs.moreNavigationController.transitionCoordinator == nil }
+        XCTAssertNil(tabs.moreNavigationController.delegate, "and has none while it shows its list")
+    }
+
     /// A swipe leaves `viewControllers` short at once too, but is committed
     /// only when it completes: a cancelled one restores its source.
     func testASwipeIsCommittedOnlyWhenItCompletes() throws {
@@ -230,7 +241,48 @@ final class UIKitTabFactsIOSTests: XCTestCase {
         more.popToRootViewController(animated: true)
     }
 
-    private func build(_ scene: UIWindowScene) {
+    /// UIKit reads which optional methods a navigation controller's delegate
+    /// answers once, when the delegate is set: a method the delegate answered
+    /// then is called though the delegate no longer answers it, and one it did
+    /// not answer is never asked for though it answers it now. A delegate whose
+    /// answers change is set again (LLP 1075.003 §9.16).
+    func testADelegatesAnswersAreReadOnceWhenItIsSet() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit asks for a push's animator as in an app only in a scene's window") }
+        build(scene)
+        let home = navs[0]
+        let answered = Answering()
+        home.delegate = answered
+        answered.answers = false
+        home.pushViewController(UIViewController(), animated: true)
+        settle()
+        XCTAssertEqual(answered.queries, 1, "asked once, when it was set")
+        XCTAssertEqual(answered.calls, 1, "and its animator called though it no longer answers for it")
+        let unanswered = Answering()
+        unanswered.answers = false
+        home.delegate = unanswered
+        unanswered.answers = true
+        home.popViewController(animated: true)
+        settle()
+        XCTAssertEqual(unanswered.queries, 1, "asked once, when it was set")
+        XCTAssertEqual(unanswered.calls, 0, "and never called though it answers for it now")
+    }
+
+    /// A tab container reads its delegate's answers once too: an orientation
+    /// method the delegate answered when it was set is called though the
+    /// delegate no longer answers it.
+    func testATabDelegatesAnswersAreReadOnceWhenItIsSet() throws {
+        let tabs = UITabBarController()
+        let answered = TabAnswering()
+        tabs.delegate = answered
+        answered.answers = false
+        XCTAssertEqual(tabs.supportedInterfaceOrientations, .portrait, "its answer, though it no longer answers for it")
+        XCTAssertEqual(answered.queries, 1, "asked once, when it was set")
+        XCTAssertEqual(answered.calls, 1)
+    }
+
+    /// Enough tabs that UIKit shows More, in a window; with `watching`, every
+    /// delegate slot, More's included, is the watcher's.
+    private func build(_ scene: UIWindowScene, watching: Bool = true) {
         window?.isHidden = true
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
@@ -238,16 +290,18 @@ final class UIKitTabFactsIOSTests: XCTestCase {
         navs = (0..<6).map { index in
             let nav = UINavigationController(rootViewController: UIViewController())
             nav.tabBarItem = UITabBarItem(title: "Tab \(index)", image: UIImage(systemName: "circle"), tag: index)
-            nav.delegate = watcher
+            if watching { nav.delegate = watcher }
             return nav
         }
-        watcher.tabs = tabs
-        tabs.delegate = watcher
+        if watching {
+            watcher.tabs = tabs
+            tabs.delegate = watcher
+        }
         tabs.setViewControllers(navs, animated: false)
         window.rootViewController = tabs
         window.makeKeyAndVisible()
         self.window = window
-        tabs.moreNavigationController.delegate = watcher
+        if watching { tabs.moreNavigationController.delegate = watcher }
         UIView.setAnimationsEnabled(true)
         waitFor("the container is in the window") { tabs.selectedViewController?.viewIfLoaded?.window != nil }
         settle()
@@ -301,5 +355,32 @@ private final class AppearanceRecorder: UIViewController {
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); calls.append("didDisappear") }
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); calls.append("willAppear") }
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); calls.append("didAppear") }
+}
+
+/// A navigation delegate whose answer for the animator method can change, counting UIKit's questions and calls.
+private final class Answering: NSObject, UINavigationControllerDelegate {
+    var answers = true, queries = 0, calls = 0
+    override func responds(to selector: Selector!) -> Bool {
+        if selector == #selector(UINavigationControllerDelegate.navigationController(_:animationControllerFor:from:to:)) { queries += 1; return answers }
+        return super.responds(to: selector)
+    }
+    func navigationController(_ navigationController: UINavigationController, animationControllerFor operation: UINavigationController.Operation,
+                              from fromVC: UIViewController, to toVC: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+        calls += 1
+        return nil
+    }
+}
+
+/// A tab delegate whose answer for the orientation method can change, counting UIKit's questions and calls.
+final class TabAnswering: NSObject, UITabBarControllerDelegate {
+    var answers = true, queries = 0, calls = 0
+    override func responds(to selector: Selector!) -> Bool {
+        if selector == #selector(UITabBarControllerDelegate.tabBarControllerSupportedInterfaceOrientations(_:)) { queries += 1; return answers }
+        return super.responds(to: selector)
+    }
+    func tabBarControllerSupportedInterfaceOrientations(_ tabBarController: UITabBarController) -> UIInterfaceOrientationMask {
+        calls += 1
+        return .portrait
+    }
 }
 #endif

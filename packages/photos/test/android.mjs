@@ -5,15 +5,16 @@
 // ranges (READ_EXTERNAL_STORAGE ends at 32), ACCESS_MEDIA_LOCATION, no permission for adding; the roster naming the
 // photos extension; the package's Kotlin and the reader's codec compiled in; the agent's six photos carried, byte for
 // byte the package's fixture. `--emulator` then drives the APK on an arm64 emulator (ANDROID_SERIAL, else adb's
-// one device) whose adb can run as root, to read the edits back: under the agent, the library through the reader's
+// one device) whose adb can run as root, to read the edits back (on a Google Play image, which refuses root, drive 4
+// checks only their sizes and says so): under the agent, the library through the reader's
 // picture door, a copy and an add, limited access and a revocation; the image codec's conformance (LLP 1133.019 §11,
 // checklist step 9) through the fixture's `editImage`; and MediaStore itself, the implementation bound and the read
-// granted by `pm grant`. Both need an NDK in ANDROID_NDK_HOME and a JDK 17 or newer in JAVA_HOME. checklist.md's
+// granted by `pm grant`, and paged through with Older. Both need an NDK in ANDROID_NDK_HOME and a JDK 17 or newer in JAVA_HOME. checklist.md's
 // Android part is what needs a person: the platform's dialogs and what is chosen in them.
 //
 // usage: bun packages/photos/test/android.mjs [--emulator]
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -93,7 +94,9 @@ if (process.argv.includes('--emulator')) {
     check(where, '1: six pictures', grid(r[4]) === 6, tree(r[4]).slice(0, 400));
     check(where, '1: each picture admitted, asked of the extension, none refused', (r[5]?.photos?.pictures?.admitted ?? 0) >= 6 && !r[5]?.photos?.pictures?.refused
       && r.lines.filter(l => /photos: picture agent-\d at \d+x\d+ cover/.test(l)).length >= 6, JSON.stringify(r[5]?.photos?.pictures));
-    check(where, "1: photo-1 is agent-1's copy, byte for byte", copy?.[1] === 'agent-1' && copy?.[2] === 'app:/tmp/photos/1.jpg' && copy?.[3] === AGENT(1), JSON.stringify(copy));
+    // Each copy has a name of its own, so two never share a file.
+    check(where, "1: photo-1 is agent-1's copy, byte for byte, at a name of its own", copy?.[1] === 'agent-1' && /^app:\/tmp\/photos\/[0-9A-F-]{36}\.jpg$/.test(copy[2])
+      && r[8]?.path === copy[2] && copy?.[3] === AGENT(1), `${JSON.stringify(copy)} ${r[8]?.path}`);
   }
   // 2: a copy added back joins the library as the newest, readable as the app's own.
   {
@@ -122,26 +125,31 @@ if (process.argv.includes('--emulator')) {
       ['keep', 'fixture:every-tag.jpg', 'transform', { metadata: 'keep' }],
       ['no-location', 'fixture:every-tag.jpg', 'transform', { metadata: 'no-location' }],
       ['none', 'fixture:every-tag.jpg', 'transform', { metadata: 'none' }],
-      ['agent-3', 'app:/tmp/photos/1.jpg', 'transform', {}],
-      ['agent-3 top half', 'app:/tmp/photos/1.jpg', 'transform', { crop: { x: 0, y: 0, width: 360, height: 240 } }],
-      ['agent-3 top half at 24', 'app:/tmp/photos/1.jpg', 'transform', { crop: { x: 0, y: 0, width: 360, height: 240 }, resizeWidth: 24 }],
+      ['agent-3', 'copy', 'transform', {}],
+      ['agent-3 top half', 'copy', 'transform', { crop: { x: 0, y: 0, width: 360, height: 240 } }],
+      ['agent-3 top half at 24', 'copy', 'transform', { crop: { x: 0, y: 0, width: 360, height: 240 }, resizeWidth: 24 }],
       ['gain map, a quarter', 'fixture:gainmap-iso.jpg', 'transform', { rotate: 90 }],
       ['gain map, 10°', 'fixture:gainmap-iso.jpg', 'transform', { rotate: 10 }],
     ];
+    // `copy` is photo-3's copy, whose name the drive cannot know: Edit the copy makes it the source.
     const ops = ['clock settle', 'tap photo-3', 'clock settle'];
     for (const [, source, call, options] of cases)
-      ops.push(`type edit-source ${source}`, `type edit-options ${JSON.stringify(options)}`, `tap ${call}`, 'clock settle', 'state edited');
+      ops.push(source === 'copy' ? 'tap edit-copy' : `type edit-source ${source}`, `type edit-options ${JSON.stringify(options)}`, `tap ${call}`, 'clock settle', 'state edited');
     // Under the agent, app storage is a named scratch store's.
     const r = drive({ photos: 'granted' }, [...ops, 'logs'], ['--storage', 'photos-codec']);
     const records = cases.map((_, i) => { try { return JSON.parse(r[3 + i * 5 + 4]?.record ?? 'null'); } catch { return null; } });
+    // The files are in the app's private directory, which adb reads only as root: the APK is not debuggable, so
+    // `run-as` refuses, and a Google Play image's adbd refuses root. There the sizes are checked and the files are not.
+    const su = adb('root'), said = `${su.stdout ?? ''}${su.stderr ?? ''}`.trim(), rooted = su.status === 0 && !/cannot run as root/.test(said);
+    const onFile = rooted ? check : () => {};
+    if (rooted) adb('wait-for-device');
+    else console.log(`SKIP ${where} 4: the edits' pixels and metadata, since adb cannot read the app's files here (adb root: ${said || `exit ${su.status}`}); a Google APIs image without Play runs adb as root`);
     // The launch's temporary directory: the newest holding these edits.
-    adb('root');
-    adb('wait-for-device');
-    const dirs = adb('shell', 'ls -dt $(find /data/data/com.exact.photosfixture -type d -name edits)').stdout.toString().trim().split(/\s+/);
+    const dirs = rooted ? adb('shell', 'ls -dt $(find /data/data/com.exact.photosfixture -type d -name edits)').stdout.toString().trim().split(/\s+/) : [];
     const out = resolve(tmpdir(), `photos-android-${process.pid}`);
     mkdirSync(out, { recursive: true });
     const file = (record) => {
-      if (!record?.path?.startsWith('app:/tmp/edits/')) return null;
+      if (!rooted || !record?.path?.startsWith('app:/tmp/edits/')) return null;
       const local = resolve(out, `${api}-${basename(record.path)}`);
       return adb('pull', `${dirs[0]}/${record.path.slice('app:/tmp/edits/'.length)}`, local).status === 0 ? local : null;
     };
@@ -157,30 +165,30 @@ if (process.argv.includes('--emulator')) {
     const img = name => by[name].path && pixels(by[name].path);
     sized('upright', 48, 64);
     const up = img('upright');
-    check(where, '4: upright, blue on the left', up && blue(at(up, 6, 32)) && red(at(up, 41, 32)), up && JSON.stringify([at(up, 6, 32), at(up, 41, 32)]));
-    check(where, '4: upright, orientation 1 and the GPS kept', exif(by.upright.path)?.orientation === 1 && exif(by.upright.path)?.gps, JSON.stringify(exif(by.upright.path)));
+    onFile(where, '4: upright, blue on the left', up && blue(at(up, 6, 32)) && red(at(up, 41, 32)), up && JSON.stringify([at(up, 6, 32), at(up, 41, 32)]));
+    onFile(where, '4: upright, orientation 1 and the GPS kept', exif(by.upright.path)?.orientation === 1 && exif(by.upright.path)?.gps, JSON.stringify(exif(by.upright.path)));
     sized('rotate 90', 64, 48);
     const turned = img('rotate 90');
-    check(where, '4: rotate 90, blue on top', turned && blue(at(turned, 32, 6)) && red(at(turned, 32, 41)), turned && JSON.stringify([at(turned, 32, 6), at(turned, 32, 41)]));
+    onFile(where, '4: rotate 90, blue on top', turned && blue(at(turned, 32, 6)) && red(at(turned, 32, 41)), turned && JSON.stringify([at(turned, 32, 6), at(turned, 32, 41)]));
     const flipped = img('flip');
-    check(where, '4: flip, blue on the right', flipped && red(at(flipped, 6, 32)) && blue(at(flipped, 41, 32)), flipped && JSON.stringify([at(flipped, 6, 32), at(flipped, 41, 32)]));
+    onFile(where, '4: flip, blue on the right', flipped && red(at(flipped, 6, 32)) && blue(at(flipped, 41, 32)), flipped && JSON.stringify([at(flipped, 6, 32), at(flipped, 41, 32)]));
     sized('crop', 24, 64);
     const cut = img('crop');
-    check(where, '4: crop, all blue', cut && [[2, 2], [21, 2], [2, 61], [21, 61], [12, 32]].every(([x, y]) => blue(at(cut, x, y))), cut && JSON.stringify(at(cut, 21, 32)));
+    onFile(where, '4: crop, all blue', cut && [[2, 2], [21, 2], [2, 61], [21, 61], [12, 32]].every(([x, y]) => blue(at(cut, x, y))), cut && JSON.stringify(at(cut, 21, 32)));
     const clear = img('free turn png'), white = img('free turn jpeg');
-    check(where, '4: rotate 30, a PNG\'s corners are clear', clear && at(clear, 0, 0)[3] === 0 && at(clear, clear.width - 1, clear.height - 1)[3] === 0, clear && JSON.stringify(at(clear, 0, 0)));
-    check(where, '4: rotate 30, a JPEG\'s corners are white', white && at(white, 0, 0).slice(0, 3).every(v => v > 240), white && JSON.stringify(at(white, 0, 0)));
+    onFile(where, '4: rotate 30, a PNG\'s corners are clear', clear && at(clear, 0, 0)[3] === 0 && at(clear, clear.width - 1, clear.height - 1)[3] === 0, clear && JSON.stringify(at(clear, 0, 0)));
+    onFile(where, '4: rotate 30, a JPEG\'s corners are white', white && at(white, 0, 0).slice(0, 3).every(v => v > 240), white && JSON.stringify(at(white, 0, 0)));
     sized('compress', 64, 48);
-    check(where, '4: compressImage turns and keeps no metadata', by.compress.path && !exif(by.compress.path), JSON.stringify(by.compress.path && exif(by.compress.path)));
+    onFile(where, '4: compressImage turns and keeps no metadata', by.compress.path && !exif(by.compress.path), JSON.stringify(by.compress.path && exif(by.compress.path)));
     const keep = exif(by.keep.path), bare = exif(by['no-location'].path), none = exif(by.none.path);
-    check(where, '4: keep keeps the GPS, the date, the camera, the rights and the maker note', keep?.gps && keep.date && keep.make && keep.copyright && keep.makerNote, JSON.stringify(keep));
-    check(where, '4: no-location keeps the date, the camera and the rights, and no GPS or maker note', bare && !bare.gps && !bare.makerNote && bare.date && bare.make && bare.copyright, JSON.stringify(bare));
-    check(where, '4: none writes no metadata', by.none.path && !none, JSON.stringify(none));
+    onFile(where, '4: keep keeps the GPS, the date, the camera, the rights and the maker note', keep?.gps && keep.date && keep.make && keep.copyright && keep.makerNote, JSON.stringify(keep));
+    onFile(where, '4: no-location keeps the date, the camera and the rights, and no GPS or maker note', bare && !bare.gps && !bare.makerNote && bare.date && bare.make && bare.copyright, JSON.stringify(bare));
+    onFile(where, '4: none writes no metadata', by.none.path && !none, JSON.stringify(none));
     sized('agent-3', 360, 480);
     sized('agent-3 top half', 360, 240);
     sized('agent-3 top half at 24', 24, 16);
     const half = img('agent-3 top half'), whole = img('agent-3');
-    check(where, '4: agent-3\'s top half is the upright photo\'s', half && whole && [[30, 30], [180, 120], [330, 200]].every(([x, y]) => at(half, x, y).slice(0, 3).every((v, i) => Math.abs(v - at(whole, x, y)[i]) < 24)),
+    onFile(where, '4: agent-3\'s top half is the upright photo\'s', half && whole && [[30, 30], [180, 120], [330, 200]].every(([x, y]) => at(half, x, y).slice(0, 3).every((v, i) => Math.abs(v - at(whole, x, y)[i]) < 24)),
       half && whole && JSON.stringify([at(half, 180, 120), at(whole, 180, 120)]));
     check(where, '4: a free turn of a gain-map photo says hdr false', by['gain map, 10°'].record?.hdr === false, JSON.stringify(by['gain map, 10°'].record));
     // Recorded, not checked: whether API 34 keeps the gain map through a quarter turn (D16).
@@ -215,6 +223,37 @@ if (process.argv.includes('--emulator')) {
     const drawn = r[13]?.node?.absolute;
     check(where, '5: the copy drawn by the reader\'s loader is upright', copied && drawn?.w === 48 && Math.abs(drawn.h - 48 * copied.height / copied.width) < 1, JSON.stringify(drawn));
     check(where, '5: the add joins the list', grid(r[11]) === grid(r[3]) + 1, `${grid(r[3])} then ${grid(r[11])}; ${shot}`);
+  }
+  // 6: MediaStore paged (D1): 30 more pushed, the six fixtures' bytes each made distinct after the JPEG's end, so
+  // many share a date taken and a date added; read 12 a page through Older to the oldest, each row once; then removed.
+  {
+    const id = 'com.exact.photosfixture', images = 'content://media/external/images/media';
+    adb('shell', `content delete --uri ${images} --where "_display_name LIKE 'photos-page-%'"`);
+    adb('shell', 'rm -f /sdcard/Pictures/photos-page-*');
+    const out = resolve(tmpdir(), `photos-android-pages-${process.pid}`);
+    mkdirSync(out, { recursive: true });
+    for (let i = 0; i < 30; i++) {
+      const file = resolve(out, `photos-page-${i}.jpg`);
+      writeFileSync(file, Buffer.concat([readFileSync(resolve(here, `../fixture/agent-${1 + i % 6}.jpg`)), Buffer.from(`page ${i}`)]));
+      adb('push', file, '/sdcard/Pictures/');
+    }
+    adb('shell', api >= 30 ? 'content call --method scan_volume --uri content://media --arg external_primary'
+      : `for f in /sdcard/Pictures/photos-page-*; do am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://$f; done`);
+    adb('shell', 'pm', 'grant', id, `android.permission.${api >= 33 ? 'READ_MEDIA_IMAGES' : 'READ_EXTERNAL_STORAGE'}`);
+    const rows = (adb('shell', `content query --uri ${images} --projection _id`).stdout.toString().match(/^Row:/gm) ?? []).length;
+    const pages = Math.ceil(rows / 12), ops = ['clock +100', 'tap @recent allow', 'clock settle', 'tree'];
+    for (let p = 1; p < pages; p++) ops.push('tap older', 'clock settle', 'tree');
+    const r = drive({}, ops, ['--bind', 'photos']);
+    const trees = r.filter(x => Array.isArray(x?.nodes));
+    const shown = trees.map(t => t.nodes.filter(n => /^photos:/.test(n.props?.imageSource ?? '')).map(n => n.props.imageSource));
+    const all = shown.flat(), ids = trees.map(t => new Set(t.nodes.map(n => n.props?.testId)));
+    check(where, `6: ${rows} rows in ${pages} pages of 12, each once`, trees.length === pages && all.length === rows && new Set(all).size === rows,
+      `${trees.length} pages, ${all.length} shown, ${new Set(all).size} distinct`);
+    check(where, '6: Older on every page but the last, which says the oldest', ids.slice(0, -1).every(t => t.has('older')) && ids.at(-1)?.has('oldest'),
+      JSON.stringify(ids.map(t => [t.has('older'), t.has('oldest')])));
+    // Gone again, so drive 5's list stays under one page.
+    adb('shell', `content delete --uri ${images} --where "_display_name LIKE 'photos-page-%'"`);
+    adb('shell', 'rm -f /sdcard/Pictures/photos-page-*');
   }
 }
 console.log(failed() ? `${failed()} failed` : 'all passed');

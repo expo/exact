@@ -29,7 +29,13 @@ final class MenuHost: NSObject {
         let bubbled: Bool
         /// The run of `source` that opened it as its context menu (X77): its anchor.
         let run: UInt32?
-        weak var parent: NSView?
+        /// Its authored parent: the container of the node it was lifted out
+        /// of, as that node has it now. A material's arrival or departure
+        /// replaces a node's container (`updateMaterial`) while the popover
+        /// is out of it.
+        var parent: NSView? { home?.container ?? held }
+        private weak var home: NodeView?
+        private weak var held: NSView?
         weak var previous: NSView?
         var index: Int
         let selection: NSRange?
@@ -50,8 +56,9 @@ final class MenuHost: NSObject {
         init(_ popover: NodeView, source: NodeView?, previous: NSView?, run: UInt32?, bubbled: Bool = false) {
             self.popover = popover; self.source = source; sourced = source != nil; self.previous = previous; self.run = run
             self.bubbled = bubbled
-            parent = popover.superview
-            index = parent?.subviews.firstIndex(of: popover) ?? 0
+            held = popover.superview
+            if let node = popover.nodeSuperview, node.container === held { home = node }
+            index = held?.subviews.firstIndex(of: popover) ?? 0
             frame = popover.frame; value = popover.props["popover"]
             hasFallbacks = popover.style["position_try_fallbacks"] != nil
             selection = ((previous as? NSTextField)?.currentEditor() as? NSTextView)?.selectedRange()
@@ -487,11 +494,17 @@ final class MenuHost: NSObject {
         // the hidden popover leaves; VoiceOver is sent to it after
         // (`tellLanding`, Accessibility.swift).
         if hadFocus, let window {
-            if restoreFocus, let previous = entry.previous, previous.window === window,
+            let invoker = pop.isMenu ? entry.source.flatMap { source -> NSView? in
+                guard live(source), !source.disabled, !source.inert,
+                      let target = presenter?.keyView(of: source), target.acceptsFirstResponder,
+                      !target.isHiddenOrHasHiddenAncestor, presenter?.dialogs.blocks(target) != true else { return nil }
+                return target
+            } : nil
+            if restoreFocus, let previous = invoker ?? entry.previous, previous.window === window,
                !previous.isHiddenOrHasHiddenAncestor, presenter?.dialogs.blocks(previous) != true,
                !((previous as? NodeView)?.inert ?? false) {
                 window.makeFirstResponder(previous)
-                if let range = entry.selection, let editor = window.firstResponder as? NSTextView { editor.setSelectedRange(range) }
+                if previous === entry.previous, let range = entry.selection, let editor = window.firstResponder as? NSTextView { editor.setSelectedRange(range) }
             } else { window.makeFirstResponder(presenter?.viewport) }
         }
         if let native = entry.native {

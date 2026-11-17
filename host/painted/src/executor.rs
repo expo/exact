@@ -174,6 +174,10 @@ impl Executor {
     pub fn retry_reader(&self) -> exact_runner::RetryReader {
         self.core.retry_reader()
     }
+    /// The session's live driver faults for individual long-poll attempts.
+    pub fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        self.core.set_fetch_fault(fault);
+    }
     /// Each listener's address and connections, by its stream ticket, live.
     pub fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         self.core.listen_reader()

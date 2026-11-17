@@ -247,29 +247,29 @@ impl Lexer {
                 // A vendor-prefixed CSS name, as the Compat Standard spells
                 // some (`-webkit-text-stroke`, LLP 1077 D7), or one Exact
                 // invents (`-exact-press-scale`, LLP 1081 D7), or a custom
-                // property the host defines (`--exact-safe-area-inset-top`,
-                // LLP 1123 D9): these prefixes only, and only as an
-                // attribute's name (followed by `=`), so `-webkit-x` in an
-                // expression stays a negation.
-                let vendor = ["-webkit-", "-apple-", "-exact-", "--exact-"]
-                    .iter()
-                    .find(|p| {
-                        trimmed[pos..].starts_with(*p)
-                            && bytes
-                                .get(pos + p.len())
-                                .is_some_and(|n| (*n as char).is_ascii_alphabetic())
-                            && {
-                                let rest = &trimmed[pos + p.find(|c| c != '-').unwrap_or(1)..];
-                                let end = rest
-                                    .find(|c: char| {
-                                        !(c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                                    })
-                                    .unwrap_or(rest.len());
-                                let after = rest[end..].trim_start_matches([' ', '\t']);
-                                after.starts_with('=') && !after.starts_with("==")
-                            }
-                    });
-                let dashes = vendor.map_or(0, |p| p.find(|c| c != '-').unwrap_or(1));
+                // property (`--gap`, LLP 1123 D5; the host's own,
+                // `--exact-safe-area-inset-top`, D9): these prefixes only,
+                // and only as an attribute's name (followed by `=`), so
+                // `-webkit-x` in an expression stays a negation.
+                let vendor = ["-webkit-", "-apple-", "-exact-", "--"].iter().find(|p| {
+                    trimmed[pos..].starts_with(*p)
+                        && bytes.get(pos + p.len()).is_some_and(|n| {
+                            let n = *n as char;
+                            n.is_ascii_alphabetic()
+                                || (**p == "--" && (n.is_ascii_digit() || n == '_'))
+                        })
+                        && {
+                            let rest = &trimmed[pos + leading_dashes(p)..];
+                            let end = rest
+                                .find(|c: char| {
+                                    !(c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                                })
+                                .unwrap_or(rest.len());
+                            let after = rest[end..].trim_start_matches([' ', '\t']);
+                            after.starts_with('=') && !after.starts_with("==")
+                        }
+                });
+                let dashes = vendor.map_or(0, |p| leading_dashes(p));
                 if c.is_ascii_alphabetic() || c == '_' || dashes > 0 {
                     // An identifier may contain hyphens — `font-size`,
                     // `aria-label` — as CSS's do; so, as in CSS `calc()`,
@@ -277,13 +277,17 @@ impl Lexer {
                     // while `x-1` still lexes as `x`, `-`, `1` (LLP 1017 §8.1).
                     let start = pos;
                     pos += dashes;
+                    // A custom property's name, only ever an attribute's, takes
+                    // every character CSS's does (`--gap-2`)
+                    let custom = dashes == 2;
                     while pos < bytes.len()
                         && ((bytes[pos] as char).is_ascii_alphanumeric()
                             || bytes[pos] == b'_'
                             || (bytes[pos] == b'-'
-                                && bytes
-                                    .get(pos + 1)
-                                    .is_some_and(|n| (*n as char).is_ascii_alphabetic())))
+                                && (custom
+                                    || bytes
+                                        .get(pos + 1)
+                                        .is_some_and(|n| (*n as char).is_ascii_alphabetic()))))
                     {
                         pos += 1;
                     }
@@ -684,4 +688,10 @@ fn skip_escaped(text: &str, slash: usize) -> usize {
 
 fn char_len(text: &str, pos: usize) -> usize {
     text[pos..].chars().next().map(char::len_utf8).unwrap_or(1)
+}
+
+/// How many `-` a name prefix starts with: two for a custom property's
+/// `--`, one for a vendor's.
+fn leading_dashes(prefix: &str) -> usize {
+    prefix.len() - prefix.trim_start_matches('-').len()
 }

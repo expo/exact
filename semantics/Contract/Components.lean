@@ -45,8 +45,10 @@ inductive CNode where
   | children (id : Nat)
   deriving Repr, Inhabited
 
-/-- A component. Children may hold device-fact resources; only the root
-holds other resources, mutations and tasks. -/
+/-- A component. Only the root holds tasks. A child's resource is a
+device fact, which the root holds once for the component, or a request
+each instance owns (LLP 1035.005.004 D1); each instance sends a child's
+mutations on its own (D6). -/
 structure CComponent where
   name : String
   props : List PropDecl := []
@@ -68,6 +70,10 @@ structure CComponent where
 def CComponent.deviceResources (c : CComponent) : List ResourceDecl :=
   c.resources.filter fun r =>
     (r.source == "exactViewport" || r.source == "exactPage") && r.args.isEmpty && r.each.isNone
+
+/-- A child's requests: every resource but its device facts. -/
+def CComponent.ownedResources (c : CComponent) : List ResourceDecl :=
+  c.resources.filter fun r => !c.deviceResources.any (·.name == r.name)
 
 /-- One root resource for a child declaration, shared by all its instances. -/
 def hoisted (component name : String) : String := s!"{name}@{component}"
@@ -98,13 +104,14 @@ structure CProgram where
   deriving Repr, Inhabited
 
 /-- Root resources followed by every child's device facts in declaration
-order, including unused components (`inline.rs` `expand`). The emitter's
-synthetic placeholder rows come after all authored resources. -/
-def CProgram.resources (p : CProgram) : List ResourceDecl :=
+order, including unused components, then `owned`, the requests each use
+lifted (`inline.rs` `expand`). The emitter's synthetic placeholder rows
+come after all authored resources. -/
+def CProgram.resources (p : CProgram) (owned : List ResourceDecl := []) : List ResourceDecl :=
   let (root, placeholders) := p.root.resources.partition fun r => !r.name.endsWith "#else"
   let children := p.components.flatMap fun c =>
     c.deviceResources.map fun r => { r with name := hoisted c.name r.name }
-  root ++ children ++ placeholders
+  root ++ children ++ owned ++ placeholders
 
 /-- The resolved locale's slot, as `contract lean` writes it: a root state
 of the base locale (the first table's), after the router's. -/

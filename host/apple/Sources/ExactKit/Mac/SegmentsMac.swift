@@ -6,7 +6,7 @@
 #if os(macOS)
 import AppKit
 
-private final class SegmentAccessibility: NSAccessibilityElement, AgentOwned {
+private final class SegmentAccessibility: NSAccessibilityElement, InspectionOwned {
     weak var control: ExactSegmentedControl?
     let index: Int
     init(_ control: ExactSegmentedControl, _ index: Int) {
@@ -15,7 +15,7 @@ private final class SegmentAccessibility: NSAccessibilityElement, AgentOwned {
         super.init()
     }
     private var native: NSAccessibilityElement? { control?.nativeSegment(at: index) }
-    var agentViewId: UInt32? {
+    var inspectionViewId: UInt32? {
         guard let control, control.memberIDs.indices.contains(index) else { return nil }
         return control.memberIDs[index]
     }

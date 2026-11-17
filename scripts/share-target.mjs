@@ -1,5 +1,5 @@
-// @ref LLP 1133.024 D1, D4–D6 — the manifest's `share_target`: what each
-// host derives from it, and what the bake refuses.
+// @ref LLP 1133.024 D1, D4–D6 (D4 and D6 amended 2026-11-15) — the manifest's
+// `share_target`: what each host derives from it, and what the bake refuses.
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DOCUMENT_UTIS, resolveApp } from './app.mjs';
@@ -13,7 +13,7 @@ export const EXTENSION_TYPES = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.heic': 'image/heic', '.heif': 'image/heif', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg',
 };
-const EXTRA_UTIS = { 'image/heic': 'public.heic', 'image/heif': 'public.heif', 'video/mp4': 'public.mpeg-4', 'video/quicktime': 'com.apple.quicktime-movie', 'audio/mp4': 'public.mpeg-4-audio', 'audio/mpeg': 'public.mp3' };
+const EXTRA_UTIS = { 'video/mp4': 'public.mpeg-4', 'video/quicktime': 'com.apple.quicktime-movie', 'audio/mp4': 'public.mpeg-4-audio', 'audio/mpeg': 'public.mp3' };
 
 const list = accept => [accept].flat();
 /** The MIME type or pattern an `accept` entry names. */
@@ -25,8 +25,8 @@ export function acceptUTI(entry) {
 }
 
 /** What the bake refuses in a manifest's `share_target`: an `accept` entry no host maps, files without
- * `POST` and multipart, a parameter name used twice. The compiler checks `action` against the app's routes
- * (`contract/cli/src/picker.rs`). */
+ * `POST` and multipart, a parameter name used twice, and `postTitle` beside the confirmation. The compiler checks
+ * `action` against the app's routes (`contract/cli/src/picker.rs`). */
 export function shareTargetProblems(manifest) {
   const target = manifest.share_target;
   if (!target) return [];
@@ -39,8 +39,19 @@ export function shareTargetProblems(manifest) {
   }));
   const names = [target.params?.title, target.params?.text, target.params?.url, ...files.map(f => f.name)].filter(Boolean);
   for (const name of new Set(names.filter((n, i) => names.indexOf(n) !== i))) problems.push(`share_target.params: the parameter ${name} is named twice`);
+  if (applePresentation(target) === 'confirmation' && target.apple.postTitle !== undefined)
+    problems.push('share_target.apple.postTitle: "presentation": "confirmation" shows no compose sheet, so there is no post button to name');
   return problems;
 }
+
+/** How Apple's share extension presents (D4, D6): `compose`, the sheet whose Post writes the share, or `confirmation`,
+ * no editor: choosing the app writes the share and shows the app's name under a checkmark. */
+export const applePresentation = target => target.apple?.presentation ?? 'compose';
+
+/** Whether Apple's share extension asks Safari for a shared page's details (D4): when the app maps `url`. Safari then
+ * runs Exact's script in the page (`host/apple/share/SharePage.js`), and the share's `url` is the page's canonical
+ * URL and its `title` the page's. An app that maps no `url` declares no script and ships none. */
+export const appleSharePage = target => !!target.params?.url;
 
 /** The web's member (D6): always GET with the text members, since a POST share needs a service worker (LLP 1030
  * D1); `notes` says what was rewritten, for the build to print. */
@@ -53,14 +64,22 @@ export function webShareTarget(target, notes = []) {
 }
 
 /** Apple's `NSExtensionActivationRule` (D4): the app's own, or derived from `params` — text when `text` is mapped, a
- * web URL when `url` is, and each accepted kind of file with no count cap, as the web has none. */
+ * web URL when `url` is, with the web page Safari runs Exact's script in (`appleSharePage`), and each accepted kind
+ * of file with no count cap, as the web has none. An app's own dictionary gains the web page too when `url` is
+ * mapped, unless it gives that count itself: Apple requires the key of an extension that reads a webpage (App
+ * Extension Programming Guide, "Declaring Supported Data Types for a Share or Action Extension"). An app's own
+ * predicate is baked as written (D6: the authored rule beats the derived one), and whether Safari offers the app
+ * a page is the predicate's to decide. On the iOS 27 simulator one that accepts only `public.url` is offered a
+ * page, and the extension then receives the page's details, a property list, in place of the link. */
 export function appleActivationRule(target) {
-  if (target.apple?.NSExtensionActivationRule) return target.apple.NSExtensionActivationRule;
+  const own = target.apple?.NSExtensionActivationRule;
+  if (own) return appleSharePage(target) && typeof own === 'object' ? { NSExtensionActivationSupportsWebPageWithMaxCount: 1, ...own } : own;
   const { text, url, files = [] } = target.params ?? {};
   const types = files.flatMap(f => list(f.accept).map(acceptType));
   const rule = {};
   if (text) rule.NSExtensionActivationSupportsText = true;
   if (url || text) rule.NSExtensionActivationSupportsWebURLWithMaxCount = 1;
+  if (appleSharePage(target)) rule.NSExtensionActivationSupportsWebPageWithMaxCount = 1;
   if (types.some(t => t?.startsWith('image/'))) rule.NSExtensionActivationSupportsImageWithMaxCount = 1000;
   if (types.some(t => t?.startsWith('video/'))) rule.NSExtensionActivationSupportsMovieWithMaxCount = 1000;
   if (types.some(t => t && !t.startsWith('image/') && !t.startsWith('video/'))) rule.NSExtensionActivationSupportsFileWithMaxCount = 1000;

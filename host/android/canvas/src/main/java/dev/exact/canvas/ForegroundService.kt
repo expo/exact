@@ -195,6 +195,8 @@ class ForegroundServices internal constructor(private val application: Context, 
 internal object Claims {
     val held = ArrayList<ForegroundClaim>()
     private val services = HashMap<String, ForegroundService>()
+    private val activeServices = HashSet<String>()
+    internal val keepsExecution: Boolean get() = held.any { !it.agent && it.kind in activeServices }
     private val ids = mapOf("capture" to 0x45584301, "call" to 0x45584302)
 
     fun service(kind: String): Class<out ForegroundService> = if (kind == "call") ForegroundService.Call::class.java else ForegroundService.Capture::class.java
@@ -277,6 +279,8 @@ internal object Claims {
         try {
             val types = types(service.kind)
             service.startForeground(ids.getValue(service.kind), notification(service), types.fold(0) { mask, type -> mask or bit(type) })
+            activeServices += service.kind
+            Exact.executionChanged()
             promoted(held.filter { it.kind == service.kind && !it.agent }, types)
         } catch (e: Exception) {
             // A `SecurityException` for a type whose permission or runtime grant is missing, or Android 12's
@@ -285,8 +289,8 @@ internal object Claims {
             Log.i("exact", "foreground service ${service.kind}: refused: $why")
             val lost = held.filter { it.kind == service.kind && !it.agent }
             held.removeAll(lost.toSet())
-            lost.forEach { it.released = true; it.lost(why) }
             stop(service)
+            lost.forEach { it.released = true; it.lost(why) }
         }
     }
 
@@ -305,11 +309,17 @@ internal object Claims {
     }
 
     private fun stop(service: ForegroundService) {
+        activeServices -= service.kind
+        Exact.executionChanged()
         service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
         service.stopSelf()
     }
 
     fun destroyed(service: ForegroundService) {
-        if (services[service.kind] === service) services.remove(service.kind)
+        if (services[service.kind] === service) {
+            services.remove(service.kind)
+            activeServices -= service.kind
+            Exact.executionChanged()
+        }
     }
 }

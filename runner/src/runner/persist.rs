@@ -24,6 +24,11 @@ pub(crate) fn state_name(name: &str) -> String {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// Refuse writes to phone-owned watch values before deferred data runs.
+    pub fn read_only_store(&mut self, names: Vec<String>) {
+        self.store.read_only(names);
+    }
+
     /// Slot `i`'s boot value: the store's, when slot `i` is persisted and the
     /// stored text decodes to its type; else `v`, the initializer's.
     pub(super) fn restore_persisted(&mut self, i: usize, v: Value) -> Value {

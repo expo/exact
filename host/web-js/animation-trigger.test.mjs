@@ -65,13 +65,13 @@ function usePlan(plan) {
 for (const target of ['js', 'wasm']) {
   const check = target === 'wasm' ? need('fixture', process.env.EXACT_WEB_DIST ? null : 'EXACT_WEB_DIST must name an all-capabilities wasm build') : test;
   check(`${target}: prefetched box and SVG animations start on first reveal`, async () => {
-    const { cmd } = webCompiler();
+    const { cmd, env } = webCompiler();
     if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
     const dir = mkdtempSync(resolve(root, 'target/animation-trigger-'));
     let browser, server;
     try {
       writeFileSync(resolve(dir, 'app.contract'), source);
-      const compile = spawnSync(cmd, ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+      const compile = spawnSync(cmd, ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8', env });
       expect(compile.status, compile.stderr).toBe(0);
       const dist = target === 'js' ? dir : resolve(process.env.EXACT_WEB_DIST);
       server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {

@@ -1,6 +1,6 @@
 # Paperback Settings — notes
 
-Built with Exact (`app.contract`, `app.tamber`, `app.test.contract`). Installed on simulator
+Built with Exact (`app.contract`, `app.forma`, `app.test.contract`). Installed on simulator
 EEFC0029-… as `Settings` (`dev.bakeoff.settings.b9239c8`). The 11 tests pass on web and iOS,
 `verify` on the web reports only the issue described below, and `verify ios` is clean (light,
 dark, largest text size, relaunch, scrolling).

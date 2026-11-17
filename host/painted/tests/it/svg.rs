@@ -245,11 +245,12 @@ fn a_press_in_an_svg_reaches_the_element_under_it() {
         .node_by_key(kernel.find_by_test_id("chart")[0])
         .unwrap()
         .id;
-    let b = *presenter
+    let b = presenter
         .boxes()
         .iter()
         .find(|b| b.id == chart)
-        .expect("the svg's box");
+        .expect("the svg's box")
+        .clone();
     let picked = |p: &mut Presenter<()>, x: f32, y: f32| {
         p.press_at(b.rect.0 + x, b.rect.1 + y, 0.0);
         let k = p.host().kernel();
@@ -291,7 +292,7 @@ fn a_zero_length_subpath_paints_its_cap() {
     assert!(error.is_none(), "{error:?}");
     let k = p.host().kernel();
     let dots = k.node_by_key(k.find_by_test_id("dots")[0]).unwrap().id;
-    let b = *p.boxes().iter().find(|b| b.id == dots).unwrap();
+    let b = p.boxes().iter().find(|b| b.id == dots).unwrap().clone();
     let (x0, y0) = (b.rect.0 as u32, b.rect.1 as u32);
     let frame = p.frame();
     let red = |x: u32| {
@@ -366,7 +367,7 @@ fn a_symbol_role_is_its_path_and_an_sf_name_is_empty() {
     let reds = |p: &mut Presenter<()>, id: &str| {
         let k = p.host().kernel();
         let node = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id;
-        let b = *p.boxes().iter().find(|b| b.id == node).unwrap();
+        let b = p.boxes().iter().find(|b| b.id == node).unwrap().clone();
         let frame = p.frame();
         let mut n = 0;
         for y in 0..48 {
@@ -478,7 +479,7 @@ fn a_transitioning_d_morphs_the_path() {
     let icon = id(&p, "icon");
     // The rows of the icon with ink in them: its height in points.
     let ink = |p: &mut Presenter<()>| {
-        let b = *p.boxes().iter().find(|b| b.id == icon).unwrap();
+        let b = p.boxes().iter().find(|b| b.id == icon).unwrap().clone();
         let frame = p.frame();
         (0..96u32)
             .filter(|y| {
@@ -522,7 +523,7 @@ fn an_even_odd_icon_draws_its_hole() {
     let red = |p: &mut Presenter<()>, id: &str, x: u32, y: u32| {
         let k = p.host().kernel();
         let node = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id;
-        let b = *p.boxes().iter().find(|b| b.id == node).unwrap();
+        let b = p.boxes().iter().find(|b| b.id == node).unwrap().clone();
         let c = p
             .frame()
             .pixel(b.rect.0 as u32 + x, b.rect.1 as u32 + y)
@@ -565,8 +566,8 @@ fn file_icons_app(source: &str, case: &str) -> (Vec<u8>, std::path::PathBuf) {
     )
     .unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\nicons\n  icon.ai = icon(svg \"ai.svg\")\n  icon.colours = icon(svg \"colours.svg\")\n  icon.rectangle = icon(svg \"rectangle.svg\")\n  icon.template = icon(svg \"template.svg\")\n",
+        dir.join("app.forma"),
+        "forma t\n\nicons\n  icon.ai = icon(svg \"ai.svg\")\n  icon.colours = icon(svg \"colours.svg\")\n  icon.rectangle = icon(svg \"rectangle.svg\")\n  icon.template = icon(svg \"template.svg\")\n",
     )
     .unwrap();
     let entry = dir.join("app.contract");
@@ -805,4 +806,189 @@ fn file_icons_are_found_in_the_layout_reply() {
         "{reply}"
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn percentage_clips_match_pixel_paths_at_two_layout_sizes() {
+    for (w, h) in [(80, 60), (160, 100)] {
+        let render = |clip: &str| {
+            let src = format!(
+                r##"component App
+  view
+    view width={w} height={h} background-color="#ffffff"
+      view width="100%" height="100%" background-color="#ff0000" clip-path="{clip}"
+        view width="100%" height=20 background-color="#0000ff"
+"##
+            );
+            let plan = contract::compile(&src).unwrap().encode();
+            let (mut p, error) = Presenter::boot_with(
+                &plan,
+                (),
+                (w as f32, h as f32),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Cpu,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame().data().to_vec()
+        };
+        let shape = render("polygon(0% 25%, 100% 0%, 50% 100%)");
+        let path = render(&format!(
+            "path('M0 {}L{} 0L{} {}Z')",
+            h as f32 / 4.,
+            w,
+            w / 2,
+            h
+        ));
+        assert_eq!(shape, path, "{w}x{h}");
+        assert_ne!(shape, render("none"));
+        for empty in ["inset(60%)", "circle(0)", "polygon(0 0)"] {
+            assert_eq!(render(empty), vec![255; (w * h * 4) as usize], "{empty}");
+        }
+    }
+}
+
+#[test]
+fn a_layout_transition_resolves_the_clip_against_each_presented_surface() {
+    let src = r##"component App
+  state big = false
+  action grow
+    big = true
+  view
+    view width=250 height=300 background-color="#ffffff"
+      view testId="box" width=(big ? 200 : 100) height=(big ? 200 : 100) background-color="#ff0000" clip-path="inset(25%)" -exact-layout-transition="1s linear"
+        view width=200 height=80 background-color="#0000ff"
+      button "Grow" testId="grow" press=grow
+"##;
+    let (mut p, _) = Presenter::boot_with(
+        &contract::compile(src).unwrap().encode(),
+        (),
+        (250., 300.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    let k = p.host().kernel();
+    let grow = k.node_by_key(k.find_by_test_id("grow")[0]).unwrap().id;
+    p.tap(grow).unwrap();
+    for time in [250., 500., 750.] {
+        p.tick(time);
+        let size = 100. + time as f32 / 10.;
+        let a = (size / 4.).ceil() as u32;
+        let b = (size * 0.75).floor() as u32;
+        let image = p.frame();
+        assert_eq!(
+            image.pixel(a + 2, a + 2).unwrap().green(),
+            0,
+            "child at {time}"
+        );
+        assert_eq!(
+            image.pixel(b - 2, b - 2).unwrap().green(),
+            0,
+            "surface at {time}"
+        );
+        assert_eq!(
+            image.pixel(a - 2, a - 2).unwrap().green(),
+            255,
+            "outside at {time}"
+        );
+        assert_eq!(
+            image.pixel(b + 2, b + 2).unwrap().green(),
+            255,
+            "outside at {time}"
+        );
+    }
+}
+
+#[test]
+fn computed_svg_clips_keep_references_paths_and_none() {
+    let src = r##"component App
+  state clip = "url(#cut)"
+  action pathClip
+    clip = "path('M50 50H100V100H50Z')"
+  action basicClip
+    clip = "inset(25%)"
+  action clearClip
+    clip = "none"
+  view
+    column background-color="#ffffff"
+      svg width=120 height=110
+        defs
+          clipPath id="cut"
+            rect x=20 y=10 width=50 height=50
+        rect x=20 y=10 width=100 height=100 fill="#ff0000" clip-path=clip
+      button "Path" testId="path" press=pathClip
+      button "Basic" testId="basic" press=basicClip
+      button "Clear" testId="clear" press=clearClip
+"##;
+    let (mut p, _) = Presenter::boot_with(
+        &contract::compile(src).unwrap().encode(),
+        (),
+        (200., 300.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    let pixels = |p: &mut Presenter<()>| {
+        let image = p.frame();
+        [
+            image.pixel(30, 20).unwrap().green(),
+            image.pixel(100, 90).unwrap().green(),
+        ]
+    };
+    assert_eq!(pixels(&mut p), [0, 255]);
+    for (name, expected) in [
+        ("path", [255, 0]),
+        ("basic", [0, 0]),
+        ("clear", [0, 0]),
+        ("path", [255, 0]),
+    ] {
+        let k = p.host().kernel();
+        let id = k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+        p.tap(id).unwrap();
+        assert_eq!(pixels(&mut p), expected, "{name}");
+    }
+    assert!(p
+        .host()
+        .agent(r#"{"op":"logs","since":0}"#)
+        .contains("basic-shape clip-path"));
+}
+
+#[test]
+fn basic_clip_hits_follow_the_shape_and_ancestors() {
+    for nested in [false, true] {
+        let body = if nested {
+            "view width=100 height=100 clip-path=\"inset(25%)\"\n        view testId=\"hit\" width=100 height=100 press=hit"
+        } else {
+            "view testId=\"hit\" width=100 height=100 clip-path=\"inset(25%)\" press=hit"
+        };
+        let src = format!("component App\n  state count = 0\n  action hit\n    count = count + 1\n  view\n    column\n      {body}\n      text `${{count}}` testId=\"count\"\n");
+        let (mut p, _) = Presenter::boot_with(
+            &contract::compile(&src).unwrap().encode(),
+            (),
+            (200., 200.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        p.frame();
+        for (i, (x, y, expected)) in [(5., 5., "0"), (50., 50., "1"), (95., 95., "1")]
+            .into_iter()
+            .enumerate()
+        {
+            p.pointer_down(x, y, i as f64 * 10.).unwrap();
+            p.pointer_up(x, y, i as f64 * 10. + 1.).unwrap();
+            let k = p.host().kernel();
+            let count = k.node_by_key(k.find_by_test_id("count")[0]).unwrap();
+            assert_eq!(
+                count.props.str(exact_kernel::PropId::Text),
+                Some(expected),
+                "nested={nested} at {x},{y}"
+            );
+        }
+    }
 }

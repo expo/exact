@@ -140,11 +140,14 @@ pub enum Capability {
     TextStroke,
     /// `-exact-symbol-palette`'s grammar (LLP 1077 D10).
     SymbolPalette,
+    /// Locked secrets (LLP 1133.010 D16), selected by `secret.keep` grants
+    /// with a presence policy, including names whose protection is optional.
+    Presence,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 36] = [
+    pub const ALL: [Capability; 37] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -181,6 +184,7 @@ impl Capability {
         Capability::Rotate,
         Capability::TextStroke,
         Capability::SymbolPalette,
+        Capability::Presence,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -222,6 +226,7 @@ impl Capability {
             Capability::Rotate => "rotate",
             Capability::TextStroke => "text_stroke",
             Capability::SymbolPalette => "symbol_palette",
+            Capability::Presence => "presence",
         }
     }
 
@@ -267,6 +272,9 @@ impl Uses {
             uses = uses.with(Capability::Io);
         }
         for line in grants.lines() {
+            if exact_grants::line_presence(line).is_some() {
+                uses = uses.with(Capability::Presence);
+            }
             uses = match line.split_whitespace().next() {
                 Some("sqlite.open") => uses.with(Capability::Sqlite),
                 Some("auth.session") => uses.with(Capability::AuthSession),
@@ -308,6 +316,20 @@ impl fmt::Display for Uses {
 /// The capabilities `plan` uses (LLP 1047 D2).
 pub fn uses(plan: &Plan) -> Uses {
     let mut uses = Uses::NONE;
+    if plan.tools.iter().any(|t| {
+        serde_json::from_str::<serde_json::Value>(plan.str(t.face)).is_ok_and(|face| {
+            face["doors"]
+                .as_array()
+                .is_some_and(|doors| doors.iter().any(|d| d == "apple"))
+                && face["parameters"].as_object().is_some_and(|params| {
+                    params
+                        .values()
+                        .any(|p| p.get("type").is_some_and(|t| t == "file"))
+                })
+        })
+    }) {
+        uses = uses.with(Capability::Picker);
+    }
     if !plan.keyframes.is_empty() {
         uses = uses.with(Capability::Animations);
     }
@@ -316,7 +338,10 @@ pub fn uses(plan: &Plan) -> Uses {
     }
     // Kept answers and surface records both need the host's store, and a
     // declared source its network (LLP 1162.001 D3).
-    if plan.resources.iter().any(|r| r.reader || r.keep) || !plan.fetches.is_empty() {
+    if plan.resources.iter().any(|r| r.reader || r.keep)
+        || !plan.fetches.is_empty()
+        || plan.slots.iter().any(|s| s.persist)
+    {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -350,7 +375,7 @@ pub fn uses(plan: &Plan) -> Uses {
                 // A shared element flies between its two places (LLP 1013.000).
                 Some(PropId::SharedElement) => uses = uses.with(Capability::Transitions),
                 Some(PropId::Virtualized)
-                    if constant_bool(plan.code(binding.expr)).is_none_or(|on| on) =>
+                    if constant_bool(plan, plan.code(binding.expr)).is_none_or(|on| on) =>
                 {
                     uses = uses.with(Capability::Collections);
                 }
@@ -433,7 +458,12 @@ pub fn uses(plan: &Plan) -> Uses {
                 }
                 if matches!(
                     StyleId::from_bit(u32::from(binding.id)),
-                    Some(StyleId::Animation | StyleId::ExitAnimation)
+                    Some(
+                        StyleId::Animation
+                            | StyleId::ExitAnimation
+                            | StyleId::ViewTransitionNew
+                            | StyleId::ViewTransitionOld
+                    )
                 ) {
                     uses = uses.with(Capability::Animations);
                 }
@@ -559,6 +589,28 @@ fn shows_media_picker(plan: &Plan) -> bool {
     })
 }
 
+/// Whether node `node` is a zoomable scroller (LLP 1057.001.000 D1): either
+/// range row written, literal or bound. The web loads its zoom module, and the
+/// wasm host names its absence, only for a plan with one.
+pub fn zoomable(plan: &Plan, node: exact_plan::NodesId) -> bool {
+    plan.node(node)
+        .bindings
+        .iter()
+        .map(|b| plan.binding(b))
+        .any(|b| {
+            b.kind == BindingKind::Style
+                && matches!(
+                    StyleId::from_bit(b.id as u32),
+                    Some(StyleId::MinZoom | StyleId::MaxZoom)
+                )
+        })
+}
+
+/// Whether `plan` has a zoomable scroller.
+pub fn zooms(plan: &Plan) -> bool {
+    (0..plan.nodes.len()).any(|i| zoomable(plan, exact_plan::NodesId(i as u32)))
+}
+
 /// Whether `plan` can show an SVG island (LLP 1055.000 D10, D14): a `mask`
 /// or `filter` element, or `filter` bound on an SVG element (its functions
 /// need no element). A host whose island module is loaded on demand (LLP
@@ -599,7 +651,7 @@ pub fn svg_filters(plan: &Plan) -> bool {
 fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
     let (mut format, mut geometry, mut lowercase) = (false, false, false);
     plan.each_code(&mut |code| {
-        for i in crate::vm::instructions(plan.code(code)).flatten() {
+        for i in crate::vm::instructions(plan.read_code(plan.code(code)).0).flatten() {
             if i.op == Opcode::Call {
                 match Stdlib::from_wire(i.args[0] as u8) {
                     Some(
@@ -669,6 +721,22 @@ pub fn uses_picture_in_picture(plan: &Plan) -> bool {
     runs_command(plan, &["requestPictureInPicture"])
 }
 
+/// Whether an image's, a media element's or a frame's source can be remote:
+/// an `http:` or `https:` literal, or one computed at run time, which this
+/// cannot read. The Mac App Store sandbox loads such a source only with
+/// `network.client` (LLP 1030.005 D2).
+pub fn sources_can_be_remote(plan: &Plan) -> bool {
+    plan.bindings.iter().any(|binding| {
+        binding.kind == BindingKind::Prop
+            && matches!(
+                PropId::from_wire(binding.id),
+                Some(PropId::Src | PropId::ImageSource)
+            )
+            && constant_str(plan, plan.code(binding.expr))
+                .is_none_or(|src| src.starts_with("http:") || src.starts_with("https:"))
+    })
+}
+
 /// Whether the runner keeps a MIDI queue the agent shows (`state.midi`):
 /// for a plan that [`uses_midi`] or declares a sequence, whose notes and
 /// clock go on it. The JS target bundles midi.js then.
@@ -682,11 +750,17 @@ pub fn chooses_locale(plan: &Plan) -> bool {
     runs_command(plan, &["setLocale"])
 }
 
+/// Whether the plan runs `setScheme`: then the scheme it chose is kept
+/// across launches.
+pub fn chooses_scheme(plan: &Plan) -> bool {
+    runs_command(plan, &["setScheme"])
+}
+
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
     let mut runs = false;
     plan.each_code(&mut |code| {
         runs = runs
-            || crate::vm::instructions(plan.code(code)).any(|i| {
+            || crate::vm::instructions(plan.read_code(plan.code(code)).0).any(|i| {
                 i.is_ok_and(|i| {
                     i.op == Opcode::Command
                         && plan
@@ -701,8 +775,8 @@ fn runs_command(plan: &Plan, names: &[&str]) -> bool {
 
 /// The boolean a binding always evaluates to, when its code is one constant:
 /// `Bool`, then `Return`.
-fn constant_bool(code: &[u8]) -> Option<bool> {
-    match code {
+fn constant_bool(plan: &Plan, code: &[u8]) -> Option<bool> {
+    match plan.read_code(code).0 {
         [op, value, ret] if *op == Opcode::Bool as u8 && *ret == Opcode::Return as u8 => {
             Some(*value != 0)
         }
@@ -713,7 +787,7 @@ fn constant_bool(code: &[u8]) -> Option<bool> {
 /// The string a binding always evaluates to, when its code is one constant:
 /// `Str`, then `Return`.
 fn constant_str<'a>(plan: &'a Plan, code: &[u8]) -> Option<&'a str> {
-    match code {
+    match plan.read_code(code).0 {
         [op, a, b, c, d, ret] if *op == Opcode::Str as u8 && *ret == Opcode::Return as u8 => {
             let id = u32::from_le_bytes([*a, *b, *c, *d]);
             plan.strings.get(id as usize).map(|_| plan.str(StrId(id)))
@@ -733,6 +807,54 @@ fn names_segment(s: &str) -> bool {
 #[cfg(test)]
 mod grant_tests {
     use super::{Capability, Uses};
+
+    #[test]
+    fn presence_grants_link_the_backend_including_optional_names() {
+        for policy in [
+            "user-presence",
+            "biometry-any",
+            "biometry-current-set",
+            "device-credential",
+        ] {
+            for optional in ["", " optional"] {
+                let grants =
+                    format!("secret.keep token {policy}{optional}\ndevice.local-auth purpose.lock");
+                let uses = Uses::NONE.with_grants(&grants);
+                assert!(uses.has(Capability::Io));
+                assert!(uses.has(Capability::Presence), "{grants}: {uses}");
+            }
+        }
+        for grants in ["", "secret.keep token", "device.local-auth purpose.lock"] {
+            assert!(!Uses::NONE.with_grants(grants).has(Capability::Presence));
+        }
+    }
+
+    #[test]
+    fn persisted_slots_link_storage_without_resources() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+        for persist in [false, true] {
+            let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let boolean = b.primitive(TypeKind::Bool);
+            let mut initial = Asm::new();
+            initial.bool(false);
+            let initial = b.code(initial);
+            let slot = b.slot("liked", boolean, initial);
+            b.set_slot_persist(slot, persist);
+            b.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            assert_eq!(
+                super::uses(&b.finish().unwrap()).has(Capability::Io),
+                persist
+            );
+        }
+    }
 
     #[test]
     fn kept_surfaces_link_storage_without_a_data_reader() {

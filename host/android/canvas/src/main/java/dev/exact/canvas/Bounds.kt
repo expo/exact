@@ -78,7 +78,7 @@ internal class Bounds {
                     i += 2 + b.get(i + 1)
                 }
                 46 -> { clips.add(clips.lastOrNull()?.let { RectF(it) }); i += 1 }
-                47 -> i += 2
+                47, 49 -> i += 2
                 6 -> { if (clips.isNotEmpty()) clips.removeAt(clips.size - 1); i += 1 }
                 7 -> { clips.add(clips.lastOrNull()?.let { RectF(it) }); i += 2 }
                 8 -> { add(out, f(b, i + 2), f(b, i + 3), f(b, i + 2) + f(b, i + 4), f(b, i + 3) + f(b, i + 5)); i += 6 }

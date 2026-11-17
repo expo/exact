@@ -431,7 +431,7 @@ const componentOfPath = token => {
  * length, a number or (no type) a colour. */
 export function packageTokens(root = ROOT) {
   // An icon token (`name = icon(svg "…")`, a space before its `(` or none) is no colour, length or number: no case restyles it.
-  return PACKAGES.flatMap(p => [...readFileSync(join(root, 'packages', p, `${p}.tamber`), 'utf8').matchAll(/^\s+([a-z][\w-]*(?:\.[\w-]+)+)(?::\s*([\w-]+))?\s*=(?!\s*icon\s*\()/gm)]
+  return PACKAGES.flatMap(p => [...readFileSync(join(root, 'packages', p, `${p}.forma`), 'utf8').matchAll(/^\s+([a-z][\w-]*(?:\.[\w-]+)+)(?::\s*([\w-]+))?\s*=(?!\s*icon\s*\()/gm)]
     .map(m => ({ name: m[1], kind: m[2] ?? 'color' })));
 }
 

@@ -207,6 +207,13 @@ fn contains(path: &Path, p: (f32, f32), even_odd: bool) -> bool {
     }
 }
 
+impl Path {
+    /// Whether a point is in the fill, closing open subpaths as SVG does.
+    pub fn contains(&self, point: (f32, f32), even_odd: bool) -> bool {
+        contains(self, point, even_odd)
+    }
+}
+
 fn cross(a: (f32, f32), b: (f32, f32), p: (f32, f32)) -> f32 {
     (b.0 - a.0) * (p.1 - a.1) - (p.0 - a.0) * (b.1 - a.1)
 }

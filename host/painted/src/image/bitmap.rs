@@ -233,6 +233,7 @@ mod tests {
                         &[Shape::rect(box_rect)],
                         Transform::identity(),
                         None,
+                        exact_kernel::ImageRendering::Auto,
                     );
                     drawn.push(raster.finish().unwrap());
                 }
@@ -321,6 +322,7 @@ mod tests {
                             &[Shape::rect(box_rect)],
                             Transform::identity(),
                             None,
+                            exact_kernel::ImageRendering::Auto,
                         );
                         drawn.push(raster.finish().unwrap());
                     }
@@ -335,7 +337,9 @@ mod tests {
                     );
                     assert!(drawn[0]
                         .data()
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .all(|p| p[..3].iter().all(|c| *c <= p[3])));
                 }
             }

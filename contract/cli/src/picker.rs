@@ -236,3 +236,32 @@ fn missing_targets(file: &File) -> Vec<CompileError> {
     }
     errors
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_dotless_declared_suffix_bounds_picker_accept() {
+        let dir = std::env::temp_dir().join(format!(
+            "exact-picker-dotless-suffix-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            std::fs::write(
+                dir.join("app.json"),
+                r#"{"name":"Board","app":{"id":"test.board","name":"Board"},"file_handlers":[{"action":"/","accept":{"application/x-studio-board+json":["board"]}}]}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("app.contract"),
+                "component App\n  view\n    input type=\"file\" accept=\".board\"\n",
+            )
+            .unwrap();
+            crate::compile_path(&dir.join("app.contract")).unwrap();
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
+}

@@ -592,6 +592,11 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         self.rust.set_document_owner(owner);
     }
 
+    fn render_web(&mut self) {
+        self.javascript.render_web();
+        self.rust.render_web();
+    }
+
     fn take_logs(&mut self) -> Vec<String> {
         Mixed::take_logs(self)
     }
@@ -1300,6 +1305,18 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         store.with_grants(&grants, |store| {
             self.javascript.module_landed(store, token, outcome)
         })
+    }
+
+    /// The JavaScript member's, under its own grants as its answers' requests
+    /// are (`route_answer`); its replies come back through `module_delivery`,
+    /// which delivers to that member. A Rust member makes none.
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        let grants = self.javascript.grants().to_string();
+        let mut reports = DataSource::take_reports(&mut self.javascript);
+        for report in &mut reports {
+            report.request.grants = Some(grants.clone());
+        }
+        reports
     }
 
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {

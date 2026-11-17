@@ -16,12 +16,21 @@ extension NodeView {
     package override var acceptsFirstResponder: Bool {
         if formDisabled || inert || isHiddenOrHasHiddenAncestor || cssVisibilityHidden { return false }
         if field != nil || textArea != nil || isNativeButton || nativeValueControl != nil { return false }
-        return props["semanticTag"] == "dialog" || isParagraph || explicitTabIndex != nil || tabbable || isRadio || ariaRadioGroup != nil
+        return props["semanticTag"] == "dialog" || isParagraph || explicitTabIndex != nil || isRadio || focusableByKind
     }
+    /// A member of a painted group is a stop only as its group's one stop
+    /// (`roleTabStop`, the kernel's: LLP 1166.000 D1), which a negative
+    /// `tabindex` rules out and no other `tabindex` makes.
     var tabbable: Bool {
+        if let stop = roleTabStop { return stop }
         if let index = explicitTabIndex { return index >= 0 }
-        if ariaRadioGroup != nil { return ariaRadioTabStop } // an authored radio group is one stop too
-        return kind == "button" || isNativeButton || isDateOrSelect || canvases?.wantsInput(id) == true || pressable || !handlers.isDisjoint(with: Self.focusEvents)
+        return focusableByKind
+    }
+    /// What takes the focus and is a stop by its kind. Apart from `tabbable`
+    /// so that whether a group's member can take the focus
+    /// (`ControlHost.canFocusMember`) never asks which member is the stop.
+    private var focusableByKind: Bool {
+        kind == "button" || isNativeButton || isDateOrSelect || canvases?.wantsInput(id) == true || pressable || !handlers.isDisjoint(with: Self.focusEvents)
             || reorderKeys || radioTabStop // a grouped grip takes the keys (LLP 1094 D9); a radio group one stop (x2apps survey #2)
     }
     /// Sequential focus honours macOS "Keyboard navigation" (LLP 1115.000

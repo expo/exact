@@ -12,14 +12,29 @@ extension NodeView {
     /// parent changed, a paragraph added or removed. A `TextIndex` built at
     /// another value is built again before it answers.
     static var textGeometry: UInt64 = 0
-    package override var frame: CGRect { didSet { Self.textGeometry &+= 1 } }
-    package override var bounds: CGRect { didSet { Self.textGeometry &+= 1 } }
-    package override var center: CGPoint { didSet { Self.textGeometry &+= 1 } }
+    package override var frame: CGRect {
+        didSet {
+            Self.textGeometry &+= 1
+            presenter?.noteOwedText(self)
+            overflowClipGeometryChanged()
+        }
+    }
+    package override var bounds: CGRect {
+        didSet {
+            Self.textGeometry &+= 1
+            presenter?.noteOwedText(self)
+            overflowClipGeometryChanged()
+        }
+    }
+    package override var center: CGPoint { didSet { Self.textGeometry &+= 1; overflowClipGeometryChanged() } }
     // A box under a transform is not indexed (`TextIndex.build`), so only
     // putting one on or taking it off moves what the index holds: a sticky
     // header moved each frame by its translation does not rebuild it.
     package override var transform: CGAffineTransform {
-        didSet { if oldValue.isIdentity != transform.isIdentity { Self.textGeometry &+= 1 } }
+        didSet {
+            if oldValue.isIdentity != transform.isIdentity { Self.textGeometry &+= 1 }
+            overflowClipGeometryChanged()
+        }
     }
 }
 
@@ -28,7 +43,12 @@ extension PlainView {
     package override var frame: CGRect { didSet { NodeView.textGeometry &+= 1 } }
     package override var bounds: CGRect { didSet { NodeView.textGeometry &+= 1 } }
     package override var center: CGPoint { didSet { NodeView.textGeometry &+= 1 } }
-    package override func didMoveToSuperview() { super.didMoveToSuperview(); NodeView.textGeometry &+= 1 }
+    package override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        NodeView.textRasterAncestryChanged(self)
+        NodeView.textGeometry &+= 1
+        ScrollMembership.epoch &+= 1
+    }
 }
 
 final class TextIndex {
@@ -64,6 +84,9 @@ final class TextIndex {
     private var loose: [NodeView] = []
     private var built: UInt64?
     private(set) var builds = 0
+    #if DEBUG
+    private(set) var visits = 0
+    #endif
 
     /// Each of `views` whose bounds may meet its scroller's port grown by
     /// `reach` (in `viewport`'s points), and every paragraph whose place is
@@ -71,6 +94,9 @@ final class TextIndex {
     /// (`Presenter.textBand`): its scroller clips it out. `body` returns
     /// false to stop.
     func visit(_ views: [UInt32: NodeView], reach: CGFloat, viewport: UIView, _ body: (NodeView) -> Bool) {
+        #if DEBUG
+        visits += 1
+        #endif
         if built != NodeView.textGeometry { build(views, viewport: viewport) }
         for node in loose where !body(node) { return }
         for port in ports {

@@ -44,20 +44,24 @@ fn print_stdout(args: std::fmt::Arguments<'_>) {
 mod ambient;
 mod build;
 mod diff;
+mod forma;
+mod forma_contract;
+mod forma_explain;
+mod forma_export;
+mod forma_gen;
+mod forma_history;
+mod forma_import;
+mod forma_import_css;
+mod forma_ops;
+mod forma_packages;
+mod forma_param_lines;
+mod forma_rows;
+mod forma_serve;
 mod migrate;
-mod tamber;
-mod tamber_contract;
-mod tamber_explain;
-mod tamber_export;
-mod tamber_gen;
-mod tamber_history;
-mod tamber_import;
-mod tamber_import_css;
-mod tamber_ops;
-mod tamber_packages;
-mod tamber_param_lines;
-mod tamber_rows;
-mod tamber_serve;
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/it/scratch.rs"]
+mod scratch;
 mod verify;
 mod vocab;
 
@@ -71,7 +75,7 @@ fn usage() -> String {
     format!("usage:
   {build}
   contract migrate <file.contract>
-  contract symbols <file.contract> [--stdin] [--name <exact-name>]
+  contract symbols <file.contract> [--stdin] [--editor] [--name <exact-name>]
   contract sources <file.contract>
   contract fmt [--check | --stdout] <file.contract>
   contract fmt --uses <file.contract>
@@ -82,7 +86,7 @@ fn usage() -> String {
   {verify}
   contract vocab [--json] [--all] [<name> …]
   contract gallery <app> -o <dir>  (<app>: a directory or app.contract; <dir>: a build cache, never the app's tree)
-  contract tamber check <app> | eval <app> [--mode <axis>=<value>] | ir <app> [-o <tamber.json>] | fmt <app> [--check]  (<app>: a directory, app.contract or file.tamber; a flag before or after it)")
+  contract forma check <app> | eval <app> [--mode <axis>=<value>] | ir <app> [-o <forma.json>] | fmt <app> [--check]  (<app>: a directory, app.contract or file.forma; a flag before or after it)")
 }
 
 #[cfg(windows)]
@@ -104,6 +108,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> ExitCode {
+    if let Err(e) = contract::root::find_for_executable() {
+        eprintln!("contract: {e}");
+        return ExitCode::from(2);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--help" | "-h") if args.len() == 1 => {
@@ -120,7 +128,11 @@ fn run() -> ExitCode {
         Some("verify") => verify::run(&args[1..]),
         Some("vocab") => vocab::run(&args[1..]),
         Some("gallery") => gallery(&args[1..]),
-        Some("tamber") => tamber::run(&args[1..]),
+        Some("forma") => forma::run(&args[1..]),
+        Some("tamber") => {
+            eprintln!("contract: rename the tamber verb to forma: use `contract forma`");
+            ExitCode::from(2)
+        }
         // The union of tokens a binding may name follows the design's `exports` (LLP 1121 D7).
         Some("types") => types(&args[1..], "types", "app.d.ts", |path| {
             let (plan, _) = contract::compile_path_all_unchecked(path, false)
@@ -197,14 +209,19 @@ fn gallery(args: &[String]) -> ExitCode {
 }
 
 fn symbols(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: contract symbols <file.contract> [--stdin] [--name <exact-name>]
-  --stdin: the file's text is stdin's, read as if saved at <file.contract>";
-    // `--stdin`, anywhere once but as `--name`'s value (a literal ID may be
-    // spelled so): the rest is matched without it.
-    let (mut stdin, mut rest) = (0, Vec::new());
+    const USAGE: &str =
+        "usage: contract symbols <file.contract> [--stdin] [--editor] [--name <exact-name>]
+  --stdin: the file's text is stdin's, read as if saved at <file.contract>
+  --editor: also each definition's `type`, `shapes`, and each view element (`elements`)";
+    // `--stdin` and `--editor`, anywhere once but as `--name`'s value (a
+    // literal ID may be spelled so): the rest is matched without them.
+    let (mut stdin, mut editor, mut rest) = (0, 0, Vec::new());
     for (i, arg) in args.iter().enumerate() {
-        if arg == "--stdin" && (i == 0 || args[i - 1] != "--name") {
+        let flag = i == 0 || args[i - 1] != "--name";
+        if flag && arg == "--stdin" {
             stdin += 1;
+        } else if flag && arg == "--editor" {
+            editor += 1;
         } else {
             rest.push(arg.clone());
         }
@@ -224,22 +241,24 @@ fn symbols(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if stdin > 1 {
+    if stdin > 1 || editor > 1 {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     }
     let path = std::path::Path::new(input);
+    let query = match editor {
+        0 => contract::symbols_json,
+        _ => contract::editor_symbols_json,
+    };
     let symbols = if stdin == 1 {
         let mut text = String::new();
         if let Err(cause) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
             eprintln!("contract symbols: stdin: {cause}");
             return ExitCode::from(1);
         }
-        contract::with_contract_texts(vec![(path.into(), text)], || {
-            contract::symbols_json(path, name)
-        })
+        contract::with_contract_texts(vec![(path.into(), text)], || query(path, name))
     } else {
-        contract::symbols_json(path, name)
+        query(path, name)
     };
     match symbols {
         Ok(json) => {

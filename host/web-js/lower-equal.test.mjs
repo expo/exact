@@ -3,12 +3,12 @@
 // EXACT_JS_NO_LOWER (the test-only comparison build: no flag, nothing in build.mjs's usage), and driven alike.
 //   - b5-edges (conformance/b5-edges.contract): every lowered kind and every refusal, through every arm, at rest
 //     and with its looks held; agent `layout` reports the same rows (condition 4); arm rules built once a site an arm.
-//   - the bounded feed (bench/dioxus/exact-bounded; its generated data from bench/dioxus/prepare.sh), every run.
+//   - the bounded feed (bench/dioxus/exact-bounded, copied with its messages from bench/heavy-list/gen.py), every run.
 //   - Conduit (apps/realworld): nothing lowers, so its program is the comparison build's byte for byte.
 //   - a scheme flip and a mode change mid-session (condition 5), a server page's adoption (condition 9), and a
 //     generation whose arm literal changed under a kept arms sheet (condition 7).
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
 import { open } from '../../scripts/agent.mjs';
@@ -189,9 +189,9 @@ test('b5-edges: agent layout reports a lowered node\'s rows as it reports the in
 }, 240000);
 
 test('a scheme flip and a mode change mid-session repaint a lowered node as the inline one (condition 5)', async () => {
-  const design = 'tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  surface.card = light-dark(#ffffff, #101010)\n    when ink=plain: light-dark(#eeeeee, #202020)\n  text.primary = light-dark(#0f1419, #e7e9ea)\n    when ink=plain: light-dark(#333333, #cccccc)\n';
+  const design = 'forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  surface.card = light-dark(#ffffff, #101010)\n    when ink=plain: light-dark(#eeeeee, #202020)\n  text.primary = light-dark(#0f1419, #e7e9ea)\n    when ink=plain: light-dark(#333333, #cccccc)\n';
   const source = 'component App\n  state s = "a"\n  state plain = false\n  action set(v: string)\n    s = v\n  action ink\n    plain = not plain\n  view\n    column testId="root" -exact-mode=(plain ? "ink=plain" : "ink=tint")\n      button testId="to-b" press=set("b") "b"\n      button testId="ink" press=ink "ink"\n      text testId="card" "card" background-color=(s == "a" ? "surface.card" : "-exact-secondary-background") border-color=(s == "a" ? "text.primary" : "AccentColor") border-style="solid" border-width=2\n';
-  const [lowDist, inlineDist] = [await build('b5-modes', source, true, { files: { 'app.tamber': design } }), await build('b5-modes', source, false, { files: { 'app.tamber': design } })];
+  const [lowDist, inlineDist] = [await build('b5-modes', source, true, { files: { 'app.forma': design } }), await build('b5-modes', source, false, { files: { 'app.forma': design } })];
   expect(readFileSync(resolve(lowDist, '.gen/app.js'), 'utf8')).toContain('Pc(');
   const { suite, low, inline } = await pair(lowDist, inlineDist);
   try {
@@ -228,7 +228,8 @@ test('adoption swaps a server page\'s inline rows for the arm class with no mome
       };
       new MutationObserver(() => { window.__lowered = [...document.querySelectorAll('[data-exact-text] > span, [data-testid]')]; }).observe(document, { subtree: true, childList: true });
     });
-    await page.goto(serve(dist));
+    // The page has only press handlers, so it waits for the reader (LLP 1048.007 D1); `?agent=` starts it at once.
+    await page.goto(serve(dist) + '?agent=1');
     await page.waitForFunction(() => globalThis.exact?.journal?.some(l => l.endsWith('adopted the document')), null, { timeout: 30000 });
     const swaps = await page.evaluate(() => window.__swaps);
     expect(swaps.length).toBeGreaterThan(0);
@@ -275,27 +276,37 @@ test('a generation whose arm literal changed shows the new value under a kept ar
 }, 600000);
 
 test('the bounded feed: every run computes as inline, and its site builds at most its seven arms', async () => {
-  const app = resolve(root, 'bench/dioxus/exact-bounded');
-  // The feed's generated data is a prerequisite, not a skip.
-  if (!existsSync(resolve(app, 'data/messages.json'))) throw new Error('lower-equal: bench/dioxus/exact-bounded/data/messages.json is missing: run bench/dioxus/prepare.sh first');
-  const extraEnv = { CARGO_TARGET_DIR: resolve(app, 'target') };
+  // A copy with the files bench/dioxus/prepare.sh would add, so the test reads none of the checkout's: the feed's messages
+  // (its images are not needed) and the root's Cargo.lock. The copy is as deep as the original, for the relative paths of its
+  // Cargo.toml files; its crates build into the bench's own target directory.
+  const bench = resolve(root, 'bench/dioxus/exact-bounded'), app = resolve(scratch, 'exact-bounded');
+  for (const part of ['Cargo.toml', 'app.json', 'app.contract', 'data', 'web', 'apple'])
+    cpSync(resolve(bench, part), resolve(app, part), { recursive: true, filter: from => !from.endsWith('/messages.json') });
+  copyFileSync(resolve(root, 'Cargo.lock'), resolve(app, 'Cargo.lock'));
+  const gen = Bun.spawnSync(['python3', '-I', resolve(root, 'bench/heavy-list/gen.py'), '--messages', resolve(app, 'data')], { stdout: 'pipe', stderr: 'pipe' });
+  expect({ gen: gen.exitCode, error: gen.exitCode ? gen.stderr.toString() : '' }).toEqual({ gen: 0, error: '' });
+  const extraEnv = { CARGO_TARGET_DIR: resolve(bench, 'target') };
   const [lowDist, inlineDist] = [await build('exact-bounded', '', true, { appDir: app, extraEnv }), await build('exact-bounded', '', false, { appDir: app, extraEnv })];
   const { suite, low, inline } = await pair(lowDist, inlineDist, { init: countRules });
+  // Each page's list settles (its rows built), nothing is in flight and its element count holds over two frames, not a
+  // fixed wait: under load a fixed wait compared one page mid-build (252 against 281 elements).
+  const quiet = () => Promise.all([low, inline].map(p => p.evaluate(async () => {
+    const frame = () => new Promise(r => requestAnimationFrame(() => r()));
+    for (let i = 0, last = -1, held = 0; i < 200 && held < 2; i++) {
+      await globalThis.exact?.lists?.pending?.(); await globalThis.exact?.lists?.settle?.(); await frame();
+      const n = document.querySelectorAll('*').length; held = n === last && !globalThis.exact?.inflight?.n ? held + 1 : 0; last = n;
+    }
+  })));
   try {
+    await quiet();
     await same(low, inline, 'first window');
-    // Rows built again further down, and back.
-    for (const y of [3000, 9000, 0]) {
-      await Promise.all([low, inline].map(p => p.evaluate(to => { for (const e of document.querySelectorAll('*')) if (e.scrollHeight > e.clientHeight + 100 && /auto|scroll/.test(getComputedStyle(e).overflowY)) e.scrollTop = to; }, y)));
-      // Each page's list settles (its rows built for the new offset) and its element count holds over two frames, not a fixed
-      // wait: under load a fixed wait compared one page mid-build (252 against 281 elements).
-      await Promise.all([low, inline].map(p => p.evaluate(async () => {
-        const frame = () => new Promise(r => requestAnimationFrame(() => r()));
-        for (let i = 0, last = -1, held = 0; i < 200 && held < 2; i++) {
-          await globalThis.exact?.lists?.pending?.(); await globalThis.exact?.lists?.settle?.(); await frame();
-          const n = document.querySelectorAll('*').length; held = n === last ? held + 1 : 0; last = n;
-        }
-      })));
-      await same(low, inline, `scrolled to ${y}`);
+    // Rows built again further down, and back. By key, not by offset: the list's estimated height differs between two
+    // loads of one page (33106 against 34091 px), so one offset showed different rows on the two pages.
+    for (const key of ['m20', 'm56', 'm0']) {
+      await Promise.all([low, inline].map(p => p.evaluate(key => globalThis.exact.lists.into(document.querySelector('[data-testid="messages"]').$list.view, key), key)));
+      await quiet();
+      expect(await Promise.all([low, inline].map(p => p.evaluate(key => !!document.querySelector(`[data-testid="row-${key}"]`), key)))).toEqual([true, true]);
+      await same(low, inline, `scrolled to ${key}`);
     }
     // All seven arms were built (each once) and so seen and compared above.
     const rules = await low.evaluate(() => window.__armRules);
@@ -308,8 +319,8 @@ test('Conduit lowers nothing: its program and sheet are the comparison build\'s 
   for (const [mode, off] of [['low', false], ['inline', true]]) {
     const env = { ...process.env };
     if (off) env.EXACT_JS_NO_LOWER = '1'; else delete env.EXACT_JS_NO_LOWER;
-    const { cmd, pre } = webCompiler();
-    const r = Bun.spawnSync([cmd, ...pre, 'js', contract, '-o', out(mode)], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+    const { cmd, pre, env: { EXACT_ROOT } } = webCompiler();
+    const r = Bun.spawnSync([cmd, ...pre, 'js', contract, '-o', out(mode)], { cwd: root, env: { ...env, EXACT_ROOT }, stdout: 'pipe', stderr: 'pipe' });
     expect({ mode, status: r.exitCode }).toEqual({ mode, status: 0 });
   }
   const read = (mode, f) => readFileSync(resolve(out(mode), f), 'utf8');

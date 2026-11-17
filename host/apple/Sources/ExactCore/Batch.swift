@@ -1,6 +1,4 @@
-// @ref LLP 1044.000 §6 S8 — decode the existing Apple JSON wire once, before
-// presentation. Style names/values still come from kernel/tables/schema.json;
-// this is a consumer of that wire, not another declaration table.
+// @ref LLP 1044.000 §6 S8 — values on the existing Apple JSON wire.
 import Foundation
 import CoreGraphics
 
@@ -77,7 +75,7 @@ public enum BatchValue: Equatable {
         if case .object(let o) = self { return o["cs"] != nil }
         return false
     }
-    /// Only capability/region/collection adapters still take heterogeneous data.
+    /// Only capability/region adapters still take heterogeneous data.
     package var any: Any {
         switch self {
         case .number(let n): return NSNumber(value: n)
@@ -103,48 +101,6 @@ extension BatchValue: ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral, Ex
 }
 
 public typealias NodeStyle = [String: BatchValue]
-
-public struct BatchOp {
-    package enum Kind: String {
-        case create, props, style, children, paragraph, frame, content, present, roots, destroy
-        case renew // LLP 1078: a list row's view now shows another item
-        case fieldContent, flow, surface, surfaceWork, command, hold, collections, region, router, title, language, unknown
-        case activity
-        case auth // LLP 1069.006 D3: open or cancel an authentication session
-        case presence // LLP 1133.010 D13: the platform's check for a presence call
-        case svg, animations // LLP 1055 D4/D7: an `svg`'s scene; a view's CSS animations
-        case canvas2d // LLP 1056 D7: a 2D canvas's stamped lists
-        case heightDrag = "height-drag", transformDrag = "transform-drag", retireMotion = "retire-motion", reorder, exit
-        case flight, land // LLP 1013.000 D4: a shared element's flight, and its end
-        case rank // LLP 1083.000: twice the sibling paint rank
-        case sticky // LLP 1083: a sticky box's constraint, or none
-        case fragments // LLP 1093 D7: a box's column fragments or a container's columns
-        case sound // LLP 1096 D8: the voice table's ops, and a boot's files
-        case roles // LLP 1095 D4: the roles the app's theme replaces
-        case midi // LLP 1125 D7: the MIDI queue's sends, retractions, inputs to open and a request
-    }
-    package let op: Kind
-    package var nodeID: UInt32?
-    package var id: UInt32 { nodeID ?? 0 }
-    package var kind = "view"
-    package var props: [String: String] = [:]
-    package var clear: [String] = []
-    package var style: NodeStyle = [:]
-    package var handlers: Set<String> = []
-    package var ids: [UInt32] = []
-    package var runs: [InlineText] = []
-    package var x = 0.0, y = 0.0, w = 0.0, h = 0.0
-    package var fitHeight: Double?
-    package var property = ""
-    // Rare adapters retain their existing input shape. Common ops never build it.
-    package var payload: [String: Any] = [:]
-    /// A create or style op's flat-leaf paint, read on the owner (`prepare`).
-    package var flat: FlatPaint?
-
-    package init(op: Kind, nodeID: UInt32? = nil) {
-        self.op = op; self.nodeID = nodeID
-    }
-}
 
 extension BatchValue {
     /// A headless snapshot preserves colour roles; validation uses their baked fallback.

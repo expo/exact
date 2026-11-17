@@ -61,36 +61,6 @@ fn fresh_clock(server: &Server, definitions: Vec<Definition>) -> (Preloads, Arc<
 }
 
 #[test]
-fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
-    for asynchronous in [false, true] {
-        let server = Server::new();
-        let release = held_plan(&server, "/early", b"early");
-        let set = launch(&server, vec![definition(&server, "/early")]);
-        server.seen(1);
-        let (core, woke) = server.core(asynchronous, true);
-        adopt(&core, set);
-        for ticket in 1..=2 {
-            core.run(job(ticket, server.request("/early")), None)
-                .unwrap();
-        }
-        {
-            let state = core.shared.state.lock().unwrap();
-            assert_eq!(effect_count(&state), 0);
-            assert!(state.running.is_empty());
-            assert!(state.completed[0].is_empty());
-        }
-        release.send(()).unwrap();
-        for expected in 1..=2 {
-            let (ticket, outcome, timing) = collect(&core, &woke);
-            assert_eq!(ticket, expected);
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"early"));
-        }
-        assert_eq!(server.count(), 1);
-    }
-}
-
-#[test]
 fn a_tool_read_queued_before_its_preload_starts_is_sent_after_the_send() {
     for asynchronous in [false, true] {
         for named in [false, true] {
@@ -596,6 +566,10 @@ fn dropping_a_set_or_its_adopting_executor_retires_every_launch_thread() {
         // The server holds its reply throughout cancellation and retirement.
         exited(&location);
         release.send(()).unwrap();
+        // A drain after retirement clears the pending bit, so later drains
+        // take no lock.
+        take_journal(&location);
+        assert!(!location.journal_pending.load(Ordering::Acquire));
     }
 }
 
@@ -721,7 +695,7 @@ fn a_taking_source_checks_its_own_grants_and_adoption_is_before_dispatch() {
 }
 
 #[test]
-fn forgetting_a_post_waiter_releases_its_ticket_and_keeps_the_launch_exchange() {
+fn forgetting_a_post_waiter_keeps_its_effect_place_until_the_launch_exchange_completes() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let release = held_plan(&server, "/post", b"held");
@@ -739,11 +713,14 @@ fn forgetting_a_post_waiter_releases_its_ticket_and_keeps_the_launch_exchange() 
             let state = core.shared.state.lock().unwrap();
             (state.counts, state.bytes, state.jobs[0].len())
         };
-        assert_eq!(counts, [0, 0]);
-        assert_eq!(bytes, [0, 0]);
-        assert_eq!(jobs, 0);
+        assert_eq!(counts, [1, 0]);
+        assert!(bytes[0] > 0);
+        assert_eq!(bytes[1], 0);
+        assert_eq!(jobs, 1);
         release.send(()).unwrap();
         ready(&core, 1);
+        assert_eq!(core.shared.state.lock().unwrap().counts, [0, 0]);
+        assert!(core.drain().is_empty());
         assert!(ask(&core, &woke, job(2, request)).1);
         assert_eq!(server.count(), 1);
     }
@@ -863,6 +840,62 @@ fn a_redirected_reply_checks_every_hops_scope_before_boot_and_queued_adoption() 
 }
 
 #[test]
+fn a_refresh_aborted_behind_the_fence_withholds_the_pending_preloads_cache_copy() {
+    let mut wrong = Vec::new();
+    for asynchronous in [false, true] {
+        for mode in [
+            exact_runner::CacheMode::Default,
+            exact_runner::CacheMode::Reload,
+            exact_runner::CacheMode::NoCache,
+        ] {
+            let server = Server::new();
+            let (release, held) = channel();
+            let mut old = Plan::new(200, &[("Cache-Control", "max-age=60")], b"old");
+            old.held = Some(held);
+            server.plan("/feed", old);
+            let (set, clock) = fresh_clock(&server, vec![definition(&server, "/feed")]);
+            server.seen(1);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            let mut refused = job(1, server.request("/refused").prefetch());
+            refused.class = RequestClass::Ordered;
+            assert!(core.run(refused, None).is_err());
+            let mut refresh = job(2, server.request("/feed").cache(mode));
+            refresh.forced = mode == exact_runner::CacheMode::Default;
+            core.run(refresh, None).unwrap();
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert!(state.ordered_barrier);
+                assert_eq!(state.fenced.len(), 1);
+                assert!(matches!(
+                    state.cache.as_ref().unwrap().preloads[0].reply,
+                    ReplyState::Pending { .. }
+                ));
+            }
+            core.cancel(&[2]);
+            assert!(core.shared.state.lock().unwrap().fenced.is_empty());
+            release.send(()).unwrap();
+            ready(&core, 1);
+            assert!(core.resume_ordered().is_empty());
+            let (reply, cached) = read(&core, &woke, &server, 3, "/feed");
+            assert!(cached);
+            assert_eq!(reply.body, b"old");
+            assert!(!core
+                .take_preload_journal()
+                .iter()
+                .any(|fact| fact.outcome == Event::DroppedByRefresh));
+            *clock.lock().unwrap() += HOLD;
+            server.plan("/feed", Plan::new(200, &[], b"new"));
+            let (reply, cached) = read(&core, &woke, &server, 4, "/feed");
+            if cached || reply.body != b"new" {
+                wrong.push((asynchronous, mode));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "preload copies stored: {wrong:?}");
+}
+
+#[test]
 fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters() {
     for asynchronous in [false, true] {
         for pending in [false, true] {
@@ -934,7 +967,7 @@ fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters
 }
 
 #[test]
-fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it() {
+fn a_post_preload_waiter_keeps_its_effect_place_until_the_held_reply_is_drained() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let release = held_plan(&server, "/preload", b"held");
@@ -967,13 +1000,15 @@ fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it()
         {
             let state = core.shared.state.lock().unwrap();
             assert_eq!(effect_count(&state), 16);
-            assert!(state.fenced.is_empty());
+            assert_eq!(state.fenced.front().unwrap().ticket(), 17);
             assert!(state.completed[0].iter().any(|r| r.ticket == 1 && r.cached));
         }
+        assert_eq!(collect(&core, &woke).0, 1);
+        assert!(core.shared.state.lock().unwrap().fenced.is_empty());
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=17 {
+        for ticket in 2..=17 {
             assert_eq!(collect(&core, &woke).0, ticket);
         }
     }
@@ -1188,6 +1223,8 @@ fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
             let request = def.request.clone();
             let (set, clock) = fresh_clock(&server, vec![def]);
             complete_set(&set);
+            let control = set.control();
+            control.take_journal();
             let (core, woke) = server.core(asynchronous, true);
             adopt(&core, set);
             let (bytes, ready) = {
@@ -1235,7 +1272,13 @@ fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
                 !ask(&core, &woke, job(2, request)).1,
                 "secret writes still invalidate the HTTP copy"
             );
-            let facts = core.take_preload_journal();
+            let facts = control.take_journal();
+            assert!(facts.iter().any(|f| f.outcome
+                == if expired {
+                    Event::NeverTaken
+                } else {
+                    Event::DroppedBySecret
+                }));
             assert!(facts
                 .iter()
                 .all(|f| f.name == "retained" && f.origin == format!("http://{}", server.address)));
@@ -1409,3 +1452,18 @@ fn launch_fetches_and_preloads_keep_the_sources_scope_at_redirects() {
     assert_eq!(first.count(), 2);
     assert_eq!(outside.count(), 0);
 }
+
+#[path = "prefetch_tests.rs"]
+mod prefetch;
+
+#[path = "preload_exchange_tests.rs"]
+mod exchange;
+
+#[path = "preload_journal_tests.rs"]
+mod journal;
+
+#[path = "preload_refresh_tests.rs"]
+mod refresh;
+
+#[path = "preload_env_tests.rs"]
+mod env;

@@ -179,6 +179,6 @@ fn a_comparison_outside_the_kernel_grammar_is_refused_at_compile_time() {
     let src = "component A\n  view\n    column padding-bottom=\"max(15px, var(--gutter))\"\n";
     assert_eq!(
         contract::compile(src).unwrap_err().id,
-        "tamber-unknown-token"
+        "forma-unknown-token"
     );
 }

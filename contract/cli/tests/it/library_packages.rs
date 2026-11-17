@@ -51,7 +51,7 @@ fn app_with(name: &str, packages: &[&str], design: &str, contract: &str) -> (Dir
             &dir.0.join("app/node_modules/@exact").join(package),
         );
     }
-    std::fs::write(dir.0.join("app/app.tamber"), design).unwrap();
+    std::fs::write(dir.0.join("app/app.forma"), design).unwrap();
     let app = dir.0.join("app/app.contract");
     std::fs::write(&app, contract).unwrap();
     (dir, app)
@@ -90,7 +90,7 @@ fn an_apps_post_button_fill_dim_and_pressed_reach_its_three_looks() {
     let (_dir, app) = app_with(
         "set",
         &["actions"],
-        &format!("tamber app\n\nparams\n  {POST_BUTTON}.fill = #ff0000  scheme=fixed\n  {POST_BUTTON}.dim = #00ff00  scheme=fixed\n  {POST_BUTTON}.pressed = #0000ff  scheme=fixed\n"),
+        &format!("forma app\n\nparams\n  {POST_BUTTON}.fill = #ff0000  scheme=fixed\n  {POST_BUTTON}.dim = #00ff00  scheme=fixed\n  {POST_BUTTON}.pressed = #0000ff  scheme=fixed\n"),
         BUTTONS,
     );
     // The press paint is the host's: the `:active` row names the param's
@@ -129,7 +129,7 @@ const ROWS: &str = "use ListRow from \"@exact/lists\"\n\ncomponent App\n  action
 /// but a destructive row's symbol is the row's red, as its title is.
 #[test]
 fn a_list_rows_symbol_takes_its_tint_but_a_destructive_rows_is_its_red() {
-    let (_dir, app) = app_with("lists", &["lists"], "tamber app\n", ROWS);
+    let (_dir, app) = app_with("lists", &["lists"], "forma app\n", ROWS);
     let r = boot(&app);
     let k = r.kernel();
     let node = |test_id: &str| k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap();

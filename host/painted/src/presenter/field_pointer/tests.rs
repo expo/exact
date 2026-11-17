@@ -19,7 +19,7 @@ fn fixture(value: &str, extra: &str) -> (Presenter<()>, ViewId) {
 "#,
         serde_json::to_string(value).unwrap()
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (400., 240.),

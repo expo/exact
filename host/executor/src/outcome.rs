@@ -75,6 +75,31 @@ pub(super) fn fetch_failure(e: ibex2::boundary::HostError, abort: &AbortControll
     }
 }
 
+/// Validate HTTP syntax before either a transport or a driver fixture can answer.
+pub(super) fn request_refusal(request: &Request) -> Option<&'static str> {
+    if !request.url.starts_with("http://") && !request.url.starts_with("https://") {
+        return None;
+    }
+    let token = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c))
+    };
+    if !token(&request.method)
+        || ["CONNECT", "TRACE", "TRACK"]
+            .iter()
+            .any(|m| request.method.eq_ignore_ascii_case(m))
+    {
+        return Some("TypeError: invalid method");
+    }
+    if request.headers.iter().any(|(name, value)| {
+        !ibex2::stdlib::fetch::is_valid_name(name) || !ibex2::stdlib::fetch::is_valid_value(value)
+    }) {
+        return Some("TypeError: invalid header name or value");
+    }
+    None
+}
+
 /// The transport's request for a runner's.
 pub(super) fn fetch_request(request: Request, forced: bool) -> ibex2::stdlib::fetch::Request {
     let mut req = ibex2::stdlib::fetch::Request::get(&request.url);
@@ -302,6 +327,53 @@ impl Quiet {
             _ => end,
         }
     }
+}
+
+/// A driver's response at the transport boundary, after ordinary request preparation.
+pub(super) struct Fixture(pub(super) super::ResponseWork);
+
+impl Fixture {
+    pub(super) fn response(&self) -> Result<exact_runner::Response, ibex2::boundary::HostError> {
+        match self.0() {
+            Outcome::Response(response) => Ok(response),
+            Outcome::Failed { message, .. } => {
+                Err(ibex2::boundary::HostError::NotAllowed { reason: message })
+            }
+            _ => unreachable!("an HTTP fixture returns a response or refusal"),
+        }
+    }
+}
+
+impl ibex2::stdlib::fetch::Transport for Fixture {
+    fn open(
+        &self,
+        request: &ibex2::stdlib::fetch::Request,
+        signal: &ibex2::stdlib::abort::AbortSignal,
+    ) -> Result<ibex2::stdlib::fetch::StreamingResponse, ibex2::boundary::HostError> {
+        let response = self.response()?;
+        let mut headers = ibex2::stdlib::fetch::Headers::new();
+        for (name, value) in response.headers {
+            headers.append(&name, &value);
+        }
+        Ok(ibex2::stdlib::fetch::Response {
+            status: response.status,
+            status_text: String::new(),
+            headers,
+            body: response.body,
+            url: request.url.clone(),
+            redirected: false,
+        }
+        .into_stream(request.body_limit(), signal.clone()))
+    }
+}
+
+pub(super) fn fixture_fetch(grants: &str, work: super::ResponseWork) -> ibex2::host::Fetch {
+    ibex2::host::Host::with_transport(Box::new(Fixture(work)))
+        .endow(
+            ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+                .expect("admitted grants"),
+        )
+        .fetch
 }
 
 #[cfg(test)]

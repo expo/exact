@@ -54,4 +54,10 @@ impl<D: DataSource> Runner<D> {
     pub fn top_layer_frames(&mut self, frames: &[TopLayerFrame], modal: Option<usize>) {
         self.scrolled.top_layer_frames(&self.kernel, frames, modal);
     }
+
+    /// The host's input-accepting backdrop for the front modal, in viewport
+    /// points, sampled with its top-layer frames. Each frame report clears it.
+    pub fn top_layer_backdrop(&mut self, backdrop: Option<crate::geometry::TopLayerBackdrop>) {
+        self.scrolled.top_layer_backdrop(&self.kernel, backdrop);
+    }
 }

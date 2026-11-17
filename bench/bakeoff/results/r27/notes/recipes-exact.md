@@ -39,7 +39,7 @@ C2188CC6-FBE9-409A-92A8-ABD89AC2C432 as `dev.bakeoff.recipes.b50a521` ("Recipes"
 - **Sizing:** fixes found by looking at the largest text size: the summary card wraps
   (`flex-wrap` plus `flex-basis` in rem), and the empty Favorites screen scrolls with a
   shorter message.
-- **Icons:** `sf/clock` would be blank on the web, so I added `app.tamber` with an icon token
+- **Icons:** `sf/clock` would be blank on the web, so I added `app.forma` with an icon token
   and a hand-drawn `assets/icons/clock.svg`. Linux shipping was removed
   (`update --without linux`).
 - **Spec reading:** I assumed "servings" in the spec means the recipe's own count (shown in

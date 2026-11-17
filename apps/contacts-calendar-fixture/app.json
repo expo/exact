@@ -18,5 +18,6 @@
     "android": {
       "minimumOS": "10"
     }
-  }
+  },
+  "rust": { "data": { "crate": "contacts-calendar-fixture-data", "type": "contacts_calendar_fixture_data::Fixture", "source": "contacts_calendar_fixture_data::Fixture" } }
 }

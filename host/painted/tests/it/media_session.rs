@@ -42,14 +42,12 @@ const SOURCE: &str = r#"component Player
 
 fn boot() -> Presenter<()> {
     let plan = contract::compile(SOURCE).unwrap();
-    let dir = std::env::temp_dir().join(format!("exact-media-session-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
     let (p, error) = Presenter::boot_with(
         &plan.encode(),
         (),
         (400., 300.),
         1.,
-        dir,
+        std::env::temp_dir(),
         PainterChoice::Cpu,
     )
     .unwrap();

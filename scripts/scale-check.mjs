@@ -17,7 +17,7 @@
 //                   {"padding": {"ios": 16, "macos": 10, "default": 16}}. A box may also expect a `gap`
 //                   between two children (`"between": ["a", "b"]`) and a `height`. A value may name a length
 //                   (`"radius": "radius.full"`): a base name from kernel/tables/schema.json's scale in the host's
-//                   column, or the plan's own design's token (`contract tamber ir`), which wins. `"then": [{"steps":
+//                   column, or the plan's own design's token (`contract forma ir`), which wins. `"then": [{"steps":
 //                   ["tap flip"], "boxes": […]}]` checks boxes again after steps, each from a fresh launch.
 //   --host: web, linux, macos, ios, android (as scripts/agent.mjs names them), or terminal (the terminal
 //   host headless, its own `layout` and `plan` verbs: corners read from its reply; it runs the plan's source
@@ -149,7 +149,7 @@ export function baseLength(schema, overrides, name, host, grid = null) {
 }
 
 /** The design's own lengths, from the compiler's reading of it (`contract
- * tamber ir`, which finds the design as a build does): each length token whose
+ * forma ir`, which finds the design as a build does): each length token whose
  * value is one px length in every tuple. One whose value varies, or is not px,
  * is refused when it is a base name (one length is what a box is held to). */
 export function overridesOf(ir, names) {
@@ -426,12 +426,12 @@ if (import.meta.main) {
   // A length named is read from the kernel's table and the plan's own design,
   // as the compiler reads it, never a copy.
   const schema = JSON.parse(readFileSync(join(ROOT, 'kernel/tables/schema.json'), 'utf8'));
-  const ir = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'tamber', 'ir', opts.source], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 });
+  const ir = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'ir', opts.source], { cwd: ROOT, encoding: 'utf8', timeout: 900_000 });
   let overrides = {};
   try {
     // (A plan with no design has none of its own.)
     if (ir.status === 0) overrides = overridesOf(JSON.parse(ir.stdout), schema.scale.map(r => r[0]));
-    else if (!/^contract tamber: \S+ has no design \(an app\.tamber, or the file app\.json's "tamber" names\)$/m.test(`${ir.stdout}${ir.stderr}`)) throw new Error(`contract tamber ir: ${ir.stdout}${ir.stderr}`);
+    else if (!/^contract forma: \S+ has no design \(an app\.forma, or the file app\.json's "forma" names\)$/m.test(`${ir.stdout}${ir.stderr}`)) throw new Error(`contract forma ir: ${ir.stdout}${ir.stderr}`);
   } catch (e) { console.error(e.message); process.exit(1); }
   const base = (name, host, grid) => baseLength(schema, overrides, name, host, grid);
   // The first frame, then each `then`'s steps from a fresh launch.

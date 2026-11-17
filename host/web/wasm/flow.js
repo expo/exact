@@ -40,7 +40,7 @@ export function flowBatch(batch) {
         return batch;
       }
     });
-    if (generation !== host.incarnation) {
+    if (generation !== host.incarnation || host.trapped) {
       controller.dispose();
       return;
     }
@@ -71,7 +71,7 @@ export function flowBatch(batch) {
 }
 // The ordinary ticker, once the timer module has loaded, until a text-flow controller takes the clock.
 export function startClock() {
-  if (host.timerFactory && !agentMode && !host.textflow) {
+  if (host.timerFactory && !agentMode && !host.textflow && !host.trapped) {
     host.ticker ??= host.timerFactory({
       now,
       scrollPending: () => collections.scrollPending(),

@@ -1206,3 +1206,75 @@ fn a_sheets_route_reads_the_sheets_own_inset() {
     let local = kernel.local_insets(form).unwrap();
     assert_eq!(local[0], SHEET_HANDLE, "{local:?}");
 }
+
+#[test]
+fn rtl_bars_follow_their_own_direction_and_hit_the_mirrored_targets() {
+    for override_ltr in [false, true] {
+        let mut source = APP.replace("main navigationKey", "main direction=\"rtl\" navigationKey");
+        if override_ltr {
+            source = source
+                .replace("header display", "header direction=\"ltr\" display")
+                .replace(
+                    "row role=\"tablist\"",
+                    "row direction=\"ltr\" role=\"tablist\"",
+                );
+        }
+        let (mut p, _) = barred(&source);
+        let more = id(&p, "more");
+        let home = id(&p, "tab-home");
+        let other = id(&p, "tab-other");
+        let heading = id(&p, "home-title");
+        let (bar, bottom) = p.bars();
+        let shown = bar.unwrap();
+        let button = shown
+            .targets
+            .iter()
+            .find(|t| t.what == What::Item(more))
+            .unwrap()
+            .rect;
+        let title = shown.texts.iter().find(|t| t.0 == heading).unwrap().1;
+        assert_eq!(title.0 > button.0, !override_ltr, "heading and action");
+        let bottom = bottom.unwrap();
+        let x = |id| {
+            bottom
+                .targets
+                .iter()
+                .find(|t| t.what == What::Tab(id))
+                .unwrap()
+                .rect
+                .0
+        };
+        assert_eq!(x(home) > x(other), !override_ltr, "tab order");
+        touch(&mut p, BOTTOM, Some("tab-other"));
+        assert_eq!(top(&mut p).title, "Other");
+    }
+}
+
+#[test]
+fn bars_remeasure_when_direction_changes_without_replacing_the_route() {
+    let source = APP
+        .replace("state said = \"nothing\"", "state said = \"rtl\"")
+        .replace("said = \"edited\"", "said = \"ltr\"")
+        .replace("main navigationKey", "main direction=said navigationKey");
+    let (mut p, _) = barred(&source);
+    tap(&mut p, "open").unwrap();
+    p.reader_bars(1.).unwrap();
+    let up = |p: &mut Presenter<Nothing>| {
+        p.bars()
+            .0
+            .unwrap()
+            .targets
+            .iter()
+            .find(|t| t.what == What::Up)
+            .unwrap()
+            .rect
+            .0
+    };
+    let right = up(&mut p);
+    assert!(right > 300.);
+    touch(&mut p, TOP, Some("edit"));
+    assert!(p.reader_bars(1.).is_some());
+    assert!(up(&mut p) < 10.);
+    touch(&mut p, TOP, None);
+    assert_eq!(top(&mut p).title, "Home");
+}

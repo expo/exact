@@ -94,9 +94,14 @@ function browserStorage(): { disk: Map<string, string>; realm: () => OAuthStore 
     getItem: (k: string) => disk.get(k) ?? null, setItem: (k: string, v: string) => disk.set(k, v), removeItem: (k: string) => disk.delete(k),
   } });
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: {
-    request: (name: string, work: () => Promise<unknown>) => {
-      const run = (locks.get(name) ?? Promise.resolve()).then(work);
-      locks.set(name, run.catch(() => {}));
+    request: (name: string, options: LockOptions | ((lock: Lock | null) => Promise<unknown>), work?: (lock: Lock | null) => Promise<unknown>) => {
+      if (typeof options === 'function') { work = options; options = {}; }
+      if (options.ifAvailable && locks.has(name)) return Promise.resolve(work!(null));
+      const before = options.ifAvailable ? Promise.resolve() : locks.get(name) ?? Promise.resolve();
+      const run = before.then(() => work!({ name, mode: 'exclusive' } as Lock));
+      const tracked = run.catch(() => {});
+      locks.set(name, tracked);
+      void tracked.finally(() => { if (locks.get(name) === tracked) locks.delete(name); });
       return run;
     },
   } } });
@@ -386,11 +391,14 @@ describe('spec edge cases', () => {
     await p.signIn(store);
     await control({ action: 'fail-token', profile: 'spec', status: 503 });
     expect((await p.signOut(store)).ok).toBe(true);
-    expect(store.map.size).toBe(0);
-    // After a 503 the token still exists (RFC 7009 §2.2.1): the next sign-out revokes it.
+    expect(store.map.get('spec.session')).toBeUndefined();
+    const freshRuntime = await import('../index.ts?revocation-runtime-loss');
+    expect((await freshRuntime.oauth(configFor('spec')).signOut(store)).ok).toBe(true);
     expect((await counts('spec'))['revoke-current'] ?? 0).toBe(0);
+    // After a 503 the token still exists (RFC 7009 §2.2.1): the next sign-out revokes it.
     expect((await p.signOut(store)).ok).toBe(true);
     expect((await counts('spec'))['revoke-current']).toBe(1);
+    expect(store.map.size).toBe(0);
   });
 
   test('a refresh whose ID token is for another account ends the session and uses none of its tokens', async () => {

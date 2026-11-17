@@ -8,5 +8,6 @@
   "app": {
     "id": "com.exact.unsaid",
     "name": "Unsaid"
-  }
+  },
+  "rust": { "data": { "crate": "hello-data", "type": "hello_data::Hello", "source": "hello_data::Hello" } }
 }

@@ -1,3 +1,4 @@
+use crate::scratch::Scratch;
 use contract_syntax::{PropertyForm, PropertyKind};
 
 const EXAMPLE: &str = r#"always "the phone is on one of its five screens"
@@ -88,8 +89,7 @@ fn refused_forms_name_the_authored_line() {
 
 #[test]
 fn the_test_command_emits_structured_properties_beside_scripts() {
-    let dir = std::env::temp_dir().join(format!("contract-properties-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-properties-{}", std::process::id()));
     std::fs::write(dir.join("app.contract"), "component App\n  state screen = \"lock\"\n  state counter = 1\n  state tsResult = none\n  state rustResult = none\n  state rustExecutorResult = none\n  state ready = false\n  state turns = 0\n  state resets = 0\n").unwrap();
     let path = dir.join("app.test.contract");
     std::fs::write(
@@ -121,8 +121,7 @@ fn the_test_command_emits_structured_properties_beside_scripts() {
 
 #[test]
 fn the_test_command_reports_errors_at_their_source() {
-    let dir = std::env::temp_dir().join(format!("contract-property-errors-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-property-errors-{}", std::process::id()));
     let dir = dir.canonicalize().unwrap();
     let app = dir.join("app.contract");
     let imported = dir.join("broken.contract");
@@ -226,8 +225,7 @@ fn the_cone_follows_derives_and_functions_but_respects_local_names() {
 
 #[test]
 fn device_json_refuses_the_same_imported_cone_as_verify() {
-    let dir = std::env::temp_dir().join(format!("contract-property-cone-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-property-cone-{}", std::process::id()));
     let dir = dir.canonicalize().unwrap();
     std::fs::write(
         dir.join("clock.contract"),
@@ -256,9 +254,7 @@ fn device_json_refuses_the_same_imported_cone_as_verify() {
 
 #[test]
 fn device_json_accepts_a_relative_test_path_whose_app_uses_a_sibling() {
-    let dir =
-        std::env::temp_dir().join(format!("contract-property-relative-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-property-relative-{}", std::process::id()));
     let dir = dir.canonicalize().unwrap();
     std::fs::write(
         dir.join("shapes.contract"),

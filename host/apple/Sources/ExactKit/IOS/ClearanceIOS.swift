@@ -31,9 +31,9 @@ extension NavigationHost {
     /// (`collapseScroll` at the top, `edgeScroll` at the bottom) beyond what
     /// UIKit insets, and what it takes back on an edge the route opts out of.
     func clearanceExtra(_ c: RouteController, scroller node: NodeView, top: Bool) -> CGFloat {
-        guard let sv = node.scrollView, c.viewIfLoaded?.window != nil else { return 0 }
+        guard let sv = node.scrollView, c.surface.window != nil else { return 0 }
         let off = Self.clearanceOff(c.node), credit = Int(c.node.style["inset_credit"]?.number ?? 0)
-        let local = c.view.safeAreaInsets, box = node.convert(node.bounds, to: c.node)
+        let local = c.surface.safeAreaInsets, box = node.convert(node.bounds, to: c.node)
         if top {
             guard off & 1 == 0, credit & 1 == 0, !Self.transparentBar(c.node) else { return 0 }
             // The box is laid out under the top cover last reported, which the

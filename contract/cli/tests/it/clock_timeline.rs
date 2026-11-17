@@ -2,6 +2,7 @@
 //! row reads `-exact-clock(Name)`, its animations stay on the clock, and two
 //! declarations of one name meet as a refusal, never as one shared phase.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, StyleId};
 use exact_plan::{Plan, Value as PlanValue};
 use exact_runner::{DataError, DataSource, Runner};
@@ -83,11 +84,10 @@ fn a_timeline_declared_twice_in_one_file_is_refused() {
     assert_eq!(e.id, "syntax-duplicate-declaration");
 }
 
-struct App(PathBuf);
+struct App(Scratch);
 impl App {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("exact-clock-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&path).unwrap();
+        let path = Scratch::new(format!("exact-clock-{name}-{}", std::process::id()));
         Self(path)
     }
     fn write(&self, name: &str, source: &str) -> PathBuf {

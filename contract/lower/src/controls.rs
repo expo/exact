@@ -669,6 +669,8 @@ const NATIVE_ROWS: &[StyleId] = &[
     StyleId::Animation,
     StyleId::ExitAnimation,
     StyleId::PressScale,
+    StyleId::PressTranslate,
+    StyleId::PressTranslatePercent,
     StyleId::PressOpacity,
     StyleId::PressOpacityTo,
     StyleId::PressBackgroundColor,
@@ -985,7 +987,7 @@ impl Lowerer<'_> {
                     || self
                         .keyframes
                         .get(&anim.name)
-                        .is_some_and(|ps| ps.iter().all(|p| native_motion(*p)));
+                        .is_some_and(|frames| frames.properties().into_iter().all(native_motion));
                 if !ok {
                     return err(
                         "lower-button-style-attr",
@@ -1088,7 +1090,7 @@ fn face_counts(
                             if tag == "text" {
                                 matches!(r, StyleId::FontSize | StyleId::FontWeight | StyleId::TextColor | StyleId::WhiteSpace | StyleId::LineClamp | StyleId::TextAlign)
                             } else {
-                                matches!(r, StyleId::TintColor | StyleId::FontSize | StyleId::FontWeight)
+                                matches!(r, StyleId::TintColor | StyleId::FontSize | StyleId::FontWeight | StyleId::SymbolRendering)
                             }
                         }),
                         _ => false,

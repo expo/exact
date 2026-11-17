@@ -1,5 +1,6 @@
 // A native drive's build first (agent-build.mjs, LLP 1116.002 D4): the decision an app's exact.mjs makes before
 // `test ios|macos` and `agent ios|macos`, on the driver's own record, with no simulator and no build run.
+import { simulatorPlanPath } from '../host/apple/assets.mjs';
 import { afterEach, beforeEach, test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -58,7 +59,6 @@ function scratchApp(name) {
   const write = (path, text = '') => { mkdirSync(dirname(resolve(dir, path)), { recursive: true }); writeFileSync(resolve(dir, path), text); };
   write('app.contract', 'component App\n  view\n    text "hello"\n');
   write('app.json', JSON.stringify({ name, app: { id: `com.exact.${name}`, name } }));
-  for (const kind of ['apple', 'web']) write(`${kind}/Cargo.toml`, `[package]\nname="${name}-${kind}"\nversion="0.1.0"\n`);
   write('exact.mjs', "// …\nconst built = await run(['scripts/agent-build.mjs', host]);\n");
   return { dir, write };
 }
@@ -240,10 +240,11 @@ test('an app launcher selects a native backend before checking its build', () =>
   const script = `
     import { mock } from 'bun:test';
     import * as processes from 'node:child_process';
+    import * as shells from './scripts/app-shells.mjs';
+    import * as builds from './scripts/web-build.mjs';
     const spawn = processes.spawn;
-    mock.module(${JSON.stringify(resolve(import.meta.dir, 'app-shells.mjs'))}, () => ({
-      platformOf: () => null,
-    }));
+    mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
+    mock.module('./scripts/web-build.mjs', () => ({ ...builds, privateNativeBuild: () => ({ env: {}, seed() {}, close() {} }) }));
     mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
       if (args[0].endsWith('/scripts/agent.mjs')) {
         return spawn(command, ['-e', 'console.log(process.env.EXACT_BACKEND_ORIGIN)'], options);
@@ -504,7 +505,7 @@ test('a missing or stale build is built first, said in one line; a fresh one run
     delete process.env.EXACT_MAC_BIN;
     const app = resolveApp('field-log');
     const built = new Date(Date.now() + 10_000), edited = new Date(+built + 10_000), before = new Date(Date.now() - 60_000);
-    for (const file of ['app.contract', 'app.json', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml']) utimesSync(resolve(dir, file), before, before);
+    for (const file of ['app.contract', 'app.json', 'exact.mjs']) utimesSync(resolve(dir, file), before, before);
     const said = [], builds = [];
     const drive = (host, { code = 0, output = '' } = {}) => buildFirst(host, app, {
       say: line => said.push(line), wait: () => {}, build: async (args, log) => (builds.push({ args, log }), { code, output }),
@@ -535,7 +536,7 @@ test('a missing or stale build is built first, said in one line; a fresh one run
     // A source edited since: the same refusal the driver makes, and the build first instead, naming what changed.
     utimesSync(resolve(dir, 'app.contract'), edited, edited);
     assert.deepEqual(nativeBuild('ios', app).changed.map(p => resolve(p)), [resolve(dir, 'app.contract')]);
-    assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /^Error: ios build is stale: .*app\.contract changed since .*; run \(cd .* && bun exact\.mjs ios\)$/);
+    assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /^Error: ios build is stale: .*app\.contract changed since .*; run \(cd .* && bun exact\.mjs ios\); if .*no build reads.*`\.exact\/`/);
     assert.equal(await drive('ios'), 0);
     // (A contract edit alone is a plan-only edit, which a build with no module receipt to check its bake against still rebuilds.)
     assert.deepEqual([said, builds.map(b => b.args)], [['building for iOS: the build is older than its sources (app.contract changed), and the build has no module receipt to check a new plan against; its log: ' + said[0].split('its log: ')[1]], [['--ios', 'field-log-apple', '--no-install']]]);
@@ -594,7 +595,7 @@ test('a source edited while the build ran is stale; a build claimed meanwhile is
     delete process.env.EXACT_MAC_BIN;
     const app = resolveApp('race-log');
     const at = seconds => new Date(Date.now() + seconds * 1000), stamp = (file, seconds) => utimesSync(resolve(dir, file), at(seconds), at(seconds));
-    for (const file of ['app.contract', 'app.json', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml']) stamp(file, -60);
+    for (const file of ['app.contract', 'app.json', 'exact.mjs']) stamp(file, -60);
     const bundle = appleArtifacts(app, { destination: 'ios-simulator' }).bundle, receipt = resolve(bundle, 'receipt.json');
     mkdirSync(bundle, { recursive: true });
     // Built from t-20 s to t+10 s; the contract edited at t-5 s, while it ran.
@@ -642,7 +643,7 @@ test('a product the build wrote and then read is judged by its recorded bytes; a
     delete process.env.EXACT_MAC_BIN; delete process.env.CARGO_TARGET_DIR;
     const app = resolveApp('gpu-log');
     const at = seconds => new Date(Date.now() + seconds * 1000), stamp = (file, seconds) => utimesSync(file, at(seconds), at(seconds));
-    for (const file of ['app.contract', 'app.json', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml']) stamp(resolve(dir, file), -120);
+    for (const file of ['app.contract', 'app.json', 'exact.mjs']) stamp(resolve(dir, file), -120);
     const bundle = appleArtifacts(app, { destination: 'ios-simulator' }).bundle, receipt = resolve(bundle, 'receipt.json');
     mkdirSync(bundle, { recursive: true });
     const profile = resolve(app.target, 'aarch64-apple-ios-sim', 'host-dev'), dylib = resolve(profile, 'signed/libgpu_log_gpu.dylib');
@@ -727,7 +728,7 @@ test('generated shell outputs a cold game build records are judged by their byte
     write('logic/src/lib.rs', 'pub struct Game;');
     write('.shells/apple/src/extra.rs', 'pub const EXTRA: u32 = 1;');
     for (const path of outputs) write(path, path.endsWith('.json') ? '{}' : '// generated shell');
-    for (const path of ['app.json', 'app.contract', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml', '.shells/Cargo.toml', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) stamp(path, before);
+    for (const path of ['app.json', 'app.contract', 'exact.mjs', '.shells/Cargo.toml', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) stamp(path, before);
     for (const path of outputs) stamp(path, generated);
     const sources = [...outputs, 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs'];
     write('target/aarch64-apple-ios-sim/host-dev/libshell_output_apple.d', `archive: ${sources.map(path => resolve(dir, path)).join(' ')}\n`);
@@ -800,7 +801,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     write('server/index.ts', "import { Database } from 'bun:sqlite';\nimport { routes } from './routes';\n");
     write('server/routes.ts', 'export const routes = {};\n');
     write('server/fixtures.json', '{}\n');
-    for (const file of ['app.contract', 'app.ts', 'types.ts', 'lib/model.ts', 'lib/seed.json', 'lib/format.mjs', 'lib/digits.mjs', 'scripts/export.mjs', 'server/index.ts', 'server/routes.ts', 'server/fixtures.json', 'app.json', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml']) stamp(file, -60);
+    for (const file of ['app.contract', 'app.ts', 'types.ts', 'lib/model.ts', 'lib/seed.json', 'lib/format.mjs', 'lib/digits.mjs', 'scripts/export.mjs', 'server/index.ts', 'server/routes.ts', 'server/fixtures.json', 'app.json', 'exact.mjs']) stamp(file, -60);
     // The build: its receipt names the plan its build script baked, beside which is the module receipt it paired.
     const target = 'aarch64-apple-ios-sim', out = resolve(app.target, target, 'host-dev/build/plan-log-apple-0123/out');
     const module = { version: 1, appId: 'com.exact.plan-log', grants: '', abi: 1, surfaces: {}, bytecodeVersion: 96 };
@@ -870,6 +871,10 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     bakeSays = '';
     assert.deepEqual(kept(), { plan: resolve(overrideDir('ios', app), 'app.plan'), dir: overrideDir('ios', app) });
     assert.equal(readFileSync(kept().plan, 'utf8'), 'plan two');
+    const firstDrive = resolve(app.target, 'drive-first'), editedDrive = resolve(app.target, 'drive-edited');
+    assert.equal(readFileSync(simulatorPlanPath(kept().plan, firstDrive), 'utf8'), 'plan two');
+    assert.equal(readFileSync(resolve(firstDrive, 'app.hbc'), 'utf8'), 'bytecode');
+    assert.deepEqual(JSON.parse(readFileSync(resolve(firstDrive, 'app.module.json'))), module);
     assert.ok(!existsSync(bakes[0]), 'the bake is staged, then moved beside the build');
 
     // Driven again with nothing edited: it runs as it is, saying nothing.
@@ -887,6 +892,9 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     assert.deepEqual([said.length, builds.length, bakes.length], [1, 0, 1]);
     assert.match(said[0], /^iOS: (app\.contract, app\.ts|app\.ts, app\.contract) changed; running the new plan on the existing build \(no native rebuild\)\. Only the agent's drives run it: .*`bun exact\.mjs ios` before timing one$/);
     assert.ok(kept());
+    assert.equal(readFileSync(simulatorPlanPath(kept().plan, editedDrive), 'utf8'), 'plan two');
+    assert.equal(readFileSync(resolve(editedDrive, 'app.hbc'), 'utf8'), 'bytecode');
+    assert.deepEqual(JSON.parse(readFileSync(resolve(editedDrive, 'app.module.json'))), module);
 
     // A newer real build retires it: fresh, the build's own plan runs; a later touch of the same sources does not bring it back.
     build({}, 40, 'two');
@@ -1027,11 +1035,11 @@ test('a drive says the web-only symbol warnings in one line and lists each in it
   }
 });
 
-test('a drive counts a warning that is information apart (tamber-unreachable, LLP 1121 D9)', async () => {
+test('a drive counts a warning that is information apart (forma-unreachable, LLP 1121 D9)', async () => {
   const { warningLines } = await import('./app-cli.mjs');
   const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-warning-notes-')));
   try {
-    const note = 'app.contract:3:5 warning [tamber-unreachable] accent-color on macOS switches: NSSwitch draws the system accent (the first at line 4; LLP 1121 D9)';
+    const note = 'app.contract:3:5 warning [forma-unreachable] accent-color on macOS switches: NSSwitch draws the system accent (the first at line 4; LLP 1121 D9)';
     const header = 'app.contract:9:3 warning [lower-header-unplaced] this `button` in this route\'s `header` is not shown on iOS';
     assert.match(warningLines(dir, 'web', [note]).at(-1), /^compiler: 1 note \(not counted\); /);
     assert.match(warningLines(dir, 'web', [header, note]).at(-1), /^compiler: 1 warning and 1 note \(not counted\), 1 new \(above\); /);

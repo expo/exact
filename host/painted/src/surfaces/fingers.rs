@@ -195,7 +195,8 @@ impl<D: DataSource> Presenter<D> {
     ) {
         let (ox, oy) = self.rect_of(view).map_or((0., 0.), |r| (r.0, r.1));
         let buttons = u32::from(matches!(phase, "down" | "move"));
-        self.surfaces.input(view, json!({"t":"pointer","id":pointer,"phase":phase,"kind":"touch","buttons":buttons,"x":x-ox,"y":y-oy,"dx":dx,"dy":dy,"at":at}));
+        let event = self.held_keys(json!({"t":"pointer","id":pointer,"phase":phase,"kind":"touch","buttons":buttons,"x":x-ox,"y":y-oy,"dx":dx,"dy":dy,"at":at}));
+        self.surfaces.input(view, event);
     }
 }
 

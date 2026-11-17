@@ -44,7 +44,7 @@ final class ScrollSnapIOSTests: XCTestCase {
         let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
         let scroll = try XCTUnwrap(node.scroll)
         scroll.contentOffset.x = 3000
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
         let first = try XCTUnwrap(snapshot.rows.map(\.index).min())
         XCTAssertGreaterThan(first, 0)
@@ -133,6 +133,43 @@ final class ScrollSnapIOSTests: XCTestCase {
                 XCTAssertEqual(vertical ? result.y : result.x, overflow == "clip" ? 225 : 0, "\(axis), \(overflow)")
             }
         }
+    }
+
+    /// A snap marker that paints nothing is a flat leaf (`FlatLeavesIOS.swift`),
+    /// not a view, and a scroller rests on it as on a view (#641): twenty
+    /// line markers, in a column beside a text, cost no view between them.
+    func testAMarkerThatPaintsNothingCostsNoViewAndStillSnaps() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 300, height: 155)
+        let markers = (0..<20).map { 10 + $0 }
+        var ops: [[String: Any]] = [
+            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_x": "hidden", "overflow_y": "scroll", "scroll_snap_type": "y mandatory"]],
+            ["op": "create", "id": 2, "kind": "view", "style": ["flex_direction": "row"]],
+            ["op": "create", "id": 3, "kind": "view"],
+            ["op": "create", "id": 4, "kind": "view", "props": ["testId": "text"]],
+        ]
+        for (i, id) in markers.enumerated() {
+            ops.append(["op": "create", "id": id, "kind": "view", "style": ["height": 51.0, "scroll_snap_align": "start", "scroll_margin_top": 2.0]])
+            ops.append(["op": "frame", "id": id, "x": 0.0, "y": Double(i) * 51, "w": 1.0, "h": 51.0])
+        }
+        ops += [["op": "children", "id": 1, "ids": [2]], ["op": "children", "id": 2, "ids": [3, 4]], ["op": "children", "id": 3, "ids": markers],
+                ["op": "roots", "ids": [1]],
+                ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 155.0],
+                ["op": "frame", "id": 2, "x": 0.0, "y": 10.0, "w": 300.0, "h": 1020.0],
+                ["op": "frame", "id": 3, "x": 0.0, "y": 5.0, "w": 1.0, "h": 1020.0],
+                ["op": "frame", "id": 4, "x": 1.0, "y": 0.0, "w": 299.0, "h": 1020.0],
+                ["op": "content", "id": 1, "w": 300.0, "h": 1040.0]]
+        p.apply(wireBatch(ops))
+        XCTAssertEqual(Set(p.views.keys), [1, 2, 4], "the column and its markers are layers")
+        XCTAssertEqual(p.flats.leaves.count, markers.count + 1)
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scroll)
+        // Line i's position: 10 + 5 + 51 i, less its 2-point margin.
+        for (projected, expected): (CGFloat, CGFloat) in [(0, 13), (100, 115), (150, 166), (700, 676)] {
+            XCTAssertEqual(node.snappedOffset(CGPoint(x: 0, y: projected), in: scroll).y, expected, accuracy: 0.01, "from \(projected)")
+        }
+        p.apply(wireBatch([["op": "frame", "id": 12, "x": 0.0, "y": 120.0, "w": 1.0, "h": 51.0]]))
+        XCTAssertNil(p.views[12])
+        XCTAssertEqual(node.snappedOffset(CGPoint(x: 0, y: 110), in: scroll).y, 133, accuracy: 0.01, "where the marker moved to")
     }
 
     private func strip(_ aligns: [(String, Double, Double)], vertical: Bool = false, type: String? = nil, stop: String = "normal") throws -> (NodeView, UIScrollView) {

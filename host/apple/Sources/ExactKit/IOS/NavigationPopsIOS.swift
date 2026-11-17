@@ -179,9 +179,9 @@ extension NavigationHost {
         retiringRoots.contains { node === $0 || node.isDescendant(of: $0) }
     }
 
-    /// Run the sync a transition held, now that it has ended.
+    /// Run the sync a transition held, now that it has ended, or else the edge passes that an app's selection owes.
     func runHeldSync() {
-        guard pendingSync || tabsHeld else { return }
+        guard pendingSync || tabsHeld else { return settleScrollEdges() }
         pendingSync = false
         tabsHeld = false
         resync()
@@ -211,7 +211,7 @@ extension RouteController {
     /// The stack it is in: its plain tab, checked first because under More
     /// the plain tab's `navigationController` is More's; else its navigation
     /// controller.
-    var stack: UIViewController? { (parent as? PlainTab) ?? navigationController }
+    var stack: UIViewController? { (parent as? PlainTab) ?? navigationController ?? (bootSurface != nil ? host?.bootOwner : nil) }
 
     /// Cover the route with its pixels as drawn now, before a batch removes
     /// the route (`NavigationHost.prepare`): a button can remove a route

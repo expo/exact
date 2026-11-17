@@ -323,6 +323,48 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertEqual(bar.rangeValueText, "3", "what UIKit speaks")
         withExtendedLifetime(w) {}
     }
+    /// A drawn `slider` or `spinbutton` offers increment and decrement, which
+    /// are the keys WebKit sends an ARIA range: down and up at the node,
+    /// ArrowRight and ArrowLeft for a slider (swapped where its `direction`
+    /// is `rtl`, which the document's sets unless the node says its own),
+    /// ArrowUp and ArrowDown for a vertical one and a spin button. A
+    /// `progressbar` offers neither.
+    func testADrawnSliderOrSpinbuttonStepsByItsKeys() {
+        let (p, w, _, _) = fixture()
+        let node = NodeView(id: 20, kind: "view", presenter: p)
+        node.frame = NSRect(x: 0, y: 100, width: 200, height: 30)
+        p.root.addSubview(node); p.views[node.id] = node
+        node.handlers = ["key", "keyup"]
+        var heard: [String] = []
+        p.onKey = { id, press in heard.append("\(id):\(press.up ? "up" : "down"):\(press.chord):\(press.code)") }
+        node.applyProps(set: ["accessibilityRole": "slider", "accessibilityValueNow": "30"], clear: [])
+        XCTAssertTrue(node.isAccessibilitySelectorAllowed(#selector(NSView.accessibilityPerformIncrement)))
+        XCTAssertTrue(node.isAccessibilitySelectorAllowed(#selector(NSView.accessibilityPerformDecrement)))
+        XCTAssertTrue(node.accessibilityPerformIncrement())
+        XCTAssertTrue(node.accessibilityPerformDecrement())
+        XCTAssertEqual(heard, ["20:down:ArrowRight:ArrowRight", "20:up:ArrowRight:ArrowRight", "20:down:ArrowLeft:ArrowLeft", "20:up:ArrowLeft:ArrowLeft"])
+        func keys(_ step: () -> Void) -> [String] {
+            heard = []
+            step()
+            return heard.filter { $0.contains(":down:") }.map { String($0.split(separator: ":")[2]) }
+        }
+        p.apply(wireBatch([["op": "language", "lang": "ar", "dir": "rtl"]]))
+        XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowLeft", "ArrowRight"])
+        // The node's own computed `direction` wins over the document's.
+        node.applyStyle(["direction": "ltr"])
+        XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowRight", "ArrowLeft"])
+        p.apply(wireBatch([["op": "language", "lang": "en", "dir": "ltr"]]))
+        node.applyStyle(["direction": "rtl"])
+        XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowLeft", "ArrowRight"])
+        node.applyProps(set: ["accessibilityOrientation": "vertical"], clear: [])
+        XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowUp", "ArrowDown"])
+        node.applyProps(set: ["accessibilityRole": "spinbutton"], clear: ["accessibilityOrientation"])
+        XCTAssertEqual(keys { _ = node.accessibilityPerformIncrement(); _ = node.accessibilityPerformDecrement() }, ["ArrowUp", "ArrowDown"])
+        node.applyProps(set: ["accessibilityRole": "progressbar"], clear: [])
+        XCTAssertFalse(node.isAccessibilitySelectorAllowed(#selector(NSView.accessibilityPerformIncrement)))
+        XCTAssertEqual(keys { XCTAssertFalse(node.accessibilityPerformIncrement()) }, [])
+        withExtendedLifetime(w) {}
+    }
     private final class Opened: ExactSessionDelegate {
         var urls: [String] = []
         func exactSession(_ session: ExactSession, command name: String, args: [Any]) {

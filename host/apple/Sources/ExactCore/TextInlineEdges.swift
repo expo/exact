@@ -24,13 +24,16 @@ extension TextEngine {
     /// (`Spec.firstLineIndent`); a line that starts with a later run starts
     /// with its start (`LineInsets.edgeStarts`), which the line before does
     /// not count (a space hangs; any other character's `exactBreakRoom`).
-    package static func kernInlineEdges(_ s: NSMutableAttributedString, runs: [Run]) {
+    /// Each run with room is marked as its own (`InlineRoomRun`), its boxes
+    /// right to left under `rtl`, for each line to place it
+    /// (`placingRooms`).
+    package static func kernInlineEdges(_ s: NSMutableAttributedString, runs: [Run], rtl: Bool) {
         guard runs.contains(where: { $0.inlineStart != 0 || $0.inlineEnd != 0 }) else { return }
-        kernInlineEdges(s, runs: runs.map { (text: $0.text, start: $0.inlineStart, end: $0.inlineEnd) })
+        kernInlineEdges(s, runs: runs.map { (text: $0.text, start: $0.inlineStart, end: $0.inlineEnd) }, rtl: rtl)
     }
 
     /// Each run's text and its room before and after it, as `Run`'s.
-    package static func kernInlineEdges(_ s: NSMutableAttributedString, runs: [(text: String, start: CGFloat, end: CGFloat)]) {
+    package static func kernInlineEdges(_ s: NSMutableAttributedString, runs: [(text: String, start: CGFloat, end: CGFloat)], rtl: Bool) {
         guard runs.contains(where: { $0.start != 0 || $0.end != 0 }) else { return }
         let text = s.string as NSString
         func add(_ room: CGFloat, before end: Int, breaks: Bool) {
@@ -46,10 +49,14 @@ extension TextEngine {
             }
         }
         var offset = 0
-        for r in runs {
+        for (index, r) in runs.enumerated() {
             let length = r.text.utf16.count
             add(r.start, before: offset, breaks: true)
             add(r.end, before: offset + length, breaks: false)
+            if length > 0, r.start != 0 || r.end != 0 {
+                let range = NSRange(location: offset, length: length)
+                s.addAttribute(.exactRoomRun, value: InlineRoomRun(index: index, range: range, start: r.start, end: r.end, rtl: rtl), range: range)
+            }
             offset += length
         }
     }
@@ -76,7 +83,38 @@ extension TextEngine {
     }
 }
 
+/// A run with no text, at UTF-16 `offset`: its attributes, which no
+/// character carries, and the room kerned after its content edge on the
+/// character before it (`Spec.roomPast`).
+package struct EmptyRun {
+    package let offset: Int
+    package let attributes: [NSAttributedString.Key: Any]
+    package let past: CGFloat
+    package init(offset: Int, attributes: [NSAttributedString.Key: Any], past: CGFloat) {
+        self.offset = offset; self.attributes = attributes; self.past = past
+    }
+}
+
 extension Spec {
+    /// For the run `index`, which has no text: the room kerned after its
+    /// place on the character before it (`TextEngine.kernInlineEdges`), past
+    /// its own start: its end, the room of the runs with no text after it,
+    /// and the start of the run that follows them.
+    package func roomPast(_ index: Int) -> CGFloat {
+        Self.roomPast(runs.map { (text: $0.text, start: $0.inlineStart, end: $0.inlineEnd) }, index)
+    }
+
+    /// `roomPast` over each run's text and its start and end room, for a caller without a `Spec`.
+    package static func roomPast(_ runs: [(text: String, start: CGFloat, end: CGFloat)], _ index: Int) -> CGFloat {
+        var past = runs[index].end
+        for r in runs.dropFirst(index + 1) {
+            past += r.start
+            guard r.text.isEmpty else { break }
+            past += r.end
+        }
+        return past
+    }
+
     /// Where the first line starts: `text-indent`, and the start edge of
     /// the inline boxes the first run is in, which nothing precedes to kern
     /// (`TextEngine.kernInlineEdges`).

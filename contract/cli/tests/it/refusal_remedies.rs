@@ -382,3 +382,88 @@ fn a_typed_states_initializer_is_refused_as_the_states() {
     contract::compile("component App\n  state n: option<number> = none\n  view\n    text \"x\"\n")
         .unwrap();
 }
+
+/// `for` and `return` in an action name what to write instead, and the
+/// forms the `for` refusal suggests compile.
+#[test]
+fn a_loop_or_return_in_an_action_names_the_form_to_write() {
+    let action = |body: &str| {
+        format!(
+            "shape Item\n  id: number\ncomponent App\n  state items: Item[] = []\n  state total = 0\n  state picked = 0\n  action go(id: number)\n{body}  view\n    button \"go\" press=go(1)\n"
+        )
+    };
+    for body in [
+        "    for x in items\n      total = total + x.id\n",
+        "    for x in items key=x.id\n      total = total + x.id\n",
+        "    if total > 0\n      for x in items\n        total = total + x.id\n",
+    ] {
+        let e = refused(&action(body));
+        assert_eq!(e.id, "syntax-expected-statement", "{e}");
+        assert!(
+            e.message
+                .starts_with("`for` repeats views; an action has no loop"),
+            "{e}"
+        );
+    }
+    contract::compile(&action(
+        "    items = items.filter(x => x.id != id)\n    total = sum(items.map(x => x.id * 2))\n    match first(items.filter(x => x.id == id))\n      case some(x)\n        picked = x.id\n      case none\n        picked = 0\n",
+    ))
+    .unwrap();
+    for body in ["    total = 1\n    return total\n", "    return\n"] {
+        let e = refused(&action(body));
+        assert_eq!(e.id, "syntax-expected-statement", "{e}");
+        assert!(e.message.starts_with("an action returns no value"), "{e}");
+    }
+    // `return` is an ordinary name elsewhere: a state so named is assigned.
+    contract::compile(
+        "component App\n  state return = 0\n  action go\n    return = return + 1\n  view\n    button \"go\" press=go\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn size_keywords_compile_and_their_neighbours_are_refused_by_name() {
+    let source = |name: &str, value: &str| {
+        format!("component App\n  view\n    column\n      text \"a\" {name}=\"{value}\"\n")
+    };
+    for name in [
+        "width",
+        "height",
+        "min-width",
+        "max-width",
+        "min-height",
+        "max-height",
+        "flex-basis",
+    ] {
+        for keyword in ["min-content", "max-content", "fit-content", "Fit-Content"] {
+            contract::compile(&source(name, keyword)).unwrap();
+        }
+        let refused = |value: &str, says: &str| {
+            let e = contract::compile(&source(name, value)).unwrap_err();
+            assert_eq!(e.id, "lower-attr-value", "{e}");
+            assert!(e.message.contains(says), "{name}={value}: {e}");
+        };
+        refused("fit-content(10rem)", "only in a grid track");
+        refused("stretch", "`stretch` (CSS Box Sizing 4) is not implemented");
+        refused(
+            "-webkit-fill-available",
+            "`stretch` (CSS Box Sizing 4) is not implemented",
+        );
+        refused("-webkit-max-content", "write `max-content`");
+        refused("calc-size(auto, size)", "`calc-size()`");
+    }
+    // `fit-content()` names its three-row equivalent where there is one.
+    let e = contract::compile(&source("width", "fit-content(10rem)")).unwrap_err();
+    assert!(
+        e.message
+            .contains("`width=\"max-content\" min-width=\"min-content\" max-width=\"<length>\"`"),
+        "{e}"
+    );
+    // `content` is `flex-basis`'s alone.
+    contract::compile(&source("flex-basis", "content")).unwrap();
+    let e = contract::compile(&source("width", "content")).unwrap_err();
+    assert!(
+        e.message.contains("`content` is a `flex-basis` value"),
+        "{e}"
+    );
+}

@@ -89,6 +89,7 @@
           }
         }
         call.secrets.shift();
+        if (browserSecrets && !call.secrets.length) call.secretCompleted = true;
         (ok ? task.resolve : task.reject)(value);
       };
       if (error) {

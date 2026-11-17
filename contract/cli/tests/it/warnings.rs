@@ -2,6 +2,8 @@
 //! the author meant. They fail nothing; each names its repair; and what the
 //! compiler cannot see through is given the benefit of the doubt.
 
+use crate::scratch::Scratch;
+
 /// The ids and lines of the warnings `src` earns, after checking that it
 /// still compiles: a warning never fails a build.
 pub(crate) fn warned(src: &str) -> Vec<(String, u32)> {
@@ -23,7 +25,7 @@ pub(crate) fn warned(src: &str) -> Vec<(String, u32)> {
 fn route(header: &str) -> String {
     let header: String = header.lines().map(|l| format!("          {l}\n")).collect();
     format!(
-        "routes nav\n  home \"/\"\ncomponent App\n  state q = \"\"\n  action go\n    q = \"x\"\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n          header display=\"flex\"\n{header}          scroll flex=1\n            text \"body\"\n"
+        "routes nav\n  home \"/\"\ncomponent App\n  state q = \"\"\n  action go\n    q = \"x\"\n  view\n    main navigationKey=`${{top(nav).id}}` width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n          header display=\"flex\"\n{header}          scroll flex=1\n            text \"body\"\n"
     )
 }
 
@@ -309,7 +311,7 @@ fn a_back_control_the_bar_stands_for_or_a_route_with_no_bar_is_not_warned() {
 pub(crate) fn tabs(tabs: &str) -> String {
     let tabs: String = tabs.lines().map(|l| format!("      {l}\n")).collect();
     format!(
-        "routes nav\n  tab home \"/\"\n  tab more \"/more\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"\n      for t in nav.tabs key=t.name\n        column role=\"tabpanel\" id=`panel-${{t.name}}`\n          for e in t.stack key=e.id\n            column navigationKey=`${{e.id}}`\n              text e.name\n      row role=\"tablist\"\n{tabs}"
+        "routes nav\n  tab home \"/\"\n  tab more \"/more\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}`\n      for t in nav.tabs key=t.name\n        column role=\"tabpanel\" id=`panel-${{t.name}}`\n          for e in t.stack key=e.id\n            column navigationKey=`${{e.id}}`\n              text e.name\n      row role=\"tablist\"\n{tabs}"
     )
 }
 
@@ -413,9 +415,9 @@ fn the_accent_pair_roles_and_artwork_are_not_named() {
         "main accent-color=\"light-dark(#0a7f5a, #3cc98f)\"\n  text \"a\"",
         "main accent-color=\"-exact-system-teal\"\n  text \"a\"",
         // Roles, and what is no colour of its own.
-        "text \"a\" color=\"-exact-secondary-label\" background-color=\"-exact-secondary-grouped-background\" border-color=\"-exact-separator\"",
+        "text \"a\" color=\"-exact-secondary-label\" background-color=\"-exact-secondary-grouped-background\" border-color=\"-exact-separator\" border-style=\"solid\"",
         "text \"a\" color=\"CanvasText\" background-color=\"AccentColor\" -exact-tint-color=\"-exact-system-red\"",
-        "text \"a\" color=\"currentColor\" background-color=\"transparent\" border-color=\"rgba(0, 0, 0, 0)\"",
+        "text \"a\" color=\"currentColor\" background-color=\"transparent\" border-color=\"rgba(0, 0, 0, 0)\" border-style=\"solid\"",
         "text \"a\" color=\"-exact-platform-color(ios systemPinkColor, #ff2d55)\"",
         // Artwork: an `svg`'s paint, and a shadow, which darkens in both.
         "svg viewBox=\"0 0 10 10\" width=10 height=10\n  circle cx=5 cy=5 r=4 fill=\"#ff0000\" stroke=\"#000000\"",
@@ -442,6 +444,60 @@ fn every_literal_colour_is_named_past_the_cap_with_one_line_on_why() {
             && warnings[25].message.starts_with("these 25 literal colours")
             && warnings[25].span.line == 6,
         "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_builds_text_says_the_literal_colours_in_one_line_and_json_lists_each() {
+    // LLP 1168.000 D7.2: a chat app said 31 colour lines in every build. The text says one,
+    // the closing line's, with the first three sites; `--json` keeps one diagnostic a site.
+    let view: String = (0..5)
+        .map(|i| format!("  text \"{i}\" color=\"#1234{i:02}\"\n"))
+        .collect();
+    let dir = Scratch::new(format!("exact-one-scheme-{}", std::process::id()));
+    let path = dir.join("app.contract");
+    std::fs::write(&path, screen(&format!("column\n{view}"))).unwrap();
+    let run = |json: bool| {
+        let mut args = vec!["build", path.to_str().unwrap()];
+        if json {
+            args.push("--json");
+        }
+        std::process::Command::new(env!("CARGO_BIN_EXE_contract"))
+            .args(&args)
+            .output()
+            .unwrap()
+    };
+    let json: serde_json::Value = serde_json::from_slice(&run(true).stdout).unwrap();
+    let listed = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|w| w["id"] == ONE_SCHEME)
+        .count();
+    let text = String::from_utf8(run(false).stderr).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(listed, 6, "five sites and the closing line: {json}");
+    let said: Vec<&str> = text.lines().filter(|l| l.contains(ONE_SCHEME)).collect();
+    let file = path.display().to_string();
+    assert_eq!(said.len(), 1, "{text}");
+    assert!(
+        said[0].starts_with(&format!("{file}:6:"))
+            && said[0].contains(&format!(
+                "these 5 literal colours ({file}:6, {file}:7, {file}:8, …) stay the same in dark mode"
+            ))
+            && said[0].contains("name a role for each or leave it unsaid")
+            && said[0].contains("one `light-dark(light, dark)` pair on `accent-color`")
+            && said[0].ends_with("`contract build --json` names each."),
+        "{text}"
+    );
+    // One site keeps its own line, whole.
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&path, screen("text \"a\" color=\"#123456\"")).unwrap();
+    let text = String::from_utf8(run(false).stderr).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        text.contains("`#123456` on `color` stays the same in dark mode"),
+        "{text}"
     );
 }
 
@@ -688,7 +744,7 @@ fn a_dialog_a_popover_and_a_modal_route_are_not_named() {
         assert_eq!(warned(&buttons(view)), [], "{view}");
     }
     // A route the router presents as a sheet.
-    let sheet = "routes nav\n  home \"/\"\n    add \"/add\"\ncomponent App\n  action back\n    nav = back(nav)\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\" width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` navigationPresentation=(e.name == \"add\" ? \"modal\" : \"push\") role=\"dialog\" position=\"absolute\" inset=0\n          text e.name\n";
+    let sheet = "routes nav\n  home \"/\"\n    add \"/add\"\ncomponent App\n  action back\n    nav = back(nav)\n  view\n    main navigationKey=`${top(nav).id}` width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` navigationPresentation=(e.name == \"add\" ? \"modal\" : \"push\") role=\"dialog\" position=\"absolute\" inset=0\n          text e.name\n";
     assert_eq!(warned(sheet), []);
 }
 
@@ -797,7 +853,7 @@ fn symbols_answer_to_apple_names_and_aliases_and_the_plan_carries_the_role() {
         .unwrap_err();
         assert!(error.to_string().contains("not a role"), "{name}: {error}");
     }
-    // `sf/` stays distinct: Apple's name, opaque, no warning (a role's own: tamber_icons).
+    // `sf/` stays distinct: Apple's name, opaque, no warning (a role's own: forma_icons).
     let (plan, warnings) =
         contract::compile_warned("component App\n  view\n    image \"symbol:sf/gearshape.2\"\n");
     let strings = plan.unwrap().strings;
@@ -1238,9 +1294,7 @@ fn warned_circles(name: &str, body: &str) -> Vec<(String, u32, String)> {
     let src = format!(
         "use RoundButton from \"exact:content\"\ncomponent App\n  state n = 0\n  state title = \"Start quiz\"\n  action go\n    n = n + 1\n  view\n    column\n{body}"
     );
-    let dir = std::env::temp_dir().join(format!("exact-circles-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-circles-{name}-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, &src).unwrap();
     let (result, warnings) = contract::compile_path_all_warned(&path, false);

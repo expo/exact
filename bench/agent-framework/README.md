@@ -31,7 +31,7 @@ Every agent and app runs in its own container.
   the host's login.
 - **Lines of code** count `.contract` files, excluding `.test.contract`. Upstream counted
   only JS, TS, HTML, CSS and component files, so it missed an Exact app's pages.
-  `app.tamber` stays uncounted, like every app's copy of `design/tokens.css`, because it
+  `app.forma` stays uncounted, like every app's copy of `design/tokens.css`, because it
   is that file converted.
 
 ## Setting up

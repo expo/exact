@@ -17,6 +17,7 @@ use std::path::Path;
 
 mod packages;
 mod slot;
+pub mod widgets;
 pub(crate) use packages::implementation_imports;
 pub use packages::{bound, plan_packages, rust_packages, write_desktop_packages, Bound};
 pub use slot::{native_slot, NativeSelection, NativeSlot};
@@ -180,7 +181,7 @@ fn watched_rust_hatches(
 /// Rust hatches, `modules/android/*.rs` or `modules/linux/*.rs`, with the
 /// reader's Kotlin ones told beside them; the reader's alone when the app
 /// has no Rust ones; none when it gives `android` no word); and what
-/// [`android_reach`] writes.
+/// [`android_reach`] writes, and the widgets' `widgets.rs` ([`widgets`]).
 pub fn android_entry(
     app_root: &Path,
     manifest: &Manifest,
@@ -204,20 +205,28 @@ pub fn android_entry(
         }
     };
     std::fs::write(out_dir.join("hatches.rs"), text).map_err(|e| e.to_string())?;
+    widgets::write(app_root, manifest, out_dir)?;
     android_reach(app_root, plan, out_dir)
 }
 
 /// What the APK's build reads beside an Android plan, from an app's
-/// Android crate or a game's bake: `uses.txt`, the plan's capabilities by
-/// name, one a line (a plan with a date or time control links Compose
-/// Material 3), and `permissions.txt`, the Android permissions its grant
-/// lines and module names derive beyond the compatibility id's reach.
+/// Android crate or a game's bake: `uses.txt`, [`android_uses`] one a line,
+/// `permissions.txt`, the Android permissions its grant lines and module
+/// names derive, and `transfers.rs`, the imported transfer package's JNI entry.
 pub fn android_reach(
     app_root: &Path,
     plan: &exact_plan::Plan,
     out_dir: &Path,
 ) -> Result<(), String> {
-    let uses: Vec<&str> = exact_runner::uses(plan).iter().map(|c| c.name()).collect();
+    let transfer = if plan.package_extensions().get("background-transfer")
+        == Some(&"@exact/background-transfer")
+    {
+        "exact_painted::android_transfer_jni!();\n"
+    } else {
+        ""
+    };
+    std::fs::write(out_dir.join("transfers.rs"), transfer).map_err(|e| e.to_string())?;
+    let uses = android_uses(plan);
     std::fs::write(out_dir.join("uses.txt"), uses.join("\n")).map_err(|e| e.to_string())?;
     // The grant ceiling of the compatibility id the build script wrote
     // beside it, when it wrote one.
@@ -228,6 +237,20 @@ pub fn android_reach(
     let permissions = android_permissions(plan, ceiling.as_deref(), &app_text(app_root));
     std::fs::write(out_dir.join("permissions.txt"), permissions.join("\n"))
         .map_err(|e| e.to_string())
+}
+
+/// What an APK links for `plan`, by name: the plan's capabilities (a date or
+/// time control links Compose Material 3), and `video` where the plan makes a
+/// `video` or `audio`, which links Media3's player (LLP 1042.001 D2). Only
+/// Android links anything for a media node, so it is not a capability.
+pub fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
+    let mut uses: Vec<&'static str> = exact_runner::uses(plan).iter().map(|c| c.name()).collect();
+    if plan.nodes.iter().any(|node| {
+        exact_kernel::NodeType::from_wire(node.node_type) == Some(exact_kernel::NodeType::Video)
+    }) {
+        uses.push("video");
+    }
+    uses
 }
 
 /// The Android permissions the module names `text` (the app's source) uses

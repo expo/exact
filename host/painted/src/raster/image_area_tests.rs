@@ -39,7 +39,14 @@ fn fractional_image_edges_match_bilinear_coverage() {
                 Transform::from_translate(x, 0.).pre_scale(0.25, 0.25),
                 mask.as_ref(),
             );
-            actual.image(&bitmap, dst, &clips, Transform::identity(), None);
+            actual.image(
+                &bitmap,
+                dst,
+                &clips,
+                Transform::identity(),
+                None,
+                exact_kernel::ImageRendering::Auto,
+            );
             let actual = actual.finish().unwrap();
             alpha.push((
                 actual.pixel(0, 0).unwrap().alpha(),
@@ -162,7 +169,14 @@ fn minified_edges_match_bilinear_under_square_and_rounded_clips_at_device_scales
                             dev,
                             mask.as_ref(),
                         );
-                        actual.image(&bitmap, dst, &clips, ts, None);
+                        actual.image(
+                            &bitmap,
+                            dst,
+                            &clips,
+                            ts,
+                            None,
+                            exact_kernel::ImageRendering::Auto,
+                        );
                         let actual = actual.finish().unwrap();
                         for (i, (a, b)) in actual.pixels().iter().zip(expected.pixels()).enumerate()
                         {
@@ -191,7 +205,14 @@ fn an_identical_rect_clip_preserves_integer_image_edges() {
         }
         actual.push_clip(&Shape::rect(dst), Transform::identity());
         for r in [&mut actual, &mut expected] {
-            r.image(&bitmap, dst, &[], Transform::identity(), None);
+            r.image(
+                &bitmap,
+                dst,
+                &[],
+                Transform::identity(),
+                None,
+                exact_kernel::ImageRendering::Auto,
+            );
         }
         assert_eq!(
             actual.finish().unwrap().data(),
@@ -289,7 +310,13 @@ fn reference(
         })
         .collect();
     let stride = target.width() as usize;
-    for (i, out) in target.data_mut().chunks_exact_mut(4).enumerate() {
+    for (i, out) in target
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         if edges.data()[i] == 0 {
             continue;
         }
@@ -358,7 +385,14 @@ fn minified_images_average_area_with_fractional_edges_masks_tint_and_parent_clip
                                 );
                             }
                         }
-                        actual.image(&bitmap, dst, &clips, Transform::identity(), tint);
+                        actual.image(
+                            &bitmap,
+                            dst,
+                            &clips,
+                            Transform::identity(),
+                            tint,
+                            exact_kernel::ImageRendering::Auto,
+                        );
                         let mask = expected.mask_with(&clips, Transform::identity());
                         if tint.is_some() {
                             expected.push_opacity(1.);
@@ -392,7 +426,9 @@ fn minified_images_average_area_with_fractional_edges_masks_tint_and_parent_clip
                         }
                         assert!(actual
                             .data()
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .all(|p| p[..3].iter().all(|c| *c <= p[3])));
                     }
                 }
@@ -435,7 +471,14 @@ fn other_image_scales_and_transforms_keep_the_bilinear_path_byte_exact() {
                 );
                 let mask = actual.active_clip().cloned();
                 let mut expected = actual.target.pixels().unwrap().clone();
-                actual.image(&bitmap, (3.25, 4.5, w, h), &[], ts, None);
+                actual.image(
+                    &bitmap,
+                    (3.25, 4.5, w, h),
+                    &[],
+                    ts,
+                    None,
+                    exact_kernel::ImageRendering::Auto,
+                );
                 expected.draw_pixmap(
                     0,
                     0,
@@ -566,7 +609,7 @@ fn long_constant_sources_preserve_colour_and_filter_each_source_row_once() {
     ] {
         let mut source = Pixmap::new(w, h).unwrap();
         for rgba in [[255, 0, 0, 255], [71, 29, 13, 127]] {
-            for pixel in source.data_mut().chunks_exact_mut(4) {
+            for pixel in source.data_mut().as_chunks_mut::<4>().0 {
                 pixel.copy_from_slice(&rgba);
             }
             let transform = Transform::from_scale(dw as f32 / w as f32, dh as f32 / h as f32);
@@ -591,7 +634,12 @@ fn long_constant_sources_preserve_colour_and_filter_each_source_row_once() {
                     rgba
                 };
                 assert!(
-                    target.data().chunks_exact(4).all(|pixel| pixel == expected),
+                    target
+                        .data()
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .all(|pixel| *pixel == expected),
                     "{w}x{h} {rgba:?}"
                 );
                 assert_eq!(scratch.rows_filtered, h as usize);
@@ -623,9 +671,9 @@ fn masks_bound_filtering_and_skip_empty_rows() {
         ));
         assert_eq!(scratch.rows_filtered, rows.len() * 4);
         assert_eq!(scratch.pixels_filtered, rows.len() * 32);
-        for (pixel, cover) in target.data().chunks_exact(4).zip(mask.data()) {
+        for (pixel, cover) in target.data().as_chunks::<4>().0.iter().zip(mask.data()) {
             assert_eq!(
-                pixel,
+                *pixel,
                 if *cover == 0 {
                     [0; 4]
                 } else {
@@ -653,8 +701,8 @@ fn vertical_reduction_reads_only_columns_needed_by_horizontal_taps() {
     ));
     assert_eq!(scratch.rows_filtered, 4);
     assert_eq!(scratch.pixels_filtered, 8);
-    for (pixel, cover) in target.data().chunks_exact(4).zip(mask.data()) {
-        assert_eq!(pixel, [*cover; 4]);
+    for (pixel, cover) in target.data().as_chunks::<4>().0.iter().zip(mask.data()) {
+        assert_eq!(*pixel, [*cover; 4]);
     }
 }
 

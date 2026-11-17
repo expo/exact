@@ -16,9 +16,44 @@
 // - Tasks: a task moves between two lists.
 // - Zoom: a route presented fullscreen zooms from its photo (iOS 18's zoom
 //   transition, `navigationSource`; LLP 1035.001).
+// - Routes: a route's own entrance and exit (LLP 1013.001), CSS's
+//   `::view-transition-new` and `::view-transition-old`: a camera presented
+//   fullscreen fades in and out, a detail slides 10 % with a fade, a scanner
+//   cuts, and a plain route keeps the platform's push and pop.
 routes nav
   tab home "/"
   photo "/photo/:photo"
+  camera "/camera"
+  detail "/detail"
+  scanner "/scanner"
+  plain "/plain"
+
+keyframes fade-in
+  from opacity=0
+keyframes fade-out
+  to opacity=0
+keyframes enter-end
+  from opacity=0 translate="10% 0"
+keyframes leave-end
+  to opacity=0 translate="10% 0"
+
+style Fades
+  ::view-transition-new
+    animation="fade-in 180ms ease-out both"
+  ::view-transition-old
+    animation="fade-out 150ms ease-in both"
+
+style Slides
+  ::view-transition-new
+    animation="enter-end 250ms ease-out both"
+  ::view-transition-old
+    animation="leave-end 200ms ease-in both"
+
+style Cuts
+  ::view-transition-new
+    animation="none"
+  ::view-transition-old
+    animation="none"
 
 shape Photo
   id: string
@@ -97,80 +132,103 @@ component App
     done = floor(done / bit) % 2 == 1 ? done - bit : done + bit
   action zoom(id: string)
     nav = push(nav, path("photo", id))
+  action go(to: string)
+    nav = push(nav, to)
   action back
     nav = back(nav)
 
   view
     main testId="app" navigationKey=`${current.id}` navigationBack="back" width="100%" height="100%" font-family="system-ui" color="-exact-label" accent-color="light-dark(#15181c, #e7e4dc)"
       for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` navigationPresentation=(e.name == "photo" ? "fullscreen" : "") navigationSource=(e.name == "photo" ? `zoom-${params(nav, "photo").join("")}` : "") position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="-exact-grouped-background"
-          if e.name == "photo"
-            ZoomViewer(id=params(nav, "photo").join(""), photos=photos, back=back)
-          else
-            column flex=1 min-height=0 position="relative" padding-top="env(safe-area-inset-top)"
-              row gap=6 padding=12 overflow-x="scroll" scrollbar-width="none" flex-shrink=0 role="tablist"
-                TabButton(name="grid", label="Grid", tab=tab, choose=choose)
-                TabButton(name="list", label="List", tab=tab, choose=choose)
-                TabButton(name="cards", label="Cards", tab=tab, choose=choose)
-                TabButton(name="tasks", label="Tasks", tab=tab, choose=choose)
-                TabButton(name="zoom", label="Zoom", tab=tab, choose=choose)
-              if tab == "grid"
-                match first(photos.filter(p => p.n == open))
-                  case some(p)
-                    Viewer(photo=p, name=`grid-${p.id}`, step=step, close=closePhoto, jump=3)
-                  case none
-                    scroll testId="grid" flex=1 min-height=0 overflow-x="hidden"
-                      column padding=12 gap=10
-                        text "Tap a photo. Close it mid-flight to reverse; step ahead before closing to land in a card that has scrolled away." font-size=13 color="-exact-secondary-label"
-                        row flex-wrap="wrap" gap=10
-                          for p in photos key=p.id
-                            button press=openPhoto(p.n) testId=`open-${p.id}` aria-label=`Open ${p.title}` padding=0 border-width=0 background-color="transparent" flex-basis="45%" flex-grow=1 min-width=0 display="flex" flex-direction="column" gap=4
-                              image p.asset sharedElement=`grid-${p.id}` class=Fly testId=`thumb-${p.id}` width="100%" height=140 min-height=0 object-fit="cover" border-radius=12 background-color=p.tone
-                              text p.title font-size=13 color="-exact-secondary-label"
-              if tab == "list"
-                match first(rows.filter(p => p.n == openRow))
-                  case some(p)
-                    Viewer(photo=p, name=`row-${p.id}`, step=stepRow, close=closeRow, jump=25)
-                  case none
-                    list id="long" virtualized=true testId="long" flex=1 min-height=0 overflow-x="hidden" estimated-item-height=76
-                      for p in rows key=p.id
-                        button press=openListRow(p.n) testId=`row-${p.id}` aria-label=`Open ${p.title}` width="100%" padding-left=12 padding-right=12 padding-top=6 padding-bottom=6 border-width=0 background-color="transparent" display="flex" flex-direction="row" align-items="center" gap=12 box-sizing="border-box"
-                          image p.asset sharedElement=`row-${p.id}` class=Fly testId=`rowthumb-${p.id}` width=64 height=64 object-fit="cover" border-radius=8 background-color=p.tone flex-shrink=0
-                          text p.title font-size=15
-              if tab == "cards"
-                match first(cards.filter(c => c.id == card))
-                  case some(c)
-                    column sharedElement=`card-${c.id}` class=Fly testId="card-detail" position="absolute" top=0 left=0 right=0 bottom=0 padding=24 gap=14 background-color=c.color
-                      row justify-content="space-between" align-items="center"
-                        text c.title font-size=30 font-weight=700
-                        button press=closeCard testId="close-card" aria-label="Close" class=Tab background-color="-exact-fill"
-                          text "Close"
-                      text c.body font-size=17 line-height=1.5
-                      text "The card is a box with children: its surface flies, and its children keep their laid-out places." font-size=14
-                  case none
-                    column padding=12 gap=12
-                      for c in cards key=c.id
-                        button press=openCard(c.id) testId=`card-${c.id}` aria-label=`Open ${c.title}` sharedElement=`card-${c.id}` class=Fly padding=16 border-width=0 border-radius=16 background-color=c.color display="flex" flex-direction="column" align-items="flex-start" gap=6
-                          text c.title font-size=20 font-weight=600
-                          text c.body font-size=14 line-clamp=1
-              if tab == "tasks"
-                row padding=12 gap=12 align-items="flex-start"
-                  column flex=1 gap=8 min-width=0
-                    text "To do" font-size=13 font-weight=600 color="-exact-secondary-label"
-                    for t in tasks.filter(t => floor(done / t.bit) % 2 == 0) key=t.id
-                      TaskChip(task=t, toggle=toggleTask, finished=false)
-                  column flex=1 gap=8 min-width=0
-                    text "Done" font-size=13 font-weight=600 color="-exact-secondary-label"
-                    for t in tasks.filter(t => floor(done / t.bit) % 2 == 1) key=t.id
-                      TaskChip(task=t, toggle=toggleTask, finished=true)
-              if tab == "zoom"
-                scroll flex=1 min-height=0 overflow-x="hidden"
+        if e.name == "camera"
+          column navigationKey=`${e.id}` navigationPresentation="fullscreen" class=Fades testId="camera" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" justify-content="center" align-items="center" gap=16 color-scheme="dark" background-color="-exact-background" color="-exact-label"
+            text "Camera" font-size=28 font-weight=600
+            text "Fades in over 180 ms; Close fades it out over 150 ms." font-size=15 padding-left=24 padding-right=24 text-align="center"
+            button press=back testId="camera-close" aria-label="Close" class=Bar color="-exact-label"
+              text "Close"
+        else if e.name == "detail"
+          column navigationKey=`${e.id}` class=Slides testId="detail" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="light-dark(#d8e8f8, #1d2a38)"
+            RouteBody(title="Detail", note="Slides in 10 % with a fade, as react-native-screens' Android default does, and leaves the same way.", back=back, go=go)
+        else if e.name == "scanner"
+          column navigationKey=`${e.id}` class=Cuts testId="scanner" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="light-dark(#f8e2c8, #3a2a18)"
+            RouteBody(title="Scanner", note="Comes and goes with a cut: both parts are `none`.", back=back, go=go)
+        else if e.name == "plain"
+          column navigationKey=`${e.id}` testId="plain" position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="light-dark(#dcefd8, #1e3320)"
+            RouteBody(title="Plain", note="No parts: the platform's own push and pop.", back=back, go=go)
+        else
+          column navigationKey=`${e.id}` navigationPresentation=(e.name == "photo" ? "fullscreen" : "") navigationSource=(e.name == "photo" ? `zoom-${params(nav, "photo").join("")}` : "") position="absolute" top=0 bottom=0 left=0 right=0 display="flex" flex-direction="column" background-color="-exact-grouped-background"
+            if e.name == "photo"
+              ZoomViewer(id=params(nav, "photo").join(""), photos=photos, back=back)
+            else
+              column flex=1 min-height=0 position="relative" padding-top="env(safe-area-inset-top)"
+                row gap=6 padding=12 overflow-x="scroll" scrollbar-width="none" flex-shrink=0 role="tablist"
+                  TabButton(name="grid", label="Grid", tab=tab, choose=choose)
+                  TabButton(name="list", label="List", tab=tab, choose=choose)
+                  TabButton(name="cards", label="Cards", tab=tab, choose=choose)
+                  TabButton(name="tasks", label="Tasks", tab=tab, choose=choose)
+                  TabButton(name="zoom", label="Zoom", tab=tab, choose=choose)
+                  TabButton(name="routes", label="Routes", tab=tab, choose=choose)
+                if tab == "grid"
+                  match first(photos.filter(p => p.n == open))
+                    case some(p)
+                      Viewer(photo=p, name=`grid-${p.id}`, step=step, close=closePhoto, jump=3)
+                    case none
+                      scroll testId="grid" flex=1 min-height=0 overflow-x="hidden"
+                        column padding=12 gap=10
+                          text "Tap a photo. Close it mid-flight to reverse; step ahead before closing to land in a card that has scrolled away." font-size=13 color="-exact-secondary-label"
+                          row flex-wrap="wrap" gap=10
+                            for p in photos key=p.id
+                              button press=openPhoto(p.n) testId=`open-${p.id}` aria-label=`Open ${p.title}` padding=0 border-width=0 background-color="transparent" flex-basis="45%" flex-grow=1 min-width=0 display="flex" flex-direction="column" gap=4
+                                image p.asset sharedElement=`grid-${p.id}` class=Fly testId=`thumb-${p.id}` width="100%" height=140 min-height=0 object-fit="cover" border-radius=12 background-color=p.tone
+                                text p.title font-size=13 color="-exact-secondary-label"
+                if tab == "list"
+                  match first(rows.filter(p => p.n == openRow))
+                    case some(p)
+                      Viewer(photo=p, name=`row-${p.id}`, step=stepRow, close=closeRow, jump=25)
+                    case none
+                      list id="long" virtualized=true testId="long" flex=1 min-height=0 overflow-x="hidden" estimated-item-height=76
+                        for p in rows key=p.id
+                          button press=openListRow(p.n) testId=`row-${p.id}` aria-label=`Open ${p.title}` width="100%" padding-left=12 padding-right=12 padding-top=6 padding-bottom=6 border-width=0 background-color="transparent" display="flex" flex-direction="row" align-items="center" gap=12 box-sizing="border-box"
+                            image p.asset sharedElement=`row-${p.id}` class=Fly testId=`rowthumb-${p.id}` width=64 height=64 object-fit="cover" border-radius=8 background-color=p.tone flex-shrink=0
+                            text p.title font-size=15
+                if tab == "cards"
+                  match first(cards.filter(c => c.id == card))
+                    case some(c)
+                      column sharedElement=`card-${c.id}` class=Fly testId="card-detail" position="absolute" top=0 left=0 right=0 bottom=0 padding=24 gap=14 background-color=c.color
+                        row justify-content="space-between" align-items="center"
+                          text c.title font-size=30 font-weight=700
+                          button press=closeCard testId="close-card" aria-label="Close" class=Tab background-color="-exact-fill"
+                            text "Close"
+                        text c.body font-size=17 line-height=1.5
+                        text "The card is a box with children: its surface flies, and its children keep their laid-out places." font-size=14
+                    case none
+                      column padding=12 gap=12
+                        for c in cards key=c.id
+                          button press=openCard(c.id) testId=`card-${c.id}` aria-label=`Open ${c.title}` sharedElement=`card-${c.id}` class=Fly padding=16 border-width=0 border-radius=16 background-color=c.color display="flex" flex-direction="column" align-items="flex-start" gap=6
+                            text c.title font-size=20 font-weight=600
+                            text c.body font-size=14 line-clamp=1
+                if tab == "tasks"
+                  row padding=12 gap=12 align-items="flex-start"
+                    column flex=1 gap=8 min-width=0
+                      text "To do" font-size=13 font-weight=600 color="-exact-secondary-label"
+                      for t in tasks.filter(t => floor(done / t.bit) % 2 == 0) key=t.id
+                        TaskChip(task=t, toggle=toggleTask, finished=false)
+                    column flex=1 gap=8 min-width=0
+                      text "Done" font-size=13 font-weight=600 color="-exact-secondary-label"
+                      for t in tasks.filter(t => floor(done / t.bit) % 2 == 1) key=t.id
+                        TaskChip(task=t, toggle=toggleTask, finished=true)
+                if tab == "routes"
                   column padding=12 gap=10
-                    text "A route presented fullscreen zooms out of its photo on iOS 18 (UIKit's zoom transition). Elsewhere it opens with the platform's ordinary transition." font-size=13 color="-exact-secondary-label"
-                    row flex-wrap="wrap" gap=10
-                      for p in photos.filter(p => p.n <= 6) key=p.id
-                        button press=zoom(p.id) testId=`zoom-open-${p.id}` aria-label=`Zoom into ${p.title}` padding=0 border-width=0 background-color="transparent" flex-basis="30%" flex-grow=1 min-width=0
-                          image p.asset id=`zoom-${p.id}` width="100%" height=110 object-fit="cover" border-radius=10 background-color=p.tone
+                    text "Each route chooses its own entrance and exit; the route beneath stands still." font-size=13 color="-exact-secondary-label"
+                    RouteLinks(go=go)
+                if tab == "zoom"
+                  scroll flex=1 min-height=0 overflow-x="hidden"
+                    column padding=12 gap=10
+                      text "A route presented fullscreen zooms out of its photo on iOS 18 (UIKit's zoom transition). Elsewhere it opens with the platform's ordinary transition." font-size=13 color="-exact-secondary-label"
+                      row flex-wrap="wrap" gap=10
+                        for p in photos.filter(p => p.n <= 6) key=p.id
+                          button press=zoom(p.id) testId=`zoom-open-${p.id}` aria-label=`Zoom into ${p.title}` padding=0 border-width=0 background-color="transparent" flex-basis="30%" flex-grow=1 min-width=0
+                            image p.asset id=`zoom-${p.id}` width="100%" height=110 object-fit="cover" border-radius=10 background-color=p.tone
 
 // Apple keeps AccentColorText white; the pale dark-scheme accent needs dark ink.
 component TabButton
@@ -232,3 +290,33 @@ component ZoomViewer
           image p.asset testId="zoom-large" flex=1 min-height=0 width="100%" object-fit="contain"
         case none
           text "No photo" padding=24
+
+component RouteLinks
+  props
+    go: action
+  view
+    column gap=10
+      button press=go(path("camera")) testId="go-camera" class=Bar
+        text "Camera: fade, fullscreen"
+      button press=go(path("detail")) testId="go-detail" class=Bar
+        text "Detail: slide"
+      button press=go(path("scanner")) testId="go-scanner" class=Bar
+        text "Scanner: cut"
+      button press=go(path("plain")) testId="go-plain" class=Bar
+        text "Plain: the platform's"
+
+component RouteBody
+  props
+    title: string
+    note: string
+    back: action
+    go: action
+  view
+    column flex=1 min-height=0 padding-top="env(safe-area-inset-top)"
+      row padding=12 gap=12 align-items="center" flex-shrink=0
+        button press=back testId="route-back" aria-label="Back" class=Bar
+          text "Back"
+        text title font-size=20 font-weight=600 role="heading" aria-level=1
+      column padding=12 gap=12
+        text note font-size=15
+        RouteLinks(go=go)

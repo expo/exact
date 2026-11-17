@@ -131,8 +131,10 @@ fn a_marked_vertex_takes_its_one_joint_and_others_still_blend() {
     }
     gpu.queue.submit([encoder.finish()]);
     let words: Vec<u32> = super::tests::read(&gpu, &output, 4 * 6 * 16)
-        .chunks_exact(4)
-        .map(|v| u32::from_ne_bytes(v.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|v| u32::from_ne_bytes(*v))
         .collect();
     let vertex = |v: usize| &words[v * 24..(v + 1) * 24];
     let matrix = |v: usize| {

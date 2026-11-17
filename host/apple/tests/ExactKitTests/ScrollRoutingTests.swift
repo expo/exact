@@ -536,5 +536,39 @@ final class ScrollRoutingTests: XCTestCase {
         atOnce { sv.scrollWheel(with: notched) }
         XCTAssertEqual(sv.contentView.bounds.minY, 10, "the agent's is applied at once, by AppKit's line")
     }
+
+    /// A `list` scrolls a line as AppKit's table does: `NSTableView` sets its
+    /// scroll view's line to its row height (`tile()`), and a SwiftUI `List`
+    /// keeps an untouched table's, whatever its rows' heights (24 points on
+    /// macOS 27, measured with a line-unit wheel event). A `scroll` keeps
+    /// `NSScrollView`'s 10, as a SwiftUI `ScrollView` and an `NSTextView` do.
+    func testAListsNotchIsAppKitsTableLine() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "wheel-line")
+        defer { session.destroy() }
+        let p = session.presenter
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 240), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        defer { window.close() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "list", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 3, "kind": "scroll", "style": ["overflow_y": "scroll"]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 240],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 150, "h": 240],
+            ["op": "frame", "id": 3, "x": 150, "y": 0, "w": 150, "h": 240],
+            ["op": "content", "id": 2, "w": 150, "h": 3000],
+            ["op": "content", "id": 3, "w": 150, "h": 3000]]))
+        let list = try XCTUnwrap(p.views[2]?.scroll), scroll = try XCTUnwrap(p.views[3]?.scroll)
+        let table = NSTableView(), line = table.rowHeight + table.intercellSpacing.height
+        XCTAssertEqual([list.verticalLineScroll, list.horizontalLineScroll], [line, line], "the table's line")
+        XCTAssertEqual([scroll.verticalLineScroll, scroll.horizontalLineScroll], [10, 10], "the scroll view's own")
+        let notch = try XCTUnwrap(NSEvent(cgEvent: try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0))))
+        atOnce { list.scrollWheel(with: notch); scroll.scrollWheel(with: notch) }
+        XCTAssertEqual(list.contentView.bounds.minY, line)
+        XCTAssertEqual(scroll.contentView.bounds.minY, 10)
+    }
 }
 #endif

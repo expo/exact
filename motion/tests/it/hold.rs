@@ -106,6 +106,27 @@ fn browser_takeover_accepts_the_actual_computed_presentation_sample() {
 }
 
 #[test]
+fn a_rotation_hold_preserves_its_axis() {
+    let mut e = engine();
+    let value = Value::four(-45.0, 1.0, 0.0, 0.0);
+    e.observe(Change {
+        node: NODE,
+        property: Property::Rotate,
+        value,
+        velocity: None,
+    })
+    .unwrap();
+    let held = e
+        .begin_hold(NODE, Property::Rotate, 0.1, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.value, value);
+    let next = Value::four(-60.0, 0.0, 1.0, 0.0);
+    e.update_hold(held.token, 0.2, next).unwrap();
+    assert_eq!(e.value(NODE, Property::Rotate), Some(next));
+}
+
+#[test]
 fn rebegin_invalidates_old_moves_and_releases_before_they_can_move_time() {
     let mut e = engine();
     let old = e.begin_hold(NODE, P, 0.1, None).unwrap().unwrap();
@@ -377,7 +398,7 @@ fn released_curve_keeps_seek_determinism() {
 
 #[test]
 fn scalar_shape_errors_cannot_replace_a_hold_or_move_the_clock() {
-    for property in [Property::Scale, Property::Rotate, Property::Opacity] {
+    for property in [Property::Scale, Property::Opacity] {
         let mut e = engine();
         e.observe(Change {
             node: NODE,

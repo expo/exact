@@ -223,6 +223,7 @@ impl<D: DataSource> Runner<D> {
         request.reach = self.reach_of(self.ticket_origin(ticket));
         let p = &mut self.pending[pos];
         p.ticket = next;
+        p.completion = None;
         p.continuation = request.continuation;
         p.fetch = None;
         p.keepable = None;
@@ -237,6 +238,7 @@ impl<D: DataSource> Runner<D> {
         ));
         self.clock.data.landing.push(next);
         self.requests.push(RequestOut {
+            completion: None,
             class: crate::RequestClass::Ordered,
             ticket: next,
             target: name,

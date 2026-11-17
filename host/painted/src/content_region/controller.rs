@@ -81,6 +81,9 @@ impl NativeText {
     pub(crate) fn runs(&self) -> &[super::TextSourceRun] {
         &self.paint.runs
     }
+    pub(crate) fn opacity(&self) -> &[crate::paint::inline_opacity::Chain] {
+        &self.paint.opacity
+    }
     pub(crate) fn matches(&self, request: &RegionTextRequest) -> bool {
         Arc::ptr_eq(&self.paint.source, request.source())
     }

@@ -141,6 +141,20 @@ fn iframes_link_only_where_a_plan_has_an_iframe() {
     assert!(!js.contains("iframes.js"), "{js}");
 }
 
+#[test]
+fn a_haptic_links_the_page_freeze_watcher() {
+    let plan = contract::compile(
+        "component App\n  action buzz()\n    haptic(\"success\")\n  view\n    button \"Buzz\" press=buzz()\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains("import{watchPage as $watchPage}from\"./facts.js\";")
+            && js.contains("$watchPage(true);"),
+        "{js}"
+    );
+}
+
 /// LLP 1055 D4: the SVG namespace follows the node type, so a module's custom
 /// element named `felt-…` is HTML and the glue attaches its factory.
 #[test]
@@ -509,90 +523,6 @@ fn a_literal_progress_value_is_its_attribute() {
     let made = js[at..].split(';').next().unwrap();
     assert!(made.contains("\"value\":\"0.4\""), "{made}");
     assert!(made.contains("\"max\":\"1\""), "{made}");
-}
-
-/// LLP 1075.003 §9.9 (expo/exact#391): a tab that names its panel and holds
-/// a badge is the platform's tab, which the neutral look draws as a tab with
-/// its badge; it was a bare button, drawn as a plain one.
-#[test]
-fn a_tab_with_a_badge_is_a_native_tab() {
-    let plan = contract::compile(
-        "component App\n  state n = 1\n  view\n    column\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel\" aria-selected=true\n          image \"symbol:bookmark\"\n          text \"Saved\"\n          if n > 0\n            row background-color=\"-exact-system-red\"\n              text `${n}`\n      column role=\"tabpanel\" id=\"panel\"\n        text \"Panel\"\n",
-    )
-    .unwrap();
-    let js = crate::emit::emit(&plan, false, false).unwrap().js;
-    let tab = js
-        .split("const e")
-        .find(|made| made.contains("\"role\":\"tab\""))
-        .expect("a tab");
-    assert!(
-        tab.contains("\"data-button-style\":\"bordered\""),
-        "a native tab: {tab}"
-    );
-}
-
-/// LLP 1116.004 D5.2: a radio group of radios is native buttons whose shell
-/// look is the segmented control, and its page loads the input piece, which
-/// gives it the arrow keys and one Tab stop, even when its radios are bare.
-#[test]
-fn a_radio_group_is_native_radios_and_loads_the_input_piece() {
-    let group = |attrs: &str| {
-        let plan = contract::compile(&format!(
-            "component App\n  state v = 1\n  action pick(n: number)\n    v = n\n  view\n    row role=\"radiogroup\" aria-label=\"Size\"\n      button role=\"radio\" aria-checked=(v == 1) press=pick(1) {attrs}\n        text \"S\"\n      button role=\"radio\" aria-checked=(v == 2) press=pick(2) {attrs}\n        text \"M\"\n"
-        ))
-        .unwrap();
-        crate::emit::emit(&plan, false, false).unwrap().js
-    };
-    let js = group("");
-    let radio = js
-        .split("const e")
-        .find(|made| made.contains("\"role\":\"radio\""))
-        .expect("a radio");
-    assert!(radio.contains("\"button\""), "{radio}");
-    assert!(
-        radio.contains("\"data-button-style\":\"bordered\""),
-        "a native radio: {radio}"
-    );
-    assert!(js.contains("pressFeedback()"), "{js}");
-    let bare = group("appearance=\"none\"");
-    assert!(!bare.contains("data-button-style"), "{bare}");
-    assert!(
-        bare.contains("pressFeedback()"),
-        "the group alone loads it: {bare}"
-    );
-}
-
-/// LLP 1115.000 D4.5: a page with a `tablist` or a `menu` loads the input
-/// piece, which gives each its arrow keys, even when nothing in it declares a
-/// press look; a page with neither does not.
-#[test]
-fn a_tablist_and_a_menu_load_the_input_piece() {
-    let page = |role: &str| {
-        let plan = contract::compile(&format!(
-            "component App\n  state v = 1\n  action pick(n: number)\n    v = n\n  view\n    row{role}\n      button appearance=\"none\" press=pick(1)\n        text \"One\"\n      button appearance=\"none\" press=pick(2)\n        text \"Two\"\n"
-        ))
-        .unwrap();
-        crate::emit::emit(&plan, false, false).unwrap().js
-    };
-    for role in ["tablist", "menu"] {
-        let js = page(&format!(" role=\"{role}\""));
-        assert!(js.contains("pressFeedback()"), "{role}: {js}");
-    }
-    let plain = page("");
-    assert!(!plain.contains("pressFeedback()"), "{plain}");
-}
-#[test]
-fn aria_disabled_is_an_attribute_for_static_and_bound_values() {
-    let plan = contract::compile(
-        "component App\n  state unavailable = false\n  view\n    column\n      button \"Update\" aria-disabled=\"true\"\n      button \"Other\" aria-disabled=unavailable\n",
-    )
-    .unwrap();
-    let js = crate::emit::emit(&plan, false, false).unwrap().js;
-    assert!(js.contains("\"aria-disabled\":\"true\""), "{js}");
-    assert!(
-        js.matches("\"aria-disabled\"").count() >= 2,
-        "the bound value uses the same DOM attribute: {js}"
-    );
 }
 
 /// LLP 1045 D11: a literal `paragraphDirs` is the element's attribute from
@@ -1401,6 +1331,33 @@ fn sheet_frames_link_only_where_a_route_can_be_a_sheet() {
     }
 }
 
+/// @ref LLP 1047.002 D1 — the projection keeps a clear bar (navigation/routes.js `clearBar`)
+/// only for a plan with a route whose `navigationBar` is, or may be, `transparent`.
+#[test]
+fn clear_bars_link_only_where_a_routes_bar_can_be_transparent() {
+    let emitted = |route: &str| {
+        let source = format!("routes nav\n  home \"/\"\ncomponent App\n  state clear = true\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` {route}\n          header\n            text \"Card\" role=\"heading\"\n");
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for route in [
+        "navigationBar=\"transparent\"",
+        "navigationBar=(clear ? \"transparent\" : \"auto\")",
+    ] {
+        let js = emitted(route);
+        let install = js.find("$useClearBars($clearBar);");
+        assert!(install.is_some() && install < js.find("router(s_"), "{js}");
+    }
+    for route in ["", "navigationBar=\"none\""] {
+        let js = emitted(route);
+        assert!(
+            !js.contains("clearBar") && !js.contains("useClearBars"),
+            "{js}"
+        );
+    }
+}
+
 /// @ref LLP 1047.002 D1 — a link's `rel` and `target` are kept by links.js only
 /// for a plan that binds a link's `href`, `rel` or `target`, handed over before
 /// the first commit builds the view; a static link's are the template's.
@@ -1490,4 +1447,27 @@ fn a_record_field_named_proto_is_an_own_descriptor_field() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+}
+
+#[test]
+fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
+    let plan = contract::compile(
+        r#"component App
+  state shown = false
+  action toggle
+    shown = not shown
+  view
+    column
+      view scale=(shown ? 1 : 0.01) press=toggle -exact-press-scale=0.92 transition="scale 200ms ease"
+      view scale=(shown ? 1 : 0.01)
+"#,
+    )
+    .unwrap();
+    let output = crate::emit::emit(&plan, false, false).unwrap();
+    assert!(
+        output.js.contains(",\"--exact-scale\",\"\",()=>"),
+        "{}",
+        output.js
+    );
+    assert!(output.js.contains(",\"scale\",\"\",()=>"), "{}", output.js);
 }

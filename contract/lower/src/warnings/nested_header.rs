@@ -10,7 +10,7 @@
 use super::header_bar::{NOT_THE_BAR, OR_NO_BAR};
 use super::{computed, literal};
 use crate::LowerError;
-use contract_syntax::Node;
+use contract_checking::Structure;
 
 /// The boxes a route's first child may be on the way down to its header:
 /// plain layout boxes. A `section` is left out (a grouped list's section
@@ -21,47 +21,43 @@ pub(super) const WRAPPERS: &[&str] = &["view", "box", "column", "row", "main", "
 /// The `header` at the end of the route's chain of first children, past at
 /// least one box, with the tag of the box that is the route's first child.
 /// An `if`, `match`, `for`, use or slot on the way is given the benefit.
-pub(super) fn nested_header(children: &[Node], out: &mut Vec<LowerError>) {
-    let Some(Node::Element {
-        tag: outer,
-        attrs,
-        children,
-        ..
-    }) = children.first()
-    else {
+pub(super) fn nested_header(children: Structure<'_>, out: &mut Vec<LowerError>) {
+    let Some(first) = children.roots().next() else {
         return;
     };
-    if !WRAPPERS.contains(&outer.as_str()) || hidden(attrs) {
+    let Some((outer, _, attrs)) = first.element() else {
+        return;
+    };
+    if !WRAPPERS.contains(&outer) || hidden(attrs) {
         return;
     }
-    let mut at = children;
-    while let Some(Node::Element {
-        tag,
-        attrs,
-        children,
-        ..
-    }) = at.first()
+    let region = first.regions()[0];
+    for (node, head) in
+        region.walk_regions_with(region.roots().next().map(|n| n.site()), |node, head| {
+            let descend = Some(node.site()) == *head
+                && node
+                    .element()
+                    .is_some_and(|(tag, _, attrs)| WRAPPERS.contains(&tag) && !hidden(attrs));
+            [
+                descend.then(|| node.children().next().map(|n| n.site())),
+                None,
+            ]
+        })
     {
-        if hidden(attrs) {
-            return;
+        if Some(node.site()) != head {
+            continue;
         }
-        if tag == "header" {
-            // A header that draws itself is no bar wherever it sits: moving
-            // it would project nothing.
-            if no_bar(attrs) {
-                return;
-            }
+        let Some((tag, _, attrs)) = node.element() else {
+            continue;
+        };
+        if tag == "header" && !no_bar(attrs) {
             out.push(LowerError {
                 id: "lower-header-nested",
                 message: format!("this `header` is not its route's first child (it is inside the `{outer}` that is), so on iOS it is not the navigation bar: {NOT_THE_BAR} Make it the route's first child: move the route's `navigationKey`, with its `navigationPresentation`, `navigationScroll` and the rest, onto the box that holds the header (a screen component's root), or move the header up{OR_NO_BAR} (docs/recipes/navigation-stack.md)"),
-                span: at[0].span(),
+                span: node.span(),
             });
             return;
         }
-        if !WRAPPERS.contains(&tag.as_str()) {
-            return;
-        }
-        at = children;
     }
 }
 

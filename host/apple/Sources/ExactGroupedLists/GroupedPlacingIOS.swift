@@ -1,11 +1,39 @@
 // Which batches take a grouped list's carried rows home, and where a row
-// goes when it does (`GroupedListView.restore`, `sendHome`); and the rows a
-// scroll to a row passes, sized before it aims (`measure`).
+// goes when it does (`GroupedListView.restore`, `sendHome`); the margins the
+// kernel is told (`tell`); and the rows a scroll to a row passes, sized
+// before it aims (`measure`).
 import ExactKit
 #if os(iOS) || os(tvOS)
 import UIKit
 
 extension GroupedListHost {
+    /// The kernel lays a list's custom rows out by the margins UIKit gave its
+    /// cards and cells (`GroupedMargins`), told after the batch and once no
+    /// slice is in flight, as a route's blocks are (`OwnerBlocks.publish`):
+    /// sampled when told, so a report that waited tells what is current, and
+    /// one behind it finds nothing changed. A list of standard rows alone
+    /// shows nothing the kernel lays out.
+    func tell() {
+        presenter.afterBatch { [weak self] in
+            guard let session = self?.presenter.session else { return }
+            session.whenIdle { [weak self] in
+                guard let self else { return }
+                var changes: [(UInt32, [CGFloat]?)] = []
+                for (id, list) in lists where list.carriesCustomRows {
+                    guard let margins = list.margins(), told[id] != margins else { continue }
+                    told[id] = margins
+                    changes.append((id, margins))
+                }
+                for id in Array(told.keys) where lists[id] == nil {
+                    told[id] = nil
+                    if presenter.views[id] != nil { changes.append((id, nil)) }
+                }
+                if !changes.isEmpty { session.apply(session.runtime.groupedMargins(changes)) }
+                tellAccessories(session)
+            }
+        }
+    }
+
     func prepare(_ ops: [BatchOp]) { for list in lists.values { list.prepare(ops) } }
 
     func placing(_ container: UIView, _ want: [NodeView]) -> [NodeView] {
@@ -117,6 +145,7 @@ extension GroupedListView {
     /// The row `id` is carried no longer, wherever its view is.
     func forget(_ id: UInt32) {
         guard let place = carried.removeValue(forKey: id) else { return }
+        if let accessory = place.accessory { accessory.node.isHidden = accessory.hidden }
         if !carried.values.contains(where: { $0.parent === place.parent }) { homes[ObjectIdentifier(place.parent)] = nil }
     }
 

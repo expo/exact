@@ -1,6 +1,6 @@
 /* Light values from Nico's Figma; dark values are the same steps of Radix Slate's dark scale (@radix-ui/colors 3.0.0), which Nico's light values match step for step.
    Design tokens from Nico's "Docs redesign" (Figma ucRpfi9Ax4Axgj5BoFSuzi, node 5175:7309).
-   Named after Tailwind v4's theme variables; `bun exact.mjs tamber import css tokens.css` writes them into app.tamber. */
+   Named after Tailwind v4's theme variables; `bun exact.mjs forma import css tokens.css` writes them into app.forma. */
 :root {
   --color-text-default: light-dark(#1c2024, #edeef0);
   --color-text-secondary: light-dark(#60646c, #b0b4ba);

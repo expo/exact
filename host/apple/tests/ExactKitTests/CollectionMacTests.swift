@@ -163,11 +163,11 @@ final class CollectionMacTests: XCTestCase {
         XCTAssertEqual(p.collections.size(2, horizontal: false), 72)
         var feedback: [Data] = []
         p.collections.onFeedback = { feedback.append($0) }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(feedback.count, 1)
         XCTAssertEqual(feedback[0].count, 120)
         p.collections.changed(1)
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(feedback.count, 1, "identical layout must not reenter Rust")
     }
     func testSharedCollectionResizeUsesOnlyRevisionedFeedback() {
@@ -178,7 +178,7 @@ final class CollectionMacTests: XCTestCase {
         p.apply(batch([
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 240.0]
         ]))
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(collectionReports, 1, "the resized collection still reports actual geometry")
     }
 
@@ -195,7 +195,7 @@ final class CollectionMacTests: XCTestCase {
                 p.apply(self.batch([["op": "collections", "items": [next]]]))
             } else { finished.fulfill() }
         }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 2, "two reports per turn, never recursive")
         wait(for: [finished], timeout: 2)
         XCTAssertEqual(reports, 7)
@@ -208,10 +208,10 @@ final class CollectionMacTests: XCTestCase {
         defer { p.collections.reset() }
         var reports = 0
         p.collections.onFeedback = { _ in reports += 1 }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 1, "the report the runner will turn away: row 2 measured at 72")
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 2)]]]))
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 2, "revision 2 leaves row 2 at epoch 7 unmeasured: its measurement is owed again")
         var acknowledged = snapshot(revision: 3)
         acknowledged["rows"] = [["view": 2, "root": 3, "epoch": 7, "size": 72.0, "measured": true]]
@@ -223,14 +223,14 @@ final class CollectionMacTests: XCTestCase {
         }
         nextTurn()
         p.apply(batch([["op": "collections", "items": [acknowledged]]]))
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 2, "a snapshot that measures it at that size owes nothing")
         // Within the runner's noise (it keeps a measured height a remeasure differs from by 0.01 or less): acknowledged.
         var denoised = snapshot(revision: 4)
         denoised["rows"] = [["view": 2, "root": 3, "epoch": 7, "size": 72.004, "measured": true]]
         nextTurn()
         p.apply(batch([["op": "collections", "items": [denoised]]]))
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 2, "a height within the runner's noise acknowledges the measurement")
     }
     func testActivationRetriesUnchangedFactsOnce() {
@@ -238,13 +238,13 @@ final class CollectionMacTests: XCTestCase {
         defer { p.collections.reset() }
         var reports = 0
         p.collections.onFeedback = { _ in reports += 1 }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 1)
         p.collections.dataReady()
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 2)
         p.collections.changed(1)
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(reports, 2)
     }
     func testCorrectionLandsBeforeDeferredAuthoredEvent() throws {
@@ -544,7 +544,7 @@ final class CollectionMacTests: XCTestCase {
         p.views[3]!.handlers = ["press"]
         XCTAssertTrue(window.makeFirstResponder(p.views[3]!))
         p.collections.pointer(6)
-        p.collections.endBatch(); p.collections.flush(); drain()
+        p.collections.endBatch(); p.collections.flushIfNeeded(); drain()
         XCTAssertEqual(accepted[1]?.0, 3)
         XCTAssertEqual(accepted[4]?.1, 6)
         p.collections.pointer(nil); window.makeFirstResponder(nil)
@@ -997,7 +997,7 @@ final class CollectionMacTests: XCTestCase {
         let turned = expectation(description: "a new turn")
         DispatchQueue.main.async { turned.fulfill() }
         wait(for: [turned], timeout: 2)
-        p.collections.flush()
+        p.collections.flushIfNeeded()
     }
 }
 

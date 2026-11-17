@@ -13,8 +13,8 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    colour or size names a role (`-exact-secondary-label`, `font="-exact-footnote"`; `bun
    <exact2>/scripts/no-tells.mjs .` lists literals). Leave the accent unsaid: it is the
    platform's blue, and a filled button keeps its white label (a pale accent under
-   it is warned, `tamber-contrast`). A brand is an `app.tamber`; a colour names a role or
-   one of its tokens, `color="ink"` or `color="var(--ink)"` (`recipes/tamber.md`). A card
+   it is warned, `forma-contrast`). A brand is an `app.forma`; a colour names a role or
+   one of its tokens, `color="ink"` or `color="var(--ink)"` (`recipes/forma.md`). A card
    is `-exact-secondary-background` (`-exact-secondary-grouped-background` on a grouped page).
 3. **Design your content:** a focal point (big type, a fill, a shape), a hierarchy in
    rows, an empty state with its next step in the list's place. A labelled entry or settings
@@ -49,6 +49,7 @@ For an SDK-named folder such as `exact`, `--name Everbloom` supplies the crate p
 a prefix that still collides gains `-app`. The prefix stays in `package.json`'s `name` across
 updates and directory renames. Authored host crates keep their own names.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
+Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
 On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
@@ -57,12 +58,16 @@ in the background. Running an iOS simulator, including `verify ios` and `agent i
 
 Start from the nearest pattern. The screen `exact new` writes, and its tests in
 `app.test.contract`, are placeholders: replace both. `exact.mjs` runs from any
-directory: a file you name is found where you are, else in the app, and it says
-which it took. Your shell commands have no such help, so keep one directory.
+directory and selects its own app. A file operand is found where you are, else in
+the app, and it says which it took. `pattern` prints its destination before writing;
+an untouched starter is replaced, but an edited or manually emptied file needs
+`--force`. To try another app, create it with `new <path>` and invoke that app's
+`<path>/exact.mjs pattern <name>` (`pattern --help` shows an example).
+Your shell commands have no such help, so keep one directory.
 |`bun exact.mjs …`|What it does|
 |---|---|
 |`contract build app.contract --json --errors-only`|A CI gate: `[]` and exit zero mean no errors (omit `--errors-only` to include warnings); it rewrites the types `app.ts` imports and type-checks it.|
-|`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar and its tab bar, whose items UIKit keeps at one size), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
+|`verify`, `verify ios`|Builds, runs `app.test.contract` and each other `*.test.contract` beside it, `check`s the first screen and where each test ends (light, dark, two widths), reads each of those screens' accessibility tree once (`tree --ax`: a control with no name, or one a screen reader reaches though hidden or behind an open modal; counted as `check`'s findings are), relaunches once on real time, and reads those screens (on the web, also the ones the tests pass through) at the largest text size, where what spills is the app's layout to fix (the web comparison leaves out content iOS projects into its navigation bar and its tab bar, whose items UIKit keeps at one size), with a remedy that keeps the text's size (no `line-clamp` in a list's row; `hyphens="auto"` only on a text of one word, which a UILabel breaks between syllables when it is longer than its line); `verify ios` also plays real touches on a long list on the first screen, once per build, and says `scrolling: like UIKit` or what a person would notice, each with UIKit's value and its cause, counting only what the app can fix: one report. A clean run on the app's platform is done.|
 |`agent web --storage s1 "clock data" "tap add" "check both"`|Drives the app by hand, to see why something fails; `--keep-storage` reopens saved data.|
 |`web`, `ios --run`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; a window (from SSH, on the signed-in desktop). A second web loop of the same target for this app refuses, naming the first URL and PID.|
 |`share`|For a person to try an iPhone app on their own phone: prints an AppDrop link that installs it. Run it when the app is ready for them, and again after each change they should see; send the link it prints.|
@@ -82,10 +87,22 @@ when its source signatures change. `test` and `agent` build and refresh it on
 Rust/TypeScript apps with a composer (such as Fieldnotes), which also refresh the
 editor copy before type-checking. `contract build` reports a refresh on stderr.
 `contract types --check app.contract` checks freshness without writing.
-`bun exact.mjs update` reports lock drift after this checkout moves; `bun exact.mjs lock`
-refreshes it. `contract migrate app.contract` rewrites retired Contract syntax;
-[the Snapback upgrade note](../snapback4/README.md#updating-an-inherited-app) covers
-mutation refusals too.
+Committed launcher, schema and guide paths are relative to the app. An app first
+created inside a linked git worktree keeps its default checkout path
+relative to the app's location in the main worktree, including when that folder does
+not exist there yet. Its launcher works before and after the app is merged.
+`app.json`'s `$schema`, guide paths, Snapback readme and game-notes paths use that
+same main-tree location, so scaffolding and updates write identical committed
+bytes in either tree. An editor opened inside a worktree at a different depth
+may not resolve those paths; open the main-tree file or use `bun exact.mjs docs`
+for the guides. The launcher's Git fallback finds the checkout for running from
+the nested worktree. `update` refreshes the paths when the checkout moves.
+
+`bun exact.mjs update` refreshes scaffold files and absolute `@exact/*` package paths for the
+checkout it runs from. It reports when `exact.mjs`'s default checkout path changes, including in a linked worktree. Run `bun install` when it reports changed package paths. An older Android
+scaffold moves `canvas_jni!` to `exact-painted`; an authored dependency form gets the manual
+edit in the report. `update` also reports lock drift; `bun exact.mjs lock` refreshes it.
+
 Keep scratch files in `.exact/` and helper scripts you commit (a screenshot comparer) in
 `tools/`: neither makes the build stale. Other files you add may (a Python helper under
 `scripts/`, a JSON file `app.ts` imports). Nothing the app reads belongs in `tools/`: an edit
@@ -98,6 +115,30 @@ the two differ, and draws `home.diff.png`, so neither picture needs viewing. On 
 
 `agent ios` is the app as a person sees it, UIKit's bars included, with screenshots a pixel a
 point (`--scale 3`: the device's): no other simulator tool is needed ([driving iOS](recipes/ios-driving.md)).
+
+## Upgrading an inherited app
+
+To upgrade an inherited app, run these commands from its directory (`contract migrate`
+rewrites retired Contract syntax):
+
+```sh
+bun exact.mjs update
+bun exact.mjs contract migrate app.contract
+bun exact.mjs lock
+bun exact.mjs contract build app.contract --json --errors-only
+```
+
+Since 2026-10-16, Snapback mutation sources with a bool `ok` field return
+`{ok: true}` on success. Replace `return {ok: false}` replies with
+`throw refused({code: 'FULL', message: 'No room'})`, importing `refused` from
+`./snapback4/snapback.ts`. Return a literal `{ok: true, ...}` on success; for a
+shared helper, annotate its return type as `Result<'source'>` (using the mutation's
+source name and importing `Result` from `./app.contract.d.ts`), or preserve the
+literal with `ok: true as const`.
+
+Render the refusal by extracting the option:
+`match failure(slot) { case some(f) => f.code, case none => "" }` (use `f.message`
+for its explanation). The mutation's `then` runs only on success.
 
 ## Platform checks
 
@@ -157,6 +198,9 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a number field, a stepper's `step`|`number-field`, `stepper`|
 |a pick from six or more options (a picker)|`select`|
 |a chat that opens at its newest message|`chat-thread`|
+|a chat header with an avatar, and day pills|`chat-header`|
+|a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
+|data the app ships and only reads (a JSON file `app.ts` imports)|`shipped-data`|
 |a long list or grid that loads more|`long-lists`|
 |a document or article longer than a screen, a long Markdown note|`long-text`|
 |a welcome at first launch|`first-launch`|
@@ -175,13 +219,17 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |ports, Bun, Chrome and its stores|`ports-and-browsers`|
 |porting an app, a release build, helpers sharing a port|`porting-and-release`|
 |a release build for a phone: the commands, signing, where the artifact lands|`mobile-build`|
+|updates an installed app takes over the air: the key, `deploy` in app.json, the first stream, `deploy`, `push`, an "update ready" banner|`over-the-air-updates`|
 |a metronome, drum machine, sequencer or MIDI app: sound, MIDI, a transport (built in; write no native audio module)|`sequencer`; ["Sound, MIDI and media"](contract-for-agents.md#sound-midi-and-media); `apps/metronome`|
 |transitions, keyframes, exit and layout animation|`motion`|
-|brand colours, light and dark, icon tokens|`theme`, `tamber`|
+|brand colours, light and dark, icon tokens|`theme`, `forma`|
 |an icon: in a button, a tab, beside a label (a symbol, never a character such as ▦ ☏ ★ or an emoji)|`symbols`|
-|a module in Swift that `app.ts` asks; a value from the launch environment (a resource that reads `native.available` or calls `native.call` keeps its answer across launches)|`native-module`|
-|a canvas drawn in Rust on the GPU (a `Surface`); Rust of the app's own, in its own Cargo workspace|`gpu-module`|
+|a module in Swift that `app.ts` asks (a resource that reads `native.available` or calls `native.call` keeps its answer across launches); a value a launch gives is a setting, not a module (`contract vocab env`)|`native-module`|
+|a canvas drawn in Rust on the GPU (a `Surface`): a crate beside app.json, in a workspace exact2 generates|`gpu-module`|
+|a GPU module whose crates call into Java on Android: the app's Java VM and `Context`|`gpu-module-android`|
+|data answered in Rust instead of `app.ts` (`exact new --rust`, app.json's `rust.data`)|`bun exact.mjs docs Rust data sources`|
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
+|labels in Arabic, Hebrew, Persian or Urdu, laid out right to left; a second language|`rtl`|
 |an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
 |a phone manifest: orientation, appearance, HTTP, a public setting|`phone-manifest`|
 |a section of the long guides, whole, by its heading|`bun exact.mjs docs <heading words>`|
@@ -307,7 +355,8 @@ a shaped domain refusal for its action to handle
 ([fetch with loading, error and retry](recipes/fetch-loading-error.md)). The clock and
 randomness are refused there; time comes as an argument. A date from a value
 works (`new Date(ms)`, `Intl.DateTimeFormat`). `console.log` appears in the agent’s
-`logs` and its last lines in a failed test’s notes. It imports its own `.ts`/`.js` and pure-JS npm
+`logs`, its last lines in a failed test’s notes, and the device’s log, in a release build too,
+where anyone with the device can read it: keep tokens and personal data out of it. It imports its own `.ts`/`.js` and pure-JS npm
 packages (ESM or CommonJS, a `browser` build first); one needing Node (`fs`, `Buffer`), the DOM or a native
 addon is refused by name. Type an untyped one with `@types/<name>` or `declare module '<name>';` in a `.d.ts`.
 
@@ -338,7 +387,10 @@ const sources: Sources = {
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
-**The tests** drive by `testId` on every host, each from empty storage (an app's own server's database is empty at the start of a run and shared by its tests):
+**The tests** drive by `testId` on every host, each from empty client storage. An
+owned server restarts empty for each test, including with `database: false`. Remote
+servers stay shared. Only `test` and `agent --test` share an ancestor's server, saying so;
+`verify` refuses an answering local server, including an ancestor's:
 
 ```contract-test
 test "an item is added, a repeat refused, checked off and kept"

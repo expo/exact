@@ -26,7 +26,7 @@ const SHAREABLE = new Set([200, 203, 204, 404, 405, 410, 414, 501]);
 /** On each response the cached fetch gives: how many ms it stays fresh for any reader (0: not shareable, or stale). */
 export const FRESH = Symbol.for('exact.fresh');
 const fresh = (response, ms) => Object.defineProperty(response, FRESH, { value: Math.max(0, ms), configurable: true });
-const directives = value => {
+export const directives = value => {
   const out = new Map();
   for (const part of (value ?? '').toLowerCase().split(',')) {
     const [name, arg] = part.split('=').map(s => s?.trim());

@@ -154,3 +154,45 @@ fn mixed_types_inside_computed_arms_and_match_subjects_are_found() {
         Some(mixed_span)
     );
 }
+
+#[test]
+fn pressed_translation_checks_bound_literal_arms() {
+    let span = Span::point(1, 1);
+    for value in [
+        Expr::Str("0 0 8px".into(), span),
+        Expr::Ternary(
+            Box::new(Expr::Bool(false, span)),
+            Box::new(Expr::Str("4px 4px".into(), span)),
+            Box::new(Expr::Str("0 0 8px".into(), span)),
+            span,
+        ),
+    ] {
+        let body = Expr::Ternary(
+            Box::new(Expr::Bool(true, span)),
+            Box::new(Expr::Str("4px 4px".into(), span)),
+            Box::new(Expr::Ident("offset".into(), span)),
+            span,
+        );
+        let attr = Attr {
+            name: ":active translate".into(),
+            value: Expr::Let {
+                name: "offset".into(),
+                value: Box::new(value),
+                body: Box::new(body),
+                span,
+            },
+            span,
+            written: true,
+        };
+        let error = check_style_value(
+            &attr,
+            &[StyleId::PressTranslate],
+            &Ty::String,
+            &[],
+            &Scope::default(),
+            &Shapes::default(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("a press is a 2D offset"), "{error}");
+    }
+}

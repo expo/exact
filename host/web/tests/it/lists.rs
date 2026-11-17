@@ -119,11 +119,13 @@ fn logical_text_copy_spans_unmounted_rows_without_changing_the_window() {
     assert_eq!(calls.get(), 1);
     assert!(r.kernel().find_by_test_id("row-0").is_empty());
     let a = ListTextPosition {
+        fixed: None,
         key: "n:498",
         paragraph: 0,
         offset: 2,
     };
     let b = ListTextPosition {
+        fixed: None,
         key: "n:502",
         paragraph: 0,
         offset: 3,
@@ -180,11 +182,13 @@ fn logical_text_joins_inline_runs_skips_hidden_text_and_uses_utf16_positions() {
         "A🦊0\n\ntail\n\nA🦊1\n\ntail\n\nA🦊2\n\ntail"
     );
     let a = ListTextPosition {
+        fixed: None,
         key: "n:0",
         paragraph: 0,
         offset: 1,
     };
     let b = ListTextPosition {
+        fixed: None,
         key: "n:2",
         paragraph: 1,
         offset: 2,
@@ -236,6 +240,7 @@ fn logical_text_leaves_out_unselectable_text() {
     // The endpoints the Mac host and the wasm page give: the code is
     // paragraph 1, after the label.
     let at = |key, offset| ListTextPosition {
+        fixed: None,
         key,
         paragraph: 1,
         offset,

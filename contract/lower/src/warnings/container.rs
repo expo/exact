@@ -20,7 +20,8 @@
 
 use super::width::{last, rows};
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span, StyleDecl};
+use contract_checking::View;
+use contract_syntax::{Attr, Expr, Span, StyleDecl};
 use std::collections::BTreeSet;
 
 /// The properties of a flex container, then a grid container's, then those
@@ -81,35 +82,12 @@ fn block_tag(tag: &str) -> bool {
         || matches!(tag, "scroll" | "button" | "link")
 }
 
-pub(super) fn flex_on_block(view: &[Node], styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+pub(super) fn flex_on_block(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
     let mut seen = BTreeSet::new();
-    walk(view, styles, &mut seen, out);
-}
-
-fn walk(
-    nodes: &[Node],
-    styles: &[StyleDecl],
-    seen: &mut BTreeSet<(u32, u32, u32, u32)>,
-    out: &mut Vec<LowerError>,
-) {
-    for node in nodes {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                span,
-                ..
-            } => {
-                if let Some(all) = rows(attrs, styles) {
-                    check(tag, &all, *span, seen, out);
-                }
-                walk(children, styles, seen, out);
-            }
-            node => {
-                for list in node.child_lists() {
-                    walk(list, styles, seen, out);
-                }
+    for node in view.walk() {
+        if let Some((tag, _, attrs)) = node.element() {
+            if let Some(all) = rows(attrs, styles) {
+                check(tag, &all, node.span(), &mut seen, out);
             }
         }
     }

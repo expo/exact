@@ -169,7 +169,7 @@ impl Core {
     /// None of it holds a later ordered completion back, and each releases
     /// its count and bytes when it ends.
     pub fn forget(&self, held: impl Fn(u64) -> bool) {
-        self.forget_with(held, &[]);
+        self.forget_with(held, &[], false);
     }
 
     /// Cancel the requests an app aborted (`Runner::take_explicit_aborts`),
@@ -179,11 +179,18 @@ impl Core {
     /// let go as `forget` lets them go.
     pub fn cancel(&self, tickets: &[u64]) {
         if !tickets.is_empty() {
-            self.forget_with(|ticket| !tickets.contains(&ticket), tickets);
+            self.forget_with(|ticket| !tickets.contains(&ticket), tickets, false);
         }
     }
 
-    fn forget_with(&self, held: impl Fn(u64) -> bool, explicit: &[u64]) {
+    /// Let go before a host suspends: wait up to 250 ms for socket close
+    /// confirmation, then abort any remaining transport work. The host holds
+    /// its platform's background task across this call.
+    pub fn forget_before_suspend(&self, held: impl Fn(u64) -> bool) {
+        self.forget_with(held, &[], true);
+    }
+
+    fn forget_with(&self, held: impl Fn(u64) -> bool, explicit: &[u64], suspending: bool) {
         let mut aborts = Vec::new();
         let mut cancels = Vec::new();
         {
@@ -198,7 +205,7 @@ impl Core {
                     if held(job.ticket) {
                         return true;
                     }
-                    if job.work.is_none()
+                    if !reads::opaque(&job.work)
                         && (reads::safe_to_forget(&job.request, job.class)
                             || explicit.contains(&job.ticket))
                     {
@@ -248,8 +255,8 @@ impl Core {
                         run.abort.clone()
                     };
                     aborts.extend(abort.map(|abort| (stream, abort)));
-                    // On the machine, cancelling a safe read (or an app's abort) claims it now.
-                    if self.machine.is_some() && asynch::cancel(run, by_app) {
+                    // A worker's rename must see cancellation before abort callbacks run.
+                    if asynch::cancel(run, by_app) && self.machine.is_some() {
                         cancels.push((run.lane, (run.ticket, run.generation)));
                     }
                 }
@@ -268,9 +275,9 @@ impl Core {
                     kept.push_back(place);
                     continue;
                 }
-                if let Fenced::Held(r, work, _, forgotten) = &mut place {
+                if let Fenced::Held(r, work, _, forgotten, _) = &mut place {
                     if !explicit.contains(&r.ticket)
-                        && (reads::effect_read(r, work.is_some())
+                        && (reads::effect_read(r, reads::opaque(work))
                             || matches!(r.class, RequestClass::Parallel(_)))
                     {
                         *forgotten = true;
@@ -297,7 +304,11 @@ impl Core {
             }
         }
         self.resume_waiting();
-        stream::release(&self.shared, aborts);
+        #[cfg(test)]
+        if let Some(before) = self.shared.before_stream_release.lock().unwrap().take() {
+            before();
+        }
+        stream::release(&self.shared, aborts, suspending);
         // An upload let go while it waits ends unsent; the places freed may start others.
         stream::forget_uploads(&self.shared, &held);
     }

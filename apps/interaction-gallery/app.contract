@@ -499,6 +499,7 @@ component Viewer
           box id="viewer-transform" testId="viewer-transform" width="100%" height="100%" position="relative" padding=0 border-width=0 margin=0 box-sizing="border-box" translate=`${panX}px ${panY}px` scale=zoom transition="translate -exact-spring(300, 30, 1), scale -exact-spring(300, 30, 1)" -exact-drag-timeline="--dismiss y"
             image viewer.photo.asset aria-label=viewer.photo.alt position="absolute" left=0 top=0 width="100%" height="100%" object-fit="contain" testId="viewer-image"
             box transformDragFor="viewer-transform" transformgeometry=photoGeometry transformrelease=releasePhoto touch-action="none" position="absolute" left=0 top=0 width="100%" height="100%" testId="viewer-handle" aria-label=`Pan ${viewer.photo.title}`
+        ZoomStudy(photo=viewer.photo)
         column width="100%" max-width=740 gap=7
           row gap=10 align-items="center"
             text viewer.photo.title font-size=(28 * k) font-weight=600 color=theme.ink flex=1
@@ -506,6 +507,35 @@ component Viewer
           text viewer.photo.subtitle font-size=(12 * k) color=theme.muted
           text viewer.photo.notes font-size=(15 * k) line-height=1.5 color=theme.ink
           text "Generated photographic illustration · bundled locally" font-size=(10 * k) color=theme.muted
+
+// LLP 1057.001.000: the photo in a zoomable scroller, the platform's own
+// pinch and double tap. Fit and 2× write `scrollZoom`; each `scroll` reports
+// it back, and mirroring it into `zoom` moves nothing (D2).
+component ZoomStudy
+  inject
+    theme: Theme
+    k: number
+  props
+    photo: Photo
+  state zoom = 1
+
+  action zoomTo(value: number)
+    zoom = value
+
+  action zoomed(x: number, y: number, e: ScrollEvent)
+    zoom = e.scrollZoom
+
+  view
+    column width="100%" max-width=740 gap=8
+      row width="100%" gap=8 align-items="center" flex-wrap="wrap"
+        text "Pinch or double-tap to zoom" font-size=(12 * k) color=theme.muted flex=1
+        button press=zoomTo(1) testId="zoom-fit" aria-label=`Fit${zoom == 1 ? ", selected" : ""}` padding=8 border-width=0 border-radius=6 background-color=(zoom == 1 ? theme.wash : theme.card)
+          text "Fit" font-size=(12 * k) color=theme.ink
+        button press=zoomTo(2) testId="zoom-detail" aria-label=`2×${zoom == 2 ? ", selected" : ""}` padding=8 border-width=0 border-radius=6 background-color=(zoom == 2 ? theme.wash : theme.card)
+          text "2×" font-size=(12 * k) color=theme.ink
+        text `${round(zoom * 100)}%` testId="zoom-readout" font-size=(12 * k) font-variant-numeric="tabular-nums" color=theme.muted
+      scroll testId="zoom-scroll" width="100%" height=320 flex-shrink=0 border-radius=12 -exact-max-zoom=4 scrollZoom=zoom scroll=zoomed scroll-behavior="smooth"
+        image photo.asset aria-label=photo.alt width="100%" height="100%" object-fit="contain" testId="zoom-image"
 
 component ArrangeCard
   inject

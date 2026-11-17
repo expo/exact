@@ -27,12 +27,31 @@ fn replay(w: u32, h: u32, scale: f64, draw: impl Fn(&Context2d)) -> Pixmap {
     for l in ctx.take_lists() {
         r.apply(&l, &env).unwrap();
     }
-    r.pixmap
+    Arc::unwrap_or_clone(r.pixmap)
 }
 
 fn at(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
     let c = p.pixel(x, y).unwrap();
     [c.red(), c.green(), c.blue(), c.alpha()]
+}
+
+#[test]
+fn multiply_overprint_draws_with_canvas_2d() {
+    let p = replay(200, 120, 1.0, |c| {
+        c.set_fill_style_str("#f6f2e9");
+        c.fill_rect(0., 0., 200., 120.);
+        c.set_fill_style_str("#34f1ec");
+        c.fill_rect(20., 40., 160., 16.);
+        c.set_global_composite_operation("multiply").unwrap();
+        c.set_fill_style_str("#fd2f7c");
+        c.fill_rect(52., 0., 16., 120.);
+    });
+    // tiny-skia's integer compositing can round a channel one byte from Chrome.
+    for (y, expected) in [(48, [52, 44, 115, 255]), (20, [244, 45, 113, 255])] {
+        for (actual, expected) in at(&p, 60, y).into_iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 1, "{actual} versus {expected}");
+        }
+    }
 }
 
 #[test]
@@ -191,6 +210,7 @@ fn capture_refuses_an_unheld_generation_without_overwriting_a_file() {
         width: 4,
         height: 4,
         scale: 1.,
+        encoding: Default::default(),
     };
     let roots = [root.clone(), root.clone(), root.clone()];
     for held in [false, true] {
@@ -227,9 +247,16 @@ fn capture_refuses_an_unheld_generation_without_overwriting_a_file() {
     ))
     .is_err());
     canvases.completed.insert(7, 1);
-    let outcome = super::capture::capture(&canvases, Ok(c), Some(roots), "fs.write app:/tmp", None);
-    assert!(
-        captured_image(&outcome).is_ok(),
+    let outcome = super::capture::capture(
+        &canvases,
+        Ok(c.clone()),
+        Some(roots.clone()),
+        "fs.write app:/tmp",
+        None,
+    );
+    assert_eq!(
+        captured_image(&outcome).map(|i| i.media_type),
+        Ok("image/png".into()),
         "a completed empty bitmap is capturable"
     );
     assert!(Pixmap::load_png(&path)
@@ -237,5 +264,75 @@ fn capture_refuses_an_unheld_generation_without_overwriting_a_file() {
         .pixels()
         .iter()
         .all(|p| p.alpha() == 0));
+    // A JPEG, as `toBlob` writes one; a type this host has no encoder for is a PNG.
+    for (file, asked, written, magic) in [
+        ("shot.jpg", "image/jpeg", "image/jpeg", &b"\xff\xd8\xff"[..]),
+        ("shot.avif", "image/avif", "image/png", &b"\x89PNG"[..]),
+    ] {
+        c.path = format!("app:/tmp/{file}");
+        c.encoding = exact_runner::canvas_capture::Encoding::new(asked, Some(0.8));
+        let outcome = super::capture::capture(
+            &canvases,
+            Ok(c.clone()),
+            Some(roots.clone()),
+            "fs.write app:/tmp",
+            None,
+        );
+        assert_eq!(
+            captured_image(&outcome).map(|i| i.media_type),
+            Ok(written.into())
+        );
+        assert!(std::fs::read(root.join(file)).unwrap().starts_with(magic));
+    }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_jpeg_capture_is_the_bitmap_over_opaque_black() {
+    let mut p = Pixmap::new(2, 1).unwrap();
+    // Transparent, and red at half alpha (premultiplied).
+    p.pixels_mut()[1] = tiny_skia::PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap();
+    let flat = super::capture::opaque(&p);
+    let rgba: Vec<_> = (flat.pixels().iter())
+        .map(|c| [c.red(), c.green(), c.blue(), c.alpha()])
+        .collect();
+    assert_eq!(rgba, [[0, 0, 0, 255], [128, 0, 0, 255]]);
+}
+
+#[test]
+fn a_redraw_copies_the_bitmap_only_while_a_painter_holds_the_last_one() {
+    let draw = |fresh: bool, x: f64| {
+        let ctx = Context2d::new();
+        ctx.set_fill_style_str("#f00");
+        ctx.fill_rect(x, 0., 1., 1.);
+        CanvasList {
+            view: 7,
+            lifetime: 1,
+            generation: 0,
+            seq: 1,
+            fresh,
+            pixel_width: 4,
+            pixel_height: 4,
+            scale: 1.,
+            stretch: false,
+            lists: ctx.take_lists(),
+            animating: false,
+            settings: Default::default(),
+        }
+    };
+    let shown = |c: &Canvases| c.snapshots()[&7].pixels.clone();
+    let mut canvases = Canvases::default();
+    assert!(canvases.apply(vec![draw(true, 0.)]).is_empty());
+    let first = Arc::as_ptr(&shown(&canvases));
+    // No painter holds the snapshot: the next list draws into the same bitmap.
+    assert!(canvases.apply(vec![draw(false, 1.)]).is_empty());
+    let held = shown(&canvases);
+    assert_eq!(Arc::as_ptr(&held), first);
+    // A painter holds it: the next list draws into a copy, and the held one stays as it was.
+    assert!(canvases.apply(vec![draw(false, 2.)]).is_empty());
+    let now = shown(&canvases);
+    assert_ne!(Arc::as_ptr(&now), Arc::as_ptr(&held));
+    assert_eq!(at(&held, 2, 0)[3], 0);
+    assert_eq!(at(&now, 2, 0), [255, 0, 0, 255]);
+    assert_eq!(at(&now, 1, 0), [255, 0, 0, 255]);
 }

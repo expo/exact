@@ -106,6 +106,7 @@ pub struct Fake {
     events: Vec<Event>,
     submitted: Submission,
     copies: Vec<([u32; 2], [u32; 2])>,
+    retired: Vec<TextureId>,
 }
 impl Device for Fake {
     type Buffer = Buffer;
@@ -183,7 +184,8 @@ impl Device for Fake {
     fn completed(&mut self) -> Result<Submission> {
         Ok(self.submitted)
     }
-    fn retire_texture(&mut self, _: TextureId) -> Result<()> {
+    fn retire_texture(&mut self, id: TextureId) -> Result<()> {
+        self.retired.push(id);
         Ok(())
     }
     fn trim(&mut self) -> Result<()> {
@@ -334,4 +336,38 @@ fn destination_copies_follow_transforms_clips_and_filter_support() {
         d.copies[1]
     );
     assert_eq!(d.copies[2], ([100, 100], [600, 400]));
+}
+
+#[test]
+fn a_canvas_redrawn_at_its_size_keeps_one_texture() {
+    fn frame(images: &mut images::Images, device: &mut Fake, pixels: &Arc<Pixmap>) -> TextureId {
+        images.begin(device).unwrap();
+        images.pixmap(device, pixels, false).unwrap()
+    }
+    let (mut device, mut images) = (Fake::default(), images::Images::default());
+    let snapshot = |w| Arc::new(Pixmap::new(w, 32).unwrap());
+    let mut shown = snapshot(64);
+    let first = frame(&mut images, &mut device, &shown);
+    // Each redraw is a new snapshot, the last one let go: uploaded in place.
+    for _ in 0..3 {
+        shown = snapshot(64);
+        assert_eq!(frame(&mut images, &mut device, &shown), first);
+    }
+    // The same snapshot drawn again uploads nothing.
+    assert_eq!(frame(&mut images, &mut device, &shown), first);
+    shown = snapshot(80);
+    let resized = frame(&mut images, &mut device, &shown);
+    assert_ne!(resized, first);
+    assert!(device.retired.is_empty());
+    assert_eq!(frame(&mut images, &mut device, &shown), resized);
+    assert_eq!(device.retired, [first]);
+    assert_eq!(device.textures.len(), 2);
+    let uploads = |t| {
+        device
+            .events
+            .iter()
+            .filter(|e| **e == Event::Upload(t))
+            .count()
+    };
+    assert_eq!((uploads(first), uploads(resized)), (4, 1));
 }

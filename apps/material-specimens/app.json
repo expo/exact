@@ -8,5 +8,6 @@
   "app": {
     "id": "com.exact.material-specimens",
     "name": "Material Specimens"
-  }
+  },
+  "rust": { "data": { "crate": "hello-data", "type": "hello_data::Hello", "source": "hello_data::Hello" } }
 }

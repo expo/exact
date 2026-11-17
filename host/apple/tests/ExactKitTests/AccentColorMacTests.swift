@@ -108,9 +108,9 @@ final class AccentColorMacTests: XCTestCase {
     /// what names the tint, though each row's style is the same `@tint`.
     func testALiveEditOfTheThemesAccentRepaintsWhatNamesTheTint() throws {
         let p = presenter()
-        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]), root: p.root) }
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0], root: p.root) }
         let roles = { (accent: [Int]) in
-            ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": accent]]]), root: p.root)
+            ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": accent]]]).ops[0], root: p.root)
             p.applyThemeTint()
         }
         // The fill as the layer holds it: nothing else asks AppKit to draw

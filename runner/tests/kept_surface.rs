@@ -86,6 +86,11 @@ fn kept_surface_publications_seed_until_live_and_disposal_does_not_replace_them(
             next.resource("hud"),
             Some(&Value::record(vec![Value::Number(9.)]))
         );
+        if !ready {
+            assert!(next.journal().any(|line| line.ends_with(
+                "hud did not use its kept answer: a live surface publication replaced it"
+            )));
+        }
         next.set_surface_record("world", None).unwrap();
         assert_eq!(
             next.resource("hud"),

@@ -10,13 +10,13 @@
 //! runs [`main`] for an app, pushes each ready plan to the page, and prints
 //! the edit → present numbers against `rules/RULES.md`'s row.
 //!
-//! A value-only design edit (LLP 1121 stage 4): when only `.tamber` files
+//! A value-only design edit (LLP 1121 stage 4): when only `.forma` files
 //! changed and the new plan's structure ([`exact_plan::Plan::structure`]) is
 //! the published one's, no plan is published and nothing restarts. The
 //! changed tokens go out as a batch instead ([`exact_runner::design`]), which
 //! every running build applies in place. (The plan file is still written,
 //! for a host that watches the file rather than the stream.) This is decided by content, so a hand
-//! edit and the Tamber server's write are one case, in any process.
+//! edit and the Forma server's write are one case, in any process.
 
 use exact_runner::DataSource;
 use std::path::{Path, PathBuf};
@@ -206,7 +206,7 @@ impl Session {
         let design_only = uses_changed
             && changed
                 .iter()
-                .all(|(p, _)| p.extension().is_some_and(|e| e == "tamber"));
+                .all(|(p, _)| p.extension().is_some_and(|e| e == "forma"));
         let surfaces_changed = self.surfaces_stamp != surfaces_stamp || uses_changed;
         // A failed compile may have observed a file while an editor was
         // replacing its bytes. Until a good plan lands, re-read even when

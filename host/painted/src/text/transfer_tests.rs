@@ -145,7 +145,7 @@ fn pixels(engine: &mut TextEngine, p: &Paragraph) -> Vec<u8> {
         Transform::identity(),
         None,
     );
-    assert!(image.data().chunks_exact(4).any(|p| p[3] != 0));
+    assert!(image.data().as_chunks::<4>().0.iter().any(|p| p[3] != 0));
     image.data().to_vec()
 }
 #[test]
@@ -915,8 +915,8 @@ fn one_worker_constructs_both_font_owners_and_moves_raster_without_ui_rebuild() 
 }
 
 #[test]
-fn current_system_catalog_generation_preserves_all_glyphs_and_rgba() {
-    let mut engine = TextEngine::new();
+fn file_backed_catalog_generation_preserves_all_glyphs_and_rgba() {
+    let mut engine = crate::text::fixtures::engine();
     let (recipe, raster) = freeze_catalog(&engine).unwrap();
     let (_k, q) = request(recipe.catalog_label(), 250.);
     let spec = q.with_request(Spec::from_request);
@@ -941,7 +941,7 @@ fn current_system_catalog_generation_preserves_all_glyphs_and_rgba() {
         pixels(&mut engine, &expected)
     );
     eprintln!(
-        "current system capture (not a timing): {:?}",
+        "file-backed capture (not a timing): {:?}",
         recipe.capture_cost()
     );
 }

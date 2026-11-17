@@ -72,9 +72,9 @@ internal class Fingers(private val view: ExactView) {
             2 -> if (down.put(id, at) == at) return
             else -> down.remove(id)
         }
+        if (!view.started) return
         val o = view.owner
         if (o == null) { Native.finger(action, id, x, y); if (view.started) view.pump(); return }
-        if (!view.started) return
         if (action != 2) o.input()
         // A move waits for nothing: several fingers cost the main thread no frame time.
         if (o.finger(action, id, x, y, if (action == 2) 0L else view.releaseWait)) view.publish()

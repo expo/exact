@@ -1,5 +1,5 @@
-// The design tool's half of LLP 1121 stage 11 D against a real `tamber
-// serve` (the server's half, tamber/1.14, and A2's package designs): Exact's
+// The design tool's half of LLP 1121 stage 11 D against a real `forma
+// serve` (the server's half, forma/1.14, and A2's package designs): Exact's
 // base scale listed read-only, each platform the app ships first with its
 // value and source as `describe` gives them; the app's override of a base
 // name as its own line; a package's tokens under their package; Set for
@@ -26,22 +26,22 @@ test('stage 11 on a real server: the base scale read-only with each shipped plat
   // (Its web target is its web crate's: the manifest alone names iOS and the Mac.)
   mkdirSync(join(app, 'web'), { recursive: true });
   cpSync(resolve(ROOT, 'apps/theme-fixture/web/Cargo.toml'), join(app, 'web/Cargo.toml'));
-  const design = 'tamber t\n\ntheme\n  brand = reading.card\n  radius.md = 12px\n  card.pad: length = space.md\n';
-  writeFileSync(join(app, 'app.tamber'), design);
+  const design = 'forma t\n\ntheme\n  brand = reading.card\n  radius.md = 12px\n  card.pad: length = space.md\n';
+  writeFileSync(join(app, 'app.forma'), design);
   const pkg = join(app, 'node_modules/@acme/reading');
   mkdirSync(pkg, { recursive: true });
   writeFileSync(join(pkg, 'package.json'), '{"name":"@acme/reading","version":"1.0.0","exports":{".":"./index.contract"}}');
   writeFileSync(join(pkg, 'index.contract'), 'component ReadingCard\n  view\n    column background-color="reading.card" padding="space.md"\n      text "x"\n');
-  const pkgDesign = 'tamber reading\n\ntheme\n  reading.card = #112233\n  reading.measure: length = 640px\n';
-  writeFileSync(join(pkg, 'reading.tamber'), pkgDesign);
+  const pkgDesign = 'forma reading\n\ntheme\n  reading.card = #112233\n  reading.measure: length = 640px\n';
+  writeFileSync(join(pkg, 'reading.forma'), pkgDesign);
   writeFileSync(join(app, 'app.contract'), 'use ReadingCard from "@acme/reading"\ncomponent App\n  view\n    column background-color="brand" padding="space.md" border-radius="radius.md"\n      ReadingCard()\n');
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app });
-  git('init', '-q'); git('add', 'app.json', 'app.tamber', 'app.contract'); git('commit', '-q', '-m', 'design');
+  git('init', '-q'); git('add', 'app.json', 'app.forma', 'app.contract'); git('commit', '-q', '-m', 'design');
   const tool = await proxied(app);
   try {
     // What the server says of the scale, the targets and the package, as the tool reads it.
-    const token = (await (await fetch(`${tool.origin}/__tamber/token`)).json()).token;
-    const described = (await (await fetch(`${tool.origin}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: '{"method":"describe"}' })).json()).ok;
+    const token = (await (await fetch(`${tool.origin}/__forma/token`)).json()).token;
+    const described = (await (await fetch(`${tool.origin}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"describe"}' })).json()).ok;
     const row = name => described.base.find(r => r.name === name);
     const shipped = [...new Set(described.targets.map(t => t.column).filter(Boolean))];
     expect(shipped.length).toBeGreaterThan(0);
@@ -131,7 +131,7 @@ test('stage 11 on a real server: the base scale read-only with each shipped plat
     expect(states[3].slots.editKind).toBe('remove-token');
     expect(tool.writes[4].after).toBe(set);
     // Back to the package removed the app's line alone: the package's own files, byte for byte as they were (LLP 1139 D5).
-    expect(readFileSync(join(pkg, 'reading.tamber'), 'utf8')).toBe(pkgDesign);
+    expect(readFileSync(join(pkg, 'reading.forma'), 'utf8')).toBe(pkgDesign);
     expect(text(pkgBack, 'token-over-reading.measure')).toBeUndefined();
     expect(node(pkgBack, 'set-for-app-reading.measure')).toBeTruthy();
     // Read only in the branch editor (the field disabled); the app's override of a base name edits as the app's line.
@@ -157,18 +157,18 @@ test('stage 11 on a real server: the base scale read-only with each shipped plat
 
 test('a package token set for this app: its value edited before Apply is still the app\'s line (set-token), and edited again after (D4 batch 2 #1)', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-override-'));
-  const design = 'tamber t\n\ntheme\n  brand = reading.card\n';
-  writeFileSync(join(app, 'app.tamber'), design);
+  const design = 'forma t\n\ntheme\n  brand = reading.card\n';
+  writeFileSync(join(app, 'app.forma'), design);
   // Another design file the app holds, open in the tool beside the app's.
-  writeFileSync(join(app, 'brand.tamber'), 'tamber brand\n\ntheme\n  brand.ink = #202020\n');
+  writeFileSync(join(app, 'brand.forma'), 'forma brand\n\ntheme\n  brand.ink = #202020\n');
   const pkg = join(app, 'node_modules/@acme/reading');
   mkdirSync(pkg, { recursive: true });
   writeFileSync(join(pkg, 'package.json'), '{"name":"@acme/reading","version":"1.0.0","exports":{".":"./index.contract"}}');
   writeFileSync(join(pkg, 'index.contract'), 'component ReadingCard\n  view\n    column background-color="reading.card" width="reading.measure"\n      text "x"\n');
-  writeFileSync(join(pkg, 'reading.tamber'), 'tamber reading\n\ntheme\n  reading.card = #112233\n  reading.measure: length = 640px\n');
+  writeFileSync(join(pkg, 'reading.forma'), 'forma reading\n\ntheme\n  reading.card = #112233\n  reading.measure: length = 640px\n');
   writeFileSync(join(app, 'app.contract'), 'use ReadingCard from "@acme/reading"\ncomponent App\n  view\n    column background-color="brand"\n      ReadingCard()\n');
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app });
-  git('init', '-q'); git('add', 'app.tamber', 'brand.tamber', 'app.contract'); git('commit', '-q', '-m', 'design');
+  git('init', '-q'); git('add', 'app.forma', 'brand.forma', 'app.contract'); git('commit', '-q', '-m', 'design');
   const tool = await proxied(app);
   try {
     const replies = await drive(tool.url, `design-tool-override-${process.pid}`, [
@@ -194,11 +194,11 @@ test('a package token set for this app: its value edited before Apply is still t
       'type new-name reading.measure', 'type new-value 760px', 'type new-value key Enter', 'clock data', 'clock +1', 'clock data', 'state',
       'tap apply', 'clock data', 'clock +1', 'clock data',
       // Another file open: their rows show beside its own, but a name added there is that file's line (round 2).
-      'type file brand.tamber', 'clock data', 'clock +1', 'clock data',
+      'type file brand.forma', 'clock data', 'clock +1', 'clock data',
       'type new-name reading.measure', 'type new-value 780px', 'type new-value key Enter', 'clock data', 'state',
       'tap cancel-edit', 'clock data',
       // The app's design opened by its own path: still the app's line over theirs (re-check, Astra and Grok).
-      'type file app.tamber', 'clock data', 'clock +1', 'clock data',
+      'type file app.forma', 'clock data', 'clock +1', 'clock data',
       'type new-name reading.measure', 'type new-value 790px', 'type new-value key Enter', 'clock data', 'state',
     ]);
     const states = replies.filter(r => r.slots);
@@ -216,8 +216,8 @@ test('a package token set for this app: its value edited before Apply is still t
     expect(tool.writes.map(w => [w.method, w.ok])).toEqual([['transaction', true], ['transaction', true], ['transaction', true], ['transaction', true], ['transaction', true]]);
     expect(tool.writes[3].after).toBe(design);
     expect(tool.writes[4].after).toBe(`${design}  reading.measure: length = 760px\n`);
-    expect([states[5].slots.file, states[5].slots.editKind, states[5].slots.editTarget]).toEqual(['brand.tamber', 'add-token', 'reading.measure']);
-    expect([states[6].slots.file, states[6].slots.editKind, states[6].slots.editTarget]).toEqual(['app.tamber', 'set-token', 'reading.measure']);
+    expect([states[5].slots.file, states[5].slots.editKind, states[5].slots.editTarget]).toEqual(['brand.forma', 'add-token', 'reading.measure']);
+    expect([states[6].slots.file, states[6].slots.editKind, states[6].slots.editTarget]).toEqual(['app.forma', 'set-token', 'reading.measure']);
   } finally {
     await tool.close();
     rmSync(app, { recursive: true, force: true });

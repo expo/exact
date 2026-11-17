@@ -11,6 +11,9 @@ component App
   derive midnight = `${all(now, now, offset)} | ${all(now - 60000, now + 120000, offset)} | ${all(now + 120000, now, offset)}`
   derive week = `${all(now - 518400000, now, offset)} | ${all(now - 604800000, now, offset)} | ${all(now - 86400000, now, offset)}`
   derive later = `${all(now + 86400000 * 2, now, offset)} | ${all(now - 86400000 * 365, now, offset)}`
+  // "section" (LLP 1168.000 D5): a weekday within six days either side, else the date with its weekday, the year
+  // when it is not now's.
+  derive section = `${formatDay(now, now, offset, "section")} / ${formatDay(now - 86400000 * 3, now, offset, "section")} / ${formatDay(now + 86400000 * 3, now, offset, "section")} / ${formatDay(now - 86400000 * 7, now, offset, "section")} / ${formatDay(now - 86400000 * 400, now, offset, "section")} / ${formatDay(now + 86400000 * 7, now, offset, "section")}`
   derive bad = `[${formatDay(0 / 0, now, 0, "day")}][${formatDay(now, 253402300800000, 0, "list")}][${formatDay(now, now, 1081, "day-time")}]`
   action tick
     now = now + 120000
@@ -23,6 +26,7 @@ component App
       text midnight testId="midnight"
       text week testId="week"
       text later testId="later"
+      text section testId="section"
       text bad testId="bad"
       button "tick" press=tick testId="tick"
       button "east" press=east testId="east"
@@ -33,9 +37,11 @@ test "the year turns at midnight"
   expect text "week" == "Dec 25, 2026 / Dec 25, 2026 at 11:59 PM / Friday | Dec 24, 2026 / Dec 24, 2026 at 11:59 PM / 12/24/26 | Yesterday / Yesterday at 11:59 PM / Yesterday"
   expect text "later" == "Jan 2, 2027 / Jan 2, 2027 at 11:59 PM / 1/2/27 | Dec 31, 2025 / Dec 31, 2025 at 11:59 PM / 12/31/25"
   expect text "bad" == "[][][]"
+  expect text "section" == "Today / Monday / Sunday / Thu, Dec 24 / Wed, Nov 26, 2025 / Thu, Jan 7, 2027"
   tap "tick"
   expect text "midnight" == "Today / Today at 12:01 AM / 12:01 AM | Today / Today at 12:00 AM / 12:00 AM | Today / Today at 12:03 AM / 12:03 AM"
   expect text "week" == "Dec 26, 2026 / Dec 26, 2026 at 12:01 AM / Saturday | Dec 25, 2026 / Dec 25, 2026 at 12:01 AM / 12/25/26 | Yesterday / Yesterday at 12:01 AM / Yesterday"
+  expect text "section" == "Today / Tuesday / Monday / Fri, Dec 25, 2026 / Thu, Nov 27, 2025 / Fri, Jan 8"
 
 test "an offset moves the days"
   tap "east"

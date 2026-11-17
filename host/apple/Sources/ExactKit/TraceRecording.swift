@@ -29,7 +29,7 @@ extension ExactSession {
             (try? JSONSerialization.jsonObject(with: Data(self.agent("{\"op\":\"\(op)\"}").utf8))) ?? ["error": "unreadable reply"]
         }
         let started = ExactEnv.wall()
-        let tree = read("tree"), state = read("state"), layout = agentInstance.layout()
+        let tree = read("tree"), state = read("state"), layout = AgentLink.layout(self)
         return ["tree": tree, "state": state, "layout": layout,
                 "observation": executionObservation().merging([
                                 "wallFrom": started, "wallTo": ExactEnv.wall(), "timebase": "milliseconds since process main",

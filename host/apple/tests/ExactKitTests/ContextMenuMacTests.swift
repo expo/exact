@@ -831,7 +831,7 @@ final class ContextMenuMacTests: XCTestCase {
         let button = try XCTUnwrap(p.views[21]), plain = try XCTUnwrap(p.views[7])
         func link(_ paragraph: UInt32, _ id: UInt32) throws -> NSAccessibilityElement {
             let elements = try XCTUnwrap(p.views[paragraph]?.accessibilityChildren() as? [NSAccessibilityElement])
-            return try XCTUnwrap(elements.first { ($0 as? AgentOwned)?.agentViewId == id })
+            return try XCTUnwrap(elements.first { ($0 as? InspectionOwned)?.inspectionViewId == id })
         }
         let list = try link(8, 82), docs = try link(10, 103)
         XCTAssertEqual(try offered(button), ["AXPress", "AXShowMenu"], "its row answers")

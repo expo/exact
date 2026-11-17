@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { helpParity } from './help-parity.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const READ = ['scripts/exact.mjs', 'scripts/app-cli.mjs', 'scripts/tamber-pairing.mjs', 'host/apple/build.mjs', 'host/apple/devices.mjs', 'host/apple/link.mjs', 'host/apple/bundle.mjs', 'host/web/dev.mjs', 'host/web/serve.mjs', 'scripts/install-page.mjs', 'scripts/tamber-remote.mjs', 'scripts/tamber-relay.mjs', 'host/web/build.mjs', 'scripts/agent-launch.mjs', 'scripts/agent-widget.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'host/windows/build.mjs', 'scripts/feedback.mjs'];
+const READ = ['scripts/exact.mjs', 'scripts/app-cli.mjs', 'scripts/forma-pairing.mjs', 'host/apple/build.mjs', 'host/apple/devices.mjs', 'host/apple/link.mjs', 'host/apple/bundle.mjs', 'host/web/dev.mjs', 'host/web/serve.mjs', 'scripts/install-page.mjs', 'scripts/forma-remote.mjs', 'scripts/forma-relay.mjs', 'host/web/build.mjs', 'scripts/agent-launch.mjs', 'scripts/agent-widget.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'host/windows/build.mjs', 'scripts/feedback.mjs'];
 
 /** helpParity over a copy of the scripts it reads, `edit` applied to the copy first. */
 function over(edit) {
@@ -22,7 +22,7 @@ function over(edit) {
 
 test('the helps agree with their scripts here, and caps says it checked them', () => {
   expect(helpParity(ROOT)).toEqual([]);
-  const caps = spawnSync(process.execPath, [resolve(ROOT, 'scripts/caps.mjs')], { cwd: ROOT, encoding: 'utf8', env: { ...process.env, EXACT_CAPS_WASM: '0' } }); // the wasm32 check is wasm-check.test's
+  const caps = spawnSync(process.execPath, [resolve(ROOT, 'scripts/caps.mjs')], { cwd: ROOT, encoding: 'utf8' });
   expect(caps.status).toBe(0);
   expect(caps.stdout).toContain("helps: each verb's flags against its script's, its rows and lengths, 0 problems");
 }, 300_000); // Bound only a hang: caps reads every file, which takes minutes on a loaded machine
@@ -39,7 +39,7 @@ test('a flag with no help row, and a row whose flag no script parses, are each s
     "agent's help names --bind, which its script does not parse.", "test's help names --bind, which its script does not parse.",
   ]);
   // A slice it reads gone is said, not taken for agreement.
-  expect(over((edit) => edit('scripts/tamber-pairing.mjs', (s) => s.replace('export function pairTtlOf(', 'function ttl(')))[0].code).toBe('help:sources');
+  expect(over((edit) => edit('scripts/forma-pairing.mjs', (s) => s.replace('export function pairTtlOf(', 'function ttl(')))[0].code).toBe('help:sources');
   // So is a verb's slice of exact.mjs gone (docs parses no flags: an empty slice would agree with its help).
   const moved = over((edit) => edit('scripts/exact.mjs', (s) => s.replace('export function docs(', 'export function guides(')));
   expect(moved.map((p) => p.code)).toEqual(['help:sources']);
@@ -47,7 +47,7 @@ test('a flag with no help row, and a row whose flag no script parses, are each s
 });
 
 const RULES = `# Rules
-- **6 blocking checks, 65s total.** **[check]**
+- **1 blocking check, 30s warm.** **[check]**
 - **15 documents in the working set.** **[check]**
 - **10 documents in the foundation.** **[check]**
 - **This file: 700 words.** **[check]**
@@ -56,8 +56,8 @@ const RULES = `# Rules
 | | |
 |---|---|
 | Cold start to interactive | 100ms |
-## The six checks
-\`build\` · \`test\` · \`lint\` · \`caps\` · \`boot\` · \`workspace\`
+## The gate (30 s)
+\`bun scripts/gate.mjs\`
 `;
 
 /** caps.mjs's exit and output in a throwaway repository whose scripts/help-parity.mjs is `parity`. */

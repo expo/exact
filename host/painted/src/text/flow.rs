@@ -78,7 +78,13 @@ impl FlowSource {
         drop(catalog);
         let mut ink = Lines::default();
         for line in layout.lines() {
-            super::lines::extract(&line, layout.styles(), 0.0, (&[], &[]), &mut ink);
+            super::lines::extract(
+                &line,
+                layout.styles(),
+                0.0,
+                super::lines::Rooms::NONE,
+                &mut ink,
+            );
         }
         // Source-backed symbols receive their ranges when placed in the flow.
         // Truncation tokens keep an empty range.

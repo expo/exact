@@ -79,9 +79,10 @@ impl Backend for ObservedRaster {
         clips: &[Shape],
         t: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
         self.shape("image", &Shape::rect(dst), t, &[]);
-        self.raster.image(i, dst, clips, t, tint);
+        self.raster.image(i, dst, clips, t, tint, rendering);
     }
     fn text(
         &mut self,
@@ -225,7 +226,7 @@ fn app(fractional: bool) -> String {
 fn fixture(plan: &[u8], region: bool) -> Presenter<()> {
     let assets = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain"));
     let (mut p, error) = if region {
-        Presenter::boot_with_content_region(
+        Presenter::boot_region_with_fixture_fonts(
             plan,
             (),
             (400., 600.),
@@ -240,7 +241,7 @@ fn fixture(plan: &[u8], region: bool) -> Presenter<()> {
             },
         )
     } else {
-        Presenter::boot_with(plan, (), (400., 600.), 1., assets, PainterChoice::Cpu)
+        Presenter::boot_with_fixture_fonts(plan, (), (400., 600.), 1., assets, PainterChoice::Cpu)
     }
     .unwrap();
     assert!(error.is_none(), "{error:?}");

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Deterministic dataset + images for the heavy list benchmark (see SPEC.md).
 Writes data/messages.json and data/images/*.jpg; prepare.sh runs it once and copies the output to the apps that
-bundle it. Needs Pillow; 11.3.0 reproduces data.sha256 byte for byte (the JPEG bytes depend on its encoder)."""
-import json, os, random
-from PIL import Image, ImageDraw, ImageFilter
+bundle it. Needs Pillow; 11.3.0 reproduces data.sha256 byte for byte (the JPEG bytes depend on its encoder).
+`gen.py --messages DIR` writes the same messages.json to DIR and no images, without Pillow."""
+import json, os, random, sys
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+MESSAGES_ONLY = sys.argv[1:2] == ['--messages']
+OUT = sys.argv[2] if MESSAGES_ONLY else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 IMG = os.path.join(OUT, 'images')
-os.makedirs(IMG, exist_ok=True)
+os.makedirs(OUT if MESSAGES_ONLY else IMG, exist_ok=True)
 rng = random.Random(49975)
 
 # ---- images: 24 avatars (256x256), 60 photos (mixed aspect, long side 1600), 20 link thumbs (600x400)
 def photo(path, w, h, seed):
+    if MESSAGES_ONLY: return
+    from PIL import Image, ImageDraw, ImageFilter
     r = random.Random(seed)
     im = Image.new('RGB', (w, h))
     d = ImageDraw.Draw(im)
@@ -100,4 +103,4 @@ for i in range(10_000):
     messages.append(m)
 
 json.dump({'version': 1, 'messages': messages}, open(os.path.join(OUT, 'messages.json'), 'w'), ensure_ascii=False, separators=(',', ':'))
-print('messages', len(messages), 'images', len(os.listdir(IMG)))
+print('messages', len(messages), 'images', 0 if MESSAGES_ONLY else len(os.listdir(IMG)))

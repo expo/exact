@@ -62,7 +62,7 @@ component Inspector
       else
         column gap=4 testId="selection"
           text inspected.source font="-exact-headline" testId="selection-source"
-          // Each a press that selects that ancestor on the build, as a click on it would (tamber/1.16); none while the
+          // Each a press that selects that ancestor on the build, as a click on it would (forma/1.16); none while the
           // page's selection is not current (the Apple pass's #5, #6: a stale or relaunched build's would be refused).
           if changes.noStep.includes(inspected.build)
             text "This build can't move its selection up the chain: click the node itself." color="-exact-secondary-label" font="-exact-footnote" testId="selection-up-none"

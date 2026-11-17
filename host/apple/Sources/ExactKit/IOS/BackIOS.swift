@@ -63,6 +63,22 @@ extension NavigationHost {
         }
     }
 
+    /// How dismissing the sheet of `route` (a swipe down, a tap behind it,
+    /// the agent's `back`) goes back: the whole sheet goes, with the routes
+    /// pushed inside it (LLP 1008 "Presented routes"). With the sheet's own
+    /// route selected it is that route's Back. With routes pushed inside the
+    /// sheet it is a history jump to the route beneath the sheet, as a pop of
+    /// several routes is (`followPops`). nil when the sheet's route is not in
+    /// the stack shown, or when Back from the selected route is refused (its
+    /// `navigationBack` control is disabled or has no `press`).
+    func sheetBack(from route: NodeView) -> (() -> Void)? {
+        guard let key = route.props["navigationKey"], let at = shownKeys.firstIndex(of: key), at > 0,
+              let top = selectedKey, shownKeys.last == top, back != nil else { return nil }
+        if top == key { return { [weak self] in self?.invokeBack(from: route) } }
+        let beneath = shownKeys[at - 1]
+        return { [weak self] in self?.goBack(from: top, to: beneath) }
+    }
+
     /// D1: resolved at use, by HTML id, among live enabled press controls —
     /// never captured at a gesture's start (`NavigationBack.control`).
     private var backControl: NodeView? {

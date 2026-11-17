@@ -92,6 +92,22 @@ enum GuestURL {
         if scheme == "http" || scheme == "https" { return url.host == nil ? nil : url }
         return text.lowercased() == "about:blank" ? url : nil
     }
+
+    /// The request for a frame's page that the app's page asks for: its
+    /// `src`, a `navigate`, or either again. A browser asks for a
+    /// cross-origin frame's page with the parent's origin as its `Referer`
+    /// (`strict-origin-when-cross-origin`, the default policy). The parent is
+    /// the host's frame page at `exact.invalid`, in the guest's scheme
+    /// (`WebArm.serve`): WebKit sends that origin from it, but none for a
+    /// page the web view loads as its own, and an embed that requires one
+    /// refuses the load (YouTube's Error 153).
+    static func request(_ url: URL, cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: cachePolicy)
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            request.setValue("\(scheme)://exact.invalid/", forHTTPHeaderField: "Referer")
+        }
+        return request
+    }
 }
 
 /// The navigation state of one partitioned web view, reported as
@@ -415,7 +431,7 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
                 return refuse("NotSupportedError", "navigate: \(scheme) is not a web page a partitioned frame shows (http, https or about:blank)")
             }
             cancelRecovery()
-            web.load(URLRequest(url: url))
+            web.load(GuestURL.request(url))
         case "traverseHistory":
             let delta = (op["delta"] as? NSNumber)?.intValue ?? 0
             if delta == 0 { return reload(ignoreCache: false) }
@@ -447,7 +463,7 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
         cancelRecovery()
         commandType = "reload"
         if let target = flight?.destination ?? (committed.isEmpty ? source() : dead ? committed : nil), let url = GuestURL.web(target) {
-            web.load(URLRequest(url: url, cachePolicy: ignoreCache ? .reloadIgnoringLocalAndRemoteCacheData : .useProtocolCachePolicy))
+            web.load(GuestURL.request(url, cachePolicy: ignoreCache ? .reloadIgnoringLocalAndRemoteCacheData : .useProtocolCachePolicy))
         } else if web.url != nil {
             if ignoreCache { web.reloadFromOrigin() } else { web.reload() }
         } else {
@@ -479,7 +495,7 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
             guard let self, let web, !self.closed, self.recovery != nil, self.deaths.last == now else { return }
             self.recovery = nil
             self.commandType = "reload"
-            if let target, let url = GuestURL.web(target) { web.load(URLRequest(url: url)) } else { web.reload() }
+            if let target, let url = GuestURL.web(target) { web.load(GuestURL.request(url)) } else { web.reload() }
         }
         recovery = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.recoveryDelays[attempt - 1], execute: work)

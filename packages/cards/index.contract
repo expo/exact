@@ -2,7 +2,7 @@
 // Bluesky clone's own pieces): a post card's shell, an Attie card, a
 // profile's header and a person's row in a list (PersonRow, its trailing
 // control the app's, in its slot; LLP 1121 stage 15 B batch 2). Their look is their params and the package's tokens
-// (cards.tamber); an app restyles them by setting either by full name, never
+// (cards.forma); an app restyles them by setting either by full name, never
 // by editing this file. Avatar and VerifiedBadge, the pieces those draw a
 // person with, are exported too (LLP 1121 stage 15 B): an app passes their
 // size, and VerifiedBadge's ink and mark, as token or role names

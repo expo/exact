@@ -7,10 +7,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { openTouches, realTap, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
+import { openTouches, realDoubleTap, realPinch, realTap, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
-import { appleArtifacts, bundleId, install } from '../host/apple/build.mjs';
+import { bundleId, install } from '../host/apple/build.mjs';
+import { simulatorAssetRoot, simulatorPlanPath } from '../host/apple/assets.mjs';
 import {
   crashWatch,
   keepInstalledRelease,
@@ -21,6 +22,8 @@ import {
   withMaterials,
   withSoftwareKeyboard,
   forwardedEnv,
+  simulatorLaunch,
+  simulatorAppContainer,
 } from '../host/apple/devices.mjs';
 import { appleExecutableName, resolveApp } from './app.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -41,7 +44,13 @@ export async function openIOS({
   onProcess,
 }) {
   const a = resolveApp(app);
-  const built = nativeBuild('ios', a, { sample: hostFixture, checked: process.env.EXACT_BUILD_CHECKED }),
+  // What the simulator gives the app (openIOSOwned); a marked setting there is the launch's (LLP 1153.002 D2).
+  const launched = simulatorLaunch(extra);
+  const built = nativeBuild('ios', a, {
+      sample: hostFixture,
+      checked: process.env.EXACT_BUILD_CHECKED,
+      launch: launched,
+    }),
     bundle = built.built;
   if (!built.missing) refuseBackendOrigin(built, a);
   const id = hostFixture ? `${a.id}.host` : a.id;
@@ -102,7 +111,6 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ios-'));
   const sock = resolve(dir, 'agent.sock');
   const env = {
-    EXACT_ASSETS: appleArtifacts(a, { destination: 'ios-simulator', host: hostFixture }).capture,
     ...forwardedEnv(),
     EXACT_AGENT: '1',
     EXACT_AGENT_SOCKET: sock,
@@ -110,8 +118,6 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
     ...(size ? { EXACT_WINDOW_WIDTH: String(size[0]), EXACT_WINDOW_HEIGHT: String(size[1]) } : {}),
     ...extra,
   };
-  const childEnv = { ...process.env };
-  for (const [k, v] of Object.entries(env)) childEnv[`SIMCTL_CHILD_${k}`] = v;
   const crashName = hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true);
   let closing = false;
   const crashes = crashWatch(crashName, bundle, { bundleId: id, udid: dev.udid }),
@@ -124,6 +130,13 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   // The launch brings the app to the front: not while another drive reads this simulator's display. The caller
   // holds the display lock (`simulatorDisplay`) through the accessibility setup and the launch.
   try {
+    env.EXACT_ASSETS = simulatorAssetRoot(
+      extra.EXACT_ASSETS ? null : simulatorAppContainer(dev.udid, id, 'app'), extra.EXACT_ASSETS, resolve(dir, 'assets'),
+    );
+    const selectedPlan = env.EXACT_PLAN ?? process.env.SIMCTL_CHILD_EXACT_PLAN;
+    if (selectedPlan) env.EXACT_PLAN = simulatorPlanPath(selectedPlan, resolve(dir, 'plan'));
+    const childEnv = { ...process.env };
+    for (const [k, v] of Object.entries(env)) childEnv[`SIMCTL_CHILD_${k}`] = v;
     launch = simulatorConsole(
       () =>
         spawn(
@@ -318,9 +331,15 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
             );
           return realTap({ ask, touches, id, rel: opts.at, abandon: why => lines.fail(why) });
         }
+        // A real double tap (LLP 1057.001.000 §6).
+        if (touch === 'platform' && kind === 'dblclick' && opts.touch)
+          return realDoubleTap({ ask, touches, id, at: opts.at, abandon: why => lines.fail(why) });
+        // Two real fingers, which UIKit's recognizers read (LLP 1057.001.000 §6).
+        if (touch === 'platform' && kind === 'pinch')
+          return realPinch({ ask, touches, id, at: opts.at, scale: opts.pinch, abandon: why => lines.fail(why) });
         const r =
           kind === 'contextmenu' || kind === 'dblclick'
-            ? await ask({ op: 'tap', id, [kind]: true, ...(opts.at ? { at: opts.at } : {}) })
+            ? await ask({ op: 'tap', id, [kind]: true, ...(opts.touch ? { touch: true } : {}), ...(opts.at ? { at: opts.at } : {}) })
             : kind === 'pinch'
               ? await ask({ op: 'tap', id, pinch: opts.pinch, at: opts.at })
               : kind === 'wheel'

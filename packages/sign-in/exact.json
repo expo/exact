@@ -174,7 +174,7 @@
               "apple": {
                 "active": true,
                 "passive": true,
-                "withPublicKey": false
+                "withPublicKey": true
               },
               "google": {
                 "active": false

@@ -1,6 +1,6 @@
 # Paperback Settings: notes
 
-Built with Exact (`app.contract`, the view; `app.tamber`, the two sepia colours; `app.test.contract`,
+Built with Exact (`app.contract`, the view; `app.forma`, the two sepia colours; `app.test.contract`,
 9 tests). Installed on simulator C2188CC6-… as `dev.bakeoff.settings.b03dcec` ("Settings").
 `test web`, `test ios`, `verify` and `verify ios` all pass the tests. The two findings left are below.
 

@@ -1,12 +1,4 @@
-// A symbol on a native control's face (LLP 1121 D10; stage 9 A2): an SF
-// Symbol's name, or, for an icon token with no `sf` and a template path, a
-// token holding that path (`symbolPath` on its image node, or beside a face's
-// "" `symbol` in the press face's and a grouped row's JSON). The token goes
-// wherever a face carries a name — its equality, its caches and its drawn
-// source keep working — and draws as a template image (ExactCore's
-// IconPath) that the control tints as it tints an SF Symbol: on a control's
-// face a symbol keeps the platform's or the control's tint (D9; LLP 1115 D4),
-// not the page image's tint-else-colour. A multicolour SVG needs an `sf`.
+// Native control glyphs: SF Symbols, template paths and build-time SVG assets.
 #if os(macOS)
 import AppKit
 #else
@@ -17,6 +9,17 @@ import ExactCore
 package enum FaceSymbol {
     /// What a path token starts with; no SF Symbol or role name holds a `:`.
     static let prefix = "icon-path:"
+
+    static let assetPrefix = "icon-asset:"
+
+    package static func assetToken(_ svg: String?, multicolor: Bool) -> String? {
+        guard let svg, !svg.isEmpty else { return nil }
+        return assetPrefix + (multicolor ? "original|" : "template|") + IconAsset.name(svg)
+    }
+
+    package static func isAsset(_ symbol: String) -> Bool { symbol.hasPrefix(assetPrefix) }
+    package static func isOriginal(_ symbol: String) -> Bool { symbol.hasPrefix(assetPrefix + "original|") }
+    package static func isCustom(_ symbol: String) -> Bool { isPath(symbol) || isAsset(symbol) }
 
     /// What follows the prefix in an even-odd icon's token (stage 14 C2); a
     /// nonzero icon's token is as it was. No viewBox starts with a letter.
@@ -29,11 +32,14 @@ package enum FaceSymbol {
         return prefix + (rule == "evenodd" ? evenOdd : "") + (viewBox ?? "") + "|" + path
     }
 
-    /// A face's symbol from its JSON: the name, else the path's token where
-    /// the name is "" and a path is given; nil for no symbol.
+    /// A face's SF name, or its path or asset token when the name is empty.
     package static func of(_ json: [String: Any]) -> String? {
         guard let name = json["symbol"] as? String else { return nil }
         guard name.isEmpty else { return name }
+        let rows = json["rows"] as? [String: Any]
+        let symbol = rows?["symbol"] as? [String: Any]
+        if let asset = assetToken(json["symbolAsset"] as? String,
+                                  multicolor: json["symbolMulticolor"] as? Bool == true || symbol?["symbol_rendering"] as? String == "multicolor") { return asset }
         return token(path: json["symbolPath"] as? String, viewBox: json["symbolViewBox"] as? String, rule: json["symbolFillRule"] as? String) ?? name
     }
 
@@ -44,7 +50,7 @@ package enum FaceSymbol {
     /// path, the icon token's name as its author wrote it (`icon.reply`)
     /// where the face says it, else "" (the token is the face's drawing).
     package static func observed(_ symbol: String?, icon: String? = nil) -> String? {
-        symbol.map { isPath($0) ? icon ?? "" : $0 }
+        symbol.map { isCustom($0) ? icon ?? "" : $0 }
     }
 
     /// The template image of a path's token, an em square `points` on a
@@ -60,6 +66,16 @@ package enum FaceSymbol {
                               size: CGSize(width: side, height: side), rule: rule)
     }
 
+    package static func configuration(_ base: SymbolMeasure.Configuration, rendering: String?, tint: PlatformColor) -> SymbolMeasure.Configuration {
+        switch rendering {
+        case "monochrome": return base.applying(SymbolMeasure.Configuration.preferringMonochrome())
+        case "multicolor": return base.applying(SymbolMeasure.Configuration.preferringMulticolor())
+        case "hierarchical": return base.applying(SymbolMeasure.Configuration(hierarchicalColor: tint))
+        case "palette": return base.applying(SymbolMeasure.Configuration(paletteColors: [tint]))
+        default: return base
+        }
+    }
+
     #if os(macOS)
     /// The point size of an SF Symbol drawn with no configuration (the body text's).
     package static var defaultPoints: CGFloat { NSFont.systemFontSize }
@@ -68,9 +84,18 @@ package enum FaceSymbol {
     /// capture): an SF Symbol's inked box there is a 16.7-point symbol's.
     package static let toolbarPoints: CGFloat = 17
 
-    /// A face symbol's image: a path's template image `points` square, else
-    /// the named SF Symbol (nil for "" or an unknown name).
-    package static func image(_ symbol: String, points: CGFloat = defaultPoints, accessibilityDescription: String? = nil) -> NSImage? {
+    /// A face's image at its site's point size. Raster assets keep their
+    /// viewport's aspect and are original only under `multicolor`.
+    package static func image(_ symbol: String, points: CGFloat = defaultPoints, accessibilityDescription: String? = nil, bundle: Bundle = .main) -> NSImage? {
+        if isAsset(symbol) {
+            let name = String(symbol.split(separator: "|").last ?? "")
+            guard let image = IconAsset.image(named: name, bundles: IconAsset.bundles(for: bundle)) else { return nil }
+            let fit = max(1, points) / max(image.size.width, image.size.height)
+            image.size = CGSize(width: image.size.width * fit, height: image.size.height * fit)
+            image.isTemplate = !isOriginal(symbol)
+            image.accessibilityDescription = accessibilityDescription
+            return image
+        }
         if isPath(symbol) {
             let image = pathImage(symbol, points: points)
             image?.accessibilityDescription = accessibilityDescription
@@ -110,9 +135,19 @@ package enum FaceSymbol {
     /// symbol's (UIKit draws bar symbols larger than the body's 17).
     package static let barItemPoints: CGFloat = 22
 
-    /// A face symbol's image: a path's template image `points` square, else
-    /// the named SF Symbol in `configuration` (nil for "" or an unknown name).
-    package static func image(_ symbol: String, points: CGFloat = defaultPoints, configuration: UIImage.SymbolConfiguration? = nil) -> UIImage? {
+    /// A face's image at its site's point size, using the catalog rendition
+    /// for the display scale. Only `multicolor` assets keep their colours.
+    package static func image(_ symbol: String, points: CGFloat = defaultPoints, configuration: UIImage.SymbolConfiguration? = nil, bundle: Bundle = .main, traits: UITraitCollection? = nil) -> UIImage? {
+        if isAsset(symbol) {
+            let name = String(symbol.split(separator: "|").last ?? "")
+            guard let image = IconAsset.image(named: name, bundles: IconAsset.bundles(for: bundle), scale: traits?.displayScale) else { return nil }
+            let fit = max(1, points) / max(image.size.width, image.size.height)
+            let size = CGSize(width: image.size.width * fit, height: image.size.height * fit)
+            // Changing the logical scale keeps the selected catalog pixels for page layout.
+            guard let pixels = image.cgImage else { return nil }
+            let drawn = UIImage(cgImage: pixels, scale: CGFloat(pixels.width) / size.width, orientation: image.imageOrientation)
+            return drawn.withRenderingMode(isOriginal(symbol) ? .alwaysOriginal : .alwaysTemplate)
+        }
         if isPath(symbol) { return pathImage(symbol, points: points) }
         return symbol.isEmpty ? nil : UIImage(systemName: symbol, withConfiguration: configuration)
     }
@@ -120,10 +155,11 @@ package enum FaceSymbol {
 }
 
 extension NodeView {
-    /// The symbol this image node shows on a control's face: its SF Symbol's
-    /// name, else its icon path's token (A1's `symbolPath`); nil for neither.
+    /// The glyph this image shows on a control: an SF name, template path
+    /// or raster asset token; nil when none is available.
     var faceSymbol: String? {
         if let name = props["symbolName"], !name.isEmpty { return name }
+        if let asset = FaceSymbol.assetToken(props["symbolAsset"], multicolor: style["symbol_rendering"]?.string == "multicolor") { return asset }
         return FaceSymbol.token(path: props["symbolPath"], viewBox: props["symbolViewBox"], rule: props["symbolFillRule"])
     }
 }

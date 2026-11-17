@@ -2,10 +2,14 @@
 // with none shows its complications' placeholders (LLP 1126.001 WP17).
 #if os(watchOS)
 import ExactCore
+#if EXACT_WATCH_SYNC
+import ExactWatchSync
+#endif
 import ExactSnapshot
 import os
 import SwiftUI
 import WatchKit
+import WidgetKit
 
 private struct WatchEntry: Identifiable {
     let kind: String
@@ -115,20 +119,30 @@ final class EarlyBoot {
         let device = WKInterfaceDevice.current()
         let size = device.screenBounds.size, scale = Double(device.screenScale)
         DispatchQueue.global(qos: .userInteractive).async {
-            LaunchPhases.mark("session")
-            let start = liveUptime()
-            // The watch draws dark. The reader's text size is not known before the scene:
-            // the default's root size here, reconciled when the root takes the session.
-            let rootFontSize = Double(SnapshotDriver.rootFontSize(for: .large))
-            let facts = SessionFacts(displayScale: scale, preferences: [.dark], rootFontSize: rootFontSize,
-                                     date: Date(), clock: HeadlessSession.liveNow())
-            let booted = Booted { (try session(size: size, facts: facts), start, rootFontSize) }
-            LaunchPhases.mark("booted")
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    if let waiting { self.waiting = nil; waiting(booted) } else { result = booted }
+            func boot(_ preparation: Result<Void, Error>) {
+                LaunchPhases.mark("session")
+                let start = liveUptime()
+                // The watch draws dark. The reader's text size is not known before the scene:
+                // the default's root size here, reconciled when the root takes the session.
+                let rootFontSize = Double(SnapshotDriver.rootFontSize(for: .large))
+                let facts = SessionFacts(displayScale: scale, preferences: [.dark], rootFontSize: rootFontSize,
+                                         date: Date(), clock: HeadlessSession.liveNow())
+                let booted = Booted { try preparation.get(); return (try session(size: size, facts: facts), start, rootFontSize) }
+                LaunchPhases.mark("booted")
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        if let waiting {
+                            if case .success = booted { self.waiting = nil }
+                            waiting(booted)
+                        } else { result = booted }
+                    }
                 }
             }
+            #if EXACT_WATCH_SYNC
+            ExactWatchSync.prepareWatch(ready: boot)
+            #else
+            boot(.success(()))
+            #endif
         }
     }
 
@@ -137,7 +151,11 @@ final class EarlyBoot {
     static func take(then: @escaping (Booted) -> Void) -> Bool {
         guard !taken, Bundle.main.object(forInfoDictionaryKey: "ExactWatchPlan") != nil else { return false }
         taken = true
-        if let result { self.result = nil; then(result) } else { waiting = then }
+        if let result {
+            self.result = nil
+            if case .failure = result { waiting = then }
+            then(result)
+        } else { waiting = then }
         return true
     }
 }
@@ -171,6 +189,11 @@ private struct LiveRoot: View {
                             LaunchPhases.mark("first frame")
                             LaunchPhases.report()
                             model.firstFrame()
+                            // Boot may have retired replicas after the binary removed sync.
+                            for entry in WatchEntry.all { WidgetCenter.shared.reloadTimelines(ofKind: entry.kind) }
+                            #if EXACT_WATCH_SYNC
+                            ExactWatchSync.subscribe { model.storeChanged() }
+                            #endif
                         }
                 } else if let failure {
                     ScrollView { Text(failure).font(.footnote) }
@@ -184,7 +207,11 @@ private struct LiveRoot: View {
                 if let model { model.resize(to: size) } else { boot(size: size) }
             }
         }
-        .onChange(of: phase, initial: true) { _, phase in latest.phase = phase; model?.setPhase(phase) }
+        .onChange(of: phase, initial: true) { _, phase in latest.phase = phase; model?.setPhase(phase)
+            #if EXACT_WATCH_SYNC
+            ExactWatchSync.scene(active: phase == .active)
+            #endif
+        }
         .onChange(of: textSize, initial: true) { _, size in
             latest.textSize = size
             model?.setRootFontSize(SnapshotDriver.rootFontSize(for: size))
@@ -233,6 +260,8 @@ private struct LiveRoot: View {
                 default: log.notice("command \(command.name, privacy: .public) has no watch arm")
                 }
             }
+            failure = nil
+            booting = false
             model = live
             let ms = (liveUptime() - since) * 1000
             log.notice("boot \(ms, format: .fixed(precision: 1)) ms at \(size.width, format: .fixed(precision: 0))x\(size.height, format: .fixed(precision: 0)) pt")

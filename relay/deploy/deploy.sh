@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys the tamber relay (scripts/tamber-relay-server.mjs, docs/tamber-relay-service.md) to one Ubuntu or
+# Deploys the forma relay (scripts/forma-relay-server.mjs, docs/forma-relay-service.md) to one Ubuntu or
 # Debian host over SSH, from a checkout on the developer's machine. Idempotent; the runbook is
 # ~/x2theme/r4-deploy-runbook.md (LLP 1121 §5 10c R4).
 #
@@ -19,7 +19,7 @@
 #                                                     ssh answers, and common other ports are closed
 #
 # <host> is [user@]address (root when no user is named). Environment: RELAY_SSH_KEY (default
-# ~/.ssh/tamber_relay_vps), RELAY_SSH_PORT (22), RELAY_KNOWN_HOSTS (default ~/.ssh/known_hosts, where `trust` pins the
+# ~/.ssh/forma_relay_vps), RELAY_SSH_PORT (22), RELAY_KNOWN_HOSTS (default ~/.ssh/known_hosts, where `trust` pins the
 # key), RELAY_CHECK_PORT (443, where check reaches the relay: a test VM's forwarded port). A user other than root runs
 # the remote side through sudo.
 set -euo pipefail
@@ -29,7 +29,7 @@ root=$(cd "$here/../.." && pwd)
 host=${1:?usage: deploy.sh <[user@]host> <trust <SHA256:…>|provision <domain>|release|rollback|health|status|install-cert <cert> <key>|accounts-add <label>|accounts-revoke <label>|check <domain>>}
 cmd=${2:?a command}
 shift 2
-key_file=${RELAY_SSH_KEY:-$HOME/.ssh/tamber_relay_vps}
+key_file=${RELAY_SSH_KEY:-$HOME/.ssh/forma_relay_vps}
 port=${RELAY_SSH_PORT:-22}
 known=${RELAY_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}
 # The host's key must already be pinned (`trust`): no first-use acceptance, so no one between here and the host can
@@ -55,10 +55,10 @@ cleanup() { [ -z "$UPLOAD" ] || ssh "${ssh_opts[@]}" -p "$port" "$host" "rm -rf 
 trap cleanup EXIT
 updir() {
   local got
-  got=$(ssh "${ssh_opts[@]}" -p "$port" "$host" 'umask 077; mktemp -d /tmp/tamber-relay-upload.XXXXXX' < /dev/null) || { echo "deploy.sh: the host made no upload directory" >&2; exit 1; }
+  got=$(ssh "${ssh_opts[@]}" -p "$port" "$host" 'umask 077; mktemp -d /tmp/forma-relay-upload.XXXXXX' < /dev/null) || { echo "deploy.sh: the host made no upload directory" >&2; exit 1; }
   got=$(printf '%s\n' "$got" | tail -1)
   # (the cleanup's target only once it is what was asked for)
-  [[ $got =~ ^/tmp/tamber-relay-upload\.[A-Za-z0-9]+$ ]] || { echo "deploy.sh: the host gave no upload directory (got '$got')" >&2; exit 1; }
+  [[ $got =~ ^/tmp/forma-relay-upload\.[A-Za-z0-9]+$ ]] || { echo "deploy.sh: the host gave no upload directory (got '$got')" >&2; exit 1; }
   UPLOAD=$got
 }
 put_up() { scp -q "${ssh_opts[@]}" -P "$port" "$1" "$host:$2"; }
@@ -105,15 +105,15 @@ case "$cmd" in
   release)
     arch=$(ssh "${ssh_opts[@]}" -p "$port" "$host" uname -m < /dev/null)
     case "$arch" in x86_64) target=bun-linux-x64;; aarch64|arm64) target=bun-linux-arm64;; *) echo "deploy.sh: no Bun target for $arch" >&2; exit 1;; esac
-    out=$(mktemp -d "${TMPDIR:-/tmp}/tamber-relay-build.XXXXXX")
+    out=$(mktemp -d "${TMPDIR:-/tmp}/forma-relay-build.XXXXXX")
     # One file, Bun inside it: the host needs nothing installed. Built from this checkout as it is.
-    (cd "$root" && bun build --compile --target="$target" scripts/tamber-relay-server.mjs --outfile "$out/tamber-relay" >/dev/null)
-    sha=$(shasum -a 256 "$out/tamber-relay" | cut -d' ' -f1)
+    (cd "$root" && bun build --compile --target="$target" scripts/forma-relay-server.mjs --outfile "$out/forma-relay" >/dev/null)
+    sha=$(shasum -a 256 "$out/forma-relay" | cut -d' ' -f1)
     rev=$(git -C "$root" rev-parse --short=10 HEAD)$(git -C "$root" diff --quiet HEAD -- scripts || echo -dirty)
-    echo "deploy.sh: tamber-relay $sha (from $rev, $target)"
+    echo "deploy.sh: forma-relay $sha (from $rev, $target)"
     updir
-    put_up "$out/tamber-relay" "$UPLOAD/tamber-relay"
-    remote release "$sha" "$UPLOAD/tamber-relay"
+    put_up "$out/forma-relay" "$UPLOAD/forma-relay"
+    remote release "$sha" "$UPLOAD/forma-relay"
     UPLOAD=""
     ;;
   check)

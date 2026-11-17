@@ -152,11 +152,11 @@ const sources: Record<string, (args: any, store: unknown, storage: Storage) => P
   },
   // A read refused (denied, or a selection that left nothing) shows no strip, not the last one.
   recents: async ([show]: [boolean]) => {
-    if (!show) return { assets: [] };
+    if (!show) return { assets: [], cursor: null };
     try {
       return await photoAssets({ limit: 24 });
     } catch {
-      return { assets: [] };
+      return { assets: [], cursor: null };
     }
   },
 };

@@ -1,5 +1,17 @@
-// The finding lines of a verify report: check's groups, each line's rule and place, and the lines by rule (LLP 1116.004
-// D1.3), and its largest-text comparison. verify.mjs re-exports what its callers import.
+// The finding lines of a verify report: check's groups, each line's rule and place, the lines by rule (LLP 1116.004
+// D1.3), its largest-text comparison, and the accessibility tree's group (LLP 1166.002 D1). verify.mjs re-exports what
+// its callers import.
+
+export const FIRST = 'first screen', RELAUNCH = 'relaunch';
+/** The hosts whose accessibility tree verify reads (verify-ax.mjs): the web (Chrome's) and iOS (UIKit's). */
+export const AX_HOSTS = new Set(['web', 'ios']);
+const plural = (n, one) => `${n} ${n === 1 ? one : `${one}s`}`;
+
+/** The screens a group covers, as its head names them: `first screen, 2 test ends, relaunch`. */
+export function placesOf(screens) {
+  const ends = screens.filter((sc) => sc !== FIRST && sc !== RELAUNCH).length;
+  return [screens.includes(FIRST) && FIRST, ends && plural(ends, 'test end'), screens.includes(RELAUNCH) && RELAUNCH].filter(Boolean).join(', ');
+}
 
 /** check's text by scheme: each header's finding lines, how many its "… and N more" left out, and its advice
  * (LLP 1116.004 D1.3), which is never a finding. */
@@ -42,6 +54,51 @@ export function byRule(lines) {
     const rest = all.slice(1), more = rest.length - PLACES;
     return [`  ${rule} ×${all.length}`, `    ${all[0].trim()}`, `    also ${rest.slice(0, PLACES).map(placeOf).join('; ')}${more > 0 ? ` and ${more} more` : ''}`];
   });
+}
+
+/** Screens as a line names them: at most three, else the first two and how many more (`name` says one). */
+const screensNamed = (screens, name) => (screens.length > 3 ? [...screens.slice(0, 2).map(name), `${screens.length - 2} more`] : screens.map(name)).join(', ');
+
+/** Each line of the reads' `key` once, tagged with the screens it was on unless it was on all. */
+function once(reads, key, name) {
+  const on = new Map(), screens = new Set(reads.map((r) => r.screen));
+  for (const r of reads) for (const f of r[key] ?? []) { if (!on.has(f.line)) on.set(f.line, new Set()); on.get(f.line).add(r.screen); }
+  return [...on].map(([line, where]) => (where.size === screens.size ? line : line.replace(/^(\s*)/, `$1(${screensNamed([...where], name)} only) `)));
+}
+
+/** The group for verify's accessibility tree reads (verify-ax.mjs `axRead`, one a screen) on `host`: a head naming the
+ * screens read, each finding once, and for each reason a screen could not be read the screens it kept from being read,
+ * which are not counted. A read whose coverage was incomplete is named in the head beside the count, so "no findings"
+ * is never said of it alone (LLP 1080.002 D8). `{ out, full, lines, accepted, unread, but }`: `lines` are the counted
+ * findings, `accepted` the lines app.json's `verify.accept` took; `unread` how many screens' trees were not read whole
+ * (not read, or read incompletely), absent on a host verify reads none on; `tree` what the closing line adds when any
+ * were, clean or not, since the run says nothing of what the tree would have said (LLP 1166.002 D1). `name` says a screen. */
+export function axGroup(reads, name, host) {
+  const read = reads.filter((r) => !r.note), unread = new Map();
+  for (const r of reads) if (r.note) unread.set(r.note, [...(unread.get(r.note) ?? []), r.screen]);
+  const notes = [...unread].map(([note, screens]) => `  could not read ${screensNamed(screens, name)}: ${note}`);
+  const short = read.filter((r) => r.incomplete), tree = unreadSaid(reads, name);
+  const tally = { unread: AX_HOSTS.has(host) ? reads.length - read.length + short.length : undefined, tree };
+  if (!read.length) return { out: notes.length ? ['tree --ax: not read (not counted)', ...notes] : [], full: [], lines: [], accepted: [], ...tally };
+  const lines = once(read, 'findings', name), accepted = once(read, 'accepted', name);
+  const cut = short.length ? `; coverage incomplete on ${short.map((r) => `${name(r.screen)} (${r.incomplete})`).join(', ')}: ${lines.length ? 'more may be unread there' : 'not a clean result there'}` : '';
+  const head = `tree --ax ${placesOf([...new Set(read.map((r) => r.screen))])}: ${lines.length ? plural(lines.length, 'finding') : 'no findings'}${cut}`;
+  return { out: [head, ...byRule(lines), ...notes], full: lines.length ? [head, ...lines] : [], lines, accepted, ...tally };
+}
+
+/** `the accessibility tree was not read on <screens> (<why>) and was read incompletely on <screens> (<why>)`, or empty
+ * when every read was whole: each reason up to its first clause, with no `;`, which the closing line's caller uses to
+ * join `contract verify`'s summary. */
+function unreadSaid(reads, name) {
+  const clause = (why) => String(why).split(/; | \(/)[0].replace(/[,.:]+$/, '');
+  const on = (rs, why) => {
+    const by = new Map();
+    for (const r of rs) by.set(clause(why(r)), [...(by.get(clause(why(r))) ?? []), r.screen]);
+    return [...by].map(([w, screens]) => `${screensNamed(screens, name)} (${w})`).join(' and ');
+  };
+  const notRead = reads.filter((r) => r.note), partial = reads.filter((r) => !r.note && r.incomplete);
+  const said = [notRead.length && `was not read on ${on(notRead, (r) => r.note)}`, partial.length && `was read incompletely on ${on(partial, (r) => r.incomplete)}`];
+  return said.some(Boolean) ? `the accessibility tree ${said.filter(Boolean).join(' and ')}` : '';
 }
 
 /** Content whose web boxes do not represent iOS's navigation bar at the largest text size.

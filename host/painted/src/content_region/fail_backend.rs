@@ -15,7 +15,16 @@ impl Backend for Failure {
     fn fill(&mut self, _: &Shape, _: [u8; 4], _: Transform) {}
     fn fill_gradient(&mut self, _: &Shape, _: &crate::paint::GradientPaint, _: Transform) {}
     fn fill_border(&mut self, _: &crate::paint::border::BorderFill, _: Transform) {}
-    fn image(&mut self, _: &Arc<Bitmap>, _: Rect4, _: &[Shape], _: Transform, _: Option<[u8; 4]>) {}
+    fn image(
+        &mut self,
+        _: &Arc<Bitmap>,
+        _: Rect4,
+        _: &[Shape],
+        _: Transform,
+        _: Option<[u8; 4]>,
+        _: exact_kernel::ImageRendering,
+    ) {
+    }
     fn text(
         &mut self,
         _: &mut TextEngine,

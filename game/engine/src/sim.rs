@@ -286,6 +286,9 @@ pub struct Sim<G: Game> {
     // tick takes it. Skipped samples are counted for the proof's report.
     paranoid_owed: bool,
     paranoid_skipped: u64,
+    // Presentation generations a paranoid rebuild advanced: its restore is not
+    // a new picture (`picture_generation`).
+    paranoid_rebuilds: u64,
     // An edit through world_mut since the last present: the next advance presents.
     present_owed: bool,
     pub(crate) development_edits: bool,
@@ -486,6 +489,7 @@ impl<G: Game> Sim<G> {
             paranoid_checked: 0,
             paranoid_owed: false,
             paranoid_skipped: 0,
+            paranoid_rebuilds: 0,
             present_owed: false,
             development_edits: true,
             edits_admitted: false,
@@ -975,6 +979,12 @@ impl<G: Game> Sim<G> {
     /// Replacement generation for presentation caches; not saved or hashed.
     pub fn generation(&self) -> u64 {
         self.world.presentation_generation()
+    }
+    /// Advances when the picture is replaced: restart, restore and
+    /// [`World::invalidate_presentation`]. A paranoid rebuild advances
+    /// [`Self::generation`] (its restore makes a new world) but not this.
+    pub fn picture_generation(&self) -> u64 {
+        self.generation().wrapping_sub(self.paranoid_rebuilds)
     }
     /// Read simulation state.
     pub fn world(&self) -> &World {

@@ -98,7 +98,8 @@ pub fn table(plan: &Plan, sites: &Sites) -> Result<String, String> {
             // Literal as the runner's `node` says (`vm::is_literal`); the
             // value, as the emitter reads it.
             let literal = binding.and_then(|b| style::literal(plan, plan.code(b.expr)));
-            let dynamic = binding.is_some_and(|b| !exact_runner::vm::is_literal(plan.code(b.expr)));
+            let dynamic =
+                binding.is_some_and(|b| !exact_runner::vm::is_literal(plan, plan.code(b.expr)));
             // A platform text style that gives the row where no own row
             // does (an expression's row cleared falls back to it too).
             if !view.style.mask.has(row) {

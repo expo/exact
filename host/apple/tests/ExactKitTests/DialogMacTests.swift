@@ -102,7 +102,7 @@ class DialogMacTests: XCTestCase {
         let p = fixture(), opener = p.views[2]!, dialog = p.views[3]!, last = p.views[5]!
         var cancelled: [UInt32] = []
         dialog.handlers.insert("cancel")
-        p.dialogs.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         let field = try XCTUnwrap(p.views[4]?.field)
         front.makeFirstResponder(opener)
         p.dialogCommand("showModal", "form")
@@ -367,7 +367,7 @@ class DialogMacTests: XCTestCase {
         ]
         var cancelled: [UInt32] = []
         dialog.handlers.insert("cancel")
-        p.dialogs.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         for (layout, code, character, ignoring, dismisses) in cases {
             cancelled.removeAll()
             p.press(2)

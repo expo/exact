@@ -743,9 +743,10 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The web's focusable nodes: controls, inputs, buttons and links, a
-    /// node with a `focus`, `blur` or `key` handler (the web gives it a
-    /// `tabindex`), and any node with an explicit `tabindex`, a negative one
-    /// included (LLP 1088 D7.3), as the Apple hosts take the first
+    /// media player's controller (`controller`), a node with a `focus`,
+    /// `blur` or `key` handler (the web gives it a `tabindex`), and any node
+    /// with an explicit `tabindex`, a negative one included (LLP 1088
+    /// D7.3), as the Apple hosts take the first
     /// responder. What tap, `autofocus` and `focus()` may focus; Tab takes
     /// only the `tabbable` ones.
     /// Windows also focuses overflowing scroll containers for keyboard navigation.
@@ -768,6 +769,7 @@ impl<D: DataSource> Presenter<D> {
                     || self.focus == Some(id) && self.alert_message(id)
                     || n.props.str(PropId::Action).is_some()
                     || n.node_type == NodeType::TextInput
+                    || self.controller(&n)
                     // A native button is a button under any role (LLP 1069.011.000 D1).
                     // Every other control is one of HTML's focusable areas
                     // ("input elements whose type attribute are not in the
@@ -795,6 +797,9 @@ impl<D: DataSource> Presenter<D> {
                         n.props.str(PropId::AccessibilityRole),
                         Some("button" | "link")
                     )
+                    // An `a` with an `href` (HTML, "The tabindex attribute"),
+                    // a run in a line of text too, which lowers with no role.
+                    || n.props.link().is_some()
                     || self
                         .host
                         .runner()

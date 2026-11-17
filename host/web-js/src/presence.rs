@@ -2,7 +2,7 @@
 
 use exact_kernel::StyleId;
 use exact_plan::{Opcode, Plan};
-use exact_runner::vm::instructions;
+use exact_runner::vm::transitive_instructions;
 
 /// Source literals parsed by the kernel for a bound presence declaration.
 /// A held value may write no CSS (`none`); an unset value clears its row.
@@ -21,7 +21,7 @@ fn named_values(
         held: Default::default(),
         unsets: Vec::new(),
     };
-    let strings = instructions(code)
+    let strings = transitive_instructions(plan, code)
         .filter_map(|i| i.ok().filter(|i| i.op == Opcode::Str))
         .map(|i| plan.str(exact_plan::StrId(i.args[0] as u32)));
     for value in strings {
@@ -55,6 +55,34 @@ pub fn exit_animations(plan: &Plan, code: &[u8], press: bool) -> PresenceValues 
         let _ = keyframes.resolve(&mut style.rare.exit_animation);
         let animations = &style.rare.exit_animation;
         Some((!animations.0.is_empty()).then(|| exact_web::css::animations_css(animations, press)))
+    })
+}
+
+/// The custom property a route's part is carried in (LLP 1013.001 D1).
+pub fn route_part_property(row: StyleId) -> &'static str {
+    match row {
+        StyleId::ViewTransitionNew => "--exact-view-transition-new",
+        _ => "--exact-view-transition-old",
+    }
+}
+
+/// A bound route part's values: each literal's animations as CSS, `none`
+/// written as itself (the author's cut, which the platform's transition is
+/// not).
+pub fn route_parts(plan: &Plan, code: &[u8], row: StyleId) -> PresenceValues {
+    named_values(plan, code, row, |value| {
+        let mut style = exact_kernel::StyleProps::default();
+        style
+            .set_dynamic(row, &exact_kernel::StyleValue::Text(value.into()))
+            .ok()?;
+        let animations = match row {
+            StyleId::ViewTransitionNew => &style.rare.view_transition_new,
+            _ => &style.rare.view_transition_old,
+        };
+        Some(Some(match animations.0.is_empty() {
+            true => "none".to_string(),
+            false => exact_web::css::animations_css(animations, false),
+        }))
     })
 }
 

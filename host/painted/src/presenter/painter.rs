@@ -550,6 +550,7 @@ impl<D: DataSource> Presenter<D> {
             scale,
             Assets::embedded(assets),
             PainterBoot::selected(choice),
+            TextEngine::shared_for_assets,
             None,
             "/",
             None,
@@ -593,6 +594,21 @@ impl<D: DataSource> Presenter<D> {
                 .map_err(|e| e.to_string());
         }
         self.brush.displayed_process_ms()
+    }
+
+    /// The swap chain's present statistics, read without waiting (LLP
+    /// 1003.001 D9); `None` without a directly presenting device.
+    #[cfg(windows)]
+    pub fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
+        if let Some((device, _)) = self
+            .surfaces
+            .direct_window
+            .as_ref()
+            .and_then(|d| d.fallback.as_ref())
+        {
+            return device.present_statistics();
+        }
+        self.brush.present_statistics()
     }
 
     /// The pixels, as a PNG at `path`.
@@ -869,6 +885,7 @@ mod tests {
                 explicit: true,
                 entry: None,
                 selected_assets: None,
+                selected_dir: None,
                 module: Ok(None),
                 updates: None,
                 hatches: None,

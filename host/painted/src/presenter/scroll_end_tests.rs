@@ -714,7 +714,6 @@ fn row_recycling_retires_the_previous_items_completion() {
     assert_eq!(number(&p, "ends"), 0.);
     assert_eq!(p.timer_due_ms(), None);
 }
-
 struct StagedPlan(Arc<[u8]>);
 impl crate::delivery::Store for StagedPlan {
     fn prepare_selected(&mut self) -> Option<crate::delivery::Selection> {
@@ -743,6 +742,9 @@ impl crate::delivery::Store for StagedPlan {
             seq: 1,
             plan: self.0.clone(),
             assets: Arc::new(|_| Ok(None)),
+            names: Vec::new(),
+            dir: None,
+            verify_assets: Box::new(|| Ok(())),
         }))
     }
     fn commit_activation(&mut self, _: Option<String>, _: u64) -> Result<(), String> {

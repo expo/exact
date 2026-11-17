@@ -25,6 +25,8 @@ use winit::{
 mod edit_menu;
 mod frames;
 mod lifecycle;
+mod presents;
+mod tray;
 use frames::{next_frame_deadline, presentation_resumes, FrameSchedule};
 
 struct App<D: DataSource> {
@@ -83,6 +85,8 @@ struct App<D: DataSource> {
     hidden: bool,
     /// The app's one instance, which later launches reach.
     instance: Option<crate::instance::Instance>,
+    tray: Option<tray::Tray>,
+    presents: presents::Presents,
 }
 
 impl<D: DataSource> Drop for App<D> {
@@ -226,6 +230,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         return 1;
     }
     if !config.windowed() {
+        crate::displays::install_headless();
         return crate::clipboard::run_headless::<D>(&mut config, started);
     }
     let instance = match lifecycle::claim(frame_limit.is_some(), compat, name) {
@@ -330,6 +335,8 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         keep_running: opening.keep_running,
         hidden: false,
         instance,
+        tray: None,
+        presents: Default::default(),
     };
     if let Err(e) = event_loop.run_app(&mut state) {
         eprintln!("exact-windows: {e}");
@@ -583,6 +590,7 @@ impl<D: DataSource + Default + 'static> App<D> {
         };
         let paint_ms = (paint.elapsed().as_secs_f64() * 1000. - direct_present_ms).max(0.);
         self.paint_ms += paint_ms;
+        let (handed, direct) = (frame.is_some() || direct_present_ms > 0., frame.is_none());
         let present = Instant::now();
         if let Some(frame) = frame {
             let surface = surface
@@ -599,7 +607,7 @@ impl<D: DataSource + Default + 'static> App<D> {
                     height
                 ));
             }
-            for (out, pixel) in buffer.iter_mut().zip(frame.data().chunks_exact(4)) {
+            for (out, pixel) in buffer.iter_mut().zip(frame.data().as_chunks::<4>().0) {
                 *out =
                     (u32::from(pixel[0]) << 16) | (u32::from(pixel[1]) << 8) | u32::from(pixel[2]);
             }
@@ -608,6 +616,9 @@ impl<D: DataSource + Default + 'static> App<D> {
         }
         if !p.last_frame_succeeded() {
             return Ok(());
+        }
+        if painting && handed {
+            self.presents.drew(p, direct, self.started);
         }
         // A keyboard command can change the cursor while the mouse is still.
         // Re-resolve the painted hit after the frame, including unmounts and HUDs.
@@ -885,6 +896,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                     .install(handle.hwnd.get(), self.proxy.clone());
                 self.modal.install(handle.hwnd.get(), self.proxy.clone());
                 self.desktop.set_window(handle.hwnd.get());
+                crate::displays::install(handle.hwnd.get());
                 if let Err(error) = self.clicks.install(handle.hwnd.get()) {
                     self.fail(events, error);
                     return;
@@ -893,6 +905,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
         }
         boot_phase("native-hooks-ready");
         let mut direct = false;
+        exact_runner::page::set_awaits_present(true);
         let booted = if let Some(preparing) = self.preparing.take() {
             app::boot_presenter_with_device::<D>(&mut self.config, viewport, preparing)
         } else if self.direct && exact_ink::device::d3d11::startup_watchdog::after_layout() {
@@ -950,11 +963,13 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 p.set_window_active(self.focused);
                 // The window's clock owns time (the timers RFC, D1)
                 p.use_native_timers(true);
+                p.presents_pictures(true);
                 p.set_live_clock(Some(exact_painted::presenter::wall_since(self.started)));
                 if let Some(warning) = warning {
                     eprintln!("exact-windows: {warning}");
                 }
                 self.presenter = Some(p);
+                self.tray_start();
                 self.hidden = self.launches_hidden();
                 let hidden = self.hidden;
                 self.tell_page(|page| page.hidden = hidden);
@@ -1133,7 +1148,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 p.surface_lifecycle(self.minimized || self.occluded || self.hidden, !focused);
                 if !focused {
                     self.buttons = 0;
-                    self.touches.forget();
+                    self.touches.forget(p);
                     let _ = p.pointer_lost(now);
                     p.set_window_active(false);
                     // Unfocused, the pads are not read: what they were is no longer known.
@@ -1309,10 +1324,12 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
     }
     fn about_to_wait(&mut self, events: &ActiveEventLoop) {
         self.handed_launches();
+        self.tray_input(events);
         self.unshown_first_pixel();
         self.wait(events, |p| {
             (p.painter_retry_deadline(), p.painter_present_deadline())
         });
+        self.tray_sync();
     }
 }
 
@@ -1382,7 +1399,8 @@ impl<D: DataSource + Default + 'static> App<D> {
             return;
         }
         let Some(p) = &mut self.presenter else { return };
-        let retirement = p.collect_painter_retirement(Instant::now());
+        let wake = self.presents.poll(p, self.started);
+        let retirement = presents::sooner(p.collect_painter_retirement(Instant::now()), wake);
         let pads_active = self.focused && !self.minimized && p.has_gamepad_input();
         if self.pads_active != pads_active {
             self.pads_active = pads_active;

@@ -1,13 +1,17 @@
 {
   "name": "exact-contract",
   "displayName": "Exact Contract",
-  "description": "Syntax highlighting for Exact Contract files, and a problem matcher for the Contract compiler's diagnostics.",
-  "version": "0.3.0",
+  "description": "Syntax highlighting for Exact Contract files, a problem matcher for the Contract compiler's diagnostics, and `.contract` registered with TypeScript 7 for the content mapper.",
+  "version": "0.4.0",
   "private": true,
   "publisher": "exact",
   "engines": {
     "vscode": "^1.85.0"
   },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:exact-contract"
+  ],
   "categories": [
     "Programming Languages"
   ],
@@ -57,6 +61,7 @@
   },
   "files": [
     "README.md",
+    "extension.js",
     "language-configuration.json",
     "syntaxes/*.json"
   ]

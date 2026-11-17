@@ -61,7 +61,32 @@ final class SegmentsMacTests: XCTestCase {
     }
 
     func testAppearanceNoneRestoresAuthoredTabsAndTheirActions() throws {
-        for (role, member) in [("tablist", "tab"), ("radiogroup", "radio")] { try appearanceNone(role, member) }
+        for (role, group, member) in [("tablist", "tabs", "tab-"), ("radiogroup", "pair", "pair-")] { try appearanceNone(role, group, member) }
+    }
+
+    /// The presses the presenter heard, in order, before they reached the runner.
+    private var pressed: [UInt32] = []
+
+    /// tests/fixtures/painted-groups.contract in a window: a radio group's or
+    /// a tablist's keys and Tab stop are the kernel's (LLP 1166.000), so the
+    /// groups are booted, not written as a batch. `node` finds a node by its
+    /// `testId`; `act` presses one of the fixture's own buttons in the runner,
+    /// changing what its groups show.
+    private func paintedGroups() throws -> (p: Presenter, w: NSWindow, node: (String) throws -> NodeView, act: (String) throws -> Void) {
+        _ = NSApplication.shared
+        let plan = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_PAINTED_GROUPS_PLAN"], "build.mjs --test compiles tests/fixtures/painted-groups.contract")
+        let session = ExactApp.shared.makeSession(label: "painted-groups-" + UUID().uuidString)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        let mount = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 400)), view = ExactView(session: session)
+        w.contentView = mount
+        view.frame = mount.bounds; mount.addSubview(view)
+        addTeardownBlock { w.close(); session.destroy() }
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: plan)), size: CGSize(width: 400, height: 400)).error)
+        let p = session.presenter, press = p.onPress
+        p.onPress = { [unowned self] id in pressed.append(id); press?(id) }
+        let node = { (testId: String) in try XCTUnwrap(p.views.values.first { $0.props["testId"] == testId }, testId) }
+        return (p, w, node, { session.apply(session.runtime.press(try node($0).id, now: session.now())) })
     }
 
     /// An authored radio group of native buttons: an arrow at one's own
@@ -69,91 +94,63 @@ final class SegmentsMacTests: XCTestCase {
     /// a right-to-left group swaps Left and Right; a hidden radio is neither
     /// the Tab stop nor an arrow's target.
     func testAnAuthoredGroupOfNativeRadiosMovesTheirOwnFocus() throws {
-        _ = NSApplication.shared
-        let p = Presenter()
-        p.buttonFace = { _ in var f = ButtonFace(); f.title = "Pick"; return f }
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
-        w.isReleasedWhenClosed = false
-        w.contentView = p.viewport
-        defer { p.reset(); w.close() }
-        var ops: [[String: Any]] = [["op": "create", "id": 10, "kind": "view", "props": ["accessibilityRole": "radiogroup"]]]
-        for id in [11, 12, 13] {
-            ops.append(["op": "create", "id": id, "kind": "control", "props": ["type": "button", "accessibilityRole": "radio"], "handlers": ["press"]])
-            ops.append(["op": "frame", "id": id, "x": Double(id - 11) * 100, "y": 0.0, "w": 90.0, "h": 30.0])
-        }
-        p.apply(wireBatch(ops + [
-            ["op": "children", "id": 10, "ids": [11, 12, 13]], ["op": "roots", "ids": [10]],
-            ["op": "frame", "id": 10, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0],
-            ["op": "style", "id": 10, "style": ["appearance": "none", "written": ["appearance"]]],
-        ]))
-        XCTAssertNil(p.segments.control(of: 10))
+        let (p, w, node, act) = try paintedGroups()
+        try act("paint")
+        XCTAssertNil(p.segments.control(of: try node("period").id))
+        let (day, week, month) = (try node("period-Day").id, try node("period-Week").id, try node("period-Month").id)
         let button = { (id: UInt32) in try XCTUnwrap(p.controls.controls[id] as? NativeButtonMac) }
-        var pressed: [UInt32] = []
-        p.onPress = { pressed.append($0) }
         func arrow(_ code: UInt16, at id: UInt32) throws {
             let character = String(UnicodeScalar([123: 0xF702, 124: 0xF703, 125: 0xF701, 126: 0xF700][Int(code)]!)!)
             let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.numericPad, .function], timestamp: 0, windowNumber: w.windowNumber,
                                          context: nil, characters: character, charactersIgnoringModifiers: character, isARepeat: false, keyCode: code)!
             try button(id).keyDown(with: event)
         }
-        XCTAssertTrue(w.makeFirstResponder(try button(11)))
-        try arrow(124, at: 11)
-        XCTAssertEqual(pressed, [12])
-        XCTAssertTrue(w.firstResponder === (try button(12)), "the pressed radio's own NSButton takes the focus")
-        p.apply(wireBatch([["op": "style", "id": 10, "style": ["appearance": "none", "written": ["appearance"], "direction": "rtl"]]]))
+        XCTAssertTrue(w.makeFirstResponder(try button(day)))
+        try arrow(124, at: day)
+        XCTAssertEqual(pressed, [week])
+        XCTAssertTrue(w.firstResponder === (try button(week)), "the pressed radio's own NSButton takes the focus")
+        try act("flip")
         pressed = []
-        try arrow(124, at: 12)
-        try arrow(123, at: 12)
-        XCTAssertEqual(pressed, [11, 13], "right-to-left: Right is the previous radio, Left the next")
-        p.apply(wireBatch([
-            ["op": "style", "id": 10, "style": ["appearance": "none", "written": ["appearance"]]],
-            ["op": "style", "id": 13, "style": ["visibility": "hidden"]],
-            ["op": "props", "id": 13, "set": ["accessibilityChecked": "true"]],
-        ]))
+        try arrow(124, at: week)
+        try arrow(123, at: week)
+        XCTAssertEqual(pressed, [day, month], "right-to-left: Right is the previous radio, Left the next")
+        try act("flip")
+        try act("hide")
+        try act("choose-Month")
         pressed = []
-        try arrow(125, at: 12)
-        XCTAssertEqual(pressed, [11], "the hidden radio is passed over")
-        XCTAssertEqual([11, 12, 13].map { p.views[$0]!.ariaRadioTabStop }, [true, false, false], "a hidden checked radio is not the stop")
+        try arrow(125, at: week)
+        XCTAssertEqual(pressed, [day], "the hidden radio is passed over")
+        // While a member has the focus it is the stop whatever is checked
+        // (LLP 1166.000 D1): the focus leaves the group first.
+        XCTAssertTrue(w.makeFirstResponder(nil))
+        XCTAssertEqual([day, week, month].map { p.views[$0]!.ariaRadioTabStop }, [true, false, false], "a hidden checked radio is not the stop")
     }
 
-    private func appearanceNone(_ role: String, _ member: String) throws {
-        _ = NSApplication.shared
-        let p = Presenter()
-        defer { p.reset() }
-        p.apply(wireBatch([
-            ["op": "create", "id": 10, "kind": "view", "props": ["accessibilityRole": role]],
-            ["op": "create", "id": 11, "kind": "button", "props": ["accessibilityRole": member], "handlers": ["press"]],
-            ["op": "create", "id": 12, "kind": "button", "props": ["accessibilityRole": member], "handlers": ["press"]],
-            ["op": "create", "id": 13, "kind": "text", "props": ["text": "One"]],
-            ["op": "create", "id": 14, "kind": "text", "props": ["text": "Two"]],
-            ["op": "children", "id": 11, "ids": [13]],
-            ["op": "children", "id": 12, "ids": [14]],
-            ["op": "children", "id": 10, "ids": [11, 12]],
-            ["op": "roots", "ids": [10]],
-        ]))
-        XCTAssertNotNil(p.segments.control(of: 10))
-        p.apply(wireBatch([["op": "style", "id": 10, "style": ["appearance": "none", "written": ["appearance"]]]]))
-        XCTAssertNil(p.segments.control(of: 10))
-        XCTAssertFalse(try XCTUnwrap(p.views[11]).isHidden)
-        var pressed: [UInt32] = []
-        p.onPress = { pressed.append($0) }
-        p.press(11)
-        XCTAssertEqual(pressed, [11])
+    private func appearanceNone(_ role: String, _ group: String, _ member: String) throws {
+        let (p, _, node, act) = try paintedGroups()
+        let owner = try node(group).id
+        XCTAssertNotNil(p.segments.control(of: owner))
+        try act("paint")
+        XCTAssertNil(p.segments.control(of: owner))
+        let (one, two) = (try node(member + "One"), try node(member + "Two"))
+        XCTAssertFalse(one.isHidden)
+        pressed = []
+        p.press(one.id)
+        XCTAssertEqual(pressed, [one.id])
         // An authored radio group keeps WAI-ARIA's keys: one Tab stop, and the
         // arrows press the next or previous radio, wrapping.
-        let (one, two) = (try XCTUnwrap(p.views[11]), try XCTUnwrap(p.views[12]))
         if role == "radiogroup" {
             XCTAssertEqual([one, two].map(\.ariaRadioTabStop), [true, false], "none checked: the first is the stop")
             XCTAssertFalse(two.tabbable)
             pressed = []
-            XCTAssertTrue(p.controls.radioKey(one, "ArrowDown", held: ""))
-            XCTAssertTrue(p.controls.radioKey(one, "ArrowUp", held: ""))
-            XCTAssertEqual(pressed, [12, 12])
+            XCTAssertTrue(p.controls.roleKey(one, "ArrowDown", held: ""))
+            XCTAssertTrue(p.controls.roleKey(one, "ArrowUp", held: ""))
+            XCTAssertEqual(pressed, [two.id, two.id])
         } else {
             XCTAssertNil(one.ariaRadioGroup)
         }
-        p.apply(wireBatch([["op": "style", "id": 10, "style": ["appearance": "auto", "written": ["appearance"]]]]))
-        XCTAssertNotNil(p.segments.control(of: 10))
+        try act("paint")
+        XCTAssertNotNil(p.segments.control(of: owner))
     }
 
     private func drain() {

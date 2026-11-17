@@ -98,6 +98,52 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertEqual(bounded.accessibilityValue, "3 tickets", "`aria-valuetext` first")
     }
 
+    /// A drawn `slider` or `spinbutton` is adjustable, and VoiceOver's
+    /// increment and decrement are the keys WebKit sends an ARIA range: down
+    /// and up at the node, ArrowRight and ArrowLeft for a slider (swapped where
+    /// its `direction` is `rtl`, which the document's sets unless the node says
+    /// its own), ArrowUp and ArrowDown for a vertical one and a spin button. A
+    /// `progressbar` is not adjustable, nor a node whose role goes.
+    func testADrawnSliderOrSpinbuttonStepsByItsKeys() throws {
+        let p = try fixture()
+        let node = NodeView(id: 40, kind: "view", presenter: p)
+        p.views[node.id] = node
+        p.root.addSubview(node)
+        node.frame = CGRect(x: 0, y: 300, width: 200, height: 30)
+        node.handlers = ["key", "keyup"]
+        var heard: [String] = []
+        p.onKey = { id, press in heard.append("\(id):\(press.up ? "up" : "down"):\(press.chord):\(press.code)") }
+        node.applyProps(set: ["accessibilityRole": "slider", "accessibilityValueNow": "30"], clear: [])
+        XCTAssertTrue(node.accessibilityTraits.contains(.adjustable))
+        node.accessibilityIncrement()
+        node.accessibilityDecrement()
+        XCTAssertEqual(heard, ["40:down:ArrowRight:ArrowRight", "40:up:ArrowRight:ArrowRight", "40:down:ArrowLeft:ArrowLeft", "40:up:ArrowLeft:ArrowLeft"])
+        func keys(_ step: () -> Void) -> [String] {
+            heard = []
+            step()
+            return heard.filter { $0.contains(":down:") }.map { String($0.split(separator: ":")[2]) }
+        }
+        p.apply(wireBatch([["op": "language", "lang": "ar", "dir": "rtl"]]))
+        XCTAssertEqual(keys { node.accessibilityIncrement(); node.accessibilityDecrement() }, ["ArrowLeft", "ArrowRight"])
+        // The node's own computed `direction` wins over the document's.
+        node.applyStyle(["direction": "ltr"])
+        XCTAssertEqual(keys { node.accessibilityIncrement(); node.accessibilityDecrement() }, ["ArrowRight", "ArrowLeft"])
+        p.apply(wireBatch([["op": "language", "lang": "en", "dir": "ltr"]]))
+        node.applyStyle(["direction": "rtl"])
+        XCTAssertEqual(keys { node.accessibilityIncrement(); node.accessibilityDecrement() }, ["ArrowLeft", "ArrowRight"])
+        node.applyProps(set: ["accessibilityOrientation": "vertical"], clear: [])
+        XCTAssertEqual(keys { node.accessibilityIncrement(); node.accessibilityDecrement() }, ["ArrowUp", "ArrowDown"])
+        node.applyProps(set: ["accessibilityRole": "spinbutton"], clear: ["accessibilityOrientation"])
+        XCTAssertTrue(node.accessibilityTraits.contains(.adjustable))
+        XCTAssertEqual(keys { node.accessibilityIncrement(); node.accessibilityDecrement() }, ["ArrowUp", "ArrowDown"])
+        node.applyProps(set: ["accessibilityRole": "progressbar"], clear: [])
+        XCTAssertFalse(node.accessibilityTraits.contains(.adjustable))
+        XCTAssertEqual(keys { node.accessibilityIncrement() }, [])
+        node.applyProps(set: ["accessibilityRole": "slider"], clear: [])
+        node.applyProps(set: [:], clear: ["accessibilityRole"])
+        XCTAssertFalse(node.accessibilityTraits.contains(.adjustable))
+    }
+
     /// A native control is named by `aria-labelledby` as by `aria-label`
     /// (accname), and follows the text it names.
     func testANativeCheckboxIsNamedByTheTextItsLabelledbyNames() throws {
@@ -234,6 +280,40 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         return p
     }
     private func elements(_ ax: [String: Any]) -> [[String: Any]] { ax["elements"] as? [[String: Any]] ?? [] }
+
+    /// A tablist's tabs are hidden by the host while a segmented control draws their words: what the
+    /// tablist labels, and a live region that holds it, read the same once the control is adopted.
+    func testATablistASegmentedControlDrawsStillNamesAndSpeaks() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 29, "kind": "view", "props": ["accessibilityLive": "polite"]],
+            ["op": "create", "id": 30, "kind": "view", "props": ["id": "views"]],
+            ["op": "create", "id": 31, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab"]],
+            ["op": "create", "id": 32, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab"]],
+            ["op": "create", "id": 33, "kind": "text", "props": ["text": "One"]],
+            ["op": "create", "id": 34, "kind": "text", "props": ["text": "Two"]],
+            ["op": "create", "id": 35, "kind": "control", "props": ["type": "checkbox", "accessibilityLabelledBy": "views"], "handlers": ["change"]],
+            ["op": "children", "id": 31, "ids": [33]], ["op": "children", "id": 32, "ids": [34]],
+            ["op": "children", "id": 30, "ids": [31, 32]], ["op": "children", "id": 29, "ids": [30]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 29, 35]],
+            ["op": "frame", "id": 29, "x": 0, "y": 220, "w": 250, "h": 40],
+            ["op": "frame", "id": 30, "x": 0, "y": 0, "w": 250, "h": 40],
+            ["op": "frame", "id": 35, "x": 0, "y": 270, "w": 22, "h": 22],
+        ]))
+        let live = try XCTUnwrap(p.views[29]), tab = try XCTUnwrap(p.views[31]), control = try XCTUnwrap(p.controls.controls[35])
+        func reads(_ when: String) {
+            p.syncAccessibility()
+            XCTAssertEqual(control.accessibilityLabel, "One Two", when)
+            XCTAssertEqual(live.liveText, "One Two", when)
+        }
+        XCTAssertNil(p.segments.control(of: 30))
+        XCTAssertFalse(tab.isHidden)
+        reads("as authored")
+        p.apply(wireBatch([["op": "props", "id": 30, "set": ["accessibilityRole": "tablist"]]]))
+        XCTAssertNotNil(p.segments.control(of: 30))
+        XCTAssertTrue(tab.isHidden)
+        reads("drawn by the segmented control")
+    }
 
     func testProjectedSegmentsJoinTheirAuthoredTabsAndStaySuppressedWithTheirOwner() throws {
         guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit's segments need its accessibility runtime") }
@@ -544,7 +624,7 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         _ = box
         // A projected element (a swipe cell, here a declared owner) lives
         // outside its view's subtree; the scope is the joined ids, so it stays.
-        final class Projected: UIAccessibilityElement, AgentOwned { var agentViewId: UInt32? { 5 } }
+        final class Projected: UIAccessibilityElement, InspectionOwned { var inspectionViewId: UInt32? { 5 } }
         let projected = Projected(accessibilityContainer: try XCTUnwrap(p.views[2]))
         projected.isAccessibilityElement = true
         projected.accessibilityLabel = "Projected"
@@ -583,7 +663,7 @@ final class AccessibilityTreeIOSTests: XCTestCase {
     func testAnOwnedElementJoinsItsDeclaredViewAndASecureValueIsOmitted() throws {
         let p = try fixture()
         let box = try XCTUnwrap(p.views[4])
-        final class Owned: UIAccessibilityElement, AgentOwned { var agentViewId: UInt32? { 5 } }
+        final class Owned: UIAccessibilityElement, InspectionOwned { var inspectionViewId: UInt32? { 5 } }
         let owned = Owned(accessibilityContainer: box)
         owned.accessibilityLabel = "Declared"
         owned.isAccessibilityElement = true

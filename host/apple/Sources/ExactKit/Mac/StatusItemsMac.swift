@@ -3,9 +3,9 @@
 // the button's place: the button is covered whole (CoversMac.swift) and
 // hidden in the window, so it takes no room there.
 //
-// The items are the status session's: the oldest live session (the one the
-// launch booted, then the oldest left). A status button in any other session
-// places nothing, and its journal says so once.
+// The items are the status session's: the live session of the window named
+// `main`, the app's (LLP 1030.004 D3), else the oldest live session. A status
+// button in any other session places nothing, and its journal says so once.
 //
 // A click opens the item's menu when the button names a menu-shaped popover
 // (LLP 1021 D1), filled from its rows as it opens (`MenuHost.fill`); with no
@@ -41,8 +41,12 @@ final class StatusItemHost: NSObject {
     /// Whether this session places status items now.
     var isStatusSession: Bool {
         Self.hosts.removeAll { $0.host == nil }
-        return Self.hosts.first { $0.host?.ended == false }?.host === self
+        let live = Self.hosts.compactMap(\.host).filter { !$0.ended }
+        return (live.first { $0.presenter.session?.label == "main" } ?? live.first) === self
     }
+    /// Whether the last sync placed this session's items: a `main` booted
+    /// again takes them from the session that held them meanwhile.
+    private var wasStatusSession = false
 
     /// Whether `node` is placed as a status item, so not in the window.
     func places(_ node: NodeView) -> Bool { items[node.id] != nil }
@@ -69,8 +73,13 @@ final class StatusItemHost: NSObject {
 
     /// After each batch: the items follow the buttons.
     func sync() {
-        let wanted = isStatusSession ? buttons() : []
-        if !isStatusSession, !saidUnplaced, !buttons().isEmpty {
+        let status = isStatusSession
+        defer {
+            if status, !wasStatusSession { for case let host? in Self.hosts.map(\.host) where host !== self { host.sync() } }
+            wasStatusSession = status
+        }
+        let wanted = status ? buttons() : []
+        if !status, !saidUnplaced, !buttons().isEmpty {
             saidUnplaced = true
             presenter.session?.log("status item: not placed: another window's session holds the app's status items (LLP 1133.025 D4)")
         }
@@ -146,7 +155,7 @@ final class StatusItemHost: NSObject {
 
     /// A restart: the new runtime's ids are its own, and its first batch
     /// places its items again. The session's end (`destroy`, which resets
-    /// the presenter): the next oldest session places its own.
+    /// the presenter): the next status session places its own.
     func reset() {
         for item in items.values { NSStatusBar.system.removeStatusItem(item) }
         items.removeAll()
@@ -154,7 +163,7 @@ final class StatusItemHost: NSObject {
         agentMenu = nil
         guard presenter.session?.state == .destroyed, !ended else { return }
         ended = true
-        for case let host? in Self.hosts.map(\.host) where host !== self && !host.ended { host.sync(); break }
+        for case let host? in Self.hosts.map(\.host) where host !== self && !host.ended && host.isStatusSession { host.sync() }
     }
 
     // MARK: The agent

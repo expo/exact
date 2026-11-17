@@ -28,7 +28,7 @@ pub struct Kept {
 pub struct Retained {
     /// The plan's retention (D7): none when the build stopped before its
     /// design.
-    pub retention: Option<exact_tamber::Retention>,
+    pub retention: Option<exact_forma::Retention>,
     /// The app's synthetic tokens (D3), each its expression and whether a
     /// colour row writes it.
     pub candidates: Vec<(String, bool)>,
@@ -36,7 +36,7 @@ pub struct Retained {
     pub kept: Option<Kept>,
     /// Whether `kept` was reused, not checked again.
     pub reused: bool,
-    /// Under `EXACT_TAMBER_RETENTION_VERIFY` (a test's): the reused types
+    /// Under `EXACT_FORMA_RETENTION_VERIFY` (a test's): the reused types
     /// or expansion were not what checking again gives, and the fresh ones
     /// were used.
     pub stale: bool,
@@ -193,7 +193,7 @@ pub(crate) fn reuse(
         .design
         .iter()
         .chain(&file.package_designs)
-        .all(|d| exact_tamber::parse(&d.text).is_ok());
+        .all(|d| exact_forma::parse(&d.text).is_ok());
     let same = parses
         && offered.mapped == mapped
         && offered.strings == *strings
@@ -231,11 +231,11 @@ pub(crate) fn keep(
 }
 
 /// Whether reused types and expansion are to be checked against fresh
-/// ones (`EXACT_TAMBER_RETENTION_VERIFY`, theme2's condition (b)): a
+/// ones (`EXACT_FORMA_RETENTION_VERIFY`, theme2's condition (b)): a
 /// test's, so that a pass that comes to read the design fails a test
 /// instead of going stale.
 pub(crate) fn verifying() -> bool {
-    std::env::var_os("EXACT_TAMBER_RETENTION_VERIFY").is_some()
+    std::env::var_os("EXACT_FORMA_RETENTION_VERIFY").is_some()
 }
 
 /// Whether the `reused` types and expansion are the `fresh` ones; a

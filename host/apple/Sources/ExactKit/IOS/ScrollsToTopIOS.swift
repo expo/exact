@@ -6,8 +6,8 @@
 // bar's scroller too, by one rule, LLP 1115.000 D11.1), else, with no routes,
 // the viewport when it scrolls, else the first vertical scroller on the
 // page. A grouped list answers with the collection view that shows, never
-// the hidden scroll beneath it. Run after every batch and every finished
-// navigation.
+// the hidden scroll beneath it. Run after batches that can change the
+// scroller selection and every finished navigation.
 #if os(iOS) || os(tvOS)
 import UIKit
 
@@ -55,8 +55,10 @@ extension NodeView {
     /// the pump leads as it does any scroll. The tap is the reader's move of
     /// the list (`CollectionHost.readerMoves`).
     @objc package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-        guard scrollView === self.scrollView, let collections = presenter?.collections,
-              let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
+        presenter?.elementScrolls.userScrolled(scrollView)
+        guard scrollView === self.scrollView else { return true }
+        dropCarriedScroll()
+        guard let collections = presenter?.collections, let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
         collections.readerMoves(id)
         let top = -scrollView.adjustedContentInset.top, glide = scrollView.bounds.height * 2
         guard scrollView.contentOffset.y - top > glide * 1.5 else { return true }
@@ -86,6 +88,15 @@ extension Presenter {
         return nil
     }
 }
+
+#if os(iOS)
+extension RouteController {
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        host?.presenter.elementScrolls.userScrolled(scrollView)
+        return true
+    }
+}
+#endif
 
 extension NavigationHost {
     /// Native selection wins over `navigationScroll`, then the first vertical scroller

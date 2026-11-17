@@ -7,6 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { oneScheme } from '../../scripts/app-cli.mjs';
 
 /** The prefix of a resident's phase line on its stdout. */
 export const PHASE = 'phase: ';
@@ -37,7 +38,7 @@ export function acceptModuleReply(line, request, run, log = console.error) {
   if (!request || reply.id !== request.id) throw new Error('unexpected module producer response');
   if (request.id !== run) return null;
   if (!reply.ok) throw new Error(reply.error || 'module producer refused the candidate');
-  for (const warning of reply.warnings) log(warning);
+  for (const warning of oneScheme(reply.warnings)) log(warning); // the colours that stay one in dark mode, one line
   return reply;
 }
 

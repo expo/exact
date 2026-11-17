@@ -11,11 +11,7 @@ impl<D: DataSource> Bridge<D> {
 
     fn pump_with_clock(&mut self, now_ms: f64, clock: impl Fn() -> Instant) -> u32 {
         if let Some(host) = self.host.as_mut() {
-            if host
-                .launch_store
-                .as_ref()
-                .is_some_and(|store| store.take_changed())
-            {
+            if host.take_launch_store_change() {
                 if let Some(executor) = self.executor.as_deref() {
                     executor.begin_pump();
                 }

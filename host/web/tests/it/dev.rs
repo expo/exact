@@ -665,16 +665,16 @@ fn a_refused_part_of_the_page_geometry_changes_nothing() {
 /// publishes no plan (its file is written, for a host that watches it); its
 /// batch says what changed. An edit that changes the plan's
 /// structure, or the Contract, still writes one. A write by rename, as the
-/// Tamber server makes it, is the same case as one in place, as an editor
+/// Forma server makes it, is the same case as one in place, as an editor
 /// saves.
 #[test]
 fn a_value_only_design_edit_writes_no_plan_and_sends_a_batch() {
     let dir = scratch("design");
     let src = dir.join("app.contract");
     let out = dir.join("app.plan");
-    let design = dir.join("app.tamber");
-    let tamber = "tamber t\n\ntheme\n  ink = #111111\n  page = #ffffff\n";
-    std::fs::write(&design, tamber).unwrap();
+    let design = dir.join("app.forma");
+    let forma = "forma t\n\ntheme\n  ink = #111111\n  page = #ffffff\n";
+    std::fs::write(&design, forma).unwrap();
     let view = "component App\n  view\n    column background-color=\"page\"\n      text \"one\" color=\"ink\"\n";
     std::fs::write(&src, view).unwrap();
     let mut s = Session::new(&src, &out);
@@ -682,7 +682,7 @@ fn a_value_only_design_edit_writes_no_plan_and_sends_a_batch() {
     assert!(first.live.is_none());
     let on_disk = std::fs::read(&out).unwrap();
     // A value, saved in place.
-    save(&design, &tamber.replace("#111111", "#222222"), 1);
+    save(&design, &forma.replace("#111111", "#222222"), 1);
     let edit = s.poll::<NoData>().expect("a design edit").unwrap();
     // Dated by the design's save, not the older root's.
     let design_ms = std::fs::metadata(&design)
@@ -706,8 +706,8 @@ fn a_value_only_design_edit_writes_no_plan_and_sends_a_batch() {
     assert_eq!(live.snapshot.tokens.len(), 2);
     assert_eq!(live.batch.design, live.snapshot.design);
     // Another, written by rename: its base is the last batch's design.
-    let tmp = dir.join(".app.tamber.tmp");
-    std::fs::write(&tmp, tamber.replace("#111111", "#333333")).unwrap();
+    let tmp = dir.join(".app.forma.tmp");
+    std::fs::write(&tmp, forma.replace("#111111", "#333333")).unwrap();
     std::fs::rename(&tmp, &design).unwrap();
     let edit = s.poll::<NoData>().expect("a renamed design").unwrap();
     let next = edit.live.expect("value-only");
@@ -716,7 +716,7 @@ fn a_value_only_design_edit_writes_no_plan_and_sends_a_batch() {
     // does not send. Naming it in the view is structure.
     save(
         &design,
-        &format!("{}  edge = #000000\n", tamber.replace("#111111", "#333333")),
+        &format!("{}  edge = #000000\n", forma.replace("#111111", "#333333")),
         3,
     );
     let quiet = s.poll::<NoData>().expect("rebuilt").unwrap();
@@ -745,9 +745,9 @@ fn a_kept_token_added_or_starting_to_vary_publishes_a_plan() {
     let dir = scratch("retained");
     let src = dir.join("app.contract");
     let out = dir.join("app.plan");
-    let design = dir.join("app.tamber");
-    let tamber = "tamber t\n\naxes\n  tone = warm | cool\n\ntheme\n  ink = #111111\n";
-    std::fs::write(&design, tamber).unwrap();
+    let design = dir.join("app.forma");
+    let forma = "forma t\n\naxes\n  tone = warm | cool\n\ntheme\n  ink = #111111\n";
+    std::fs::write(&design, forma).unwrap();
     std::fs::write(
         &src,
         "component App\n  view\n    text \"one\" color=\"ink\"\n",
@@ -766,12 +766,12 @@ fn a_kept_token_added_or_starting_to_vary_publishes_a_plan() {
         .unwrap()
         .live
         .is_none());
-    save(&design, &format!("{tamber}  spare = #222222\n"), 1);
+    save(&design, &format!("{forma}  spare = #222222\n"), 1);
     let added = s.poll::<NoData>().expect("an added token").unwrap();
     assert!(added.live.is_none(), "kept, so the plan's structure moved");
     save(
         &design,
-        &format!("{tamber}  spare = #222222\n").replace(
+        &format!("{forma}  spare = #222222\n").replace(
             "ink = #111111\n",
             "ink = #111111\n    when tone=cool: #0a7aff\n",
         ),
@@ -791,9 +791,9 @@ fn a_scrub_previews_without_writing_and_restores_the_committed_design() {
     let dir = scratch("scrub");
     let src = dir.join("app.contract");
     let out = dir.join("app.plan");
-    let design = dir.join("app.tamber");
-    let tamber = "tamber t\n\ntheme\n  ink = #111111\n  page = #ffffff\n";
-    std::fs::write(&design, tamber).unwrap();
+    let design = dir.join("app.forma");
+    let forma = "forma t\n\ntheme\n  ink = #111111\n  page = #ffffff\n";
+    std::fs::write(&design, forma).unwrap();
     std::fs::write(
         &src,
         "component App\n  view\n    column background-color=\"page\"\n      text \"one\" color=\"ink\"\n",
@@ -803,7 +803,7 @@ fn a_scrub_previews_without_writing_and_restores_the_committed_design() {
     s.poll::<NoData>().expect("first look builds").unwrap();
     let plan = std::fs::read(&out).unwrap();
     let (batch, snapshot) = s
-        .scrub::<NoData>(tamber.replace("#111111", "#222222"))
+        .scrub::<NoData>(forma.replace("#111111", "#222222"))
         .unwrap();
     let batch = batch.expect("ink moved");
     assert_eq!(batch.tokens.len(), 1);
@@ -812,16 +812,16 @@ fn a_scrub_previews_without_writing_and_restores_the_committed_design() {
     assert_eq!(std::fs::read(&out).unwrap(), plan, "no plan written");
     assert_eq!(
         std::fs::read_to_string(&design).unwrap(),
-        tamber,
+        forma,
         "no design written"
     );
     let (next, _) = s
-        .scrub::<NoData>(tamber.replace("#111111", "#333333"))
+        .scrub::<NoData>(forma.replace("#111111", "#333333"))
         .unwrap();
     assert_eq!(next.unwrap().base.as_deref(), Some(batch.design.as_str()));
     // An axis added is structure: refused, the preview kept.
     assert!(s
-        .scrub::<NoData>(tamber.replace("theme\n", "axes\n  mode = a | b\n\ntheme\n"))
+        .scrub::<NoData>(forma.replace("theme\n", "axes\n  mode = a | b\n\ntheme\n"))
         .is_err());
     let (back, committed) = s.restore().expect("a scrub previewed");
     let back = back.expect("back to #111111");
@@ -831,9 +831,9 @@ fn a_scrub_previews_without_writing_and_restores_the_committed_design() {
     // A save while a scrub previews: the builds stay on the preview (an
     // empty batch), and its end restores the saved design.
     let (shown, _) = s
-        .scrub::<NoData>(tamber.replace("#111111", "#444444"))
+        .scrub::<NoData>(forma.replace("#111111", "#444444"))
         .unwrap();
-    save(&design, &tamber.replace("#111111", "#555555"), 1);
+    save(&design, &forma.replace("#111111", "#555555"), 1);
     let saved = s.poll::<NoData>().expect("a design edit").unwrap();
     let live = saved.live.expect("value-only");
     assert!(live.batch.tokens.is_empty());
@@ -843,10 +843,10 @@ fn a_scrub_previews_without_writing_and_restores_the_committed_design() {
     assert_eq!(back.tokens[0].value, "#555555ff");
     // A released scrub: the build of what it wrote goes from it, and ends it.
     let (shown, _) = s
-        .scrub::<NoData>(tamber.replace("#111111", "#666666"))
+        .scrub::<NoData>(forma.replace("#111111", "#666666"))
         .unwrap();
     s.release();
-    save(&design, &tamber.replace("#111111", "#666666"), 2);
+    save(&design, &forma.replace("#111111", "#666666"), 2);
     let written = s.poll::<NoData>().expect("the release's write").unwrap();
     let live = written.live.expect("value-only");
     assert_eq!(
@@ -857,13 +857,13 @@ fn a_scrub_previews_without_writing_and_restores_the_committed_design() {
     assert!(s.restore().is_none(), "ended");
     // A scrub that previews before a released one's write builds keeps its
     // preview: that build changes only what its end restores.
-    s.scrub::<NoData>(tamber.replace("#111111", "#777777"))
+    s.scrub::<NoData>(forma.replace("#111111", "#777777"))
         .unwrap();
     s.release();
     let (next, _) = s
-        .scrub::<NoData>(tamber.replace("#111111", "#888888"))
+        .scrub::<NoData>(forma.replace("#111111", "#888888"))
         .unwrap();
-    save(&design, &tamber.replace("#111111", "#777777"), 3);
+    save(&design, &forma.replace("#111111", "#777777"), 3);
     let written = s.poll::<NoData>().expect("the first's write").unwrap();
     assert!(written.live.expect("value-only").batch.tokens.is_empty());
     let (back, _) = s.restore().expect("the second still previews");
@@ -884,13 +884,13 @@ fn a_running_web_build_applies_a_batch_in_place() {
     use exact_runner::design;
     let dir = scratch("live-host");
     let view = "component App\n  state n = 0\n  action bump\n    n = n + 1\n  view\n    column background-color=\"page\"\n      button press=bump testId=\"bump\"\n        text `${n}` color=\"ink\" testId=\"count\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  ink = #111111\n  page = #ffffff\n");
-    let b = plan("tamber t\n\ntheme\n  ink = #ff0000\n  page = #ffffff\n");
+    let a = plan("forma t\n\ntheme\n  ink = #111111\n  page = #ffffff\n");
+    let b = plan("forma t\n\ntheme\n  ink = #ff0000\n  page = #ffffff\n");
     let structure = design::shape(&a);
     let batch = design::batch(&structure, &design::tokens(&a), &design::tokens(&b)).unwrap();
     let (mut host, _) = Host::boot(&a.encode(), NoData, Default::default(), "/").unwrap();
@@ -925,14 +925,14 @@ fn a_running_web_build_drops_a_scrub_frame_older_than_one_it_showed() {
     use exact_runner::design;
     let dir = scratch("live-scrub");
     let view = "component App\n  view\n    column background-color=\"page\"\n      text \"a\" color=\"ink\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  ink = #111111\n  page = #ffffff\n");
-    let b = plan("tamber t\n\ntheme\n  ink = #ff0000\n  page = #ffffff\n");
-    let c = plan("tamber t\n\ntheme\n  ink = #00ff00\n  page = #ffffff\n");
+    let a = plan("forma t\n\ntheme\n  ink = #111111\n  page = #ffffff\n");
+    let b = plan("forma t\n\ntheme\n  ink = #ff0000\n  page = #ffffff\n");
+    let c = plan("forma t\n\ntheme\n  ink = #00ff00\n  page = #ffffff\n");
     let shape = design::shape(&a);
     let (ta, tb, tc) = (design::tokens(&a), design::tokens(&b), design::tokens(&c));
     let marked = |mut e: design::Edit, id: &str, rev, run: Option<&str>| {
@@ -1005,9 +1005,9 @@ fn a_running_web_build_drops_a_scrub_frame_older_than_one_it_showed() {
 #[test]
 fn a_patched_scrub_frame_is_the_compiled_one() {
     let dir = scratch("patch");
-    let design = dir.join("app.tamber");
-    let tamber = "tamber t\n\naxes\n  dark-style = dim | black  under scheme=dark\n\ntheme\n  ink = #111111\n  page = light-dark(#ffffff, #151d28)\n    when dark-style=black: #000000\n";
-    std::fs::write(&design, tamber).unwrap();
+    let design = dir.join("app.forma");
+    let forma = "forma t\n\naxes\n  dark-style = dim | black  under scheme=dark\n\ntheme\n  ink = #111111\n  page = light-dark(#ffffff, #151d28)\n    when dark-style=black: #000000\n";
+    std::fs::write(&design, forma).unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  view\n    column background-color=\"page\"\n      text \"a\" color=\"ink\"\n").unwrap();
     let mut s = Session::new(dir.join("app.contract"), dir.join("out.plan"));
     s.poll::<NoData>().expect("built").unwrap();
@@ -1015,14 +1015,11 @@ fn a_patched_scrub_frame_is_the_compiled_one() {
         use sha2::Digest;
         format!("{:x}", sha2::Sha256::digest(text))
     };
-    let source = digest(tamber);
+    let source = digest(forma);
     assert_eq!(s.design_source(), Some(source.as_str()));
     let ink = [("ink".to_string(), vec!["#ff0000ff".to_string(); 2])];
     // Folded over other bytes (or none named): compiled instead.
-    assert!(s
-        .patch(Some(&digest("tamber t\n")), &ink)
-        .unwrap()
-        .is_none());
+    assert!(s.patch(Some(&digest("forma t\n")), &ink).unwrap().is_none());
     assert!(s.patch(None, &ink).unwrap().is_none());
     let (patched, _) = s
         .patch(
@@ -1040,7 +1037,7 @@ fn a_patched_scrub_frame_is_the_compiled_one() {
         )
         .unwrap()
         .expect("patched");
-    let edited = tamber
+    let edited = forma
         .replace("#111111", "#ff0000")
         .replace("#151d28", "#222222");
     let (compiled, _) = s.scrub::<NoData>(edited.clone()).unwrap();
@@ -1060,7 +1057,7 @@ fn a_patched_scrub_frame_is_the_compiled_one() {
     // A hand edit's build, its batch empty under the preview: the design
     // it committed is the edit's, and a frame folded before it is not
     // patched on it.
-    let hand = tamber.replace("#111111", "#333333");
+    let hand = forma.replace("#111111", "#333333");
     std::fs::write(&design, &hand).unwrap();
     s.poll::<NoData>().expect("built").unwrap();
     assert_eq!(s.design_source(), Some(digest(&hand).as_str()));
@@ -1076,13 +1073,13 @@ fn a_running_web_build_takes_a_role_override_edit_in_place() {
     use exact_runner::design;
     let dir = scratch("live-role");
     let view = "component App\n  view\n    column\n      text \"a\" testId=\"text\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  AccentColor = #0a7aff\n  CanvasText = #111111\n");
-    let b = plan("tamber t\n\ntheme\n  AccentColor = #ff0000\n  CanvasText = #222222\n");
+    let a = plan("forma t\n\ntheme\n  AccentColor = #0a7aff\n  CanvasText = #111111\n");
+    let b = plan("forma t\n\ntheme\n  AccentColor = #ff0000\n  CanvasText = #222222\n");
     let batch =
         design::batch(&design::shape(&a), &design::tokens(&a), &design::tokens(&b)).unwrap();
     let (mut host, boot) = Host::boot(&a.encode(), NoData, Default::default(), "/").unwrap();
@@ -1103,13 +1100,13 @@ fn a_running_web_build_takes_a_role_override_edit_in_place() {
 fn an_event_beside_another_session_crosses_under_its_own_roles() {
     let dir = scratch("two-sessions");
     let view = "component App\n  state n = 0\n  action bump\n    n = n + 1\n  view\n    column\n      button press=bump testId=\"bump\"\n        text `${n}` color=\"#ff0000\" testId=\"count\"\n";
-    let plan = |tamber: &str| {
-        std::fs::write(dir.join("app.tamber"), tamber).unwrap();
+    let plan = |forma: &str| {
+        std::fs::write(dir.join("app.forma"), forma).unwrap();
         std::fs::write(dir.join("app.contract"), view).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap()
     };
-    let a = plan("tamber t\n\ntheme\n  CanvasText = #111111\n");
-    let b = plan("tamber t\n\ntheme\n  CanvasText = #222222\n");
+    let a = plan("forma t\n\ntheme\n  CanvasText = #111111\n");
+    let b = plan("forma t\n\ntheme\n  CanvasText = #222222\n");
     let (mut first, _) = Host::boot(&a.encode(), NoData, Default::default(), "/").unwrap();
     let (_second, _) = Host::boot(&b.encode(), NoData, Default::default(), "/").unwrap();
     let bump = {

@@ -271,15 +271,31 @@ final class FixtureModule: ExactModule {
     }
 
     /// The app's own container, when the environment asks for it (the UIKit
-    /// tests': `EXACT_FIXTURE_CONTAINER=app`): a segmented control over the
-    /// selected tab's stack, through the seam alone.
+    /// tests'): `EXACT_FIXTURE_CONTAINER=app`, a segmented control over the
+    /// selected tab's stack, through the seam alone; `tab-bar`, a tab bar
+    /// controller that is its own delegate.
     override func tabContainer(_ contents: ExactTabContents) -> UIViewController? {
-        return ProcessInfo.processInfo.environment["EXACT_FIXTURE_CONTAINER"] == "app" ? FixtureTabs(contents) : nil
+        switch ProcessInfo.processInfo.environment["EXACT_FIXTURE_CONTAINER"] {
+        case "app": return FixtureTabs(contents)
+        case "tab-bar": return FixtureTabBar(contents)
+        default: return nil
+        }
     }
     #endif
 }
 
 #if os(iOS)
+/// A tab bar controller the app owns, its delegate slot its own.
+final class FixtureTabBar: UITabBarController, UITabBarControllerDelegate {
+    init(_ contents: ExactTabContents) {
+        super.init(nibName: nil, bundle: nil)
+        setViewControllers(contents.tabs.map(\.controller), animated: false)
+        selectedIndex = contents.selected
+        delegate = self
+    }
+    required init?(coder: NSCoder) { nil }
+}
+
 /// A container the app owns: every tab's stack a child, the selected one
 /// shown; its control asks Exact to select, and Exact says what it chose.
 final class FixtureTabs: UIViewController {

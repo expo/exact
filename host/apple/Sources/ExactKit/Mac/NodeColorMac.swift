@@ -12,6 +12,8 @@ extension NodeView {
     package func color(_ key: String, _ fallback: NSColor) -> NSColor { cgColor(key).flatMap { NSColor(cgColor: $0) } ?? fallback }
     /// CSS `::placeholder { color }` (LLP 1104 D3); nil, the platform's.
     var placeholderColor: NSColor? { cgColor("placeholder_color").flatMap { NSColor(cgColor: $0) } }
+    /// CSS `::backdrop { background-color }` on a dialog (LLP 1035.001 D11); nil, the platform's.
+    var backdropColor: NSColor? { cgColor("backdrop_color").flatMap { NSColor(cgColor: $0) } }
     /// A colour row as Core Graphics draws it (LLP 1100 D2).
     func cgColor(_ key: String, dark: Bool? = nil) -> CGColor? { style[key].flatMap { $0.cgColor(dark: dark ?? drawsDark, contrast: drawsHighContrast, elevated: window is SheetWindow, tint: ownTint(for: $0)) } }
 

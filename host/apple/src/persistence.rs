@@ -16,6 +16,7 @@ impl<D: DataSource> Host<D> {
         let writes = self.runner.take_store_writes();
         if self.secrets.is_none() {
             if changed {
+                self.stored = true;
                 crate::store::widget_changed(self.runner.data_ref().app_id());
             }
             return;
@@ -83,6 +84,7 @@ impl<D: DataSource> Host<D> {
             }
         }
         if changed {
+            self.stored = true;
             crate::store::widget_changed(self.runner.data_ref().app_id());
         }
     }

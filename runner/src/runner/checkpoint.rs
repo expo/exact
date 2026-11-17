@@ -25,6 +25,8 @@ pub struct Checkpoint {
     pub answers: Vec<(String, String, Vec<Value>, Value)>,
     /// What was still pending then, and rendered its placeholder.
     pub pending: Vec<String>,
+    /// Development-only HTTP URLs fetched for each answer, in `answers` order.
+    pub urls: Vec<Vec<String>>,
     /// The indices in `answers` of those whose stream was still open (LLP
     /// 1016.000 D5): the runtime shows each and asks it again, which
     /// subscribes the runtime to it.
@@ -38,6 +40,27 @@ pub struct Checkpoint {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// Record a render's HTTP dependency against the resource owning this request.
+    pub fn record_render_request(&mut self, request: &crate::RequestOut) {
+        if self.delivery.production
+            || (!request.request.url.starts_with("http://")
+                && !request.request.url.starts_with("https://"))
+        {
+            return;
+        }
+        if let Some(Target::Resource(i)) = self
+            .pending
+            .iter()
+            .find(|p| p.ticket == request.ticket)
+            .map(|p| p.target)
+        {
+            let urls = &mut self.resources[i].render_urls;
+            if !urls.contains(&request.request.url) {
+                urls.push(request.request.url.clone());
+            }
+        }
+    }
+
     /// Boot from a rendered document's checkpoint (LLP 1048.000 D6). Each
     /// answer seeds its resource — the same name and source, answered by
     /// the same logic, a value that still fits — as an answer this runner
@@ -123,6 +146,7 @@ impl<D: DataSource> Runner<D> {
                 open_rows[i] = true;
             }
         }
+        let mut urls = Vec::new();
         let (mut answers, mut open, mut readers) = (Vec::new(), Vec::new(), Vec::new());
         // Write each row's answer but a list's own, which no request gave: a
         // list's answers are its elements', whose rows follow the declared
@@ -146,6 +170,9 @@ impl<D: DataSource> Runner<D> {
             if let Some(state) =
                 (resource.state.as_ref()).filter(|state| !resource.pending && !state.placeholder)
             {
+                if !self.delivery.production {
+                    urls.push(resource.render_urls.clone());
+                }
                 answers.push((
                     name.to_string(),
                     source.to_string(),
@@ -165,6 +192,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             logic: self.data.revision().map(str::to_owned),
             answers,
+            urls,
             pending,
             open,
             readers,
@@ -198,6 +226,23 @@ impl<D: DataSource> Runner<D> {
                 (checkpoint.answers.iter().enumerate()).filter(|(_, (n, s, args, _))| {
                     n == name && s == source && args.len() == row.args.len as usize
                 });
+            // A child's resource: the answers of the instances the render
+            // made, which the boot's instances take by their arguments
+            // (LLP 1035.005.004 D8).
+            if row.owner.is_some() && i < self.plan.resources.len() {
+                let ty = row.ty;
+                let answers = (answers.filter(|(_, (.., value))| self.conforms(value, ty)))
+                    .map(|(k, (_, _, args, value))| PageAnswer {
+                        args: args.clone(),
+                        value: value.clone(),
+                        again: asks(k),
+                        reads: reads(k),
+                    })
+                    .collect();
+                self.resources[i].page_answers =
+                    Some(Box::new(PageAnswers::new(answers, self.store.revision())));
+                continue;
+            }
             if self.is_family(i) {
                 let element_type = self.plan.types[row.ty.0 as usize]
                     .elem
@@ -253,8 +298,17 @@ impl<D: DataSource> Runner<D> {
         if checkpoint.logic.as_deref() != self.data.revision() {
             return "checkpoint: other logic answered it; its answers are asked again".into();
         }
-        let elements: usize = (self.resources.iter_mut())
-            .filter_map(|row| row.page_answers.take())
+        // A child's held answers wait for the first frame's instances
+        // (`boot_owned`).
+        let owned = |i: usize| {
+            self.plan
+                .resources
+                .get(i)
+                .is_some_and(|r| r.owner.is_some())
+        };
+        let lists: Vec<usize> = (0..self.resources.len()).filter(|i| !owned(*i)).collect();
+        let elements: usize = (lists.into_iter())
+            .filter_map(|i| self.resources[i].page_answers.take())
             .map(|page| page.taken())
             .sum();
         let taken = seeded.iter().filter(|s| **s).count() + elements;

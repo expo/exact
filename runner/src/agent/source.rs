@@ -32,7 +32,7 @@ pub(super) fn write<D: DataSource>(
         match node.source_of(row) {
             Some(from) => {
                 // And the token the ancestor's own row read, its link; and that ancestor's plan site, which the
-                // design server names by its source (tamber/1.16 `fromAt`).
+                // design server names by its source (forma/1.16 `fromAt`).
                 let _ = write!(s, ",\"source\":\"inherited\",\"from\":{from}");
                 if let Some((site, _)) = runner.site_of(from) {
                     let _ = write!(s, ",\"fromSite\":{}", site.0);

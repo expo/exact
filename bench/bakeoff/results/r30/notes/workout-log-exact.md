@@ -45,7 +45,7 @@ size, and scrolling has nothing to fix. The web tests pass too.
   - A block `match` takes no `=>` on its `case` lines.
   - `font-weight` is a number.
   - A section's `footer` can't sit inside an `if`.
-- **Dumbbell icon:** an SF Symbol warns because web and Linux ship too. I added an `app.tamber`
+- **Dumbbell icon:** an SF Symbol warns because web and Linux ship too. I added an `app.forma`
   icon token with an SVG fallback.
 - **Web-only findings:** the web `verify` at the largest text size reports clipping in the tab
   bar and the header buttons. On iOS those are UIKit's own bars, and `verify ios` is clean, so I

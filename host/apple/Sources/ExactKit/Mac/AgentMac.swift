@@ -69,9 +69,10 @@ extension Agent {
 
     /// A modal route's sheet has arrived or left by the time the input
     /// that asked for it returns (AppKit's `beginSheet` and `endSheet` do
-    /// not return before), so there is nothing to wait for (the iOS host's
-    /// `awaitModalTransitions`).
-    @discardableResult func awaitModalTransitions(bound: TimeInterval = 2) -> Bool { true }
+    /// not return before), and the Mac's navigation counts no transition in
+    /// flight (`nativeInFlight`). So there is nothing to wait for (the iOS
+    /// host's `awaitTransitions`).
+    @discardableResult func awaitTransitions(bound: TimeInterval = 2) -> Bool { true }
     @discardableResult func awaitChosenPress(bound: TimeInterval = 2) -> Bool { true }
 
     /// AppKit's list corrections and element reveals finish on its clock,
@@ -242,6 +243,16 @@ extension Agent {
                 "ry": r2(max(0, document.height + i.top + i.bottom - visible.height))]
     }
 
+    /// A zoomable scroller's offsets and ranges in zoomed points, and its
+    /// zoom and range (LLP 1057.001.000 §6).
+    static func zoomed(_ v: NodeView, _ sv: NSScrollView) -> [String: Any] {
+        let clip = sv.contentView, i = sv.contentInsets, z = sv.magnification, o = clip.bounds.origin
+        let document = sv.documentView?.frame.size ?? .zero, port = clip.frame.size
+        return ["sx": r2(o.x * z + i.left), "sy": r2(o.y * z + i.top),
+                "rx": r2(max(0, i.left + document.width * z + i.right - port.width)), "ry": r2(max(0, i.top + document.height * z + i.bottom - port.height)),
+                "scrollZoom": Double(z), "minZoom": Double(v.zoomRange?.lowerBound ?? 1), "maxZoom": Double(v.zoomRange?.upperBound ?? 1)]
+    }
+
     /// The same, for a live scroller.
     static func overscroll(of sv: NSScrollView) -> (CGFloat, CGFloat) {
         overscroll(origin: sv.contentView.bounds.origin,
@@ -266,6 +277,7 @@ extension Agent {
                 n["sx"] = Agent.r2(o.x)
                 n["sy"] = Agent.r2(o.y)
                 n.merge(Agent.range(of: sv)) { _, new in new }
+                if sv.zoom != nil { n.merge(Agent.zoomed(v, sv)) { _, new in new } }
                 // How far past its own ends this scroller currently sits.
                 // A stretched rubber band is a real state a driver could not
                 // otherwise see: the offset alone reads as an ordinary
@@ -357,7 +369,11 @@ extension Agent {
         var clip: [[String: Any]] = []
         for (n, kind) in clippers.reversed() {
             clip.append(["id": Int(n.id), "kind": kind])
-            if host.window != nil, !host.convert(host.bounds, to: nil).intersects(n.convert(n.bounds, to: nil)) { clipped = true }
+            if host.window != nil {
+                let intersects = kind == "overflow" ? n.overflowClipIntersects(host.convert(host.bounds, to: n))
+                    : host.convert(host.bounds, to: nil).intersects(n.convert(n.bounds, to: nil))
+                if !intersects { clipped = true }
+            }
         }
         node["scroll"] = scroll
         node["clip"] = clip
@@ -1153,22 +1169,10 @@ extension Agent {
         return ["typed": Int(v.id), "value": Agent.shownValue(f.stringValue, of: v)]
     }
 
-    /// `CGWindowListCreateImage` of one window of this process, without its
-    /// frame's shadow, at the backing resolution. The SDK marks the call
-    /// unavailable (ScreenCaptureKit replaces it, and asks for Screen
-    /// Recording even for the caller's own windows), so it is looked up at
-    /// run time; the window server still answers it for the caller's own.
     /// EXACT_AGENT_ACTIVATE=1 (only scripts/measure-controls.mjs sets it): an
     /// activated run, whose pictures say whether they were (ExactMac main.swift).
     nonisolated static let activated = ExactEnv.agentMode && ExactEnv.environment["EXACT_AGENT_ACTIVATE"] == "1"
-    static func ownWindowImage(_ number: Int) -> CGImage? {
-        typealias Create = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
-        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return nil } // RTLD_DEFAULT
-        let create = unsafeBitCast(symbol, to: Create.self)
-        // kCGWindowListOptionIncludingWindow; kCGWindowImageBoundsIgnoreFraming | kCGWindowImageBestResolution
-        guard let image = create(.null, 1 << 3, UInt32(number), 1 << 0 | 1 << 3)?.takeRetainedValue(), !emptyPicture(image) else { return nil }
-        return image
-    }
+    static func ownWindowImage(_ number: Int) -> CGImage? { WindowServerPicture.ownWindow(number) }
 
     /// The window server's own composite of `window` and `attached`, all
     /// this process's, in `window`'s frame: one over another as a person
@@ -1216,23 +1220,7 @@ extension Agent {
         return pictures.isEmpty ? image : drawingWindows(pictures, over: image, in: window.frame)
     }
 
-    /// Whether the window server's picture holds nothing. A display that is
-    /// asleep, or a locked screen, still answers, with a transparent picture
-    /// a pixel or two short of the window: no picture, not a wrong one. It
-    /// is read at sixteen places across it, not one: a sheet's corners are
-    /// transparent, and scaled to a single pixel a 460 by 226 sheet read as
-    /// empty and was left out of its window's picture (LLP 1115.002 D7.2).
-    static func emptyPicture(_ image: CGImage) -> Bool {
-        let side = 4
-        var pixels = [UInt8](repeating: 0, count: side * side * 4)
-        let drawn = pixels.withUnsafeMutableBytes { bytes -> Bool in
-            guard let few = CGContext(data: bytes.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
-                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-            few.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
-            return true
-        }
-        return !drawn || stride(from: 3, to: pixels.count, by: 4).allSatisfy { pixels[$0] == 0 }
-    }
+    static func emptyPicture(_ image: CGImage) -> Bool { WindowServerPicture.isEmpty(image) }
 
     func screenshot(_ req: [String: Any]) -> [String: Any] {
         let loading = settleForPicture()
@@ -1274,7 +1262,21 @@ extension Agent {
         }
         // As a capture: every canvas paints its picture, read back from the
         // module, and every iframe paints its arm snapshot at its node.
-        var picture = Capture.withGuests(of: [session]) { Capture.picture(of: v) }
+        var picture: NSBitmapImageRep?, captureNote: String?
+        if Capture.hasGlass(in: v), let window = v.window {
+            let readbacks = Self.canvasReadbacks(in: window)
+            let serverPicture = Capture.windowServerPictureResult(of: v)
+            readbacks.restore()
+            switch serverPicture {
+            case let .success(capture):
+                picture = capture
+            case let .failure(error):
+                picture = Capture.withGuests(of: [session]) { Capture.picture(of: v) }
+                captureNote = "glass was not composited: \(error.message); the viewport layer tree was used"
+            }
+        } else {
+            picture = Capture.withGuests(of: [session]) { Capture.picture(of: v) }
+        }
         let area = presenter.navigation.split.agentCaptureArea
         if presenter.navigation.split.active, let full = picture, let image = full.cgImage {
             let scale = CGFloat(full.pixelsWide) / v.bounds.width
@@ -1288,6 +1290,7 @@ extension Agent {
         // as it was taken, which the measure requires of each picture.
         if Self.activated { r["active"] = NSApp.isActive && (v.window?.isKeyWindow ?? false) }
         if loading > 0 { r["imagesPending"] = loading }
+        if let captureNote { r["note"] = captureNote }
         // This is the viewport's own drawing: a dialog's sheet and AppKit's popover are other windows (LLP 1115.002 D7).
         let apart = presenter.sheets(on: v.window).map { String(describing: Swift.type(of: $0)) } + presenter.menus.windowed.map { _ in "NSPopover" }
         if !apart.isEmpty { r["notShown"] = ["windows": apart, "see": "screenshot <png> window"] as [String: Any] }
@@ -1341,115 +1344,20 @@ extension Agent {
     }
 }
 
-extension Capture {
-    /// `view` as the agent's screenshot shows it, in sRGB: drawn into sRGB,
-    /// so a translucent fill blends there as Chrome blends it, whatever the
-    /// display's profile (spreadsheet F18), and agent pixel comparisons and
-    /// films read sRGB bytes.
-    static func picture(of view: NSView) -> NSBitmapImageRep? {
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)?.retagging(with: .sRGB) else { return nil }
-        draw(view, to: rep)
-        return rep
+/// WebKit reads this public AppKit property when deciding whether to run a
+/// page's frames and timers. At the driver's reserved level, a covered window
+/// and its sheets still have live pages; their window-server order never changes.
+open class ExactAgentWindow: NSWindow {
+    public override var occlusionState: NSWindow.OcclusionState {
+        let actual = super.occlusionState
+        var parent: NSWindow = self
+        while let over = parent.sheetParent { parent = over }
+        guard parent.level == .agentBehind, isVisible, !isMiniaturized, !NSApp.isHidden else { return actual }
+        return actual.union(.visible)
     }
 
-    /// `view` drawn by `cacheDisplay` as the window shows it: as a capture
-    /// (`capturing`), box fills an inset shadow paints hidden, siblings in
-    /// their z order, animations at what they present, and a backdrop box's
-    /// shadow drawn by a view under it (`standShadows`). Undoing the reorder
-    /// moves the boxes' layers, so the shadows' stands find their places again.
-    static func draw(_ view: NSView, to rep: NSBitmapImageRep) {
-        let shown = showAnimations(in: view.layer)
-        let fills = hideBoxFills(in: view), ordered = paintOrder(in: view), stands = standShadows(in: view)
-        capturing = true
-        view.cacheDisplay(in: view.bounds, to: rep)
-        capturing = false
-        stands(); ordered(); restore(fills); shown()
-        ShadowStand.followAll()
-    }
-
-    /// `cacheDisplay` draws subviews in array order; the window server
-    /// composites siblings by `zPosition`, which carries CSS `z-index`
-    /// (the kernel's paint rank, LLP 1083.000). For the capture, each view's subviews are in the
-    /// order they show — a sticky header over the rows that scroll under it
-    /// (spreadsheet F13), a raised dropdown over the content after it (shop
-    /// F18) — and the closure returned puts them back.
-    private static func paintOrder(in root: NSView) -> () -> Void {
-        var undo: [(NSView, [NSView])] = []
-        func walk(_ view: NSView) {
-            let subviews = view.subviews
-            if subviews.contains(where: { ($0.layer?.zPosition ?? 0) != 0 }) {
-                // Stable: equal z keeps document order.
-                let shown = subviews.enumerated().sorted {
-                    let (a, b) = ($0.element.layer?.zPosition ?? 0, $1.element.layer?.zPosition ?? 0)
-                    return a != b ? a < b : $0.offset < $1.offset
-                }.map(\.element)
-                if shown != subviews { undo.append((view, subviews)); arrange(view, shown) }
-            }
-            subviews.forEach(walk)
-        }
-        walk(root)
-        return { for (view, subviews) in undo.reversed() { arrange(view, subviews) } }
-    }
-
-    /// Reorder in place: assigning `subviews` detaches and reattaches them,
-    /// which resigns a first responder among them (`CollectionMac`).
-    private static func arrange(_ view: NSView, _ order: [NSView]) {
-        var ranks = Dictionary(uniqueKeysWithValues: order.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
-        withUnsafeMutablePointer(to: &ranks) { context in
-            view.sortSubviews({ left, right, raw in
-                let rank = raw!.assumingMemoryBound(to: [ObjectIdentifier: Int].self).pointee
-                let a = rank[ObjectIdentifier(left)] ?? 0, b = rank[ObjectIdentifier(right)] ?? 0
-                return a < b ? .orderedAscending : a > b ? .orderedDescending : .orderedSame
-            }, context: context)
-        }
-    }
-
-    /// `cacheDisplay` draws the layers' model values, never what Core
-    /// Animation shows: a lowered animation (a box's `opacity` keyframes,
-    /// an SVG shape's paint) was captured at its underlying value while the
-    /// window showed it playing (shop F25). For the capture, each animated
-    /// key path's model value is what the layer presents; the closure
-    /// returned puts the model back.
-    private static func showAnimations(in root: CALayer?) -> () -> Void {
-        guard let root else { return {} }
-        CATransaction.flush() // presentation() reads committed animations
-        var undo: [(CALayer, String, Any?)] = []
-        func walk(_ layer: CALayer) {
-            if let keys = layer.animationKeys(), !keys.isEmpty, let shown = layer.presentation() {
-                var paths: Set<String> = []
-                for key in keys { if let path = (layer.animation(forKey: key) as? CAPropertyAnimation)?.keyPath { paths.insert(path) } }
-                for path in paths {
-                    undo.append((layer, path, layer.value(forKeyPath: path)))
-                    layer.setValue(shown.value(forKeyPath: path), forKeyPath: path)
-                }
-            }
-            layer.sublayers?.forEach(walk)
-            if let mask = layer.mask { walk(mask) }
-        }
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        walk(root)
-        CATransaction.commit()
-        return {
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            for (layer, path, value) in undo.reversed() { layer.setValue(value, forKeyPath: path) }
-            CATransaction.commit()
-        }
-    }
+    var physicalOcclusionState: NSWindow.OcclusionState { super.occlusionState }
 }
-
-extension NSWindow.Level {
-    /// A driven window's level, one below every other app's ordinary windows:
-    /// AppKit orders a window forward for a drive's click or sheet as for a
-    /// person's, and within this level that never shows it over what the person
-    /// is working on. A drive on the agent's clock needs nothing from being seen:
-    /// its pictures are of this window alone (`CGWindowListCreateImage`), with
-    /// canvas readbacks composited in place of Metal layers in either occlusion state,
-    /// and page visibility is the driver's (`PageFacts.hidden`). A live frame
-    /// observation (`liveFrames`) lifts it while it records, and an iframe
-    /// guest, whose WebKit page is not on that clock, while the session holds one.
-    public static let agentBehind = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
-}
-
 extension Agent {
     /// Whether this process's windows sit at `NSWindow.Level.agentBehind`: a drive
     /// on the agent's clock, not activated. Under `--timing platform` the clock and

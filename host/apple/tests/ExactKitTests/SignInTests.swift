@@ -29,7 +29,7 @@ final class SignInTests: XCTestCase {
             XCTAssertEqual(answer["available"] as? Bool, true)
             let providers = try XCTUnwrap(answer["providers"] as? [String: [String: Bool]])
             XCTAssertEqual(providers["google"], ["active": false, "passive": false, "withPublicKey": false])
-            XCTAssertEqual(providers["apple"]?["withPublicKey"], false)
+            XCTAssertEqual(providers["apple"]?["withPublicKey"], providers["apple"]?["active"])
             XCTAssertEqual(providers["apple"]?["active"], providers["apple"]?["passive"])
         }
     }
@@ -49,6 +49,17 @@ final class SignInTests: XCTestCase {
         var args = options(); args["publicKey"] = ["rpId": "example.com"]
         XCTAssertThrowsError(try SignInModule.request(args))
         XCTAssertThrowsError(try SignInModule.request(["identity": ["providers": [["configURL": "https://example.com"]]]]))
+    }
+
+    func testPassiveAppleRequestCanJoinAPasskey() throws {
+        var args = options(fields: ["email"])
+        var identity = try XCTUnwrap(args["identity"] as? [String: Any])
+        identity["mode"] = "passive"
+        args["identity"] = identity
+        args["publicKey"] = ["rpId": "example.com", "challenge": "AQ"]
+        let request = try SignInModule.request(args)
+        XCTAssertEqual(request.nonce, "raw-nonce-123")
+        XCTAssertEqual(request.requestedScopes, [.email])
     }
 
     func testAnswerHasTheDeclaredFieldsAndFirstAuthorizationData() throws {

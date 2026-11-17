@@ -9,13 +9,22 @@ routes nav
   home "/"
     picker "/picker"
 
-component CoverScroll
+component App
   action openPicker
     nav = push(nav, "/picker")
   action back
     nav = back(nav)
   view
-    main navigationKey=`${top(nav).id}` testId="app" viewport-fit="cover" width="100%" height="100%"
+    CoverScroll(nav=nav, openPicker=openPicker, back=back)
+
+component CoverScroll
+  props
+    nav: Router
+    openPicker: action
+    back: action
+  derive fit = "cover"
+  view
+    main navigationKey=`${top(nav).id}` testId="app" viewport-fit=fit width="100%" height="100%"
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}` testId=`route-${e.name}` navigationPresentation=(e.name == "picker" ? "modal" : "") navigationScroll=(e.name == "picker" ? "picker-scroll" : "") position="absolute" inset=0 display="flex" flex-direction="column"
           header testId="header-home" display="flex" align-items="center" padding="8px 16px"

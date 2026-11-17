@@ -20,7 +20,7 @@ fn boot(source: &str, kind: Kind) -> Presenter<()> {
                 "column popover=\"manual\" role=\"dialog\" id=\"box\"",
             ),
     };
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (480., 400.),

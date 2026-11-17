@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 
 /** The shell inputs recorded by a web build's freshness receipt. */
-export const SHELL_SOURCES = ['host/web/index.html', 'host/web/neutral.css', 'host/web/look.mjs', 'kernel/tables/schema.json'];
+export const SHELL_SOURCES = ['host/web/index.html', 'host/web/neutral.css', 'host/web/look.mjs', 'host/web/scheme.js', 'kernel/tables/schema.json'];
 
 /** Append the neutral sheet before the build minifies the shell's styles. */
 export function withLook(shell) {
@@ -42,3 +42,15 @@ export function withInterfaceStyle(shell, style) {
 
 /** The head's `<meta name="color-scheme">` for a fixed `style`; nothing for none. */
 export const colorSchemeMeta = (style) => (style ? `<meta name="color-scheme" content="${style}">\n` : '');
+
+/** Restore the app's stored scheme before the runtime or the first paint. */
+export const schemeHead = (key, { development = false, wasm = false } = {}) => `${key ? `<meta name="exact-scheme" content="${key}"${development ? ' data-development' : ''}${wasm ? ' data-wasm' : ''}>\n` : ''}<script data-exact-scheme>${readFileSync(new URL('./scheme.js', import.meta.url), 'utf8').trimEnd()}</script>\n`;
+
+/** The manifest's launch background, until the app paints its root (LLP 1034 D2). */
+export function launchBackground(manifest) {
+  const hex = value => /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value ?? '') ? value : null;
+  const light = hex(manifest.background_color), dark = hex(manifest.color_scheme_dark?.background_color);
+  if (!light) return '';
+  const color = dark ? `light-dark(${light},${dark})` : light;
+  return `html:has(#exact-root:empty){background-color:${color}}`;
+}

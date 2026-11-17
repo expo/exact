@@ -245,6 +245,7 @@ fn an_empty_pump_delivers_a_refusal_from_waiting_admission() {
     .unwrap();
     assert!(error.is_none(), "{error:?}");
     let request = |ticket, request, class| RequestOut {
+        completion: None,
         ticket,
         request,
         class,

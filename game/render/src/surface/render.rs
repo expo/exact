@@ -49,6 +49,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             asset_check: None,
             reported: false,
             generation: 0,
+            picture: (0, false),
             seekable: true,
             audio_requested: false,
             hidden: false,
@@ -286,15 +287,22 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return false;
         }
         self.device = true;
+        if let Some(sim) = &self.sim {
+            if self.picture.0 != sim.picture_generation() {
+                self.picture = (sim.picture_generation(), true);
+                self.ready_work = None;
+                self.assets_dirty = true;
+            }
+            if self.generation != sim.generation() {
+                self.generation = sim.generation();
+                self.dirty = true;
+            }
+        }
         self.prepare_assets(device, queue, format);
         let asset_work = self.asset_work();
         let Some(sim) = &mut self.sim else {
             return false;
         };
-        if self.generation != sim.world().presentation_generation() {
-            self.generation = sim.world().presentation_generation();
-            self.dirty = true;
-        }
         let drawable = frame.width.is_finite()
             && frame.height.is_finite()
             && frame.width > 0.0
@@ -359,7 +367,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             sim.refresh_presented();
             sim.presented_assets_ready()
         };
-        if ASSETS && !ready {
+        // A new picture's live frames tick whatever its assets: readiness
+        // permits ticks and leaves pausing to the app (`rules/DEFERRED.md`,
+        // #905). Only its encoding waits, after the ticks below.
+        if ASSETS && !ready && (self.seekable || !self.picture.1) {
             return sim.assets_pending() || asset_work;
         }
         // A new world's first size runs `Game::first_frame`: this frame shows it.
@@ -466,6 +477,24 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         self.perf.ticks.push(ticks as f64);
         if self.error.is_some() {
             return false;
+        }
+        // A tick can replace the picture. It is not presented from here on;
+        // prepare its shown assets before encoding.
+        if self.picture.0 != sim.picture_generation() {
+            self.picture = (sim.picture_generation(), true);
+            self.ready_work = None;
+            self.assets_dirty = true;
+            return true;
+        }
+        // A picture awaiting its first complete frame encodes only once what
+        // these ticks show is delivered and prepared; until then the frame
+        // draws nothing and `presented` stays false.
+        if ASSETS && self.picture.1 && {
+            sim.refresh_presented();
+            !sim.presented_assets_resident()
+        } {
+            self.assets_dirty = true;
+            return true;
         }
         let (renderer, feed) = self.render.as_mut().unwrap();
         let start = (!frame.seekable).then(Stamp::now);
@@ -592,6 +621,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 renderer.pipelines.half
             );
             self.ready_work = Some(renderer.residency_work());
+            self.picture.1 = false;
         }
         self.frame_ready =
             !self.hooks.needs().contains(crate::Needs::PENDING) && self.hooks.error().is_none();

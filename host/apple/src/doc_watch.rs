@@ -14,8 +14,13 @@ pub(crate) struct DocWatch {
     owner: u64,
     shared: Arc<Shared>,
     folders: Vec<PathBuf>,
+    grants: Option<(String, Option<ibex2::grant::GrantSet>)>,
+    #[cfg(test)]
+    grant_parses: usize,
     #[cfg(target_os = "macos")]
     stream: Option<fsevents::Stream>,
+    #[cfg(target_os = "macos")]
+    retry: bool,
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // FSEvents reads it.
@@ -80,8 +85,24 @@ impl DocWatch {
                 native,
             }),
             folders: Vec::new(),
+            grants: None,
+            #[cfg(test)]
+            grant_parses: 0,
             #[cfg(target_os = "macos")]
             stream: None,
+            #[cfg(target_os = "macos")]
+            retry: false,
+        }
+    }
+
+    pub(crate) fn needs_retry(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.retry
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
         }
     }
 
@@ -89,12 +110,26 @@ impl DocWatch {
     /// (`fs.read doc:/`): the watches change at once, and the stream is
     /// replaced only when its folders do.
     fn follow(&mut self, topics: &[String], grants: &str) {
-        let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).ok();
+        if self
+            .grants
+            .as_ref()
+            .is_none_or(|(source, _)| source != grants)
+        {
+            self.grants = Some((
+                grants.to_owned(),
+                ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).ok(),
+            ));
+            #[cfg(test)]
+            {
+                self.grant_parses += 1;
+            }
+        }
+        let grants = self.grants.as_ref().and_then(|(_, parsed)| parsed.as_ref());
         let now: Vec<Watched> = topics
             .iter()
             .filter_map(|t| documents::watched(t, self.owner))
             .filter(|w| {
-                grants.as_ref().is_some_and(|g| {
+                grants.is_some_and(|g| {
                     g.permits(&ibex2::grant::Operation::FsRead {
                         path: w.path.clone(),
                     })
@@ -130,6 +165,7 @@ impl DocWatch {
             return;
         }
         self.stream = None;
+        self.retry = false;
         self.folders.clear();
         if folders.is_empty() {
             return;
@@ -137,6 +173,8 @@ impl DocWatch {
         self.stream = start(&folders, self.shared.clone());
         if self.stream.is_some() {
             self.folders = folders;
+        } else {
+            self.retry = true;
         }
     }
 }
@@ -146,17 +184,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn grants_are_parsed_once_until_the_source_changes() {
+        let owner = (1 << 48) | u64::from(std::process::id());
+        let path = documents::mint(&std::env::temp_dir(), owner).unwrap();
+        let topics = [format!("doc-watch:{path}")];
+        let mut watch = DocWatch::announcing(owner, exact_runner::Native::default());
+        for _ in 0..100 {
+            watch.follow(&topics, "fs.read doc:/");
+        }
+        assert_eq!(watch.grant_parses, 1);
+        assert_eq!(watch.shared.watches.lock().unwrap().len(), 1);
+        watch.follow(&topics, "");
+        assert_eq!(watch.grant_parses, 2);
+        assert!(watch.shared.watches.lock().unwrap().is_empty());
+        watch.follow(&topics, "");
+        assert_eq!(watch.grant_parses, 2);
+        watch.follow(&topics, "fs.read doc:/");
+        assert_eq!(watch.grant_parses, 3);
+        assert_eq!(watch.shared.watches.lock().unwrap().len(), 1);
+        for _ in 0..2 {
+            watch.follow(&topics, "invalid grant");
+        }
+        assert_eq!(watch.grant_parses, 4);
+        assert!(watch.shared.watches.lock().unwrap().is_empty());
+        documents::forget(owner);
+    }
+
+    #[test]
     fn a_failed_start_is_tried_again_on_the_next_sync() {
         let folder = std::env::temp_dir();
         let mut watch = DocWatch::announcing(1, exact_runner::Native::default());
         watch.install(vec![folder.clone()], |_, _| None);
         assert!(watch.stream.is_none());
+        assert!(watch.needs_retry());
         watch.install(vec![folder.clone()], fsevents::Stream::start);
         assert!(
             watch.stream.is_some(),
             "the same folders start a stream again"
         );
         assert_eq!(watch.folders, vec![folder]);
+        assert!(!watch.needs_retry());
     }
 }
 

@@ -6,6 +6,58 @@ import AppKit
 #endif
 
 final class CollectionTests: XCTestCase {
+    private func decodeSnapshot(_ value: [String: Any]) -> CollectionSnapshot? {
+        wireBatch([["op": "collections", "items": [value]]]).ops.first?.collections?.first
+    }
+
+    func testCollectionSnapshotsAreTypedInEitherOperationFieldOrder() throws {
+        let items = #"[{"view":2,"axis":"x","parent":1,"revision":"18446744073709551614","scrollSequence":3,"totalExtent":4000,"count":100,"pending":true,"seeking":true,"waiting":false,"request":"9","lastRequest":"10","rows":[{"view":4,"root":5,"epoch":"18446744073709551613","index":7,"size":40,"measured":true}],"correction":{"scrollSequence":3,"offset":90,"from":-20,"smooth":true}}]"#
+        for op in [#"{"op":"collections","items":\#(items)}"#, #"{"items":\#(items),"op":"collections"}"#] {
+            let batch = Batch.decode(Data(#"{"ops":[\#(op)]}"#.utf8))
+            XCTAssertNil(batch.error)
+            let decoded = try XCTUnwrap(batch.ops.first)
+            XCTAssertTrue(decoded.payload.isEmpty, "no snapshot dictionaries cross to presentation")
+            let snapshot = try XCTUnwrap(decoded.collections?.first)
+            XCTAssertEqual(snapshot.view, 2)
+            XCTAssertTrue(snapshot.horizontal)
+            XCTAssertEqual(snapshot.parent, 1)
+            XCTAssertEqual(snapshot.revision, UInt64.max - 1)
+            XCTAssertEqual(snapshot.rows.first?.epoch, UInt64.max - 2)
+            XCTAssertEqual(snapshot.rows.first?.index, 7)
+            XCTAssertEqual(snapshot.rows.first?.size, 40)
+            XCTAssertEqual(snapshot.rows.first?.measured, true)
+            XCTAssertTrue(snapshot.pending && snapshot.seeking && !snapshot.waiting)
+            XCTAssertEqual(snapshot.request, 9)
+            XCTAssertEqual(snapshot.lastRequest, 10)
+            XCTAssertEqual(snapshot.correction?.from, -20)
+            XCTAssertEqual(snapshot.correction?.smooth, true)
+        }
+    }
+
+    func testTypedSnapshotsPreserveFixedContentAndRefuseMalformedFixedSlots() throws {
+        let fixed: [[String: Any]] = [
+            ["view": 5, "roots": [6, 7], "epoch": 1, "size": 20],
+            ["view": 8, "roots": [], "epoch": 1, "size": 0],
+        ]
+        var value: [String: Any] = ["view": 1, "revision": 1, "scrollSequence": 0, "totalExtent": 200,
+                                    "rows": [["view": 2, "root": 3, "epoch": 1]], "fixed": fixed]
+        let snapshot = try XCTUnwrap(decodeSnapshot(value))
+        XCTAssertEqual(snapshot.fixed.map(\.view), [5, 8])
+        XCTAssertEqual(snapshot.fixed.map(\.roots), [[6, 7], []])
+        XCTAssertEqual(snapshot.fixed.map(\.size), [20, 0])
+        for bad in [Array(fixed.prefix(1)), [fixed[0], fixed[0]],
+                    [["view": 2, "roots": [], "epoch": 1, "size": 0], fixed[1]],
+                    [["view": 5, "roots": [0], "epoch": 1, "size": 20], fixed[1]],
+                    [["view": 5, "roots": [], "epoch": 2, "size": 20], fixed[1]]] {
+            value["fixed"] = bad
+            value["correction"] = NSNull()
+            XCTAssertNil(decodeSnapshot(value))
+        }
+        value["fixed"] = fixed
+        value["axis"] = "x"
+        XCTAssertNil(decodeSnapshot(value), "fixed slots are vertical")
+    }
+
     func testSnapQueryReadsUnmountedRowsWithoutChangingTheWindow() throws {
         #if canImport(AppKit)
         _ = NSApplication.shared
@@ -100,28 +152,28 @@ final class CollectionTests: XCTestCase {
         let row: [String: Any] = ["view": 3, "root": 4, "index": 0, "start": 0, "size": 40, "epoch": "18446744073709551614", "measured": false]
         let value: [String: Any] = ["view": 2, "revision": 5, "scrollSequence": 0, "count": 100,
             "totalExtent": 4000, "rows": [row], "correction": NSNull()]
-        XCTAssertEqual(CollectionSnapshot(value)?.rows.first?.epoch, UInt64.max - 1)
-        var broken = value; broken["totalExtent"] = Double.nan
-        XCTAssertNil(CollectionSnapshot(broken))
+        XCTAssertEqual(decodeSnapshot(value)?.rows.first?.epoch, UInt64.max - 1)
+        var broken = value; broken["totalExtent"] = -1
+        XCTAssertNil(decodeSnapshot(broken))
         broken = value; broken["rows"] = [row, row]
-        XCTAssertNil(CollectionSnapshot(broken))
+        XCTAssertNil(decodeSnapshot(broken))
         // A `scrollIntoView` into the padding before the first row is a
-        // negative correction (LLP 1010 §6.9); a non-finite one is not.
+        // negative correction (LLP 1010 §6.9); an unrepresentable one is not.
         var padded = value; padded["correction"] = ["scrollSequence": 1, "offset": -92]
-        XCTAssertEqual(CollectionSnapshot(padded)?.correction?.offset, -92)
+        XCTAssertEqual(decodeSnapshot(padded)?.correction?.offset, -92)
         // An anchor's correction taken from a port in that padding keeps its
         // `from`, so it stays relative (Grok's scroll-padding review r2).
         padded["correction"] = ["scrollSequence": 1, "offset": 500, "from": -92]
-        XCTAssertEqual(CollectionSnapshot(padded)?.correction?.from, -92)
-        padded["correction"] = ["scrollSequence": 1, "offset": -Double.infinity]
-        XCTAssertNil(CollectionSnapshot(padded))
+        XCTAssertEqual(decodeSnapshot(padded)?.correction?.from, -92)
+        padded["correction"] = ["scrollSequence": 1, "offset": -Double.greatestFiniteMagnitude]
+        XCTAssertNil(decodeSnapshot(padded))
     }
 
 
     func testDecimalJSONCountersRetainAllSixtyFourBits() throws {
         let bytes = Data(#"{"view":2,"revision":"18446744073709551614","scrollSequence":"18446744073709551613","totalExtent":4000,"rows":[],"correction":{"scrollSequence":"18446744073709551613","offset":90}}"#.utf8)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-        let snapshot = try XCTUnwrap(CollectionSnapshot(object))
+        let snapshot = try XCTUnwrap(decodeSnapshot(object))
         XCTAssertEqual(snapshot.revision, UInt64.max - 1)
         XCTAssertEqual(snapshot.sequence, UInt64.max - 2)
         XCTAssertEqual(snapshot.correction?.sequence, UInt64.max - 2)
@@ -137,6 +189,67 @@ final class CollectionTests: XCTestCase {
         XCTAssertFalse(budget.begin())
         budget.nextTurn()
         XCTAssertTrue(budget.begin())
+    }
+
+    func testEachWakeRenewsPinReportsBeforeContinuationsRun() throws {
+        #if canImport(AppKit)
+        _ = NSApplication.shared
+        #endif
+        let p = Presenter()
+        defer { p.reset() }
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 300, height: 200)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "collections", "items": [["view": 1, "revision": 1, "scrollSequence": 0,
+                "totalExtent": 1000, "rows": [["view": 2, "root": 2, "epoch": 1]]]]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 200],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 300, "h": 100],
+            ["op": "content", "id": 1, "w": 300, "h": 1000],
+        ]))
+        var reports: [Data] = []
+        p.collections.onFeedback = { reports.append($0) }
+        p.collections.settle()
+        #if os(iOS) || os(tvOS)
+        p.scrollPump.reset()
+        #endif
+        var wakes = 0, armed = false
+        let done = expectation(description: "pin reports on two consecutive wakes")
+        let activities = CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.afterWaiting.rawValue
+        let observer = try XCTUnwrap(CFRunLoopObserverCreateWithHandler(nil, activities, true, 1) { _, activity in
+            guard wakes < 2 else { return }
+            if activity == .beforeWaiting {
+                guard !armed else { return }
+                // Spend both passes after this turn's queued continuations.
+                p.collections.pointer(nil)
+                p.collections.fillSlice(1, limit: 0)
+                let before = reports.count
+                p.collections.pointer(2)
+                p.collections.pointer(nil)
+                XCTAssertEqual(reports.count - before, 2)
+                armed = true
+            } else if armed {
+                // Order 1 follows the budget observer, before native input
+                // and the main queue can run on this wake.
+                let before = reports.count
+                let refused = p.collections.budget.refusedSpent
+                p.collections.pointer(2)
+                XCTAssertEqual(reports.count - before, 1, "the input reports its pin synchronously")
+                XCTAssertEqual(p.collections.budget.refusedSpent, refused)
+                XCTAssertEqual(p.collections.entries[1]?.lastFacts?.interaction, 2)
+                armed = false
+                wakes += 1
+                if wakes == 2 { done.fulfill() }
+            }
+        })
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(wakes, 2)
+        XCTAssertTrue(p.collections.observingTurns)
+        p.collections.reset()
+        XCTAssertTrue(p.collections.observingTurns)
     }
 
     /// A rescue is never refused for the turn's passes, only while a pass

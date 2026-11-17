@@ -210,15 +210,25 @@ unsafe fn errno_location() -> *mut libc::c_int {
 }
 
 /// `/proc/<pid>/stat`'s fields after the command's closing parenthesis.
-fn stat_fields(pid: i32) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = &text[text.rfind(')')? + 1..];
-    Some(after.split_whitespace().map(str::to_string).collect())
+fn stat_fields(path: impl AsRef<std::path::Path>) -> io::Result<Vec<String>> {
+    // The command can contain arbitrary bytes, including parentheses.
+    let bytes = std::fs::read(path)?;
+    let end = bytes
+        .iter()
+        .rposition(|b| *b == b')')
+        .ok_or_else(|| super::invalid("invalid process stat"))?;
+    let fields = std::str::from_utf8(&bytes[end + 1..])
+        .map_err(|_| super::invalid("invalid process stat fields"))?;
+    Ok(fields.split_whitespace().map(str::to_string).collect())
 }
 
 pub(super) fn start_time(pid: i32) -> Option<u64> {
     // Field 22, `starttime`, is the 20th after the command.
-    stat_fields(pid)?.get(19)?.parse().ok()
+    stat_fields(format!("/proc/{pid}/stat"))
+        .ok()?
+        .get(19)?
+        .parse()
+        .ok()
 }
 
 pub(super) fn boot_id() -> Option<String> {
@@ -227,14 +237,35 @@ pub(super) fn boot_id() -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-pub(super) fn group_members(pgid: i32) -> Vec<i32> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
-        // Field 5, `pgrp`, is the 3rd after the command.
-        .filter(|pid| stat_fields(*pid).and_then(|f| f.get(2)?.parse::<i32>().ok()) == Some(pgid))
-        .collect()
+pub(super) fn group_members(pgid: i32) -> io::Result<Vec<i32>> {
+    let pids = std::fs::read_dir("/proc")?.filter_map(|entry| match entry {
+        Ok(entry) => entry.file_name().to_str()?.parse::<i32>().ok().map(Ok),
+        Err(e) => Some(Err(e)),
+    });
+    super::scan::live_members(pids, pgid, super::getpgid, live)
+}
+
+/// Whether process `pid` has a live thread.
+fn live(pid: i32) -> io::Result<bool> {
+    if live_state(&stat_fields(format!("/proc/{pid}/stat"))?)? {
+        return Ok(true);
+    }
+    // A main thread that called pthread_exit is a zombie while workers
+    // still run. Its process still needs signalling until all tasks exit.
+    for task in std::fs::read_dir(format!("/proc/{pid}/task"))? {
+        match stat_fields(task?.path().join("stat")).and_then(|fields| live_state(&fields)) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(e) if super::scan::vanished(&e) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(false)
+}
+
+fn live_state(fields: &[String]) -> io::Result<bool> {
+    let state = fields
+        .first()
+        .ok_or_else(|| super::invalid("missing process state"))?;
+    Ok(!matches!(state.as_str(), "Z" | "X"))
 }

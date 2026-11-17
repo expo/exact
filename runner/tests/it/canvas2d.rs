@@ -752,7 +752,7 @@ fn captures_wait_for_a_completed_drawing() {
             );
         } else {
             c.snapshotted().unwrap();
-            assert!(captured_image(&c.captured()).is_ok(), "{row:?}");
+            assert!(captured_image(&c.captured("image/png")).is_ok(), "{row:?}");
         }
     }
 }
@@ -801,6 +801,6 @@ fn a_rejected_draw_fails_its_capture_but_a_later_capture_can_succeed() {
         assert!(error.starts_with("EncodingError:"), "{error}");
         let capture = next.take_canvas_capture().unwrap().unwrap();
         capture.snapshotted().unwrap();
-        assert!(captured_image(&capture.captured()).is_ok());
+        assert!(captured_image(&capture.captured("image/png")).is_ok());
     }
 }

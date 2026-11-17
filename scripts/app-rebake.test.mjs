@@ -162,7 +162,7 @@ test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('a dependency regenerates Rust w
     const generated = resolve(scriptDir('binding'), 'out/binding.rs'), stamp = statSync(generated, {bigint:true}).mtimeNs;
     bake(); assert.equal(statSync(generated, {bigint:true}).mtimeNs, stamp, 'a dependency with an absent design must stay warm');
     // Only the dependency reads this package. The app's revision stays fixed.
-    write('node_modules/@fixture/ui/ui.tamber', 'tamber ui\n\ntheme\n  ui.card = #123456\n');
+    write('node_modules/@fixture/ui/ui.forma', 'forma ui\n\ntheme\n  ui.card = #123456\n');
     bake(); assert.notEqual(run(), before, 'a dependency must regenerate when its optional design appears');
   },{binding:true});
 },300000);
@@ -172,11 +172,11 @@ test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('the app\'s absent optional desi
     write('node_modules/@fixture/ui/package.json', JSON.stringify({name: '@fixture/ui', exports: './child.contract'}));
     write('node_modules/@fixture/ui/child.contract', 'component Child\n  view\n    text "DESIGNED"\n');
     write('app.contract', 'use Child from "@fixture/ui"\ncomponent App\n  view\n    Child()\n');
-    const design = resolve(dir, 'node_modules/@fixture/ui/ui.tamber');
+    const design = resolve(dir, 'node_modules/@fixture/ui/ui.forma');
     const absent = bake();
     assert.ok(absent.optionalInputs?.includes(design) && !absent.binary.missing.includes(design));
     assert.deepEqual(pendingBuildInputs(absent), []);
-    write('node_modules/@fixture/ui/ui.tamber', 'tamber ui\n\ntheme\n  ui.card = #123456\n');
+    write('node_modules/@fixture/ui/ui.forma', 'forma ui\n\ntheme\n  ui.card = #123456\n');
     assert.deepEqual(pendingBuildInputs(absent), [design], 'making the design must make the build stale');
     const present = bake();
     assert.equal(present.binary.sha256, absent.binary.sha256, 'making the design must not change the binary');

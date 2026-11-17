@@ -74,6 +74,20 @@ impl Kernel {
         !owners.is_empty()
     }
 
+    /// Say whether text whose direction is unsaid takes each paragraph's
+    /// base direction from its first strong character (LLP 1060.000 D3): a
+    /// host whose platform fixes the layout direction for the process, and
+    /// draws its own text so, says it before the first commit. Every
+    /// paragraph is measured again. Whether it changed.
+    pub fn set_natural_text(&mut self, on: bool) -> bool {
+        if self.arena.natural_text == on {
+            return false;
+        }
+        self.arena.natural_text = on;
+        self.remeasure_text();
+        true
+    }
+
     /// Say whether Bold Text is on (LLP 1115.000 D12.3): the person's
     /// accessibility setting, which weights the system font, an authored
     /// weight included, and leaves a family the app ships alone. The next

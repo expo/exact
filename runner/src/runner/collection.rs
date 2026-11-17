@@ -4,6 +4,12 @@ use crate::compare::{equivalent, equivalent_all};
 use crate::instance::collection::{CollectionFeedback, CollectionFill, CollectionSnapshot};
 
 impl<D: DataSource> Runner<D> {
+    /// Latest host travel, consumed before substantive work; no commit or edge.
+    pub fn collection_travel(&mut self, view: ViewId, revision: u64, sequence: u64, offset: f64) {
+        if let Some(tree) = &mut self.tree {
+            tree.collection_travel(view, revision, sequence, offset);
+        }
+    }
     /// Mounted collection metadata for a host's post-commit layout/measurement.
     pub fn collections(&self) -> Vec<CollectionSnapshot> {
         self.tree
@@ -372,7 +378,7 @@ impl EdgeState {
             rows: frames
                 .iter()
                 .filter_map(|f| f.row.as_ref())
-                .map(|row| (row.clone(), row.borrow().clone()))
+                .map(|row| (row.clone(), row.borrow().slots.clone()))
                 .collect(),
             pending: r.pending.iter().map(|p| (p.target, p.ticket)).collect(),
             ticket: r.next_ticket,
@@ -403,7 +409,7 @@ impl EdgeState {
                     _ => true,
                 })
             || self.rows.iter().any(|(row, old)| {
-                let now = row.borrow();
+                let now = &row.borrow().slots;
                 old.len() != now.len()
                     || old
                         .iter()

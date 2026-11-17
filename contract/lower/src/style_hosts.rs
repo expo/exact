@@ -6,7 +6,8 @@
 
 use crate::control_roles::Rows;
 use crate::{vocab, LowerError};
-use contract_syntax::{Attr, Expr, Node, Span, StyleDecl};
+use contract_checking::View;
+use contract_syntax::{Attr, Expr, Span, StyleDecl};
 use exact_kernel::StyleId;
 
 /// One row a declaration sets where a host does not draw it.
@@ -66,74 +67,58 @@ fn rows(a: &Attr) -> Vec<StyleId> {
 }
 
 /// Every undrawn row, once a row, scope and reason, naming each target.
-pub(crate) fn undrawn(view: &[Node], styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+pub(crate) fn undrawn(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
     let targets = crate::icons::shipped();
     if !targets.iter().any(|t| column(&t.name).is_some()) {
         return;
     }
     let mut found: Vec<Found> = Vec::new();
-    let mut stack: Vec<(&Node, bool)> = view.iter().rev().map(|n| (n, false)).collect();
-    while let Some((node, in_svg)) = stack.pop() {
-        let children: Vec<&Node> = match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                // The `svg` element is its content's root: a row on it is its
-                // content's, not a box's.
-                let here = in_svg || tag == "svg";
-                let scope = if here { "svg" } else { "box" };
-                for a in Rows::of(attrs, styles).all().filter(|a| a.written) {
-                    for row in rows(a).into_iter().filter(|row| sets(*row, &a.value)) {
-                        for entry in vocab::style_hosts(row) {
-                            if !entry.none || entry.on.is_some_and(|on| on != scope) {
-                                continue;
-                            }
-                            let Some(target) =
-                                targets.iter().find(|t| column(&t.name) == Some(entry.host))
-                            else {
-                                continue;
-                            };
-                            match found
-                                .iter_mut()
-                                .find(|f| f.row == row && f.on == entry.on && f.why == entry.why)
-                            {
-                                Some(f) => {
-                                    if !f.targets.iter().any(|t| t.name == target.name) {
-                                        f.targets.push(target);
-                                    }
-                                    if f.span != a.span {
-                                        f.count += 1;
-                                    }
+    for (node, in_svg) in view.walk_with(false, |node, in_svg| {
+        *in_svg || node.element().is_some_and(|(tag, _, _)| tag == "svg")
+    }) {
+        if let Some((tag, _, attrs)) = node.element() {
+            // The `svg` element is its content's root: a row on it is its
+            // content's, not a box's.
+            let here = in_svg || tag == "svg";
+            let scope = if here { "svg" } else { "box" };
+            for a in Rows::of(attrs, styles).all().filter(|a| a.written) {
+                for row in rows(a).into_iter().filter(|row| sets(*row, &a.value)) {
+                    for entry in vocab::style_hosts(row) {
+                        if !entry.none || entry.on.is_some_and(|on| on != scope) {
+                            continue;
+                        }
+                        let Some(target) =
+                            targets.iter().find(|t| column(&t.name) == Some(entry.host))
+                        else {
+                            continue;
+                        };
+                        match found
+                            .iter_mut()
+                            .find(|f| f.row == row && f.on == entry.on && f.why == entry.why)
+                        {
+                            Some(f) => {
+                                if !f.targets.iter().any(|t| t.name == target.name) {
+                                    f.targets.push(target);
                                 }
-                                None => found.push(Found {
-                                    row,
-                                    on: entry.on,
-                                    why: entry.why,
-                                    name: a.name.clone(),
-                                    span: a.span,
-                                    line: a.span.line,
-                                    count: 1,
-                                    targets: vec![target],
-                                }),
+                                if f.span != a.span {
+                                    f.count += 1;
+                                }
                             }
+                            None => found.push(Found {
+                                row,
+                                on: entry.on,
+                                why: entry.why,
+                                name: a.name.clone(),
+                                span: a.span,
+                                line: a.span.line,
+                                count: 1,
+                                targets: vec![target],
+                            }),
                         }
                     }
                 }
-                stack.extend(children.iter().rev().map(|c| (c, here)));
-                continue;
             }
-            Node::When {
-                then, otherwise, ..
-            } => then.iter().chain(otherwise).collect(),
-            Node::Each { body, .. } => body.iter().collect(),
-            Node::Match { some, none, .. } => some.1.iter().chain(none).collect(),
-            Node::Use { children, .. } => children.iter().collect(),
-            Node::Children { .. } => Vec::new(),
-        };
-        stack.extend(children.into_iter().rev().map(|c| (c, in_svg)));
+        }
     }
     for f in found {
         let ships: Vec<String> = f.targets.iter().map(|t| t.described()).collect();

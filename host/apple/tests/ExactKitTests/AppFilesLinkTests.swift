@@ -1,4 +1,5 @@
 import XCTest
+import ExactPackage
 import ExactSnapshot
 @testable import ExactKit
 
@@ -89,6 +90,87 @@ final class AppFilesLinkTests: XCTestCase {
         XCTAssertNil(AppFileWalk.destination(data, ["album.jpg"]))
         XCTAssertEqual(try Data(contentsOf: photo), PNG.bytes)
         XCTAssertNil(AppFileWalk.destination(data, ["photos"]))
+    }
+
+    func testAPackageCanCreateOrReplaceADirectoryWithoutFollowingLinks() throws {
+        let data = base.appendingPathComponent("data")
+        for names in [["transcripts"], ["new", "nested", "transcripts"], ["photos"]] {
+            XCTAssertEqual(AppFileWalk.directory(data, names), names.reduce(data) { $0.appendingPathComponent($1) })
+        }
+        for names in [["x.png"], ["linked"], ["linked", "transcripts"], [], ["..", "transcripts"], ["photos", ""]] {
+            XCTAssertNil(AppFileWalk.directory(data, names), names.joined(separator: "/"))
+        }
+        try PNG.write(to: data.appendingPathComponent("transcript"))
+        XCTAssertNil(AppFileWalk.directory(data, ["transcript"]))
+        XCTAssertEqual(try Data(contentsOf: data.appendingPathComponent("transcript")), PNG.bytes)
+    }
+
+    func testAQueuedDirectoryReplacementCannotBeRedirectedThroughALink() throws {
+        let files = FileManager.default, data = base.appendingPathComponent("data")
+        let admitted = data.appendingPathComponent("takes/take-2.transcript")
+        try files.createDirectory(at: admitted, withIntermediateDirectories: true)
+        try Data("partial".utf8).write(to: admitted.appendingPathComponent("00000.jsonl"))
+        let outside = base.appendingPathComponent("outside")
+        let outsideTranscript = outside.appendingPathComponent("take-2.transcript")
+        try files.createDirectory(at: outsideTranscript, withIntermediateDirectories: true)
+        let sentinel = outsideTranscript.appendingPathComponent("sentinel")
+        try Data("keep".utf8).write(to: sentinel)
+
+        let names = ["takes", "take-2.transcript"]
+        XCTAssertNotNil(AppFileWalk.directory(data, names), "admitted before the queued cleanup")
+        let writer = DispatchQueue(label: "exact.app-files-link-test")
+        let held = DispatchSemaphore(value: 0), done = expectation(description: "writer")
+        writer.async { held.wait() }
+        writer.async {
+            if let directory = AppFileWalk.replaceDirectory(data, names) {
+                let fd = openat(directory.fileDescriptor, "00000.jsonl", O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+                if fd >= 0 {
+                    let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+                    try? file.write(contentsOf: Data("new".utf8))
+                    try? file.close()
+                }
+            }
+            done.fulfill()
+        }
+        let original = data.appendingPathComponent("original-takes")
+        try files.moveItem(at: data.appendingPathComponent("takes"), to: original)
+        try files.createSymbolicLink(at: data.appendingPathComponent("takes"), withDestinationURL: outside)
+        held.signal()
+        wait(for: [done], timeout: 2)
+
+        XCTAssertEqual(try Data(contentsOf: sentinel), Data("keep".utf8))
+        XCTAssertFalse(files.fileExists(atPath: outsideTranscript.appendingPathComponent("00000.jsonl").path))
+    }
+
+    func testAPackageDirectoryRefusesAFIFOWithoutBlockingItsWriter() throws {
+        let directory = base.appendingPathComponent("fifo-transcript")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let fifo = directory.appendingPathComponent("00000.jsonl")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        let directoryFD = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        XCTAssertGreaterThanOrEqual(directoryFD, 0)
+        let handle = FileHandle(fileDescriptor: directoryFD, closeOnDealloc: true)
+        let context = ExactPackageContext(agent: true, session: UUID().uuidString,
+                                          changed: { _ in }, log: { _ in }, now: { 0 },
+                                          replaceDirectory: { _ in handle })
+        let output = try XCTUnwrap(context.replaceDirectory("app:/data/transcript"))
+        let writer = DispatchQueue(label: "exact.app-files-fifo-test")
+        let entered = DispatchSemaphore(value: 0), done = DispatchSemaphore(value: 0)
+        var written: Bool?
+        writer.async {
+            entered.signal()
+            written = output.append(Data("line\n".utf8), to: "00000.jsonl")
+            done.signal()
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 2), .success, "the transcript writer starts")
+        let prompt = done.wait(timeout: .now() + 2)
+        if prompt != .success {
+            let reader = open(fifo.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+            if reader >= 0 { close(reader) }
+            XCTAssertEqual(done.wait(timeout: .now() + 2), .success, "the cleanup reader releases the blocked open")
+        }
+        XCTAssertEqual(prompt, .success, "a special file cannot hold the serial transcript writer")
+        XCTAssertEqual(written, false)
     }
 
     #if canImport(WidgetKit)

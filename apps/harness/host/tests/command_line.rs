@@ -7,25 +7,34 @@ use std::process::{Command, Output, Stdio};
 /// The harness on the mock, with no key from this machine's environment or
 /// configuration.
 fn harness(name: &str, model: &str, args: &[&str]) -> Output {
-    let home = std::env::temp_dir().join(format!(
+    let home = Home(std::env::temp_dir().join(format!(
         "harness-command-line-{}-{name}",
         std::process::id()
-    ));
-    std::fs::create_dir_all(&home).unwrap();
+    )));
+    std::fs::create_dir_all(&home.0).unwrap();
     // The mock's tour reads a small file, then asks to run a command.
-    std::fs::write(home.join("notes.txt"), "a small file\n").unwrap();
+    std::fs::write(home.0.join("notes.txt"), "a small file\n").unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_harness"));
     for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"] {
         command.env_remove(key);
     }
     command
-        .env("HOME", &home)
+        .env("HOME", &home.0)
         .env("EXACT_HARNESS_MODEL", model)
-        .current_dir(&home)
+        .current_dir(&home.0)
         .args(args)
         .stdin(Stdio::null())
         .output()
         .expect("runs")
+}
+
+/// The run's home, removed when dropped.
+struct Home(std::path::PathBuf);
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn text(bytes: &[u8]) -> String {

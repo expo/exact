@@ -1,8 +1,12 @@
 //! One test owns the process-wide look switches, as in `base_scale.rs`.
+#[path = "fonts/mod.rs"]
+mod test_fonts;
+
 use exact_painted::{presenter::PainterChoice, Presenter};
 
 #[test]
 fn button_symbols_follow_the_buttons_inline_direction() {
+    crate::test_fonts::pin_font();
     let mut source = String::from(
         "component App\n  view\n    column width=400 height=600 background-color=\"white\"\n",
     );

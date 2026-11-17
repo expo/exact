@@ -1,7 +1,7 @@
-// The tool's changes on the server's GET long poll (tamber/1.17, LLP 1122 stage 14 D) through LLP 1016.000 D8's
+// The tool's changes on the server's GET long poll (forma/1.17, LLP 1122 stage 14 D) through LLP 1016.000 D8's
 // `exactLongPoll`, against a real design server: idle, its poll is held, so `clock settle` doesn't wait on it and
 // each heartbeat (the server's 204 after its wait, 25 s) is a reply `clock held changes` returns on that commits
-// nothing; an agent's write then shows within one reply. The server's wait is 5 s here (tamber-timing.mjs's test
+// nothing; an agent's write then shows within one reply. The server's wait is 5 s here (forma-timing.mjs's test
 // knob, every bound scaled from 25 s's), and the real 25 s in the slow lane (EXACT_SLOW_TESTS=1).
 import { expect, onTestFinished, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -19,12 +19,12 @@ const WAIT = SLOW ? 25_000 : 5_000, HELD = `clock held changes ${Math.ceil(WAIT 
 
 test('an idle tool holds its long poll: clock settle returns at once, heartbeats over three waits commit nothing, and a write shows within one reply', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-poll-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
-  const tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--no-open'], { cwd: ROOT, env: timed({ POLL: WAIT }), stdio: ['ignore', 'pipe', 'pipe'] });
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--no-open'], { cwd: ROOT, env: timed({ POLL: WAIT }), stdio: ['ignore', 'pipe', 'pipe'] });
   let said = '', drive;
   tool.stderr.on('data', d => { said = (said + d).slice(-4000); });
   try {
-    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000).catch(e => { throw new Error(`${e.message}\n${said}`); });
+    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000).catch(e => { throw new Error(`${e.message}\n${said}`); });
     // The first read is a POST; its follow task (`clock +1`) opens the stream, whose first ask is answered at once.
     // (`clock held` waits up to 1.2 waits here: a heartbeat comes a wait after an ask.) The write lands while the drive
     // waits on its signal, so no heartbeat can come between: then one reply on, it is folded.
@@ -44,8 +44,8 @@ test('an idle tool holds its long poll: clock settle returns at once, heartbeats
     const replies = () => out.seen.filter(l => l.startsWith('{'));
     // The fourth heartbeat is in (the twelfth reply is the state after it): an agent writes, and the next reply carries it.
     await out.until(() => replies().length >= N + 12, 300_000).catch(e => { throw new Error(`${e.message}\n${driveSaid}`); });
-    const digest = createHash('sha256').update(readFileSync(join(app, 'app.tamber'))).digest('hex');
-    const write = spawnSync(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'op', TOOL_ORIGIN, JSON.stringify({ method: 'transaction', client: 'agent:codex', files: { 'app.tamber': digest }, ops: [{ op: 'set-token', name: 'surface.card', value: 'light-dark(#f1f3f5, #17191d)' }] })], { cwd: ROOT, encoding: 'utf8' });
+    const digest = createHash('sha256').update(readFileSync(join(app, 'app.forma'))).digest('hex');
+    const write = spawnSync(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'op', TOOL_ORIGIN, JSON.stringify({ method: 'transaction', client: 'agent:codex', files: { 'app.forma': digest }, ops: [{ op: 'set-token', name: 'surface.card', value: 'light-dark(#f1f3f5, #17191d)' }] })], { cwd: ROOT, encoding: 'utf8' });
     expect(write.status, write.stdout + write.stderr).toBe(0);
     written.fire(1);
     await new Promise(ok => drive.once('exit', ok));
@@ -53,7 +53,7 @@ test('an idle tool holds its long poll: clock settle returns at once, heartbeats
     const r = replies().map(l => JSON.parse(l));
     expect(r.length).toBe(ops.length);
     const opened = r[N + 5].resources.changes, idle = r[N + 11].resources.changes, after = r[N + 15].resources.changes;
-    expect(r[N + 5].resources.hello).toMatchObject({ ok: true, protocol: 'tamber/1.18' });
+    expect(r[N + 5].resources.hello).toMatchObject({ ok: true, protocol: 'forma/1.18' });
     expect(opened.stream).toBe(true);
     // Settled with the poll held, not waited on: named, and back well inside the server's wait (10 s of 25 s).
     expect(r[N + 6]).toMatchObject({ settled: true, held: 1, heldTargets: ['changes'] });
@@ -68,7 +68,7 @@ test('an idle tool holds its long poll: clock settle returns at once, heartbeats
     // The write: one reply on, folded from the stream, attributed.
     expect(after.answer, HEARTBEAT_RACE).toBe(idle.answer + 1);
     expect(after.stream).toBe(true);
-    expect(after.recent[0]).toMatchObject({ kind: 'changed', who: 'agent:codex', files: ['app.tamber'], tokens: ['surface.card'] });
+    expect(after.recent[0]).toMatchObject({ kind: 'changed', who: 'agent:codex', files: ['app.forma'], tokens: ['surface.card'] });
   } finally {
     if (drive) await stop(drive);
     await stop(tool);

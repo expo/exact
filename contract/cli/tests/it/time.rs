@@ -1,6 +1,7 @@
 //! @ref LLP 1027.000.000 — the date is a host fact: unknown (0) at bake and
 //! boot, then one commit when the host says it; refused when implausible.
 //! And tasks that wait for state (LLP 1092 D7–D11), below.
+use crate::scratch::Scratch;
 use exact_kernel::Kernel;
 use exact_runner::{DataError, DataSource, Runner, RunnerError, Value};
 
@@ -1356,8 +1357,7 @@ fn resource_clock_advice_tracks_let_values_in_their_scope() {
 
 #[test]
 fn resource_clock_advice_keeps_json_build_success_and_stdout_valid() {
-    let root = std::env::temp_dir().join(format!("exact-clock-advice-{}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = Scratch::new(format!("exact-clock-advice-{}", std::process::id()));
     let path = root.join("app.contract");
     std::fs::write(&path, "shape Reply\n  value: number\ncomponent App\n  resource reply = read(performanceNow()) as shape Reply else empty()\n  view\n    text `${reply.value}`\n").unwrap();
     let run = std::process::Command::new(env!("CARGO_BIN_EXE_contract"))

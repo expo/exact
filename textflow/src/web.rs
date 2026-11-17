@@ -257,8 +257,8 @@ impl TextFlow {
             return Err("textflow advance count mismatch");
         }
         let hyphen = number(input, 0)?;
-        if input.chunks_exact(4).any(|b| {
-            let n = f32::from_le_bytes(b.try_into().unwrap());
+        if input.as_chunks::<4>().0.iter().any(|b| {
+            let n = f32::from_le_bytes(*b);
             !n.is_finite() || n < 0.0
         }) {
             return Err("textflow advances must be finite and nonnegative");

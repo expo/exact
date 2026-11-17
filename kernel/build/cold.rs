@@ -1,13 +1,13 @@
 // Effect rows marked cold in schema.json share their initial values.
 // A style allocates them only when written; clones remain independent on writes.
 
-/// `ColdRows`, its initial values, and `Cold`, the pointer StyleProps holds.
+/// `ColdRows`, its initial values, and the pointer ordinary rows hold.
 fn emit_cold(w: &mut String, schema: &Schema) {
     let cold: Vec<&StyleRow> = schema.styles.iter().filter(|r| r.cold).collect();
     for row in &cold {
         assert!(!row.inherited && !row.rare, "schema.json: cold row {} overlaps inherited or rare storage", row.field);
     }
-    writeln!(w, "/// The rows few nodes set ([`StyleProps::cold`]).").unwrap();
+    writeln!(w, "/// The rows few nodes set ([`OrdinaryRows::cold`]).").unwrap();
     writeln!(w, "#[derive(Debug, Clone, PartialEq)]").unwrap();
     writeln!(w, "pub struct ColdRows {{").unwrap();
     for row in &cold {
@@ -62,8 +62,8 @@ fn emit_cold(w: &mut String, schema: &Schema) {
         "}\n",
     ));
     w.push_str(concat!(
-        "impl std::ops::Deref for StyleProps { type Target = ColdRows; fn deref(&self) -> &ColdRows { &self.cold } }\n",
-        "impl std::ops::DerefMut for StyleProps { fn deref_mut(&mut self) -> &mut ColdRows { &mut self.cold } }\n",
+        "impl std::ops::Deref for OrdinaryRows { type Target = ColdRows; fn deref(&self) -> &ColdRows { &self.cold } }\n",
+        "impl std::ops::DerefMut for OrdinaryRows { fn deref_mut(&mut self) -> &mut ColdRows { &mut self.cold } }\n",
     ));
     writeln!(w, "impl StyleMask {{").unwrap();
     writeln!(w, "    /// The rows [`ColdRows`] holds.").unwrap();
@@ -120,4 +120,131 @@ fn emit_cold_copy(w: &mut String, schema: &Schema) {
         .unwrap();
     }
     writeln!(w, "        }}").unwrap();
+}
+
+/// The ordinary row block and the small per-node declaration around it.
+fn emit_style_storage(w: &mut String, schema: &Schema) {
+    writeln!(w, "/// Style values shared independently of animation declarations.").unwrap();
+    writeln!(w, "#[derive(Debug, Clone, PartialEq)]").unwrap();
+    writeln!(w, "pub struct OrdinaryRows {{").unwrap();
+    for row in schema.styles.iter().filter(|r| !r.rare && !r.cold && !r.separate) {
+        writeln!(
+            w,
+            "    pub {}: {},",
+            row.field,
+            parse_codec(&row.codec).rust_type()
+        )
+        .unwrap();
+    }
+    writeln!(
+        w,
+        "    /// The rows few nodes set ([`RareRows`]).\n    pub rare: Rare,"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "    /// Effect rows, shared until written.\n    pub cold: Cold,"
+    )
+    .unwrap();
+    writeln!(w, "}}").unwrap();
+    emit_rare(w, schema);
+    emit_cold(w, schema);
+    emit_separate(w, schema);
+    writeln!(w, "impl Default for OrdinaryRows {{").unwrap();
+    writeln!(w, "    fn default() -> Self {{").unwrap();
+    writeln!(w, "        OrdinaryRows {{").unwrap();
+    for row in schema.styles.iter().filter(|r| !r.rare && !r.cold && !r.separate) {
+        let codec = parse_codec(&row.codec);
+        let default = default_of(&codec, &row.default, &row.field, &schema.colors);
+        writeln!(w, "            {}: {},", row.field, default).unwrap();
+    }
+    writeln!(w, "            rare: Rare::default(),").unwrap();
+    writeln!(w, "            cold: Cold::default(),").unwrap();
+    writeln!(w, "        }}").unwrap();
+    writeln!(w, "    }}").unwrap();
+    writeln!(w, "}}").unwrap();
+    writeln!(w, "/// Ordinary rows, shared independently of a node's animation declaration.").unwrap();
+    writeln!(w, "#[derive(Debug, Clone, Default)]").unwrap();
+    writeln!(w, "pub struct Ordinary(Option<std::sync::Arc<OrdinaryRows>>);").unwrap();
+    w.push_str(concat!(
+        "static INITIAL_ORDINARY: std::sync::LazyLock<OrdinaryRows> = std::sync::LazyLock::new(OrdinaryRows::default);\n",
+        "impl Ordinary {\n",
+        "    pub(crate) fn rows(&self) -> Option<&std::sync::Arc<OrdinaryRows>> { self.0.as_ref() }\n",
+        "    pub(crate) fn share(rows: std::sync::Arc<OrdinaryRows>) -> Self { Self(Some(rows)) }\n",
+        "}\n",
+        "impl std::ops::Deref for Ordinary {\n",
+        "    type Target = OrdinaryRows;\n",
+        "    fn deref(&self) -> &OrdinaryRows { self.0.as_deref().unwrap_or(&INITIAL_ORDINARY) }\n",
+        "}\n",
+        "impl std::ops::DerefMut for Ordinary {\n",
+        "    fn deref_mut(&mut self) -> &mut OrdinaryRows { std::sync::Arc::make_mut(self.0.get_or_insert_with(|| std::sync::Arc::new(OrdinaryRows::default()))) }\n",
+        "}\n",
+        "impl PartialEq for Ordinary {\n",
+        "    fn eq(&self, other: &Self) -> bool { match (&self.0, &other.0) {\n",
+        "        (Some(a), Some(b)) if std::sync::Arc::ptr_eq(a, b) => true,\n",
+        "        (None, None) => true,\n",
+        "        _ => **self == **other,\n",
+        "    } }\n",
+        "}\n",
+    ));
+    writeln!(w, "/// Every style row and its provenance; also a masked patch.").unwrap();
+    writeln!(w, "#[derive(Debug, Clone, Default, PartialEq)]").unwrap();
+    writeln!(w, "pub struct StyleProps {{").unwrap();
+    writeln!(w, "    /// Rows explicitly set.").unwrap();
+    writeln!(w, "    pub mask: StyleMask,").unwrap();
+    w.push_str("    /// The declarations the author wrote on this node (@ref LLP 1115.000 D2): an attribute or a class's row,\n    /// never one the compiler implied or one only inherited. Bits outside `mask` request CSS unset.\n    pub written: StyleMask,\n");
+    writeln!(
+        w,
+        "    /// The rows authored in `rem`/`em`, which the kernel keeps resolved (LLP 1069.000 D3)."
+    )
+    .unwrap();
+    writeln!(w, "    pub relative: crate::style::relative::Relative,").unwrap();
+    writeln!(w, "    /// Ordinary rows, copied only when written.\n    pub ordinary: Ordinary,").unwrap();
+    for row in schema.styles.iter().filter(|r| r.separate) {
+        assert!(!row.rare && !row.cold && !row.inherited, "separate row overlaps grouped storage");
+        writeln!(w, "    /// Declaration shared independently of ordinary rows.\n    pub {}: {}Declaration,", row.field, pascal(&row.field)).unwrap();
+    }
+    writeln!(w, "}}").unwrap();
+    w.push_str(concat!(
+        "impl std::ops::Deref for StyleProps { type Target = OrdinaryRows; fn deref(&self) -> &OrdinaryRows { &self.ordinary } }\n",
+        "impl std::ops::DerefMut for StyleProps { fn deref_mut(&mut self) -> &mut OrdinaryRows { &mut self.ordinary } }\n",
+        "impl StyleProps {\n",
+        "    /// Change rows of an owned style, copying shared storage on write.\n",
+        "    pub fn with_rows(mut self, write: impl FnOnce(&mut Self)) -> Self { write(&mut self); self }\n",
+        "}\n",
+    ));
+    let mut mask = String::new();
+    for row in schema.styles.iter().filter(|r| !r.separate) {
+        write!(mask, "m.set(StyleId::{}); ", pascal(&row.field)).unwrap();
+    }
+    writeln!(w, "impl StyleMask {{").unwrap();
+    writeln!(w, "    /// Rows shared independently of per-node declarations.").unwrap();
+    writeln!(w, "    pub fn ordinary() -> StyleMask {{ let mut m = StyleMask::EMPTY; {mask}m }}").unwrap();
+    writeln!(w, "}}").unwrap();
+}
+
+/// Each separate row has its own copy-on-write allocation and initial value.
+fn emit_separate(w: &mut String, schema: &Schema) {
+    for row in schema.styles.iter().filter(|r| r.separate) {
+        let name = format!("{}Declaration", pascal(&row.field));
+        let ty = parse_codec(&row.codec).rust_type();
+        let initial = default_of(&parse_codec(&row.codec), &row.default, &row.field, &schema.colors);
+        writeln!(w, "/// A declaration shared independently of the other style rows.").unwrap();
+        writeln!(w, "#[derive(Debug, Clone, Default)]\npub struct {name} {{ rows: Option<std::sync::Arc<{ty}>> }}").unwrap();
+        writeln!(w, "impl {name} {{").unwrap();
+        writeln!(w, "    pub(crate) fn rows(&self) -> Option<&std::sync::Arc<{ty}>> {{ self.rows.as_ref() }}").unwrap();
+        writeln!(w, "    pub(crate) fn share(rows: std::sync::Arc<{ty}>) -> Self {{ Self {{ rows: Some(rows) }} }}").unwrap();
+        writeln!(w, "}}").unwrap();
+        writeln!(w, "impl From<{ty}> for {name} {{ fn from(rows: {ty}) -> Self {{ Self::share(std::sync::Arc::new(rows)) }} }}").unwrap();
+        writeln!(w, "impl std::ops::Deref for {name} {{").unwrap();
+        writeln!(w, "    type Target = {ty};").unwrap();
+        writeln!(w, "    fn deref(&self) -> &{ty} {{").unwrap();
+        writeln!(w, "        static INITIAL: std::sync::LazyLock<{ty}> = std::sync::LazyLock::new(|| {initial});").unwrap();
+        writeln!(w, "        self.rows.as_deref().unwrap_or(&INITIAL)\n    }}\n}}").unwrap();
+        writeln!(w, "impl std::ops::DerefMut for {name} {{").unwrap();
+        writeln!(w, "    fn deref_mut(&mut self) -> &mut {ty} {{ std::sync::Arc::make_mut(self.rows.get_or_insert_with(|| std::sync::Arc::new({initial}))) }}\n}}").unwrap();
+        writeln!(w, "impl PartialEq for {name} {{").unwrap();
+        writeln!(w, "    fn eq(&self, other: &Self) -> bool {{ match (&self.rows, &other.rows) {{").unwrap();
+        writeln!(w, "        (Some(a), Some(b)) if std::sync::Arc::ptr_eq(a, b) => true,\n        (None, None) => true,\n        _ => **self == **other,\n    }} }}\n}}").unwrap();
+    }
 }

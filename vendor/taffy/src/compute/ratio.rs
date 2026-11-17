@@ -226,7 +226,10 @@ pub(crate) fn minimum_ratio_width(
 ) -> Option<f32> {
     use crate::{LayoutPartialTreeExt, MaybeResolve, ResolveOrZero};
     let style = tree.get_core_container_style(node);
-    if style.aspect_ratio().is_none() || !style.size().width.is_auto()
+    // EXACT PATCH 78: a content keyword width is sized as `auto` is for a box with a ratio.
+    let width = style.size().width;
+    let auto_width = width.is_auto() || (width.is_sizing_keyword() && !width.is_stretch());
+    if style.aspect_ratio().is_none() || !auto_width
         || !style.min_size().width.is_auto() || style.is_compressible_replaced()
         || style.overflow().x.is_scroll_container() || style.overflow().y.is_scroll_container() {
         return None;

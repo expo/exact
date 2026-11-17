@@ -250,11 +250,12 @@ pub(super) fn paint(
     scale: f32,
     pixels: PixelSize,
 ) -> Result<Pixmap, Refusal> {
-    let drawn = crate::paint::Painter::svg_picture(text, scene, css, scale).map_err(|e| {
-        let line = format!("exact: an SVG image did not draw: {e}");
-        eprintln!("{}", super::remote::without_queries(&line));
-        Refusal::DecodeFailed
-    })?;
+    let drawn =
+        crate::paint::Painter::svg_picture(text, scene, css, scale, false).map_err(|e| {
+            let line = format!("exact: an SVG image did not draw: {e}");
+            eprintln!("{}", super::remote::without_queries(&line));
+            Refusal::DecodeFailed
+        })?;
     if (drawn.width(), drawn.height()) != (pixels.width, pixels.height) {
         return Err(Refusal::ActualExceedsReservation);
     }
@@ -284,7 +285,7 @@ pub(super) fn finish(text: &Shared, pending: Pending) {
     let text = if fonts.is_empty() {
         text.clone()
     } else {
-        crate::text::TextEngine::for_svg(&fonts)
+        text.borrow().for_svg(&fonts)
     };
     match paint(text, &scene, css, scale, pixels) {
         Ok(drawn) => {

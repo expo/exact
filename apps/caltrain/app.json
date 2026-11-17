@@ -95,7 +95,7 @@
       }
     }
   ],
-  "rust": { "module": { "package": "caltrain-logic" } },
+  "rust": { "data": { "crate": "caltrain-data", "type": "caltrain_data::Caltrain", "source": "caltrain_data::Caltrain" }, "module": { "package": "caltrain-logic" } },
   "host": {
     "ios": {
       "minimumOS": "17.0",
@@ -104,8 +104,7 @@
         "ipad"
       ],
       "localNetworking": "Exact connects to your dev server on the local network to load the app you are working on.",
-      "backgroundModes": [],
-      "associatedDomains": false
+      "backgroundModes": []
     },
     "macos": {
       "minimumOS": "14.0"

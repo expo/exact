@@ -864,7 +864,12 @@ fn damage_clearing_preserves_the_page_colour_at_fractional_scales() {
             raster.begin(width, 80.0, scale);
             let background = raster.finish().unwrap();
             let page = page.unwrap_or([255; 4]);
-            assert!(background.data().chunks_exact(4).all(|px| px == page));
+            assert!(background
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| *px == page));
 
             let red = [255, 0, 0, 255];
             raster.begin(width, 80.0, scale);
@@ -1375,10 +1380,12 @@ fn full_window_split_preserves_premultiplied_composition_and_refuses_clips() {
     let above = split.finish().unwrap();
     for (((b, g), a), expected) in below
         .data()
-        .chunks_exact(4)
-        .zip(game.data().chunks_exact(4))
-        .zip(above.data().chunks_exact(4))
-        .zip(expected.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(game.data().as_chunks::<4>().0)
+        .zip(above.data().as_chunks::<4>().0)
+        .zip(expected.data().as_chunks::<4>().0)
     {
         for channel in 0..4 {
             let composed = a[channel] as f32

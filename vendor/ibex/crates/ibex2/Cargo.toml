@@ -30,7 +30,7 @@ ibex2-sqlite = { path = "../ibex2-sqlite" }
 mio = { version = "1", features = ["os-poll", "net"] }
 socket2 = "0.6"
 libc = "0.2"
-ureq = { version = "=3.4.0", default-features = false, features = ["rustls"] }
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.7"
 webpki-roots = "1"
@@ -39,23 +39,25 @@ sha2 = "0.10"
 [build-dependencies]
 cc = "1"
 
-# The transport off Apple platforms (LLP 0057 §3; OQ2 of LLP 0068, resolved
-# 2026-08-30): HTTP/1.1 over rustls with the webpki roots — pure Rust, no
-# system TLS, nothing a builder without -dev packages lacks. Redirects and
-# the rest of `fetch` stay above it, in Rust, as on Apple.
+# HTTP/1.1 and WebSockets off Apple use rustls. Android delegates certificate
+# verification to its trust manager; other hosts read native roots and fall back
+# to webpki roots only when none are usable.
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 mio = { version = "1", features = ["os-poll", "net"] }
 socket2 = "0.6"
 libc = "0.2"
-ureq = { version = "=3.4.0", default-features = false, features = ["rustls"] }
-# The trust store is the platform's (LLP 0057 §3): the distro's CA bundle
-# through rustls-native-certs; the compiled-in webpki roots only where the
-# machine has none. The same rustls ureq pins, so one copy is linked.
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.7"
 # The compiled-in roots for a socket's own TLS where the machine has none
 # (the copy ureq already links).
 webpki-roots = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "platform-verifier"] }
+# android/ implements the 0.7 JNI interface (CertificateVerifierTest checks it).
+rustls-platform-verifier = "0.7.1"
+jni = { version = "0.22.4", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_WindowsProgramming"] }
@@ -63,7 +65,7 @@ windows-sys = { version = "0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_F
 [target.'cfg(target_vendor = "apple")'.dependencies]
 mio = { version = "1", features = ["os-poll", "net"], optional = true }
 socket2 = { version = "0.6", optional = true }
-ureq = { version = "=3.4.0", default-features = false, features = ["rustls"], optional = true }
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 rustls-native-certs = { version = "0.7", optional = true }
 webpki-roots = { version = "1", optional = true }

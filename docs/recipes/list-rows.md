@@ -23,7 +23,7 @@ component Notes
   action aim(id: string)
     aimed = id
   view
-    main navigationKey=`${top(nav).id}` navigationBack="back" testId="app" width="100%" height="100%"
+    main navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}` navigationScroll="notes-list" position="absolute" inset=0
           header display="flex" flex-wrap="wrap" align-items="center" gap=8 padding="8px 16px"

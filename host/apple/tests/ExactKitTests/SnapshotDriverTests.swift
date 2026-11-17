@@ -9,8 +9,9 @@ import XCTest
 import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
+import CoreText
 import ExactCore
-import ExactSnapshot
+@testable import ExactSnapshot
 #if canImport(WidgetKit)
 import WidgetKit
 #endif
@@ -19,6 +20,68 @@ import WidgetKit
 @MainActor
 @available(iOS 17.0, macOS 14.0, visionOS 26.0, *)
 final class SnapshotDriverTests: XCTestCase {
+    func testAWrappedSnapshotRunCompositesItsOverlappingLinesTogether() throws {
+        let size = CGSize(width: 300, height: 900)
+        let session = try HeadlessSession(plan: fixturePlan("HEADLESS"), size: size, facts: SessionFacts(displayScale: 1, preferences: [], clock: 0))
+        defer { session.close() }
+        let tree = try session.snapshot()
+        let node = try XCTUnwrap(tree.nodes.values.first { $0.props["testId"] == "opacity-wrap" })
+        XCTAssertGreaterThan(node.lines.count, 1)
+        let environment = SnapshotEnvironment(family: .systemSmall, entryDate: Date(timeIntervalSince1970: 0))
+        let image = try XCTUnwrap(render(SnapshotTextView(node: node, environment: environment), size: node.frame.size, scale: 1))
+        let px = try pixels(image)
+        let alpha = stride(from: 3, to: px.data.count, by: 4).map { px.data[$0] }.max() ?? 0
+        XCTAssertEqual(Double(alpha), 127.5, accuracy: 2, "overlapping wrapped lines belong to one opacity group")
+    }
+
+    /// Each opacity group lays out the whole line, its other runs unpainted:
+    /// a faded run's tracking still moves the runs after it.
+    func testAFadedTrackedRunKeepsTheNextRunInPlace() throws {
+        let font = CTFontCreateWithName("Helvetica" as CFString, 32, nil)
+        func rightmostOpaqueInk(_ alpha: Double) throws -> Int {
+            let faded = HeadlessSession.Run(text: "AAAA", size: 32, weight: 400, family: 0, italic: false, letterSpacing: 4,
+                                            opacityGroups: alpha < 1 ? [InlineOpacity(box: 2, alpha: alpha)] : [], font: font)
+            let next = HeadlessSession.Run(text: "BBBB", size: 32, weight: 400, family: 0, italic: false, font: font)
+            let line = HeadlessSession.Line(text: "AAAABBBB", range: NSRange(location: 0, length: 8), origin: CGPoint(x: 0, y: 32),
+                                            width: 260, ascent: 32, descent: 8,
+                                            segments: [HeadlessSession.Segment(run: 0, text: "AAAA"), HeadlessSession.Segment(run: 1, text: "BBBB")])
+            let node = HeadlessSession.Node(id: 1, kind: "text", frame: CGRect(x: 0, y: 0, width: 300, height: 60), lines: [line], runs: [faded, next])
+            let environment = SnapshotEnvironment(family: .systemSmall, entryDate: Date(timeIntervalSince1970: 0))
+            let image = try XCTUnwrap(render(SnapshotTextView(node: node, environment: environment).environment(\.colorScheme, .light),
+                                             size: node.frame.size, scale: 1))
+            let px = try pixels(image)
+            // The faded run is at most half alpha; only the next run is opaque.
+            var right = -1
+            for y in 0..<px.height { for x in 0..<px.width where px.data[(y * px.width + x) * 4 + 3] > 200 { right = max(right, x) } }
+            return right
+        }
+        let solid = try rightmostOpaqueInk(1)
+        XCTAssertGreaterThan(solid, 100)
+        XCTAssertEqual(try rightmostOpaqueInk(0.5), solid, accuracy: 1)
+    }
+
+    func testNestedRunOpacityFadesSnapshotGlyphsAndLinesOnce() throws {
+        let size = CGSize(width: 300, height: 900)
+        let session = try HeadlessSession(plan: fixturePlan("HEADLESS"), size: size,
+                                          facts: SessionFacts(displayScale: 1, preferences: []))
+        defer { session.close() }
+        let tree = try session.snapshot()
+        let environment = SnapshotEnvironment(family: .systemSmall, entryDate: Date(timeIntervalSince1970: 0))
+        let image = try XCTUnwrap(render(SnapshotDriver.view(tree, environment: environment).background(Color.white)
+            .environment(\.colorScheme, .light), size: size, scale: 1))
+        let px = try pixels(image)
+        let root = try XCTUnwrap(tree.roots.first.flatMap { tree.nodes[$0] })
+        for (name, opacity) in [("zero", 0.0), ("partial", 0.25), ("full", 1.0)] {
+            let node = try XCTUnwrap(tree.nodes.values.first { $0.props["testId"] == "opacity-\(name)" })
+            let rect = node.frame.offsetBy(dx: root.frame.minX, dy: root.frame.minY)
+            var darkness = 0
+            for y in Int(rect.minY)..<Int(rect.maxY) { for x in Int(rect.minX)..<Int(rect.maxX) {
+                darkness = max(darkness, 255 - Int(px.data[(y * px.width + x) * 4]))
+            } }
+            XCTAssertEqual(Double(darkness), 255 * 0.5 * 0.5 * opacity, accuracy: 3, name)
+        }
+    }
+
     #if os(macOS)
     func testMacExtensionFindsTheContainingAppsCatalogAndImage() throws {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_SNAPSHOT_ASSETS_EXTENSION"])
@@ -28,6 +91,7 @@ final class SnapshotDriverTests: XCTestCase {
         let color = try XCTUnwrap(SnapshotBundles.all(for: bundle).compactMap { NSColor(named: "WidgetInk", bundle: $0)?.usingColorSpace(.sRGB) }.first)
         XCTAssertEqual(color.redComponent, 1, accuracy: 0.001)
         XCTAssertEqual(color.greenComponent, 0, accuracy: 0.001)
+        XCTAssertNotNil(IconAsset.image(named: IconAsset.name("two.svg"), bundles: SnapshotBundles.all(for: bundle)), "icon catalogs resolve from the containing app")
         let roots = SnapshotBundles.imageRoots(for: bundle)
         XCTAssertTrue(roots.map(\.path).contains(app.bundleURL.appendingPathComponent("Contents/Resources").path))
         let image = try XCTUnwrap(SnapshotRasters().decode("assets/widget.png", roots: roots, appGroup: nil, appID: nil, box: CGSize(width: 1, height: 1), fit: "contain", scale: 1))
@@ -60,12 +124,18 @@ final class SnapshotDriverTests: XCTestCase {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_\(key)_PLAN"], "EXACT_\(key)_PLAN: build.mjs --test compiles it")
         return try Data(contentsOf: URL(fileURLWithPath: path))
     }
+    /// The rendered pictures go to `EXACT_WP4_OUT`, which keeps them, else to a directory removed after the class.
+    private nonisolated static let kept = ProcessInfo.processInfo.environment["EXACT_WP4_OUT"].map { URL(fileURLWithPath: $0) }
+    private nonisolated static let scratch = FileManager.default.temporaryDirectory.appending(path: "exact-wp4-\(ProcessInfo.processInfo.processIdentifier)")
     private static let out: URL = {
-        let dir = ProcessInfo.processInfo.environment["EXACT_WP4_OUT"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.temporaryDirectory.appending(path: "exact-wp4-\(ProcessInfo.processInfo.processIdentifier)")
+        let dir = kept ?? scratch
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+    nonisolated override class func tearDown() {
+        if kept == nil { try? FileManager.default.removeItem(at: scratch) }
+        super.tearDown()
+    }
     private static let baseline = ProcessInfo.processInfo.environment["EXACT_WP4_BASELINE"].map { URL(fileURLWithPath: $0) }
 
     // MARK: The stand-in for WidgetKit's container (the baseline's `WidgetContainer`)
@@ -668,6 +738,30 @@ final class SnapshotDriverTests: XCTestCase {
         XCTAssertEqual(SnapshotSemantics.traits(image), .isImage)
         XCTAssertEqual(SnapshotSemantics.role(HeadlessSession.Node(id: 3, kind: "button", frame: .zero, props: ["href": "/x"])), "link")
         XCTAssertEqual(SnapshotSemantics.traits(HeadlessSession.Node(id: 3, kind: "view", frame: .zero, props: ["accessibilityRole": "button"])), .isButton)
+    }
+
+    func testRasterIconCatalogsRenderInWidgetAndActivitySnapshots() throws {
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_RASTER_ICONS_BUNDLE"])
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        let size = CGSize(width: 80, height: 40)
+        for family in [SnapshotEnvironment.Family.systemSmall, .liveActivity] {
+            for multicolor in [true, false] {
+                let node = HeadlessSession.Node(id: 1, kind: "image", frame: CGRect(origin: .zero, size: size),
+                    props: ["imageSource": "symbol:icon||0 0 24 24||two.svg", "symbolName": "", "symbolAsset": "two.svg"],
+                    style: ["symbol_rendering": .string(multicolor ? "multicolor" : "monochrome"), "text_color": [0, 255, 0, 255]])
+                let environment = SnapshotEnvironment(family: family, imageRoots: [bundle.bundleURL], contentMargins: EdgeInsets())
+                let view = SnapshotImageView(node: node, environment: environment).environment(\.colorScheme, .light).background(.white)
+                let image = try XCTUnwrap(render(view, size: size, scale: 1))
+                let left = try color(image, x: 30, y: 20), right = try color(image, x: 50, y: 20)
+                if multicolor {
+                    XCTAssertGreaterThan(left[0], 240); XCTAssertLessThan(left[1], 10); XCTAssertLessThan(left[2], 10)
+                    XCTAssertGreaterThan(right[2], 240); XCTAssertLessThan(right[0], 10)
+                } else {
+                    XCTAssertGreaterThan(left[1], 240); XCTAssertLessThan(left[0], 10); XCTAssertLessThan(left[2], 10)
+                    XCTAssertEqual(left, right)
+                }
+            }
+        }
     }
 
     /// Stage 14 C2: a widget's even-odd icon (`symbolFillRule`) leaves its

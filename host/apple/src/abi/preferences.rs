@@ -11,6 +11,11 @@ use super::{not_booted, Bridge};
 use exact_runner::DataSource;
 
 impl<D: DataSource> Bridge<D> {
+    /// Omit layout-only boxes inside quiet collection rows of subsequent boots (LLP 1171 D4).
+    pub fn set_flat_nodes(&mut self, on: bool) {
+        self.launch_layout.flat_nodes = on;
+    }
+
     /// Frame tasks at their presentation target after timer admission.
     pub fn admitted_frame(&mut self, target_ms: f64, wall_ms: f64) -> u32 {
         let out = self
@@ -122,15 +127,15 @@ impl<D: DataSource> Bridge<D> {
     }
 
     /// The binding core's answer (LLP 1121 D12, stage 5) to the request in
-    /// the input buffer ([`Host::tamber_json`]), UTF-8 in the output buffer.
+    /// the input buffer ([`Host::forma_json`]), UTF-8 in the output buffer.
     /// Not a batch: nothing changes.
-    pub fn tamber(&mut self, len: usize) -> u32 {
+    pub fn forma(&mut self, len: usize) -> u32 {
         let text = std::str::from_utf8(&self.input[..len.min(self.input.len())])
             .unwrap_or("")
             .to_owned();
         self.output = match self.host.as_mut() {
-            Some(h) => h.tamber_json(&text),
-            None => exact_runner::agent::error("tamber: not booted"),
+            Some(h) => h.forma_json(&text),
+            None => exact_runner::agent::error("forma: not booted"),
         }
         .into_bytes();
         self.output.len() as u32
@@ -194,6 +199,30 @@ impl<D: DataSource> Bridge<D> {
         if time.validate().is_ok() {
             self.launch_facts.time = Some(time);
         }
+    }
+
+    /// The window the session runs in, for every boot from here: its name,
+    /// which the page's `name` reads, and whether the router launches
+    /// rooted at the launch location (LLP 1030.004 D2).
+    pub fn set_launch_window(&mut self, len: usize, rooted: bool) {
+        let name = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
+        self.launch_facts.window_name = Some(name);
+        self.launch_facts.rooted = rooted;
+    }
+
+    /// The platform's layout direction for every boot from here
+    /// (`exact_runner::time::Launch::direction`): 0 left to right, 1 right
+    /// to left, anything else none (the strings table's).
+    pub fn set_launch_direction(&mut self, direction: u32) {
+        self.launch_facts.direction = u8::try_from(direction)
+            .ok()
+            .and_then(exact_kernel::Direction::from_wire);
+    }
+
+    /// Whether unsaid text is natural for every boot from here
+    /// (`exact_runner::time::Launch::natural_text`, LLP 1060.000 D3).
+    pub fn set_launch_natural_text(&mut self, on: bool) {
+        self.launch_facts.natural_text = on;
     }
 
     /// Where the viewer is, for the next boot's first settle, as
@@ -360,12 +389,12 @@ mod rebind_tests;
 
 impl<D: DataSource> Bridge<D> {
     /// The root font size in points (LLP 1069.000 D3): a relayout.
+    /// The latest valid one is also the next boot's first layout's.
     pub fn set_root_font_size(&mut self, px: f64) -> u32 {
-        if self.host.is_none() {
-            if !px.is_finite() || !(px as f32).is_finite() || px <= 0.0 {
-                return self.refuse("root font size must be finite and positive");
-            }
+        if (px as f32).is_finite() && px as f32 > 0.0 {
             self.launch_layout.root_font_size = Some(px as f32);
+        } else if self.host.is_none() {
+            return self.refuse("root font size must be finite and positive");
         }
         let out = self
             .host
@@ -376,12 +405,12 @@ impl<D: DataSource> Bridge<D> {
 
     /// The display's scale (LLP 1115.000 D10.3): a relayout where a row is a
     /// hairline.
+    /// The latest valid one is also the next boot's first layout's.
     pub fn set_display_scale(&mut self, scale: f64) -> u32 {
-        if self.host.is_none() {
-            if !scale.is_finite() || !(scale as f32).is_finite() || scale <= 0.0 {
-                return self.refuse("display scale must be finite and positive");
-            }
+        if (scale as f32).is_finite() && scale as f32 > 0.0 {
             self.launch_layout.display_scale = Some(scale as f32);
+        } else if self.host.is_none() {
+            return self.refuse("display scale must be finite and positive");
         }
         let out = self
             .host

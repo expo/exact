@@ -24,12 +24,11 @@ static STARTS: LazyLock<Vec<[StyleProps; 4]>> = LazyLock::new(|| {
         .iter()
         .map(|style| {
             std::array::from_fn(|column| {
-                let mut rows = StyleProps {
-                    font_weight: style.weights[column],
-                    line_height: style.leadings[column]
-                        .map_or(LineHeight::Normal, LineHeight::Number),
-                    ..StyleProps::default()
-                };
+                let mut rows = StyleProps::default().with_rows(|rows| {
+                    rows.font_weight = style.weights[column];
+                    rows.line_height =
+                        style.leadings[column].map_or(LineHeight::Normal, LineHeight::Number);
+                });
                 rows.mask.set(StyleId::FontWeight);
                 rows.mask.set(StyleId::LineHeight);
                 rows

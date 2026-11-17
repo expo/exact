@@ -71,9 +71,22 @@ pub(crate) fn digits_argument(
 
 /// `formatNumber`'s third argument, a currency's ISO 4217 code, is written
 /// with `"currency"` and only with it (@ref LLP 1116 D8): the code picks the
-/// symbol and the fraction digits, and no other style has one.
+/// symbol and the fraction digits, and no other style has one. A fraction
+/// digit count is written with `"decimal"` and only with it (expo/exact#491).
 pub(crate) fn currency_code(args: &[Expr], span: Span) -> Result<(), TypeError> {
-    let currency = matches!(args.get(1), Some(Expr::Str(style, _)) if style == "currency");
+    let style = |s: &str| matches!(args.get(1), Some(Expr::Str(style, _)) if style == s);
+    if let Some(digits @ Expr::Number(..)) = args.get(2) {
+        return if style("decimal") {
+            Ok(())
+        } else {
+            err(
+                "type-format-style",
+                "argument 3 of `formatNumber` is a fraction digit count only with `\"decimal\"` (`formatNumber(n, \"decimal\", 1)`); `\"currency\"` takes an ISO 4217 code, `\"compact\"` and `\"percent\"` two arguments",
+                digits.span(),
+            )
+        };
+    }
+    let currency = style("currency");
     match (currency, args.get(2)) {
         (true, None) => err(
             "type-format-style",
@@ -82,7 +95,7 @@ pub(crate) fn currency_code(args: &[Expr], span: Span) -> Result<(), TypeError> 
         ),
         (false, Some(code)) => err(
             "type-format-style",
-            "argument 3 of `formatNumber` is a currency's ISO 4217 code, written only with `\"currency\"` (`formatNumber(total, \"currency\", \"USD\")`); `\"compact\"`, `\"decimal\"` and `\"percent\"` take two arguments",
+            "argument 3 of `formatNumber` is a currency's ISO 4217 code, written only with `\"currency\"` (`formatNumber(total, \"currency\", \"USD\")`), or a fraction digit count with `\"decimal\"` (`formatNumber(n, \"decimal\", 1)`); `\"compact\"` and `\"percent\"` take two arguments",
             code.span(),
         ),
         _ => Ok(()),

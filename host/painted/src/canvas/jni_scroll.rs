@@ -69,6 +69,47 @@ macro_rules! canvas_jni_scroll {
             };
         }
 
+        /// The reader's pinch of zoomable scroller `id`
+        /// (`CanvasHost::zoom`; px).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_zoom(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            id: $crate::canvas::jni_sys::jint,
+            phase: $crate::canvas::jni_sys::jint,
+            factor: $crate::canvas::jni_sys::jfloat,
+            x0: $crate::canvas::jni_sys::jfloat,
+            y0: $crate::canvas::jni_sys::jfloat,
+            x1: $crate::canvas::jni_sys::jfloat,
+            y1: $crate::canvas::jni_sys::jfloat,
+        ) {
+            with(|h| h.zoom(id as u32, phase, factor, (x0, y0), (x1, y1)));
+        }
+
+        /// The reader's double tap (`CanvasHost::zoom_tap`; px).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_zoomTap(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            phase: $crate::canvas::jni_sys::jint,
+            x: $crate::canvas::jni_sys::jfloat,
+            y: $crate::canvas::jni_sys::jfloat,
+        ) {
+            with(|h| h.zoom_tap(phase, x, y));
+        }
+
+        /// A wheel with `ctrl` held (`CanvasHost::zoom_wheel`; px, points).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_zoomWheel(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            x: $crate::canvas::jni_sys::jfloat,
+            y: $crate::canvas::jni_sys::jfloat,
+            dy: $crate::canvas::jni_sys::jfloat,
+        ) {
+            with(|h| h.zoom_wheel(x, y, dy));
+        }
+
         /// The fling the reader threw from its drag of scroller `id` stopped
         /// (`CanvasHost::fling_ended`).
         #[no_mangle]

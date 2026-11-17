@@ -55,3 +55,13 @@ Reproduce with fonttools 4.67.0:
 ```sh
 pyftsubset RobotoFlex.ttf --text="Hamburgefonts EXACT" --layout-features='*' --output-file=RobotoFlex-subset.ttf
 ```
+
+# Tall button fixture
+
+`NotoNastaliqUrdu.ttf` is Noto Nastaliq Urdu 3.009. Its tall line and
+joining strokes exercise button labels and metrics without a Latin glyph probe.
+Copyright 2022 The Noto Project Authors; SIL Open Font License 1.1,
+`NotoNastaliqUrdu-LICENSE`.
+
+Source: [NotoNastaliqUrdu[wght].ttf](https://github.com/google/fonts/blob/900d04478c1245a3474c056d095eae15cdb3c8fd/ofl/notonastaliqurdu/NotoNastaliqUrdu%5Bwght%5D.ttf),
+SHA-256 `98a4787f34eb6fde57fb9a1121a8f216301196ab0da98ea110cad581be8abbcd`.

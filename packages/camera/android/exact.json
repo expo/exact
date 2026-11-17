@@ -12,6 +12,10 @@
       "flashMode": "enum<auto|on|off>",
       "jpegQuality": "number",
       "shutterSound": "bool"
+    },
+    "recordVideoWithCameraApp": {
+      "videoQuality": "enum<low|high>",
+      "sizeLimit": "number"
     }
   },
   "names": [],

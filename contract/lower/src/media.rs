@@ -26,6 +26,14 @@ pub(crate) fn check(name: &str, value: &Expr, span: Span) -> Result<(), LowerErr
         {
             return err("lower-attr-value", "unknown controlslist token", span);
         }
+        // @ref LLP 1042.000 D2 — spelt as HLS spells a variant's RESOLUTION.
+        if name == "preferredMaximumResolution" && resolution(text).is_none() {
+            return err(
+                "lower-attr-value",
+                format!("`{name}` is `<width>x<height>` in pixels, each a whole number above 0, as `1920x1080`"),
+                span,
+            );
+        }
     }
     if let Some(number) = numeric_literal(value) {
         // @ref LLP 1098 D2 — a seek moves a number of seconds, some.
@@ -55,6 +63,19 @@ pub(crate) fn check(name: &str, value: &Expr, span: Span) -> Result<(), LowerErr
     Ok(())
 }
 
+/// `<width>x<height>`, each a decimal whole number above 0 (RFC 8216
+/// §4.3.4.2's decimal-resolution).
+fn resolution(text: &str) -> Option<(u32, u32)> {
+    let (w, h) = text.split_once('x')?;
+    let whole = |s: &str| {
+        (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| s.parse::<u32>().ok())
+            .flatten()
+            .filter(|n| *n > 0)
+    };
+    Some((whole(w)?, whole(h)?))
+}
+
 /// HTML's `<audio>` (LLP 1042 §8): the media node a `video` is, marked so
 /// the web makes an `<audio>`; [`audio_rows`] gives it HTML's box.
 pub(crate) const AUDIO: crate::tags::Tag = crate::tags::Tag {
@@ -81,7 +102,7 @@ pub(crate) fn audio_rows(
     if let Some(a) = attrs.iter().find(|a| {
         matches!(
             a.name.as_str(),
-            "poster" | "playsinline" | "playbackVisibilityThreshold"
+            "poster" | "playsinline" | "playbackVisibilityThreshold" | "preferredMaximumResolution"
         )
     }) {
         return err(

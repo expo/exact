@@ -433,6 +433,7 @@ fn grow(w: &mut World, e: Entity, at: u64) {
 /// Feeding visits this plot's bounded fruit slots, never the whole garden.
 /// It changes the weight at ripening without drawing another random number.
 pub fn needs_feed(w: &World, plant: Entity) -> bool {
+    let fruits = w.components::<Fruit>();
     w.get::<Plant>(plant).is_some_and(|p| {
         if p.stage < 4 {
             !p.fed
@@ -440,18 +441,19 @@ pub fn needs_feed(w: &World, plant: Entity) -> bool {
             p.fruits
                 .iter()
                 .flatten()
-                .any(|&e| w.get::<Fruit>(e).is_some_and(|f| !f.ripe && !f.fed))
+                .any(|&e| fruits.get(e).is_some_and(|f| !f.ripe && !f.fed))
         }
     })
 }
 
 pub fn is_fed(w: &World, plant: Entity) -> bool {
+    let fruits = w.components::<Fruit>();
     w.get::<Plant>(plant).is_some_and(|p| {
         p.fed
             || p.fruits
                 .iter()
                 .flatten()
-                .any(|&e| w.get::<Fruit>(e).is_some_and(|f| f.fed))
+                .any(|&e| fruits.get(e).is_some_and(|f| f.fed))
     })
 }
 
@@ -472,6 +474,7 @@ pub fn feed(w: &World, plant: Entity) {
 /// moves forward by a quarter of elapsed time, preserving visual progress;
 /// the deadline moves nearer by a quarter of the remaining time. No world scan.
 pub fn needs_water(w: &World, plant: Entity) -> bool {
+    let fruits = w.components::<Fruit>();
     w.get::<Plant>(plant).is_some_and(|p| {
         if p.stage < 4 {
             !p.watered
@@ -479,7 +482,7 @@ pub fn needs_water(w: &World, plant: Entity) -> bool {
             p.fruits
                 .iter()
                 .flatten()
-                .any(|&e| w.get::<Fruit>(e).is_some_and(|f| !f.ripe && !f.watered))
+                .any(|&e| fruits.get(e).is_some_and(|f| !f.ripe && !f.watered))
         }
     })
 }
@@ -608,10 +611,11 @@ pub fn fruits_of(w: &World, plant: Entity) -> Vec<(Entity, bool, u64)> {
     let Some(slots) = w.get::<Plant>(plant).map(|p| p.fruits.clone()) else {
         return vec![];
     };
+    let fruits = w.components::<Fruit>();
     slots
         .into_iter()
         .flatten()
-        .filter_map(|e| w.get::<Fruit>(e).map(|f| (e, f.ripe, f.ripe_at)))
+        .filter_map(|e| fruits.get(e).map(|f| (e, f.ripe, f.ripe_at)))
         .collect()
 }
 

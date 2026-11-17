@@ -34,5 +34,6 @@
       "macos": "0",
       "ios": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "theme-fixture-data", "type": "theme_fixture_data::Fixture", "source": "theme_fixture_data::Fixture" } }
 }

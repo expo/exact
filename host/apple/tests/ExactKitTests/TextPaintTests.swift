@@ -9,6 +9,200 @@ import IOSurface
 @testable import ExactKit
 
 final class TextPaintTests: XCTestCase {
+    func testAnInvisibleStrokedSiblingCannotLeakIntoAVisibleRun() {
+        var hidden = run("H")
+        hidden.size = 40
+        hidden.stroke = [30, 255, 0, 0, 255]
+        hidden.opacity = [InlineOpacity(box: 2, alpha: 0)]
+        var visible = run("H")
+        visible.size = 40
+        visible.color = [0, 255, 0, 255]
+        let spec = Spec(runs: [hidden, visible], align: 0, lineClamp: 0, color: [0, 0, 0, 255])
+        let shot = paint(engine.paragraph(spec, width: 200), spec, size: CGSize(width: 200, height: 100))
+        XCTAssertFalse(stride(from: 0, to: shot.bytes.count, by: 4).contains { shot.bytes[$0] > 0 }, "excluded red stroke overlaps the visible sibling's advance")
+    }
+
+    func testGlyphClippedBackgroundsRespectInlineOpacity() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "clipped-run-opacity")
+        defer { session.destroy() }
+        func draw(_ opacity: Double) throws -> [UInt8] {
+            session.presenter.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "text", "style": ["font_size": 32, "background_clip": "text", "background_color": [255, 0, 0, 255], "text_color": [0, 0, 0, 0]]],
+                ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 100],
+                ["op": "paragraph", "id": 1, "runs": [
+                    ["id": 2, "parent": 1, "paint": true, "props": ["text": "HHHH"], "style": ["font_size": 32, "text_color": [0, 0, 0, 0]]],
+                    ["id": 3, "parent": 1, "paint": true, "opacity": opacity, "props": ["text": "HHHH"], "style": ["font_size": 32, "text_color": [0, 0, 0, 0]]],
+                ]],
+            ]))
+            let node = try XCTUnwrap(session.presenter.views[1])
+            let spec = node.paragraphSpec(), paragraph = engine.paragraph(spec, width: 300)
+            var bytes = [UInt8](repeating: 0, count: 300 * 100 * 4)
+            bytes.withUnsafeMutableBytes { raw in
+                let ctx = CGContext(data: raw.baseAddress, width: 300, height: 100, bitsPerComponent: 8, bytesPerRow: 1200, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                ctx.translateBy(x: 0, y: 100); ctx.scaleBy(x: 1, y: -1)
+                node.paintBackgroundThroughText(ctx, paragraph: paragraph, spec: spec, in: CGRect(x: 0, y: 20, width: 300, height: 80))
+            }
+            return bytes
+        }
+        let solid = try draw(1), zero = try draw(0), half = try draw(0.5)
+        var faded = 0
+        for i in stride(from: 0, to: solid.count, by: 4) {
+            if solid[i + 3] == zero[i + 3] { XCTAssertEqual(half[i + 3], solid[i + 3]) }
+            else {
+                faded += 1
+                XCTAssertEqual(Double(half[i + 3]), Double(solid[i + 3]) / 2, accuracy: 2)
+            }
+        }
+        XCTAssertGreaterThan(faded, 20)
+    }
+
+    func testAWrappedInlineGroupCompositesItsLinesTogether() {
+        func draw(_ opacity: Double) -> [UInt8] {
+            var faded = run("HHHH HHHH HHHH")
+            faded.size = 32
+            faded.background = [255, 0, 0, 255]
+            faded.shadow = [0, 30, 0, 0, 255, 0, 255]
+            faded.opacity = [InlineOpacity(box: 2, alpha: opacity)]
+            faded.backgroundOpacity = faded.opacity
+            let spec = Spec(runs: [faded], align: 0, lineClamp: 0, color: [0, 0, 0, 255])
+            let paragraph = engine.paragraph(spec, width: 80)
+            XCTAssertGreaterThan(paragraph.lines.count, 1)
+            return paint(paragraph, spec, size: CGSize(width: 200, height: 300), expectsPaint: opacity > 0).bytes
+        }
+        let solid = draw(1)
+        for opacity in [0.0, 0.5, 1.0] {
+            let actual = draw(opacity)
+            let expected = solid.map { UInt8((Double($0) * opacity).rounded()) }
+            XCTAssertTrue(zip(actual, expected).allSatisfy { abs(Int($0) - Int($1)) <= 2 })
+        }
+    }
+
+    func testPlainRunOpacitySurvivesTheRasterFastPaths() throws {
+        for opacity in [0.0, 0.25, 1.0] {
+            var faded = run("HHHH")
+            faded.opacity = opacity == 1 ? [] : [InlineOpacity(box: 2, alpha: opacity)]
+            let spec = Spec(runs: [faded], align: 0, lineClamp: 0, color: [0, 0, 0, 255])
+            let paragraph = engine.paragraph(spec, width: 200)
+            let glyphs = MeasuredGlyphs(paragraph, spec: spec, width: 200)
+            XCTAssertEqual(glyphs == nil, opacity < 1)
+            let job = TextRasterJob(source: engine.attributed(spec), ranges: paragraph.lines.map { CTLineGetStringRange($0) },
+                                    baselines: paragraph.baselines, flush: 0, box: CGRect(x: 0, y: 10, width: 200, height: 40),
+                                    size: CGSize(width: 200, height: 60), scale: 1,
+                                    measuredGlyphs: glyphs, measuredColor: TextEngine.color(spec.color).cgColor)
+            let pixels = rasterPixels(try XCTUnwrap(job.render()))
+            XCTAssertEqual(Double(pixels.map(\.w).max() ?? 0), opacity, accuracy: 1.0 / 255)
+        }
+    }
+
+    func testAnHDRShadowStaysInsideItsRunsOpacityGroup() throws {
+        let hdr: BatchValue = ["cs": [["s": "srgb-linear", "v": [0, 0, 2, 1]]], "c": [0, 0, 255, 255]]
+        var faded = run("HHHH")
+        faded.opacity = [InlineOpacity(box: 2, alpha: 0.5)]
+        faded.shadow = [80, 0, 0] + (try XCTUnwrap(hdr.textChannels(dark: false)))
+        let spec = Spec(runs: [faded], align: 0, lineClamp: 0, color: [0, 0, 0, 255])
+        let paragraph = engine.paragraph(spec, width: 200)
+        let job = TextRasterJob(source: engine.attributed(spec), ranges: paragraph.lines.map { CTLineGetStringRange($0) },
+                                baselines: paragraph.baselines, flush: 0, box: CGRect(x: 0, y: 10, width: 200, height: 40),
+                                size: CGSize(width: 200, height: 60), scale: 1)
+        let image = try XCTUnwrap(job.render())
+        XCTAssertNil(image.cast, "the grouped shadow composites with its glyphs")
+        let shadow = try XCTUnwrap(rasterPixels(image).max { $0.z < $1.z })
+        let color = try XCTUnwrap(TextEngine.shadowColor(faded.shadow!).converted(to: CGColorSpace(name: CGColorSpace.extendedSRGB)!, intent: .relativeColorimetric, options: nil))
+        XCTAssertGreaterThan(image.headroom, 1)
+        XCTAssertEqual(Double(shadow.z), color.components![2] * 0.5, accuracy: 0.01)
+        XCTAssertEqual(shadow.w, 0.5, accuracy: 0.01)
+    }
+
+    func testInlineOpacityCompositesOverlappingPaintsTogether() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "run-group-opacity")
+        defer { session.destroy() }
+        let p = session.presenter
+        func draw(_ outer: Double, _ inner: Double, parentBackground: Bool) throws -> [UInt8] {
+            let background: [String: Any] = ["background_color": [255, 0, 0, 255]]
+            var parent: [String: Any] = ["font_size": 32]
+            var leaf: [String: Any] = ["font_size": 32, "text_color": [0, 0, 0, 255],
+                                       "text_shadow": ["o": [0, 35], "b": 0, "c": [0, 255, 0, 255]],
+                                       "text_stroke_width": 1, "text_stroke_color": [0, 0, 255, 255]]
+            if parentBackground { parent.merge(background) { _, b in b } }
+            else { leaf.merge(background) { _, b in b } }
+            p.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "text", "style": ["font_size": 32, "text_color": [0, 0, 0, 255], "text_decoration_line": "underline line-through"]],
+                ["op": "paragraph", "id": 1, "runs": [
+                    ["id": 2, "parent": 1, "paint": false, "opacity": outer, "style": parent],
+                    ["id": 3, "parent": 2, "paint": true, "opacity": outer * inner, "props": ["text": "HHHH"], "style": leaf],
+                ]],
+            ]))
+            let spec = try XCTUnwrap(p.views[1]).paragraphSpec()
+            XCTAssertFalse(spec.reusesMeasuredGlyphs)
+            return paint(engine.paragraph(spec, width: 300), spec, size: CGSize(width: 300, height: 100), expectsPaint: outer > 0).bytes
+        }
+        for parentBackground in [false, true] {
+            let solid = try draw(1, parentBackground ? 0.5 : 1, parentBackground: parentBackground)
+            for opacity in [0.0, 0.25, 1.0] {
+                let actual = try draw(opacity, parentBackground ? 0.5 : 1, parentBackground: parentBackground)
+                let expected = solid.map { UInt8((Double($0) * opacity).rounded()) }
+                let maximum = zip(actual, expected).map { abs(Int($0) - Int($1)) }.max() ?? 0
+                XCTAssertLessThanOrEqual(maximum, 2, "all paints composite together at \(opacity), parent background: \(parentBackground)")
+            }
+        }
+    }
+
+    func testAnAncestorDecorationAndItsShadowTakeInlineOpacityOnce() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "run-decoration-shadow-opacity")
+        defer { session.destroy() }
+        let p = session.presenter
+        for opacity in [0.0, 0.5, 1.0] {
+            p.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "text", "style": ["font_size": 32, "text_color": [255, 0, 0, 255], "text_decoration_line": "underline"]],
+                ["op": "paragraph", "id": 1, "runs": [
+                    ["id": 2, "parent": 1, "paint": true, "opacity": opacity, "props": ["text": "HHHH"],
+                     "style": ["font_size": 32, "text_color": [0, 0, 0, 0], "text_shadow": ["o": [120, 0], "b": 0, "c": [0, 0, 255, 255]]]],
+                ]],
+            ]))
+            let spec = try XCTUnwrap(p.views[1]).paragraphSpec()
+            let shot = paint(engine.paragraph(spec, width: 300), spec, size: CGSize(width: 300, height: 80), expectsPaint: opacity > 0)
+            let pixels = stride(from: 0, to: shot.bytes.count, by: 4)
+            let shadowAlpha = pixels.filter { shot.bytes[$0 + 2] > shot.bytes[$0] }.map { shot.bytes[$0 + 3] }.max() ?? 0
+            XCTAssertEqual(Double(shadowAlpha), 255 * opacity, accuracy: 1, "the offset blue shadow takes opacity once")
+        }
+    }
+
+    func testAncestorLinesTakeTheCoveredRunsOpacityOnce() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "run-decoration-opacity")
+        defer { session.destroy() }
+        let p = session.presenter
+        for opacity in [0.0, 0.25, 1.0] {
+            p.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "text", "style": ["font_size": 32, "opacity": 0.5, "text_color": [255, 0, 0, 255], "text_decoration_line": "underline line-through"]],
+                ["op": "paragraph", "id": 1, "runs": [
+                    ["id": 2, "parent": 1, "paint": false, "opacity": 0.5, "style": ["text_color": [0, 255, 0, 255], "text_decoration_line": "underline"]],
+                    ["id": 3, "parent": 2, "paint": true, "opacity": 0.5 * opacity, "props": ["text": "HHHH"], "style": ["font_size": 32, "text_color": [0, 0, 0, 0]]],
+                ]],
+            ]))
+            let spec = try XCTUnwrap(p.views[1]).paragraphSpec()
+            let run = spec.runs[0]
+            XCTAssertEqual(run.underlineColor?[3], 255)
+            XCTAssertEqual(run.strikeColor?[3], 255)
+            XCTAssertEqual(run.opacity.reduce(1) { $0 * $1.alpha }, 0.5 * opacity)
+            let paragraph = engine.paragraph(spec, width: 300)
+            let shot = paint(paragraph, spec, size: CGSize(width: 300, height: 80), expectsPaint: opacity > 0)
+            let alpha = stride(from: 3, to: shot.bytes.count, by: 4).map { shot.bytes[$0] }.max() ?? 0
+            XCTAssertEqual(Double(alpha), 255 * 0.5 * opacity, accuracy: 1)
+        }
+    }
+
     let engine = TextEngine(resolve: { _ in nil })
     private let arabic = "مرحبا، سنلتقي في المحطة غداً."
 
@@ -30,7 +224,7 @@ final class TextPaintTests: XCTestCase {
     }
 
     /// Premultiplied RGBA, rows top-down, at scale 1, painted y-down as a view does.
-    private func paint(_ p: Paragraph, _ spec: Spec, size: CGSize) -> (bytes: [UInt8], width: Int, height: Int) {
+    private func paint(_ p: Paragraph, _ spec: Spec, size: CGSize, expectsPaint: Bool = true) -> (bytes: [UInt8], width: Int, height: Int) {
         let width = Int(size.width), height = Int(size.height)
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         bytes.withUnsafeMutableBytes { raw in
@@ -40,7 +234,7 @@ final class TextPaintTests: XCTestCase {
             ctx.translateBy(x: 0, y: CGFloat(height)); ctx.scaleBy(x: 1, y: -1)
             TextEngine.draw(p, spec: spec, in: CGRect(x: 0, y: 20, width: size.width, height: p.height), context: ctx)
         }
-        XCTAssertTrue(CapturePixels.hasPaint(bytes), "the paragraph draws")
+        XCTAssertEqual(CapturePixels.hasPaint(bytes), expectsPaint, "the paragraph draws at its run opacity")
         return (bytes, width, height)
     }
 
@@ -304,6 +498,48 @@ final class TextPaintTests: XCTestCase {
         hidden.addAttribute(.exactHidden, value: true, range: NSRange(location: 8, length: 2))
         XCTAssertTrue(try capture(shadowed, pass: .caster(shadow)) == capture(hidden),
                        "the separate shadow caster includes decorations and excludes neighbouring runs")
+    }
+
+    /// A run drawn apart from its neighbours, as an opacity group draws it,
+    /// keeps the decorations CoreText draws with the whole line.
+    func testGroupedRunsKeepTheWholeLinesDecorations() throws {
+        let font = engine.font(size: 32, weight: 400, family: 1, italic: false)
+        let plain = NSAttributedString(string: "MM  WW  II", attributes: [
+            .font: font, .foregroundColor: PlatformColor.black,
+            .underlineStyle: 1, .strikethroughStyle: 1,
+            .underlineColor: PlatformColor.red, .strikethroughColor: PlatformColor.blue,
+        ])
+        let grouped = NSMutableAttributedString(attributedString: plain)
+        grouped.addAttribute(.exactOpacity, value: [InlineOpacity(box: 2, alpha: 1)], range: NSRange(location: 4, length: 4))
+        func capture(_ string: NSAttributedString) throws -> [UInt8] {
+            let ctx = try CapturePixelsTests.clearedContext(width: 240, height: 60)
+            TextLinePaint.draw(CTLineCreateWithAttributedString(string), at: CGPoint(x: 10, y: 40), in: ctx)
+            return Array(UnsafeBufferPointer(start: try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self), count: 240 * 60 * 4))
+        }
+        let error = zip(try capture(plain), try capture(grouped)).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        XCTAssertLessThan(error, 500, "a fully opaque group keeps glyphs, underline and line-through")
+    }
+
+    /// A faded run's HDR shadow is painted with its glyphs, in its group: the
+    /// separate cast an opaque sibling's equal shadow makes leaves it out.
+    func testAGroupedRunIsNotInItsSiblingsSeparateCast() throws {
+        let font = engine.font(size: 32, weight: 400, family: 1, italic: false)
+        let shadow = TextRunShadow([0, 8, 0, 0, 0, 0, 255])
+        let plain = NSMutableAttributedString(string: "HHHH HHHH", attributes: [.font: font, .foregroundColor: PlatformColor.black])
+        plain.addAttribute(.exactShadow, value: shadow, range: NSRange(location: 0, length: 9))
+        let faded = NSMutableAttributedString(attributedString: plain)
+        faded.addAttribute(.exactOpacity, value: [InlineOpacity(box: 2, alpha: 0.5)], range: NSRange(location: 5, length: 4))
+        let hidden = NSMutableAttributedString(attributedString: plain)
+        hidden.addAttribute(.exactHidden, value: true, range: NSRange(location: 5, length: 4))
+        func capture(_ string: NSAttributedString) throws -> [UInt8] {
+            let ctx = try CapturePixelsTests.clearedContext(width: 240, height: 60)
+            TextLinePaint.draw(CTLineCreateWithAttributedString(string), at: CGPoint(x: 10, y: 40), in: ctx, pass: .caster(shadow))
+            return Array(UnsafeBufferPointer(start: try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self), count: 240 * 60 * 4))
+        }
+        let expected = try capture(hidden)
+        XCTAssertTrue(CapturePixels.hasPaint(expected), "the opaque run casts")
+        let error = zip(try capture(faded), expected).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        XCTAssertLessThan(error, 100, "the faded run casts only inside its group")
     }
 
     func testRunShadowClipsPreserveItalicInkAndThickStroke() throws {

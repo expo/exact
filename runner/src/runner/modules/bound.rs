@@ -23,6 +23,12 @@ use crate::request::{Reply, Request};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) fn with_authority(body: &[u8], scope: &str) -> Vec<u8> {
+    let mut body: Json = serde_json::from_slice(body).expect("forwarded module call");
+    body["authority"] = json!(scope);
+    body.to_string().into_bytes()
+}
+
 impl<D: DataSource> Runner<D> {
     /// The host's implementations answer `real` as in production, and
     /// `agent`, told they run under the agent, answer an interface that is
@@ -242,6 +248,11 @@ impl<D: DataSource> Runner<D> {
                 });
             }
         }
+        // A person's input stands (`admit.rs`): the implementation may take
+        // the call as their act.
+        if self.user_activation(origin) {
+            body["userActivation"] = json!(true);
+        }
         // A send's number, which `cancel` names if it is let go (LLP 1133.016 D15 item 2).
         if row.send {
             self.extensions.requests += 1;
@@ -455,6 +466,8 @@ impl<D: DataSource> Runner<D> {
                     self.extensions.live.remove(key);
                     self.extensions.readers.remove(key);
                     self.extensions.groups.remove(key);
+                    // A reader asking again polls it again (`note_poll`).
+                    self.extensions.polls.remove(key);
                 }
                 self.log(format!("release {key}: no reader is left"));
                 released.push(json!({ "extension": extension, "release": name }));
@@ -550,9 +563,12 @@ impl<D: DataSource> Runner<D> {
             return false;
         };
         let source = self.plan.sources[row.source.0 as usize].name;
+        // A child's declared row and a destroyed instance's read nothing
+        // (LLP 1035.005.004 D4).
         (0..self.resources.len()).any(|i| {
             let asleep = (self.resources[i].state.as_ref()).is_some_and(|s| s.asleep);
             !asleep
+                && !self.settles_to_nothing(i)
                 && (self.resource_row(i).source == source
                     || self.resources[i].watching.iter().any(|t| t == key))
         }) || self.pending.iter().any(|p| {

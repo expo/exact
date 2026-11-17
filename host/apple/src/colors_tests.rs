@@ -459,7 +459,7 @@ fn mixed_appearance_translucent_gradient_keeps_legacy_premultiplication() {
             exact_kernel::gradient::premultiplied_ramp(&expected.layers()[0].resolved(false));
         let stops = gradient[legacy_key].as_array().unwrap();
         assert_eq!(stops.len(), ramp.len() * 5);
-        for (row, (at, c)) in stops.chunks_exact(5).zip(ramp) {
+        for (row, (at, c)) in stops.as_chunks::<5>().0.iter().zip(ramp) {
             assert!((row[0].as_f64().unwrap() - f64::from(at)).abs() < 0.00001);
             assert_eq!(
                 &row[1..],
@@ -538,10 +538,12 @@ fn a_role_crosses_as_this_platforms_colour() {
 /// `setRootFontSize` included, and only then.
 #[test]
 fn a_batch_says_when_the_root_font_size_or_the_modes_moved() {
-    let dir = std::env::temp_dir().join(format!("exact2-apple-facts-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact2-apple-facts-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), "tamber t\n\naxes\n  density = cozy | compact\n\ntheme\n  ink = #111111\n    when density=compact: #222222\n").unwrap();
+    std::fs::write(dir.join("app.forma"), "forma t\n\naxes\n  density = cozy | compact\n\ntheme\n  ink = #111111\n    when density=compact: #222222\n").unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  action compact\n    setMode(\"density\", \"compact\")\n  action larger\n    setRootFontSize(20)\n  action nothing\n    copyText(\"x\")\n  view\n    column\n      button press=compact testId=\"compact\"\n        text \"compact\" color=\"ink\"\n      button press=larger testId=\"larger\"\n        text \"larger\"\n      button press=nothing testId=\"nothing\"\n        text \"nothing\"\n").unwrap();
     let plan = contract::compile_path(&dir.join("app.contract"))
         .unwrap()

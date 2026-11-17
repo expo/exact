@@ -152,6 +152,24 @@ test "stats count the library and keep the goal"
   tap "tab-stats"
   expect text "goal" == "11 books"
 
+test "Discover asks for its works only while its tab shows"
+  // `works` is Discover's own (LLP 1035.005.004), gated on its tab.
+  perf
+    clock data
+  expect perf query works == 0
+  perf
+    tap "tab-discover"
+    clock data
+  expect perf query works == 1
+  perf
+    tap "tab-library"
+    clock data
+  expect perf query works == 0
+  perf
+    tap "tab-discover"
+    clock data
+  expect perf query works == 1
+
 test "discover shows an error, then tries again"
   fail fetch "https://openlibrary.org/subjects"
   tap "tab-discover"
@@ -162,20 +180,60 @@ test "discover shows an error, then tries again"
   clock data
   expect tree missing "discover-error"
 
-test "Scan Barcode opens the scan screen inside the add sheet, and Cancel goes back"
+// Scanning needs the platform's barcode detector. A browser has one or not by
+// its OS (Chrome's on macOS, none on Linux), so the web runs neither test.
+test "Scan Barcode opens the scan screen inside the add sheet, and Cancel goes back" on macos, ios
   tap "add-book"
   clock settle
-  tap "scan-barcode"
+  perf
+    tap "scan-barcode"
+    clock +400
+  expect perf query lookup == 1
   expect state current.name == "scan"
   expect text "scan-hint" == "Point the camera at the barcode on the back of the book"
-  clock +400
-  tap "scan-cancel"
+  // The scan's requests go with its screen.
+  perf
+    tap "scan-cancel"
+    clock +400
+  expect perf query lookup == 0
   expect state current.name == "add"
   expect state scanTrack == ""
 
-test "the web reads no text from a photo, so a book offers no Add Quote from Photo"
+test "with no barcode detector, the add sheet offers no Scan Barcode" on linux, windows
+  tap "add-book"
+  clock settle
+  expect tree has "add-title"
+  expect tree missing "scan-barcode"
+
+test "the web reads no text from a photo, so a book offers no Add Quote from Photo" on web, linux, windows
   tap "book-seed-2"
   expect tree missing "add-quote"
+
+// The book screen owns the photo's read (LLP 1035.005.004 D6). The first read
+// in a new build waits while the platform compiles its recognizer.
+test "a photo's lines open the quote sheet, and leaving the book before they come opens none" on macos, ios
+  tap "book-seed-2"
+  clock settle
+  tap "add-quote"
+  pick "quote-photo" "../../packages/text-detection/fixture/quote.png"
+  clock data
+  clock data
+  clock data
+  clock settle
+  expect state current.name == "quote"
+  expect text "quote-line-0" == "It is a truth universally acknowledged,"
+  back
+  clock settle
+  tap "add-quote"
+  pick "quote-photo" "../../packages/text-detection/fixture/quote.png"
+  back
+  clock settle
+  clock data
+  clock +1000
+  clock data
+  clock settle
+  expect state current.name == "library"
+  expect tree missing "route-quote"
 
 after "askRemoveAimed" "askRemoveAimed writes only none"
   writes none
@@ -186,5 +244,3 @@ always "draftStatus is one of 3 values"
 always "filter is one of 4 values"
   expect state filter in "all" "done" "reading" "want"
 
-always "subject is one of 3 values"
-  expect state subject in "fantasy" "mystery_and_detective_stories" "science_fiction"

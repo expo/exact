@@ -207,9 +207,10 @@ pub(crate) fn full_shaders(
         // Mask LUT buffer, used only when MSAA is enabled.
         BufReadOnly,
     ];
-    // EXACT: the area stage also reads a backdrop (binding 8), and has a
-    // second pipeline over the same library for a BGRA8 target.
-    let mut area_resources = fine_resources;
+    // EXACT: the area stage reads a backdrop (8) and clip coverage (9),
+    // with a second pipeline over the same library for a BGRA8 target.
+    let mut area_resources = [BufReadOnly; 10];
+    area_resources[..9].copy_from_slice(&fine_resources);
     area_resources[8] = ImageRead(ImageFormat::Rgba8);
     let mut area_bgra = area_resources;
     area_bgra[5] = Image(ImageFormat::Bgra8);

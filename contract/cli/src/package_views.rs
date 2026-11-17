@@ -47,7 +47,7 @@ pub(crate) fn placed(plan: &exact_plan::Plan) -> BTreeSet<String> {
             {
                 return None;
             }
-            match exact_runner::vm::instructions(plan.code(binding.expr))
+            match exact_runner::vm::instructions(plan.read_code(plan.code(binding.expr)).0)
                 .collect::<Result<Vec<_>, _>>()
                 .as_deref()
             {
@@ -145,7 +145,7 @@ pub fn declared(app_root: &Path) -> Result<BTreeMap<String, PackageView>, Declar
 /// The tag a standard module serves, for the line `exact add` writes, and
 /// that module's short name.
 pub fn standard_with(tag: &str) -> Option<String> {
-    let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    let packages = crate::root::sdk_root().join("packages");
     let mut names: Vec<_> = std::fs::read_dir(packages).ok()?.flatten().collect();
     names.sort_by_key(|e| e.file_name());
     names.into_iter().find_map(|entry| {

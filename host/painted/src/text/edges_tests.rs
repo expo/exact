@@ -14,11 +14,10 @@ fn engine() -> TextEngine {
 /// A paragraph of `runs`, each its text and its room before and after.
 fn spec(runs: &[(&str, f32, f32)]) -> Spec {
     let mut s = crate::paint::text_spec(
-        &StyleProps {
-            font_size: 16.0,
-            white_space: WhiteSpace::Normal,
-            ..Default::default()
-        },
+        &StyleProps::default().with_rows(|rows| {
+            rows.font_size = 16.0;
+            rows.white_space = WhiteSpace::Normal;
+        }),
         "",
     );
     let style = s.strut.clone();

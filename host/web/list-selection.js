@@ -24,7 +24,7 @@ globalThis.exact.installListSelection = function ({ root, lists, index, text }) 
   }
   function paragraphs(row) {
     return [...row.querySelectorAll(paragraphSelector)].filter(el => {
-      for (let p = el; p && p !== row; p = p.parentElement) if (getComputedStyle(p).display === 'none') return false;
+      for (let p = el; p && p !== row; p = p.parentElement) if (lists.has(p) || getComputedStyle(p).display === 'none') return false;
       return true;
     });
   }
@@ -38,6 +38,20 @@ globalThis.exact.installListSelection = function ({ root, lists, index, text }) 
     }
     return true;
   }
+  // Offsets count the paragraph's text nodes, which differ from a Markdown
+  // or image paragraph's authored source; a copy that cuts the paragraph
+  // clips this text instead, without the spans display hides.
+  function rendered(p) {
+    let text = '';
+    const hidden = [], walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walk.nextNode());) {
+      for (let el = n.parentElement; el && el !== p; el = el.parentElement) {
+        if (getComputedStyle(el).display === 'none') { hidden.push([text.length, text.length + n.length]); break; }
+      }
+      text += n.data;
+    }
+    return { text, hidden };
+  }
   function position(node, offset) {
     const p = element(node)?.closest(paragraphSelector), row = p?.closest(rowSelector), list = owner(row);
     if (!p || !row || !list) return null;
@@ -45,7 +59,7 @@ globalThis.exact.installListSelection = function ({ root, lists, index, text }) 
     range.selectNodeContents(p);
     try { range.setEnd(node, offset); } catch { return null; }
     return { list, key: row.dataset.listitemkey, row: Number(row.getAttribute('aria-posinset')) - 1,
-      paragraph: paragraphs(row).indexOf(p), offset: range.toString().length };
+      paragraph: paragraphs(row).indexOf(p), offset: range.toString().length, rendered: rendered(p) };
   }
   // Selection.toString() asks for rendered text and forces layout even for a
   // collapsed selection. Endpoint identity/offsets detect native changes without
@@ -69,10 +83,13 @@ globalThis.exact.installListSelection = function ({ root, lists, index, text }) 
     if (!selected) return;
     const { list, a, b, all } = selected;
     if (!list.isConnected || !lists.has(list)) { clear(); return; }
-    a.row = index(list, a.key); b.row = index(list, b.key);
-    if (a.row === 0xffffffff || b.row === 0xffffffff) { clear(); return; }
-    const [lo, hi] = compare(a, b) <= 0 ? [a, b] : [b, a], ranges = [];
-    for (const row of list.querySelectorAll(rowSelector)) {
+    if (!all) {
+      a.row = index(list, a.key); b.row = index(list, b.key);
+      if (a.row === 0xffffffff || b.row === 0xffffffff) { clear(); return; }
+    }
+    const [lo, hi] = all || compare(a, b) <= 0 ? [a, b] : [b, a], ranges = [];
+    for (const row of all ? [list] : list.querySelectorAll(rowSelector)) {
+      if (!all && owner(row) !== list) continue;
       const ordinal = Number(row.getAttribute('aria-posinset')) - 1;
       for (const [i, p] of paragraphs(row).entries()) {
         const at = { row: ordinal, paragraph: i, offset: 0 };
@@ -111,10 +128,7 @@ globalThis.exact.installListSelection = function ({ root, lists, index, text }) 
     const list = owner(getSelection()?.anchorNode) ?? (lastList?.isConnected ? lastList : null)
       ?? (lists.size === 1 ? lists.keys().next().value : null);
     if (!list) return;
-    const rows = [...list.querySelectorAll(rowSelector)];
-    if (!rows.length) return;
-    const point = row => ({ list, key: row.dataset.listitemkey, row: 0, paragraph: 0, offset: 0 });
-    selected = { list, a: point(rows[0]), b: point(rows.at(-1)), all: true };
+    selected = { list, all: true };
     event.preventDefault(); getSelection().removeAllRanges(); nativeStamp = stamp(getSelection()); paint();
   });
   document.addEventListener('copy', event => {

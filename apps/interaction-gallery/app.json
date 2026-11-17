@@ -12,6 +12,7 @@
     "name": "Still \u00b7 Interaction Gallery"
   },
   "rust": {
+    "data": { "crate": "interaction-gallery-data", "type": "interaction_gallery_data::Gallery" },
     "mode": "off"
   },
   "host": {

@@ -154,6 +154,34 @@ impl std::ops::Deref for IndexOwner {
     }
 }
 
+impl Paragraph {
+    /// Shaped glyph ink in paragraph points, including raster placement rounding.
+    pub(crate) fn paint_bounds(&self, scale: f32) -> Option<(f32, f32, f32, f32)> {
+        let mut catalog = self.source.catalog.borrow_mut();
+        let mut cache = self.ink.borrow_mut();
+        if !cache.matches(&catalog.ink_catalog, scale) {
+            cache.reset(&catalog.ink_catalog, scale);
+            cache.index = Index::build(&mut catalog, self, scale).map(Into::into);
+        }
+        let index = cache.index.as_ref()?;
+        let bounds = index.spans[1];
+        if bounds.empty() {
+            return Some((0., 0., 0., 0.));
+        }
+        if !bounds.finite() || index.max_input > COORD_LIMIT {
+            return None;
+        }
+        let s = f64::from(scale);
+        let b = bounds.expand(1., 1.);
+        Some((
+            (b.x0 / s) as f32,
+            (b.y0 / s) as f32,
+            ((b.x1 - b.x0) / s) as f32,
+            ((b.y1 - b.y0) / s) as f32,
+        ))
+    }
+}
+
 /// Each face of `lines` as this catalog's raster slot.
 pub(super) fn slots(catalog: &mut Catalog, lines: &Lines) -> Vec<u32> {
     lines

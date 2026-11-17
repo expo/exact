@@ -1,0 +1,13 @@
+8:3: forma-motion-axis: a duration or an easing is written into its `transition` or `animation` at build, so it has one value: no `when` (vary the row instead)
+10:3: forma-motion-axis: a duration or an easing is written into its `transition` or `animation` at build, so it has one value: no `when` (vary the row instead)
+12:27: forma-kind: `cubic-bezier(2, 0, 0, 1)` is no easing a transition takes
+13:24: forma-kind: `steps(0)` is no easing a transition takes
+14:29: forma-kind: a duration is a time, `150ms` or `0.15s`
+15:31: forma-kind: `ink` is not a duration
+16:27: forma-kind: `12px`: a duration is in `ms` or `s`
+17:28: forma-unknown-token: `bounce` is no easing token or keyword
+18:25: forma-kind: `steps(2, bogus)` is no easing a transition takes
+19:24: forma-kind: `-exact-spring(-1, 26, 1)` is no easing a transition takes
+20:26: forma-kind: `linear()` is no easing a transition takes
+21:3: forma-motion-name: `fast`: a duration's or an easing's name is dotted (`duration.fast`), so a `transition` or `animation` reads it as the token wherever it stands, never as a property, a keyframes name or a keyword
+23:3: forma-motion-name: `standard`: a duration's or an easing's name is dotted (`easing.standard`), so a `transition` or `animation` reads it as the token wherever it stands, never as a property, a keyframes name or a keyword

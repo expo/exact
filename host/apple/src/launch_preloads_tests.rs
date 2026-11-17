@@ -11,6 +11,40 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
 const HANG: Duration = Duration::from_secs(10);
 
+#[test]
+fn request_ticket_order_keeps_ties_and_all_ticket_bits() {
+    for n in [0, 1, 16, 21, 64, 257] {
+        let tickets = [0, 1, 1 << 63, u64::MAX];
+        let mut requests: Vec<_> = (0..n)
+            .map(|i| exact_runner::RequestOut {
+                completion: None,
+                ticket: tickets[(i * 17 + i / 5) % tickets.len()],
+                target: i.to_string(),
+                request: exact_runner::Request::get("https://example.invalid/"),
+                class: exact_runner::RequestClass::Read,
+                forced: false,
+            })
+            .collect();
+        let expected: Vec<_> = tickets
+            .into_iter()
+            .flat_map(|ticket| {
+                requests
+                    .iter()
+                    .filter(move |request| request.ticket == ticket)
+                    .map(|request| (request.ticket, request.target.clone()))
+            })
+            .collect();
+        sort_requests(&mut requests);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| (request.ticket, request.target.clone()))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
 struct Server {
     address: std::net::SocketAddr,
     requests: Receiver<String>,
@@ -161,7 +195,7 @@ impl DataSource for Source {
             return Ok(Answer::Now(Value::record(vec![Value::str("changed")])));
         }
         if source == "first" && self.first_unloaded {
-            let url = self.definitions[0].fill(|_| None).unwrap().url;
+            let url = self.definitions[0].fill(|_| None, preload_url).unwrap().url;
             return Ok(Answer::Later(exact_runner::Request::get(&format!(
                 "{url}/first"
             ))));
@@ -169,7 +203,7 @@ impl DataSource for Source {
         if source == "named" {
             return Ok(Answer::Later(
                 self.definitions[0]
-                    .fill(|_| None)
+                    .fill(|_| None, preload_url)
                     .unwrap()
                     .header("X-Trace", "new")
                     .preload("feed")
@@ -178,7 +212,7 @@ impl DataSource for Source {
         }
         Ok(Answer::Later(
             self.definitions[usize::from(source == "after")]
-                .fill(|_| Some("present-secret".into()))
+                .fill(|_| Some("present-secret".into()), preload_url)
                 .unwrap(),
         ))
     }
@@ -199,7 +233,9 @@ impl DataSource for Source {
                 previous, 0,
                 "boot settled a request produced by a fulfillment"
             );
-            return Ok(Answer::Later(self.definitions[0].fill(|_| None).unwrap()));
+            return Ok(Answer::Later(
+                self.definitions[0].fill(|_| None, preload_url).unwrap(),
+            ));
         }
         if source == "timeline" {
             return Ok(Answer::Now(Value::list(vec![Value::record(vec![
@@ -259,7 +295,7 @@ fn ready(launch: &LaunchPreloads) {
 }
 fn memory_endow(grants: &str, _: &str, _: bool) -> crate::store::Endowed {
     let grants = format!(
-        "{}\nstorage.kv {}\nstorage.kv exact.state",
+        "{}\nstorage.kv {}\nstorage.kv exact.state\nstorage.kv exact.watch",
         exact_runner::io_grants(grants),
         crate::store::KEPT
     );
@@ -342,14 +378,15 @@ fn plan() -> Vec<u8> {
 }
 
 #[test]
-fn invalid_filled_headers_and_urls_are_named_without_sending_or_exposing_values() {
-    for (value, invalid_url) in [
-        ("ok\nX-Other: yes", false),
-        ("\rvalue", false),
-        ("nul\0byte", false),
-        (" leading", false),
-        ("trailing\t", false),
-        ("secret-value", true),
+fn filled_headers_follow_fetch_and_invalid_requests_do_not_expose_values() {
+    for (value, invalid_url, accepted) in [
+        ("ok\nX-Other: yes", false, false),
+        ("bad\rvalue", false, false),
+        ("\rvalue", false, true),
+        ("nul\0byte", false, false),
+        (" leading", false, true),
+        ("trailing\t", false, true),
+        ("secret-value", true, false),
     ] {
         let server = Server::new(1);
         let mut source = server.source(PreloadWhen::Start, true);
@@ -372,6 +409,19 @@ fn invalid_filled_headers_and_urls_are_named_without_sending_or_exposing_values(
         }));
         launch.begin(false, factory(&source));
         launch.0.set.get().unwrap().control.wait_definitions();
+        if accepted {
+            let sent = server.request().to_ascii_lowercase();
+            let normalised = ibex2::stdlib::fetch::normalize_value(value);
+            assert!(
+                sent.contains(&format!("authorization: {normalised}\r\n")),
+                "{sent}"
+            );
+            server.release(0);
+            ready(&launch);
+            assert!(!format!("{:?}", launch.journal()).contains(normalised));
+            assert_eq!(server.count.load(Ordering::Acquire), 1);
+            continue;
+        }
         let facts = launch.journal();
         assert_eq!(facts.len(), 1, "{facts:?}");
         assert_eq!(facts[0].name, "feed");
@@ -597,11 +647,16 @@ fn foreground_waits_for_opened_and_can_start_after_adoption() {
         .unwrap()
         .encode();
     let (_bridge, _) = boot(source.clone(), &empty, false, wake);
+    launch.journal();
     launch.signal(true, factory(&source));
     launch.signal(true, factory(&source));
     server.request();
     server.release(0);
     assert_eq!(server.count.load(Ordering::Acquire), 1);
+    assert!(launch
+        .journal()
+        .iter()
+        .any(|fact| fact.outcome == crate::executor::PreloadEvent::Sent));
 }
 
 #[test]
@@ -1073,7 +1128,9 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
             self.base.query(name, args)
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            let mut request = self.base.definitions[0].fill(|_| None).unwrap();
+            let mut request = self.base.definitions[0]
+                .fill(|_| None, preload_url)
+                .unwrap();
             request.body = self.body.to_vec();
             Ok(Answer::Later(request.preload("feed").unwrap()))
         }
@@ -1215,4 +1272,177 @@ fn prepared_generations_disable_names_before_settlement_but_keep_equal_preloads(
             }
         }
     }
+}
+
+#[test]
+fn empty_launch_journal_drains_take_no_lock_and_late_facts_are_not_lost() {
+    let launch = LaunchPreloads::default();
+    {
+        let journal = launch.0.journal.lock().unwrap();
+        let reader = launch.clone();
+        let (done, drained) = channel();
+        let thread = std::thread::spawn(move || {
+            for _ in 0..100 {
+                assert!(reader.journal().is_empty());
+            }
+            done.send(()).unwrap();
+        });
+        let result = drained.recv_timeout(HANG);
+        drop(journal);
+        thread.join().unwrap();
+        result.expect("an empty drain waited for the journal lock");
+    }
+    let writer = launch.clone();
+    let thread = std::thread::spawn(move || {
+        for i in 0..1000 {
+            writer.record_fact(PreloadFact {
+                name: i.to_string(),
+                origin: String::new(),
+                outcome: crate::executor::PreloadEvent::DroppedBySecret,
+            });
+        }
+    });
+    let mut facts = Vec::new();
+    while !thread.is_finished() {
+        facts.extend(launch.journal());
+        std::thread::yield_now();
+    }
+    thread.join().unwrap();
+    facts.extend(launch.journal());
+    assert_eq!(facts.len(), 1000);
+    assert!(facts
+        .iter()
+        .enumerate()
+        .all(|(i, fact)| fact.name == i.to_string()));
+    assert!(launch.journal().is_empty());
+}
+
+#[test]
+fn manifest_settings_leave_at_launch_and_equal_reads_take_the_reply() {
+    const TEST: &str =
+        "launch_preloads::tests::manifest_settings_leave_at_launch_and_equal_reads_take_the_reply";
+    let Ok(case) = std::env::var("EONE_APPLE_CASE") else {
+        for case in ["unset", "empty", "launch", "grant", "header"] {
+            let server = Server::new(1);
+            let build = format!("http://{}/build", server.address);
+            let value = format!("http://{}/launch", server.address);
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([TEST, "--exact", "--nocapture"])
+                .env("EONE_APPLE_CASE", case)
+                .env("EONE_APPLE_BUILD", &build)
+                .env_remove("EONE_APPLE_URL")
+                .env_remove("EONE_APPLE_HEADER")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            if case == "empty" {
+                command.env("EONE_APPLE_URL", "");
+            }
+            if case == "launch" {
+                command.env("EONE_APPLE_URL", &value);
+            }
+            if case == "grant" {
+                command.env("EONE_APPLE_URL", "https://denied.example");
+            }
+            if case == "header" {
+                command.env("EONE_APPLE_HEADER", "bad\nheader");
+            }
+            let child = command.spawn().unwrap();
+            if !matches!(case, "grant" | "header") {
+                assert!(server.request().contains(if case == "launch" {
+                    "/launch/feed"
+                } else {
+                    "/build/feed"
+                }));
+                server.release(0);
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{case}: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                server.count.load(Ordering::Acquire),
+                usize::from(!matches!(case, "grant" | "header"))
+            );
+        }
+        return;
+    };
+    let server = Server::new(1);
+    let mut source = server.source(PreloadWhen::Start, false);
+    let build: &'static str = std::env::var("EONE_APPLE_BUILD").unwrap().leak();
+    source.definitions = vec![Baked {
+        url: vec![
+            PreloadPart::Env("EONE_APPLE_URL", build),
+            PreloadPart::Literal("/feed"),
+        ]
+        .leak(),
+        headers: &[("X-Note", &[PreloadPart::Env("EONE_APPLE_HEADER", "built")])],
+        ..source.definitions[0]
+    }]
+    .leak();
+    source.grants = format!(
+        "net.fetch {}\nenv.launch EONE_APPLE_URL\nenv.launch EONE_APPLE_HEADER",
+        url::Url::parse(build)
+            .unwrap()
+            .origin()
+            .ascii_serialization()
+    );
+    let launch = fixture();
+    launch.begin(false, factory(&source));
+    launch.0.set.get().unwrap().control.wait_definitions();
+    if matches!(case.as_str(), "grant" | "header") {
+        let facts = if case == "header" {
+            launch.journal()
+        } else {
+            launch.0.set.get().unwrap().control.handed();
+            launch.journal()
+        };
+        assert_eq!(facts.len(), 1, "{facts:?}");
+        assert_eq!(
+            facts[0].outcome,
+            if case == "header" {
+                crate::executor::PreloadEvent::InvalidHeader
+            } else {
+                crate::executor::PreloadEvent::RefusedGrant
+            }
+        );
+        assert_eq!(
+            facts[0].origin,
+            if case == "grant" {
+                "https://denied.example".into()
+            } else {
+                url::Url::parse(build)
+                    .unwrap()
+                    .origin()
+                    .ascii_serialization()
+            }
+        );
+        return;
+    }
+    ready(&launch);
+    let value = if case == "launch" {
+        std::env::var("EONE_APPLE_URL").unwrap()
+    } else {
+        build.into()
+    };
+    let mut request = exact_runner::Request::get(&format!("{value}/feed"));
+    request.headers = vec![("X-Note".into(), "built".into())];
+    let out = exact_runner::RequestOut {
+        completion: None,
+        ticket: 1,
+        target: "feed".into(),
+        request,
+        class: exact_runner::RequestClass::Read,
+        forced: false,
+    };
+    let (reply, timing) = launch.answer(&out).expect("equal read takes held reply");
+    assert!(timing.cached);
+    assert!(matches!(reply, Outcome::Response(r) if r.body == b"content"));
+    assert!(launch
+        .journal()
+        .iter()
+        .any(|fact| fact.outcome == crate::executor::PreloadEvent::Taken));
 }

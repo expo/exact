@@ -28,6 +28,8 @@ pub struct Bound {
     pub extension: String,
     /// The implementation's root Rust file.
     pub root: PathBuf,
+    /// The declaration that selects the root and class.
+    pub manifest: PathBuf,
     /// The type in it that implements `exact_painted::package::Package`.
     pub class: String,
 }
@@ -71,6 +73,7 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
         out.push(Bound {
             extension,
             root,
+            manifest: dir.join("exact.json"),
             class: class.to_owned(),
         });
     }
@@ -96,12 +99,7 @@ pub fn rust_packages(app_root: &Path, extensions: &[&str], target: &str) -> Resu
             b.extension
                 .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
         );
-        if let Some(dir) = b.root.parent() {
-            println!(
-                "cargo:rerun-if-changed={}",
-                dir.join("exact.json").display()
-            );
-        }
+        println!("cargo:rerun-if-changed={}", b.manifest.display());
         text += &format!(
             "#[path = {:?}]\n#[allow(dead_code, missing_docs, unused_imports, clippy::all)]\nmod {module};\n",
             b.root.display().to_string()

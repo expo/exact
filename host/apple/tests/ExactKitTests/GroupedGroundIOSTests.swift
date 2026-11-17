@@ -63,8 +63,8 @@ final class GroupedGroundIOSTests: GroupedListFixture {
 
     /// A theme's page ground (LLP 1095 D4) is a plain list's, its `Canvas` where it sets no `background`, as a page's is.
     func testAThemedPlainListsGroundIsThePagesGround() throws {
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Canvas": [253, 246, 227, 255]]]]))
-        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]])) }
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["Canvas": [253, 246, 227, 255]]]]).ops[0])
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0]) }
         let p = presenter { self.model("plain") }
         let all = grounds(try list(p))
         XCTAssertTrue(all.allSatisfy { abs($0[0] - 253.0 / 255) < 0.01 && abs($0[2] - 227.0 / 255) < 0.01 }, "\(all)")
@@ -72,8 +72,8 @@ final class GroupedGroundIOSTests: GroupedListFixture {
 
     /// A theme's grouped ground (LLP 1095 D4) is the collection view's from the first layout on, as the sections'.
     func testAThemesGroundIsTheWholeListsFromTheFirstLayout() throws {
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["grouped-background": [[10, 20, 30, 255], [40, 50, 60, 255]]]]]))
-        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]])) }
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["grouped-background": [[10, 20, 30, 255], [40, 50, 60, 255]]]]]).ops[0])
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0]) }
         let p = presenter { self.model() }
         let all = grounds(try list(p))
         XCTAssertTrue(all.allSatisfy { abs($0[0] - 10.0 / 255) < 0.01 && abs($0[2] - 30.0 / 255) < 0.01 }, "\(all)")

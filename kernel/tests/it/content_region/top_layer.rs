@@ -1,6 +1,4 @@
-//! A popover in a content region (stage 14 B, theme2 09:54): it stays in
-//! the region's trial, laid out in-region as on main (the native region
-//! captures it: QUEUE); out of the region it is in the viewport again.
+//! Top-layer subtrees use the viewport, independently of a content region.
 use super::support::*;
 use exact_kernel::*;
 
@@ -48,30 +46,50 @@ fn with_popover(static_owner: bool) -> Kernel {
 }
 
 #[test]
-fn a_popover_under_a_region_stays_in_its_trial() {
+fn a_popover_under_a_region_uses_the_viewport() {
     let mut k = with_popover(false);
+    let mut owner = StyleProps::default();
+    owner.mask = mask(&[StyleId::Width]);
+    owner.width = Dimension::Points(400.);
+    k.apply(
+        1,
+        1,
+        &[Op::SetStyle {
+            id: 2,
+            patch: Box::new(owner),
+        }],
+    )
+    .unwrap();
     register(&mut k);
-    let r = ready(&mut k, 400., 1);
+    let r = ready(&mut k, 800., 1);
     let popover = key(&k, 7);
-    assert_eq!(k.host_block(7), None, "no viewport block under a region");
-    // In its owner, the trial's containing block: 50% of the owner's 400.
-    let f = r.current_frame(popover).expect("one of the trial's frames");
-    assert_eq!((f.width, f.height), (200., 30.));
-    // Out of the region, the same popover is in the viewport again.
+    assert!(k.host_block(7).is_some(), "a viewport block under a region");
+    assert!(
+        r.current_frame(popover).is_none(),
+        "outside the region publication"
+    );
+    let f = k.node(7).unwrap().frame;
+    assert_eq!((f.width, f.height), (400., 30.));
+    for cover in [Some(HostCover::Whole), None] {
+        k.set_host_cover(7, cover).unwrap();
+        let r = ready(&mut k, 800., 1);
+        assert!(r.current_frame(popover).is_none());
+    }
+    assert_eq!(k.node(7).unwrap().frame.width, 400.);
+    // Removing the region preserves the same viewport-relative size.
     k.set_content_region(None).unwrap();
     k.compute_layout(1, Offer::definite(800., 300.)).unwrap();
     assert!(k.host_block(7).is_some());
     assert_eq!(k.node(7).unwrap().frame.width, 400.);
 }
 
-/// A static owner over a popover is refused, as over any absolutely
-/// positioned box (LLP 1074 T1): under a region the popover is in the trial.
+/// A top-layer box establishes its own containing block (LLP 1074 T1).
 #[test]
-fn a_static_owner_over_a_popover_is_refused() {
-    let k = with_popover(true);
-    let b = binding(&k);
-    let mut k = k;
-    assert!(k.set_content_region(Some(b)).is_err());
+fn a_static_owner_over_a_popover_registers() {
+    let mut k = with_popover(true);
+    register(&mut k);
+    assert!(ready(&mut k, 800., 1).current);
+    assert_eq!(k.node(7).unwrap().frame.width, 400.);
 }
 
 /// A region whose owner is in the top layer is refused: the owner is laid
@@ -203,4 +221,53 @@ fn a_former_popover_owner_registers_before_the_next_layout() {
     let b = binding(&k);
     assert!(k.set_content_region(Some(b)).is_ok());
     assert!(ready(&mut k, 400., 1).current);
+}
+
+/// An inline run that says `popover` is no top-layer box: it stays in its
+/// paragraph, and the paragraph stays in the region's publication.
+#[test]
+fn an_inline_popover_run_stays_in_its_paragraph() {
+    let mut k = fixture();
+    k.apply(
+        0,
+        0,
+        &[
+            Op::CreateView {
+                id: 8,
+                node_type: NodeType::Text,
+            },
+            Op::CreateView {
+                id: 9,
+                node_type: NodeType::Text,
+            },
+            Op::SetProp {
+                id: 9,
+                prop: PropId::Text,
+                value: "Keep me".into(),
+            },
+            Op::SetProp {
+                id: 9,
+                prop: PropId::Popover,
+                value: "manual".into(),
+            },
+            Op::SetChildren {
+                id: 8,
+                children: vec![9],
+            },
+            Op::SetChildren {
+                id: 3,
+                children: vec![4, 8],
+            },
+        ],
+    )
+    .unwrap();
+    register(&mut k);
+    let r = ready(&mut k, 400., 1);
+    assert_eq!(k.host_block(9), None);
+    assert!(
+        r.current_frame(key(&k, 9)).is_some(),
+        "the run is in the publication"
+    );
+    let paragraph = r.current_frame(key(&k, 8)).expect("its paragraph");
+    assert!(paragraph.width > 0. && paragraph.height > 0.);
 }

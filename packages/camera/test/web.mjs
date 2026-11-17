@@ -19,9 +19,11 @@ const engines = process.argv.slice(2).length ? process.argv.slice(2) : ['chromiu
 const { chromium, firefox, webkit } = await import(resolve(root, 'node_modules/playwright-core/index.mjs'));
 const { check, failed } = checker();
 
-// web/card.js carries the agent's picture as base64: it must be the fixture's bytes.
+// web/card.js carries the agent's picture as base64, and web/clip.js its video: each must be the fixture's bytes.
 const card = readFileSync(resolve(pkg, 'fixture/card.jpg')).toString('base64');
 check('package', "web/card.js is fixture/card.jpg's bytes", readFileSync(resolve(pkg, 'web/card.js'), 'utf8').includes(`'${card}'`), 'run the line in card.js\'s header again');
+const clip = readFileSync(resolve(pkg, 'fixture/clip.mp4'));
+check('package', "web/clip.js is fixture/clip.mp4's bytes", readFileSync(resolve(pkg, 'web/clip.js'), 'utf8').includes(`'${clip.toString('base64')}'`), 'web/clip.js is clip.mp4 in base64');
 
 const { app, id } = makeFixture();
 run('bun', ['exact.mjs', 'web-build', '--render', 'none'], app);
@@ -53,8 +55,9 @@ const count = () => {
   MediaStreamTrack.prototype.stop = function () { if (this.readyState === 'live') globalThis.__media.stops++; return stop.call(this); };
 };
 
-/** The size of the file the page's store holds at `path` (storage-fs.js's IndexedDB), or -1. */
-const stored = (page, path) => page.evaluate(async ([prefix, path]) => {
+/** The size of the file the page's store holds at `path` (storage-fs.js's IndexedDB), or -1; with `kind`, also whether
+ *  its entry is a Blob (a chosen file, by reference) or bytes. */
+const stored = (page, path, kind = false) => page.evaluate(async ([prefix, path, kind]) => {
   const name = (await indexedDB.databases()).map(d => d.name).find(n => n === prefix || n.startsWith(`${prefix}%40`) || n.startsWith(`${prefix}@`));
   if (!name) return -1;
   return new Promise(done => {
@@ -62,13 +65,13 @@ const stored = (page, path) => page.evaluate(async ([prefix, path]) => {
     open.onsuccess = () => {
       try {
         const get = open.result.transaction('files').objectStore('files').get(path);
-        get.onsuccess = () => { const c = get.result?.contents; done(c ? (c.byteLength ?? c.size) : -1); open.result.close(); };
+        get.onsuccess = () => { const c = get.result?.contents; done(!c ? -1 : kind ? `${c instanceof Blob ? 'blob' : 'bytes'} ${c.byteLength ?? c.size}` : (c.byteLength ?? c.size)); open.result.close(); };
         get.onerror = () => done(-1);
       } catch { done(-1); }
     };
     open.onerror = () => done(-1);
   });
-}, [`exact-storage:${encodeURIComponent(id)}`, path]);
+}, [`exact-storage:${encodeURIComponent(id)}`, path, kind]);
 
 /** The viewfinder's video: its size and whether it plays a stream. */
 const viewfinder = page => page.evaluate(() => {
@@ -151,6 +154,24 @@ for (const engine of engines) {
     await none.setFiles([]);
     const cancelled = await until(page, 'shot-error', t => t === 'AbortError');
     check(engine, 'choosing nothing is AbortError', cancelled === 'AbortError', cancelled);
+
+    // A video (LLP 1133.008.000 D2): the input asks for one, and the chosen File is the path's entry by reference.
+    const [recorder] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), tap(page, 'camera-video')]);
+    const videoInput = await recorder.element().evaluate(el => `${el.accept} capture=${el.getAttribute('capture')}`);
+    check(engine, 'recordVideoWithCameraApp opens a file input asking for a video from the camera', videoInput === 'video/* capture=', videoInput);
+    await recorder.setFiles({ name: 'clip.mp4', mimeType: 'video/mp4', buffer: clip });
+    // An engine that plays no H.264 (Playwright's Chromium) reads no facts: each is 0, as the RFC says of an `error`.
+    const plays = await page.evaluate(() => document.createElement('video').canPlayType('video/mp4; codecs="avc1.42C00A"') !== '');
+    const want = `app:/tmp/camera/3.mp4 video/mp4 ${clip.length} ${plays ? '1 160x120' : '0 0x0'}`;
+    const recorded = await until(page, 'clip', t => t === want, 15000);
+    check(engine, `the chosen video is answered with its ${plays ? 'facts' : 'facts at 0 (no H.264 here)'}`, recorded === want, `${recorded} ${await text(page, 'clip-error')}`);
+    // WebKit's ephemeral context, as its private browsing, stores no Blob in IndexedDB: the bytes there.
+    const entry = await stored(page, 'app:/tmp/camera/3.mp4', true), byReference = engine !== 'webkit';
+    check(engine, `the video is stored ${byReference ? 'as the chosen File, not its bytes' : 'as its bytes, the store taking no File'}`, entry === `${byReference ? 'blob' : 'bytes'} ${clip.length}`, entry);
+    const [skipped] = await Promise.all([page.waitForEvent('filechooser', { timeout: 10000 }), tap(page, 'camera-video')]);
+    await skipped.setFiles([]);
+    const noVideo = await until(page, 'clip-error', t => t === 'AbortError');
+    check(engine, 'choosing no video is AbortError', noVideo === 'AbortError', noVideo);
 
     // Another camera under the same id (D1): the browser's track replaced, the app's id kept.
     // A camera that already faces the person (WebKit's mock) stays as it is.

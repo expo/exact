@@ -7,6 +7,7 @@ use exact_runner::{
     CallOrigin, FailureKind, Outcome, ProcessOp, Request, RequestOut, SocketOp, SocketOrigin,
     SocketSend, WorkClock,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
@@ -16,18 +17,30 @@ const GRANTS: &str = "process.spawn path:t3\nprocess.spawn /usr/bin/tar\nenv.rea
 /// (docs/testing.md, "Waiting").
 const BOUND: Duration = Duration::from_secs(30);
 
-fn script(json: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("exact-process-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join(format!("{:x}.json", fnv(json)));
-    std::fs::write(&file, json).unwrap();
-    file.display().to_string()
+/// A child's script, written to a file of its own; displayed as its path,
+/// and removed when dropped.
+struct ScriptFile(std::path::PathBuf);
+impl std::fmt::Display for ScriptFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.0.join("script.json").display().fmt(f)
+    }
+}
+impl Drop for ScriptFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
-fn fnv(text: &str) -> u64 {
-    text.bytes().fold(0xcbf29ce484222325, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
-    })
+fn script(json: &str) -> ScriptFile {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "exact-process-test-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("script.json"), json).unwrap();
+    ScriptFile(dir)
 }
 
 fn setup(processes: &[(&str, &str)]) -> (Core, Receiver<()>) {
@@ -46,6 +59,7 @@ fn setup(processes: &[(&str, &str)]) -> (Core, Receiver<()>) {
 
 fn request(ticket: u64, body: &str, stream: bool) -> RequestOut {
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "server".into(),

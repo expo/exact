@@ -646,6 +646,7 @@ impl<D: DataSource> Presenter<D> {
         if let Some(s) = &next {
             let pane = s.pane();
             let block = HostBlock {
+                tactic: Default::default(),
                 width: BlockAxis::Is(pane.2),
                 height: BlockAxis::Is(pane.3),
             };

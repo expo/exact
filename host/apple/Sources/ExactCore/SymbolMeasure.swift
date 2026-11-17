@@ -1,4 +1,4 @@
-// A system symbol's natural size (`exact_set_symbol_measure`), which the kernel
+// A system symbol or raster icon's natural size (`exact_set_symbol_measure`), which the kernel
 // asks for before laying out. The UIKit and AppKit symbol views take their
 // point size and weight from `configuration` too. In the core so a headless
 // session measures a symbol as a presented one does.
@@ -29,10 +29,14 @@ package enum SymbolMeasure {
         return Configuration(pointSize: points > 0 ? points : 1, weight: weights[index])
     }
 
-    /// The box a symbol takes: its glyph's, an em square when the OS has no
+    /// The box a symbol takes: its glyph or raster viewport, an em square when the OS has no
     /// glyph by that name (LLP 1035.004.000 D2), none at a point size of 0.
-    package static func size(_ name: String, points: CGFloat, weight: CGFloat) -> CGSize? {
+    package static func size(_ name: String, points: CGFloat, weight: CGFloat, bundles: [Bundle] = IconAsset.bundles(for: .main)) -> CGSize? {
         guard points > 0 else { return nil }
+        if name.hasPrefix(IconAsset.measurePrefix) {
+            let svg = String(name.dropFirst(IconAsset.measurePrefix.count))
+            return IconAsset.image(named: IconAsset.name(svg), bundles: bundles).map { IconAsset.size($0.size, points: points) }
+        }
         let config = configuration(points: points, weight: weight)
         #if canImport(UIKit)
         let image = name.isEmpty ? nil : UIImage(systemName: name, withConfiguration: config)

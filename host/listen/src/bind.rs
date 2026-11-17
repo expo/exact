@@ -339,11 +339,11 @@ fn remember(path: &Path, ours: Identity) {
 mod tests {
     use super::*;
 
-    fn dir(name: &str) -> PathBuf {
+    fn dir(name: &str) -> crate::TempDir {
         let base = std::env::temp_dir().canonicalize().unwrap();
         let dir = base.join(format!("exact-listen-bind-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        dir
+        crate::TempDir(dir)
     }
 
     fn registered(path: &Path) -> Vec<Identity> {

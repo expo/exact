@@ -8,6 +8,7 @@ const grants = "fs.read app:/data\nfs.write app:/data\nfs.write app:/cache/widge
 let tail: Promise<unknown> = Promise.resolve();
 let saves: Promise<unknown> = Promise.resolve(), saveError = "";
 let shared: Promise<{text:string}>;
+let nativeLeaseBody = "";
 
 // Background work (LLP 1097): the last save started and not awaited, and
 // the last failure a background step reported to the app.
@@ -40,6 +41,18 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
       const leaked = raw && await raw;
       await db.close();
       return {text: leaked ? "raw database exposed" : "private"};
+    });
+  }
+  if (op === "read-before-exclusive") {
+    const pending = storage.fs.readFile(storage.fs.directories.data + "/native-order");
+    return store.exclusive("session", () => { nativeLeaseBody = value; })
+      .then(() => pending)
+      .then(bytes => ({text: new TextDecoder().decode(bytes) + " " + nativeLeaseBody}));
+  }
+  if (op === "exclusive-only") {
+    return store.exclusive("session", () => {
+      store.set("session", value);
+      return {text: "entered " + value};
     });
   }
   if (op === "worker-retirement") {
@@ -381,6 +394,10 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
       () => storage.fs.readdir(data + "/note"),
       () => storage.fs.mkdir(data + "/full").then(() => storage.fs.writeFile(data + "/full/x", new Uint8Array([1]))).then(() => storage.fs.rm(data + "/full")),
       () => storage.sqlite.open("app:/data/other.db"),
+      // A folder where a file is read or copied from is EISDIR, as on the web; the copy makes no file.
+      () => storage.fs.mkdir(data + "/folder").then(() => storage.fs.readFile(data + "/folder")),
+      () => storage.fs.copyFile(data + "/folder", data + "/folder-copy"),
+      () => storage.fs.stat(data + "/folder-copy"),
     ];
     for (const step of steps) {
       try { await step(); out.push("ok"); } catch (e:any) { out.push(e.kind + " " + e.code + " " + e.message); }
@@ -407,6 +424,30 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     ];
     for (const step of steps) {
       try { await step(); out.push("ok"); } catch (e:any) { out.push(e.name + " " + e.code + " " + e.message); }
+    }
+    return {text: out.join("\n")};
+  }
+  // An explicit `quality` (LLP 1069.002 A1.12): each record's type, size,
+  // width and height, then each refusal's name and message, in one answer.
+  if (op === "compress-quality") {
+    const data = storage.fs.directories.data, out: string[] = [];
+    const steps: (() => Promise<any>)[] = [
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/low.jpg", { maxDimension: 32, quality: 0.1 }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/high.jpg", { maxDimension: 32, quality: 1 }),
+      () => storage.fs.stat(data + "/high.jpg").then(high =>
+        storage.fs.compressImage(data + "/in.jpg", data + "/capped.jpg", { maxDimension: 32, maxBytes: high.size, quality: 1 })),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/plain.png", { maxDimension: 32, maxBytes: 2_000_000, type: "image/png" }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/quality.png", { maxDimension: 32, maxBytes: 2_000_000, quality: 0.1, type: "image/png" }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: 1.5 }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: NaN }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: null as any }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32 } as any),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, maxBytes: 0, quality: 2 }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: 0.5, type: "image/webp" as any }),
+    ];
+    for (const step of steps) {
+      try { const r = await step(); out.push([r.type, r.size, r.width, r.height].join(" ")); }
+      catch (e:any) { out.push(e.name + " " + e.message); }
     }
     return {text: out.join("\n")};
   }

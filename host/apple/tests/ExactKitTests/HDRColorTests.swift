@@ -253,6 +253,30 @@ final class HDRColorTests: XCTestCase {
                                                              .foregroundColor: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)])
     }
 
+    /// A paragraph's raster is in the space of its widest colour, however
+    /// many runs paint each colour, and an HDR shadow cast apart does not
+    /// hide the same colour painted as ink.
+    func testARastersFormatFollowsItsWidestColour() throws {
+        let rgb = { (name: CFString, c: [CGFloat]) in CGColor(colorSpace: CGColorSpace(name: name)!, components: c + [1])! }
+        let sdr = [rgb(CGColorSpace.sRGB, [0, 0, 0]), rgb(CGColorSpace.sRGB, [1, 0.85, 0.24]), rgb(CGColorSpace.extendedSRGB, [0.2, 0.4, 0.6])]
+        let p3 = rgb(CGColorSpace.displayP3, [1, 0, 0])
+        let rec2020 = rgb(CGColorSpace.itur_2020, [0, 1, 0])
+        let hdr = TextRunShadow([3, 3, 0] + (try XCTUnwrap(fourTimesWhite.textChannels(dark: false))))
+        func format(_ paints: [(NSAttributedString.Key, Any)]) -> (space: String, headroom: Float, deep: Bool) {
+            let runs = (0..<100).flatMap { _ in paints.map { [$0.0: $0.1] as NSDictionary } }
+            let f = TextRasterJob.format(runs)
+            return (f.space.name! as String, f.headroom, f.deep)
+        }
+        let ink = { (colors: [CGColor]) in colors.map { (NSAttributedString.Key.foregroundColor, $0 as Any) } }
+        XCTAssertTrue(format(ink(sdr)) == (CGColorSpace.sRGB as String, 0, false))
+        XCTAssertTrue(format(ink(sdr + [p3])) == (CGColorSpace.displayP3 as String, 0, false))
+        XCTAssertTrue(format(ink(sdr + [p3, rec2020])) == (CGColorSpace.extendedSRGB as String, 1, true))
+        XCTAssertTrue(format(ink(sdr) + [(.exactShadow, hdr)]) == (CGColorSpace.sRGB as String, 0, false))
+        let both = format(ink(sdr) + [(.exactShadow, hdr), (.foregroundColor, hdr.color)])
+        XCTAssertEqual(both.space, CGColorSpace.extendedSRGB as String)
+        XCTAssertEqual(both.headroom, 4, accuracy: 0.001)
+    }
+
     /// A `text-shadow` keeps its colour's space (`textChannels`' nine after
     /// the offset and blur). An HDR one is painted into a bitmap of its own,
     /// with its light, and the SDR ink's stays SDR.

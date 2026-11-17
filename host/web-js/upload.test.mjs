@@ -234,7 +234,7 @@ test('an untraced async tool handler keeps its origin for fetches and nested mod
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-tool-origin-'));
   const kept = ['fetch', 'location', 'exact', '__exact_module', '__exact_async_context', '__exact_ordinary'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
   let sent = 0;
-  globalThis.fetch = async url => { sent++; return Object.defineProperty(new Response('sent'), 'url', { value: String(url) }); };
+  globalThis.fetch = async (url, init) => { sent++; return Object.defineProperty(new Response('sent'), 'url', { value: new Request(url, init).url }); };
   globalThis.location = { hostname: 'public.example' };
   writeFileSync(resolve(dir, 'source.js'), `import {fetch} from './ts-fetch.js';
 const ask = () => fetch('https://127.0.0.1/').then(() => 'sent', e => e.message);
@@ -266,7 +266,7 @@ export const admitsNetwork=()=>true, admitsSecret=()=>false, coversPath=()=>fals
     // Even a fetch implementation that returns a landing URL must pass the destination gate before its body reader runs.
     let read = false, redirect;
     const native = globalThis.fetch;
-    globalThis.fetch = async (_url, init) => { redirect = init.redirect; return Object.defineProperty(new Response('private'), 'url', { value: 'https://127.0.0.1/' }); };
+    globalThis.fetch = async (url, init) => { redirect = new Request(url, init).redirect; return Object.defineProperty(new Response('private'), 'url', { value: 'https://127.0.0.1/' }); };
     const checked = await import(pathToFileURL(resolve(dir, 'landing.js')).href);
     await expect(checked.fetchWith({}, 'https://public.example/', {}, null, undefined, () => { read = true; }, 'tool')).rejects.toMatchObject({ kind: 'Refused', message: 'NotAllowedError: person-required' });
     expect(read).toBe(false); expect(redirect).toBe('error');

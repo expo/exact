@@ -42,6 +42,12 @@ pub const EXCEPTIONS: &[Exception] = &[
     },
 ];
 
+/// Why a store build refuses every exception grant (LLP 1030.005 D2): Apple,
+/// "Embedding a helper tool in a sandboxed app", signs a helper with
+/// `com.apple.security.app-sandbox` and `com.apple.security.inherit` alone.
+pub const SANDBOX_REFUSAL: &str =
+    "the Mac App Store sandbox signs an embedded helper with app-sandbox and inherit alone, and no runtime exception";
+
 /// One `runtime.<name> <target>` line.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeGrant<'a> {

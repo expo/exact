@@ -63,11 +63,17 @@ shape TocItem
   title: string
   href: string
 
+shape Crumb
+  title: string
+  href: string
+  icon: string
+
 shape Page
   slug: string
   path: string
   movedFrom: string[]
   section: string
+  crumbs: Crumb[]
   title: string
   description: string
   subtitle: string
@@ -82,6 +88,9 @@ shape Page
   chatgptUrl: string
   codexUrl: string
   cursorUrl: string
+  t3Url: string
+  grokUrl: string
+  metaUrl: string
   blocks: Block[]
   toc: TocItem[]
 
@@ -131,6 +140,9 @@ shape Moved
 
 shape Markdown
   text: string
+
+shape Address
+  url: string
 
 shape Viewport
   width: number

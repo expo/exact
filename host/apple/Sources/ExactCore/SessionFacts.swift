@@ -33,7 +33,7 @@ public struct SessionFacts {
     public init(displayScale: Double, preferences: Preferences,
                 rootFontSize: Double = Double(defaultRootFontSize),
                 date: Date = Date(), clock: Double = 0, timeZone: TimeZone = .current,
-                locale: String = Locale.preferredLanguages.first ?? Locale.current.identifier(.bcp47),
+                locale: String = SessionFacts.viewerLocale(),
                 formatLocale: String = SessionFacts.currentFormatLocale,
                 seed: UInt64 = UInt64(UInt32.random(in: .min ... .max)),
                 textResidencyBytes: Int = 2 * 1024 * 1024) {
@@ -58,6 +58,24 @@ public struct SessionFacts {
 }
 
 extension SessionFacts {
+    /// The language the strings table is chosen for off the agent: the first of the person's preferred languages
+    /// that one of the bundle's localizations (its strings tables, `CFBundleLocalizations`) serves, compared as the
+    /// runner's `resolve_locale` compares (RFC 4647 lookup), else their first. The system chooses the app's language
+    /// from the same list (`Bundle.preferredLocalizations`), and with it the language of its own strings and the
+    /// layout direction of the chrome it draws, so taking only the first language could put an Arabic window around
+    /// an English table for someone who prefers French, then Arabic.
+    public static func viewerLocale(preferred: [String] = Locale.preferredLanguages, localizations: [String] = Bundle.main.localizations) -> String {
+        let served = preferred.first { language in
+            var tag = Substring(language)
+            while !localizations.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+                guard let end = tag.lastIndex(of: "-") else { return false }
+                tag = tag[..<end]
+            }
+            return true
+        }
+        return served ?? preferred.first ?? Locale.current.identifier(.bcp47)
+    }
+
     /// `exactTime().formatLocale` off the agent: the Region's format
     /// (`Locale.current`; English in Korea is `en-KR`) with the hour cycle the
     /// user forces (System Settings › General › Date & Time › 24-hour time on

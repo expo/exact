@@ -19,3 +19,7 @@ component PressPaint
         text "Keeps its own" color="#bbf7d0" testId="keeps"
       button press=press -exact-press-scale=0.9 -exact-press-opacity=(presses % 2 == 0 ? 0.4 : 0.8) testId="both" width=200 height=60 background-color="#16a34a" border-width=0 border-radius=12
         text "Scale and dim" color="#ffffff"
+      view press=press translate="10px 20px" testId="slab" width=160 height=60 background-color="#fd2f7c"
+        :active
+          translate = (presses % 2 == 0 ? "4px 4px" : "10% 20%")
+        text "Shift onto the plate"

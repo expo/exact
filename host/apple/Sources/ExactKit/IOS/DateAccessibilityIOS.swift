@@ -10,7 +10,7 @@ import UIKit
 /// author's placeholder or none, and activating it activates that element,
 /// which opens the calendar or wheel; where that element leaves activation
 /// to VoiceOver, VoiceOver taps its activation point, on UIKit's content.
-final class EmptyDateElement: UIAccessibilityElement, AgentOwned {
+final class EmptyDateElement: UIAccessibilityElement, InspectionOwned {
     private(set) weak var native: NSObject?
     private weak var picker: BoundDatePicker?
     init(standingFor native: NSObject, in picker: BoundDatePicker) {
@@ -18,7 +18,7 @@ final class EmptyDateElement: UIAccessibilityElement, AgentOwned {
         self.picker = picker
         super.init(accessibilityContainer: picker)
     }
-    var agentViewId: UInt32? { picker.map { UInt32($0.tag) } }
+    var inspectionViewId: UInt32? { picker.map { UInt32($0.tag) } }
     override var accessibilityLabel: String? { get { native?.accessibilityLabel } set {} }
     override var accessibilityHint: String? { get { native?.accessibilityHint } set {} }
     override var accessibilityValue: String? {

@@ -18,7 +18,7 @@ component Site
   action back
     nav = back(nav)
   view
-    main navigationKey=`${top(nav).id}` navigationBack="back" testId="navigation"
+    main navigationKey=`${top(nav).id}` testId="navigation"
       head title="Site" description="Every post" image="/assets/site.png" robots="index"
       for e in stack(nav) key = e.id
         column navigationKey=`${e.id}` testId=`route-${e.name}`

@@ -1,7 +1,7 @@
 /-
 The program-level operational semantics: statements, actions as
-transactions, settlement of derives and resources, rendering, timers, and
-the events a host delivers.
+transactions, rendering, timers, and the events a host delivers, over the
+settlement of derives and resources (`Contract.Settle`).
 
 A configuration steps on an event to a new configuration. Each step is one
 commit or none: an action reads the state as it was when the event arrived,
@@ -11,7 +11,7 @@ settlement that fails — leaves the configuration exactly as it was. A
 failure while rendering poisons the configuration: it keeps its state and
 refuses every later event (the runner's `poison`).
 -/
-import Contract.Tabs
+import Contract.Settle
 
 namespace Contract
 
@@ -25,10 +25,14 @@ structure Effects where
   deriving Inhabited
 
 def isRootState (p : Program) (x : String) : Bool :=
-  p.states.any (fun s => s.name == x && s.owner.isNone) || p.mutations.any (·.name == x)
+  p.states.any (fun s => s.name == x && s.owner.isNone) ||
+    p.mutations.any (fun m => m.name == x && m.owner.isNone)
 
+/-- A row's slot: a state an arm owns, or a child's mutation, whose answer
+is its instance's (LLP 1035.005.004 D6). -/
 def isRowState (p : Program) (x : String) : Bool :=
-  p.states.any (fun s => s.name == x && s.owner.isSome)
+  p.states.any (fun s => s.name == x && s.owner.isSome) ||
+    p.mutations.any (fun m => m.name == x && m.owner.isSome)
 
 /-- Run a block of statements. A `let` scopes over the statements after it
 in its block and the blocks nested there; a branch's block is a scope of
@@ -83,378 +87,88 @@ def exec : Nat → Env → Locals → List Stmt → Effects → Result Effects
         let fx ← exec fuel env ((ad.params.map (·.1)).zip vs).reverse ad.body fx
         exec fuel env ls rest fx
 
-/-! ## Types at run time -/
+/-! ## A child's requests (LLP 1035.005.004) -/
 
-mutual
-/-- Whether a value has a type: what the runner checks at every boundary
-(a slot written, a derive settled, a source's answer, an action's
-argument). A source's arguments are checked for finiteness too. Infinities
-and NaN live only inside an evaluation. A record is of the shape it names
-(the runner's records carry no name; here the name selects field indices, so a
-record of another name is not of this shape). -/
-def conforms (p : Program) : Value → Ty → Bool
-  | _, .unknown => true
-  | .num f, .number => Number.isFinite f
-  | .bool _, .bool => true
-  | .str _, .string => true
-  | .unit, .unit => true
-  | .none, .option _ => true
-  | .some v, .option t => conforms p v t
-  | .list xs, .list t => conformsAll p xs t
-  | .record s' vs, .record s =>
-    match p.shapes.find? (·.name == s) with
-    | .some sh => s' == s && vs.length == sh.fields.length && conformsFields p vs sh.fields
-    | .none => false
-  | _, _ => false
-/-- Every item of a list has the type. -/
-def conformsAll (p : Program) : List Value → Ty → Bool
-  | [], _ => true
-  | v :: vs, t => conforms p v t && conformsAll p vs t
-/-- Each value has its field's type, pairwise (as far as both go). -/
-def conformsFields (p : Program) : List Value → List Field → Bool
-  | v :: vs, f :: fs => conforms p v f.ty && conformsFields p vs fs
-  | _, _ => true
-end
+/-- The name an instance keeps a request's arguments under, beside its
+value: absent while the request is idle (D2). No authored name has an `@`. -/
+def ownedArgs (x : String) : String := x ++ "@args"
 
-mutual
-/-- Whether a value has a type, its numbers any (infinities and NaN
-included): `conforms` without finiteness. -/
-def typed (p : Program) : Value → Ty → Bool
-  | _, .unknown => true
-  | .num _, .number => true
-  | .bool _, .bool => true
-  | .str _, .string => true
-  | .unit, .unit => true
-  | .none, .option _ => true
-  | .some v, .option t => typed p v t
-  | .list xs, .list t => typedAll p xs t
-  | .record s' vs, .record s =>
-    match p.shapes.find? (·.name == s) with
-    | .some sh => s' == s && vs.length == sh.fields.length && typedFields p vs sh.fields
-    | .none => false
-  | _, _ => false
-def typedAll (p : Program) : List Value → Ty → Bool
-  | [], _ => true
-  | v :: vs, t => typed p v t && typedAll p vs t
-def typedFields (p : Program) : List Value → List Field → Bool
-  | v :: vs, f :: fs => typed p v f.ty && typedFields p vs fs
-  | _, _ => true
-end
+/-- Set `x` in an instance's slots, adding it when absent. -/
+def putSlot (s : List (String × Value)) (x : String) (v : Value) : List (String × Value) :=
+  if (lookup x s).isSome then s.map (fun (y, w) => if x == y then (y, v) else (y, w)) else s ++ [(x, v)]
 
-/-- Why a value fails a boundary's check (`conforms`): when it is of the
-type (`typed`), a number in it is not finite, which is refused (`finite`);
-otherwise it is of another type (`wrong`), the type error a checked program
-never makes. -/
-def unfit (isTyped : Bool) (finite wrong : String) : Err :=
-  if isTyped then .refused finite else .type wrong
+/-- Whether `x` is a child's resource, one each instance owns. -/
+def isOwned (p : Program) (x : String) : Bool :=
+  p.resources.any fun r => r.name == x && r.owner.isSome
 
-/-- A hidden parameter: one the expansion adds to a child's lifted action
-for a prop or inject it captures (`@capture:…`; `@` begins no authored
-name). Its argument is the compiler's, not the host's. -/
-def hiddenParam (x : String) : Bool := x.startsWith "@"
+/-- An environment in an instance's rows: each request its rows' instances
+own reads as a resource, holding its value where its type admits it,
+current unless idle. -/
+def Env.withOwned (env : Env) : Env :=
+  let own := env.rows.filter fun (x, v) =>
+    env.prog.resources.any fun r => r.name == x && r.owner.isSome && conforms env.prog v r.ty
+  { env with
+    resources := own ++ env.resources,
+    idle := (own.filter fun (x, _) => (lookup (ownedArgs x) env.rows).isNone).map (·.1) ++
+      env.idle.filter fun x => !isOwned env.prog x }
 
-/-- An action's argument check: an authored parameter's argument crosses
-the boundary (`conforms`, its numbers finite); a hidden parameter's has
-its type, its numbers any, as the prop it captures would be read in place. -/
-def argOk (p : Program) : String × Ty → Value → Bool
-  | (x, t), v => if hiddenParam x then typed p v t else conforms p v t
+@[simp] theorem Env.withOwned_prog (env : Env) : env.withOwned.prog = env.prog := rfl
+@[simp] theorem Env.withOwned_slots (env : Env) : env.withOwned.slots = env.slots := rfl
+@[simp] theorem Env.withOwned_derives (env : Env) : env.withOwned.derives = env.derives := rfl
+@[simp] theorem Env.withOwned_rows (env : Env) : env.withOwned.rows = env.rows := rfl
+@[simp] theorem Env.withOwned_now (env : Env) : env.withOwned.now = env.now := rfl
 
-/-- A root slot's declared type: a state's, or `option<T>` for a mutation
-`T` (what a write to it is checked against). -/
-def slotTy (p : Program) (x : String) : Ty :=
-  match p.states.find? (·.name == x) with
-  | .some s => s.ty
-  | .none => ((p.mutations.find? (·.name == x)).map (fun m => Ty.option m.ty)).getD .unknown
+/-- The requests an arm instance owns, settled in its scope (D2): each
+child resource whose owner is the arm, in declaration order, its `when`
+and arguments read with the instance's slots and locals. A request keeps
+its value while its arguments are those the value answers; one asked anew
+asks the oracle, whose every answer is synchronous; a closed `when` keeps
+the value (its placeholder before any), idle, with no arguments, so the
+render that opens it asks again. Passes repeat while a request changes, so
+one whose arguments read another's answer asks on that answer.
 
-/-! ## The data seam -/
-
-/-- Bit-for-bit sameness (NaN is itself; records by fields). -/
-partial def Value.same : Value → Value → Bool
-  | .num a, .num b => a.toBits == b.toBits
-  | .bool a, .bool b => a == b
-  | .str a, .str b => a == b
-  | .unit, .unit => true
-  | .none, .none => true
-  | .some a, .some b => Value.same a b
-  | .list xs, .list ys => xs.length == ys.length && (xs.zip ys).all fun (a, b) => Value.same a b
-  | .record _ xs, .record _ ys => xs.length == ys.length && (xs.zip ys).all fun (a, b) => Value.same a b
-  | _, _ => false
-
-/-- The data sources: a function of (source, arguments). The semantics is
-parametric in it; a differential run supplies the answers the runner's
-source gave, as a table. -/
-structure Oracle where
-  answers : List (String × List Value × Value) := []
-  /-- Host facts, by resource: what a resource whose source the host
-  answers itself (`exactViewport`, `exactPage`, …) holds. -/
-  facts : List (String × Value) := []
-  /-- The device's store at launch (LLP 1116 D5): each persisted state's
-  kept value, by the state's name, as the host read it before boot — the
-  device's, like every answer here. A fresh install's is empty. -/
-  stored : List (String × Value) := []
-  /-- The sources a native module answers (LLP 1133.002 D13): the runner
-  answers them from the module's substitute, whose state (a permission, a
-  preferred value) is its own, so a call to one with no answer and no fact
-  is outside the semantics, not a refusal. -/
-  modules : List String := []
-  /-- The sources a program declares (LLP 1162.001): the runner makes their
-  HTTP request itself and never asks the oracle, so a call to one with no
-  answer and no fact is outside the semantics, not a refusal. -/
-  fetches : List String := []
-  /-- The host built every tab panel at boot and builds each as it is made
-  (LLP 1075.003 §9.14: a page rendered ahead of its runtime, which the
-  runtime adopts whole; `Runner::build_every_tab`). -/
-  everyTab : Bool := false
-  deriving Inhabited
-
-mutual
-/-- Source arguments carry only finite numbers, including in containers (LLP 1027 D2). -/
-private def finiteValue : Value → Bool
-  | .num f => Number.isFinite f
-  | .some v => finiteValue v
-  | .list vs | .record _ vs => finiteValues vs
-  | _ => true
-private def finiteValues : List Value → Bool
-  | [] => true
-  | v :: vs => finiteValue v && finiteValues vs
-end
-
-/-- The differential oracle's numeric keys (`difftest/src/oracle.rs`)
-use canonical bits; signed zeros remain distinct. -/
-private partial def oracleSame : Value → Value → Bool
-  | .num a, .num b => Number.canonicalBits a == Number.canonicalBits b
-  | .some a, .some b => oracleSame a b
-  | .list xs, .list ys => xs.length == ys.length && (xs.zip ys).all fun (a, b) => oracleSame a b
-  | .record _ xs, .record _ ys => xs.length == ys.length && (xs.zip ys).all fun (a, b) => oracleSame a b
-  | a, b => Value.same a b
-
-def Oracle.ask (o : Oracle) (src : String) (args : List Value) (resource : String := "") :
-    Result Value :=
-  if !finiteValues args then .error (.refused "a source argument contains a non-finite number") else
-  match o.answers.find? (fun (s, as, _) =>
-      s == src && as.length == args.length && (as.zip args).all fun (a, b) => oracleSame a b) with
-  | .some (_, _, v) => .ok v
-  | .none =>
-    match lookup resource o.facts with
-    | .some v => .ok v
-    | .none =>
-      if src = "exactTransport" ∨ src = "exactMIDI" then
-        .error (.unsupported s!"`{src}`: the runner answers it from its transport or its MIDI ports, which change as they play (LLP 1125)")
-      else if o.modules.contains src then
-        .error (.unsupported s!"`{src}`: a native module's, which the runner answers from the module's substitute (LLP 1133.002 D13)")
-      else if o.fetches.contains src then
-        .error (.unsupported s!"`{src}`: a declared source's, whose HTTP request the runner makes itself (LLP 1162.001)")
-      else .error (.refused s!"the oracle has no answer for {src}")
-
-/-! ## Settlement -/
-
-structure Settled where
-  derives : List (String × Value) := []
-  resources : List (String × Value) := []
-  /-- The arguments each resource's value answers. An idle resource has
-  none: its value answers nothing now. -/
-  args : List (String × List Value) := []
-  /-- The resources whose `when` was false (LLP 1161.002 D2). -/
-  idle : List String := []
-  deriving Inhabited
-
-/-- `ty`'s zero, what a resource idle before its first answer holds (LLP
-1161.002 D5): `0`, `""`, `false`, `()`, `none`, `[]`, and a record of its
-fields' zeros, as the runner's `zero`. A string enum is a `string` here,
-whose zero is `""` where the runner's is the enum's first member. -/
-def zeroOf (shapes : List Shape) : Nat → Ty → Value
-  | _, .number => .num 0
-  | _, .bool => .bool false
-  | _, .string => .str ""
-  | _, .unit => .unit
-  | _, .option _ => .none
-  | _, .list _ => .list []
-  | _, .unknown => .unit
-  | 0, .record s => .record s []
-  | n + 1, .record s =>
-    match shapes.find? (·.name == s) with
-    | .some sh => .record s (sh.fields.map fun f => zeroOf shapes n f.ty)
-    | .none => .record s []
-
-/-- What an idle resource holds (LLP 1161.002 D2, D5): its previous
-value, else its type's zero. -/
-def idleValue (p : Program) (prev : Settled) (r : ResourceDecl) : Value :=
-  (lookup r.name prev.resources).getD (zeroOf p.shapes (p.shapes.length + 1) r.ty)
-
-/-- Whether a resource's `when` holds (LLP 1161.002 D1): with none it
-always does; a value other than `true` closes it, as the runner reads it. -/
-def gateOpen (env : Env) (r : ResourceDecl) : Result Bool :=
-  match r.gate with
-  | .none => .ok true
-  | .some g => do
-    match ← eval fuel env false [] g with
-    | .bool true => pure true
-    | _ => pure false
-
-/-- The runner's `==` on values (`exact_plan::Value`'s `PartialEq`):
-numbers by IEEE `==` (`-0 = 0`, `NaN ≠ NaN`), the rest structurally. Two
-argument lists equal under it ask one question. -/
-partial def Value.rustEq : Value → Value → Bool
-  | .num a, .num b => a == b
-  | .bool a, .bool b => a == b
-  | .str a, .str b => a == b
-  | .unit, .unit => true
-  | .none, .none => true
-  | .some a, .some b => Value.rustEq a b
-  | .list xs, .list ys => xs.length == ys.length && (xs.zip ys).all fun (a, b) => Value.rustEq a b
-  | .record _ xs, .record _ ys =>
-    xs.length == ys.length && (xs.zip ys).all fun (a, b) => Value.rustEq a b
-  | _, _ => false
-
-def argsEq (xs ys : List Value) : Bool :=
-  xs.length == ys.length && (xs.zip ys).all fun (a, b) => Value.rustEq a b
-
-/-- A row key as the runner identifies it (`key_text`): a string, a bool,
-or a finite number with `-0` read as `0`. -/
-def rowKey : Value → Result Value
-  | .str t => .ok (.str t)
-  | .bool b => .ok (.bool b)
-  | .num f =>
-    if Number.isFinite f then .ok (.num (if f == 0 then 0 else f))
-    else .error (.refused "a row key that is not finite")
-  | _ => .error (.refused "a row key that is not a string, number or bool")
-
-/-! ### A resource over a list (LLP 1017.000 P4c, amended 2026-11-04) -/
-
-/-- Whether `h`, an element's request as settlement holds it
-(`.list [key, .list args, answer]`), is keyed `k`. -/
-def heldKeyed (k : Value) : Value → Bool
-  | .list [k', _, _] => Value.same k k'
-  | _ => false
-
-/-- A held request's answer. -/
-def heldAnswer : Value → Value
-  | .list [_, _, v] => v
-  | v => v
-
-/-- A held request's answer when it was asked at `args`. -/
-def heldAt (args : List Value) : Value → Option Value
-  | .list [_, .list old, v] => if argsEq old args then .some v else .none
-  | _ => .none
-
-/-- An element's key before `rowKey` reads it: its `key=`, read with the
-element bound to `e.item`, or the element itself. -/
-def eachKey (env : Env) (e : ResourceEach) (x : Value) : Result Value :=
-  match e.key with
-  | .some k => eval fuel env false [(e.item, x)] k
-  | .none => .ok x
-
-/-- An element's answer: the one held for it, or the oracle's. -/
-def eachAnswer (o : Oracle) (r : ResourceDecl) (args : List Value) : Option Value → Result Value
-  | .some v => .ok v
-  | .none => o.ask r.source args r.name
-
-/-- The elements' requests, in the list's order, as the runner's members
-(`runner/src/runner/each.rs`): each element's key (`rowKey`), then, for a
-key not yet seen this pass, its arguments, read with the element bound to
-`e.item`, and an answer: the one an earlier settlement held for that key
-at equal arguments, unless forced, or the oracle's. An element whose key
-repeats an earlier one's reads that one's answer. -/
-def settleEachGo (p : Program) (o : Oracle) (env : Env) (r : ResourceDecl) (e : ResourceEach)
-    (prev : List Value) (forced : Bool) :
-    List Value → List Value → List Value → Result (List Value × List Value)
-  | [], out, held => .ok (out, held)
-  | x :: xs, out, held => do
-    let k ← rowKey (← eachKey env e x)
-    match held.find? (heldKeyed k) with
-    | .some h => settleEachGo p o env r e prev forced xs (out ++ [heldAnswer h]) held
-    | .none =>
-      let args ← evalList fuel env false [(e.item, x)] r.args
-      let v ← eachAnswer o r args
-        (if forced then Option.none else (prev.find? (heldKeyed k)).bind (heldAt args))
-      settleEachGo p o env r e prev forced xs (out ++ [v]) (held ++ [.list [k, .list args, v]])
-
-/-- A resource over a list: its answers in the list's order, and its
-elements' requests, which the next settlement reads as `prev`. -/
-def settleEach (p : Program) (o : Oracle) (env : Env) (r : ResourceDecl) (e : ResourceEach)
-    (prev : List Value) (forced : Bool) : Result (List Value × List Value) := do
-  match ← eval fuel env false [] e.list with
-  | .list xs => settleEachGo p o env r e prev forced xs [] []
-  | _ => .error (.refused s!"resource `{r.name}`: its `for` reads no list")
-
-/-- Settle every derive and resource against the slots: evaluate each
-whose inputs have settled, until all have. A derive or resource that reads
-one not yet settled waits (`pending`); a pass with no progress is a cycle.
-The result does not depend on the order of evaluation (the dependency
-graph is acyclic, and each value is a function of the values it reads).
-
-A resource whose arguments equal (`argsEq`) those its previous value
-answered keeps that value and asks nothing, unless the commit refreshes it
-(`force`): its source is asked only when the question changes.
-
-A resource whose `when` is false is idle (LLP 1161.002 D2): its arguments
-are not read and nothing is asked, even when the commit refreshes it; it
-keeps its previous value, or its type's zero, with no arguments, so the
-settlement that opens the gate asks again (D3). -/
-def settle (p : Program) (o : Oracle) (slots : List (String × Value)) (now : F64)
-    (prev : Settled := {}) (force : List String := []) : Result Settled :=
-  let rec pass : Nat → Settled → Result Settled
-    | 0, _ => .error (.refused "settlement did not converge")
-    | n + 1, st => do
-      let mut st := st
-      let mut progress := false
-      let mut waiting := false
-      for d in p.derives do
-        if (lookup d.name st.derives).isSome then continue
-        let env : Env := { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle }
-        match eval fuel env false [] d.body with
-        | .ok v =>
-          if !conforms p v d.ty then
-            throw (unfit (typed p v d.ty) s!"derive `{d.name}` holds a number that is not finite"
-              s!"derive `{d.name}` of the wrong type")
-          st := { st with derives := st.derives ++ [(d.name, v)] }
-          progress := true
-        | .error .pending => waiting := true
-        | .error e => throw e
-      for r in p.resources do
-        if (lookup r.name st.resources).isSome then continue
-        let env : Env := { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle }
-        match r.each with
-        | .some e =>
-          let held := ((prev.args.find? (·.1 == r.name)).map (·.2)).getD []
-          match settleEach p o env r e held (force.contains r.name) with
-          | .ok (vs, held) =>
-            if !conforms p (.list vs) r.ty then throw (.refused s!"resource `{r.name}` of the wrong shape")
-            st := { st with resources := st.resources ++ [(r.name, .list vs)], args := st.args ++ [(r.name, held)] }
-            progress := true
-          | .error .pending => waiting := true
-          | .error err => throw err
-        | .none =>
-        match gateOpen env r with
-        | .error .pending => waiting := true
-        | .error e => throw e
-        | .ok false =>
-          if !conforms p (idleValue p prev r) r.ty then
-            throw (.refused s!"resource `{r.name}` of the wrong shape")
-          st := { st with resources := st.resources ++ [(r.name, idleValue p prev r)], idle := st.idle ++ [r.name] }
-          progress := true
-        | .ok true =>
-        match evalList fuel env false [] r.args with
-        | .ok args =>
-          let kept : Option (Value × List Value) :=
-            match lookup r.name prev.resources, prev.args.find? (·.1 == r.name) with
-            | .some v, .some (_, old) =>
-              if !force.contains r.name && argsEq old args then Option.some (v, old) else Option.none
-            | _, _ => Option.none
-          let (v, held) ← match kept with
-            | .some k => pure k
-            | .none => do
-              let v ← o.ask r.source args r.name
-              if !conforms p v r.ty then throw (.refused s!"resource `{r.name}` of the wrong shape")
-              pure (v, args)
-          st := { st with resources := st.resources ++ [(r.name, v)], args := st.args ++ [(r.name, held)] }
-          progress := true
-        | .error .pending => waiting := true
-        | .error e => throw e
-      if !waiting then return st
-      if !progress then throw (.refused "a cycle among derives and resources")
-      pass n st
-  pass (p.derives.length + p.resources.length + 2) {}
+Its slots are kept only where each holds a value its slot type admits (a
+request's name is no state's, so any), as `armSlots` checks a fresh slot.
+An evaluation that fails, as a gate or argument reading a pending root
+resource, refuses the render: the semantics models every owned answer as
+synchronous (D2), and nothing here waits. -/
+def settleOwned (fuel : Nat) (o : Oracle) (env : Env) (ls : Locals) (owner : Nat × Nat)
+    (slots : List (String × Value)) : Result (List (String × Value)) :=
+  let rs := env.prog.resources.filter (·.owner == Option.some owner)
+  let rec go : Nat → List (String × Value) → Result (List (String × Value))
+    | 0, _ => .error (.refused "an instance's requests did not settle")
+    | n + 1, slots => do
+      let mut s := slots
+      let mut changed := false
+      for r in rs do
+        let env' := ({ env with rows := s ++ env.rows } : Env).withOwned
+        let isOpen ← match r.gate with
+          | .none => pure true
+          | .some g => do pure ((← eval fuel env' false ls g) matches .bool true)
+        if !isOpen then
+          let v := (lookup r.name s).getD (placeholderValue env.prog r)
+          if !conforms env.prog v r.ty then throw (.refused s!"resource `{r.name}` of the wrong shape")
+          if (lookup r.name s).isNone || (lookup (ownedArgs r.name) s).isSome then changed := true
+          s := (putSlot s r.name v).filter (·.1 != ownedArgs r.name)
+        else
+          let args ← evalList fuel env' false ls r.args
+          let kept := match lookup r.name s, lookup (ownedArgs r.name) s with
+            | .some _, .some (.list old) => argsEq old args
+            | _, _ => false
+          if !kept then
+            let v ← o.ask r.source args r.name
+            if !conforms env.prog v r.ty then throw (.refused s!"resource `{r.name}` of the wrong shape")
+            s := putSlot (putSlot s r.name v) (ownedArgs r.name) (.list args)
+            changed := true
+      if !changed then return s
+      go n s
+  match go (rs.length + 2) slots with
+  | .ok s =>
+    if s.all fun (x, v) => conforms env.prog v (slotTy env.prog x) then .ok s
+    else .error (.refused "an instance's request in a slot of another type")
+  | .error (.unsupported m) => .error (.unsupported m)
+  | .error (.refused m) => .error (.refused m)
+  | .error _ => .error (.refused "an instance's request did not evaluate")
 
 /-! ## Rendering -/
 
@@ -465,12 +179,48 @@ earlier rows of that list had the same key (the runner's `dup`). A row in
 a nested `each` is named by its path from the outermost. -/
 abbrev RowId := List (Nat × Value × Nat)
 
-/-- Each live row's slots. -/
+/-- The binder values the render chose for one live region instance. -/
+structure RowFrame where
+  item : Option Value := .none
+  index : Option Nat := .none
+  bound : Option Value := .none
+  deriving Repr, Inhabited
+
+/-- Each live row's slots. The renderer also adds empty marker rows after
+an instance to retain its item, index, or match binding. Their tag is
+outside the program's region tags, so they cannot name an authored row. -/
 abbrev RowStore := List (RowId × List (String × Value))
 
 def RowStore.find (rs : RowStore) (id : RowId) : Option (List (String × Value)) :=
   (rs.find? fun (i, _) => i.length == id.length &&
     (i.zip id).all fun ((t, k, d), (t', k', d')) => t == t' && d == d' && Value.same k k').map (·.2)
+
+def regionTags : List Node → List Nat
+  | [] => []
+  | .element _ _ _ _ children :: rest => regionTags children ++ regionTags rest
+  | .when tag _ thn els :: rest => tag :: (regionTags thn ++ regionTags els ++ regionTags rest)
+  | .matchN tag _ _ someNodes noneNodes :: rest =>
+    tag :: (regionTags someNodes ++ regionTags noneNodes ++ regionTags rest)
+  | .each tag _ _ _ _ body :: rest => tag :: (regionTags body ++ regionTags rest)
+
+/-- A tag no authored region has. It distinguishes render-owned frame
+markers from live instance rows without changing the row-store type. -/
+def instanceMarkerTag (p : Program) : Nat :=
+  (regionTags p.view).foldl max 0 + 1
+
+def frameMarkerIds (p : Program) (id : RowId) (frame : RowFrame) : List RowId :=
+  let marker (kind : Nat) (value : Value) : RowId :=
+    id ++ [(instanceMarkerTag p, value, kind)]
+  (frame.item.map (marker 0)).toList ++
+    (frame.index.map (fun i => marker 1 (.num (F64.ofNat i)))).toList ++
+    (frame.bound.map (marker 2)).toList
+
+def frameMarkers (p : Program) (id : RowId) (frame : RowFrame) : RowStore :=
+  (frameMarkerIds p id frame).map fun marker => (marker, [])
+
+def recordInstance (p : Program) (live : RowStore) (id : RowId)
+    (slots : List (String × Value)) (frame : RowFrame) : RowStore :=
+  live ++ [(id, slots)] ++ frameMarkers p id frame
 
 /-- A rendered element: what the view shows and what a host can address. -/
 structure VNode where
@@ -489,8 +239,8 @@ structure VNode where
   `input` whose literal `type` is `checkbox`, `radio`, `range`, `date`, …): its
   payloads follow HTML's rules, which the semantics leaves out. -/
   control : Option String := .none
-  /-- A `list` whose `virtualized` is literally `true`: the runner shows
-  the rows its window lays out, which the observation leaves out. -/
+  /-- A synthetic group around a virtualized list's data region: the
+  observation omits those rows and retains authored fixed children. -/
   windowed : Bool := false
   navigation : TabInfo := {}
   /-- The rows this element stands in, innermost first. -/
@@ -503,6 +253,9 @@ structure RenderCx where
   store : RowStore
   rows : List RowId := []
   tabs : TabCx := {}
+  /-- What the instances' requests ask (LLP 1035.005.004 D2). -/
+  oracle : Oracle := {}
+  enterFrame : RowFrame := {}
 
 /-- An element's text: the first positional argument, displayed, of a tag
 whose positional is its text (`text`, `tspan`, `option`). -/
@@ -538,6 +291,15 @@ def elementControl (tag : String) (props : List (String × Expr)) : Option Strin
     | _ => Option.none
   else Option.none
 
+/-- The navigation fact that decides whether an element's children render. -/
+def elementNavigation (fuel : Nat) (env : Env) (ls : Locals) (tabs : TabCx)
+    (props : List (String × Expr)) : Result TabInfo := do
+  let values ← (tabProps props).mapM fun (name, e) => do
+    pure (name, ← unsetRefused (eval fuel env false ls e))
+  pure (tabs.element props (values.filterMap fun (n, v) => v.map (n, ·)))
+
+def TabInfo.rendersChildren (navigation : TabInfo) : Bool := navigation.opened
+
 /-- Render a view. Returns the elements and the rows that are live after
 it (their slots, kept from `store` or initialized now). -/
 def render : Nat → RenderCx → Locals → List Node → RowStore → Result (List VNode × RowStore)
@@ -548,25 +310,29 @@ def render : Nat → RenderCx → Locals → List Node → RowStore → Result (
       | .element tag pos props hs children => do
         let text ← elementText fuel cx.env ls tag pos
         let testId ← elementTestId fuel cx.env ls props
-        let values ← (tabProps props).mapM fun (name, e) => do
-          pure (name, ← unsetRefused (eval fuel cx.env false ls e))
-        let navigation := cx.tabs.element props (values.filterMap fun (n, v) => v.map (n, ·))
-        let (kids, live) ← (if navigation.opened then
+        let navigation ← elementNavigation fuel cx.env ls cx.tabs props
+        let windowed := tag == "list" && ((lookupField "virtualized" props).map tabLiteral matches .some (.bool true))
+        -- Only the direct data region is hidden from observation and tab discovery.
+        let children := if windowed then children.map (fun child => match child with
+          | .each .. => .element "#window" [] [] [] [child]
+          | _ => child) else children
+        let (kids, live) ← (if navigation.rendersChildren then
           render fuel { cx with tabs := cx.tabs.children props } ls children live
           else pure ([], live))
         pure ([{ tag, testId, text, handlers := hs, locals := ls, rows := cx.rows,
                  control := elementControl tag props,
-                 windowed := tag == "list" && ((lookupField "virtualized" props).map tabLiteral matches .some (.bool true)),
+                 windowed := tag == "#window",
                  navigation, children := kids : VNode }], live)
       | .when tag c thn els => do
         match ← eval fuel cx.env false ls c with
-        | .bool true => renderArm fuel cx ls tag 0 thn live
-        | .bool false => renderArm fuel cx ls tag 1 els live
+        | .bool true => renderArm fuel { cx with enterFrame := {} } ls tag 0 thn live
+        | .bool false => renderArm fuel { cx with enterFrame := {} } ls tag 1 els live
         | _ => .error (.type "`when` on a value that is not a bool")
       | .matchN tag s x sm nn => do
         match ← eval fuel cx.env false ls s with
-        | .some v => renderArm fuel cx ((x, v) :: ls) tag 0 sm live
-        | .none => renderArm fuel cx ls tag 1 nn live
+        | .some v =>
+          renderArm fuel { cx with enterFrame := { bound := some v } } ((x, v) :: ls) tag 0 sm live
+        | .none => renderArm fuel { cx with enterFrame := {} } ls tag 1 nn live
         | _ => .error (.type "`match` on a value that is not an option")
       | .each tag x ix list key body => do
         let items ← (← eval fuel cx.env false ls list).asList
@@ -591,6 +357,11 @@ where
                 s!"slot `{st.name}` initialized with a number that is not finite"
                 s!"slot `{st.name}` initialized with a value of the wrong type")
             s := s ++ [(st.name, v)]
+        -- A child's mutation holds no answer until the instance sends it
+        -- (its slot type, `option`, admits `none`: its name is no state's).
+        for m in cx.env.prog.mutations do
+          if m.owner == Option.some owner && conforms cx.env.prog Value.none (slotTy cx.env.prog m.name) then
+            s := s ++ [(m.name, Value.none)]
         pure s
   /-- A `when` or `match` arm: an instance of its own, named by the arm. -/
   renderArm : Nat → RenderCx → Locals → Nat → Nat → List Node → RowStore →
@@ -599,10 +370,11 @@ where
     | fuel + 1, cx, ls, tag, arm, body, live => do
       let id : RowId := (cx.rows.head?.getD []) ++ [(tag, Value.num (F64.ofNat arm), 0)]
       let slots ← armSlots fuel cx ls id (tag, arm)
+      let slots ← settleOwned fuel cx.oracle cx.env ls (tag, arm) slots
       let cx' : RenderCx := { cx with
-        env := { cx.env with rows := slots ++ cx.env.rows }, rows := id :: cx.rows,
-        tabs := cx.tabs.enter (.num (F64.ofNat arm)) }
-      render fuel cx' ls body (live ++ [(id, slots)])
+        env := Env.withOwned { cx.env with rows := slots ++ cx.env.rows }, rows := id :: cx.rows,
+        tabs := cx.tabs.enter (.num (F64.ofNat arm)), enterFrame := {} }
+      render fuel cx' ls body (recordInstance cx.env.prog live id slots cx.enterFrame)
   /-- The rows of an `each`, in list order. `seen` holds the keys of the
   rows before this one, for `dup`. -/
   renderRows : Nat → RenderCx → Locals → Nat → String → Option String → Expr → List Node →
@@ -620,10 +392,13 @@ where
       -- The row's slots: kept, or initialized from their initializers in
       -- the row's own scope (an initializer may read the item).
       let slots ← armSlots fuel cx ls' id (tag, 0)
+      let slots ← settleOwned fuel cx.oracle cx.env ls' (tag, 0) slots
       let cx' : RenderCx := { cx with
-        env := { cx.env with rows := slots ++ cx.env.rows },
-        rows := id :: cx.rows, tabs := cx.tabs.enter k dup }
-      let (vs, live) ← render fuel cx' ls' body (live ++ [(id, slots)])
+        env := Env.withOwned { cx.env with rows := slots ++ cx.env.rows },
+        rows := id :: cx.rows, tabs := cx.tabs.enter k dup, enterFrame := {} }
+      let frame : RowFrame := { item := some item, index := some i }
+      let (vs, live) ← render fuel cx' ls' body
+        (recordInstance cx.env.prog live id slots frame)
       let (more, live) ← renderRows fuel cx ls tag x ix key body items (i + 1) (seen ++ [k]) live
       pure (vs ++ more, live)
 
@@ -632,6 +407,10 @@ def tabIndex : List VNode → Tabs.Index
   | [] => []
   | n@{ children, .. } :: rest => n.navigation ::
       ((if n.windowed then [] else tabIndex children) ++ tabIndex rest)
+
+/-- The tab context from which render and validation traverse a configuration. -/
+def renderTabContext (o : Oracle) (view : List VNode) : TabCx :=
+  { opened := Tabs.visited (tabIndex view), every := o.everyTab }
 
 /-- Render empty waiting panels, then open the ones selection requires.
 Each pass retains the preceding pass's initialized slots. The bound only
@@ -713,6 +492,23 @@ def Timer.precedes (tm b : Timer) : Bool :=
 resources settled against them (LLP 1092 D3). -/
 abbrev Basis := List (String × Value) × Settled
 
+/-- Row identities, compared as `RowStore.find` compares them. -/
+def RowId.same (i id : RowId) : Bool :=
+  i.length == id.length &&
+    (i.zip id).all fun ((t, k, d), (t', k', d')) => t == t' && d == d' && Value.same k k'
+
+/-- The runner's row for one instance's sends to one child's mutation
+(LLP 1035.005.004 D6): made at the instance's first send, after the
+declared mutations' rows, in the order made. It holds the mutation, the
+instance's row while the instance lives, and when its armed `then` is due.
+A destroyed instance's row is let go, and the next instance to send that
+mutation takes it (the runner's `send_row`). -/
+structure SendRow where
+  mutation : String
+  inst : Option RowId
+  due : F64 := F64.posInf
+  deriving Inhabited
+
 structure Config where
   slots : List (String × Value)
   settled : Settled
@@ -735,6 +531,8 @@ structure Config where
   /-- Each `queue` mutation's armed `next`, due at the time of the commit
   after which it was free (the runner's `next_due`, LLP 1092 D3). -/
   nexts : List (String × F64) := []
+  /-- The rows of instances' sends to children's mutations. -/
+  sendRows : List SendRow := []
   deriving Inhabited
 
 /-- A step's outcome, as a host sees it. -/
@@ -751,16 +549,36 @@ def setSlot (slots : List (String × Value)) (x : String) (v : Value) : List (St
 def rowSlots (store : RowStore) (rows : List RowId) : List (String × Value) :=
   rows.foldr (fun id acc => (store.find id).getD [] ++ acc) []
 
+/-- The region arm that owns a row slot: a state's, or a child's mutation's. -/
+def slotOwner (p : Program) (x : String) : Option (Nat × Nat) :=
+  match (p.states.find? (·.name == x)).bind (·.owner) with
+  | .some o => .some o
+  | .none => (p.mutations.find? (·.name == x)).bind (·.owner)
+
 /-- Apply row writes: each goes to the innermost row in force whose `each`
 owns the slot. -/
 def applyRowWrites (p : Program) (store : RowStore) (rows : List RowId)
     (ws : List (String × Value)) : RowStore :=
   ws.foldl (fun store (x, v) =>
-    let owner := ((p.states.find? (·.name == x)).bind (·.owner)).map (·.1)
+    let owner := (slotOwner p x).map (·.1)
     match rows.find? (fun id => (id.getLast?.map (·.1)) == owner) with
     | .some id => store.map fun (i, s) =>
         if (RowStore.find [(i, s)] id).isSome then (i, setSlot s x v) else (i, s)
     | .none => store) store
+
+/-- An action's `refresh` of a child's resource reaches only the instance
+whose action ran (LLP 1035.005.004 D5): that request forgets its
+arguments, so the render asks again. An idle one has none to forget. -/
+def refreshOwned (p : Program) (store : RowStore) (rows : List RowId) (names : List String) :
+    RowStore :=
+  names.foldl (fun store x =>
+    match (p.resources.find? (·.name == x)).bind (·.owner) with
+    | .none => store
+    | .some (tag, _) =>
+      match rows.find? (fun id => (id.getLast?.map (·.1)) == Option.some tag) with
+      | .some id => store.map fun (i, s) =>
+          if (RowStore.find [(i, s)] id).isSome then (i, s.filter (·.1 != ownedArgs x)) else (i, s)
+      | .none => store) store
 
 /-- Settle and render against new slots. -/
 def update (p : Program) (o : Oracle) (slots : List (String × Value)) (store : RowStore)
@@ -768,8 +586,7 @@ def update (p : Program) (o : Oracle) (slots : List (String × Value)) (store : 
     Result (Settled × Result (List VNode × RowStore)) := do
   let st ← settle p o slots now prev force
   let env : Env := { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle }
-  .ok (st, renderTabs fuel
-    { env, store, tabs := { opened := Tabs.visited (tabIndex view), every := o.everyTab } })
+  .ok (st, renderTabs fuel { env, store, tabs := renderTabContext o view, oracle := o })
 
 /-- Whether the router slot, if the program has one, holds a valid router
 (`Route.routerOf`). -/
@@ -790,6 +607,55 @@ def armThens (p : Program) (armed : List (String × F64))
     if (p.mutations.find? (·.name == m)).any (·.andThen.isSome) then
       armed.filter (·.1 != m) ++ [(m, now)]
     else armed) armed
+
+/-! ## A child's sends (LLP 1035.005.004 D6) -/
+
+/-- Whether `m` is a child's mutation, one each instance sends. -/
+def isOwnedMutation (p : Program) (m : String) : Bool :=
+  p.mutations.any fun md => md.name == m && md.owner.isSome
+
+/-- The instance a send of a child's mutation `m` from `rows` goes to: the
+innermost row in force that its owner's region made, as `applyRowWrites`
+finds the row of the slot its answer lands in. -/
+def sendInstance (p : Program) (rows : List RowId) (m : String) : Option RowId :=
+  match (p.mutations.find? (·.name == m)).bind (·.owner) with
+  | .some (tag, _) => rows.find? fun id => (id.getLast?.map (·.1)) == Option.some tag
+  | .none => .none
+
+/-- The row instance `id` sends `m` on: the one it holds, else the first
+let-go row of `m`, else a new one after the rest. -/
+def sendRow (rs : List SendRow) (m : String) (id : RowId) : List SendRow × Nat :=
+  match rs.findIdx? (fun r => r.mutation == m && r.inst.any (RowId.same · id)) with
+  | .some i => (rs, i)
+  | .none =>
+    match rs.findIdx? (fun r => r.mutation == m && r.inst.isNone) with
+    | .some i => (rs.set i { mutation := m, inst := .some id }, i)
+    | .none => (rs ++ [{ mutation := m, inst := .some id }], rs.length)
+
+/-- Rows whose instance a render left out of `live` are let go: nothing
+of theirs is armed, and their `then` does not run. -/
+def letGo (rs : List SendRow) (live : RowStore) : List SendRow :=
+  rs.map fun r =>
+    match r.inst with
+    | .some id => if (live.find id).isSome then r else { r with inst := .none, due := F64.posInf }
+    | .none => r
+
+/-- After a commit at `now` that stood and rendered `live`: each send to a
+child's mutation (with the instance it went to) takes its row and arms its
+`then` (every answer here lands at once); then the rows of instances the
+render destroyed are let go. -/
+def landSends (p : Program) (rs : List SendRow) (sent : List (String × RowId)) (now : F64)
+    (live : RowStore) : List SendRow :=
+  let rs := sent.foldl (fun rs (m, id) =>
+    let (rs, i) := sendRow rs m id
+    if (p.mutations.find? (·.name == m)).any (·.andThen.isSome) then
+      rs.mapIdx fun j r => if j == i then { r with due := now } else r
+    else rs) rs
+  letGo rs live
+
+/-- Row `i`'s `then`, no longer armed. -/
+def disarm (rs : List SendRow) (i : Nat) : List SendRow :=
+  rs.mapIdx fun j r => if j == i then { r with due := F64.posInf } else r
 
 /-! ## Gated tasks and queued sends (LLP 1092) -/
 
@@ -928,10 +794,12 @@ def isQueue (p : Program) (m : String) : Bool :=
 (LLP 1092 D2): a send of a `queue` mutation is asked only when nothing of
 it waits, it is not stalled, and no send of it came earlier in the commit;
 otherwise it joins its queue with its arguments. Free is the runner's
-`idle`: neither its `then` nor its `next` armed, and not stalled. -/
+`idle`: neither its `then` nor its `next` armed, and not stalled. A send of
+a child's mutation is neither: its instance's (`runAction`). -/
 def splitSends (p : Program) (c : Config) (sends : List (String × String × List Value)) :
     List (String × String × List Value) × List (String × String × List Value) :=
   sends.foldl (fun (acc : List (String × String × List Value) × List (String × String × List Value)) s =>
+    if isOwnedMutation p s.1 then acc else
     if isQueue p s.1 && (acc.1.any (·.1 == s.1) || acc.2.any (·.1 == s.1) ||
         c.queued.any (·.1 == s.1) || c.stalled.any (·.1 == s.1) ||
         c.armed.any (·.1 == s.1) || c.nexts.any (·.1 == s.1))
@@ -939,6 +807,7 @@ def splitSends (p : Program) (c : Config) (sends : List (String × String × Lis
 
 theorem splitSends_go_sub {p : Program} {c : Config} :
     ∀ (l : List (String × String × List Value)) acc s, s ∈ (l.foldl (fun (acc : List (String × String × List Value) × List (String × String × List Value)) s =>
+      if isOwnedMutation p s.1 then acc else
       if isQueue p s.1 && (acc.1.any (·.1 == s.1) || acc.2.any (·.1 == s.1) ||
           c.queued.any (·.1 == s.1) || c.stalled.any (·.1 == s.1) ||
           c.armed.any (·.1 == s.1) || c.nexts.any (·.1 == s.1))
@@ -948,6 +817,8 @@ theorem splitSends_go_sub {p : Program} {c : Config} :
     rw [List.foldl_cons] at h
     rcases splitSends_go_sub l _ s h with h | h
     · split at h
+      · exact .inl h
+      split at h
       · exact .inl h
       · rcases List.mem_append.mp h with h | h
         · exact .inl h
@@ -981,6 +852,20 @@ def hostCommands (cs : List (String × List Value)) : List (String × List Value
   cs.filter fun (name, args) =>
     name != "setMode" && !(name == "scrollIntoView" && args.length == 7)
 
+/-- A send of a child's mutation from `rows`, asked now (LLP 1035.005.004
+D6): the mutation, the instance it goes to and the answer for the
+instance's slot. -/
+def sendOwned (p : Program) (o : Oracle) (rows : List RowId) :
+    String × String × List Value → Result (String × RowId × Value)
+  | (m, src, vs) => do
+    if isQueue p m then throw (.unsupported "a child's `queue` mutation")
+    let .some id := sendInstance p rows m
+      | throw (.refused s!"mutation `{m}` sent outside its instance")
+    let v ← o.ask src vs
+    let ty := ((p.mutations.find? (·.name == m)).map (·.ty)).getD .unknown
+    if !conforms p v ty then throw (.refused s!"mutation `{m}` answered with the wrong shape")
+    pure (m, id, Value.some v)
+
 /-- Run an action as one commit. `rows` are the rows in force where the
 event arrived (none for a timer). -/
 def runAction (p : Program) (o : Oracle) (c : Config) (name : String) (args : List Value)
@@ -993,8 +878,8 @@ def runAction (p : Program) (o : Oracle) (c : Config) (name : String) (args : Li
     if a.params.length != args.length then refuse (.refused "arity") else
     if !((a.params.zip args).all fun (q, v) => argOk p q v) then
       refuse (.refused "an argument of the wrong type") else
-    let env : Env := { prog := p, slots := c.slots, derives := c.settled.derives,
-                       resources := c.settled.resources, rows := rowSlots c.store rows, now := c.now, idle := c.settled.idle }
+    let env : Env := ({ prog := p, slots := c.slots, derives := c.settled.derives,
+                        resources := c.settled.resources, rows := rowSlots c.store rows, now := c.now, idle := c.settled.idle } : Env).withOwned
     let ls : Locals := ((a.params.map (·.1)).zip args).reverse
     match exec fuel env ls a.body {} with
     | .error e => refuse e
@@ -1013,6 +898,10 @@ def runAction (p : Program) (o : Oracle) (c : Config) (name : String) (args : Li
       match answered with
       | .error e => refuse e
       | .ok answered =>
+      let sent := (fx.sends.filter fun s => isOwnedMutation p s.1).mapM (sendOwned p o rows)
+      match sent with
+      | .error e => refuse e
+      | .ok sent =>
         if !((fx.writes ++ fx.rowWrites).all fun (x, v) => conforms p v (slotTy p x)) then
           refuse (unfit ((fx.writes ++ fx.rowWrites).all fun (x, v) => typed p v (slotTy p x))
             "a write of a number that is not finite" "a write of the wrong type") else
@@ -1020,7 +909,10 @@ def runAction (p : Program) (o : Oracle) (c : Config) (name : String) (args : Li
         -- The router slot must hold a valid router after every commit (the
         -- runner's `router_change`): a forged value is refused.
         if !routerValid p slots then refuse (.refused "an invalid router value") else
-        let store := applyRowWrites p c.store rows fx.rowWrites
+        -- An instance's answers land before its action's writes, as the
+        -- root's do.
+        let rowWrites := sent.map (fun (s : String × RowId × Value) => (s.1, s.2.2)) ++ fx.rowWrites
+        let store := refreshOwned p (applyRowWrites p c.store rows rowWrites) rows fx.refreshes
         match update p o slots store c.now c.settled fx.refreshes c.view with
         | .error e => refuse e
         | .ok (st, r) =>
@@ -1033,7 +925,9 @@ def runAction (p : Program) (o : Oracle) (c : Config) (name : String) (args : Li
             | .ok (view, live) =>
               (({ c with slots, settled := st, store := live, view, timers,
                          commands := c.commands ++ hostCommands fx.commands, queued,
-                         armed := armThens p c.armed split.1 c.now }.unstall).armNexts p, .ok)
+                         armed := armThens p c.armed split.1 c.now,
+                         sendRows := landSends p c.sendRows (sent.map fun (s : String × RowId × Value) => (s.1, s.2.1)) c.now live
+                       }.unstall).armNexts p, .ok)
             | .error e =>
               ({ c with slots, settled := st, store, poisoned := true,
                         commands := c.commands ++ hostCommands fx.commands, queued := [], stalled := [],
@@ -1083,7 +977,8 @@ def nextCommit (p : Program) (o : Oracle) (c : Config) (m : String) : Config × 
           match r with
           | .ok (view, live) =>
             (({ c₀ with slots, settled := st, store := live, view, timers,
-                         armed := armThens p c.armed [(m, src, vs)] c.now }.unstall).armNexts p, .ok)
+                         armed := armThens p c.armed [(m, src, vs)] c.now,
+                         sendRows := letGo c.sendRows live }.unstall).armNexts p, .ok)
           | .error e => ({ c₀ with slots, settled := st, poisoned := true, queued := [], stalled := [],
                                     nexts := [] }, .poisoned e)
 
@@ -1183,17 +1078,22 @@ def boot (p : Program) (o : Oracle) : Config × Outcome :=
     match startTimers p slots with
     | .error e => (empty, .refused e)
     | .ok timers =>
-      match settle p o slots 0 with
+      match settle p o slots 0 (lateReady := false) with
       | .error e => (empty, .refused e)
       | .ok st =>
       match lateSlots p st slots with
       | .error e => (empty, .refused e)
       | .ok slots =>
+      -- A late resource reads the late slots just made: settle again
+      -- (LLP 1035.005.004 D2), as the runner does only when there is one.
+      match (if p.resources.any (·.late) then settle p o slots 0 st else Except.ok st) with
+      | .error e => (empty, .refused e)
+      | .ok st =>
       match gateStep p slots st 0 timers with
       | .error e => (empty, .refused e)
       | .ok timers =>
       let env : Env := { prog := p, slots, derives := st.derives, resources := st.resources, now := 0, idle := st.idle }
-      match renderTabs fuel { env, store := [], tabs := { every := o.everyTab } } with
+      match renderTabs fuel { env, store := [], tabs := renderTabContext o [], oracle := o } with
       | .ok (view, live) =>
         ({ slots, settled := st, store := live, view, now := 0, timers }, .ok)
       -- A view that fails to render at boot fails the boot: there is no
@@ -1225,9 +1125,9 @@ def dispatch (p : Program) (o : Oracle) (c : Config) (target : String) (event : 
     | .some (_, a, args) =>
       if payload.isSome && n.control.isSome then
         (c, .refused (.unsupported s!"a payload for a `{n.control.getD ""}` control")) else
-      let env : Env := { prog := p, slots := c.slots, derives := c.settled.derives,
-                         resources := c.settled.resources, rows := rowSlots c.store n.rows,
-                         now := c.now, idle := c.settled.idle }
+      let env : Env := ({ prog := p, slots := c.slots, derives := c.settled.derives,
+                          resources := c.settled.resources, rows := rowSlots c.store n.rows,
+                          now := c.now, idle := c.settled.idle } : Env).withOwned
       match evalList fuel env false n.locals args with
       | .error e => (c, .refused e)
       | .ok vs => runAction p o c a (vs ++ payload.toList) n.rows
@@ -1252,18 +1152,43 @@ def dueThen (p : Program) (armed : List (String × F64)) (t : F64) :
       else best
     | _, _ => best) Option.none
 
-/-- What the clock runs besides a timer: a `queue` mutation's `next`, or a
-mutation's `then`. -/
+/-- The send rows with their indices, in the order a tie between their
+`then`s goes: by the mutation's declaration, then by row (the runner's
+`advance`). -/
+def sendOrder (p : Program) (rs : List SendRow) : List (SendRow × Nat) :=
+  p.mutations.flatMap fun m => rs.zipIdx.filter (·.1.mutation == m.name)
+
+/-- The send row whose armed `then` is due earliest by `t`, ties in
+`sendOrder`: the row, its due time and its action. -/
+def dueOwned (p : Program) (rs : List SendRow) (t : F64) : Option (Nat × F64 × String) :=
+  (sendOrder p rs).foldl (fun best (r, i) =>
+    match r.inst, (p.mutations.find? (·.name == r.mutation)).bind (·.andThen) with
+    | .some _, .some a =>
+      if r.due ≤ t then
+        match best with
+        | .none => Option.some (i, r.due, a)
+        | .some (_, b, _) => if r.due < b then Option.some (i, r.due, a) else best
+      else best
+    | _, _ => best) Option.none
+
+/-- What the clock runs besides a timer: a `queue` mutation's `next`, a
+mutation's `then`, or the `then` of an instance's send row. -/
 inductive Clock where
   | next (m : String) (w : F64)
   | andThen (m : String) (w : F64) (a : String)
+  | owned (i : Nat) (w : F64) (a : String)
 
 /-- The armed `then` the clock runs by `t`, when it is due no later than
-a timer due at `timer`. -/
+a timer due at `timer`: the earliest, a root mutation's on a tie (the
+root's mutations are declared before those lifted from children). -/
 def thenPick (p : Program) (c : Config) (t : F64) (timer : Option F64) : Option Clock :=
-  match dueThen p c.armed t with
-  | .some (m, w, a) => if timer.all (w ≤ ·) then Option.some (.andThen m w a) else Option.none
-  | .none => Option.none
+  match dueThen p c.armed t, dueOwned p c.sendRows t with
+  | .some (m, w, a), .some (i, w', a') =>
+    if w' < w then (if timer.all (w' ≤ ·) then Option.some (.owned i w' a') else Option.none)
+    else if timer.all (w ≤ ·) then Option.some (.andThen m w a) else Option.none
+  | .some (m, w, a), .none => if timer.all (w ≤ ·) then Option.some (.andThen m w a) else Option.none
+  | .none, .some (i, w, a) => if timer.all (w ≤ ·) then Option.some (.owned i w a) else Option.none
+  | .none, .none => Option.none
 
 /-- What the clock runs next by `t`, before a timer due at `timer` (the
 runner's `advance`): a `next` due before any armed `then` and no later than
@@ -1271,9 +1196,51 @@ the timer; else a `then` due no later than the timer; else nothing. -/
 def clockPick (p : Program) (c : Config) (t : F64) (timer : Option F64) : Option Clock :=
   match dueNext p c.nexts t with
   | .some (m, w) =>
-    if timer.all (w ≤ ·) && (dueThen p c.armed t).all (fun d => w < d.2.1)
+    if timer.all (w ≤ ·) && (dueThen p c.armed t).all (fun d => w < d.2.1) &&
+        (dueOwned p c.sendRows t).all (fun d => w < d.2.1)
     then Option.some (.next m w) else thenPick p c t timer
   | .none => thenPick p c t timer
+
+/-- A mutation's `then` arguments: the props a child's lifted action
+captures, none for the root's. -/
+def thenArgsOf (p : Program) (m : String) : List Expr :=
+  ((p.mutations.find? (·.name == m)).map (·.thenArgs)).getD []
+
+/-- A `then` as its own commit: action `a`, its arguments read in the rows
+and locals it runs in (none for the root's). An argument that fails to
+evaluate refuses the commit: the checker types a child's props in its
+use's scope, which the semantics does not carry, as for a request's
+arguments (`settleOwned`). -/
+def thenCommit (p : Program) (o : Oracle) (c : Config) (a : String) (args : List Expr)
+    (rows : List RowId) (ls : Locals) : Config × Outcome :=
+  let env : Env := ({ prog := p, slots := c.slots, derives := c.settled.derives,
+                      resources := c.settled.resources, rows := rowSlots c.store rows,
+                      now := c.now, idle := c.settled.idle } : Env).withOwned
+  match evalList fuel env false ls args with
+  | .ok vs => runAction p o c a vs rows
+  | .error (.unsupported m) => (c, .refused (.unsupported m))
+  | .error (.refused m) => (c, .refused (.refused m))
+  | .error _ => (c, .refused (.refused "a `then`'s arguments did not evaluate"))
+
+/-- Where instance `id`'s elements were rendered: their locals and rows in
+force. -/
+def instanceScope (id : RowId) : List VNode → Option (Locals × List RowId)
+  | [] => .none
+  | n@{ children, .. } :: rest =>
+    if n.rows.head?.any (RowId.same · id) then .some (n.locals, n.rows)
+    else (instanceScope id children).orElse fun _ => instanceScope id rest
+
+/-- The `then` of send row `i` (LLP 1035.005.004 D6): run in its
+instance's rows, its arguments read with the locals the instance's
+elements were rendered with (none when it rendered none; its rows are
+then the prefixes of its identity, the instances around it). -/
+def ownedThen (p : Program) (o : Oracle) (c : Config) (i : Nat) (a : String) : Config × Outcome :=
+  match c.sendRows[i]? with
+  | .some { mutation, inst := .some id, .. } =>
+    let scope := (instanceScope id c.view).getD
+      ([], (List.range id.length).reverse.map fun k => id.take (k + 1))
+    thenCommit p o c a (thenArgsOf p mutation) scope.2 scope.1
+  | _ => (c, .ok)
 
 /-- Move the clock to `t`, firing every timer due by then in order of due
 time (ties by declaration order), each at its own due time. An armed
@@ -1310,7 +1277,12 @@ def advance (p : Program) (o : Oracle) (c : Config) (t : F64) : Config × Outcom
         | (c, out) => (c, out)
       | .some (.andThen m w a) =>
         let c := { c with armed := c.armed.filter (·.1 != m), now := if c.now < w then w else c.now }
-        match runAction p o c a [] [] with
+        match thenCommit p o c a (thenArgsOf p m) [] [] with
+        | (c, .ok) => go n c
+        | (c, out) => (c.armNexts p, out)
+      | .some (.owned i w a) =>
+        let c := { c with sendRows := disarm c.sendRows i, now := if c.now < w then w else c.now }
+        match ownedThen p o c i a with
         | (c, .ok) => go n c
         | (c, out) => (c.armNexts p, out)
       | .none =>

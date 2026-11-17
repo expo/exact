@@ -9,6 +9,8 @@
 //! reuses the host's element and CSS rules (`exact_web::host::template`),
 //! and `exact-web` already depends on `contract`.
 
+#[cfg(test)]
+mod aria_tests;
 mod base_scale;
 #[cfg(test)]
 mod base_scale_tests;
@@ -36,12 +38,16 @@ mod modes;
 mod modes_tests;
 #[cfg(test)]
 mod module_tests;
+#[cfg(test)]
+mod owned_tests;
 mod paint;
 #[cfg(test)]
 mod paint_tests;
 mod presence;
 #[cfg(test)]
 mod presence_tests;
+#[cfg(test)]
+mod reader_tests;
 mod reads;
 mod sized;
 mod style;
@@ -50,6 +56,35 @@ mod symbols;
 mod timelines;
 
 use std::process::ExitCode;
+
+/// An empty directory `<name>-<pid>` under the temp dir, removed when dropped.
+#[cfg(test)]
+struct TestDir(std::path::PathBuf);
+
+#[cfg(test)]
+impl TestDir {
+    fn new(name: &str) -> TestDir {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        TestDir(dir)
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for TestDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
 
 const USAGE: &str =
     "usage: exact-web-js js <app.contract | app.plan> -o <dir> [--dump] [--sites] [--dev-reload] [--app <dir>]\n       exact-web-js normalize-grants <file>\n       exact-web-js design <app.contract> <design text file, or - for stdin>\n       exact-web-js design-serve <app.contract>\n       exact-web-js inspect-table <app.plan> <out.json>";
@@ -222,6 +257,10 @@ fn patched(plan: &exact_plan::Plan, values: &[(String, Vec<String>)]) -> Option<
 }
 
 fn main() -> ExitCode {
+    if let Err(e) = contract::root::find_for_executable() {
+        eprintln!("exact-web-js: {e}");
+        return ExitCode::from(2);
+    }
     // `--sites` (a development build): each element names its plan node, and
     // a Contract compiled here leaves its source map beside the plan.
     let all: Vec<String> = std::env::args().skip(1).collect();
@@ -412,7 +451,7 @@ fn main() -> ExitCode {
         }
     } else {
         // Every refusal, each naming its own file (LLP 1054 L9), as `contract build` prints them.
-        let (compiled, warnings) = contract::compile_path_all_with_warnings(path, sites);
+        let (compiled, warnings) = contract::compile_path_all_with_warnings(path, true);
         warned = warnings;
         match compiled {
             Ok((p, m)) => {
@@ -594,6 +633,13 @@ fn main() -> ExitCode {
             if out_files.editor {
                 let _ = std::fs::write(dir.join("editor.flag"), "");
             }
+            // A plan that sends (a mutation): its TypeScript seam stays in the
+            // entry, since a send is refused while its source is not ready
+            // (LLP 1047.003 D6).
+            let _ = std::fs::remove_file(dir.join("sends.flag"));
+            if !plan.mutations.is_empty() {
+                let _ = std::fs::write(dir.join("sends.flag"), "");
+            }
             // A dialog, an alert or a popover (prompt-glue.js, alert-message.js,
             // menu-rows.js): glue the page adds for them (LLP 1047.002 D1).
             let _ = std::fs::remove_file(dir.join("dialogs.flag"));
@@ -632,6 +678,23 @@ fn main() -> ExitCode {
                 out_files.css.len(),
                 if count == 1 { "" } else { "s" }
             );
+            if let Some(map) = &map {
+                let costs = map.component_code_costs(&plan);
+                let top: Vec<_> = costs
+                    .iter()
+                    .take(5)
+                    .map(|(name, instances, bytes)| {
+                        format!(
+                            "{name}: {bytes} B ({instances} instance{})",
+                            if *instances == 1 { "" } else { "s" }
+                        )
+                    })
+                    .collect();
+                println!(
+                    "  own plan code by component (shared bodies counted per use): {}",
+                    top.join(", ")
+                );
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

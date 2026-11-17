@@ -85,10 +85,9 @@ final class StoreRefreshTests: XCTestCase {
         XCTAssertEqual(reloads, 0, "the installed counter is the baseline, including before first pixel")
         let plan = try fixturePlan("STORE_REFRESH")
         let readers = (0..<2).map { app.makeSession(label: "store-reader-\($0)") }
-        let writer = app.makeSession(label: "store-writer")
-        defer { (readers + [writer]).forEach { $0.destroy() } }
+        defer { readers.forEach { $0.destroy() } }
         let booting = ExactEnv.wall()
-        for session in readers + [writer] {
+        for session in readers {
             XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 300, height: 400)).error)
             session.apply(session.runtime.dataReady())
         }
@@ -111,8 +110,20 @@ final class StoreRefreshTests: XCTestCase {
             let node = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testID })
             session.apply(session.runtime.press(node.id, now: 0))
         }
+        /// The other process's write, as an interactive widget's intent makes
+        /// one (LLP 1126.001 WP11): a headless session booted on the store as
+        /// it stands presses the node. A write of one of the app's own
+        /// sessions reaches its other sessions at once (`relayStore`); a
+        /// peer's reaches them only through the observer.
+        func peerTap(_ testID: String) throws {
+            let peer = try HeadlessSession(plan: plan, size: CGSize(width: 300, height: 400), facts: SessionFacts(displayScale: 1, preferences: [], clock: 0))
+            defer { peer.close() }
+            try peer.refresh()
+            let node = try XCTUnwrap(try peer.snapshot().nodes.values.first { $0.props["testId"] == testID })
+            try peer.press(node.id)
+        }
         try tap(readers[0], "local")
-        try tap(writer, "favourite")
+        try peerTap("favourite")
         XCTAssertTrue(readers.allSatisfy { text($0, "Not a favourite") })
         expected = expectation(description: "the production Darwin observer refreshes both readers before reload")
         try Data("1000001".utf8).write(to: counter, options: .atomic)
@@ -122,7 +133,7 @@ final class StoreRefreshTests: XCTestCase {
         expected = nil
         XCTAssertTrue(readers.allSatisfy { text($0, "Favourite") })
         XCTAssertEqual(reloads, 1)
-        try tap(writer, "favourite")
+        try peerTap("favourite")
         try Data("1000002".utf8).write(to: counter, options: .atomic)
         XCTAssertTrue(readers.allSatisfy { text($0, "Favourite") })
         expected = expectation(description: "didBecomeActive recovers a ping missed by a prewarmed app")
@@ -150,22 +161,22 @@ final class StoreRefreshTests: XCTestCase {
         // Main stays in this turn until both publications exist, so the
         // observer first sees the app's counter over the peer's new value.
         setenv("EXACT_WIDGET_WRITER", "", 1)
-        try tap(writer, "favourite")
+        try peerTap("favourite")
         let peerCounter = UInt64(try String(contentsOf: counter, encoding: .utf8))! + 1
         try Data(String(peerCounter).utf8).write(to: counter, options: .atomic)
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), CFNotificationName(ping as CFString), nil, nil, true)
         setenv("EXACT_WIDGET_WRITER", appID, 1)
-        try tap(writer, "marker")
+        try peerTap("marker")
         let deadline = Date().addingTimeInterval(5)
         while (UInt64((try? String(contentsOf: counter, encoding: .utf8)) ?? "") ?? 0) <= peerCounter && Date() < deadline { usleep(50000) }
         XCTAssertGreaterThan(UInt64(try String(contentsOf: counter, encoding: .utf8))!, peerCounter)
         expected = expectation(description: "an app publication cannot hide a peer value")
         wait(for: [try XCTUnwrap(expected)], timeout: 5)
         expected = nil
-        XCTAssertTrue((readers + [writer]).allSatisfy { text($0, "Not a favourite") && text($0, "Marked") })
+        XCTAssertTrue(readers.allSatisfy { text($0, "Not a favourite") && text($0, "Marked") })
 
         setenv("EXACT_WIDGET_WRITER", "", 1)
-        try tap(writer, "wait")
+        try peerTap("wait")
         try Data(String(peerCounter + 2).utf8).write(to: counter, options: .atomic)
         var timerBatch: Batch?
         let refreshing = ExactEnv.wall()

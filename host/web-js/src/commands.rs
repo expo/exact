@@ -85,15 +85,20 @@ pub(super) fn linked(uses: &Uses) -> Vec<String> {
         .collect()
 }
 
-/// The import of each, as `$c_<name>`.
+/// The import of each, as `$c_<name>`, and a haptic's lifecycle watcher.
 pub(super) fn import(commands: &[String]) -> String {
     format!(
-        "import{{{}}}from\"./commands.js\";",
+        "import{{{}}}from\"./commands.js\";{}",
         commands
             .iter()
             .map(|c| format!("{c} as $c_{c}"))
             .collect::<Vec<_>>()
-            .join(",")
+            .join(","),
+        if commands.iter().any(|c| c == "haptic") {
+            "import{watchPage as $watchPage}from\"./facts.js\";"
+        } else {
+            ""
+        }
     )
 }
 
@@ -101,7 +106,15 @@ pub(super) fn import(commands: &[String]) -> String {
 /// that function as the module imported it.
 pub(super) fn install(slot: &str, commands: &[String]) -> String {
     let table: Vec<String> = commands.iter().map(|c| format!("{c}:$c_{c}")).collect();
-    format!("{slot}({{{}}});", table.join(","))
+    format!(
+        "{}{slot}({{{}}});",
+        if commands.iter().any(|c| c == "haptic") {
+            "$watchPage(true);"
+        } else {
+            ""
+        },
+        table.join(",")
+    )
 }
 
 /// Whether the node is a dialog, an alertdialog, a menu or a popover, literal

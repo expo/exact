@@ -12,11 +12,10 @@ static HEADER: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
         };
         crate::ColorValue::Role(crate::style::roles::role(name).expect("schema header role"))
     };
-    let mut style = StyleProps {
-        background_color: Some(role("-exact-header-ground")),
-        text_color: role("-exact-header-color"),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.background_color = Some(role("-exact-header-ground"));
+        rows.text_color = role("-exact-header-color");
+    });
     style.border_color_bottom = Some(role("-exact-header-edge-color"));
     for id in [
         StyleId::BackgroundColor,
@@ -46,18 +45,17 @@ static HEADER: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
 static TAB_BAR: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
     let role =
         |name| crate::ColorValue::Role(crate::style::roles::role(name).expect("schema role"));
-    let mut style = StyleProps {
-        background_color: Some(role("-exact-background")),
-        border_width_top: metrics::length_in(
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.background_color = Some(role("-exact-background"));
+        rows.border_width_top = metrics::length_in(
             crate::generated::metric::CONTROL_LINE,
             Column::Neutral,
             1.0,
             1.0,
         )
-        .expect("neutral separator width"),
-        border_style_top: crate::BorderStyle::Solid,
-        ..StyleProps::default()
-    };
+        .expect("neutral separator width");
+        rows.border_style_top = crate::BorderStyle::Solid;
+    });
     // Keep role identities: a static default must not capture one app's theme.
     style.border_color_top = Some(role("-exact-separator"));
     for id in [
@@ -81,10 +79,9 @@ static SEGMENTED: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| 
         let px = metrics::length_in(index, Column::Neutral, 1.0, 1.0).expect("neutral row");
         crate::StyleValue::Number(px as f64)
     };
-    let mut style = StyleProps {
-        background_color: Some(role("-exact-tertiary-fill")),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.background_color = Some(role("-exact-tertiary-fill"));
+    });
     style.mask.set(StyleId::BackgroundColor);
     let padding = length(crate::generated::metric::SEGMENTED_PADDING);
     let radius = length(crate::generated::metric::CONTROL_RADIUS);
@@ -130,7 +127,16 @@ impl NodeArena {
         }
         // What moves a box in or out of sticky moves it out of or into the
         // top layer: its block follows at the next layout.
-        if crate::style::top_layer::lifted(self, slot) {
+        let lifted = crate::style::top_layer::lifted(self, slot);
+        // Measure every reader again, and at the next layout derive the raw readers below
+        // again, when a box joins or leaves the top layer: their band and targets may change
+        if lifted != self.top_layer_slots.contains(slot) {
+            self.observations.invalidate();
+            if !self.readers.targets.is_empty() {
+                self.observations.targets.moved.push(slot);
+            }
+        }
+        if lifted {
             self.top_layer_slots.insert(slot);
         } else {
             self.top_layer_slots.remove(slot);
@@ -243,7 +249,7 @@ impl NodeArena {
             crate::style::relative::text_style_size(large, 16.) * self.root_font_size() / 16. * 1.2;
         let margin = ((large_line - line) / 2.).max(0.);
         if !own.has(StyleId::MinHeight) {
-            style.min_size.height = taffy::style::LengthPercentageAuto::length(line);
+            style.min_size.height = taffy::style::Dimension::length(line);
         }
         if !own.has(StyleId::MarginTop) {
             style.margin.top = taffy::style::LengthPercentageAuto::length(margin);
@@ -476,10 +482,9 @@ impl NodeArena {
         if self.bold_text {
             let weight = self.computed_source(slot, StyleId::FontWeight).font_weight;
             let family = self.computed_source(slot, StyleId::FontFamily).font_family;
-            let bold = StyleProps {
-                font_weight: self.emboldened(slot, weight, family),
-                ..StyleProps::default()
-            };
+            let bold = StyleProps::default().with_rows(|rows| {
+                rows.font_weight = self.emboldened(slot, weight, family);
+            });
             out.copy_rows(&bold, StyleMask::of(StyleId::FontWeight));
         }
         out

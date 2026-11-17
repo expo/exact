@@ -15,7 +15,7 @@ final class NavigationMarksTests: XCTestCase {
         waitFor("the navigation's first frame") { marks.recent.contains { $0.hasPrefix("cold_ttr ") } }
         XCTAssertNil(marks.link, "only the first frame needs a display link")
         XCTAssertFalse(marks.recent.contains { $0.hasPrefix("tti ") }, "native work still holds TTI")
-        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
         waitFor("the slice's landing") { !session.fillInFlight }
         marks.workEnded(session)
         waitFor("TTI after the work clears") { marks.recent.contains { $0.hasPrefix("tti ") } }
@@ -33,7 +33,7 @@ final class NavigationMarksTests: XCTestCase {
         let session = try heldNavigation("/landed") { $0.holdFillForTests() }
         defer { session.destroy() }
         let applied = session.appliedBatches
-        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
         waitForTTI("/landed")
         XCTAssertEqual(session.appliedBatches, applied, "the slice shows nothing and skips the pass")
     }
@@ -72,7 +72,7 @@ final class NavigationMarksTests: XCTestCase {
         let session = try heldNavigation("/destroyed") { $0.holdFillForTests() }
         session.destroy()
         // A slice that lands after the session is gone, and the evaluation it asks for
-        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
         waitFor("the slice's landing") { !session.fillInFlight }
         waitForMainQueue("the evaluation it asked for")
         XCTAssertFalse(NavigationMarks.shared.recent.contains { $0.hasPrefix("tti /destroyed ") }, "a destroyed session's runtime has no outstanding work to read")

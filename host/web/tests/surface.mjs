@@ -8,7 +8,7 @@ import { glueDeclarations, checkedGlueCall } from './glue-fixture.mjs';
 // Run the production lazy module and applyBatch with a deterministic GPU and
 // presenter. The runner's returned batch addresses the *final* outer tree.
 export async function fixture(options = {}) {
-  const views = new Map(), records = [], metrics = [], reporting = [], diagnostics = [], observers = [], sizeWrites = [];
+  const views = new Map(), records = [], metrics = [], reporting = [], diagnostics = [], observers = [], resizes = [], sizeWrites = [];
   let next = 0, hud = null, expectedView = null;
   const changed = new Map(), events = [], order = [], restored = new Set();
   let mutations = Promise.resolve(), frame, timerId = -1;
@@ -44,7 +44,7 @@ export async function fixture(options = {}) {
     gpu_assets: () => '{"requests":[],"retired":[]}', gpu_asset: () => true, gpu_lifecycle: () => true, gpu_clock: () => true, gpu_period: () => {},
   };
   const glue = readFileSync(process.env.R8A_GLUE_SOURCE || new URL('../glue.js', import.meta.url), 'utf8');
-  const applySource = glueDeclarations(glue, ['heldLinks', 'applyBatch', 'holdWake', 'holdOrientation']);
+  const applySource = glueDeclarations(glue, ['heldLinks', 'heldOutputs', 'applyBatch', 'holdWake', 'holdOrientation']);
   const operationSource = glueDeclarations(glue, ['apply']);
   const applyOperations = new Function('exact', 'views', 'globalThis', `
     let timelinesMoved = false;
@@ -115,7 +115,7 @@ export async function fixture(options = {}) {
     'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout',
     source + `;exact.finishRestore = (view) => { const e = surfaces.get(view); e.pendingRestore = {bytes:new Uint8Array([7])}; finishRestore(e, gpu); };`
   )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
-    class { observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
+    class { constructor(fn) { resizes.push(fn); } observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
     options.performance ?? globalThis.performance, (fn, ms) => {
       if (ms === 1000) { const id = timerId--; metricTimers.set(id, fn); return id; }
       return (options.setTimeout ?? globalThis.setTimeout)(fn, ms);
@@ -125,6 +125,6 @@ export async function fixture(options = {}) {
     views.set(id, el); exact.gpu.surface(id, name, []); return el;
   }
   function destroy(id) { views.delete(id); exact.gpu.destroy(id); }
-  return { metricTimers, pollMetrics: () => { const pending = [...metricTimers.values()]; metricTimers.clear(); for (const fn of pending) fn(); }, metrics, reporting, window, document, exact, records, diagnostics, sizeWrites, create, destroy, applyBatch, events, order, gpu, nextGpu, Element, publish:(id,value)=>changed.set(id,JSON.stringify(value)), mutation: () => observers.forEach(fn => fn()),
+  return { metricTimers, pollMetrics: () => { const pending = [...metricTimers.values()]; metricTimers.clear(); for (const fn of pending) fn(); }, metrics, reporting, window, document, exact, records, diagnostics, sizeWrites, create, destroy, applyBatch, events, order, gpu, nextGpu, Element, publish:(id,value)=>changed.set(id,JSON.stringify(value)), mutation: () => observers.forEach(fn => fn()), resize: () => resizes.forEach(fn => fn()),
     frame: () => frame?.(0), expectView: id => { expectedView = id; }, stale: () => { hud = 'stale'; }, hud: () => hud };
 }

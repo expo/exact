@@ -44,13 +44,20 @@ pub(crate) fn csp(grants: &str, dist: &Path) -> String {
     // that one; and the script a boot document's page removes it with (LLP
     // 1048.005).
     let mut scripts = format!(
-        "'self' 'wasm-unsafe-eval' 'sha256-{}' 'sha256-{}' 'sha256-{}' 'sha256-{}'",
+        "'self' 'wasm-unsafe-eval' 'sha256-{}' 'sha256-{}' 'sha256-{}' 'sha256-{}' 'sha256-{}'",
+        hash(include_str!("../../web/scheme.js").trim_end().as_bytes()),
         hash(crate::page::capture().as_bytes()),
         hash(crate::page::capture_js().as_bytes()),
         hash(crate::page::scroll_document_js().as_bytes()),
         hash(crate::direct::boot_swap_js().as_bytes())
     );
-    for file in ["module-binary.js", "module-prelude.js", "app.js"] {
+    // And the JavaScript target's entry, which an `--inline` shell holds,
+    // under its content name (`routes.json` `files`, LLP 1153.004 D4).
+    let entry = crate::files::content_files(dist).remove("app.js");
+    for file in ["module-binary.js", "module-prelude.js", "app.js"]
+        .into_iter()
+        .chain(entry.as_deref())
+    {
         if let Ok(bytes) = std::fs::read(dist.join(file)) {
             let _ = write!(scripts, " 'sha256-{}'", hash(&bytes));
         }

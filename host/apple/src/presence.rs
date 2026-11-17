@@ -424,9 +424,10 @@ impl<D: DataSource> Host<D> {
             }) else {
                 continue;
             };
-            if Property::PAINT.contains(&p.property) {
+            if Property::PAINT.contains(&p.property) || p.property == Property::Filter {
                 // @ref LLP 1055.000 D6 — an `svg`'s scene shows its colours;
-                // a box's are its style, re-sent with the presented values.
+                // a box's are its style, re-sent with the presented values,
+                // and so is its filter (LLP 1003.002 D8).
                 if !self.svg.touch(self.runner.kernel(), view) {
                     let inherits = p.property == Property::Color;
                     if let Some((_, changed)) = colored.iter_mut().find(|(id, _)| *id == view) {
@@ -473,10 +474,10 @@ impl<D: DataSource> Host<D> {
     ) {
         // A layout box is presented as its offset from the laid-out
         // origin and its size's difference from the laid-out size;
-        // identity is `0 0 0 0`. The other three are one or two numbers.
+        // identity is `0 0 0 0`. Rotation carries its angle and axis.
         let values = match property {
             Property::Layout => layout_presented(&self.engine, node, value),
-            Property::Translate => [value.x, value.y, value.z, value.w],
+            Property::Translate | Property::Rotate => [value.x, value.y, value.z, value.w],
             _ => [value.x, 0.0, 0.0, 0.0],
         };
         let identity = match property.identity() {
@@ -486,16 +487,19 @@ impl<D: DataSource> Host<D> {
         if identity && (boot || batch.at_identity(view, property.name())) {
             return;
         }
-        // A run has no box of its own to move, and transforms do not apply
-        // to a non-replaced inline box (CSS Transforms 1 §3).
-        if self.inline_runs.contains_key(&view) || self.svg.presented(view) {
+        // A layout-only box has no layer. A run has no box of its own to
+        // move: transforms do not apply to non-replaced inline boxes (CSS Transforms 1 §3).
+        if self.flat.nodes.contains(&view)
+            || self.inline_runs.contains_key(&view)
+            || self.svg.presented(self.runner.kernel(), view)
+        {
             return;
         }
         if self.native_protected_id(view) && !self.native_current() {
             return;
         }
-        if property == Property::Layout {
-            batch.present4(view, "layout", values);
+        if matches!(property, Property::Layout | Property::Rotate) {
+            batch.present4(view, property.name(), values);
         } else if property == Property::Translate && (values[2] != 0.0 || values[3] != 0.0) {
             // Its percentages ride as `w` and `h`; the presenter
             // resolves them against the box (chess diary #4).

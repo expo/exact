@@ -12,6 +12,7 @@ mod inputs;
 /// host's live clock when one owns it (D1; none is a seek clock).
 #[derive(Default)]
 pub(super) struct Clock {
+    pub(super) deadline: std::cell::RefCell<super::gates::Deadline>,
     /// The host presents frames: frame tasks fire only at `frame` (LLP 1073 D4)
     pub(super) presenting: bool,
     pub(super) native_timers: bool,
@@ -561,13 +562,18 @@ impl<D: DataSource> Runner<D> {
             // An answer's `then` goes before a timer due at the same time: the
             // answer landed first. A queue's `next` goes after the `then`s and
             // before the timers (LLP 1092 D3). `exactTransport`'s answer is a
-            // `then` after every mutation's (LLP 1125 D3).
+            // `then` after every mutation's (LLP 1125 D3). `then`s due
+            // together run in the order their mutations are declared, a
+            // child's instances' by their rows (LLP 1035.005.004 D6).
             let then = self
                 .then_due
                 .iter()
                 .enumerate()
                 .filter(|(_, at)| **at <= now_ms)
-                .min_by(|(ia, a), (ib, b)| a.partial_cmp(b).unwrap().then(ia.cmp(ib)))
+                .min_by(|(ia, a), (ib, b)| {
+                    let site = |m: &usize| (self.mutation_site(*m), *m);
+                    a.partial_cmp(b).unwrap().then(site(ia).cmp(&site(ib)))
+                })
                 .map(|(m, at)| (m, *at));
             let answer = Some(self.transport.answer_due.min(self.midi.answer_due))
                 .filter(|at| *at <= now_ms && then.is_none_or(|(_, then)| *at < then));
@@ -662,7 +668,7 @@ impl<D: DataSource> Runner<D> {
                 let result = self.scheduled(at, |r| {
                     let was = r.poisoned;
                     let result = r.run_next(m);
-                    r.record_ran("queue", r.plan.mutations[m].name, was, &result);
+                    r.record_ran("queue", r.mutation_row(m).name, was, &result);
                     result
                 });
                 match result {
@@ -702,15 +708,25 @@ impl<D: DataSource> Runner<D> {
                 }
                 self.now_ms = self.now_ms.max(at);
                 self.then_due[m] = f64::INFINITY;
-                let action = self.plan.mutations[m].then.expect("armed only with a then");
+                let action = self.mutation_row(m).then.expect("armed only with a then");
                 let was_poisoned = self.poisoned;
                 let ticket = self.next_ticket;
+                // A child's runs in its instance's frames, with the
+                // arguments read there; a gone instance's does not run
+                // (LLP 1035.005.004 D6).
                 // A `then` runs under its answer's origin (LLP 1133.002 D12),
                 // invocation (LLP 1133.023 D7) and causes (LLP 1133.035 D16
                 // item 6).
                 let (origin, id, causes) = self.then_origin(m);
-                let result = self.as_invocation_caused(origin, id, causes, |r| {
-                    r.scheduled(at, |r| r.traced_action("then", action, Vec::new(), &[]))
+                let call = match self.then_call(m) {
+                    Ok(Some(call)) => Ok(call),
+                    Ok(None) => continue,
+                    Err(e) => Err(e),
+                };
+                let result = call.and_then(|(args, frames)| {
+                    self.as_invocation_caused(origin, id, causes, |r| {
+                        r.scheduled(at, |r| r.traced_action("then", action, args, &frames))
+                    })
                 });
                 match result {
                     Ok(receipt) => receipts.push(Timed {
@@ -720,7 +736,7 @@ impl<D: DataSource> Runner<D> {
                     Err(e) => {
                         let what = format!(
                             "{} then {}",
-                            self.plan.str(self.plan.mutations[m].name),
+                            self.mutation_name(m),
                             self.plan.str(self.plan.action(action).name)
                         );
                         let failed = Err(e);

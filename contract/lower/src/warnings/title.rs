@@ -7,7 +7,9 @@
 
 use super::{computed, has, literal};
 use crate::LowerError;
-use contract_syntax::{Expr, Node, Span, TemplatePart, VisitSpans};
+use contract_checking::Visit;
+use contract_syntax::{Expr, Span, TemplatePart, VisitSpans};
+use std::{cell::Cell, rc::Rc};
 
 /// What a heading says: its words when they are written, else its
 /// expression with its places dropped, so the same name twice is equal.
@@ -18,10 +20,8 @@ enum Says {
 }
 
 /// A `text` heading's words, from its first positional argument.
-fn says(node: &Node) -> Option<Says> {
-    let Node::Element { positional, .. } = node else {
-        return None;
-    };
+fn says(node: Visit<'_>) -> Option<Says> {
+    let (_, positional, _) = node.element()?;
     let words = |s: &str| Says::Words(s.split_whitespace().collect::<Vec<_>>().join(" "));
     match positional.first()? {
         Expr::Str(s, _) => Some(words(s)),
@@ -56,7 +56,7 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// A heading of `nodes` that says the title and is the first heading
+    /// A heading of the content that says the title and is the first heading
     /// the page shows under the bar. Past one that is always shown before
     /// it, or inside a `section`, it is a section's own name, not the
     /// screen's. An `if`, `for` or `match` may show nothing, so a heading
@@ -64,43 +64,45 @@ impl Walk<'_> {
     /// the bar is skipped: a hidden node, a popover or dialog (over the
     /// page when opened) and another route. Under a `for` or `match`, a
     /// bound expression may name another value: the benefit of the doubt.
-    fn walk(&mut self, nodes: &[Node], bound: bool, section: bool, passed: &mut bool) {
-        for node in nodes {
-            match node {
-                Node::Element {
-                    tag,
-                    attrs,
-                    children,
-                    ..
-                } => {
-                    if literal(attrs, "display") == Some("none")
-                        || computed(attrs, "display")
-                        || has(attrs, "popover")
-                        || has(attrs, "navigationKey")
-                        || tag == "dialog"
-                    {
-                        continue;
-                    }
-                    if heading(tag, attrs) {
-                        let same = says(node).is_some_and(|s| {
-                            &s == self.title && (matches!(s, Says::Words(_)) || !bound)
-                        });
-                        if same && !*passed && !section {
-                            self.out.push(node.span());
+    fn walk(&mut self, content: &[Visit<'_>]) {
+        let passed = Rc::new(Cell::new(false));
+        for root in content {
+            for _ in root.subtree().walk_regions_with(
+                (false, false, passed.clone()),
+                |node, (bound, section, passed)| {
+                    if let Some((tag, _, attrs)) = node.element() {
+                        if literal(attrs, "display") == Some("none")
+                            || computed(attrs, "display")
+                            || has(attrs, "popover")
+                            || has(attrs, "navigationKey")
+                            || tag == "dialog"
+                        {
+                            return [None, None];
                         }
-                        *passed = true;
+                        if heading(tag, attrs) {
+                            let same = says(node).is_some_and(|s| {
+                                &s == self.title && (matches!(s, Says::Words(_)) || !bound)
+                            });
+                            if same && !passed.get() && !section {
+                                self.out.push(node.span());
+                            }
+                            passed.set(true);
+                        }
+                        [
+                            Some((*bound, *section || tag == "section", passed.clone())),
+                            None,
+                        ]
+                    } else if node.component_use().is_some() {
+                        [Some((*bound, *section, passed.clone())), None]
+                    } else {
+                        let bound = *bound || node.bindings().iter().any(|binds| !binds.is_empty());
+                        [
+                            Some((bound, *section, Rc::new(Cell::new(passed.get())))),
+                            Some((bound, *section, Rc::new(Cell::new(passed.get())))),
+                        ]
                     }
-                    self.walk(children, bound, section || tag == "section", passed);
-                }
-                Node::Use { children, .. } => self.walk(children, bound, section, passed),
-                node => {
-                    let lists = node.scoped_child_lists();
-                    let bound = bound || lists.iter().any(|(_, binds)| !binds.is_empty());
-                    for (list, _) in lists {
-                        self.walk(list, bound, section, &mut passed.clone());
-                    }
-                }
-            }
+                },
+            ) {}
         }
     }
 }
@@ -108,12 +110,12 @@ impl Walk<'_> {
 /// `lower-title-twice`: `title` is the heading of a route's `header` that
 /// is its iOS bar (one heading, by `route_header`'s rule), `content` the
 /// route's nodes after that header.
-pub(super) fn title_twice(title: &Node, content: &[&Node], out: &mut Vec<LowerError>) {
+pub(super) fn title_twice(title: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerError>) {
     let Some(says_title) = says(title) else {
         return;
     };
-    let large = match title {
-        Node::Element { attrs, .. } => {
+    let large = match title.element() {
+        Some((_, _, attrs)) => {
             matches!(
                 attrs.iter().rev().find(|a| a.name == "aria-level").map(|a| &a.value),
                 Some(Expr::Number(n, _)) if *n == 1.0
@@ -134,10 +136,7 @@ pub(super) fn title_twice(title: &Node, content: &[&Node], out: &mut Vec<LowerEr
         title: &says_title,
         out: Vec::new(),
     };
-    let mut passed = false;
-    for node in content {
-        walk.walk(std::slice::from_ref(*node), false, false, &mut passed);
-    }
+    walk.walk(content);
     for span in walk.out {
         out.push(LowerError {
             id: "lower-title-twice",

@@ -10,6 +10,39 @@ import { appVerbs } from '../scripts/app-cli.mjs';
 import { bringPlatform, ensureShells } from '../scripts/app-shells.mjs';
 import { createApp } from './new.mjs';
 
+test('a pattern names the wrapper app when launched from another app', () => {
+  const parent = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-pattern-target-')));
+  try {
+    const app = resolve(parent, 'probe'), other = resolve(parent, 'scratch');
+    createApp(app); createApp(other);
+    const read = dir => readFileSync(resolve(dir, 'app.contract'), 'utf8');
+    const untouched = read(other);
+    const run = (...args) => spawnSync(process.execPath, [resolve(app, 'exact.mjs'), 'pattern', ...args], {
+      cwd: other, env: { ...process.env, EXACT: resolve(import.meta.dir, '..'), EXACT_FEEDBACK: '0' }, encoding: 'utf8', timeout: 30_000,
+    });
+    const help = run('--help');
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /wrapper selects its own app/);
+    assert.match(help.stdout, /manually emptied app.contract/);
+    assert.match(help.stdout, /new ..\/pattern-scratch/);
+    const applied = run('tabs');
+    assert.equal(applied.status, 0, applied.stderr);
+    assert.ok(applied.stdout.includes(`App: ${app}\n`), applied.stdout);
+    assert.match(read(app), /tablist/);
+    assert.equal(read(other), untouched);
+    writeFileSync(resolve(app, 'app.contract'), '');
+    const refused = run('one-screen');
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(refused.stderr, /app.contract was edited/);
+    assert.equal(read(app), '');
+    const forced = run('one-screen', '--force');
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.ok(forced.stdout.includes(`App: ${app}\n`), forced.stdout);
+    assert.ok(read(app).length > 0);
+    assert.equal(read(other), untouched);
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
 test('launchers and generated own commands find pinned Bun with an old PATH', () => {
   const old = resolve(process.env.HOME, '.bun/bin/bun');
   if (!existsSync(old)) return;

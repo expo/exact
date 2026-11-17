@@ -15,6 +15,8 @@ pub fn open_auth_session(url: &str, callback: &str, state: &str, ephemeral: bool
         url: url.into(),
         callback: callback.into(),
         state: state.into(),
+        logout: false,
+        prepared: None,
         ephemeral,
         message: None,
     };

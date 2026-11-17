@@ -447,7 +447,7 @@ impl Lowerer<'_> {
                         ok = false;
                         errors.push(LowerError {
                             id: "lower-keyframes",
-                            message: format!("`scale=\"{value}\"` in `keyframes {}`: exact2's `scale` is one factor for both axes, here and on a row; a per-axis scale is not built. A bar can grow by `translate` inside a box that clips (`overflow=\"hidden\"`)", decl.name),
+                            message: format!("`scale=\"{value}\"` in `keyframes {}`: exact2's `scale` is one factor for both axes, here and on a row; a per-axis scale is not built. For a fold, animate `rotate=\"-90deg x\"` or `rotate=\"90deg y\"`; for a bar, animate `translate` inside `overflow=\"hidden\"`", decl.name),
                             span: a.span,
                         });
                         continue;
@@ -499,7 +499,7 @@ impl Lowerer<'_> {
             match Keyframes::parse(&css) {
                 Ok(rule) => {
                     self.b.keyframes(&decl.name, &rule.css());
-                    self.keyframes.insert(decl.name.clone(), rule.properties());
+                    self.keyframes.insert(decl.name.clone(), rule);
                 }
                 Err(e) => errors.push(LowerError {
                     id: "lower-keyframes",
@@ -521,7 +521,7 @@ impl Lowerer<'_> {
         let in_svg = in_svg(self.svg_depth > 0, parent_tag);
         check_svg_attrs_with(tag, in_svg, attrs, &|a| {
             if matches!(a.name.as_str(), "animation" | "-exact-exit-animation") {
-                self.check_animation_names(tag, &a.value)?;
+                self.check_animation_names(tag, in_svg, attrs, &a.value)?;
             }
             if a.name == "animation" && timeline_bound(attrs) {
                 self.check_timeline_rows(&a.value)?;
@@ -533,13 +533,19 @@ impl Lowerer<'_> {
         })
     }
 
-    fn check_animation_names(&self, tag: &str, value: &Expr) -> Result<(), LowerError> {
+    fn check_animation_names(
+        &self,
+        tag: &str,
+        in_svg: bool,
+        attrs: &[Attr],
+        value: &Expr,
+    ) -> Result<(), LowerError> {
         each_literal(value, &mut |text, span| {
             let Ok(list) = Animations::parse(text) else {
                 return Ok(()); // the row's own check names the grammar
             };
             for a in &list.0 {
-                let Some(properties) = self.keyframes.get(&a.name) else {
+                let Some(frames) = self.keyframes.get(&a.name) else {
                     return err(
                         "lower-animation-name",
                         format!(
@@ -549,6 +555,27 @@ impl Lowerer<'_> {
                         span,
                     );
                 };
+                let mut spatial_axis = false;
+                for row in attrs.iter().filter(|a| a.name == "rotate") {
+                    each_literal(&row.value, &mut |text, _| {
+                        spatial_axis |= exact_motion::rotation::parse(text)
+                            .is_some_and(|v| v.y != 0.0 || v.z != 0.0);
+                        Ok(())
+                    })?;
+                }
+                let takes_axis = frames.0.iter().any(|f| {
+                    f.values
+                        .iter()
+                        .any(|(p, v)| *p == Property::Rotate && [v.y, v.z, v.w] == [0.0; 3])
+                });
+                if in_svg && (frames.spatial_rotation() || spatial_axis && takes_axis) {
+                    return err(
+                        "lower-animation-target",
+                        format!("`keyframes {}` rotates outside the screen plane, which an SVG element cannot draw on Apple or painted hosts (Linux, Android, Windows); animate a box around the `svg` instead", a.name),
+                        span,
+                    );
+                }
+                let properties = frames.properties();
                 // An SVG element's transform animates as CSS says (LLP
                 // 1055.000 D5); `r` is a circle's alone.
                 if properties.contains(&Property::R) && !matches!(tag, "circle") && is_element(tag)
@@ -591,7 +618,7 @@ impl Lowerer<'_> {
                     );
                 }
                 let unpainted = self.keyframes.get(&a.name).and_then(|properties| {
-                    properties.iter().copied().find(|p| {
+                    properties.properties().into_iter().find(|p| {
                         !matches!(
                             p,
                             Property::Opacity
@@ -815,6 +842,23 @@ pub(crate) fn check_svg_content(
     Ok(())
 }
 
+fn native_clip(value: &Expr) -> bool {
+    match value {
+        Expr::None(_) => true,
+        Expr::Str(v, _) => {
+            exact_kernel::clip::ClipPath::parse(v).is_none_or(|clip| clip.shape_data().is_none())
+        }
+        Expr::Ternary(_, yes, no, _)
+        | Expr::Match {
+            some: yes,
+            none: no,
+            ..
+        } => native_clip(yes) && native_clip(no),
+        Expr::Let { body, .. } | Expr::Typed(body, _, _) => native_clip(body),
+        _ => true,
+    }
+}
+
 fn check_svg_attrs_with(
     tag: &str,
     in_svg: bool,
@@ -829,7 +873,7 @@ fn check_svg_attrs_with(
             continue;
         }
         // A `clipPath` by reference clips SVG elements (LLP 1055.000 D10);
-        // a box's `clip-path` is a path.
+        // a box takes a path or a basic shape.
         if matches!(tag, "text" | "tspan") && element && a.name == "rotate" {
             return err(
                 "lower-svg-attr",
@@ -855,9 +899,28 @@ fn check_svg_attrs_with(
         {
             return err(
                 "lower-attr-value",
-                "`clip-path: url(#…)` clips SVG elements; a box takes `path(\"…\")`",
+                "`clip-path: url(#…)` clips SVG elements; a box takes a basic shape or `path(\"…\")`",
                 a.span,
             );
+        }
+        if element && a.name == "clip-path" && !native_clip(&a.value) {
+            let native: Vec<_> = crate::icons::shipped()
+                .into_iter()
+                .filter(|t| {
+                    matches!(
+                        t.name.as_str(),
+                        "ios" | "macos" | "tvos" | "watchos" | "linux" | "windows" | "android"
+                    )
+                })
+                .map(|t| t.described())
+                .collect();
+            if !native.is_empty() {
+                return err(
+                    "lower-svg-clip-host",
+                    format!("basic-shape `clip-path` on SVG elements is not implemented on {}. Use `path()` in CSS pixels on a surrounding box, or `url(#id)` on the SVG element with a `clipPath` in `userSpaceOnUse` coordinates without percentages; computed `url()`, `path()` and `none` also work. Basic shapes work on boxes on every host and on SVG elements on the web", native.join(", ")),
+                    a.span,
+                );
+            }
         }
         if let Some(owners) = owners(&a.name) {
             if !owners.contains(&tag) {
@@ -963,65 +1026,17 @@ fn exit_ends(value: &Expr) -> Result<(), LowerError> {
 
 /// Each string literal `value` can be: through a ternary's or a `match`'s
 /// arms, a type ascription, and a `let`'s body, where a read of the bound
-/// name is its value. Like the length checks, the visits are bounded, as
-/// shared derives can expand exponentially; past the bound the rest is the
-/// runtime's.
+/// name is its value. Shared initializers are visited once.
 fn each_literal(
     value: &Expr,
     check: &mut dyn FnMut(&str, Span) -> Result<(), LowerError>,
 ) -> Result<(), LowerError> {
-    /// `bindings`: each `let` name in scope with its value; `None` for a
-    /// `match` arm's binding, which shadows it.
-    fn visit<'a>(
-        value: &'a Expr,
-        bindings: &mut Vec<(&'a str, Option<&'a Expr>)>,
-        budget: &mut usize,
-        check: &mut dyn FnMut(&str, Span) -> Result<(), LowerError>,
-    ) -> Result<(), LowerError> {
-        if *budget == 0 {
-            return Ok(());
-        }
-        *budget -= 1;
-        match value {
-            Expr::Str(text, span) => check(text, *span),
-            Expr::Ternary(_, yes, no, _) => {
-                visit(yes, bindings, budget, check)?;
-                visit(no, bindings, budget, check)
-            }
-            Expr::Match {
-                var, some, none, ..
-            } => {
-                bindings.push((var, None));
-                let some = visit(some, bindings, budget, check);
-                bindings.pop();
-                some?;
-                visit(none, bindings, budget, check)
-            }
-            Expr::Typed(inner, ..) => visit(inner, bindings, budget, check),
-            Expr::Let {
-                name,
-                value: bound,
-                body,
-                ..
-            } => {
-                bindings.push((name, Some(bound)));
-                let body = visit(body, bindings, budget, check);
-                bindings.pop();
-                body
-            }
-            Expr::Ident(name, _) => {
-                let Some(i) = bindings.iter().rposition(|(bound, _)| bound == name) else {
-                    return Ok(());
-                };
-                let Some(bound) = bindings[i].1 else {
-                    return Ok(());
-                };
-                visit(bound, &mut bindings[..i].to_vec(), budget, check)
-            }
-            _ => Ok(()),
+    for leaf in contract_checking::value_leaves(value) {
+        if let Expr::Str(text, span) = leaf {
+            check(text, *span)?;
         }
     }
-    visit(value, &mut Vec::new(), &mut 4096, check)
+    Ok(())
 }
 
 // These props bypass CSS length resolution. NUL represents only unknown text;

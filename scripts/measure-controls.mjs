@@ -104,7 +104,7 @@ export function deltaE00([L1, a1, b1], [L2, a2, b2]) {
 /** A fixture build: the app as written, or with no accent and no design. */
 function build(dir, authored) {
   cpSync(resolve(FIXTURE, 'app.contract'), join(dir, 'app.contract'));
-  if (authored) cpSync(resolve(FIXTURE, 'app.tamber'), join(dir, 'app.tamber'));
+  if (authored) cpSync(resolve(FIXTURE, 'app.forma'), join(dir, 'app.forma'));
   else writeFileSync(join(dir, 'app.contract'), readFileSync(join(dir, 'app.contract'), 'utf8').replace(' accent-color="accent.authored"', ''));
   const plan = join(dir, 'app.plan');
   const c = spawnSync('cargo', ['run', '-q', '--profile', 'host-dev', '-p', 'contract', '--', 'build', join(dir, 'app.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
@@ -116,7 +116,7 @@ function build(dir, authored) {
  * Android is its reader (D9's column: the APK's Canvas reader, not the
  * Linux host under adb), which boots the plan its APK bakes: the fixture
  * goes in as the app of a scratch checkout (`--scratch <worktree>`, whose
- * `apps/tamber-host` it overwrites) and the APK is built there. */
+ * `apps/forma-host` it overwrites) and the APK is built there. */
 /** The app in front on this Mac (its LaunchServices ASN and bundle id), or
  * null: put back in front after the Mac's activated run (`frontAgain`). */
 function frontApp() {
@@ -143,18 +143,18 @@ function capture(plan, png, dir) {
   const ids = [...new Set(ROWS.map(r => r[2]))];
   let root = ROOT, target = ['--plan', plan];
   if (host === 'android') {
-    if (!scratch) throw new Error('android: --scratch <a throwaway git worktree of this checkout>, whose apps/tamber-host is the fixture while it runs');
+    if (!scratch) throw new Error('android: --scratch <a throwaway git worktree of this checkout>, whose apps/forma-host is the fixture while it runs');
     // The fixture names no module: the app's own Swatch (its hatches read its design's params) goes.
-    const manifest = join(scratch, 'apps/tamber-host/app.json');
+    const manifest = join(scratch, 'apps/forma-host/app.json');
     writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, 'utf8')), modules: [] }, null, 2));
-    rmSync(join(scratch, 'apps/tamber-host/modules'), { recursive: true, force: true });
-    for (const f of ['app.contract', 'app.tamber']) rmSync(join(scratch, 'apps/tamber-host', f), { force: true });
-    cpSync(join(dir, 'app.contract'), join(scratch, 'apps/tamber-host/app.contract'));
-    if (existsSync(join(dir, 'app.tamber'))) cpSync(join(dir, 'app.tamber'), join(scratch, 'apps/tamber-host/app.tamber'));
-    const b = spawnSync(process.execPath, [join(scratch, 'scripts/agent-android.mjs'), 'build', 'tamber-host', '--apk'], { cwd: scratch, encoding: 'utf8', maxBuffer: 1 << 28 });
+    rmSync(join(scratch, 'apps/forma-host/modules'), { recursive: true, force: true });
+    for (const f of ['app.contract', 'app.forma']) rmSync(join(scratch, 'apps/forma-host', f), { force: true });
+    cpSync(join(dir, 'app.contract'), join(scratch, 'apps/forma-host/app.contract'));
+    if (existsSync(join(dir, 'app.forma'))) cpSync(join(dir, 'app.forma'), join(scratch, 'apps/forma-host/app.forma'));
+    const b = spawnSync(process.execPath, [join(scratch, 'scripts/agent-android.mjs'), 'build', 'forma-host', '--apk'], { cwd: scratch, encoding: 'utf8', maxBuffer: 1 << 28 });
     if (b.status !== 0) throw new Error(`the reader's APK does not build: ${(b.stderr || b.stdout).slice(-2000)}`);
     root = scratch;
-    target = ['--reader', '--app', 'tamber-host'];
+    target = ['--reader', '--app', 'forma-host'];
   }
   // The Mac draws a control's accent only in a key window, which an agent's window never is (it takes no focus):
   // EXACT_AGENT_ACTIVATE=1, for this run only, activates the app; it puts back the app in front when it quits, and

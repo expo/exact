@@ -8,35 +8,11 @@
 // with the real shape.js.
 import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { standIns } from './stand-ins.mjs';
+import { root, dir, webJs, freshRuntime } from './js-runtime-harness.mjs';
 import { fileURLToPath } from 'node:url';
 
-// The runtime in a `web-js` directory, as built: modules.js imports the web host's `../web/address-space.js`, stood in.
-const root = mkdtempSync(resolve(tmpdir(), 'exact-js-baked-')), dir = resolve(root, 'web-js');
-mkdirSync(dir);
-mkdirSync(resolve(root, 'web'));
-writeFileSync(resolve(root, 'web/address-space.js'), 'export const setSpaceState = () => {};');
-const webJs = name => resolve(fileURLToPath(new URL(`../../web-js/${name}`, import.meta.url)));
-
-const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'uploads.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'modules.js', 'permissions.js', 'samples.js', 'spans.js', 'update.js', 'arrival.js', 'devices.js', 'wakes.js', 'reach.js', 'members.js', 'resource-inspection.js', 'sheets.js'];
-for (const f of REAL) copyFileSync(webJs(f), resolve(dir, f));
-// The stand-ins export what these modules and ts-data.js import; the values the tests read are stated.
-const STATED = {
-  'admission.js': { createSecretFacade: '() => ({ read: false })', hasGrant: '() => true', appGrantSet: '() => null', coversPath: '() => true',
-    setAppGrantSet: 'g => g', overlaying: '{ on: false }', inOverlay: 'api => new Error(api)' },
-  'admission-data.js': { tsGrantSet: '{}' },
-  // The build points ts-data.js's `__FETCH_MODULE__` here, from which it imports `fetch`.
-  'ts-fetch.js': { fetch: '() => {}', answering: '{ call: null, untraced: new Set(), ordinary: (start) => start() }', files: '{ appId: null }', activeCall: '() => answering.call',
-    SOCKET_AND_FETCH: "'a mutation cannot both send on a socket and fetch'" },
-  'names.js': { sourceTypes: '{}' },
-};
-for (const [file, source] of standIns([...REAL, 'ts-data.js'], STATED)) writeFileSync(resolve(dir, file), source);
-// A view transition that holds every tree update (shared.js's commit returns before its callback).
-writeFileSync(resolve(dir, 'shared.js'), 'export const commit = (tail) => { globalThis.heldTail = tail; return true; };');
-writeFileSync(resolve(dir, 'presence-glue.js'), 'globalThis.exact.presence = () => ({ before() {}, after() {}, exit() {} });');
 // ts-data.js over a scripted store (the storage test below), written before
 // anything is imported from here: the loader reads this directory once.
 const stub = (file, text) => writeFileSync(resolve(dir, file), text);
@@ -46,7 +22,7 @@ stub('storage-fs.js', `const files = new Map(); export const createFileSystem = 
   atomicWriteFile: (p, v) => new Promise((ok, no) => setTimeout(() => p.includes('absent/') ? no(Object.assign(new Error('filesystem: No such file'), { code: 'ENOENT' })) : ok(files.set(p, v)), 5)),
   writeFile: (p, v) => new Promise(ok => setTimeout(() => ok(files.set(p, v)), 1)),
   readFile: async p => files.get(p) ?? '',
-  compressImage: async (from, to, o) => ({ path: to, type: o.type, size: o.maxBytes, width: o.maxDimension, height: 1, ...(o.rotate === undefined ? {} : { rotate: o.rotate }) }),
+  compressImage: async (from, to, o) => ({ path: to, type: o.type, size: o.maxBytes, width: o.maxDimension, height: 1, ...(o.rotate === undefined ? {} : { rotate: o.rotate }), ...(o.quality === undefined ? {} : { quality: o.quality, unsaid: !('maxBytes' in o) }) }),
   transformImage: async (from, to, o) => ({ path: to + '.jpg', options: o }) });`);
 stub('app.mjs', `export const appId = 'test';
   export function answer(source, [op, value], store, storage) {
@@ -65,6 +41,11 @@ stub('app.mjs', `export const appId = 'test';
     if (op === 'compress-png') return storage.fs.compressImage('app:/tmp/in.png', 'app:/tmp/out.png', { maxDimension: 8, maxBytes: 100, type: 'image/png' }).then(r => JSON.stringify(r));
     if (op === 'compress-bad-type') return storage.fs.compressImage('app:/tmp/in.png', 'app:/tmp/out.webp', { maxDimension: 8, maxBytes: 100, type: 'image/webp' })
       .then(() => 'ok', e => e.constructor.name + ' ' + e.code + ' ' + e.message);
+    if (op === 'compress-quality') return storage.fs.compressImage('app:/tmp/in.jpg', 'app:/tmp/out.jpg', { maxDimension: 8, quality: 0.5 }).then(r => JSON.stringify(r));
+    if (op === 'compress-bad-quality') return storage.fs.compressImage('app:/tmp/in.jpg', 'app:/tmp/out.jpg', { maxDimension: 8, maxBytes: 100, quality: 2 })
+      .then(() => 'ok', e => e.constructor.name + ' ' + e.message);
+    if (op === 'compress-neither') return storage.fs.compressImage('app:/tmp/in.jpg', 'app:/tmp/out.jpg', { maxDimension: 8 })
+      .then(() => 'ok', e => e.constructor.name + ' ' + e.message);
     if (op === 'compress-edit') return storage.fs.compressImage('app:/tmp/in.jpg', 'app:/tmp/out.jpg', { maxDimension: 8, maxBytes: 100, rotate: 90 }).then(r => JSON.stringify(r));
     if (op === 'transform') {
       const options = { rotate: 90, crop: { x: 0, y: 0, width: 4, height: 4 }, metadata: 'no-location', unknown: true };
@@ -617,7 +598,9 @@ test('a key handler stops and prevents its event while a view transition holds t
   globalThis.requestAnimationFrame = f => setTimeout(f, 0);
   globalThis.document = { getElementById: () => ({}) };
   try {
-    const { on, onKey, act, C, pr, pieces } = await import(resolve(dir, 'rt.js'));
+    const { on, onKey, act, C, pr, pieces, useCommands } = await import(resolve(dir, 'rt.js'));
+    const { preventDefault, stopPropagation } = await import(resolve(dir, 'commands.js'));
+    useCommands({ preventDefault, stopPropagation });
     pr({}); await pieces();
     const listeners = [];
     const el = { addEventListener: (type, f) => listeners.push([type, f]) };
@@ -642,7 +625,9 @@ test('a key handler hears isComposing last in its KeyboardEvent record', async (
 });
 
 test('capture stop ends Exact key handlers but leaves Enter submission and the browser default available', async () => {
-  const { on, onKey, onSubmit, Hosts } = await import(resolve(dir, 'rt.js'));
+  const { on, onKey, onSubmit, Hosts, useCommands } = await import(resolve(dir, 'rt.js'));
+  const { preventDefault, stopPropagation } = await import(resolve(dir, 'commands.js'));
+  useCommands({ preventDefault, stopPropagation });
   const saved = globalThis.addEventListener, windowListeners = [];
   globalThis.addEventListener = (type, f) => windowListeners.push([type, f]);
   try {
@@ -732,16 +717,21 @@ test('toFixed and formatDecimal are the runner\'s', async () => {
 });
 
 // LLP 1116 D8: format.js's `decimal`, `currency` and `percent` are Intl.NumberFormat("en-US")'s, swept against Bun's own
-// Intl: halves at each style's cut, magnitudes from 1e-12 to 1e28, random doubles, every code the roster lists
-// (runner/tests/it/format.rs pins the runner's to rows from the same Intl). Non-finite is "", as every format's is.
+// Intl: halves at each style's cut, magnitudes from 1e-12 to 1e28, random doubles, every code the roster lists and
+// `decimal` at the ends and a spread of its digit-count range (runner/tests/it/format.rs pins the runner's to rows
+// from the same Intl). Non-finite is "", as every format's is.
 test('decimal, currency and percent numbers are Intl\'s', async () => {
   const { x_formatNumber } = await import(webJs('format.js'));
   const roster = JSON.parse(readFileSync(new URL('../../../plan/tables/format.json', import.meta.url), 'utf8')).stdlib
     .find(f => f.name === 'formatNumber');
-  const codes = roster.params[2].split(' | ').map(c => JSON.parse(c));
+  const alternatives = roster.params[2].split(' | ');
+  const codes = alternatives.filter(c => c.startsWith('"')).map(c => JSON.parse(c));
+  const [lo, hi] = alternatives.find(c => /^\d+\.\.=\d+$/.test(c)).split('..=').map(Number);
+  const digits = [...new Set([lo, 1, 2, 3, 7, 20, hi])];
   const nf = options => new Intl.NumberFormat('en-US', options);
   const styles = [['decimal', '', nf({})], ['percent', '', nf({ style: 'percent' })],
-    ...codes.map(c => ['currency', c, nf({ style: 'currency', currency: c })])];
+    ...codes.map(c => ['currency', c, nf({ style: 'currency', currency: c })]),
+    ...digits.map(d => ['decimal', d, nf({ minimumFractionDigits: d, maximumFractionDigits: d })])];
   const wrong = [];
   const check = x => { for (const [style, code, f] of styles) if (x_formatNumber(x, style, code) !== f.format(x)) wrong.push([x, style, code]); };
   [0, -0, 1, -1, 1.005, 2.675, 1.0005, 999.9995, 0.9995, -0.0001, 1e21, 5e-324, Number.MAX_VALUE, -Number.MAX_VALUE,
@@ -772,6 +762,11 @@ test('formatDay\'s dates, times and weekdays are Intl\'s', async () => {
     const at = options => dtf(off, options).format(new Date(then)), time = at({ timeStyle: 'short' });
     if (mode === 'list') return apart === 0 ? time : apart === -1 ? 'Yesterday'
       : apart >= -6 && apart <= -2 ? at({ weekday: 'long' }) : at({ dateStyle: 'short' });
+    // LLP 1168.000 D5: a weekday within six days either side, else MMMEd, yMMMEd in another year.
+    const year = ms => new Date(Math.trunc(ms) + off * 6e4).getUTCFullYear();
+    if (mode === 'section') return ({ 0: 'Today', '-1': 'Yesterday', 1: 'Tomorrow' })[apart]
+      ?? (Math.abs(apart) <= 6 ? at({ weekday: 'long' })
+        : at({ weekday: 'short', month: 'short', day: 'numeric', ...(year(then) === year(now) ? {} : { year: 'numeric' }) }));
     const label = ({ 0: 'Today', '-1': 'Yesterday', 1: 'Tomorrow' })[apart] ?? at({ dateStyle: 'medium' });
     return mode === 'day-time' ? `${label} at ${time}` : label;
   };
@@ -781,7 +776,7 @@ test('formatDay\'s dates, times and weekdays are Intl\'s', async () => {
   for (let i = 0; i < 3000; i++) {
     const now = 1e12 + next() * 1.5e12, then = now + Math.round((next() - 0.75) * 12 * 864e5);
     const off = [0, 60, -60, 330, 345, -420, -480, 840, -720, 1080, -1080][Math.floor(next() * 11)];
-    for (const mode of ['day', 'day-time', 'list'])
+    for (const mode of ['day', 'day-time', 'list', 'section'])
       if (x_formatDay(then, now, off, mode) !== expected(then, now, off, mode)) wrong.push([then, now, off, mode]);
   }
   expect(wrong.slice(0, 10)).toEqual([]);
@@ -972,6 +967,58 @@ test.each(['device.geolocation-approximate', 'device.geolocation'])('a precision
   } finally { data.grants = previous.grants; clock.agent = previous.agent; }
 });
 
+// The motion package on the JS target as its declaration says and the runner answers (`modules.rs`): while the
+// permission is `prompt` a sensor read answers `whilePrompt`, an error naming the request that asks, and asking while
+// it is denied answers the status (`deniedAnswers`; both LLP 1133.013 D11).
+test('a module read while its permission is prompt answers whilePrompt; asking while denied answers the status', async () => {
+  const { clock, data } = await freshRuntime('while-prompt');
+  const { modules } = await import(resolve(root, 'web-js-while-prompt', 'modules.js'));
+  const declaration = JSON.parse(readFileSync(new URL('../../../packages/motion/exact.json', import.meta.url), 'utf8'));
+  const rows = Object.fromEntries(declaration.names.filter(n => ['accelerometer', 'motionStatus', 'requestMotionPermission'].includes(n.source ?? n.send)).map(n => {
+    const name = n.source ?? n.send;
+    return [name, [`motion.${name}`, !!n.send, { ...n.substitute, permission: declaration.permission }, 'u', n.request ? 'always' : 'never', null, !!n.live]];
+  }));
+  // modules.js installs the agent's door on the shared global: put back what was there
+  const exact = globalThis.exact, kept = exact && { extensions: exact.extensions, foreground: exact.foreground };
+  try {
+    clock.agent = true;
+    modules(rows);
+    const api = globalThis.exact.extensions, read = () => api.call({ extension: 'motion', source: 'accelerometer', args: {} });
+    expect(api.prefer({ permission: { motion: 'prompt' } }).error).toBeUndefined();
+    expect(await read()).toEqual(declaration.permission.whilePrompt);
+    // A Contract resource's failure carries the request it names, as the runner's
+    const contract = await Promise.resolve().then(() => data.reserved.accelerometer(null, [{}], 'contract')).then(() => 'answered', e => e.message);
+    expect(contract).toBe('motion.accelerometer: NotAllowedError: requestMotionPermission');
+    expect(api.prefer({ permission: { motion: 'denied' } }).error).toBeUndefined();
+    const asked = await api.call({ extension: 'motion', send: 'requestMotionPermission', args: {} });
+    expect([await read(), asked.state]).toEqual([{ error: 'NotAllowedError' }, 'denied']);
+    expect(asked).toEqual(await api.call({ extension: 'motion', source: 'motionStatus', args: {} }));
+  } finally { if (kept) Object.assign(globalThis.exact, kept); else delete globalThis.exact; }
+});
+
+// `whilePrompt` is the selected permission's, as the runner reads it: a row whose permission requires one another
+// interface declares selects none and answers as it would, and under the agent a read of the app's own item (`owned`)
+// goes to the implementation before any permission (`owned_call`).
+test('whilePrompt answers only for the permission a call selects, and not for a read of the app\'s own item', async () => {
+  const { clock, data } = await freshRuntime('while-prompt-selected');
+  const { modules } = await import(resolve(root, 'web-js-while-prompt-selected', 'modules.js'));
+  const asks = { error: 'NotAllowedError', message: 'ask' }, permission = (name, more) => ({ name, field: 'state', denied: 'NotAllowedError', ...more });
+  const rows = {
+    read: ['a.read', false, { default: 7, permission: permission('p', { requires: { web: ['q'] }, whilePrompt: asks }) }, 'u', 'never', null, false],
+    other: ['b.other', false, { default: 0, permission: permission('q') }, 'u', 'never', null, false],
+    own: ['c.own', false, { implementation: true, owned: { web: 'device.photos-add' }, permission: permission('r', { whilePrompt: asks }) }, 'u', 'never', null, false],
+  };
+  const exact = globalThis.exact, kept = exact && { extensions: exact.extensions, foreground: exact.foreground }, grants = data.grants;
+  try {
+    clock.agent = true;
+    data.grants = 'device.photos-add';
+    modules(rows, { c: () => Promise.resolve({ implementation: () => ({ own: async () => 'the implementation\'s' }) }) });
+    const api = globalThis.exact.extensions;
+    expect(api.prefer({ permission: { p: 'granted', q: 'prompt', r: 'prompt' } }).error).toBeUndefined();
+    expect([await api.call({ extension: 'a', source: 'read', args: {} }), await api.call({ extension: 'c', source: 'own', args: {} })]).toEqual([7, 'the implementation\'s']);
+  } finally { data.grants = grants; if (kept) Object.assign(globalThis.exact, kept); else delete globalThis.exact; }
+});
+
 // LLP 1133.004 D6, LLP 1133.002 D12: a module event's origin on the JS target.
 test('a command keeps the origin of the commit that queued it, whenever its tail runs', async () => {
   const { commit, C, Hosts, Origin } = await import(resolve(dir, 'rt.js'));
@@ -1098,6 +1145,13 @@ test('compressImage copies its options and refuses bad ones before the queue', a
   const badType = ask('compress-bad-type');
   expect(data.background().queued + data.background().inFlight).toBe(0);
   expect(await badType.promise).toBe('TypeError undefined storage.fs.compressImage(): type must be "image/jpeg" or "image/png"');
+  // `quality` (A1.12): passed on, and with it `maxBytes` may be unsaid; a bad one, or neither, a TypeError before the queue.
+  expect(JSON.parse(await ask('compress-quality').promise)).toEqual({ path: 'app:/tmp/out.jpg', type: 'image/jpeg', width: 8, height: 1, quality: 0.5, unsaid: true });
+  for (const [op, says] of [['compress-bad-quality', 'quality must be a number from 0 to 1'], ['compress-neither', 'needs maxBytes, quality or both']]) {
+    const refused = ask(op);
+    expect(data.background().queued + data.background().inFlight).toBe(0);
+    expect(await refused.promise).toBe(`TypeError storage.fs.compressImage(): ${says}`);
+  }
   // LLP 1133.019 D14, D15: the edit and a transform's options, copied as checked.
   expect(JSON.parse(await ask('compress-edit').promise)).toMatchObject({ rotate: 90, width: 8 });
   expect(JSON.parse(await ask('transform').promise)).toEqual({ path: 'app:/tmp/edit.jpg',
@@ -1263,11 +1317,6 @@ test('an argument or a write past MAX_STRING is refused by name, and a trapping 
 
 // A runtime with state of its own: the runtime's files copied to a directory of their own, so each module is loaded
 // afresh (a query on rt.js alone would load only rt.js again, not the files it is split into).
-const freshRuntime = tag => {
-  const own = resolve(root, `web-js-${tag}`);
-  cpSync(dir, own, { recursive: true });
-  return import(resolve(own, 'rt.js'));
-};
 
 test('a refused derive names itself and only the failed resources it reads', async () => {
   const { memo, res, data } = await freshRuntime('derive-refusal');
@@ -1357,7 +1406,9 @@ test('a submit runs before the field\'s next key or edit applies; the edit lands
 
 
 test('clipboard handlers preserve the default unless prevented and restore the enclosing event', async () => {
-  const { on, onClipboard, Hosts } = await import(resolve(dir, 'rt.js'));
+  const { on, onClipboard, Hosts, useCommands } = await import(resolve(dir, 'rt.js'));
+  const { preventDefault, stopPropagation } = await import(resolve(dir, 'commands.js'));
+  useCommands({ preventDefault, stopPropagation });
   const event = () => ({ defaultPrevented: false, stopped: false,
     clipboardData: { getData: () => 'clipboard text' },
     preventDefault() { this.defaultPrevented = true; },
@@ -1388,11 +1439,36 @@ test('clipboard handlers preserve the default unless prevented and restore the e
   expect(outer.defaultPrevented).toBe(true);
 });
 
+test('linked unload commands cancel the current event and restore it after the handler', async () => {
+  const page = globalThis.document, listen = globalThis.addEventListener;
+  globalThis.document = { getElementById: () => ({}) };
+  let listener;
+  globalThis.addEventListener = (_, f) => { listener = f; };
+  try {
+    const { onUnload, Hosts, useCommands } = await freshRuntime('unload-commands');
+    const { preventDefault, stopPropagation } = await import(resolve(root, 'web-js-unload-commands', 'commands.js'));
+    useCommands({ preventDefault, stopPropagation });
+    onUnload({ isConnected: true }, 'unload', () => { Hosts.preventDefault(); Hosts.stopPropagation(); });
+    const event = { type: 'beforeunload', defaultPrevented: false, returnValue: 'unchanged',
+      preventDefault() { this.defaultPrevented = true; } };
+    listener(event);
+    expect([event.defaultPrevented, event.returnValue, event.$stopped]).toEqual([true, '', true]);
+    event.defaultPrevented = false; event.returnValue = 'restored'; delete event.$stopped;
+    Hosts.preventDefault(); Hosts.stopPropagation();
+    expect([event.defaultPrevented, event.returnValue, event.$stopped]).toEqual([false, 'restored', undefined]);
+  } finally {
+    if (page === undefined) delete globalThis.document; else globalThis.document = page;
+    if (listen === undefined) delete globalThis.addEventListener; else globalThis.addEventListener = listen;
+  }
+});
+
 test('focus handlers stop bubbling while a view transition holds their commit', async () => {
   globalThis.requestAnimationFrame = f => setTimeout(f, 0);
   globalThis.document = { getElementById: () => ({}) };
   try {
-    const { on, onFocusWithin, act, C, pr, pieces } = await freshRuntime('focus-events');
+    const { on, onFocusWithin, act, C, pr, pieces, useCommands } = await freshRuntime('focus-events');
+    const { preventDefault, stopPropagation } = await import(resolve(root, 'web-js-focus-events', 'commands.js'));
+    useCommands({ preventDefault, stopPropagation });
     pr({}); await pieces();
     for (const kind of ['focusin', 'focusout']) {
       const listeners = [], heard = [];

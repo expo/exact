@@ -36,7 +36,9 @@ pub(crate) fn parse_report(bytes: &[u8]) -> Option<Vec<(ColorValue, bool, Color)
     }
     Some(
         bytes
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .filter_map(|r| {
                 let id = u16::from_le_bytes([r[2], r[3]]);
                 let c = match r[0] {

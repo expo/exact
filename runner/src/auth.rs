@@ -37,6 +37,12 @@ pub struct Session {
     pub callback: String,
     /// The `state` the callback must carry, exactly once.
     pub state: String,
+    /// This is an RP-initiated logout, whose return carries no code or error
+    /// and may omit `state`.
+    pub logout: bool,
+    /// The web's blank window reserved synchronously at the press. Other
+    /// hosts ignore it.
+    pub prepared: Option<String>,
     /// Ask for no shared cookies (`prefersEphemeralWebBrowserSession`).
     pub ephemeral: bool,
     /// The sentence a loopback callback's page shows under its heading, in
@@ -48,7 +54,7 @@ pub struct Session {
 const MESSAGE_CHARS: usize = 500;
 
 impl Session {
-    /// The request body, `{"url","callback","state","ephemeral","message"}`.
+    /// The request body, `{"url","callback","state","logout","prepared","ephemeral","message"}`.
     pub fn from_json(json: &str) -> Result<Session, String> {
         let text = |k: &str| field_str(json, k).filter(|v| !v.is_empty());
         let (Some(url), Some(callback), Some(state)) =
@@ -92,6 +98,8 @@ impl Session {
             url,
             callback,
             state,
+            logout: field_bool(json, "logout"),
+            prepared: field_str(json, "prepared").filter(|v| !v.is_empty()),
             ephemeral: field_bool(json, "ephemeral"),
             message,
         })
@@ -105,6 +113,11 @@ impl Session {
         quote(&self.callback, &mut s);
         s.push_str(",\"state\":");
         quote(&self.state, &mut s);
+        s.push_str(&format!(",\"logout\":{}", self.logout));
+        if let Some(prepared) = &self.prepared {
+            s.push_str(",\"prepared\":");
+            quote(prepared, &mut s);
+        }
         s.push_str(&format!(",\"ephemeral\":{}", self.ephemeral));
         if let Some(message) = &self.message {
             s.push_str(",\"message\":");
@@ -171,7 +184,10 @@ impl Session {
         }
         s.push_str(",\"state\":");
         quote(&self.state, &mut s);
-        s.push_str(&format!(",\"ephemeral\":{}}}", self.ephemeral));
+        s.push_str(&format!(
+            ",\"logout\":{},\"ephemeral\":{}}}",
+            self.logout, self.ephemeral
+        ));
         s
     }
 }
@@ -506,8 +522,9 @@ fn loopback_admits(grant: &str, callback: &str) -> bool {
 
 /// D3's match, on every host: `got`'s scheme, host and path equal
 /// `session.callback`'s exactly (no userinfo; the same port), and its query
-/// carries `state` exactly once, equal to the request's. `Err` says which
-/// check failed, never the URL.
+/// carries `state` exactly once, equal to the request's. A logout instead
+/// carries neither `code` nor `error`, and its state may be absent. `Err`
+/// says which check failed, never the URL.
 pub fn accept(session: &Session, got: &str) -> Result<(), String> {
     let want = Url::parse(&session.callback).ok_or("the request's callback is unreadable")?;
     let url = Url::parse(got).ok_or("the callback is not an absolute URL")?;
@@ -524,12 +541,21 @@ pub fn accept(session: &Session, got: &str) -> Result<(), String> {
     if url.path != want.path {
         return Err("the callback's path is not the request's".into());
     }
-    let states: Vec<String> = query_pairs(url.query.unwrap_or(""))
-        .filter(|(n, _)| n == "state")
-        .map(|(_, v)| v)
-        .collect();
+    let mut states = Vec::new();
+    let mut has_response = false;
+    for (name, value) in query_pairs(url.query.unwrap_or("")) {
+        if name == "state" {
+            states.push(value);
+        } else if matches!(name.as_str(), "code" | "error") {
+            has_response = true;
+        }
+    }
+    if session.logout && has_response {
+        return Err("the logout return carries a code or error".into());
+    }
     match states.as_slice() {
         [one] if same(one, &session.state) => Ok(()),
+        [] if session.logout => Ok(()),
         [] => Err("the callback carries no state".into()),
         [_] => Err("the callback's state is not the request's".into()),
         _ => Err("the callback carries state more than once".into()),
@@ -571,7 +597,7 @@ impl Live {
     /// D3's match, and for a loopback receiver its further check.
     fn accept(&self, got: &str) -> Result<(), String> {
         accept(&self.session, got)?;
-        if self.listened {
+        if self.listened && !self.session.logout {
             one_code_or_error(got)?;
         }
         Ok(())
@@ -666,8 +692,9 @@ pub fn complete<D: DataSource>(
 }
 
 /// Consume a declared Android callback endpoint before navigation, including
-/// stale and cold callbacks. Only a matching state selects a live session;
-/// its remaining checks can settle 502 without ending another sign-in.
+/// stale and cold callbacks. State selects its exact session. With no state,
+/// a response carrying neither `code` nor `error` selects the oldest logout
+/// at this endpoint; it never selects a sign-in.
 pub fn receive_callback<D: DataSource>(runner: &mut Runner<D>, url: &str) -> bool {
     // A malformed response query still belongs to this endpoint, never to navigation.
     let endpoint = url.split(['?', '#']).next().unwrap_or(url);
@@ -703,13 +730,20 @@ pub fn receive_callback<D: DataSource>(runner: &mut Runner<D>, url: &str) -> boo
     let states: Vec<_> = query_pairs(query)
         .filter_map(|(name, value)| (name == "state").then_some(value))
         .collect();
+    let has_response =
+        query_pairs(query).any(|(name, _)| matches!(name.as_str(), "code" | "error"));
     let tickets: Vec<_> = runner
         .auth_mut()
         .live
         .iter()
         .filter(|live| {
             endpoint_matches(&live.session.callback)
-                && states.iter().any(|state| same(state, &live.session.state))
+                && if states.is_empty() {
+                    live.session.logout && !has_response
+                } else {
+                    (!live.session.logout || !has_response)
+                        && states.iter().any(|state| same(state, &live.session.state))
+                }
         })
         .map(|live| live.ticket)
         .collect();
@@ -744,6 +778,20 @@ pub fn arm<D: DataSource>(
     agent: bool,
     browser: Browser,
     web_origin: Option<&str>,
+) -> Arm {
+    let fixture = fixture_origin();
+    arm_with_fixture(runner, out, agent, browser, web_origin, fixture.as_deref())
+}
+
+/// [`arm`], with the agent drive's fixture supplied by a host that cannot
+/// read process environment, such as the browser wasm host.
+pub fn arm_with_fixture<D: DataSource>(
+    runner: &mut Runner<D>,
+    out: &RequestOut,
+    agent: bool,
+    browser: Browser,
+    web_origin: Option<&str>,
+    fixture: Option<&str>,
 ) -> Arm {
     let ticket = out.ticket;
     if out.request.reach.origin == crate::CallOrigin::Action {
@@ -819,7 +867,13 @@ pub fn arm<D: DataSource>(
     // Under the agent the hold comes first, on every host: a fixture sign-in
     // needs no browser, so a headless Linux drive can complete one (LLP 1146 D4).
     if agent {
-        runner.hold_request(ticket, "auth", &out.target, &session.summary());
+        let fixture = declared_fixture(fixture.map(str::to_owned), agent);
+        runner.hold_request(
+            ticket,
+            "auth",
+            &out.target,
+            &session.summary_with(fixture.as_deref()),
+        );
         return Arm::Held;
     }
     if browser == Browser::Android
@@ -911,6 +965,8 @@ mod tests {
             url: "https://bsky.social/oauth/authorize?client_id=https%3A%2F%2Fapp.example%2Fc.json&request_uri=urn%3Ax&id_token_hint=secret".into(),
             callback: callback.into(),
             state: "s1".into(),
+            logout: false,
+            prepared: None,
             ephemeral: false,
             message: None,
         }
@@ -968,6 +1024,8 @@ mod tests {
             url: url.into(),
             callback: "app.test:/cb".into(),
             state: "s".into(),
+            logout: false,
+            prepared: None,
             ephemeral: false,
             message: None,
         };
@@ -1066,6 +1124,34 @@ mod tests {
         .is_err());
         assert!(accept(&https, "http://app.example/.exact/auth/callback?state=s1").is_err());
         assert!(accept(&https, "https://app.example/.exact/auth/callback/?state=s1").is_err());
+    }
+
+    #[test]
+    fn a_logout_return_has_no_code_or_error_and_may_omit_state() {
+        let mut s = session("social.exact.bluesky:/oauth");
+        s.logout = true;
+        assert!(Session::from_json(&s.to_json()).unwrap().logout);
+        for good in [
+            "social.exact.bluesky:/oauth",
+            "social.exact.bluesky:/oauth?state=s1",
+        ] {
+            assert!(accept(&s, good).is_ok(), "{good}");
+        }
+        for bad in [
+            "social.exact.bluesky:/oauth?code=c",
+            "social.exact.bluesky:/oauth?error=e",
+            "social.exact.bluesky:/oauth?state=wrong",
+            "social.exact.bluesky:/oauth?state=s1&state=s1",
+        ] {
+            assert!(accept(&s, bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_session_carries_its_prepared_browser_context() {
+        let mut given = session("https://app.example/.exact/auth/callback");
+        given.prepared = Some("reserved-window".into());
+        assert_eq!(Session::from_json(&given.to_json()).unwrap(), given);
     }
 
     /// A loopback receiver's callback is an authorization response: one

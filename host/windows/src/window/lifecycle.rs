@@ -3,7 +3,11 @@
 //! hidden by the person's close (the close button, Alt+F4, the taskbar's
 //! Close window), with nothing asked, since nothing unloads; the page is
 //! put away, as the back/forward cache keeps one, until the window shows
-//! again. The app's own `close()` still closes it. A login item registered
+//! again. A status item in the notification area does not make the close
+//! hide the window, as it does on the Mac: Windows' guidelines advise
+//! against Close minimizing to the notification area
+//! ([Notifications and the notification area](https://learn.microsoft.com/windows/win32/uxguide/winenv-notification)).
+//! The app's own `close()` still closes it. A login item registered
 //! `hidden` shows no window at its launch (D6): a frame painted to pixels
 //! that nothing presents is the launch's first pixel, and nothing is drawn
 //! into the window until it shows. A later launch of the app
@@ -44,11 +48,16 @@ pub(super) fn window_commands<D: DataSource>(
 }
 
 impl<D: DataSource + Default + 'static> App<D> {
+    /// Whether the person's close hides the window: only under
+    /// `keepRunning`.
+    pub(super) fn hides_on_close(&self) -> bool {
+        self.keep_running
+    }
+
     /// The app's `hideWindow()`: the window put away as the person's close
-    /// puts it away under `keepRunning`; refused where the app would end
-    /// without its window, as on the Mac.
+    /// puts it away; refused where that close ends the app, as on the Mac.
     pub(super) fn hide_by_app(&mut self) {
-        if self.keep_running {
+        if self.hides_on_close() {
             return self.hide();
         }
         if let Some(p) = &mut self.presenter {
@@ -67,7 +76,7 @@ impl<D: DataSource + Default + 'static> App<D> {
     /// that prevents it keeps the window, and the app's own question ends
     /// in its `close()`, which is not asked again.
     pub(super) fn close_requested(&mut self, events: &ActiveEventLoop) {
-        if !self.closing && self.keep_running {
+        if !self.closing && self.hides_on_close() {
             return self.hide();
         }
         if let Some(p) = self.presenter.as_mut().filter(|_| !self.closing) {

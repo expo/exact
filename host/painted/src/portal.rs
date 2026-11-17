@@ -61,12 +61,121 @@ pub(crate) fn title(kind: Kind) -> &'static str {
     }
 }
 
-/// The portal method `picker` calls, and its `options` (`a{sv}`) under
-/// `token`. No `filters`: the manifest's `file_handlers` are not in a
-/// Linux binary, so the chooser offers every file, as macOS's does for an
-/// app that declares no types.
+/// One file type the portal offers, with its glob or MIME rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Filter {
+    name: String,
+    rules: Vec<(u32, String)>,
+}
+
+/// The manifest's declared file types, from the Linux binary's compatibility
+/// metadata. A directory declaration is for the directory picker, whose portal
+/// request takes no file filter.
+pub(crate) fn filters(compat: &str) -> Result<Vec<Filter>, String> {
+    let json = serde_json::from_str::<serde_json::Value>(compat)
+        .map_err(|error| format!("compatibility metadata is not JSON: {error}"))?;
+    let Some(handlers) = json.pointer("/inputs/fileHandlers") else {
+        return Ok(Vec::new());
+    };
+    let handlers = handlers
+        .as_array()
+        .ok_or_else(|| "compatibility metadata's fileHandlers is not an array".to_owned())?;
+    let mut filters = Vec::new();
+    for (handler_index, handler) in handlers.iter().enumerate() {
+        let accept = handler
+            .get("accept")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| format!("file handler {handler_index}'s accept is not an object"))?;
+        let mut globs = Vec::new();
+        let mut mimes = Vec::new();
+        for (mime, extensions) in accept {
+            if mime == "inode/directory" {
+                continue;
+            }
+            mimes.push((1, mime.clone()));
+            let extensions = extensions.as_array().ok_or_else(|| {
+                format!("file handler {handler_index}'s extensions for {mime} are not an array")
+            })?;
+            for (extension_index, extension) in extensions.iter().enumerate() {
+                let Some(glob) = extension.as_str().and_then(extension_glob) else {
+                    return Err(format!(
+                        "file handler {handler_index}'s extension {extension_index} is invalid"
+                    ));
+                };
+                globs.push((0, glob));
+            }
+        }
+        let rules = if globs.is_empty() { mimes } else { globs };
+        if rules.is_empty() {
+            continue;
+        }
+        let name = match handler.get("name") {
+            Some(name) => name
+                .as_str()
+                .filter(|name| valid_label(name))
+                .ok_or_else(|| format!("file handler {handler_index}'s name is not a valid label"))?
+                .to_owned(),
+            None => rules[0].1.clone(),
+        };
+        filters.push(Filter { name, rules });
+    }
+    Ok(filters)
+}
+
+fn extension_glob(value: &str) -> Option<String> {
+    let valid = value.starts_with('.')
+        && !value.ends_with('.')
+        && value.len() <= 16
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'+' | b'.')
+        });
+    valid.then(|| {
+        let mut glob = String::from("*");
+        for byte in value.bytes() {
+            if byte.is_ascii_lowercase() {
+                glob.extend(['[', byte as char, byte.to_ascii_uppercase() as char, ']']);
+            } else {
+                glob.push(byte as char);
+            }
+        }
+        glob
+    })
+}
+
+fn valid_label(value: &str) -> bool {
+    !value.is_empty() && !value.chars().any(char::is_control)
+}
+
+/// A filter as the portal specifies it: `(sa(us))`, a visible name and rules
+/// whose kind is 0 for a case-sensitive glob or 1 for a MIME type. `filters`
+/// is `a(sa(us))`; `current_filter` is one of those same structs.
+/// <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.FileChooser.html>
 #[cfg(unix)]
-pub(crate) fn request(picker: &Picker, token: &str) -> (&'static str, wire::Value) {
+fn filter_value(filter: &Filter) -> wire::Value {
+    use wire::Value;
+    Value::Struct(vec![
+        Value::str(&filter.name),
+        Value::Array(
+            "(us)".into(),
+            filter
+                .rules
+                .iter()
+                .map(|(kind, value)| Value::Struct(vec![Value::U32(*kind), Value::str(value)]))
+                .collect(),
+        ),
+    ])
+}
+
+/// The portal method `picker` calls, and its `options` (`a{sv}`) under
+/// `token`; `folder` is where the chooser opens (`current_folder`, a
+/// NUL-terminated byte string; LLP 1173 D2's `startIn`).
+#[cfg(unix)]
+pub(crate) fn request(
+    picker: &Picker,
+    token: &str,
+    filters: &[Filter],
+    folder: Option<&std::path::Path>,
+) -> (&'static str, wire::Value) {
     use wire::Value;
     let mut options = vec![("handle_token", Value::str(token))];
     let member = match picker.kind {
@@ -83,6 +192,22 @@ pub(crate) fn request(picker: &Picker, token: &str) -> (&'static str, wire::Valu
             "SaveFile"
         }
     };
+    if picker.kind != Kind::Directory && !filters.is_empty() {
+        options.push((
+            "filters",
+            Value::Array(
+                "(sa(us))".into(),
+                filters.iter().map(filter_value).collect(),
+            ),
+        ));
+        options.push(("current_filter", filter_value(&filters[0])));
+    }
+    if let Some(folder) = folder {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = folder.as_os_str().as_bytes().iter().chain([&0]);
+        let bytes = bytes.map(|b| Value::Byte(*b)).collect();
+        options.push(("current_folder", Value::Array("y".into(), bytes)));
+    }
     (member, Value::dict(options))
 }
 

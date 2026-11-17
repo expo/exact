@@ -29,8 +29,8 @@ The two codecs are still built:
   `host/apple/src/style.rs:192`, `457`, `host/web-js/src/style.rs:1276`,
   `runner/src/agent/row.rs:104`, `158`, `contract/lower/src/values.rs:282`,
   `contract/lower/src/vocab.rs:304`, `contract/lower/src/theme/scan.rs:36`,
-  `contract/cli/src/tamber_uses.rs:427`, `contract/cli/src/gallery/inert.rs:398`, and
-  five in `contract/cli/tests/it` (`theme.rs:34`, `tamber.rs:43`, `461`,
+  `contract/cli/src/forma_uses.rs:427`, `contract/cli/src/gallery/inert.rs:398`, and
+  five in `contract/cli/tests/it` (`theme.rs:34`, `forma.rs:43`, `461`,
   `state_parts.rs:40`, `actions_exports.rs:199`).
 
 The plain `u8` codec is in the same state: both `u8` rows are `keywords` rows, so

@@ -2,7 +2,26 @@
 use exact_game::asset::{Content, SoundData};
 use std::fs;
 
-fn temp(name: &str) -> std::path::PathBuf {
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "sound-bake-{name}-{}-{:?}",
         std::process::id(),
@@ -10,7 +29,7 @@ fn temp(name: &str) -> std::path::PathBuf {
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("art")).unwrap();
-    dir
+    TempDir(dir)
 }
 /// A RIFF/WAVE file; `extensible` wraps the tag in WAVE_FORMAT_EXTENSIBLE.
 fn wav(tag: u16, channels: u16, rate: u32, bits: u16, data: &[u8], extensible: bool) -> Vec<u8> {

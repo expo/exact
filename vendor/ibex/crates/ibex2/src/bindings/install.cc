@@ -507,6 +507,7 @@ void Adapter::install_with(Groups groups, const Ibex2Bindings* bindings,
     std::string fetch_primitives;
     std::string abort_hooks;
     std::string headers_hooks;
+    std::string events_hooks;
     std::unique_ptr<Reachability> reachability;
     auto read_bootstrap_name = [&](const char* option, const char* kind,
                                    Groups required, const char* group) {
@@ -535,21 +536,24 @@ void Adapter::install_with(Groups groups, const Ibex2Bindings* bindings,
         options.abort_hooks, "abort hooks", GROUP_ABORT, "ABORT");
     headers_hooks = read_bootstrap_name(
         options.headers_hooks, "headers hooks", GROUP_PURE, "PURE");
+    events_hooks = read_bootstrap_name(
+        options.events_hooks, "events hooks", GROUP_EVENTS, "EVENTS");
     const std::string* outputs[] = {&fetch_primitives, &abort_hooks,
-                                    &headers_hooks};
-    for (size_t i = 0; i < 3; ++i)
-      for (size_t j = i + 1; j < 3; ++j)
+                                    &headers_hooks, &events_hooks};
+    for (size_t i = 0; i < 4; ++i)
+      for (size_t j = i + 1; j < 4; ++j)
         if (!outputs[i]->empty() && *outputs[i] == *outputs[j])
           throw std::invalid_argument(
               "trusted-bootstrap outputs require distinct global names");
     if (!fetch_primitives.empty() || !abort_hooks.empty() ||
-        !headers_hooks.empty())
+        !headers_hooks.empty() || !events_hooks.empty())
       reachability = std::make_unique<Reachability>(rt);
     auto expected = expected_scripts(groups);
     if (script_count != expected.size() || (script_count != 0 && scripts == nullptr))
       throw std::invalid_argument("Ibex2 binding bytecode count does not match groups");
     jsi::Value published_abort_hooks = jsi::Value::undefined();
     jsi::Value published_headers_hooks = jsi::Value::undefined();
+    jsi::Value published_events_hooks = jsi::Value::undefined();
     for (size_t i = 0; i < script_count; ++i) {
       if (scripts[i].name == nullptr || scripts[i].bytes == nullptr ||
           std::strcmp(scripts[i].name, expected[i]) != 0)
@@ -587,6 +591,10 @@ void Adapter::install_with(Groups groups, const Ibex2Bindings* bindings,
           state_->blob_helpers.isObject())
         rt.global().setProperty(rt, "__ibex2_blob_helpers",
                                 state_->blob_helpers);
+      // events.js takes and deletes the flag: no clock, and the embedder's
+      // report in place of the native console's.
+      if (std::strcmp(script.name, "events") == 0 && !events_hooks.empty())
+        rt.global().setProperty(rt, "__ibex2_events_embedded", true);
       auto buffer = std::make_shared<CompiledBytes>(script.bytes, script.len);
       auto value = rt.evaluateJavaScript(buffer, std::string(script.name) + ".js");
       if (std::strcmp(script.name, "timers") == 0) {
@@ -660,6 +668,18 @@ void Adapter::install_with(Groups groups, const Ibex2Bindings* bindings,
         capture("fireTrustedEvent", state_->trusted_event_dispatch);
         capture("hasEventListener", state_->event_listener_query);
         capture("setListenerChangeHook", state_->event_listener_change_hook);
+        if (!events_hooks.empty()) {
+          jsi::Object published(rt);
+          for (const char* member :
+               {"reportException", "onUnhandled", "onHandled", "configure"}) {
+            auto hook = hooks.getProperty(rt, member);
+            if (!hook.isObject() || !hook.getObject(rt).isFunction(rt))
+              throw jsi::JSError(rt, "events binding returned an invalid engine hook");
+            published.setProperty(rt, member, std::move(hook));
+          }
+          freeze(rt, published);
+          published_events_hooks = jsi::Value(rt, published);
+        }
         if (has(groups, GROUP_ABORT)) {
           // The hook crosses only the next installation step. abort.js takes
           // and deletes it before any application entrance can run.
@@ -806,6 +826,15 @@ void Adapter::install_with(Groups groups, const Ibex2Bindings* bindings,
       publish_bootstrap_output(
           "headers hooks", headers_hooks,
           published_headers_hooks.getObject(rt), members);
+    }
+    if (!events_hooks.empty()) {
+      if (!published_events_hooks.isObject())
+        throw jsi::JSError(rt, "events binding hooks were not retained");
+      constexpr const char* members[] = {"reportException", "onUnhandled",
+                                         "onHandled", "configure"};
+      publish_bootstrap_output(
+          "events hooks", events_hooks,
+          published_events_hooks.getObject(rt), members);
     }
     if (!state_->bootstrap_outputs.empty())
       state_->reachability = std::move(reachability);

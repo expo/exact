@@ -55,9 +55,9 @@
 //        the window toolbar Exact installed (LLP 1075.003.000 §3.7)
 // 208  module_will_quit(module, ctx, done)            size ≥ 216; macOS:
 //        the quit's work (LLP 1069.010 Q4); done(ctx) once, from any thread
-// 216  module_tamber(module)                         size ≥ 224; nullable:
+// 216  module_forma(module)                         size ≥ 224; nullable:
 //        after a batch that moved what a binding reads (LLP 1121 D12), the
-//        module asks its places again (ExactTamber.swift)
+//        module asks its places again (ExactForma.swift)
 // 224  create_view(module, view, tag, …)              size ≥ 232; nullable:
 //        `create` with the node's id (u64), which a package's view is made
 //        with and its displayed reports name (LLP 1133.008 D8 item 1)
@@ -166,7 +166,7 @@ private final class NativeTable {
     /// The quit's work (macOS), in a table of 216 bytes or more.
     var willQuit: WillQuitFn?
     /// The bindings' moved inputs (LLP 1121 D12), in one of 224 or more.
-    var tamber: ModuleDestroyFn?
+    var forma: ModuleDestroyFn?
     /// `create` with the node's id (LLP 1133.008 D8 item 1), in one of 232 or more.
     var createView: CreateViewFn?
     /// The authenticator entry (LLP 1133.010 D13), in one of 240 or more.
@@ -256,7 +256,7 @@ private final class NativeTable {
         }
         if size >= 208 { loaded.tickHatch = pointer(200).map { unsafeBitCast($0, to: HatchTickFn.self) } }
         if size >= 216 { loaded.willQuit = pointer(208).map { unsafeBitCast($0, to: WillQuitFn.self) } }
-        if size >= 224 { loaded.tamber = pointer(216).map { unsafeBitCast($0, to: ModuleDestroyFn.self) } }
+        if size >= 224 { loaded.forma = pointer(216).map { unsafeBitCast($0, to: ModuleDestroyFn.self) } }
         if size >= 232 { loaded.createView = pointer(224).map { unsafeBitCast($0, to: CreateViewFn.self) } }
         if size >= 240 { loaded.authenticate = pointer(232).map { unsafeBitCast($0, to: PresenceAuthenticateFn.self) } }
         if size >= 248 { loaded.image = pointer(240).map { unsafeBitCast($0, to: PackageImageFn.self) } }
@@ -433,6 +433,7 @@ final class NativeViews {
     /// and its views and calls work; no hatch is connected or called.
     static let hatchesOff = !ExactEnv.productionBake && ExactEnv.environment["EXACT_HATCHES"] == "off"
     private var entries: [UInt32: NativeEntry] = [:]
+    var isEmpty: Bool { entries.isEmpty }
     private var gateOpen = false
     private var waits: [UInt32: NativeWait] = [:]
     private var nextToken: UInt32 = 1
@@ -642,7 +643,9 @@ final class NativeViews {
 
     /// Where the module keeps its files: the app's roots, as the runtime
     /// configures storage, including a named agent store. An unnamed drive
-    /// gets a process-local tree. Temporary files survive named relaunches,
+    /// gets a process-local tree, made here: a package resolves an `app:/`
+    /// path by a walk that starts at an existing root (`AppFileWalk`), and
+    /// nothing else makes this one. Temporary files survive named relaunches,
     /// except the picker's separately managed `picked` directory.
     static func roots(session: ExactSession, agent: Bool = ExactEnv.agentMode,
                       namedStore: String? = ExactEnv.environment["EXACT_AGENT_STORAGE"]) -> (data: String, cache: String, temporary: String) {
@@ -653,7 +656,11 @@ final class NativeViews {
         let id = Bundle.main.bundleIdentifier ?? "app"
         if agent {
             let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("exact-agent-\(getpid())-\(session.runtime.rt)")
-            return (base + "/data", base + "/cache", base + "/temporary")
+            let roots = (data: base + "/data", cache: base + "/cache", temporary: base + "/temporary")
+            for root in [roots.data, roots.cache, roots.temporary] {
+                try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            }
+            return roots
         }
         let home = NSHomeDirectory()
         let cache = home + "/Library/Caches/exact/" + id
@@ -694,10 +701,9 @@ final class NativeViews {
         return "the app's native module artifact did not load: \(failure.message)"
     }
 
-    /// After first pixel, before data activates: load the artifact and make
-    /// the session's instance, so the first `native.call` pays for neither.
-    /// A first load of a freshly built dylib took 164 ms inside a call's
-    /// 100 ms budget (the sample host, 2026-09-27).
+    /// After first pixel, before data activates: load the app library and
+    /// make the session's instance. Packages wait for their first use
+    /// (LLP 1067.000.001).
     func prepareAppModule() {
         activateHatches()
         defer { if !hatchesConnected, pendingHatches == nil { session?.presenter.elements.releaseFrames() } } // they never will
@@ -787,9 +793,9 @@ final class NativeViews {
 
     /// After a batch: the module asks the places it observes again, when it
     /// has the entry (LLP 1121 D12). Main thread.
-    func tamberMoved() {
-        guard let instance, case .success(let table)? = NativeProcess.table, let tamber = table.tamber else { return }
-        tamber(instance)
+    func formaMoved() {
+        guard let instance, case .success(let table)? = NativeProcess.table, let forma = table.forma else { return }
+        forma(instance)
     }
 
     private func askQuit() {

@@ -31,5 +31,5 @@ diagnostic and its existing regression coverage, then rerun the required
 Clippy command with warnings denied.
 
 Checked open and closed filesystem issues and all 275 cached GitHub
-issue bodies. The closed dead-code report covers Tamber and verification
+issue bodies. The closed dead-code report covers Forma and verification
 scripts; no report covers this Rust duplicate or its current check failure.

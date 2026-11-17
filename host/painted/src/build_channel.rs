@@ -161,7 +161,7 @@ impl Link {
         self.snapshot = true;
     }
 
-    /// The live-table frames (`tamber-batch`, `tamber-snapshot`) the ticks
+    /// The live-table frames (`forma-batch`, `forma-snapshot`) the ticks
     /// took, in order; the rest stay for [`Link::frames`]' other readers.
     pub fn take_live(&mut self) -> Vec<Value> {
         let (live, rest) = std::mem::take(&mut self.frames)
@@ -272,7 +272,7 @@ impl Answer {
 pub(crate) fn is_live(frame: &Value) -> bool {
     matches!(
         frame["kind"].as_str(),
-        Some("tamber-batch" | "tamber-snapshot")
+        Some("forma-batch" | "forma-snapshot")
     )
 }
 
@@ -823,9 +823,9 @@ mod tests {
             nonce: Some("n".into()),
             ack: 1,
             frames: vec![
-                json!({"kind": "tamber-batch", "n": 1}),
+                json!({"kind": "forma-batch", "n": 1}),
                 json!({"kind": "pin"}),
-                json!({"kind": "tamber-snapshot", "n": 2}),
+                json!({"kind": "forma-snapshot", "n": 2}),
             ],
             registered: true,
             off: false,

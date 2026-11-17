@@ -1,5 +1,5 @@
 //! @ref LLP 1043.000 §3 D5–D7 — CoreText advances into the shared walker.
-//! Handles are thread-confined, never reused; stale/null handles are harmless.
+//! Handles are process-wide, never reused; stale/null handles are harmless.
 //! Pointer buffers are borrowed only during a call. Non-null pointers must name
 //! valid, aligned buffers of the stated length, as with the measure callback.
 #![allow(unsafe_code)]
@@ -472,6 +472,37 @@ pub fn free(handle: u64) {
     with_sources(|sources| sources.remove(&handle));
 }
 
+/// Natural text's paragraph bases (LLP 1060.000 D3,
+/// `exact_kernel::text::natural::paragraph_bases`): one byte per paragraph,
+/// 0 left to right, 1 right to left; `fallback` is the layout direction.
+/// Writes min(count, cap) to `out` (null is a query); returns the count, 0
+/// for invalid UTF-8.
+pub fn paragraph_bases(
+    text: *const u8,
+    len: usize,
+    fallback: u8,
+    out: *mut u8,
+    cap: usize,
+) -> usize {
+    let Some(text) = slice(text, len).and_then(|b| std::str::from_utf8(b).ok()) else {
+        return 0;
+    };
+    let fallback = match fallback {
+        1 => exact_kernel::Direction::Rtl,
+        _ => exact_kernel::Direction::Ltr,
+    };
+    let mut bases = Vec::new();
+    exact_kernel::text::natural::paragraph_bases(text, fallback, &mut bases);
+    for (i, base) in bases
+        .iter()
+        .enumerate()
+        .take(if out.is_null() { 0 } else { cap })
+    {
+        unsafe { out.add(i).write(*base as u8) };
+    }
+    bases.len()
+}
+
 /// Export the text-shape-owned walker seam from the application's static archive.
 #[macro_export]
 macro_rules! textflow_exports {
@@ -540,6 +571,17 @@ macro_rules! textflow_exports {
             cap: usize,
         ) -> usize {
             $crate::textflow::line_breaks(text, len, words, word_count, out, cap)
+        }
+        /// Natural text's base direction per paragraph (LLP 1060.000 D3).
+        #[no_mangle]
+        pub extern "C" fn exact_text_paragraph_bases(
+            text: *const u8,
+            len: usize,
+            fallback: u8,
+            out: *mut u8,
+            cap: usize,
+        ) -> usize {
+            $crate::textflow::paragraph_bases(text, len, fallback, out, cap)
         }
         /// Release one prepared source.
         #[no_mangle]

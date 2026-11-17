@@ -12,7 +12,7 @@ final class ThemeRolesIOSTests: GroupedListFixture {
     /// UIKit's own list (its ground, the cards, the rows' text) where it
     /// would read the role; without one the platform's colours stay.
     func testAThemeThatReplacesTheGroupedRolesColoursTheNativeList() throws {
-        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]])) }
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0]) }
         let platform = presenter { self.model() }
         let before = try cell(platform, 10)
         XCTAssertNotEqual(before.backgroundConfiguration?.backgroundColor?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)), UIColor(red: 10 / 255, green: 20 / 255, blue: 30 / 255, alpha: 1))
@@ -20,7 +20,7 @@ final class ThemeRolesIOSTests: GroupedListFixture {
             "grouped-background": [[1, 2, 3, 255], [4, 5, 6, 255]],
             "secondary-grouped-background": [10, 20, 30, 255],
             "label": [200, 0, 0, 255],
-        ]]]))
+        ]]]).ops[0])
         let themed = presenter { self.model() }
         let card = try cell(themed, 10)
         let light = UITraitCollection(userInterfaceStyle: .light), dark = UITraitCollection(userInterfaceStyle: .dark)
@@ -31,7 +31,7 @@ final class ThemeRolesIOSTests: GroupedListFixture {
         XCTAssertEqual(ground.resolvedColor(with: dark), UIColor(red: 4 / 255, green: 5 / 255, blue: 6 / 255, alpha: 1))
         XCTAssertNil(ThemeRoles.color("separator"), "a role the theme leaves stays the platform's")
         // A new table (a dev reload's) recolours the list's next update without a relaunch.
-        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["secondary-grouped-background": [1, 2, 3, 255]]]]))
+        ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["secondary-grouped-background": [1, 2, 3, 255]]]]).ops[0])
         try list(themed).update(model())
         let again = try cell(themed, 10)
         XCTAssertEqual(again.backgroundConfiguration?.backgroundColor?.resolvedColor(with: light), UIColor(red: 1 / 255, green: 2 / 255, blue: 3 / 255, alpha: 1))

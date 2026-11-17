@@ -241,10 +241,10 @@ struct TextAccessibilityWrite: Equatable {
 
 /// Words a group-role paragraph holds: a static text of its runs `runs`
 /// between two links, or its whole text when it has no runs.
-private final class ParagraphWords: NSAccessibilityElement, AgentOwned {
+private final class ParagraphWords: NSAccessibilityElement, InspectionOwned {
     weak var owner: NodeView?
     let runs: [UInt32]
-    var agentViewId: UInt32? { owner?.id }
+    var inspectionViewId: UInt32? { owner?.id }
     init(owner: NodeView, text: String, runs: [InlineText]) {
         self.owner = owner; self.runs = runs.map(\.id)
         super.init()
@@ -260,10 +260,10 @@ private final class ParagraphWords: NSAccessibilityElement, AgentOwned {
         return rect.isNull ? .zero : window.convertToScreen(owner.convert(rect, to: nil))
     }
 }
-private final class InlineAccessibility: NSAccessibilityElement, AgentOwned {
+private final class InlineAccessibility: NSAccessibilityElement, InspectionOwned {
     weak var owner: NodeView?
     package let id: UInt32
-    var agentViewId: UInt32? { id } // the run's own view (LLP 1080.002 D5)
+    var inspectionViewId: UInt32? { id } // the run's own view (LLP 1080.002 D5)
     init(owner: NodeView, run: InlineText, text: NSString) {
         self.owner = owner; id = run.id
         super.init()
@@ -306,10 +306,10 @@ private final class InlineAccessibility: NSAccessibilityElement, AgentOwned {
     }
 }
 #else
-private final class InlineAccessibility: UIAccessibilityElement, AgentOwned {
+private final class InlineAccessibility: UIAccessibilityElement, InspectionOwned {
     weak var owner: NodeView?
     package let id: UInt32
-    var agentViewId: UInt32? { id } // the run's own view (LLP 1080.002 D5)
+    var inspectionViewId: UInt32? { id } // the run's own view (LLP 1080.002 D5)
     init(owner: NodeView, run: InlineText, text: NSString) {
         self.owner = owner; id = run.id
         super.init(accessibilityContainer: owner)

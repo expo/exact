@@ -711,7 +711,9 @@ mod tests {
         }
         gpu.queue.submit([encoder.finish()]);
         crate::skinning::tests::read(gpu, &io, (words.len() * 4) as u64)
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|c| {
                 Vec3::from_array(std::array::from_fn(|i| {
                     f32::from_ne_bytes(c[i * 4..i * 4 + 4].try_into().unwrap())

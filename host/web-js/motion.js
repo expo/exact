@@ -20,17 +20,29 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
   // The page's clock: the driver's under the agent, else the runtime's wall.
   const now = () => clock.agent ? clock.now : Math.max(clock.now, wall());
   const PROPS = ['translate', 'scale', 'rotate', 'opacity', 'height'];
+  // A spring a commit begins waits for the browser's ready time, on the
+  // page's clock (LLP 1003.001 D9); none waits while the page is hidden or
+  // frozen, when nothing is presented.
+  if (!clock.agent) {
+    w.m_start_on_frame(1);
+    let frozen = false;
+    const presentable = () => { w.m_presentable(document.visibilityState !== 'hidden' && !frozen ? 1 : 0); applyBatch(ops(lower())); };
+    document.addEventListener('visibilitychange', presentable);
+    for (const name of ['freeze', 'resume']) document.addEventListener(name, () => { frozen = name === 'freeze'; presentable(); });
+    if (document.visibilityState === 'hidden') w.m_presentable(0);
+  }
   // The engine's lowered ops (Motion::lower's numbers) as the wasm host's
-  // batch writes them: a spring's frames (`animate` with `at`, ms), or a cancel.
+  // batch writes them: a spring's frames (`animate` with `at`, ms), a held
+  // spring's (`held`, with its release's `due`, ms), or a cancel.
   const lower = () => {
     const n = w.m_lower(now() / 1000), f = new Float64Array(w.memory.buffer, w.m_out(), n), out = [];
     for (let i = 0; i < n;) {
       const [kind, id, p] = [f[i], f[i + 1], PROPS[f[i + 2]]];
       if (kind === 2) { out.push({ op: 'animate', id, property: p, delay: 0, duration: 0, values: [] }); i += 3; continue; }
       const k = f[i + 6], values = [];
-      // Four numbers a frame: translate's lengths, then its percentages.
-      for (let j = 0, at = i + 7; j < k; j++, at += 4) values.push(p === 'translate' ? (f[at + 2] || f[at + 3] ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : [f[at], f[at + 1]]) : f[at]);
-      out.push({ op: 'animate', id, property: p, at: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values });
+      // Four numbers per frame: translation lengths/percentages or rotation angle/axis.
+      for (let j = 0, at = i + 7; j < k; j++, at += 4) values.push(p === 'translate' ? (f[at + 2] || f[at + 3] ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : [f[at], f[at + 1]]) : p === 'rotate' ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : f[at]);
+      out.push(kind === 3 ? { op: 'animate', id, property: p, held: true, due: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values } : { op: 'animate', id, property: p, at: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values });
       i += 7 + 4 * k;
     }
     return out;
@@ -41,23 +53,21 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
   const held = view => [...holds.values()].includes(view);
   const ended = serial => { const view = holds.get(serial); holds.delete(serial); if (!held(view)) authored.delete(view); };
   // `[translate, scale, rotate, opacity, transition, velocity]` as the plan binds them:
-  // translate is one or two lengths in px or percentages of the box (kernel
-  // `space::translate`), rotate degrees; a value the row refuses is the
-  // row's initial one.
+  // translate is lengths in px and percentages of the box, `calc()` included
+  // (`exact_motion::length`), rotate angle and axis; a value the row refuses
+  // is the row's initial one.
   const num = (v, d) => { const n = typeof v === 'number' ? v : parseFloat(v); return Number.isFinite(n) ? n : d; };
   const observe = (id, [tr, scale, rotate, opacity, transition, velocity]) => {
     let n = nodes.get(id);
     if (!n) nodes.set(id, n = {});
-    const parts = typeof tr === 'string' ? tr.trim().split(/\s+/) : [];
-    const axis = p => p.endsWith('%') ? [0, num(p.slice(0, -1), 0)] : [num(p, 0), 0];
-    const [[x, px], [y, py]] = [axis(parts[0] ?? '0'), axis(parts[1] ?? '0')];
+    const [x, y, px, py] = typeof tr === 'string' && w.m_translate(put(tr)) ? [0, 1, 2, 3].map(i => w.m_scratch(i)) : [0, 0, 0, 0];
     if (n.transition !== transition) { n.transition = transition; if (!w.m_transitions(id, put(transition ?? '')) && transition) say(`motion: transition ${JSON.stringify(transition)} refused`); }
     const speed = typeof velocity === 'string' ? velocity.trim().split(/\s+/).map(v => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(v) ? Math.fround(Number(v)) : NaN) : [];
     const supplied = speed.length === 2 && speed.every(Number.isFinite);
     const cleared = velocity == null || typeof velocity === 'string' && (!velocity.trim() || velocity.trim().toLowerCase() === 'unset');
     if (!cleared && !supplied && n.velocity !== velocity) say(`motion: -exact-translate-velocity ${JSON.stringify(velocity)} refused`);
     n.velocity = velocity;
-    if (!w.m_observe(id, x, y, px, py, num(scale, 1), num(rotate, 0), num(opacity, 1), supplied ? 1 : 0, supplied ? speed[0] : 0, supplied ? speed[1] : 0, now() / 1000)) say(`motion: targets for #${id} refused`);
+    if (!w.m_observe(id, x, y, px, py, num(scale, 1), put(String(rotate ?? 0)), num(opacity, 1), supplied ? 1 : 0, supplied ? speed[0] : 0, supplied ? speed[1] : 0, now() / 1000)) say(`motion: targets for #${id} refused`);
   };
   const ops = list => ({ ops: list, timers: false });
   const applyBatch = batch => {
@@ -128,6 +138,9 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
       case 'height-owner': case 'clear-height-owner': return { accepted: false };
       case 'transform-geometry': case 'transform-invalidate': case 'transform-begin': case 'transform-move': case 'transform-action': return T.request(facts);
       case 'reorder-begin': case 'reorder-preview': case 'reorder-terminal': case 'reorder-cancel': case 'reorder-rebase': case 'reorder-finish': return A.request(facts);
+      // A held spring's ready time (`x`, ms) and the deadline's release (LLP 1003.001 D9).
+      case 'present': return w.m_present(facts.view, PROPS.indexOf(facts.property), facts.x / 1000) ? { accepted: true, batch: ops(lower()) } : { accepted: false };
+      case 'release-overdue': w.m_release_overdue(facts.now / 1000); return { accepted: true, batch: ops(lower()) };
       case 'pan-sample': w.m_pan_sample(facts.view, facts.token ? 1 : 0, facts.x, facts.y, facts.now); return { accepted: true };
       case 'pan-velocity': w.m_pan_release(facts.view, facts.now); return { vx: w.m_scratch(0), vy: w.m_scratch(1) };
       default: return { error: `${facts.op} is not in the JS target's motion` };

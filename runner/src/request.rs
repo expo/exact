@@ -84,7 +84,8 @@ pub use http::{CacheMode, Redirect};
 #[path = "request_preload.rs"]
 mod preload;
 pub use preload::{
-    Launch, LaunchContext, LaunchRequest, MissingPreloadSecret, Preload, PreloadPart, PreloadWhen,
+    secret_in_origin, Launch, LaunchContext, LaunchRequest, Preload, PreloadFillError, PreloadPart,
+    PreloadWhen,
 };
 #[path = "request_http.rs"]
 mod http;
@@ -153,10 +154,10 @@ pub struct Request {
     /// [`Request::idle_timeout`].
     pub idle_timeout_ms: Option<u32>,
     /// The body is this app file's bytes (`app:/…`), read by the host when it
-    /// runs the request, under the `fs.read` grant, at most
-    /// [`MAX_BODY_FROM_BYTES`]: the bytes never cross the source. `body` is
+    /// runs the request, under the `fs.read` grant, streamed from disk with
+    /// no size bound of Exact's: the bytes never cross the source. `body` is
     /// then empty. Set by TypeScript's `fetch(url, {exactBodyFrom})` and
-    /// [`Request::body_from`] (LLP 1108 D6 R2).
+    /// [`Request::body_from`] (LLP 1108 D6 R2, LLP 1133.008.000 D4).
     pub body_from: Option<String>,
     /// A 2xx reply's body is written to this app file (`app:/…`) by the
     /// host as it arrives, under the `fs.write` grant, and never crosses the
@@ -172,7 +173,8 @@ pub struct Request {
     pub cache: CacheMode,
     /// A preload to take by name when method and URL agree (LLP 1162.000 D1).
     pub preload: Option<Box<str>>,
-    /// Checked prefetch option; currently a plain fetch on every host (LLP 1162.000 D5).
+    /// Start a preload alongside the caller's ordinary read on Apple, Linux,
+    /// Windows and Android hosts (LLP 1162.000 D5).
     pub prefetch: bool,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,
@@ -259,9 +261,6 @@ pub struct Retrying {
 /// The host's live view of its long polls' waits (D8), by stream ticket;
 /// `None` for a ticket that is not waiting.
 pub type RetryReader = std::sync::Arc<dyn Fn(u64) -> Option<Retrying> + Send + Sync>;
-
-/// The largest file [`Request::body_from`] sends: 64 MiB.
-pub const MAX_BODY_FROM_BYTES: u64 = 64 << 20;
 
 /// The longest [`Request::body_from`] or [`Request::body_to`] path, in bytes.
 pub const MAX_BODY_FROM_PATH: usize = 4096;
@@ -870,13 +869,15 @@ pub enum SurfaceRequest {
         /// The complete carried state; hosts never project or truncate it.
         bytes: Vec<u8>,
     },
-    /// Write the kept bitmap of a 2D canvas as a PNG file
+    /// Write the kept bitmap of a 2D canvas as an image file
     /// ([`crate::canvas_capture`]).
     Canvas {
         /// The authored canvas surface name.
         name: String,
         /// The `app:/` file to write.
         path: String,
+        /// The image type and quality asked for.
+        encoding: crate::canvas_capture::Encoding,
         /// The runner's owned drawing boundary; absent until the requesting commit stands.
         job: Option<crate::canvas_capture::CaptureJob>,
     },
@@ -1255,6 +1256,10 @@ impl Drop for Reply {
 pub enum Work {
     /// Runs on the host's I/O worker; what it returns is the outcome.
     Now(Box<dyn FnOnce() -> Outcome + Send>),
+    /// A driver response, returned only after the HTTP executor prepares the
+    /// request's file body and checks its abort and deadline. Prefetch and its
+    /// foreground fallback can each ask the same response provider.
+    HttpResponse(std::sync::Arc<dyn Fn() -> Outcome + Send + Sync>),
     /// Hands the reply to another owner and returns at once; the outcome
     /// arrives when that owner sends it. The I/O worker is never held
     /// while a module computes (LLP 1027.002 D4).
@@ -1322,8 +1327,12 @@ pub struct CompletionTiming {
 
 /// A request the host is to run: its ticket, the resource or mutation it
 /// answers, and the request. Taken by [`Runner::take_requests`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct RequestOut {
+    /// Runner-issued authority, shared with this request's lifetime record and
+    /// integer entry (LLP 1172.019 Carry). Retained work keeps it after UI
+    /// retirement; synthetic host work has none.
+    pub completion: Option<crate::runner::CompletionReply>,
     /// Names the reply: [`Runner::fulfill`] takes it back.
     pub ticket: u64,
     /// The resource's or mutation's name.
@@ -1334,6 +1343,31 @@ pub struct RequestOut {
     pub class: RequestClass,
     /// The app forced it (`refresh`): the executor bypasses its cache.
     pub forced: bool,
+}
+
+// Authority is separate from the work value: replay and full/incremental
+// comparisons must agree across sessions (LLP 1172.005 E10).
+impl PartialEq for RequestOut {
+    fn eq(&self, other: &Self) -> bool {
+        self.ticket == other.ticket
+            && self.target == other.target
+            && self.request == other.request
+            && self.class == other.class
+            && self.forced == other.forced
+    }
+}
+impl Eq for RequestOut {}
+
+impl std::fmt::Debug for RequestOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestOut")
+            .field("ticket", &self.ticket)
+            .field("target", &self.target)
+            .field("request", &self.request)
+            .field("class", &self.class)
+            .field("forced", &self.forced)
+            .finish()
+    }
 }
 
 #[cfg(test)]

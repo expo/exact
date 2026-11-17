@@ -3,7 +3,7 @@ Add identity to the Exact app in this folder, on its Snapback backend: guests, d
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), or it is not wired to a Snapback backend, stop and tell me: wire it first with docs/recipes/snapback.md.
 2. Ask me which identities the app allows: guests and password accounts (`use identity`), password accounts only (`use identity password`), and whether development uses personas (`use personas alice, bob`). Do not choose for me.
-3. Build from the complete mixed identity app in the Exact checkout's snapback4/README.md ("A complete mixed identity app"): the schema, Contract, TypeScript and tests.
+3. The Snapback client is not included in Exact. Where the checkout has it at snapback4/, its accompanying snapback4/README.md contains "A complete mixed identity app": the schema, Contract, TypeScript and tests. Use that example; if the client or guide is missing, stop and report what is missing.
 4. For guests, call `guest()` before a read. Keep the session with `auth: {store, key, now}` and grant `secret.keep` for that key. Use a distinct secret key for each backend origin.
 5. For personas, start with `state persona = ""` (signed out) and an explicit persona choice. Await logout before a switch of accounts. Hide retained rows until the current principal's resource answers.
 6. `serve` refuses persona headers: tell me the persona controls must go before production.

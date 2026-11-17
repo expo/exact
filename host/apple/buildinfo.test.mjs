@@ -1,7 +1,7 @@
 // The build stamp (`buildinfo.mjs`): `bun test host/apple/buildinfo.test.mjs`;
 // the async lane runs it (`tests/it/development.rs`).
-import { test, expect } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +10,9 @@ import { nativeManifestMetadata } from '../../scripts/app.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const now = new Date('2026-10-08T10:00:00Z');
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(resolve(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 
 test('frame health collects on demand in production and follows the manifest independently of the menu', () => {
   const stamp = (manifest, options = {}) => buildInfo({ dir: root, manifest }, { root, now, env: {}, ...options });
@@ -64,7 +67,7 @@ test('an app inside exact2 carries exact2\'s commit alone, and the kind', () => 
 });
 
 test('an app in its own repository carries its commit and whether it was dirty', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-buildinfo-'));
+  const dir = scratch('exact-buildinfo-');
   const git = (...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
   git('init', '-q');
   writeFileSync(resolve(dir, 'app.contract'), 'component A\n');
@@ -85,7 +88,7 @@ test('an app in its own repository carries its commit and whether it was dirty',
 });
 
 test('release notes: none or blank is no section, long ones are cut at a character, and non-UTF-8 fails the build', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-notes-'));
+  const dir = scratch('exact-notes-');
   expect(releaseNotes(dir)).toBe('');
   writeFileSync(resolve(dir, 'release-notes.md'), '  \n\n');
   expect(releaseNotes(dir)).toBe('');

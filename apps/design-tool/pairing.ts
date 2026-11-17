@@ -1,4 +1,4 @@
-// Pairing in the tool (LLP 1122 D12, T6; LLP 1121 stage 10 A2, tamber/1.13):
+// Pairing in the tool (LLP 1122 D12, T6; LLP 1121 stage 10 A2, forma/1.13):
 // the local tool mints a code for a client on another machine, at a scope,
 // and shows it with each remote door's certificate fingerprint, which the
 // other machine checks before it trusts the door; it lists the paired
@@ -66,7 +66,7 @@ page.addEventListener?.('message', onCanvasWord);
 
 const canvasKey = (client: string, epoch: string, tick: number) => JSON.stringify([client, epoch, tick]);
 
-/** The pairing sources, over the tool's one `tamber/1` client; `door` the paired server's origin ("" while local). */
+/** The pairing sources, over the tool's one `forma/1` client; `door` the paired server's origin ("" while local). */
 export function pairingSources(call: Call, pairWith: PairWith, door: () => string): Pick<Sources, 'mintCode' | 'loadClients' | 'revokeClient' | 'pairRemote' | 'loadCanvas' | 'canvasEntered'> {
   return {
     // A paired tool's canvas (stage 10 C): the app through the server's
@@ -87,7 +87,7 @@ export function pairingSources(call: Call, pairWith: PairWith, door: () => strin
       // One mint a key: a second ask for it (its `done` moving meanwhile) waits on the first.
       if (minting?.key !== key) {
         const answer = (async () => {
-          const { error, reply } = await call('/__tamber', { method: 'canvas' });
+          const { error, reply } = await call('/__forma', { method: 'canvas' });
           if (error) return { frame: '', root: '', error: `No canvas: ${error}` };
           const made = canvasFrame(String(reply.ok?.url ?? ''), String(reply.ok?.grant ?? ''), door(), client);
           return made.error ? { frame: '', root: '', error: `No canvas: ${made.error}.` } : made;
@@ -113,7 +113,7 @@ export function pairingSources(call: Call, pairWith: PairWith, door: () => strin
       return { ok: r.ok, error: r.error, note: r.ok ? `Paired as ${r.client}, at ${r.scope}.` : '' };
     },
     mintCode: async ([scope]) => {
-      const { error, reply } = await call('/__tamber', { method: 'pair-code', scope });
+      const { error, reply } = await call('/__forma', { method: 'pair-code', scope });
       if (error) return { ok: false, error, code: '', scope: '', until: '', doors: [] };
       const ok = reply.ok ?? {};
       // Each remote door open (stage 10 B): its origin, and the fingerprint
@@ -125,7 +125,7 @@ export function pairingSources(call: Call, pairWith: PairWith, door: () => strin
     // with its scope, where it pairs from and when it was last seen.
     loadClients: async ([local]) => {
       if (!local) return { ok: true, error: '', clients: [] };
-      const { error, reply, used } = await call('/__tamber', { method: 'clients' });
+      const { error, reply, used } = await call('/__forma', { method: 'clients' });
       if (error) return { ok: false, error, clients: [] };
       listedBy = used;
       const list = Array.isArray(reply.ok?.clients) ? reply.ok.clients : [];
@@ -134,7 +134,7 @@ export function pairingSources(call: Call, pairWith: PairWith, door: () => strin
     // A revoke goes to the server run whose list it was pressed in, never a
     // later one's (a restart names its clients from #1 again).
     revokeClient: async ([client]) => {
-      const { error } = await call('/__tamber', { method: 'revoke', client }, 15000, listedBy || undefined);
+      const { error } = await call('/__forma', { method: 'revoke', client }, 15000, listedBy || undefined);
       return error ? { ok: false, error, note: '' } : { ok: true, error: '', note: `${client} was revoked: its token is refused from now on, and its stream and long poll end.` };
     },
   };

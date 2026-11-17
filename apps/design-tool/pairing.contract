@@ -33,13 +33,13 @@ component Pairing
               text c.code font="-exact-title2" font-family="ui-monospace, monospace" testId="pair-code-text"
               text `Good once, until ${c.until}, for a client of its own at ${c.scope}. Type it on the other machine; nothing else is needed.` color="-exact-secondary-label" font="-exact-footnote" testId="pair-code-note"
               if c.doors.length == 0
-                text "No remote door is open: start the dev loop or tamber serve with --remote <host:port> for a client on another machine." color="-exact-secondary-label" font="-exact-footnote" testId="pair-no-door"
+                text "No remote door is open: start the dev loop or forma serve with --remote <host:port> for a client on another machine." color="-exact-secondary-label" font="-exact-footnote" testId="pair-no-door"
               for d in c.doors key=d.origin
                 if d.tunnel
                   text `Through the tunnel you trusted, at ${d.origin}` font="-exact-footnote" testId=`pair-door-${d.origin}`
                 else
                   column gap=2 testId=`pair-door-${d.origin}`
-                    text `Open ${d.origin}/__tamber/tool/ there, and check its certificate's SHA-256 is` font="-exact-footnote"
+                    text `Open ${d.origin}/__forma/tool/ there, and check its certificate's SHA-256 is` font="-exact-footnote"
                     text d.fingerprint font="-exact-caption1" font-family="ui-monospace, monospace" testId=`pair-fingerprint-${d.origin}`
           else
             text c.error color="-exact-system-red" font="-exact-footnote" testId="pair-error"

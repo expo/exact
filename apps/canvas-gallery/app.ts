@@ -11,8 +11,8 @@ export const grants = 'fs.write app:/tmp';
 export const answer: Answer = (async (source: string, [surface, path]: [string, string]) => {
   if (source !== 'capture') throw { kind: 'UnknownSource', message: source };
   try {
-    const c = await captureCanvas(surface, path);
-    return { record: `${c.path} ${c.width}x${c.height} @${c.scale}`, path: c.path };
+    const c = await captureCanvas(surface, path, path.endsWith('.jpg') ? 'image/jpeg' : undefined);
+    return { record: `${c.path} ${c.width}x${c.height} @${c.scale} ${c.type}`, path: c.path };
   } catch (e: any) {
     return { record: `${e.name}: ${e.message}`, path: '' };
   }

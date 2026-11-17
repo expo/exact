@@ -1,20 +1,15 @@
-# The Cargo tests on Linux and macOS and the script tests on Linux, for pushes
-# to main and for pull requests. Nothing waits for this workflow (ci.yml is what
-# a push waits for): a hosted runner takes over an hour for these.
+# Hosted tests are hourly and do not block landing. scripts/async.mjs owns
+# affected-suite selection and commit attribution on the provisioned fleet.
 name: tests
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
 
-# A run on main is never stopped by a newer push. While one runs, the newest
-# push waits and takes the place of any push that was waiting before it, so the
-# tip is always tested and runs do not pile up. A pull request's newer push
-# replaces the run of the one before it.
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -93,32 +88,4 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           CHROME: ${{ steps.chrome.outputs.chrome-path }}
-        run: bun test scripts
-
-  macos:
-    runs-on: macos-26
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Rust (rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Hermes bundle
-        run: cargo run --manifest-path vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml -- --target aarch64-apple-darwin
-
-      - name: Bun dependencies
-        run: bun install --frozen-lockfile
-
-      - name: test
-        env:
-          CARGO_TERM_COLOR: always
-        run: cargo test --tests --no-fail-fast
+        run: bun test ./scripts

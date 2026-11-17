@@ -10,6 +10,15 @@ extension MenuHost {
         return drawn.window != nil && !drawn.isHidden && !port.isHidden
     }
 
+    /// Whether `view` is in the confirmation UIKit shows: its alert or action
+    /// sheet is presented over every presentation, so a presentation that
+    /// covers the page the dialog is in leaves it reachable (HTML's topmost
+    /// modal dialog).
+    func confirmationShows(_ view: UIView) -> Bool {
+        guard let owner = confirmation, !owner.finishing, let pop = owner.popover else { return false }
+        return view.isDescendant(of: pop)
+    }
+
     /// An alertdialog-shaped popover has one or more actions and at most one
     /// hide-only cancel: a chooser ("Open in…") is one action per choice.
     /// Retain this owner until native dismissal completes; ids alone are not
@@ -77,6 +86,11 @@ extension MenuHost {
         var finishing = false
         var dismissing = false
         var chosen: NodeView?
+        /// Ended by the person's close request (Escape, Back, a tap
+        /// outside), which fires `cancel` at a modal dialog before its
+        /// `close`, as HTML's does. The cancel's button is its authored
+        /// `command="close"`, which fires `close` alone.
+        var closeRequest = false
         /// An action as presented: the node, the title the sheet shows for
         /// it, and whether it could be chosen.
         final class Presented {
@@ -115,11 +129,11 @@ extension MenuHost {
         func adaptivePresentationStyle(for controller: UIPresentationController) -> UIModalPresentationStyle { .none }
         #if !os(tvOS)
         func popoverPresentationControllerDidDismissPopover(_ controller: UIPopoverPresentationController) {
-            host?.cancelled(self)
+            host?.cancelled(self, closeRequest: true)
         }
         #endif
         func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-            host?.cancelled(self)
+            host?.cancelled(self, closeRequest: true)
         }
     }
 
@@ -133,7 +147,7 @@ private final class ConfirmationLifetime: UIView {
         guard mounted else { return }
         DispatchQueue.main.async { [weak self] in
             guard let owner = self?.owner, owner.alert.presentingViewController == nil, !owner.finishing else { return }
-            owner.host?.cancelled(owner)
+            owner.host?.cancelled(owner, closeRequest: false)
         }
     }
 }

@@ -112,6 +112,13 @@ impl<'a> Overflow<'a> {
         all.all(|v| v == first).then_some(first)
     }
 
+    /// Whether both axes scroll in every case, each known to be `auto` or
+    /// `scroll` (a zoomable container, LLP 1057.001.000 D4).
+    pub(crate) fn scrolls_both(&self) -> bool {
+        let scrolls = |v: Option<&str>| matches!(v, Some("auto" | "scroll"));
+        self.0.iter().all(|&(x, y)| scrolls(x) && scrolls(y))
+    }
+
     /// Whether y may scroll: a known y that scrolls, or a computed y. A
     /// computed x beside a `visible` y is not counted: before the
     /// two-value split no x row made a scroll ancestor.

@@ -248,6 +248,21 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertTrue(controllers.count == stacks.count && zip(controllers, stacks).allSatisfy { $0 === $1 }, "the tabs keep their stacks")
     }
 
+    /// A tab container the app owns is the app's, its delegate slot
+    /// included (LLP 1075.003 §3.5): retiring the tabs leaves the app's
+    /// delegate in it.
+    func testRetiringTheTabsLeavesTheSlotOfAContainerTheAppOwns() throws {
+        setenv("EXACT_FIXTURE_CONTAINER", "tab-bar", 1)
+        defer { unsetenv("EXACT_FIXTURE_CONTAINER"); NativeViews.uninstallTable() }
+        let session = try fixture("owned-tab-bar", module: true)
+        let navigation = session.presenter.navigation
+        until("the app's container holds the tabs") { navigation.tabController == nil && navigation.tabOwner != nil }
+        let owner = try XCTUnwrap(navigation.tabOwner as? UITabBarController)
+        XCTAssertTrue(owner.delegate === owner, "the app's own delegate")
+        navigation.retireTabs()
+        XCTAssertTrue(owner.delegate === owner, "still the app's")
+    }
+
     func testAnAppOwnedContainerSelectsThroughARebuiltTablist() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the app's container selects tabs in its window") }
         setenv("EXACT_FIXTURE_CONTAINER", "app", 1)
@@ -675,6 +690,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let overlayNode = { session.presenter.views.values.first { $0.props["testId"] == "root-overlay" } }
         until("the overlay mounts") { overlayNode() != nil }
         let overlay = try node(session, "root-overlay")
+        XCTAssertNil(overlay.props["accessibilityRole"], "this fixture tests layering, not modal presentation")
         let parent = try XCTUnwrap(overlay.superview)
         XCTAssertTrue(tabs.view.superview === parent, "the overlay and the tab container are siblings")
         XCTAssertGreaterThan(overlay.layer.zPosition, tabs.view.layer.zPosition, "the overlay paints over the tabs")

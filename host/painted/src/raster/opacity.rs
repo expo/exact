@@ -35,8 +35,8 @@ pub(super) fn composite(below: &mut Pixmap, layer: &Pixmap, opacity: f32, rows: 
 }
 
 fn empty(row: &[u8]) -> bool {
-    let mut blocks = row.chunks_exact(32);
-    blocks.all(|block| block == [0; 32]) && blocks.remainder().iter().all(|&byte| byte == 0)
+    let (blocks, rest) = row.as_chunks::<32>();
+    blocks.iter().all(|block| *block == [0; 32]) && rest.iter().all(|&byte| byte == 0)
 }
 
 #[cfg(test)]

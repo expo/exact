@@ -120,11 +120,11 @@ theorem settleEach_good {p : Program} {o : Oracle} {env : Env} {r : ResourceDecl
   · next xs => exact settleEachGo_good hp henv hargs hkey xs [] [] hv
   · trivial
 
-theorem settle_pass_good {p : Program} {o : Oracle} {slots now prev force} {G : Scope} {H : Prop}
+theorem settle_pass_good {p : Program} {o : Oracle} {slots now prev force lateReady} {G : Scope} {H : Prop}
     (hN : distinct (p.resources.map (·.name)) = true)
     (hH : H → SettleHyps p G slots now) (hprev : SettledOK p prev) :
     ∀ n st, SettledOK p st →
-      GoodW (fun e => (H → Legit e) ∧ e ≠ .pending) (SettledOK p) (settle.pass p o slots now prev force n st)
+      GoodW (fun e => (H → Legit e) ∧ e ≠ .pending) (SettledOK p) (settle.pass p o slots now prev force lateReady n st)
   | 0, _, _ => by simp [settle.pass, GoodW, Legit]
   | n + 1, st, hst => by
     rw [settle.pass]
@@ -186,6 +186,8 @@ theorem settle_pass_good {p : Program} {o : Oracle} {slots now prev force} {G : 
         simp only [bind, Except.bind, throw, throwThe, MonadExceptOf.throw, GoodW]
         refine ⟨fun hHy => ?_, hne⟩
         have HH := hH hHy
+        split at he
+        · cases he
         have := gateOpen_good (r := r) HH.prog (HH.env s.1 hs) (HH.gates r hr)
         rw [he] at this
         exact this
@@ -234,29 +236,30 @@ values of their declared types (`SettledOK`, which needs no hypothesis:
 the runtime checks every value it settles); and when the slots are well
 typed for the scope the derives and resources are typed in (`SettleHyps`),
 it fails only legitimately: never a type error, never an unbound name. -/
-theorem settle_good {p : Program} {o : Oracle} {slots now prev force} {G : Scope} {H : Prop}
+theorem settle_good {p : Program} {o : Oracle} {slots now prev force lateReady} {G : Scope} {H : Prop}
     (hN : distinct (p.resources.map (·.name)) = true)
     (hH : H → SettleHyps p G slots now) (hprev : SettledOK p prev) :
-    GoodW (fun e => (H → Legit e) ∧ e ≠ .pending) (SettledOK p) (settle p o slots now prev force) :=
+    GoodW (fun e => (H → Legit e) ∧ e ≠ .pending) (SettledOK p) (settle p o slots now prev force lateReady) :=
   settle_pass_good hN hH hprev _ _ SettledOK.empty
 
-theorem settle_settledOK {p : Program} {o : Oracle} {slots now prev force st}
+theorem settle_settledOK {p : Program} {o : Oracle} {slots now prev force lateReady st}
     (hN : distinct (p.resources.map (·.name)) = true) (hprev : SettledOK p prev)
-    (h : settle p o slots now prev force = .ok st) : SettledOK p st := by
-  have := settle_good (o := o) (slots := slots) (now := now) (force := force) (G := []) (H := False) hN
+    (h : settle p o slots now prev force lateReady = .ok st) : SettledOK p st := by
+  have := settle_good (o := o) (slots := slots) (now := now) (force := force) (lateReady := lateReady)
+    (G := []) (H := False) hN
     (fun h => h.elim) hprev
   rw [h] at this; exact this
 
-theorem settle_legit {p : Program} {o : Oracle} {slots now prev force} {G : Scope}
+theorem settle_legit {p : Program} {o : Oracle} {slots now prev force lateReady} {G : Scope}
     (hN : distinct (p.resources.map (·.name)) = true) (hH : SettleHyps p G slots now) (hprev : SettledOK p prev) :
-    GoodR (SettledOK p) (settle p o slots now prev force) :=
+    GoodR (SettledOK p) (settle p o slots now prev force lateReady) :=
   GoodR.of_goodW ((settle_good (H := True) hN (fun _ => hH) hprev).mono (fun _ h => h.1 trivial) (fun _ h => h))
 
 /-- Settlement fails only legitimately and never `pending` (it waits on
 those). -/
-theorem settle_strict {p : Program} {o : Oracle} {slots now prev force} {G : Scope}
+theorem settle_strict {p : Program} {o : Oracle} {slots now prev force lateReady} {G : Scope}
     (hN : distinct (p.resources.map (·.name)) = true) (hH : SettleHyps p G slots now) (hprev : SettledOK p prev) :
-    GoodW Strict (SettledOK p) (settle p o slots now prev force) :=
+    GoodW Strict (SettledOK p) (settle p o slots now prev force lateReady) :=
   (settle_good (H := True) hN (fun _ => hH) hprev).mono (fun _ h => ⟨h.1 trivial, h.2⟩) (fun _ h => h)
 
 end Contract

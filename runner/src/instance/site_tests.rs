@@ -31,8 +31,13 @@ fn reused_frames_preserve_nested_scopes_and_release_rows_on_error() {
         store_dependent_resources: (&[]).into(),
     };
     let mut update = Update::new(env, &sites, &mut ids);
-    let outer = Rc::new(RefCell::new(BTreeMap::from([(0, Value::Number(7.0))])));
-    let inner = Rc::new(RefCell::new(BTreeMap::from([(0, Value::Number(9.0))])));
+    let owned = |v: f64| crate::vm::Owned {
+        slots: BTreeMap::from([(0, Value::Number(v))]),
+        requests: Vec::new(),
+        sends: Vec::new(),
+    };
+    let outer = Rc::new(RefCell::new(owned(7.0)));
+    let inner = Rc::new(RefCell::new(owned(9.0)));
     let released = [Rc::downgrade(&outer), Rc::downgrade(&inner)];
     let frame = |row, item| Frame {
         row: Some(row),
@@ -43,7 +48,7 @@ fn reused_frames_preserve_nested_scopes_and_release_rows_on_error() {
     let result: Result<(), _> = update.with_frame(&[], frame(outer, 1.0), |update, frames| {
         assert_eq!(frames.len(), 1);
         assert_eq!(
-            Frame::row_of(frames, 5).unwrap().borrow()[&0],
+            Frame::row_of(frames, 5).unwrap().borrow().slots[&0],
             Value::Number(7.0)
         );
         update.with_frame(frames, frame(inner, 2.0), |_, frames| {
@@ -51,7 +56,7 @@ fn reused_frames_preserve_nested_scopes_and_release_rows_on_error() {
             assert_eq!(frames[0].item, Some(Value::Number(1.0)));
             assert_eq!(frames[1].item, Some(Value::Number(2.0)));
             assert_eq!(
-                Frame::row_of(frames, 5).unwrap().borrow()[&0],
+                Frame::row_of(frames, 5).unwrap().borrow().slots[&0],
                 Value::Number(9.0)
             );
             Err(InstanceError::List("nested failure"))

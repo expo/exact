@@ -23,7 +23,7 @@
     "calendar-input-root",
     "calendar-drag-handle"
   ],
-  "rust": "off",
+  "rust": { "mode": "off", "data": { "crate": "calendar-data", "type": "calendar_data::Calendar" } },
   "host": {
     "ios": {
       "minimumOS": "17.0",

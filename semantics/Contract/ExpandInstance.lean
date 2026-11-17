@@ -72,7 +72,8 @@ theorem typed_iff {fe : Env} {Lf : Locals} {e : Expr} {t : Ty} {v : Value} :
 theorem cvar_prop {n : Nat} {ce : CEnv} {C : CComponent} {c : String} {id : InstId}
     {binds : List (String × Expr × Frame × Locals)} (hC : ce.comp c = .ok C) {p : String}
     {a : Expr} {fp : Frame} {lp : Locals} (hd : ¬ C.derives.any (·.name == p))
-    (hst : ¬ C.states.any (·.name == p)) (hb : lookupBind p binds = .some (a, fp, lp)) {v : Value} :
+    (hst : ¬ C.states.any (·.name == p)) (hr : ¬ C.ownedResources.any (·.name == p))
+    (hb : lookupBind p binds = .some (a, fp, lp)) {v : Value} :
     cvar (n + 1) ce c id binds p = .ok v ↔ ceval n ce fp lp a = .ok v := by
   have hd' : C.derives.find? (·.name == p) = .none := by
     rw [List.find?_eq_none]; intro d hdm hdp; exact hd (List.any_eq_true.2 ⟨d, hdm, hdp⟩)
@@ -80,9 +81,9 @@ theorem cvar_prop {n : Nat} {ce : CEnv} {C : CComponent} {c : String} {id : Inst
   constructor
   · rintro ⟨C', hC', h⟩
     cases hC'
-    simpa [hd', hst, hb] using h
+    simpa [hd', hst, hb, hr] using h
   · intro h
-    exact ⟨C, rfl, by simpa [hd', hst, hb] using h⟩
+    exact ⟨C, rfl, by simpa [hd', hst, hb, hr] using h⟩
 
 /-- **A prop corresponds** when its argument does: the argument, read in
 the use site's frame, has the values its substitution has in the flat
@@ -91,8 +92,8 @@ around it changes no value). -/
 theorem prop_reads {ce : CEnv} {C : CComponent} {c : String} {id : InstId}
     {binds : List (String × Expr × Frame × Locals)} (hC : ce.comp c = .ok C) {p : String}
     {a : Expr} {fp : Frame} {lp : Locals} (hd : ¬ C.derives.any (·.name == p))
-    (hst : ¬ C.states.any (·.name == p)) (hb : lookupBind p binds = .some (a, fp, lp))
-    {fe : Env} {Lf : Locals} {cs : Subst} {r : Expr}
+    (hst : ¬ C.states.any (·.name == p)) (hown : ¬ C.ownedResources.any (·.name == p))
+    (hb : lookupBind p binds = .some (a, fp, lp)) {fe : Env} {Lf : Locals} {cs : Subst} {r : Expr}
     (hg : cs.get p = .some (replOf r) ∨ ∃ t, cs.get p = .some (replOf (.typed r t)))
     (harg : ∀ v, (∃ n, ceval n ce fp lp a = .ok v) ↔ EvalR fe false Lf r v) :
     ∀ v, (∃ n, cvar n ce c id binds p = .ok v) ↔ Reads fe Lf cs p v := by
@@ -106,9 +107,9 @@ theorem prop_reads {ce : CEnv} {C : CComponent} {c : String} {id : InstId}
   · rintro ⟨n, h⟩
     cases n with
     | zero => simp [cvar] at h
-    | succ n => exact ⟨n, (cvar_prop hC hd hst hb).1 h⟩
+    | succ n => exact ⟨n, (cvar_prop hC hd hst hown hb).1 h⟩
   · rintro ⟨n, h⟩
-    exact ⟨n + 1, (cvar_prop hC hd hst hb).2 h⟩
+    exact ⟨n + 1, (cvar_prop hC hd hst hown hb).2 h⟩
 
 /-- A state reads its instance's store. -/
 theorem cvar_state {n : Nat} {ce : CEnv} {C : CComponent} {c : String} {id : InstId}
@@ -121,7 +122,7 @@ theorem cvar_state {n : Nat} {ce : CEnv} {C : CComponent} {c : String} {id : Ins
   constructor
   · rintro ⟨C', hC', h⟩
     cases hC'
-    simp only [hd', hst, ite_true] at h
+    simp only [hd', hst, Bool.true_or, ite_true] at h
     split at h
     · rename_i s hs
       exact ⟨s, hs, Option.elim_err_ok.mp h⟩

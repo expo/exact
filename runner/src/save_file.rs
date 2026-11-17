@@ -9,6 +9,7 @@
 //! with no file to write first and no grant to read it (x2apps notes #4:
 //! "export what's on screen" took a mirror file kept current, because the
 //! save picker needs the press's activation and a `then` is past it).
+//! Either form takes the pickers' `startIn=` (LLP 1173 D2).
 //!
 //! One rule on every host, as for `share` (LLP 1069.003): the runner
 //! refuses bad data into the journal (`saveFile: refused: <reason>`), holds
@@ -32,6 +33,9 @@ pub struct SaveFile {
     pub suggested_name: String,
     /// The content itself (`text=`), saved as UTF-8.
     pub text: Option<String>,
+    /// Where the panel opens, as the pickers' `startIn`
+    /// ([`crate::file_pickers::WELL_KNOWN`] or a `doc:/` path).
+    pub start_in: Option<String>,
 }
 
 /// What a host does with a `saveFile`.
@@ -48,7 +52,9 @@ pub enum Arm {
 
 impl SaveFile {
     /// The command's positional arguments, `(id, from, suggestedName)`, or
-    /// `(id, none, suggestedName, text)` for `text=`.
+    /// `(id, none, suggestedName, text)` for `text=`; with `startIn=`, five:
+    /// `(id, from, suggestedName, none, startIn)` or `(id, none,
+    /// suggestedName, text, startIn)`.
     pub fn from_args(args: &[Value]) -> Result<SaveFile, String> {
         const USAGE: &str =
             "saveFile takes (id, from, suggestedName) or (id, text=, suggestedName=), strings";
@@ -57,18 +63,24 @@ impl SaveFile {
             Some(Value::Option(Some(v))) if v.is_str() => Ok(v.text().to_string()),
             _ => Err(USAGE.to_owned()),
         };
+        let start_in = crate::file_pickers::start_in_arg(args.get(4)).map_err(|()| USAGE)?;
+        let text = matches!(args[..], [_, Value::Option(None), ..]);
         match args.len() {
-            3 => Ok(SaveFile {
-                id: at(0)?,
-                from: at(1)?,
-                suggested_name: at(2)?,
-                text: None,
-            }),
-            4 if matches!(args[1], Value::Option(None)) => Ok(SaveFile {
+            3 | 5 if !text && matches!(args.get(3), None | Some(Value::Option(None))) => {
+                Ok(SaveFile {
+                    id: at(0)?,
+                    from: at(1)?,
+                    suggested_name: at(2)?,
+                    text: None,
+                    start_in,
+                })
+            }
+            4 | 5 if text => Ok(SaveFile {
                 id: at(0)?,
                 from: String::new(),
                 suggested_name: at(2)?,
                 text: Some(at(3)?),
+                start_in,
             }),
             _ => Err(USAGE.into()),
         }
@@ -92,6 +104,7 @@ impl SaveFile {
         }
         s.push_str(",\"suggestedName\":");
         quote(&self.suggested_name, &mut s);
+        crate::file_pickers::push_start_in(&self.start_in, &mut s);
         s.push('}');
         s
     }
@@ -161,7 +174,7 @@ pub fn arm<D: DataSource>(
         runner.log(format!("saveFile: refused: {reason}"));
         Arm::Refused(reason, view)
     };
-    let request = match request {
+    let mut request = match request {
         Ok(request) => request,
         Err(reason) => return refuse(runner, reason, None),
     };
@@ -180,6 +193,8 @@ pub fn arm<D: DataSource>(
     if let Err(reason) = request.checked(runner) {
         return refuse(runner, reason, Some(view));
     }
+    request.start_in =
+        crate::file_pickers::ruled_start_in(runner, "saveFile", request.start_in.take());
     if agent {
         let summary = request.summary();
         return Arm::Held(runner.hold("export", Some(view), &summary, &[], true));
@@ -192,9 +207,10 @@ pub fn arm<D: DataSource>(
 
 /// [`arm`] for a host whose command arrived as JSON (the web glue, the
 /// Apple session): `{"id":…,"from":…,"suggestedName":…,"agent":true}`, or
-/// `"text"` in place of `"from"`. The reply is `{"refused":"…","view":N?}`,
+/// `"text"` in place of `"from"`, and `"startIn"` when the call names one. The reply is `{"refused":"…","view":N?}`,
 /// `{"ticket":N}` or `{"present":true,"view":N,…}` with the summary's fields.
 pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
+    let start_in = field_str(json, "startIn");
     let parsed = match (
         field_str(json, "id"),
         field_str(json, "from"),
@@ -206,12 +222,14 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
             from: String::new(),
             suggested_name,
             text: Some(text),
+            start_in,
         }),
         (Some(id), Some(from), Some(suggested_name), None) => Ok(SaveFile {
             id,
             from,
             suggested_name,
             text: None,
+            start_in,
         }),
         _ => Err(
             "saveFile takes (id, from, suggestedName) or (id, text=, suggestedName=), strings"
@@ -298,5 +316,33 @@ mod tests {
             r#"{"id":"x","text":"A","suggestedName":"a.md"}"#
         );
         assert!(SaveFile::from_args(&[s("x"), s("app:/data/a"), s("a.md"), s("A")]).is_err());
+        // `startIn=` (LLP 1173 D2) makes either form five.
+        let none = Value::Option(None);
+        let copy = [
+            s("x"),
+            s("app:/data/a"),
+            s("a.png"),
+            none.clone(),
+            s("pictures"),
+        ];
+        assert_eq!(
+            SaveFile::from_args(&copy).unwrap().summary(),
+            r#"{"id":"x","from":"app:/data/a","suggestedName":"a.png","startIn":"pictures"}"#
+        );
+        let text = [s("x"), none.clone(), s("a.md"), s("A"), s("doc:/2/notes")];
+        assert_eq!(
+            SaveFile::from_args(&text).unwrap().summary(),
+            r#"{"id":"x","text":"A","suggestedName":"a.md","startIn":"doc:/2/notes"}"#
+        );
+        let both = [s("x"), s("app:/data/a"), s("a.png"), s("A"), s("pictures")];
+        assert!(SaveFile::from_args(&both).is_err());
+        let number = [
+            s("x"),
+            s("app:/data/a"),
+            s("a.png"),
+            none,
+            Value::Number(1.0),
+        ];
+        assert!(SaveFile::from_args(&number).is_err());
     }
 }

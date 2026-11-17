@@ -246,3 +246,23 @@ component App
     );
     assert!(json("still").get("written").is_none());
 }
+
+#[test]
+fn basic_clips_cross_as_relative_geometry() {
+    let mut style = StyleProps::default();
+    style
+        .set_dynamic(
+            StyleId::ClipPath,
+            &StyleValue::Text("polygon(evenodd, 4px 25%, 100% 0, 0 100%)".into()),
+        )
+        .unwrap();
+    let (text, skipped) = style_json(&style, &Env::default());
+    assert!(skipped.is_empty());
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        json["clip_path"],
+        serde_json::json!({
+            "shape": "polygon", "values": [4,0,0,25,0,100,0,0,0,0,0,100], "rule":"evenodd"
+        })
+    );
+}

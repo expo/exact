@@ -18,7 +18,8 @@
 
 use super::BOXES;
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span, StyleDecl};
+use contract_checking::View;
+use contract_syntax::{Attr, Expr, Span, StyleDecl};
 use std::collections::BTreeSet;
 
 /// How the containing box lays out the children the walk gives it.
@@ -195,52 +196,27 @@ fn inset(rows: &[&Attr]) -> bool {
 }
 
 /// `lower-width-padding` over the whole view.
-pub(super) fn width_padding(view: &[Node], styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+pub(super) fn width_padding(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
     let mut seen = BTreeSet::new();
-    walk(view, Parent::Fills, false, styles, &mut seen, out);
-}
-
-fn walk(
-    nodes: &[Node],
-    parent: Parent,
-    in_list: bool,
-    styles: &[StyleDecl],
-    seen: &mut BTreeSet<(u32, u32, u32, u32)>,
-    out: &mut Vec<LowerError>,
-) {
-    for node in nodes {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                span,
-                ..
-            } => {
-                let Some(all) = rows(attrs, styles) else {
-                    walk(children, Parent::Other, in_list, styles, seen, out);
-                    continue;
-                };
-                if parent == Parent::Fills && container(tag) && wide(&all) {
-                    flag(*span, seen, out);
-                }
-                walk(
-                    children,
-                    parent_of(tag, &all, in_list),
-                    in_list || tag == "list",
-                    styles,
-                    seen,
-                    out,
-                );
-            }
-            Node::Use { children, .. } => walk(children, Parent::Other, in_list, styles, seen, out),
-            node => {
-                for list in node.child_lists() {
-                    walk(list, parent, in_list, styles, seen, out);
-                }
-            }
+    for _ in view.walk_with((Parent::Fills, false), |node, &(parent, in_list)| {
+        let Some((tag, _, attrs)) = node.element() else {
+            return (
+                if node.component_use().is_some() {
+                    Parent::Other
+                } else {
+                    parent
+                },
+                in_list,
+            );
+        };
+        let Some(all) = rows(attrs, styles) else {
+            return (Parent::Other, in_list);
+        };
+        if parent == Parent::Fills && container(tag) && wide(&all) {
+            flag(node.span(), &mut seen, out);
         }
-    }
+        (parent_of(tag, &all, in_list), in_list || tag == "list")
+    }) {}
 }
 
 /// Whether the rows make a content-box container exactly as wide as its
@@ -288,20 +264,12 @@ fn flag(span: Span, seen: &mut BTreeSet<(u32, u32, u32, u32)>, out: &mut Vec<Low
 
 /// @ref LLP 1116.011 D2.4 — role text grows with accessibility sizes; px widths do not.
 pub(super) fn text_px_width(
-    view: &[Node],
+    view: &View<'_>,
     styles: &[StyleDecl],
     lowered: &super::TextStyles,
     out: &mut Vec<LowerError>,
 ) {
-    text_widths(
-        view,
-        Some(true),
-        TextContext::default(),
-        styles,
-        lowered,
-        &mut BTreeSet::new(),
-        out,
-    );
+    text_widths(view, styles, lowered, &mut BTreeSet::new(), out);
 }
 
 /// `inherit` and `unset` use the CSS parent even where `em` uses a native
@@ -501,41 +469,72 @@ struct TextContext {
     web_only: bool,
 }
 
-/// Returns whether this subtree contains text whose known font scales.
-fn text_widths(
-    nodes: &[Node],
-    inherited: Option<bool>,
+struct TextFrame<'a> {
+    font: Option<bool>,
     context: TextContext,
+    child_scales: bool,
+    active: bool,
+    element: Option<TextElement<'a>>,
+}
+
+struct TextElement<'a> {
+    tag: &'a str,
+    positional: &'a [Expr],
+    span: Span,
+    all: Vec<&'a Attr>,
+    layout: Vec<&'a Attr>,
+    known_class: bool,
+    field: bool,
+    inline: bool,
+    svg: bool,
+    font_row: Option<&'a Attr>,
+    parent_axis: Option<bool>,
+}
+
+fn text_widths(
+    view: &View<'_>,
     styles: &[StyleDecl],
     lowered: &super::TextStyles,
     seen: &mut BTreeSet<(u32, u32, u32, u32)>,
     out: &mut Vec<LowerError>,
-) -> bool {
-    let mut scales = false;
-    for node in nodes {
-        scales |= match node {
-            Node::Element {
-                tag,
-                attrs,
-                positional,
-                children,
-                span,
-                instance,
-            } => {
+) {
+    let mut stack: Vec<TextFrame<'_>> = Vec::new();
+    for (node, (), entering) in view.events((), |_, _| Some(())) {
+        if entering {
+            let (inherited, context, active) = stack
+                .last()
+                .map_or((Some(true), TextContext::default(), true), |parent| {
+                    (parent.font, parent.context, parent.active)
+                });
+            let mut frame = TextFrame {
+                font: inherited,
+                context,
+                child_scales: false,
+                active,
+                element: None,
+            };
+            if !active {
+                stack.push(frame);
+                continue;
+            }
+            if let Some((tag, positional, attrs)) = node.element() {
+                let span = node.span();
                 let svg = context.svg || tag == "svg";
                 if svg
                     && matches!(
-                        tag.as_str(),
+                        tag,
                         "defs" | "symbol" | "clipPath" | "mask" | "pattern" | "marker"
                     )
                 {
+                    frame.active = false;
+                    stack.push(frame);
                     continue;
                 }
                 let resolved = rows(attrs, styles);
                 let known_class = resolved.is_some();
                 let all = resolved
                     .unwrap_or_else(|| attrs.iter().filter(|a| a.name != "class").collect());
-                let effective = lowered.get(&(*span, *instance, tag.clone()));
+                let effective = lowered.get(&(span, node.instance().unwrap(), tag.to_owned()));
                 let layout: Vec<_> = match effective {
                     Some(Some(style)) => style.layout.iter().collect(),
                     _ => all.clone(),
@@ -543,11 +542,13 @@ fn text_widths(
                 if matches!(effective, Some(None))
                     || last(&layout, "display").is_some_and(|a| literal_word(a, &["none"]))
                 {
+                    frame.active = false;
+                    stack.push(frame);
                     continue;
                 }
                 let heading = tag == "text"
                     && matches!(last(&all, "role").map(|a| &a.value), Some(Expr::Str(v, _)) if v == "heading");
-                let field = matches!(tag.as_str(), "input" | "textarea")
+                let field = matches!(tag, "input" | "textarea")
                     && contract_syntax::input_control(tag, attrs).is_none();
                 let base = if (tag == "button" || field) && !context.web_only {
                     match effective.and_then(|s| s.as_ref()).and_then(|s| s.native) {
@@ -573,70 +574,80 @@ fn text_widths(
                         .find(|a| matches!(a.name.as_str(), "font" | "font-size"))
                         .copied(),
                 };
-                let font = if matches!(effective, Some(None)) {
-                    None
-                } else {
-                    scaling_font(font_row, inherited, base, default)
-                };
-                let child_context = TextContext {
+                frame.font = scaling_font(font_row, inherited, base, default);
+                frame.context = TextContext {
                     inline: !svg && tag == "text",
                     svg: svg && tag != "foreignObject",
                     web_only: context.web_only || tag == "foreignObject",
                 };
-                let child_scales =
-                    text_widths(children, font, child_context, styles, lowered, seen, out);
-                if svg {
-                    continue;
-                }
-                let text = positional
+                frame.element = Some(TextElement {
+                    tag,
+                    positional,
+                    span,
+                    all,
+                    layout,
+                    known_class,
+                    field,
+                    inline: context.inline,
+                    svg,
+                    font_row,
+                    parent_axis: effective
+                        .and_then(|s| s.as_ref())
+                        .and_then(|s| s.parent_horizontal_flex),
+                });
+            } else if node.component_use().is_some() {
+                frame.font = None;
+                frame.context = TextContext::default();
+            }
+            stack.push(frame);
+        } else {
+            let frame = stack.pop().unwrap();
+            let scales = if !frame.active {
+                false
+            } else if let Some(e) = frame.element {
+                let text = e
+                    .positional
                     .first()
-                    .or_else(|| last(&all, "text").map(|a| &a.value));
-                let text_scales = if tag == "text" && text.is_some() {
-                    font == Some(true) && !matches!(text, Some(Expr::Str(s, _)) if s.is_empty())
+                    .or_else(|| last(&e.all, "text").map(|a| &a.value));
+                let text_scales = if e.tag == "text" && text.is_some() {
+                    frame.font == Some(true)
+                        && !matches!(text, Some(Expr::Str(s, _)) if s.is_empty())
                 } else {
-                    (field && font == Some(true)) || child_scales
+                    (e.field && frame.font == Some(true)) || frame.child_scales
                 };
-                let parent_axis = effective
-                    .and_then(|style| style.as_ref())
-                    .and_then(|style| style.parent_horizontal_flex);
-                if let Some(bound) = proven_width(&layout, font_row, parent_axis) {
-                    if text_scales
-                        && known_class
-                        && !(tag == "text" && context.inline)
-                        && seen.insert((span.source_id, span.line, span.col, span.end_col))
-                    {
-                        out.push(LowerError {
-                            id: "lower-text-px-width",
-                            message: format!("this box's absolute `{}` keeps its width bounded while its text can grow at accessibility sizes and may overrun it: express the width and its bounds in `rem` (for example, `{}=\"3rem\"`) so they follow the root font, or let the content determine the width. Native Apple controls use the Apple control font, which can scale with Dynamic Type; web controls inherit, and Linux control defaults are fixed", bound.name, bound.name),
-                            span: *span,
-                        });
+                if !e.svg {
+                    if let Some(bound) = proven_width(&e.layout, e.font_row, e.parent_axis) {
+                        if text_scales
+                            && e.known_class
+                            && !(e.tag == "text" && e.inline)
+                            && seen.insert((
+                                e.span.source_id,
+                                e.span.line,
+                                e.span.col,
+                                e.span.end_col,
+                            ))
+                        {
+                            out.push(LowerError {
+                                id: "lower-text-px-width",
+                                message: format!("this box's absolute `{}` keeps its width bounded while its text can grow at accessibility sizes and may overrun it: express the width and its bounds in `rem` (for example, `{}=\"3rem\"`) so they follow the root font, or let the content determine the width. Native Apple controls use the Apple control font, which can scale with Dynamic Type; web controls inherit, and Linux control defaults are fixed", bound.name, bound.name),
+                                span: e.span,
+                            });
+                        }
                     }
                 }
-                text_scales
-                    && known_class
-                    && known_display(&layout)
-                    && in_flow(&layout)
-                    && tag != "dialog"
-                    && last(&layout, "popover").is_none()
+                !e.svg
+                    && text_scales
+                    && e.known_class
+                    && known_display(&e.layout)
+                    && in_flow(&e.layout)
+                    && e.tag != "dialog"
+                    && last(&e.layout, "popover").is_none()
+            } else {
+                frame.child_scales
+            };
+            if let Some(parent) = stack.last_mut() {
+                parent.child_scales |= scales;
             }
-            Node::Use { children, .. } => text_widths(
-                children,
-                None,
-                TextContext::default(),
-                styles,
-                lowered,
-                seen,
-                out,
-            ),
-            // Every list is walked, so not `any`.
-            node => {
-                let mut yes = false;
-                for list in node.child_lists() {
-                    yes |= text_widths(list, inherited, context, styles, lowered, seen, out);
-                }
-                yes
-            }
-        };
+        }
     }
-    scales
 }

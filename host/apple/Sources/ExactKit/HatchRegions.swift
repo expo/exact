@@ -123,7 +123,7 @@ final class HatchRegions {
         if tombstones.count > Self.tombstonesKept { tombstones.removeFirst(tombstones.count - Self.tombstonesKept) }
     }
 
-    private func frame(_ view: PlatformView) -> [String: Any] { AgreementReport.rect(view.convert(view.bounds, to: nil)) }
+    private func frame(_ view: PlatformView) -> [String: Any] { InspectionGeometry.rect(view.convert(view.bounds, to: nil)) }
 
     private func json(_ region: Region) -> [String: Any] {
         var observed: [String: Any] = ["live": true]

@@ -38,5 +38,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "sparkline-data", "type": "sparkline_data::Spark", "source": "sparkline_data::Spark" } }
 }

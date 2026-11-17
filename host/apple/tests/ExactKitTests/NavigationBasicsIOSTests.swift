@@ -212,7 +212,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         let observation = try XCTUnwrap(Agent(session: session).layout(["id": Int(field.id)])["node"] as? [String: Any])
         let scrolls = try XCTUnwrap(observation["scroll"] as? [[String: Any]])
         let routeScroll = try XCTUnwrap(scrolls.first { $0["route"] as? Int == Int(route.node.id) })
-        XCTAssertEqual(routeScroll["sy"] as? Double, Agent.r2(content.contentOffset.y))
+        XCTAssertEqual(routeScroll["sy"] as? Double, InspectionValue.r2(content.contentOffset.y))
         let clips = try XCTUnwrap(observation["clip"] as? [[String: Any]])
         XCTAssertTrue(clips.contains { $0["id"] as? Int == Int(route.node.id) && $0["kind"] as? String == "viewport" })
         XCTAssertTrue(FocusSearch.items(p.documentMount, in: p.documentMount.bounds).contains { ($0 as? UIView) === field.field },
@@ -339,7 +339,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         session.publishFillForTests(route.node.id, wireBatch([
             ["op": "content", "id": document.id, "w": content.bounds.width, "h": extent],
             ["op": "frame", "id": target.id, "x": moved.minX, "y": moved.minY, "w": moved.width, "h": moved.height],
-        ]), generation: session.generation)
+        ]), lease: session.runtime.completionLease)
         session.landFill()
         until("the fill lands and the target is revealed") { !session.fillInFlight && p.elementScrolls.names.isEmpty && content.contentOffset.y > 0 }
         XCTAssertTrue(content.bounds.contains(target.convert(target.bounds, to: content)), "the reveal uses the target's new frame")

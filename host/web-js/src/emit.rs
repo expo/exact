@@ -1,6 +1,6 @@
 //! The plan's tables → one ES module.
 //! Module shape:
-//! slots `s_i = sig(init)`, derives `d_i = memo(body)`, resources
+//! slots `s_i = sig(init)`, settled derives `d_i = memo(body)`, resources
 //! `r_i = res(source, args, compiled value, compiled args)`, actions
 //! `a_i = act(body)` (writes land at commit, as the VM's `StoreSlot`
 //! collects them), then the view as nested statements: a node is `h(…)` with
@@ -11,7 +11,7 @@
 use crate::code::{self, Scope, Uses};
 use crate::style;
 use exact_kernel::{NodeType, PropId};
-use exact_plan::{BindingKind, EventKind, NodesId, Plan, RegionKind, Value};
+use exact_plan::{BindingKind, EventKind, NodesId, Plan, Value};
 use exact_web::host::template::Parts;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -24,18 +24,24 @@ mod commands;
 mod each;
 #[path = "list_options.rs"]
 mod list_options;
+#[path = "list_text.rs"]
+mod list_text;
 #[path = "lower.rs"]
 pub(crate) mod lower;
 #[path = "markdown.rs"]
 mod markdown;
 #[path = "motion.rs"]
 mod motion;
+#[path = "mutations.rs"]
+mod mutations;
 #[path = "named_records.rs"]
 mod named_records;
 #[path = "pages.rs"]
 mod pages;
 #[path = "regions.rs"]
 mod regions;
+#[path = "resources.rs"]
+mod resources;
 #[path = "rows.rs"]
 mod rows;
 #[path = "said.rs"]
@@ -136,8 +142,12 @@ struct Em<'a> {
     list: bool,
     /// Whether an ordinary scroller takes `scrollFollowEnd` (`follow.js` is imported).
     follow: bool,
+    /// Whether a scroller is zoomable (`zoom.js` is imported, LLP 1057.001.000 §5).
+    zoom: bool,
     /// Whether a `video` or `audio` is in the plan (`media.js` is installed).
     media: bool,
+    /// Whether a route declares its own entrance or exit (shared.js plays it).
+    route_parts: bool,
     /// Whether an image draws a symbol (`symbols.js`), and whether a
     /// binding names one (its roles are then the plan's strings).
     symbols: (bool, bool),
@@ -158,6 +168,9 @@ struct Em<'a> {
     /// The tab panels whose contents wait for their first selection
     /// (`exact_runner::instance::panel_sites`; tabs.js).
     panels: Vec<exact_plan::NodesId>,
+    /// Whether a child's resource is in the plan: its instances' paths are
+    /// then kept (LLP 1035.005.004 D8).
+    owns_requests: bool,
 }
 
 /// The runner's reserved sources the JS runtime answers itself: the page's
@@ -235,7 +248,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         flow: false,
         list: false,
         follow: false,
+        zoom: false,
         media: false,
+        route_parts: false,
         symbols: (false, false),
         heights: Default::default(),
         transforms: Default::default(),
@@ -245,6 +260,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         site_attrs,
         dev_reload,
         panels: exact_runner::instance::tabs::panel_sites(plan),
+        owns_requests: plan.resources.iter().any(|r| r.owner.is_some()),
     };
     em.heights = em.drag_targets(PropId::HeightDragFor);
     em.transforms = em.drag_targets(PropId::TransformDragFor);
@@ -353,133 +369,41 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         }
         root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
     }
-    for (i, r) in plan.derives.iter().enumerate() {
-        let f = code::function(
-            plan,
-            plan.code(r.body),
-            &code::evaluation(&top, format!("derive {:?}", plan.str(r.name)), false),
-            0,
-            &mut em.uses,
-        )
-        .map_err(|e| format!("derive {}: {e}", plan.str(r.name)))?;
-        let memo = em.uses.rt("memo");
-        let _ = write!(
-            body,
-            "const d_{i}={memo}({f},{}{});",
-            serde_json::to_string(&type_code(plan, r.ty)).unwrap(),
-            if site_attrs {
-                format!(",{}", serde_json::to_string(plan.str(r.name)).unwrap())
-            } else {
-                String::new()
-            }
-        );
-    }
+    body.push_str(&em.declare_derives(&top, site_attrs)?);
     // The reserved sources facts.js, midi.js and transport.js answer, their declared fields filled by name:
     // installed before any resource, since the boot's settlement asks them (the runner answers them itself).
     let facts = crate::facts::reserved(plan, &mut body)?;
     let midi = timers::midi(&mut em, &mut body)?;
     let transport = timers::transport(&mut em, &mut body)?;
     for (i, r) in plan.resources.iter().enumerate() {
-        let mut args = Vec::new();
-        for (k, a) in r.args.iter().enumerate() {
-            let f = code::expression(
-                plan,
-                plan.code(plan.arg(a).expr),
-                &code::evaluation(
-                    &top,
-                    format!("resource {:?} argument {}", plan.str(r.name), k + 1),
-                    false,
-                ),
-                &mut em.uses,
-            )
-            .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;
-            args.push(f);
-        }
-        if let Some(each) = each::resource(plan, i, &args, &top, &mut em.uses)? {
-            body.push_str(&each);
+        // A child's resource is made with each instance of its arm, and a
+        // late one after the late slots it reads (LLP 1035.005.004 D1, D2).
+        if r.owner.is_some() {
+            let owned = em.uses.rt("owned");
+            let _ = write!(
+                body,
+                "const r_{i}={owned}({});",
+                serde_json::to_string(plan.str(r.name)).unwrap()
+            );
             continue;
         }
-        // What it shows while it waits with nothing kept (LLP 1048.003 D6,
-        // 1054.000.002): an `else source()` row's value, a declared
-        // `else empty(…)`, or the type's zero; a placeholder row has none.
-        let is_placeholder = plan
-            .resources
-            .iter()
-            .any(|o| o.placeholder.map(|p| p.0 as usize) == Some(i));
-        let placeholder = match (r.placeholder, plan.bytes(r.placeholder_value)) {
-            (Some(p), _) => format!("()=>r_{}()", p.0),
-            (None, b) if !b.is_empty() => {
-                value_js(&Value::from_bytes(b).map_err(|e| e.to_string())?)
-            }
-            _ if is_placeholder => "void 0".into(),
-            _ => pages::zero(plan, r.ty),
-        };
-        // Host facts and store readers are asked at launch (LLP 1027 D4).
-        let fact = HOST_FACTS.contains(&plan.str(r.source));
-        let initial = plan.bytes(r.initial);
-        let initial = if initial.is_empty() || fact {
-            "void 0".to_string()
-        } else {
-            value_js(&Value::from_bytes(initial).map_err(|e| e.to_string())?)
-        };
-        let initial_args = plan.bytes(r.initial_args);
-        let initial_args = if initial_args.is_empty() || fact || r.reader {
-            "void 0".to_string()
-        } else {
-            value_js(&Value::from_bytes(initial_args).map_err(|e| e.to_string())?)
-        };
-        let res = if dev_reload {
-            "$devRes".to_string()
-        } else {
-            em.uses.rt("res")
-        };
-        let res = each::constructor(r, res);
-        // An `else` row's compiled answer is the bake's for every launch,
-        // never asked again (each was a worker turn; the runner's
-        // `is_placeholder_row`, review B4): it is settled, not a bake.
-        let kept = if is_placeholder { ",1" } else { "" };
-        let carry = if dev_reload {
-            format!(",{}{kept}", type_json(plan, r.ty))
-        } else {
-            kept.to_string()
-        };
-        // Its last `context` arguments are its `with` context (LLP 1027.005
-        // D6), which identify no upload it asks (uploads.js, LLP 1016.000 D10).
-        let args = each::arguments(plan, r, &args, &top, &mut em.uses)?;
-        let _ = write!(
-            body,
-            "const r_{i}={res}({},{},{args},{initial},{initial_args},{},{placeholder}{carry});",
-            serde_json::to_string(plan.str(r.name)).unwrap(),
-            serde_json::to_string(plan.str(r.source)).unwrap(),
-            serde_json::to_string(&type_code(plan, r.ty)).unwrap()
-        );
-        // The runner's own resource shows its facts, never a write (overlay.js)
-        if exact_plan::RUNNER_OWNED_SOURCES.contains(&plan.str(r.source)) {
-            let _ = write!(body, "r_{i}.r.owned=true;");
+        if r.late {
+            continue;
         }
+        body.push_str(&resources::declaration(
+            plan,
+            i,
+            &top,
+            dev_reload,
+            &mut em.uses,
+        )?);
     }
-    for (i, m) in plan.mutations.iter().enumerate() {
-        let refreshes: Vec<String> = m
-            .refreshes
-            .iter()
-            .map(|x| format!("r_{}", plan.mutation_refreshes[x.0 as usize].resource.0))
-            .collect();
-        let mt = em.uses.rt("mut");
-        // A queue's sends wait their turn (LLP 1092 D6; schedule.js); a
-        // parallel one's run together (LLP 1161.000 D6).
-        let _ = write!(
-            body,
-            "const m_{i}={mt}({},s_{},[{}],{}{});",
-            serde_json::to_string(plan.str(m.name)).unwrap(),
-            m.slot.0,
-            refreshes.join(","),
-            serde_json::to_string(&type_code(plan, m.ty)).unwrap(),
-            match m.mode {
-                exact_plan::MutationMode::Newest => "",
-                exact_plan::MutationMode::Queue => ",1",
-                exact_plan::MutationMode::Parallel => ",2",
-            }
-        );
+    // A child's mutation used outside every region answers into a late
+    // slot: declared after it (LLP 1035.005.004 D6).
+    let (late_mutations, early_mutations): (Vec<usize>, Vec<usize>) = (0..plan.mutations.len())
+        .partition(|&i| plan.slots[plan.mutations[i].slot.0 as usize].late);
+    for i in early_mutations {
+        body.push_str(&mutations::declaration(plan, i, &mut em.uses));
     }
     // A child's state used outside every region: initialized as the root
     // instance renders, after the derives and resources (LLP 1017 P4c).
@@ -487,6 +411,19 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         if r.late {
             root_slot(plan, i, &top, dev_reload, &mut em.uses, &mut body)?;
         }
+    }
+    // A child's resource used outside every region reads those slots.
+    for (i, _) in plan.resources.iter().enumerate().filter(|(_, r)| r.late) {
+        body.push_str(&resources::declaration(
+            plan,
+            i,
+            &top,
+            dev_reload,
+            &mut em.uses,
+        )?);
+    }
+    for i in late_mutations {
+        body.push_str(&mutations::declaration(plan, i, &mut em.uses));
     }
     for (i, r) in plan.actions.iter().enumerate() {
         // An action that touches row slots takes the row in force first.
@@ -544,10 +481,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             let _ = write!(body, "const a_{i}={act}({f},[{}]{tail});", types.join(","));
         }
     }
-    for (i, m) in plan.mutations.iter().enumerate() {
-        if let Some(a) = m.then {
-            let _ = write!(body, "m_{i}.then=a_{};", a.0);
-        }
+    for i in 0..plan.mutations.len() {
+        body.push_str(&mutations::root_then(plan, i, &top, &mut em.uses)?);
     }
     em.out.clear();
     em.node(sites.root, "$R", &top)?;
@@ -614,20 +549,36 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|b| plan.binding(b))
                 .any(|b| b.kind == BindingKind::Prop && b.id == PropId::NavigationBack as u16)
         });
-    // A root that can present a sheet (a route whose `navigationPresentation` is, or may be,
-    // `modal`) hands the projection the sheet's frame (navigation/routes.js `sheetFrame`), which a plan
-    // without one never links (LLP 1047.002 D1).
-    let sheets = roots
-        && plan.nodes.iter().any(|n| {
+    // Whether a node's `prop` is, or may be, `word`.
+    let may_say = |prop: PropId, word: &str| {
+        plan.nodes.iter().any(|n| {
             n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
                 b.kind == BindingKind::Prop
-                    && b.id == PropId::NavigationPresentation as u16
+                    && b.id == prop as u16
                     && style::literal(plan, plan.code(b.expr))
-                        .is_none_or(|v| v.as_str() == Some("modal"))
+                        .is_none_or(|v| v.as_str() == Some(word))
             })
-        });
+        })
+    };
+    // A root that can present a sheet (a route whose `navigationPresentation` may be `modal`) hands
+    // the projection the sheet's frame (navigation/routes.js `sheetFrame`), and one whose route may
+    // say `navigationBar="transparent"` the clear bar (`clearBar`), which a plan without one never
+    // links (LLP 1047.002 D1).
+    let sheets = roots && may_say(PropId::NavigationPresentation, "modal");
+    let clear_bars = roots && may_say(PropId::NavigationBar, "transparent");
     if sheets {
         body.push_str("$useSheets($sheetFrame);");
+    }
+    if clear_bars {
+        body.push_str("$useClearBars($clearBar);");
+    }
+    // @ref LLP 1013.001 D2 — a route's own entrance or exit plays through
+    // shared.js, which loads after first paint when a node asks for it: a
+    // plan with one asks at boot, since the route that declares it is
+    // seldom mounted then, and its first push would otherwise cut.
+    if em.route_parts {
+        let load = em.uses.rt("pr");
+        let _ = write!(body, "{load}();");
     }
     if let Some(slot) = plan.router {
         let router = em.uses.rt("router");
@@ -636,7 +587,6 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let project = em.uses.rt("navigationRoots");
         let _ = write!(body, "{project}($navigation);");
     }
-    // The state's getters, for the agent (names live in `names.js`).
     let list = |p: &str, n: usize| {
         (0..n)
             .map(|i| format!("{p}_{i}"))
@@ -653,10 +603,15 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             .map(|(i, _)| format!("s_{i}"))
             .collect::<Vec<_>>()
             .join(","),
-        list("d", plan.derives.len()),
+        plan.derives
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.unsettled)
+            .map(|(i, _)| format!("d_{i}"))
+            .collect::<Vec<_>>()
+            .join(","),
         list("r", plan.resources.len())
     );
-    // The queues read the state a stalled `next` saw (LLP 1092 D3).
     if (plan.mutations.iter()).any(|m| m.mode == exact_plan::MutationMode::Queue) {
         let queues = em.uses.rt("queues");
         let _ = write!(body, "{queues}($state);");
@@ -717,7 +672,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|r| plan.str(r.name))
                 .collect()
         ),
-        names(plan.derives.iter().map(|r| plan.str(r.name)).collect()),
+        names(
+            plan.derives
+                .iter()
+                .filter(|r| !r.unsettled)
+                .map(|r| plan.str(r.name))
+                .collect()
+        ),
         names(plan.resources.iter().map(|r| plan.str(r.name)).collect()),
         types(
             plan.slots
@@ -726,7 +687,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|r| r.ty)
                 .collect()
         ),
-        types(plan.derives.iter().map(|r| r.ty).collect()),
+        types(
+            plan.derives
+                .iter()
+                .filter(|r| !r.unsettled)
+                .map(|r| r.ty)
+                .collect()
+        ),
         types(plan.resources.iter().map(|r| r.ty).collect())
     );
     // Each source's parameter and result types, by field name, for a
@@ -762,12 +729,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         })
         .collect();
     let names_js = format!(
-        "{names_js}export const sourceTypes={{{}}};export const pages=[{}];export const viewportMedia={};export const activation={};export const markdownPaths={};\n",
+        "{names_js}export const sourceTypes={{{}}};export const pages=[{}];export const viewportMedia={};export const activation={};export const markdownPaths={};export const choosesScheme={};\n",
         source_types.join(","),
         pages.join(","),
         crate::facts::viewport_media(plan),
         crate::facts::activation(plan),
-        serde_json::to_string(&em.uses.markdown_paths).unwrap()
+        serde_json::to_string(&em.uses.markdown_paths).unwrap(),
+        commands.iter().any(|name| name == "setScheme")
     );
     let imports: Vec<String> = em.uses.names.iter().cloned().collect();
     let commands_import = commands::import(&commands);
@@ -780,6 +748,17 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         .iter()
         .map(|(n, v)| format!("const {n}={v};\n"))
         .collect();
+    // What data can give its elements (`style::bound_tokens`), which
+    // writers.mjs counts.
+    let bound = crate::style::bound_tokens(plan);
+    let consts = if bound.is_empty() {
+        consts
+    } else {
+        format!(
+            "export const boundTokens={};\n{consts}",
+            serde_json::to_string(&bound).unwrap()
+        )
+    };
     let (fetch_import, prepare, prepared) = crate::facts::prepared_sources(plan);
     let js = format!(
         "// Generated by exact-web-js from the app's plan. Do not edit.\nimport{{{}}}from\"./rt.js\";{}{}{}{}{fetch_import}\nexport const sources={{{}}};export const wait={};{consts}{prepare}export default function(){{{prepared}{body}return $state}}\n",
@@ -789,10 +768,14 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         } else {
             format!("import{{{}}}from\"./budget.js\";", budget.join(","))
         },
-        match (roots, sheets) {
-            (true, true) => "import{navigation as $navigation,useSheets as $useSheets,sheetFrame as $sheetFrame}from\"./navigation.js\";",
-            (true, false) => "import{navigation as $navigation}from\"./navigation.js\";",
-            _ => "",
+        if roots {
+            format!(
+                "import{{navigation as $navigation{}{}}}from\"./navigation.js\";",
+                if sheets { ",useSheets as $useSheets,sheetFrame as $sheetFrame" } else { "" },
+                if clear_bars { ",useClearBars as $useClearBars,clearBar as $clearBar" } else { "" },
+            )
+        } else {
+            String::new()
         },
         if dev_reload { "import{devResource as $devRes,devSignal as $devSig}from\"./checkpoint.js\";" } else { "" },
         // Loaded pieces, imported only where the plan uses them.
@@ -802,6 +785,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (em.list, "import{vl as $vl}from\"./list.js\";"),
             (each::readers(plan), "import{reader as $reader}from\"./store-reader.js\";"),
             (em.follow, "import\"./follow.js\";"),
+            (em.zoom, "import{zoom as $zoom}from\"./zoom.js\";"),
             (em.media, "import{mediaUse as $media}from\"./media.js\";"),
             (links, "import{linkUse as $links}from\"./links.js\";"),
             (iframes, "import\"./iframes.js\";"),
@@ -863,23 +847,12 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     // carries them: the browser runs `animation` rows.
     for row in &plan.keyframes {
         if let Ok(frames) = exact_motion::Keyframes::parse(plan.str(row.css)) {
-            let text = frames.css();
+            let text = exact_web::css::rotation_keyframes_css(&frames);
             let _ = write!(css, "@keyframes {}{{{text}}}", plan.str(row.name));
             // A pressable node plays the copy that also animates
             // `--exact-scale` (exact_web::css::keyframes_name).
-            if text.contains("scale:") {
-                let mut press = String::new();
-                let mut rest = text.as_str();
-                while let Some(at) = rest.find("scale:") {
-                    let Some(end) = rest[at..].find(';').map(|e| at + e) else {
-                        break;
-                    };
-                    press.push_str(&rest[..=end]);
-                    press.push_str("--exact-");
-                    press.push_str(&rest[at..=end]);
-                    rest = &rest[end + 1..];
-                }
-                press.push_str(rest);
+            if text.contains("scale:") || text.contains("translate:") {
+                let press = exact_web::css::press_keyframes_css(&text);
                 let _ = write!(
                     css,
                     "@keyframes {}-exact-press{{{press}}}",
@@ -1007,12 +980,23 @@ impl Em<'_> {
         }
         if presence.contains("--exact-press:")
             || presence.contains("--exact-press-haptic:")
+            || presence.contains("--exact-press-translate:")
             || presence.contains("--exact-press-opacity:")
             || presence.contains("--exact-press-opacity-to:")
             || presence.contains("--exact-press-background-color:")
             || presence.contains("--exact-press-color:")
+            || !parts.looks.is_empty()
+            || plan
+                .node(NodesId(i))
+                .bindings
+                .iter()
+                .map(|b| plan.binding(b))
+                .any(|b| {
+                    b.kind == BindingKind::Prop && b.id == PropId::AccessibilityKeyShortcuts as u16
+                })
             || attrs.iter().any(|a| {
                 a.0 == "data-button-style"
+                    || a.0 == "aria-keyshortcuts"
                     || (a.0 == "role" && ["radiogroup", "tablist", "menu"].contains(&a.1.as_str()))
             })
         {
@@ -1124,7 +1108,18 @@ impl Em<'_> {
             self.out,
             "const {e}={h}({parent},\"{element}\",{class},{attrs_js},{text});"
         );
-        if let Some(register) = self.presence_registration(i, !presence.is_empty()) {
+        // Its children go in the zoom's layer.
+        let zoomable = exact_runner::uses::zoomable(plan, NodesId(i));
+        let parent_of_children = if zoomable {
+            self.zoom = true;
+            let _ = write!(self.out, "const z{i}=$zoom({e});");
+            format!("z{i}")
+        } else {
+            e.clone()
+        };
+        if let Some(register) = self.presence_registration(i, &presence) {
+            self.route_parts |=
+                presence.contains("--exact-view-transition-") || self.binds_route_part(i);
             let register = self.uses.rt(register);
             let _ = write!(self.out, "{register}({e});");
         }
@@ -1172,6 +1167,17 @@ impl Em<'_> {
             }
             // Nor have the system bars (LLP 1105 D7), interactive glass,
             // a menu's order or a tip (LLP 1035.006.000 D4).
+            // A zoomable scroller's zoom is zoom.js's; no other scroller has one.
+            if b.kind == BindingKind::Prop && b.id == PropId::ScrollZoom as u16 {
+                if zoomable {
+                    let f = self
+                        .bound(i, &e, &b, scope)
+                        .map_err(|x| format!("node {i}: {x}"))?;
+                    let p = self.uses.rt("P");
+                    let _ = write!(self.out, "{p}({e},\"scrollZoom\",{f});");
+                }
+                continue;
+            }
             if b.kind == BindingKind::Prop
                 && (b.id == PropId::StatusBarStyle as u16
                     || b.id == PropId::StatusBarAnimation as u16
@@ -1191,9 +1197,18 @@ impl Em<'_> {
                     self.markdown(i, &e, &format!("()=>{source}"), plan.code(b.expr));
                 }
                 // Refused SVG literals still run their binding to journal the refusal.
-                if b.kind != BindingKind::Prop
-                    || !exact_runner::bridge::prop_value(b.id, &v)
-                        .is_err_and(|e| crate::svg_lengths::refused(&e))
+                let svg_animation = node_type.is_svg_element()
+                    && b.kind == BindingKind::Style
+                    && matches!(
+                        exact_kernel::StyleId::from_bit(b.id as u32),
+                        Some(
+                            exact_kernel::StyleId::Animation | exact_kernel::StyleId::ExitAnimation
+                        )
+                    );
+                if !svg_animation
+                    && (b.kind != BindingKind::Prop
+                        || !exact_runner::bridge::prop_value(b.id, &v)
+                            .is_err_and(|e| crate::svg_lengths::refused(&e)))
                 {
                     continue;
                 }
@@ -1432,21 +1447,9 @@ impl Em<'_> {
             let _ = write!(self.out, "{tp}({e},()=>{{");
         }
         if virtualized {
-            let opts = self.list_options(i, scope, &edges)?;
-            let &[Site::Region(r)] = self.sites.of_node(i) else {
-                return Err(format!(
-                    "node {i}: a virtualized list needs one direct `for`"
-                ));
-            };
-            if plan.regions[r as usize].kind != RegionKind::Each {
-                return Err(format!(
-                    "node {i}: a virtualized list needs one direct `for`"
-                ));
-            }
-            self.list = true;
-            self.each(r, &e, scope, Some(opts))?;
+            self.collection_children(i, &e, scope, &edges)?;
         } else {
-            self.children(self.sites.of_node(i), &e, scope)?;
+            self.children(self.sites.of_node(i), &parent_of_children, scope)?;
         }
         self.live_time(i, element, &e, scope)?;
         if panel {

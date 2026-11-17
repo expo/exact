@@ -105,7 +105,7 @@ pub(crate) fn style(tag: &str, attrs: &[Attr]) -> Result<Option<&'static str>, L
     {
         return err(
             "lower-grouped-list",
-            "a grouped list builds every row (a settings screen, not a feed); it is never `virtualized`",
+            "a grouped list builds every row; write appearance=\"none\" for a virtualized list, or remove `virtualized` to keep the grouped list",
             a.span,
         );
     }

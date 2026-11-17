@@ -36,7 +36,7 @@ to fix, and the data survives a relaunch.
 - **Tests.** Leaving a pushed screen in a test is the `back` step, not `tap "back"`. `verify`'s
   second engine reports "PART/DIVERGE/OUTSIDE" lines (`toLowerCase` unsupported, back/tap not
   delivered by the oracle). I took them as informational, since the summary said clean.
-- **Symbols.** `sf/pin.slash` is blank on the web, so I added an `app.tamber` icon token with a
+- **Symbols.** `sf/pin.slash` is blank on the web, so I added an `app.forma` icon token with a
   hand-drawn SVG (`assets/icons/pin-slash.svg`). I dropped Linux with `update --without linux`.
 - **Swipe-to-pin.** I left out a leading swipe action for pin. Exact's long-form swipe doesn't
   seem to combine with the platform-drawn `delete=` on a `link` row, so pinning lives in the

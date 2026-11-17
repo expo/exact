@@ -276,7 +276,7 @@ impl Breadcrumb {
             if read.is_err() || bytes.len() != SLOTS * SLOT_BYTES {
                 continue;
             }
-            for slot in bytes.chunks_exact(SLOT_BYTES) {
+            for slot in bytes.as_chunks::<SLOT_BYTES>().0 {
                 let depth = u32_at(slot, 4);
                 if u32_at(slot, 0) != 1 || depth == 0 || depth > DEPTH_MAX {
                     continue;

@@ -145,11 +145,22 @@ test('async help exits before creating or checking out its worktree', () => {
 });
 
 
-test('the existing glue step runs Mac widget packaging, signing and migration tests', () => {
+test('the existing glue step runs Mac widget packaging, signing, migration and fixture-prep tests', () => {
   const glue = glueTests(join(import.meta.dir, '..'));
   const step = checks('new', 'old', { lane: [], glue }).find(([name]) => name === 'glue');
-  for (const file of ['scripts/app-apple.test.mjs', 'scripts/app-keychain.test.mjs', 'scripts/app-manifest.test.mjs', 'scripts/exact.test.mjs', 'host/apple/link.test.mjs', 'host/apple/cloak.test.mjs', 'scripts/agent-drag.test.mjs']) {
+  for (const file of ['scripts/app-apple.test.mjs', 'scripts/app-keychain.test.mjs', 'scripts/app-manifest.test.mjs', 'scripts/exact.test.mjs', 'host/apple/link.test.mjs', 'host/apple/cloak.test.mjs', 'host/apple/xctest-fixtures.test.mjs', 'scripts/agent-drag.test.mjs']) {
     expect(glue).toContain('./' + file);
     expect(step[2].at(-1)).toContain('./' + file);
   }
+});
+
+test('hourly quick uses the complete commit range, and probes replay its cases rather than a no-op', async () => {
+  const { quickProbe } = await import('./async.mjs');
+  const quick = checks('tip', 'last-hour', { lane: [], glue: [] }).find(([name]) => name === 'difftest-quick');
+  expect(quick[2].slice(-3)).toEqual(['quick', '--base', 'last-hour']);
+  const probe = quickProbe('quick: random --seed 18446744073709551615 --count 40');
+  expect(probe[2][1]).toContain('corpus');
+  expect(probe[2][1]).toContain('random --seed 18446744073709551615 --count 40');
+  expect(probe[2][1]).toContain('lowering --seed 18446744073709551615 --count 8 --batch 2');
+  expect(probe[2][1]).not.toContain('-- quick');
 });

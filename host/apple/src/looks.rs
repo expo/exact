@@ -8,8 +8,13 @@ use exact_kernel::{ColorValue, Env, NodeRef, StyleId, StyleMask};
 /// The pressed paint's rows (LLP 1061 D7), `:active`'s absolute opacity
 /// (LLP 1121 D8) among them: a cleared one is no pressed look.
 pub(crate) fn press_paint_rows() -> StyleMask {
-    use StyleId::{PressBackgroundColor, PressColor, PressOpacity, PressOpacityTo};
+    use StyleId::{
+        PressBackgroundColor, PressColor, PressOpacity, PressOpacityTo, PressTranslate,
+        PressTranslatePercent,
+    };
     [
+        PressTranslate,
+        PressTranslatePercent,
         PressOpacity,
         PressOpacityTo,
         PressBackgroundColor,

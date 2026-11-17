@@ -50,7 +50,10 @@ pub enum ImageFormat {
 #[derive(Debug, Clone, Default)]
 pub struct ImageRequest {
     pub max_dimension: u32,
-    pub max_bytes: u64,
+    /// Exact patch 9 (exact2 LLP 1069.002 A1.12): `None` when the call names
+    /// no byte target; the output is then bounded by the service's
+    /// `max_output_bytes`.
+    pub max_bytes: Option<u64>,
     pub format: ImageFormat,
     /// Exact patch 9a (exact2 LLP 1133.019 D17): the call's further options
     /// as one JSON value, which Ibex passes to the codec unread: the edit on
@@ -294,7 +297,7 @@ impl ImageWork {
     pub fn new(limits: WorkLimits) -> Self {
         Self(Arc::new(Registry {
             generation: GENERATION
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
                 .expect("image owner identity exhausted"),
             limits,
             state: Mutex::new(RegistryState {
@@ -499,7 +502,7 @@ impl ImageJob {
         }
         if request.transform {
             request.max_dimension = service.limits.max_dimension;
-            request.max_bytes = service.limits.max_output_bytes;
+            request.max_bytes = Some(service.limits.max_output_bytes);
         }
         if !from.starts_with("app:/")
             || !to.starts_with("app:/")
@@ -510,8 +513,9 @@ impl ImageJob {
         }
         if request.max_dimension == 0
             || request.max_dimension > service.limits.max_dimension
-            || request.max_bytes == 0
-            || request.max_bytes > service.limits.max_output_bytes
+            || request
+                .max_bytes
+                .is_some_and(|n| n == 0 || n > service.limits.max_output_bytes)
             || u64::from(request.max_dimension)
                 .checked_mul(u64::from(request.max_dimension))
                 .is_none()
@@ -582,7 +586,11 @@ impl ImageJob {
             || image.width > self.request.max_dimension
             || image.height > self.request.max_dimension
             || pixels > self.service.codec_limits.max_pixels
-            || image.bytes.len() as u64 > self.request.max_bytes
+            || image.bytes.len() as u64
+                > self
+                    .request
+                    .max_bytes
+                    .unwrap_or(self.service.limits.max_output_bytes)
         {
             return Err(failed("codec exceeded its output contract"));
         }
@@ -674,7 +682,7 @@ mod tests {
                 "app:/data/out",
                 ImageRequest {
                     max_dimension: 16,
-                    max_bytes: 32,
+                    max_bytes: Some(32),
                     format: ImageFormat::Jpeg,
                     ..Default::default()
                 },
@@ -944,7 +952,7 @@ mod tests {
             "app:/data/out",
             ImageRequest {
                 max_dimension: 16,
-                max_bytes: 32,
+                max_bytes: Some(32),
                 format: ImageFormat::Jpeg,
                 ..Default::default()
             }
@@ -1009,7 +1017,7 @@ mod tests {
             "app:/data/out",
             ImageRequest {
                 max_dimension: 16,
-                max_bytes: 32,
+                max_bytes: Some(32),
                 format: ImageFormat::Jpeg,
                 ..Default::default()
             }
@@ -1046,7 +1054,7 @@ mod tests {
             "app:/data/out",
             ImageRequest {
                 max_dimension: 16,
-                max_bytes: 32,
+                max_bytes: Some(32),
                 format: ImageFormat::Jpeg,
                 ..Default::default()
             }
@@ -1067,7 +1075,7 @@ mod tests {
             "app:/data/out",
             ImageRequest {
                 max_dimension: 1,
-                max_bytes: 1,
+                max_bytes: Some(1),
                 format: ImageFormat::Jpeg,
                 ..Default::default()
             },
@@ -1098,7 +1106,7 @@ mod tests {
             "app:/data/out",
             ImageRequest {
                 max_dimension: 1,
-                max_bytes: 1,
+                max_bytes: Some(1),
                 format: ImageFormat::Jpeg,
                 ..Default::default()
             },
@@ -1178,6 +1186,61 @@ mod tests {
             failed_as("transformImage", "image path exceeds its bound")
         );
     }
+    /// Exact patch 9 (exact2 LLP 1069.002 A1.12): a compression that names no
+    /// byte target reaches the codec as `None`, and the service's own output
+    /// limit bounds it.
+    #[test]
+    fn a_compression_without_a_byte_target_is_bounded_by_the_service() {
+        struct Output(usize);
+        impl ImageCodec for Output {
+            fn limits(&self) -> CodecLimits {
+                CodecLimits {
+                    max_pixels: 1024,
+                    max_scratch_bytes: 1024,
+                }
+            }
+            fn encode(
+                &self,
+                _: &[u8],
+                request: ImageRequest,
+                _: &WorkControl,
+            ) -> Result<CompressedImage, HostError> {
+                assert_eq!(request.max_bytes, None);
+                Ok(CompressedImage {
+                    bytes: vec![0; self.0],
+                    width: 2,
+                    height: 1,
+                    ..Default::default()
+                })
+            }
+        }
+        let f = Fixture::new();
+        let limits = WorkLimits {
+            max_output_bytes: 4,
+            ..WorkLimits::default()
+        };
+        let work = ImageWork::new(limits);
+        let run = |size: usize| {
+            let service = ImageService::new(Arc::new(Output(size)), limits).unwrap();
+            ImageJob::prepare(
+                &work,
+                Some(&service),
+                Some(f.dirs.clone()),
+                f.grants.clone(),
+                "app:/tmp/in",
+                "app:/data/out",
+                ImageRequest {
+                    max_dimension: 16,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .execute()
+        };
+        assert_eq!(run(4).unwrap().size, 4);
+        assert!(run(5).is_err());
+        assert_eq!(f.output(), vec![0; 4]);
+    }
     #[test]
     fn destination_parent_is_pinned_before_codec_and_host_owner_drop_cancels_queued_work() {
         let f = Fixture::new();
@@ -1207,7 +1270,7 @@ mod tests {
                 "app:/data/out",
                 ImageRequest {
                     max_dimension: 2,
-                    max_bytes: 32,
+                    max_bytes: Some(32),
                     format: ImageFormat::Jpeg,
                     ..Default::default()
                 },

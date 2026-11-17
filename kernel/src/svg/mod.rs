@@ -27,6 +27,95 @@ pub use scene::{Item, Kind, Scene, Shape, Transform};
 pub use shape::{circle, dash_scale, ellipse, geometry, view_box, view_box_transform, ViewBox};
 pub use transform::{Affine, TransformList, TransformOrigin};
 
+/// Whether a rasterized SVG consumes this node, including references from
+/// other SVGs. Every source of that picture must be sampled by the engine.
+pub fn in_blended_scene(kernel: &crate::Kernel, node: &crate::NodeRef<'_>) -> bool {
+    if node.node_type != NodeType::Svg && !node.node_type.is_svg_element() {
+        return false;
+    }
+    let arena = kernel.arena();
+    arena
+        .iter_live()
+        .filter(|s| arena.node_type(*s) == NodeType::Svg)
+        .any(|s| {
+            let sources = scene_sources(kernel, arena.local_id(s));
+            sources.contains(&node.id)
+                && sources.iter().any(|id| {
+                    kernel
+                        .node(*id)
+                        .is_some_and(|n| n.style.mix_blend_mode != crate::MixBlendMode::Normal)
+                })
+        })
+}
+
+/// Source nodes read by an SVG, including transitive references. Hosts use
+/// these dependencies for animation ownership and picture invalidation.
+pub fn scene_sources(
+    kernel: &crate::Kernel,
+    root: crate::ViewId,
+) -> std::collections::HashSet<crate::ViewId> {
+    let mut todo = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = todo.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(n) = kernel.node(id) else {
+            continue;
+        };
+        todo.extend(n.children());
+        // References can bring paint and animated inputs from another SVG.
+        // Use the scene's duplicate-id resolution; visit targets once so
+        // cyclic use and pattern references terminate.
+        let mut reference = |name: &str| {
+            if let Some(target) = kernel.resolve_id(n.id, name) {
+                todo.push(target);
+            }
+        };
+        if matches!(
+            n.node_type,
+            NodeType::SvgUse
+                | NodeType::SvgPattern
+                | NodeType::SvgLinearGradient
+                | NodeType::SvgRadialGradient
+        ) {
+            if let Some(name) = n
+                .props
+                .str(crate::PropId::Href)
+                .and_then(|h| h.strip_prefix('#'))
+            {
+                reference(name);
+            }
+        }
+        for paint in [&n.style.fill, &n.style.stroke] {
+            if let Paint::Url(name, _) = paint {
+                reference(name);
+            }
+        }
+        if let Some(name) = n.style.rare.svg_mask.url() {
+            reference(name);
+        }
+        if let Some(name) = n.style.rare.clip_path.url() {
+            reference(name);
+        }
+        for filter in &n.style.filter.0 {
+            if let filter::FilterFn::Url(name) = filter {
+                reference(name);
+            }
+        }
+        for marker in [
+            &n.style.marker_start,
+            &n.style.marker_mid,
+            &n.style.marker_end,
+        ] {
+            if let Some(name) = marker.url() {
+                reference(name);
+            }
+        }
+    }
+    seen
+}
+
 impl NodeType {
     /// An element inside an `svg`: `g` or a shape (LLP 1055 D3). Never laid
     /// out as a box; painted by its `svg` from [`geometry`].

@@ -41,7 +41,7 @@ pub use direct::boot_swap_js;
 pub use executor::{pump, Executor};
 pub use page::{capture, capture_js, page, page_with_rules, scroll_document_js};
 pub use pages::pages;
-pub use requests::settle;
+pub use requests::{render_with_at, settle};
 pub use serve::{expire_renders, Serve, Server, Stopper};
 pub use source::Anonymous;
 
@@ -122,6 +122,11 @@ pub struct Rendered {
     /// (written so without a kernel, LLP 1048.004): the page doesn't
     /// rewrite it (`page::for_runtime`), and the digest is over this form.
     pub runtime_form: bool,
+    /// Whether the document restores the reader's saved appearance before paint.
+    pub chooses_scheme: bool,
+    /// The render drew secure randomness, which is the device's (LLP
+    /// 1069.005 D2): its page is its reader's alone.
+    pub drew: bool,
 }
 
 /// Render `plan` at `location` with a source from `data`, waiting at most
@@ -184,17 +189,17 @@ fn project_for<D: DataSource>(
 pub fn projects_as_booted(plan: &Plan) -> bool {
     use exact_plan::Opcode::*;
     plan.slots.iter().all(|slot| {
-        exact_runner::vm::instructions(plan.code(slot.init)).all(|i| {
+        exact_runner::vm::transitive_instructions(plan, plan.code(slot.init)).all(|i| {
             i.is_ok_and(|i| {
-                !matches!(
-                    i.op,
-                    LoadResource
-                        | LoadDerive
-                        | PendingResource
-                        | FailedResource
-                        | FailureResource
-                        | PendingMutation
-                )
+                !(i.op == LoadDerive && plan.unsettled_body(i.args[0] as u32).is_none())
+                    && !matches!(
+                        i.op,
+                        LoadResource
+                            | PendingResource
+                            | FailedResource
+                            | FailureResource
+                            | PendingMutation
+                    )
             })
         })
     })
@@ -288,11 +293,8 @@ pub fn render_with<D: DataSource + 'static, F: Fn() -> D>(
     )
 }
 
-/// [`render_with`], with a fixed render timestamp in milliseconds since the
-/// Unix epoch, including every initializer, resource argument and checkpoint,
-/// and the web build's delivery facts available before any initializer runs.
 #[allow(clippy::too_many_arguments)]
-pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
+pub(crate) fn render_with_faults_at<D: DataSource + 'static, F: Fn() -> D>(
     plan: impl Into<exact_runner::Program>,
     data: &F,
     viewport: exact_runner::Viewport,
@@ -303,12 +305,13 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
     projection: Projection,
     now_ms: f64,
     delivery: &exact_runner::delivery::Delivery,
+    faults: Option<&exact_runner::runner::faults::Faults>,
 ) -> Result<Rendered, String> {
     let program = plan.into();
     let plan = &program;
     let direct = direct_for(plan, ids, projection)?;
     let mut page = settle_at(
-        plan, data, viewport, location, deadline, direct, now_ms, delivery, None,
+        plan, data, viewport, location, deadline, direct, now_ms, delivery, None, faults,
     )?;
     let settled_tree = if direct {
         match page.runner.document_tree() {
@@ -330,7 +333,7 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
             Err(why) if projection == Projection::Auto => {
                 crate::log(format_args!("render {location}: with a kernel ({why})"));
                 retire(page, data);
-                return render_with_at(
+                return render_with_faults_at(
                     plan,
                     data,
                     viewport,
@@ -341,6 +344,7 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
                     Projection::Kernel,
                     now_ms,
                     delivery,
+                    faults,
                 );
             }
             Err(why) => {
@@ -357,13 +361,15 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
         None
     };
     let (checkpoint, settled, clocked) = (page.checkpoint.clone(), page.settled, page.clocked);
+    let mut drew = page.runner.store().entropy_draws() > 0;
     retire(page, data);
     // @ref LLP 1048.000 D6 — the document is the checkpoint's projection,
     // from a runner booted from the page's checkpoint with a fresh source,
     // as the runtime boots: its first tree is built in one pass, so its view
     // ids are the runtime's, a pending answer's placeholder included. The
-    // runner that settled built its tree as answers arrived. What the boot
-    // asks is never run. A document whose ids nobody keeps is the settled
+    // runner that settled built its tree as answers arrived. The boot may
+    // ask a source again (an open stream's answer, `ask_at_launch`), which a
+    // ready source answers. A document whose ids nobody keeps is the settled
     // tree's projection where that is the same ([`Ids::Any`]).
     let state = read_checkpoint(&checkpoint).map_err(|e| format!("the checkpoint: {e}"))?;
     let (document, handlers) = match settled_tree {
@@ -383,6 +389,8 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
             booted
                 .build_every_tab()
                 .map_err(|e| format!("boot from the checkpoint: {e:?}"))?;
+            // An open stream is asked again at boot, and its source may draw
+            drew |= booted.store().entropy_draws() > 0;
             (
                 project_for(ids)(&booted).map_err(|e| e.to_string())?,
                 booted.handlers(),
@@ -394,6 +402,7 @@ pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
     let clocked = clocked || ids != Ids::Any;
     finish(
         plan, site, location, document, handlers, checkpoint, state, settled, clocked, viewport,
+        drew,
     )
 }
 
@@ -434,6 +443,7 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     now_ms: f64,
     delivery: &exact_runner::delivery::Delivery,
     on_boot: Option<OnBoot<'_, D>>,
+    faults: Option<&exact_runner::runner::faults::Faults>,
 ) -> Result<Settling<D>, String> {
     // Both complete documents and streamed JS pages settle through this entry.
     exact_kernel::style::roles::set_column(exact_kernel::style::roles::Column::Neutral);
@@ -445,7 +455,7 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     // with it, instead of building a realm per render (LLP 1048.000 D10's
     // fresh realm). For anonymous pages only: a realm's module state (its
     // caches, counters) carries from one render to the next.
-    let warm = warm_realms();
+    let warm = warm_realms() && faults.is_none();
     // The last render's runner, if its worker did not drop it after sending.
     retire_renders();
     let pooled = warm
@@ -473,13 +483,17 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     // (LLP 1153.001 D7); no runner or module state enters that cache.
     let grants =
         exact_runner::grants::with_declared(exact_runner::DataSource::grants(&settling), plan);
-    let executor = EXECUTORS
-        .with(|pool| {
-            let mut pool = pool.borrow_mut();
-            let at = pool.iter().position(|(g, _)| *g == grants)?;
-            Some(pool.swap_remove(at).1)
-        })
-        .unwrap_or_else(|| Executor::start(&grants));
+    let executor = if faults.is_some() {
+        Executor::start_with_cache(&grants, exact_executor::SharedHttpCache::new())
+    } else {
+        EXECUTORS
+            .with(|pool| {
+                let mut pool = pool.borrow_mut();
+                let at = pool.iter().position(|(g, _)| *g == grants)?;
+                Some(pool.swap_remove(at).1)
+            })
+            .unwrap_or_else(|| Executor::start(&grants))
+    };
     let until = Instant::now() + deadline;
     let watchdog = Watchdog::arm(settling.interrupt(), until);
     let kernel = || {
@@ -513,6 +527,8 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
         ),
         Err(e) => return Err(format!("boot: {e:?}")),
     };
+    // A render takes its table from this request, never the process environment.
+    runner.share_faults(&faults.cloned().unwrap_or_default());
     // The page is the web's: its packages answer as there, not as on this machine.
     runner.set_module_target("web");
     // A rendered page holds every tab panel, which the JS target adopts at
@@ -541,7 +557,7 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
     // Whatever is still in flight is abandoned with the render; an executor
     // with nothing in flight goes back to this worker's pool, its open
     // streams let go.
-    if matches!(settled, Settled::Deadline) {
+    if matches!(settled, Settled::Deadline) || faults.is_some() {
         drop(executor);
     } else {
         executor.forget(|_| false);
@@ -559,16 +575,21 @@ pub(crate) fn settle_at<D: DataSource + 'static, F: Fn() -> D>(
 }
 
 /// A settled render's runner, done with: its realm kept warm
-/// (`EXACT_RENDER_REALMS=warm`, a render that settled), and the runner
-/// dropped once the page is sent ([`retire_renders`]), off the response's
-/// path.
+/// (`EXACT_RENDER_REALMS=warm`, a render that settled and drew nothing,
+/// since its module may hold a draw, which is the device's: LLP 1069.005
+/// D2), and the runner dropped once the page is sent ([`retire_renders`]),
+/// off the response's path.
 pub(crate) fn retire<D: DataSource + 'static, F: Fn() -> D>(page: Settling<D>, data: &F) {
     let Settling {
         mut runner,
         settled,
         ..
     } = page;
-    if warm_realms() && !matches!(settled, Settled::Deadline) {
+    if warm_realms()
+        && runner.faults().is_empty()
+        && !matches!(settled, Settled::Deadline)
+        && runner.store().entropy_draws() == 0
+    {
         let used = std::mem::replace(runner.data(), Anonymous::new(data()));
         REALMS.with(|p| p.borrow_mut().push(Box::new(used)));
     }
@@ -588,6 +609,7 @@ pub(crate) fn finish(
     settled: Settled,
     clocked: bool,
     viewport: exact_runner::Viewport,
+    drew: bool,
 ) -> Result<Rendered, String> {
     let head = document
         .page_head(plan, site, location)
@@ -604,6 +626,8 @@ pub(crate) fn finish(
         wake,
         activate: activation,
         runtime_form: false,
+        chooses_scheme: exact_runner::uses::chooses_scheme(plan),
+        drew,
     })
 }
 

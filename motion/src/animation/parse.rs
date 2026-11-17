@@ -336,6 +336,11 @@ impl Keyframes {
     /// The body as CSS (percentages, CSS units), for a web host's
     /// `@keyframes name { … }`.
     pub fn css(&self) -> String {
+        self.css_values(value_css)
+    }
+
+    /// Serialize values through a host's CSS spelling.
+    pub fn css_values(&self, value: impl Fn(Property, Value) -> String) -> String {
         let mut out = String::new();
         for frame in self.0.iter() {
             let _ = write!(out, "{}%{{", Shortest(frame.offset * 100.0));
@@ -383,7 +388,7 @@ impl Keyframes {
                             colour(Property::ShadowColor, shade)
                         )
                     }
-                    _ => value_css(*p, *v),
+                    _ => value(*p, *v),
                 };
                 let _ = write!(out, "{}:{};", p.css_name(), text);
             }
@@ -404,7 +409,7 @@ pub fn value_css(property: Property, v: Value) -> String {
             };
             format!("{} {}", axis(v.x, v.z), axis(v.y, v.w))
         }
-        Property::Rotate => format!("{}deg", Shortest(v.x)),
+        Property::Rotate => crate::rotation::css(v),
         Property::R
         | Property::Height
         | Property::Cx
@@ -761,28 +766,10 @@ fn keyframe_value(property: Property, value: &str) -> Result<Value, ParseError> 
         ))
     };
     Ok(match property {
-        // A length or a percentage of the box per axis (chess diary #4):
-        // lengths in x and y, percentages in z and w.
-        Property::Translate => {
-            let axis = |part: &str| match part.strip_suffix('%') {
-                Some(n) => exact_num::parse_f64(n.trim())
-                    .ok()
-                    .filter(|n| n.is_finite())
-                    .map(|n| (0.0, n)),
-                None => length(part).map(|l| (l, 0.0)),
-            };
-            let parts: Vec<&str> = value.split_whitespace().collect();
-            let ((x, px), (y, py)) = match parts.as_slice() {
-                [x] => (axis(x).ok_or_else(bad)?, (0.0, 0.0)),
-                [x, y] => (axis(x).ok_or_else(bad)?, axis(y).ok_or_else(bad)?),
-                _ => return Err(bad()),
-            };
-            Value::four(x, y, px, py)
-        }
-        Property::Rotate => {
-            let n = word::strip_unit(value, "deg").unwrap_or(value);
-            Value::scalar(exact_num::parse_f64(n.trim()).map_err(|_| bad())?)
-        }
+        // A length, a percentage of the box or a `calc()` of them per axis
+        // (chess diary #4): lengths in x and y, percentages in z and w.
+        Property::Translate => crate::length::translate(value, false).ok_or_else(bad)?,
+        Property::Rotate => crate::rotation::parse(value).ok_or_else(bad)?,
         Property::Scale | Property::Opacity => {
             let v = match value.strip_suffix('%') {
                 Some(n) => exact_num::parse_f64(n.trim()).map_err(|_| bad())? / 100.0,

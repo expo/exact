@@ -15,9 +15,21 @@
 // pair that has a curve the transition is skipped and the update still
 // runs. The browser calls the update asynchronously: until it has run, later
 // commits' updates wait behind it, in order.
+//
+// A route's own entrance and exit (LLP 1013.001) share that call. Only the
+// route a push adds or a pop removes takes part, under a name it holds on one
+// side of the change alone: a popped route whose exit is declared is named
+// before the old state is captured, and a pushed route whose entrance is
+// declared after the flush, in the new state. The root stays unnamed, so the
+// page beneath is the live page; the route beneath a pushed one is held shown,
+// and the pushed one inert, until the transition ends (navigation.js
+// `holdRoutes`). A push in a commit that needs no transition otherwise starts
+// one after its flush: the old state then names nothing, and the browser shows
+// nothing of the new until it has run the update.
 
 import { hold, within } from './focus.js';
 import { rt as Link } from './rt-link.js';
+import { shownStacks, holdRoutes } from './navigation.js';
 
 const NAME = '[data-shared-element]';
 let pending = null; // the tails waiting for a transition's update
@@ -90,6 +102,67 @@ function springCurve(k, c, m) {
 
 function ident() { return `exact-se-${++serial}`; }
 
+const PARTS = { new: '--exact-view-transition-new', old: '--exact-view-transition-old' };
+/** A route's entrance or exit (LLP 1013.001 D1): its `animation` as CSS, `none` (the author's cut), or '' when it
+ * declares none. */
+const part = (route, which) => route.style.getPropertyValue(PARTS[which]).trim();
+const plays = css => css !== '' && css !== 'none';
+
+/** Whether `el` is inside a region or list `queue` reruns, which may remove it. */
+function rerun(queue, el) {
+  for (const n of queue) {
+    if (!n.$r || n.gone) continue;
+    const [a, b] = n.$r();
+    if (!a || !b || a.parentNode !== b.parentNode) continue;
+    for (let e = a.nextSibling; e && e !== b; e = e.nextSibling) if (e === el || (e.nodeType === 1 && e.contains(el))) return true;
+  }
+  return false;
+}
+
+/** The eligible route changes between two `shownStacks` (LLP 1013.001 D2): at each root, one route pushed onto the
+ * selected stack or popped off it, never a sheet's or a zoom's. A tab switch or a swap changes the stack otherwise. */
+function routeChanges(before, after) {
+  const out = [];
+  for (const [nav, was] of before) {
+    const now = after.get(nav) ?? [];
+    let change = null;
+    if (was.length && now.length === was.length + 1 && was.every((r, i) => now[i] === r)) change = { owner: now.at(-1), beneath: was.at(-1), which: 'new' };
+    else if (now.length && was.length === now.length + 1 && now.every((r, i) => was[i] === r)) change = { owner: was.at(-1), beneath: now.at(-1), which: 'old' };
+    if (!change || change.owner.getAttribute('navigationPresentation') === 'modal' || change.owner.getAttribute('navigationSource')) continue;
+    out.push({ ...change, css: part(change.owner, change.which) });
+  }
+  return out;
+}
+
+/** After a commit's flush that needed no transition: a push whose route declares its entrance plays it, in a
+ * transition started now. */
+function entrance(before, root, inflight, after) {
+  const change = routeChanges(before, shownStacks(root)).find(c => c.which === 'new' && plays(c.css));
+  if (!change) return;
+  if (running) { running.skipTransition(); running = null; }
+  const id = ident(), { owner } = change;
+  const release = holdRoutes(change.beneath, owner);
+  style ??= document.head.appendChild(document.createElement('style'));
+  style.textContent = `:root{view-transition-name:none}::view-transition-new(${id}){animation:${change.css}}`;
+  pending = Object.assign([], { after: [] });
+  inflight.n++;
+  const t = document.startViewTransition(() => {
+    owner.style.viewTransitionName = id;
+    const tails = pending;
+    pending = null;
+    try { for (const f of tails) f(); } finally { for (const f of tails) if (!f.ran) f.release(); for (const f of tails.after) f(); }
+  });
+  running = t;
+  const clean = () => {
+    if (running === t) running = null;
+    if (owner.style.viewTransitionName === id) owner.style.viewTransitionName = '';
+    release();
+  };
+  const ready = t.ready.then(() => { for (const f of after ?? []) f(); }, () => {}).finally(() => inflight.n--);
+  (globalThis.exact ??= {}).viewTransition = () => ready;
+  t.finished.then(clean, clean);
+}
+
 /** Run a commit's tree update `tail`, inside a view transition when its
  * flush may hand a name on. Returns what `tail` returns, or true when it
  * waits for the browser. */
@@ -104,10 +177,24 @@ export function commit(tail, queue, inflight, after) {
     return run;
   };
   if (pending) { pending.push(deferred()); return true; }
+  // Under reduce motion every change cuts (LLP 1013.000 D7, LLP 1013.001 D6).
   if (typeof document.startViewTransition !== 'function' || matchMedia('(prefers-reduced-motion: reduce)').matches) return tail();
+  const root = document.getElementById('exact-root');
+  const routes = root ? shownStacks(root) : new Map();
   const old = leavers(queue);
-  if (!old.size) return tail();
+  // The top route of each root, when its exit is declared and the flush may pop it: captured under a name of its own.
+  const exits = new Map();
+  for (const was of routes.values()) {
+    const top = was.at(-1);
+    if (top && plays(part(top, 'old')) && rerun(queue, top)) exits.set(top, ident());
+  }
+  if (!old.size && !exits.size) {
+    const result = tail();
+    if (root) entrance(routes, root, inflight, after);
+    return result;
+  }
   const before = new Set(document.querySelectorAll(NAME)); // an arriver is new
+  // A second change ends the first at its end state (LLP 1013.001 D6).
   if (running) { running.skipTransition(); running = null; }
   // Every candidate is captured under its own name; which ones left, and
   // whether a name left once and arrived once, is known after the flush.
@@ -118,13 +205,17 @@ export function commit(tail, queue, inflight, after) {
     curves.set(el, curve(el));
     el.style.viewTransitionName = id;
   }
+  for (const [el, id] of exits) el.style.viewTransitionName = id;
+  // Its own names only: a transition skipped by the next must not clear the
+  // names the next just gave.
+  const own = new Set([...ids.values(), ...exits.values()]);
   // Only the pairs move: the root and unpaired leavers are not shown.
   style ??= document.head.appendChild(document.createElement('style'));
   style.textContent = ':root{view-transition-name:none}';
   pending = Object.assign([deferred()], { after: [] });
   inflight.n++;
-  let paired = false, result = true;
-  const rules = [], named = [...old.keys()];
+  let paired = false, routed = false, result = true;
+  const rules = [], named = [...old.keys(), ...exits.keys()], releases = [];
   const t = document.startViewTransition(() => {
     const tails = pending;
     pending = null;
@@ -156,17 +247,33 @@ export function commit(tail, queue, inflight, after) {
       rules.push(`::view-transition-group(${id}),::view-transition-old(${id}),::view-transition-new(${id}){animation-duration:${c.duration}ms;animation-delay:${c.delay}ms;animation-timing-function:${c.timing}}`);
       paired = true;
     }
+    // The route change, if any: its owner alone takes part (LLP 1013.001 D1).
+    const changes = root ? routeChanges(routes, shownStacks(root)) : [];
+    for (const [el, id] of exits) {
+      // A popped route is in the old state alone, and plays its exit there.
+      const popped = changes.find(c => c.which === 'old' && c.owner === el);
+      if (el.isConnected) el.style.viewTransitionName = '';
+      if (popped && plays(popped.css)) { rules.push(`::view-transition-old(${id}){animation:${popped.css}}`); routed = true; }
+      else rules.push(`::view-transition-group(${id}){display:none}`);
+    }
+    for (const c of changes.filter(c => c.which === 'new' && plays(c.css))) {
+      const id = ident();
+      c.owner.style.viewTransitionName = id;
+      named.push(c.owner);
+      own.add(id);
+      releases.push(holdRoutes(c.beneath, c.owner));
+      rules.push(`::view-transition-new(${id}){animation:${c.css}}`);
+      routed = true;
+    }
     style.textContent = `:root{view-transition-name:none}${rules.join('')}`;
   });
   running = t;
-  // Its own names only: a transition skipped by the next must not clear the
-  // names the next just gave.
-  const own = new Set(ids.values());
   const clean = () => {
     if (running === t) running = null;
     for (const el of named) if (own.has(el.style.viewTransitionName)) el.style.viewTransitionName = '';
+    for (const release of releases) release();
   };
-  t.updateCallbackDone.then(() => { if (!paired) t.skipTransition(); }, () => {});
+  t.updateCallbackDone.then(() => { if (!paired && !routed) t.skipTransition(); }, () => {});
   // Its animations exist once it is ready: what runs after a commit's tree
   // (the agent's clock registers and seeks them) runs again then. The agent
   // waits for that before it moves the clock (agent.js).

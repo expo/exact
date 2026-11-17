@@ -22,11 +22,17 @@ final class FrameClock: NSObject {
     /// A correction moves the port before the reveal and the pump read it.
     enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip }
 
-    private struct User {
+    private final class User {
         weak var owner: AnyObject?
         var order: Order
         var rate: CAFrameRateRange
         var tick: (CADisplayLink) -> Void
+        init(owner: AnyObject, order: Order, rate: CAFrameRateRange, tick: @escaping (CADisplayLink) -> Void) {
+            self.owner = owner
+            self.order = order
+            self.rate = rate
+            self.tick = tick
+        }
     }
     private var users: [ObjectIdentifier: User] = [:]
     /// The users' keys in tick order, made again only when one comes or goes:

@@ -51,6 +51,18 @@ pub extern "C" fn m_transitions(node: f64, len: u32) -> u32 {
     state().transitions(node as u64, &text) as u32
 }
 
+/// A bound `translate`, the input's `len` bytes of CSS text, as its lengths
+/// and its percentages of the box in the scratch: 1 when it is one, else 0.
+#[no_mangle]
+pub extern "C" fn m_translate(len: u32) -> u32 {
+    let text = unsafe { String::from_utf8_lossy(&IO[..len as usize]).into_owned() };
+    let Some(v) = exact_motion::length::translate(&text, true) else {
+        return 0;
+    };
+    unsafe { SCRATCH = [v.x, v.y, v.z, v.w] };
+    1
+}
+
 /// A node's four targets after a commit at `now` seconds: translate as its
 /// lengths and its percentages of the box.
 #[no_mangle]
@@ -62,17 +74,21 @@ pub extern "C" fn m_observe(
     px: f64,
     py: f64,
     scale: f64,
-    rotate: f64,
+    rotate_len: u32,
     opacity: f64,
     supplied: u32,
     vx: f64,
     vy: f64,
     now: f64,
 ) -> u32 {
+    let text = unsafe { String::from_utf8_lossy(&IO[..rotate_len as usize]).into_owned() };
+    let rotation = exact_motion::rotation::parse(&text).unwrap_or(Value::ZERO);
     state()
         .observe(
             node as u64,
-            [x, y, px, py, scale, rotate, opacity],
+            [
+                x, y, px, py, scale, rotation.x, opacity, rotation.y, rotation.z, rotation.w,
+            ],
             (supplied != 0).then(|| Value::new(vx, vy)),
             now,
         )
@@ -223,4 +239,30 @@ pub extern "C" fn m_pan_sample(view: u32, first: u32, x: f64, y: f64, ms: f64) {
 pub extern "C" fn m_pan_release(view: u32, ms: f64) {
     let v = state().pan_release(view, ms);
     unsafe { SCRATCH[..2].copy_from_slice(&[v.x, v.y]) };
+}
+
+/// The first-frame rule: 1 on (the page's clock), 0 off (the agent's).
+#[no_mangle]
+pub extern "C" fn m_start_on_frame(on: u32) {
+    let _ = state().start_on_frame(on != 0);
+}
+
+/// 1 while the browser will present anything: not hidden, not frozen.
+#[no_mangle]
+pub extern "C" fn m_presentable(on: u32) {
+    let _ = state().presentable(on != 0);
+}
+
+/// A held spring's animation became ready at `at` seconds: 1 when the
+/// engine held it and starts it there.
+#[no_mangle]
+pub extern "C" fn m_present(node: f64, p: u32, at: f64) -> u32 {
+    let Some(p) = property(p) else { return 0 };
+    state().present(node as u64, p, at).unwrap_or(false) as u32
+}
+
+/// Release what waited past the deadline by `now` seconds for a ready time.
+#[no_mangle]
+pub extern "C" fn m_release_overdue(now: f64) {
+    let _ = state().release_overdue(now);
 }

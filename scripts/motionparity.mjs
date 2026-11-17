@@ -2,7 +2,7 @@
 // on each native host against Chrome's at fixed clock times. Chrome (the web
 // build, the JS target, in agent mode) is the reference: its animated images are its own
 // decoder's frames placed by Chrome's schedule (host/web/image-glue.js), and
-// its keyframes are the browser's own, seeked. Each `fx-*` box is cropped by
+// its keyframes and transitions are the browser's own, seeked. Each `fx-*` box is cropped by
 // its host's layout at one pixel per point, registered within ±2 px, and
 // compared: mean |Δ| ≤ 4/255 and ≤ 6% of pixels off by more than 32. Linux
 // decodes no GIF or WebP (LLP 1011.000 §4): its image fixtures are declared
@@ -28,7 +28,9 @@ async function capture(open, host, dir) {
   try {
     for (const t of TIMES) {
       await s.clock(String(t));
-      out[t] = boxes(await shot(s, host, dir, `t${t}`), { slop: SLOP });
+      // Chrome's picture holds a transition at its end; a native host's
+      // shows it where the clock is, as Chrome's film frame does.
+      out[t] = boxes(await shot(s, host, dir, `t${t}`, host === 'web'), { slop: SLOP });
     }
     return out;
   } finally {

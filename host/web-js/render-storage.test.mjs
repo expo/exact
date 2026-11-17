@@ -11,11 +11,27 @@ const scratch = () => {
   writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Render Storage', app: { id: 'test.render-storage', name: 'Render Storage' }, host: { web: {} } }));
   return dir;
 };
-// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure.
+// The scratch app's Rust data crate `krate` at data/, a member of the workspace exact2 generates, and app.json naming
+// it and its source (LLP 1153.003 D2); the test writes data/src/lib.rs.
+const rustData = (dir, krate, type, source) => {
+  const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, rust: { data: { crate: krate, type, ...(source ? { source } : {}) } } }));
+  mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+  writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
+name = "${krate}"
+version.workspace = true
+edition.workspace = true
+workspace = "../.exact/shells"
+[dependencies]
+exact-runner.workspace = true
+`);
+};
+// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure. A Rust module
+// builds into the checkout's target, warm from the last run, rather than cold into the app's own.
 async function build(dir) {
   const dist = resolve(dir, 'dist');
   const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'render-storage-test', '--out', dist, '--render', 'js'], {
-    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? resolve(root, 'target') }, stdout: 'pipe', stderr: 'pipe',
   });
   const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
   expect(status, stdout + stderr).toBe(0);
@@ -115,17 +131,7 @@ export function answer(name: string, [route]: string[], store: any): any {
 }
 `);
     else {
-      mkdirSync(resolve(dir, 'data/src'), { recursive: true });
-      mkdirSync(resolve(dir, 'web'));
-      writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, render_store_data::Reader::default()); }\n');
-      writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
-name = "render-store-data"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-exact-runner = { path = "${root}/runner" }
-[workspace]
-`);
+      rustData(dir, 'render-store-data', 'render_store_data::Reader');
       writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
 
 fn write(store: &mut Store, route: &str) -> Result<Answer, DataError> {
@@ -304,17 +310,7 @@ component App
 `);
     // On the reader's device the file is not there yet: the source says so, which shows that storage was asked.
     if (language === 'Rust') {
-      mkdirSync(resolve(dir, 'data/src'), { recursive: true });
-      mkdirSync(resolve(dir, 'web'));
-      writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, render_storage_data::Prefs); }\n');
-      writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
-name = "render-storage-data"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-exact-runner = { path = "${root}/runner" }
-[workspace]
-`);
+      rustData(dir, 'render-storage-data', 'render_storage_data::Prefs', 'render_storage_data::Prefs');
       writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
 
 pub struct Prefs;

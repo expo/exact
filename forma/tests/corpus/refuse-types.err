@@ -1,0 +1,15 @@
+4:17: forma-syntax: a percentage where a hue takes a number or an angle
+5:21: forma-syntax: a percentage where a hue takes a number or an angle
+6:13: forma-syntax: a sum of values of different types
+7:15: forma-syntax: an angle where a colour takes a number
+8:13: forma-syntax: a missing component (`none`) is not folded yet; write its value
+9:17: forma-syntax: a missing component (`none`) is not folded yet; write its value
+10:25: forma-syntax: a sum of values of different types
+11:19: forma-syntax: a sum of values of different types
+12:15: forma-syntax: `h` is missing (powerless) in an achromatic colour, which is not folded yet; write its value
+13:19: forma-syntax: `-exact-platform-color(ios bogus, #000)`: `-exact-platform-color(ios <name>, macos <name>, web <name>, <fallback>)`, each platform once; an iOS or macOS name is a documented UIColor/NSColor class colour (`systemTealColor`) or `named:<asset>`
+14:13: forma-kind: `currentcolor` is the element's own colour, which no token can hold
+15:19: forma-kind: `-exact-platform-color(ios systemTealColor, oklch(0.7 0.1 200))`: a platform colour's fallback is a legacy colour or a `light-dark()` of two
+16:20: forma-syntax: `-exact-platform-color(ios a, ios b, #000)`: `-exact-platform-color(ios <name>, macos <name>, web <name>, <fallback>)`, each platform once; an iOS or macOS name is a documented UIColor/NSColor class colour (`systemTealColor`) or `named:<asset>`
+17:16: forma-syntax: `color-mix([in <space>,] <colour> [<percentage>], …)`
+18:19: forma-syntax: `h` is missing (powerless) in an achromatic colour, which is not folded yet; write its value

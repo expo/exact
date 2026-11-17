@@ -391,7 +391,9 @@ pub fn mips(
     cutoff: Option<f32>,
 ) -> Vec<Vec<u8>> {
     let coverage = cutoff.map(|c| {
-        rgba.chunks_exact(4)
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[3] as f32 / 255. >= c)
             .count() as f32
             / (w * h) as f32
@@ -498,7 +500,12 @@ mod alpha_tests {
         }
         let mips = super::mips(8, 1, pixels, true, true, Some(0.5));
         for mip in &mips[..3] {
-            let covered = mip.chunks_exact(4).filter(|p| p[3] >= 128).count();
+            let covered = mip
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[3] >= 128)
+                .count();
             assert_eq!(covered, (mip.len() as f32 / 4. * 0.25).round() as usize);
         }
     }

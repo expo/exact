@@ -34,6 +34,12 @@ pub struct Motion {
     /// Transform pairs by their translate serial.
     pairs: BTreeMap<u64, TransformHold>,
     enabled_translate: BTreeSet<u64>,
+    /// Springs lowered held (LLP 1003.001 D9), by their curve without its
+    /// start, which moves with the clock while held: lowered once.
+    held: BTreeMap<(u64, Property), SpringDescriptor>,
+    /// Springs started at the browser's ready time, or released at their
+    /// commit: the started op's `at`.
+    presented: BTreeMap<(u64, Property), f64>,
 }
 
 impl Default for Motion {
@@ -55,6 +61,53 @@ impl Motion {
             pan: None,
             pairs: BTreeMap::new(),
             enabled_translate: BTreeSet::new(),
+            held: BTreeMap::new(),
+            presented: BTreeMap::new(),
+        }
+    }
+
+    /// Turn the first-frame rule on (the page's clock owns time) or off
+    /// (the agent's): a spring a commit begins waits for the browser's
+    /// ready time (LLP 1003.001 D7, D9).
+    pub fn start_on_frame(&mut self, on: bool) -> Result<(), EngineError> {
+        let at = self.engine.now();
+        self.engine.set_start_on_frame(on, at).map(|_| ())
+    }
+
+    /// Whether the browser will present anything: not while the page is
+    /// hidden or frozen, when every hold starts at its commit (D9, "The
+    /// bound"); the next lowering re-emits what that started.
+    pub fn presentable(&mut self, presentable: bool) -> Result<(), EngineError> {
+        self.engine.set_presentable(presentable)?;
+        self.note_released();
+        Ok(())
+    }
+
+    /// The browser made a held spring's animation ready at `at` seconds:
+    /// the engine's curve starts there. Whether it was held.
+    pub fn present(&mut self, node: u64, property: Property, at: f64) -> Result<bool, EngineError> {
+        let started = self.engine.present_curve(node, property, at)?;
+        if started {
+            self.presented.insert((node, property), at);
+        }
+        Ok(started)
+    }
+
+    /// Release what waited [`exact_motion::HOLD_DEADLINE`] by `now` for a
+    /// ready time that has not come.
+    pub fn release_overdue(&mut self, now: f64) -> Result<(), EngineError> {
+        self.engine.release_overdue(now.max(self.engine.now()))?;
+        self.note_released();
+        Ok(())
+    }
+
+    /// Held springs the engine released start, in their op, at the curve's
+    /// own start, not at a ready time.
+    fn note_released(&mut self) {
+        for key in self.held.keys() {
+            if let Some(start) = self.engine.curve_start(key.0, key.1) {
+                self.presented.insert(*key, start);
+            }
         }
     }
 
@@ -85,23 +138,23 @@ impl Motion {
     }
 
     /// A node's targets after a commit, at `now`: translate x and y, its x
-    /// and y percentages of the box, scale, rotate (degrees), opacity. The
+    /// and y percentages of the box, scale, rotate (degrees), opacity, rotation axis. The
     /// first observation of a node is taken as it is (nothing transitions),
     /// as the kernel's `adopt` does.
     pub fn observe(
         &mut self,
         node: u64,
-        values: [f64; 7],
+        values: [f64; 10],
         velocity: Option<Value>,
         now: f64,
     ) -> Result<(), EngineError> {
         self.seek(now)?;
         let enabled = self.enabled_translate.remove(&node);
-        let [x, y, px, py, scale, rotate, opacity] = values;
+        let [x, y, px, py, scale, rotate, opacity, ax, ay, az] = values;
         let targets = [
             Value::four(x, y, px, py),
             Value::scalar(scale),
-            Value::scalar(rotate),
+            Value::four(rotate, ax, ay, az),
             Value::scalar(opacity),
         ];
         for (property, value) in TARGETS.into_iter().zip(targets) {
@@ -286,19 +339,56 @@ impl Motion {
     /// (`Springs::lower_current`, `Host::emit_lowered`): a spring that
     /// started is its frames, one that stopped before its end is
     /// cancelled. Each op is numbers in `out`: `[1, node, property, at,
-    /// delay, duration, n, x0, y0, …]` (seconds) or `[2, node, property]`.
+    /// delay, duration, n, x0, y0, …]` (seconds), `[2, node, property]`, or
+    /// a held spring (LLP 1003.001 D9), `[3, node, property, due, delay,
+    /// duration, n, …]`, which the browser starts at its ready time and the
+    /// engine releases at its commit by `due`.
     pub fn lower(&mut self, now: f64, out: &mut Vec<f64>) -> Result<(), EngineError> {
         self.seek(now)?;
+        // Only springs wait for the browser's ready time; the CSS transitions
+        // the browser runs itself start at their commit in the engine.
+        self.engine.release_held_but_springs()?;
         let now = self.engine.now();
         let index = |p: Property| TARGETS.iter().position(|t| *t == p).unwrap_or(4) as f64;
         for p in self.engine.frame() {
             let key = (p.node, p.property);
             if self.engine.is_held(p.node, p.property) {
                 self.playing.remove(&key);
+                self.held.remove(&key);
                 continue;
             }
             match self.engine.spring_descriptor(p.node, p.property) {
+                Some(descriptor) if self.engine.curve_start(p.node, p.property).is_none() => {
+                    let curve = SpringDescriptor {
+                        start: 0.0,
+                        ..descriptor
+                    };
+                    if self.held.get(&key) == Some(&curve) {
+                        continue;
+                    }
+                    let (Some(frames), Some(due)) = (
+                        self.engine.spring_frames(p.node, p.property),
+                        self.engine.held_deadline(),
+                    ) else {
+                        continue;
+                    };
+                    self.held.insert(key, curve);
+                    self.playing.remove(&key);
+                    out.extend([
+                        3.0,
+                        p.node as f64,
+                        index(p.property),
+                        due,
+                        (frames.start - now).max(0.0),
+                        frames.duration,
+                        frames.values.len() as f64,
+                    ]);
+                    for v in &frames.values {
+                        out.extend([v.x, v.y, v.z, v.w]);
+                    }
+                }
                 Some(descriptor) => {
+                    self.held.remove(&key);
                     if self.playing.get(&key).map(|(d, _)| d) == Some(&descriptor) {
                         continue;
                     }
@@ -307,12 +397,15 @@ impl Motion {
                     };
                     self.playing
                         .insert(key, (descriptor, frames.start + frames.duration));
+                    // Started at the browser's ready time, or released at its
+                    // commit: the page pins the animation there.
+                    let at = self.presented.remove(&key).unwrap_or(now);
                     out.extend([
                         1.0,
                         p.node as f64,
                         index(p.property),
-                        now,
-                        (frames.start - now).max(0.0),
+                        at,
+                        (frames.start - at).max(0.0),
                         frames.duration,
                         frames.values.len() as f64,
                     ]);
@@ -323,10 +416,14 @@ impl Motion {
                     }
                 }
                 None => {
-                    if let Some((previous, end)) = self.playing.remove(&key) {
-                        if now < end || p.value != previous.target {
-                            out.extend([2.0, p.node as f64, index(p.property)]);
-                        }
+                    // A spring lowered held runs in the browser until cancelled.
+                    let held = self.held.remove(&key).is_some();
+                    let playing = self.playing.remove(&key);
+                    if held
+                        || playing
+                            .is_some_and(|(previous, end)| now < end || p.value != previous.target)
+                    {
+                        out.extend([2.0, p.node as f64, index(p.property)]);
                     }
                 }
             }

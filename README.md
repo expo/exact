@@ -3,6 +3,9 @@
 **Write an app once. It runs natively on the web, macOS, iOS, and Linux, and an AI
 agent can build it, run it, see it, and test it on every one of them.**
 
+Android and Windows are early and in progress: an app builds and runs on both, and
+what each still lacks is under [Not yet, or not at all](#not-yet-or-not-at-all).
+
 **Building an app?** With the tools installed ([Quick start, step 1](#1-install-the-tools)),
 run `bun scripts/exact.mjs setup` once, make the app with `bun scripts/exact.mjs new <path>`,
 and read [`docs/start-here.md`](docs/start-here.md) (for a website,
@@ -52,7 +55,8 @@ or working on it.
 
 Exact is a cross-platform application runtime. You describe your interface in
 **Contract**, a small declarative language, and you write your data logic in
-**TypeScript or Rust**. The Contract compiler turns the interface into a compact
+**TypeScript or Rust**; a plain HTTP read needs neither, as it can be declared in
+Contract. The Contract compiler turns the interface into a compact
 *plan*. On the web, that plan becomes one ES module over a ~20 KB runtime that drives
 the real DOM. On macOS, iOS, and Linux, a Rust runner executes the same plan, a Rust
 layout kernel computes every box with CSS rules, and each platform draws with its own
@@ -70,9 +74,17 @@ The design record is a separate, private repository of numbered documents (LLPs)
 README and the guides cite it by number (`LLP 1115 D7`). The guides under [`docs/`](docs)
 are the public documentation.
 
-Upgrade note (2026-10-16): Snapback mutation replies with `ok: false` now throw
-`refused(why)` and expose `failure(slot)`; see the
-[before/after and inherited-app commands](snapback4/README.md#updating-an-inherited-app).
+To upgrade an inherited app, run these commands from its directory:
+
+```sh
+bun exact.mjs update
+bun exact.mjs contract migrate app.contract
+bun exact.mjs lock
+bun exact.mjs contract build app.contract --json --errors-only
+```
+
+For the Snapback mutation refusal rewrite, see the
+[upgrade note in start-here](docs/start-here.md#upgrading-an-inherited-app).
 
 ## Contents
 
@@ -118,7 +130,7 @@ bun scripts/agent.mjs web tree "tap change-station" "type station-search Palo" \
 ### 2. Speed is king
 
 Speed of the app and speed of the loop. Each budget in `rules/RULES.md` is tracked on
-every commit, and a regression is a P0 with a name on it.
+each hour, and a regression is a P0 with a name on it.
 
 | Budget | Target |
 |---|---|
@@ -126,7 +138,7 @@ every commit, and a regression is a P0 with a name on it.
 | Dev restart, edit to present | 100 ms p50 |
 | App JavaScript executed before first pixel | none |
 | Touch one line, rebuild that crate | 30 s |
-| The whole blocking check suite | 65 s |
+| The blocking gate, warm after a one-crate edit | 30 s |
 
 How the design keeps those numbers:
 
@@ -226,7 +238,13 @@ Linux host, and the iOS cross compiler. On Windows, use WSL 2 with Ubuntu 24.04 
   not needed.
 - **Google Chrome.** The agent drives the web through headless Chrome. Set `CHROME` to
   use another Chromium.
-- **Xcode 27.1 or later**, for Apple builds on macOS (`exact setup --check` checks it). For iOS builds on Linux/WSL, install
+- **Apple SDKs and Swift**, for Apple builds on macOS (`exact setup --check` checks both).
+  The host needs the macOS 26.0 SDK (Xcode 26.0+), iOS 27.1 SDK (Xcode 27.1+),
+  or tvOS 27.0 SDK (Xcode 27.0+), and Swift 6.4 or later. Swift 6.4 is tested;
+  Swift 6.2.4 cannot type-check the host. The SDK and compiler floors live in
+  [`host/apple/devices.mjs`](host/apple/devices.mjs).
+  Swift builds use `xcrun`'s selected compiler; select it with `DEVELOPER_DIR` or `TOOLCHAINS`.
+  For iOS builds on Linux/WSL, install
   [Swift 6.4.2](https://www.swift.org/install/linux/),
   [xtool 1.24.0](https://github.com/xtool-org/xtool/releases/tag/1.24.0),
   [LLVM 23](https://apt.llvm.org/), and
@@ -300,10 +318,14 @@ asset catalog generation, App Intents metadata and ad-hoc signing run on Linux.
 Production builds with custom native views also validate the compiled factory roster.
 Linux can import a simulator qualification with `EXACT_NATIVE_ROSTERS=/path/to/qualification.json`.
 It contains `{ "version": 1, "probes": [{ "probeSha256": "…", "roster": "<JSON object>" }] }`.
-The build writes `native-probes.json` beside its link products to identify the probe to
-execute on an iOS simulator. Qualifications match the probe's SHA-256; changing its
-compiled bytes requires a new simulator run. Without a matching qualification, a
-production build refuses rather than accepting an absent factory or omitting its
+The build writes `native-probes.json` beside its link products to identify the retained
+probe directory. Copy that whole directory to the Mac and run its `ExactRosterProbe`
+with `xcrun simctl spawn <simulator> <directory>/ExactRosterProbe`. Use the printed JSON
+as the qualification's `roster` string and the listed `probeSha256` as its digest.
+The digest covers every file in the directory: the executable, module library, package
+libraries and declared frameworks. Changing any of them requires a new simulator run.
+Without a matching qualification, a production build refuses rather than accepting
+an absent factory or omitting its
 first-frame declaration. Development builds retain the existing manifest fallback.
 
 ### 2. Run Caltrain in the browser
@@ -725,11 +747,15 @@ else here was admitted because a real app needed it.
   (`exact-camera srcObject=`) and takes still photos (`takePhoto`) on the web, iOS,
   macOS, and Android, behind the `device.camera` grant (LLP 1133.008).
   `takePhotoWithCameraApp` takes one in the system camera UI instead: Android's camera
-  app, iOS's camera picker, and on the web a file input with `capture`. It needs no grant
-  on Android; iOS shows the `device.camera` line's purpose. It does not record video
-  from the camera or hand its frames to code, and it has no Windows, Linux, tvOS, or
-  watchOS implementation.
-- **Data.** TypeScript or Rust sources, optionally on a worker. Grant-checked `fetch` and
+  app, iOS's camera picker, and on the web a file input with `capture`;
+  `recordVideoWithCameraApp` records a video there (LLP 1133.008.000). Neither needs a
+  grant on Android; iOS shows the `device.camera` line's purpose, and for a video the
+  `device.microphone` line's too. It does not record video in the app or hand the
+  camera's frames to code, and it has no Windows, Linux, tvOS, or watchOS implementation.
+- **Data.** TypeScript or Rust sources, optionally on a worker, and sources declared in
+  Contract: an HTTP request whose JSON answer is read field by field. An app whose
+  sources are all declared has no data module, and its native build links no JavaScript
+  engine (LLP 1162.001). Grant-checked `fetch` and
   streams, files and SQLite (native and in the browser), Keychain secrets, and OAuth
   sign-in. A router keeps a stack per tab (LLP 1038).
 - **Native modules.** Platform widgets as hyphenated tags
@@ -761,8 +787,10 @@ else here was admitted because a real app needed it.
   [Windows Desk](apps/windows-desk/README.md) demonstrates
   native controls over Contract and the kernel with an app-local Win32 presenter;
   general Windows control parity and delivery remain unfinished.
-  Notification-area icons are not built: `-exact-menu="status"` stays an
-  ordinary button in the window (LLP 1133.025 §14).
+  A `-exact-menu="status"` button is a notification-area icon with a painted
+  menu (LLP 1133.025 D4), verified on Windows 11 for a hidden launch,
+  pointer input, checkbox state and Exit. Menu placement beside an
+  auto-hide taskbar still needs a Windows run.
 - **Android.** Admitted (2026-10-07) and early. An app builds for Android and runs
   on an emulator or a phone: `bun exact.mjs android` builds it, `bun exact.mjs test
   android` runs its tests, and `bun exact.mjs agent android …` drives it
@@ -811,24 +839,13 @@ Start with [`rules/RULES.md`](rules/RULES.md), one page on how work happens here
 [`rules/DEFERRED.md`](rules/DEFERRED.md), what v1 deliberately leaves out. Agents should
 also read [`AGENTS.md`](AGENTS.md). In short:
 
-- **Six blocking checks, 65 seconds in total.** Anything slower runs asynchronously,
-  per commit.
-
-  ```sh
-  cargo build --all-targets --keep-going
-  cargo test --tests --no-fail-fast
-  cargo clippy --all-targets --keep-going -- -D warnings && cargo fmt --all -- --check
-  bun scripts/caps.mjs     # budgets: 1,500 lines per source file, document caps
-  bun scripts/boot.mjs     # counts the module graph before first pixel
-  cargo check --workspace --all-targets --keep-going   # every crate compiles
-  ```
-
-  The first three build and test Cargo's `default-members`. The last compiles every
-  other crate too, so a host or an app outside them cannot stop compiling unseen. It
-  needs the pinned Bun (`package.json`) first on `PATH`: app crates' build scripts run it.
-
-- **Verify by running, not by reading.** Build the app a change touches and drive it:
-  `bun scripts/smoke.mjs <web|macos|ios|linux>` drives the whole app on that host.
+- **One blocking gate, 30 seconds warm:** `bun scripts/gate.mjs`.
+  Stage your files, run it, push, and fix what the hourly lane attributes to you.
+  It reports every failure and each part's time. Full checks, affected tests,
+  semantic difftests, app drives, XCTests and platform builds run hourly through
+  `bun scripts/async.mjs`; new failures are bisected through the hour's commits.
+- **Verify by running.** The hourly lane builds and drives affected apps.
+  To investigate, `bun scripts/smoke.mjs <web|macos|ios|linux>` drives the app.
 - **Delete; don't deprecate.** Before 1.0 there are no compatibility shims. Generated
   files are built, never committed.
 - **Agents remove apparatus freely and add none** (checks, scripts, registries, design
@@ -848,4 +865,5 @@ The Snapback client (`snapback4/`) is not in this repository, and Exact works wi
 in a checkout without it, `exact new --snapback` and `bun exact.mjs snapback` refuse,
 naming the missing client. A checkout that has it there uses published **0.4.33** with
 the matching immutable Rust source revision `3653cae823145170df3e720f5e321bd1b5b4d79d`,
-and [its guide](snapback4/README.md) covers wiring and device rebuilds.
+and its guide, `snapback4/README.md`, comes with that client and covers wiring
+and device rebuilds. The guide is absent from a clean Exact checkout.

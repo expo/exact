@@ -82,7 +82,7 @@ fn boxed<D: DataSource>(p: &mut Presenter<D>, test_id: &str) -> PaintedBox {
     p.boxes()
         .iter()
         .find(|b| ids.contains(&b.id))
-        .copied()
+        .cloned()
         .unwrap()
 }
 
@@ -800,7 +800,7 @@ fn a_launch_location_precedes_initializers_and_root_type_navigates_once() {
         844.0,
         None,
         None,
-        &exact_painted::app::launch_location(["--agent".into(), "post/42".into()]),
+        &exact_painted::app::launch_location(["--agent".into(), "post/42".into()], "{}"),
     )
     .unwrap();
     assert!(error.is_none());

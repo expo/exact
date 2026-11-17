@@ -112,9 +112,11 @@ pub(crate) fn blend(src: &Img, dst: &Img, mode: u8) -> Img {
     let mut out = Img::clear(src.w, src.h, src.linear);
     for ((o, s), d) in out
         .px
-        .chunks_exact_mut(4)
-        .zip(src.px.chunks_exact(4))
-        .zip(dst.px.chunks_exact(4))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.px.as_chunks::<4>().0)
+        .zip(dst.px.as_chunks::<4>().0)
     {
         blend_pixel(o, s, d, mode);
     }

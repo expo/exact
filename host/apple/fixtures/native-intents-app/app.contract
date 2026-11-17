@@ -1,0 +1,21 @@
+shape Imported
+  text: string
+
+component App
+  mutation imported as shape Imported
+  derive contents = match imported { case some(v) => v.text, case none => "No file received." }
+  tool saveScreenshot writes closed "Read a screenshot attachment." = saveScreenshot returns contents
+  action saveScreenshot(image: string)
+    send imported = readAttachment(image)
+  view
+    main padding=24 testId="app"
+      text contents testId="contents"
+
+shape IntentWidgetProps
+  title: string
+
+component IntentWidget
+  props
+    title: string
+  view
+    text title

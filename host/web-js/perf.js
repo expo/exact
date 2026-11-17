@@ -126,7 +126,15 @@ export function reply(target, tags) {
     return { site, instances: live.get(site), live: w.created - w.retired, ...w, ...(globalThis.exact?.hatchPerf?.site(site) ?? {}) };
   });
   // Each resource whose source was asked, and how often (LLP 1146 D3), as the runner's `resources`.
-  const resources = Resources.filter(r => r.asks).map(r => ({ name: r.name, ...(r.member ? { member: resourceKey(r) } : {}), asked: r.asks }));
+  const resources = Resources.filter(r => r.asks && !r.path).map(r => ({ name: r.name, ...(r.member ? { member: resourceKey(r) } : {}), asked: r.asks }));
+  // A child's resource counts every instance's asks, those gone too, under the name its component declares, as the
+  // runner counts by row (LLP 1035.005.004 D8).
+  for (const g of globalThis.exact?.state?.[2] ?? []) {
+    const row = g.r;
+    if (!row?.instances) continue;
+    const asked = row.retired + row.members().reduce((n, r) => n + (r.asks ?? 0), 0);
+    if (asked) resources.push({ name: row.declared, asked });
+  }
   return { ...tags, seq: clock.epoch, plan: globalThis.exact?.plan ?? null, sites, resources, walked, truncated, work: {scope:"session", since:Since, timebase:"runner-clock-ms", counts:Object.fromEntries(["timersPrecise", "timersFrame", "timersUpdate", "timersScrollend", "timersIdle", "timersCap", "frameTasks"].flatMap((name, i) => clock.timerFirings?.[i] ? [[name, clock.timerFirings[i]]] : [])), coverage:"virtual row operations by collection site; browser layout and inherited work are unavailable"} };
 }
 

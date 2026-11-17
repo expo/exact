@@ -17,7 +17,7 @@ The following images are by Daehyeon Mun and are included with permission:
   apps/exact-live/ (photographs)
   apps/interaction-gallery/ (photographs)
   apps/duo-lab/art/
-  tamber/tests/import/figma/ (Figma kit fixtures)
+  forma/tests/import/figma/ (Figma kit fixtures)
 ```
 
 The only image files under `apps/exact-live/` and `apps/interaction-gallery/` are six PNGs in each `assets/` directory: `north-shore`, `ochre-dunes`, `alpine-water`, `winter-ridge`, `glasshouse`, `last-light`. The two sets are byte-identical.

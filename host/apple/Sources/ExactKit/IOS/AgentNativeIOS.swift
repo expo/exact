@@ -92,6 +92,10 @@ extension Agent {
             if let sv = v.scrollView {
                 n.merge(Agent.offset(of: sv, top: v.scrollTopInset(sv))) { _, new in new }
                 n.merge(Agent.range(of: sv)) { _, new in new }
+                // A zoomable scroller's zoom and range (LLP 1057.001.000 §6).
+                if v.extras?.zoom != nil, let range = v.zoomRange {
+                    n["scrollZoom"] = Double(sv.zoomScale); n["minZoom"] = Double(range.lowerBound); n["maxZoom"] = Double(range.upperBound)
+                }
                 let p = port(of: v, sv)
                 n["port"] = [p[0] + Double(shift.x), p[1] + Double(shift.y), p[2], p[3]].map { Agent.r2(CGFloat($0)) }
                 // How far past its own ends it sits: a stretched bounce is a
@@ -144,6 +148,7 @@ extension Agent {
         // D4's `screen` space) and the scene's interface orientation: what a
         // real touch's aim is checked against (LLP 1080.000 D4).
         if let w = vp.window, let container = vp.superview {
+            reply["safeArea"] = ["bottom": Agent.r2(w.safeAreaInsets.bottom)]
             let screen = w.screen
             let origin = container.convert(presenter.pageFrame.origin, to: screen.coordinateSpace) // the page's area (LLP 1130)
             reply["screen"] = ["w": Agent.r2(screen.bounds.width), "h": Agent.r2(screen.bounds.height), "scale": Agent.r2(screen.scale),

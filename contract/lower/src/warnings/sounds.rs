@@ -17,8 +17,8 @@
 
 use crate::theme::scan::stmts;
 use crate::LowerError;
-use contract_syntax::{BinOp, Expr, Node, Stmt, TemplatePart};
-use contract_types::Checked;
+use contract_checking::Checking;
+use contract_syntax::{BinOp, Expr, Stmt, TemplatePart};
 use std::collections::BTreeSet;
 
 /// A piece of a built path: fixed text, or a hole any text fills.
@@ -29,74 +29,29 @@ enum Piece {
 }
 
 /// Every WAV path the file writes or builds that no declared sound can be.
-pub(super) fn undeclared(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
-    let declared: Vec<&str> = checked
-        .file
-        .sounds
-        .iter()
-        .map(|s| s.source.as_str())
-        .collect();
-    let root = &checked.expanded.root;
-    // The view's expressions, and the name each `audio` or `video` source
-    // is.
+pub(super) fn undeclared(checking: &Checking<'_>, out: &mut Vec<LowerError>) {
+    let declared: Vec<&str> = checking.sounds().collect();
     let (mut view, mut media) = (Vec::new(), BTreeSet::<String>::new());
-    let mut stack: Vec<&Node> = root.view.iter().collect();
-    while let Some(node) = stack.pop() {
-        match node {
-            Node::Element {
-                tag,
-                positional,
-                attrs,
-                children,
-                ..
-            } => {
-                let is_media = matches!(tag.as_str(), "audio" | "video");
-                let src = |a: &&contract_syntax::Attr| is_media && a.name == "src";
-                if is_media {
-                    let sources = positional
-                        .iter()
-                        .chain(attrs.iter().filter(src).map(|a| &a.value));
-                    // Only the name the source is: `audio song(kit)` names `song`, not `kit`.
-                    for e in sources {
-                        if let Expr::Ident(name, _) | Expr::Call(name, _, _) = e {
-                            media.insert(name.clone());
-                        }
+    for node in checking.expanded().walk_reverse() {
+        if let Some((tag, positional, attrs)) = node.element() {
+            let is_media = matches!(tag, "audio" | "video");
+            let src = |a: &&contract_syntax::Attr| is_media && a.name == "src";
+            if is_media {
+                let sources = positional
+                    .iter()
+                    .chain(attrs.iter().filter(src).map(|a| &a.value));
+                // Only the source's name: `audio song(kit)` names `song`, not `kit`.
+                for e in sources {
+                    if let Expr::Ident(name, _) | Expr::Call(name, _, _) = e {
+                        media.insert(name.clone());
                     }
-                } else {
-                    view.extend(positional);
                 }
-                view.extend(attrs.iter().filter(|a| !src(a)).map(|a| &a.value));
-                stack.extend(children);
+            } else {
+                view.extend(positional);
             }
-            Node::Use { args, children, .. } => {
-                view.extend(args.iter().map(|a| &a.value));
-                stack.extend(children);
-            }
-            Node::When {
-                cond,
-                then,
-                otherwise,
-                ..
-            } => {
-                view.push(cond);
-                stack.extend(then.iter().chain(otherwise));
-            }
-            Node::Each {
-                list, key, body, ..
-            } => {
-                view.extend([list, key]);
-                stack.extend(body);
-            }
-            Node::Match {
-                subject,
-                some,
-                none,
-                ..
-            } => {
-                view.push(subject);
-                stack.extend(some.1.iter().chain(none));
-            }
-            Node::Children { .. } => {}
+            view.extend(attrs.iter().filter(|a| !src(a)).map(|a| &a.value));
+        } else {
+            view.extend(node.expressions());
         }
     }
     let mut seen = BTreeSet::new();
@@ -113,38 +68,35 @@ pub(super) fn undeclared(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
             }
         })
     };
-    for f in checked
-        .file
-        .fns
+    for f in checking
+        .functions()
         .iter()
         .filter(|f| !media.contains(f.name.as_str()))
     {
         check(&f.body);
     }
-    let bindings = root
-        .states
-        .iter()
-        .chain(&root.derives)
-        .chain(&root.provides);
-    for b in bindings.filter(|b| !media.contains(b.name.as_str())) {
+    for b in checking
+        .root_bindings()
+        .filter(|b| !media.contains(b.name.as_str()))
+    {
         check(&b.expr);
     }
-    for r in &root.resources {
+    for r in checking.resources() {
         r.args.iter().for_each(&mut check);
         if let Some(p) = &r.placeholder {
             p.args.iter().for_each(&mut check);
         }
     }
-    for s in &root.sequences {
+    for s in checking.sequences() {
         check(&s.tracks);
         s.options.iter().for_each(|(_, e, _)| check(e));
     }
     // A value assigned to a binding a media source names is a media file too.
     let mut media_values = BTreeSet::new();
-    for a in &root.actions {
+    for a in checking.actions(0) {
         assigned(&a.body, &media, &mut media_values);
     }
-    for a in &root.actions {
+    for a in checking.actions(0) {
         stmts(&a.body, &mut |e| {
             if !media_values.contains(&(e as *const Expr)) {
                 check(e);

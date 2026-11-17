@@ -528,3 +528,52 @@ fn android_same_target_sessions_deliver_by_state() {
         assert_eq!(settled(&mut r), (out.ticket, 200));
     }
 }
+
+#[test]
+fn android_state_less_return_selects_oldest_logout_and_never_a_sign_in() {
+    let mut r = Runner::boot(
+        contract::compile("shape R\n  text: string\ncomponent App\n  resource signed = signIn(\"app.test:/cb\", s) for s in [\"sign-in\", \"logout-one\", \"logout-two\"] as shape R\n  view\n    text signed.map(s => s.text).join(\",\")\n").unwrap(),
+        Signer, Kernel::with_monospace(), Default::default(), "/",
+    ).unwrap();
+    let mut requests = r.take_requests();
+    assert_eq!(requests.len(), 3);
+    for (i, out) in requests.iter_mut().enumerate() {
+        let mut session =
+            auth::Session::from_json(std::str::from_utf8(&out.request.body).unwrap()).unwrap();
+        session.logout = i > 0;
+        out.request = exact_runner::Request::auth(session.to_json().into_bytes());
+        assert!(matches!(
+            auth::arm(&mut r, out, false, Browser::Android, None),
+            Arm::Present(_)
+        ));
+    }
+    assert!(auth::receive_callback(&mut r, "app.test:/cb?code=sign-in"));
+    assert!(
+        r.take_request_refusal(true).is_none(),
+        "a state-less sign-in response completes no logout"
+    );
+    assert!(auth::receive_callback(
+        &mut r,
+        "app.test:/cb?code=sign-in&state=logout-one"
+    ));
+    assert!(
+        r.take_request_refusal(true).is_none(),
+        "a code-bearing response cannot complete its state-matched logout"
+    );
+    assert!(auth::receive_callback(&mut r, "app.test:/cb"));
+    assert_eq!(
+        settled(&mut r),
+        (requests[1].ticket, 200),
+        "the oldest logout"
+    );
+    assert!(auth::receive_callback(
+        &mut r,
+        "app.test:/cb?code=c&state=sign-in"
+    ));
+    assert_eq!(settled(&mut r), (requests[0].ticket, 200));
+    assert!(auth::receive_callback(
+        &mut r,
+        "app.test:/cb?state=logout-two"
+    ));
+    assert_eq!(settled(&mut r), (requests[2].ticket, 200));
+}

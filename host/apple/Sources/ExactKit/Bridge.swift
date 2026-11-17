@@ -3,6 +3,13 @@ import CExact
 import Foundation
 
 extension Runtime {
+    func collectionFixedSizes(_ view: UInt32, lead: Int, trail: Int) -> [Double]? {
+        on(busy: nil) {
+            let sizes = (0..<2).map { exact_collection_fixed_size(rt, view, UInt32(lead), UInt32(trail), UInt32($0)) }
+            return sizes.allSatisfy { $0.isFinite && $0 >= 0 } ? sizes : nil
+        }
+    }
+
     func collectionSnap(_ view: UInt32, proposed: Double, port: Double, minimum: Double = 0, maximum: Double, distance: Double = .infinity) -> Double? {
         on(busy: nil) {
             let value = exact_collection_snap(rt, view, proposed, port, minimum, maximum, distance)
@@ -30,7 +37,7 @@ extension Runtime {
     }
 
     func holdBegin(_ view: UInt32, property: UInt32, now: Double) -> (NativeHold?, Batch) {
-        if holds() { return (nil, Runtime.heldBatch) } // (`on(busy:)` doesn't hold: ResetGate)
+        if enter() { return (nil, Runtime.heldBatch) }
         return on(busy: (nil, Runtime.busy)) {
             let batch = read(exact_hold_begin(rt, view, property, now))
             let start = batch.ops.first { $0.op == .hold }.flatMap { NativeHold($0.payload) }
@@ -38,7 +45,7 @@ extension Runtime {
         }
     }
     package func heightDragBegin(_ handleKey: UInt64, targetKey: UInt64, now: Double) -> (NativeHold?, Batch) {
-        if holds() { return (nil, Runtime.heldBatch) }
+        if enter() { return (nil, Runtime.heldBatch) }
         return on(busy: (nil, Runtime.busy)) {
             let batch = read(exact_height_drag_begin(rt, handleKey, targetKey, now))
             return (batch.ops.first { $0.op == .hold }.flatMap { NativeHold($0.payload) }, batch)
@@ -73,7 +80,7 @@ extension Runtime {
     func liveClock(_ yes: Bool) { setLiveClock(yes ? { ExactEnv.wall() } : nil) }
     /// The posture and the viewport segments (LLP 1078 D4): the rects as `x y w h` floats in the input buffer, none for one segment.
     func segments(_ fold: ViewportFold) -> Batch {
-        on {
+        on(layout: true) {
             var data = Data(capacity: fold.rects.count * 16)
             for r in fold.rects { for v in [Float(r.minX), Float(r.minY), Float(r.width), Float(r.height)] { withUnsafeBytes(of: v.bitPattern.littleEndian) { data.append(contentsOf: $0) } } }
             _ = write(data)
@@ -89,7 +96,7 @@ extension Runtime {
     /// thread has no window to read it from; without one `@tint` is not
     /// reported, and the kernel keeps what it had.
     func reportColors(tint: [[Double]]?) -> Batch {
-        on {
+        on(layout: true) {
             let len = exact_color_references(rt)
             let json = Data(bytes: exact_out(rt), count: Int(len))
             let refs = (try? JSONSerialization.jsonObject(with: json)) as? [[Any]] ?? []
@@ -128,6 +135,14 @@ extension Runtime {
             return RadioGroup(json: Data(bytes: exact_out(rt), count: Int(len)))
         }
     }
+    /// A painted group's keys and Tab stop for member `view` (LLP 1166.000
+    /// D2), with `key` pressed and the focus at `focused`; nil for no member.
+    func roleKeys(_ view: UInt32, key: String?, focused: UInt32?) -> RoleKeys? {
+        return on(busy: nil) {
+            let len = exact_role_keys(rt, view, focused ?? 0, write(key ?? ""))
+            return RoleKeys(json: Data(bytes: exact_out(rt), count: Int(len)))
+        }
+    }
     /// A navigation root's tabs by the kernel's rule (LLP 1115.001 D11); nil for one stack.
     func rootTabs(_ view: UInt32) -> RootTabs? {
         return on(busy: nil) {
@@ -138,8 +153,8 @@ extension Runtime {
     /// What native containers cover of boxes (LLP 1075.003 §3.5), under one
     /// layout: `edges` add to a box's padding; `whole` lays it out as
     /// `display: none`; nil clears.
-    func covers(_ covers: [(UInt32, HostCover?)]) -> Batch {
-        return on {
+    package func covers(_ covers: [(UInt32, HostCover?)]) -> Batch {
+        return on(layout: true) {
             var bytes = Data(capacity: covers.count * 24)
             for (view, cover) in covers {
                 let (kind, edges): (UInt32, [CGFloat]) = switch cover {
@@ -160,7 +175,7 @@ extension Runtime {
     /// one layout: the owner by its root's view, nil for the session root's;
     /// nil insets take them back.
     func localInsets(_ owners: [(UInt32?, [CGFloat]?)]) -> Batch {
-        return on {
+        return on(layout: true) {
             var bytes = Data(capacity: owners.count * 24)
             for (view, insets) in owners {
                 let kind: UInt32 = (view == nil ? 19 : 17) + (insets == nil ? 1 : 0)
@@ -187,7 +202,7 @@ extension Runtime {
     /// cells, under one layout: the card's left and right insets, then the
     /// cell's left and right margins; nil clears them.
     package func groupedMargins(_ lists: [(UInt32, [CGFloat]?)]) -> Batch {
-        return on {
+        return on(layout: true) {
             var bytes = Data(capacity: lists.count * 24)
             for (view, margins) in lists {
                 let lengths = (margins ?? [0, 0, 0, 0]).map { Float($0).bitPattern }
@@ -201,7 +216,7 @@ extension Runtime {
     /// The margin UIKit's cell gives each cells list's rows at its left and
     /// right, under one layout (LLP 1138); nil clears it.
     package func listMargins(_ lists: [(UInt32, [CGFloat]?)]) -> Batch {
-        return on {
+        return on(layout: true) {
             var bytes = Data(capacity: lists.count * 24)
             for (view, margins) in lists {
                 let lengths = ((margins ?? [0, 0]) + [0, 0]).map { Float($0).bitPattern }
@@ -222,5 +237,8 @@ extension Runtime {
                     if let pointer { Unmanaged<RegionArtifact>.fromOpaque(pointer).release() }
                 }))
         }
+    }
+    func regionFallback(_ request: UInt64) -> Batch {
+        on { read(exact_region_fallback(rt, request)) }
     }
 }

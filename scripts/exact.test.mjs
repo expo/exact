@@ -107,7 +107,7 @@ test.skipIf(!tools)('widget packaging preserves parent platform and device capab
     mkdirSync(framework, { recursive: true });
     const parent = { CFBundleVersion: '8', CFBundleShortVersionString: '1.0.0', MinimumOSVersion: '17.0',
       UIDeviceFamily: [1, 2], CFBundleSupportedPlatforms: [device ? 'iPhoneOS' : 'iPhoneSimulator'], DTPlatformName: platform, ExactWidgetGeneration: 'fixture',
-      ...(device ? { UIRequiredDeviceCapabilities: ['arm64'] } : {}) };
+      CFBundleDevelopmentRegion: 'ar', CFBundleLocalizations: ['ar', 'en'], ...(device ? { UIRequiredDeviceCapabilities: ['arm64'] } : {}) };
     writeFileSync(resolve(bundle, 'Info.plist'), plistFile(parent));
     writeFileSync(resolve(framework, 'Info.plist'), plistFile({ CFBundleIdentifier: 'dev.exact.fixture.runtime' }));
     let signed = null;
@@ -135,6 +135,8 @@ test.skipIf(!tools)('widget packaging preserves parent platform and device capab
     }
     assert.deepEqual(info.CFBundleSupportedPlatforms, parent.CFBundleSupportedPlatforms);
     assert.equal(info.CFBundleVersion, parent.CFBundleVersion);
+    assert.equal(info.CFBundleDevelopmentRegion, 'ar');
+    assert.deepEqual(info.CFBundleLocalizations, ['ar', 'en']);
   }
 }));
 for (const device of [true, false]) {
@@ -1042,7 +1044,7 @@ test('docs prints the section on its words first, matching whole words', () => {
   for (const [words, file, shows] of [
     [['exit', 'animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
     [['-exact-exit-animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
-    [['call'], 'docs/recipes/native-module.md', /func call/],
+    [['call'], 'docs/recipes/native-module.md', /`native\.call`/],
     [['tool'], 'docs/recipes/tools.md', /^# Recipe: tools an agent or the system calls/],
     [['later'], 'docs/reference.md', /Answer::Later/],
     [['screenshot'], 'docs/recipes/ios-driving.md', /screenshot\s+\.exact\/x\.png compare/],
@@ -1070,7 +1072,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['glass'], 'docs/contract-for-agents.md', /glass/],
     [['detent'], 'docs/contract-for-agents.md', /detent/],
     [['tab', 'bar'], 'docs/recipes/tabs.md', /iOS's bar/],
-    [['back', 'button'], 'docs/recipes/navigation-stack.md', /`button id="back"`/],
+    [['back', 'button'], 'docs/recipes/navigation-stack.md', /`button id="close" press=back`/],
     [['search'], 'docs/recipes/list-rows.md', /search/],
     [['menu'], 'docs/recipes/list-rows.md', /menu/],
     [['swipe'], 'docs/recipes/list-rows.md', /swipe/],
@@ -1080,6 +1082,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['dark', 'mode'], 'docs/recipes/theme.md', /follows light, dark/],
     [['image'], 'docs/recipes/app-json.md', /image "assets\/logo.png"/],
     [['svg'], 'docs/recipes/theme.md', /svg "icons\/play\.svg"/],
+    [['waveform'], 'docs/recipes/waveform-and-tail.md', /^# Recipe: a voice note's waveform/],
     [['animation'], 'docs/recipes/motion.md', /animation/],
     [['transition'], 'docs/recipes/motion.md', /transition/],
     [['timer'], 'docs/recipes/timers.md', /^# Recipe: timers/],
@@ -1252,6 +1255,7 @@ test("setup's Cargo crates row fails on a registry without exact2's locked crate
 
 test.skipIf(process.platform === 'win32')("the setup report's Rust row and exact contract name another's cargo, rustup's rustc working", async () => {
   const { sdkReport } = await import('./exact.mjs');
+  const { freshCompiler } = await import('../host/web-js/module.mjs');
   const pin = Bun.TOML.parse(readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8')).toolchain.channel;
   inDir((brew) => {
     writeFileSync(resolve(brew, 'cargo'), `#!/bin/sh\necho 'error: no such command: \`+${pin}\`' >&2\nexit 101\n`, { mode: 0o755 });
@@ -1263,9 +1267,15 @@ test.skipIf(process.platform === 'win32')("the setup report's Rust row and exact
     const rust = sdkReport(env, { only: 'web' }).find(row => row.name === 'Rust');
     assert.equal(rust.ok, false);
     assert.equal(rust.fix, fault);
-    const vocab = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'contract', 'vocab', 'button'], { env, encoding: 'utf8' });
-    assert.equal(vocab.status, 101);
-    assert.ok(vocab.stderr.includes(`exact contract: ${fault}`), vocab.stderr);
+    // `exact contract` reaches Cargo only where this checkout's compiler is not fresh and no tool set matches; a HOME
+    // with no sets leaves the checkout's own build to decide (LLP 1174 D5).
+    const compiler = resolve(import.meta.dir, '../target/debug', 'contract');
+    const vocab = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'contract', 'vocab', 'button'], { env: { ...env, HOME: brew }, encoding: 'utf8' });
+    if (freshCompiler(compiler)) assert.equal(vocab.status, 0, vocab.stderr);
+    else {
+      assert.equal(vocab.status, 101);
+      assert.ok(vocab.stderr.includes(`exact contract: ${fault}`), vocab.stderr);
+    }
   });
 }, 60_000);
 
@@ -1466,3 +1476,18 @@ test('an installed command opens the bundle it names, whatever the name holds', 
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.stdout.split('\n').slice(0, -1), ['-a', target, '--', ...files]);
 });
+
+test('exact new names setup --check for each native platform the app names, whose rows its web table leaves out', async () => { const { shellPath } = await import('./exact.mjs'); inDir((dir) => {
+  const made = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'with-native'), '--with', 'ios', '--with', 'mac'], { encoding: 'utf8', timeout: 120_000 });
+  assert.equal(made.status, 0, made.stderr);
+  const script = shellPath(resolve(import.meta.dir, 'exact.mjs'));
+  assert.ok(made.stdout.includes(`Before the first ios build: bun ${script} setup --check --platform ios names what it lacks (the Xcode or SDK it needs among them).`), made.stdout);
+  assert.ok(made.stdout.includes(`Before the first macos build: bun ${script} setup --check --platform macos names`), made.stdout);
+  // The command it names is one setup takes, run by a shell from the app: it prints the platform's table, not its usage.
+  const named = /^Before the first macos build: bun (.+? setup --check --platform macos) names/m.exec(made.stdout);
+  const checked = spawnSync('/bin/sh', ['-c', `${shellPath(process.execPath)} ${named[1]}`], { cwd: resolve(dir, 'with-native'), encoding: 'utf8', timeout: 120_000 });
+  assert.doesNotMatch(checked.stderr, /Usage: exact setup/);
+  assert.match(checked.stdout, /\bXcode\b|\bmacOS\b/);
+  const plain = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'new', resolve(dir, 'web-only')], { encoding: 'utf8', timeout: 120_000 });
+  assert.doesNotMatch(plain.stdout, /Before the first/);
+}); }, 240_000);

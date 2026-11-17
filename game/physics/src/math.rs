@@ -310,7 +310,7 @@ pub(crate) fn heightfield(
         }
     }
     let mut normals = vec![Vec3::ZERO; heights.len()];
-    for t in mesh.indices.chunks_exact(3) {
+    for t in mesh.indices.as_chunks::<3>().0 {
         let p = |i: u32| Vec3::from_slice(&mesh.positions[i as usize * 3..][..3]);
         let n = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
         for &i in t {

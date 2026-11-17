@@ -66,7 +66,7 @@ pub fn take_design_scan() -> Option<DesignScan> {
 pub(super) fn scan(
     file: &File,
     root: &Component,
-    design: &exact_tamber::Design,
+    design: &exact_forma::Design,
     declared: &Arc<rows::Declared>,
     typing: &rows::Typing,
 ) -> Said {

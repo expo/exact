@@ -47,9 +47,10 @@ Built for Windows so far: the host's services (`host/windows/src/desktop.rs`:
 `RegisterHotKey`, `FlashWindowEx`, the `Run` value), the three packages'
 Rust (`packages/*/windows/lib.rs`), `keepRunning`, the hidden login launch
 and one instance (`host/windows/src/window/lifecycle.rs`,
-`host/windows/src/instance.rs`), cross-checked on this Mac only. Not built:
-the notification-area icon, a launch with no window at every launch, the
-startup task and the modifier pair's hook (LLP 1133.025 §14). Run these in the NucBox's signed-in console
+`host/windows/src/instance.rs`), and the notification-area icon with its
+menu (`host/windows/src/tray.rs`), cross-checked on this Mac only. Not
+built: a launch with no window at every launch, the startup task and the
+modifier pair's hook (LLP 1133.025 §14). Run these in the NucBox's signed-in console
 session (`docs/testing.md`, "Windows: the NucBox"), not over SSH, with a
 development build of an app that depends on the three packages.
 
@@ -78,3 +79,24 @@ development build of an app that depends on the three packages.
    Manager. The app's own button that calls `close()` ends it.
 6. **One instance.** With Shelf open (no `keepRunning`), its jump-list task
    Add Book opens Add Book in that window, and no second window appears.
+7. **Notification-area icon.** The fixture's star is an icon in the
+   notification area (or its overflow), drawn white on a dark taskbar and
+   black on a light one, sharp at 100%, 150% and 200% scaling, and the
+   Desktop Fixture button is gone from the window. Hovering it shows
+   "Desktop Fixture". A left click and a right click each open its menu at
+   the pointer, above the taskbar, with rounded corners and a shadow, and
+   with the window hidden too; the arrows, Enter and Escape work in it, as
+   does a letter for its row. Open Desktop Fixture shows the window; the
+   disabled row is dimmed and presses nothing; a click outside, Alt or
+   Escape closes the menu and runs nothing. The menu ends with Exit, which
+   ends the app. Hide Menu Bar Item removes the icon, and Show brings it
+   back. With the icon placed and no `keepRunning`, the close button ends
+   the app; with `keepRunning`, it hides the window, and starting the app
+   from Start shows it again. In a production build, turn the icon on in
+   Settings › Personalization › Taskbar › Other system tray icons, quit, and
+   start the app again: it is still shown there, and the journal has no
+   "refused the icon's GUID". Restart
+   Explorer (`taskkill /f /im explorer.exe`, then `explorer`): the icon
+   comes back. Switch Settings › Personalization › Colors between dark and
+   light: the star follows. With Narrator on, note what it reads in the
+   menu (its window has no UI Automation tree yet).

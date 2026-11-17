@@ -92,6 +92,119 @@ fn inline_frame_matches_chromes_font_boxes_and_wrap_union() {
     }
 }
 
+/// A run with no text and padding is a box in its line, as Chrome lays
+/// `Hi<span style="padding:3px 5px;border:2px solid"></span> there` out:
+/// its padding and border take room after "Hi", and its frame is its border
+/// box, 14 wide and as tall as its font's content area and block reach.
+#[test]
+fn an_empty_padded_run_is_a_box_in_its_line() {
+    let ids = ["empty", "after"];
+    let text = |attrs: &str| {
+        format!("text \"Hi\"\ntext \"\" id=\"empty\" {attrs}\ntext \" there\" id=\"after\"")
+    };
+    let mut plain = boot(&app(&text(""), "", "", &ids));
+    let mut boxed = boot(&app(
+        &text("padding=\"3px 5px\" margin-left=4 border-width=2 border-style=\"solid\""),
+        "",
+        "",
+        &ids,
+    ));
+    let [insertion, after] = [0, 1].map(|i| relative(&mut plain, i));
+    close(
+        relative(&mut boxed, 0),
+        [
+            insertion[0] + 4.,
+            insertion[1] - 5.,
+            14.,
+            insertion[3] + 10.,
+        ],
+        0.01,
+    );
+    let moved = relative(&mut boxed, 1);
+    close(moved, [after[0] + 18., after[1], after[2], after[3]], 0.01);
+}
+
+/// A run's frame is its border box, as Chrome's `getBoundingClientRect`
+/// answers: its padding and border stand out from its glyphs on every side
+/// (CSS 2 §10.6.1, §8.6), and neither its margin nor its neighbours' room is
+/// part of it. A box's padding past its first and last characters counts
+/// the boxes inside it there.
+#[test]
+fn inline_frame_is_the_runs_border_box() {
+    let ids = ["before", "run", "after"];
+    let text = |attrs: &str| {
+        format!("text \"Hi \" id=\"before\"\ntext \"link\" id=\"run\" {attrs}\ntext \" there\" id=\"after\"")
+    };
+    let mut plain = boot(&app(&text(""), "", "", &ids));
+    let mut boxed = boot(&app(
+        &text("padding=\"7.5px 8px\" margin-left=10 margin-right=12 border-right-width=3 border-right-style=\"solid\""),
+        "",
+        "",
+        &ids,
+    ));
+    let [before, glyphs, after] = [0, 1, 2].map(|i| relative(&mut plain, i));
+    close(relative(&mut boxed, 0), before, 0.01);
+    close(
+        relative(&mut boxed, 1),
+        [
+            glyphs[0] + 10.,
+            glyphs[1] - 7.5,
+            glyphs[2] + 19.,
+            glyphs[3] + 15.,
+        ],
+        0.01,
+    );
+    close(
+        relative(&mut boxed, 2),
+        [after[0] + 41., after[1], after[2], after[3]],
+        0.01,
+    );
+
+    let ids = ["outer", "inner"];
+    let text = |outer: &str, inner: &str| {
+        format!("text \"Hi \"\ntext id=\"outer\" {outer}\n  text \"ab\" id=\"inner\" {inner}\n  text \"cd\"\ntext \" x\"")
+    };
+    let mut plain = boot(&app(&text("", ""), "", "", &ids));
+    let mut boxed = boot(&app(
+        &text("padding=6", "padding-left=3 padding-top=2"),
+        "",
+        "",
+        &ids,
+    ));
+    let [outer, inner] = [0, 1].map(|i| relative(&mut plain, i));
+    close(
+        relative(&mut boxed, 0),
+        [outer[0], outer[1] - 6., outer[2] + 15., outer[3] + 12.],
+        0.01,
+    );
+    close(
+        relative(&mut boxed, 1),
+        [inner[0] + 6., inner[1] - 2., inner[2] + 3., inner[3] + 2.],
+        0.01,
+    );
+
+    // Wrapped, its padding stands out above and below both lines, and its
+    // start moves the first line's text (and right edge) on by 5.
+    let text = |attrs: &str| {
+        format!("text \"one \"\ntext \"two three four\" id=\"run\" {attrs}\ntext \" end\"")
+    };
+    let plain = relative(&mut boot(&app(&text(""), "width=120", "", &["run"])), 0);
+    let boxed = relative(
+        &mut boot(&app(
+            &text("padding=\"2px 5px\""),
+            "width=120",
+            "",
+            &["run"],
+        )),
+        0,
+    );
+    close(
+        boxed,
+        [plain[0], plain[1] - 2., plain[2] + 5., plain[3] + 4.],
+        0.01,
+    );
+}
+
 #[test]
 fn inline_frame_empty_run_on_a_blank_hard_line() {
     for separator in [r"\n", r"\u{d}\n"] {

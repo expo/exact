@@ -56,9 +56,16 @@ fn always_none(value: &Expr) -> bool {
     }
 }
 
-/// `::placeholder`'s `color` (LLP 1104 D3) colours a text field's
-/// placeholder, and only a text field has one.
-pub(crate) fn placeholder_refusal(name: &str, tag: &str, control: Option<&str>) -> Option<String> {
+/// A part on an element that has none: `::placeholder`'s `color` (LLP 1104
+/// D3) colours a text field's placeholder, and only a text field has one;
+/// `::backdrop`'s `background-color` (LLP 1035.001 D11) is what lies beneath
+/// a modal `dialog`.
+pub(crate) fn part_refusal(name: &str, tag: &str, control: Option<&str>) -> Option<String> {
+    if name.starts_with("::backdrop ") && tag != "dialog" {
+        return Some(format!(
+            "`::backdrop` colours what lies beneath a modal `dialog`; `{tag}` has none"
+        ));
+    }
     let field = control == Some("field") || tag == "textarea";
     (name.starts_with("::placeholder ") && !field).then(|| {
         let what = control.filter(|_| tag == "input").map_or(format!("`{tag}`"), |c| format!("an `input` of type `{c}`"));
@@ -66,13 +73,19 @@ pub(crate) fn placeholder_refusal(name: &str, tag: &str, control: Option<&str>) 
     })
 }
 
-/// What an author may write for a placeholder's colour, and what to write
-/// (LLP 1104 D3): CSS's `::placeholder` block, and `color` alone in it.
-pub(crate) fn placeholder_hint(name: &str) -> Option<String> {
+/// What an author may write in a part, and how to write a placeholder's
+/// colour (LLP 1104 D3): CSS's `::placeholder` block, and `color` alone in
+/// it; a backdrop's `background-color` alone (LLP 1035.001 D11).
+pub(crate) fn part_hint(name: &str) -> Option<String> {
     const BLOCK: &str = "`::placeholder` on its own line under the field (or in a `style`), then `color=\"#6b7280\"` indented beneath it, CSS's `::placeholder { color }`";
     if let Some(property) = name.strip_prefix("::placeholder ") {
         return Some(format!(
             "; `::placeholder` admits only `color` for now, not `{property}`"
+        ));
+    }
+    if let Some(property) = name.strip_prefix("::backdrop ") {
+        return Some(format!(
+            "; `::backdrop` admits only `background-color` for now, not `{property}`"
         ));
     }
     matches!(

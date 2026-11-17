@@ -44,7 +44,7 @@ nothing spills at the largest text size. Two of `verify ios`'s scrolling-feel nu
 - **The last grid row sat under the floating iOS 26 tab bar** when the list opened at its end. The
   footer row (count plus padding) fixes it.
 - **Colours over photos.** The white heart and checkmark backing needed `scheme=fixed` tokens in an
-  `app.tamber` to clear `lower-colour-one-scheme`.
+  `app.forma` to clear `lower-colour-one-scheme`.
 
 ## Guesses
 - Day headings are full dates ("Monday, October 26, 2026") in the device's time zone, with no

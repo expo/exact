@@ -165,7 +165,7 @@ impl<D: DataSource> Runner<D> {
         let at = template::pointer(&json, pointer)
             .ok_or_else(|| shaped(format!("the reply has nothing at `{pointer}`")))?;
         let shape = Shape::from_plan(&self.plan, ty).map_err(DataError::Unavailable)?;
-        let value = exact_js_value::project_json(at, &shape).map_err(&shaped)?;
+        let value = exact_js_value::project_json(at, &shape).map_err(shaped)?;
         if !value.conforms(&self.plan, ty) {
             return Err(shaped(crate::conform::mismatch(&self.plan, &value, ty)));
         }

@@ -150,11 +150,11 @@ fn random_style(rng: &mut Rng, node_type: NodeType) -> Box<StyleProps> {
             1 => s.top = Dimension::Auto,
             2 => (s.left, s.top) = (Dimension::Auto, Dimension::Auto),
             3 => {
-                (s.right, s.left) = (s.left, Dimension::Auto);
+                (s.right, s.left) = (s.left.clone(), Dimension::Auto);
                 s.mask.set(StyleId::Right);
             }
             4 => {
-                (s.bottom, s.top) = (s.top, Dimension::Auto);
+                (s.bottom, s.top) = (s.top.clone(), Dimension::Auto);
                 s.mask.set(StyleId::Bottom);
             }
             _ => {}
@@ -749,12 +749,12 @@ fn block_intrinsic_probes_cannot_leave_cached_final_children_wrapped() {
         .unwrap();
     let measure =
         |inputs: taffy::tree::LayoutInput, _, context: Option<&mut bool>, style: &Style| {
+            let is_save = *context.unwrap();
             taffy::compute_leaf_layout(
                 inputs,
                 style,
                 |_, _| 0.0,
                 |known, space| {
-                    let is_save = *context.unwrap();
                     let full = if is_save { 75.0 } else { 122.0 };
                     let narrow = if is_save { 41.0 } else { 65.0 };
                     let available = known.width.unwrap_or(match space.width {
@@ -1052,6 +1052,7 @@ fn measured_baselines_include_padding_and_inherited_direction_relayouts_boxes() 
             TextMetrics {
                 width: 20.,
                 height: h,
+                pending: false,
                 first_baseline: Some(h * 0.75),
             }
         }

@@ -59,7 +59,8 @@
       if (env.overlaying()) throw inOverlay(api);
       answerOnly(api);
       var value = take();
-      host(8, "", "");
+      // An empty fill drew nothing
+      if (typeof value === "string" || value.byteLength > 0) host(8, "", "");
       return value;
     }
     // Under the agent, the host's repeatable stream (D2b): `n` bytes, or

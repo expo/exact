@@ -34,6 +34,7 @@ fn jobs(width: u32, height: u32, scale: f64, draw: impl Fn(&Context2d)) -> Vec<(
         scene: Scene::new(),
         keep: false,
         shadows: Vec::new(),
+        masks: Vec::new(),
     };
     replayer.begin(&mut frame.scene);
     for list in ctx.take_lists() {

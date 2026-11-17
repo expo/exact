@@ -133,10 +133,18 @@ export function binaryPrivacyAPIs(binary) {
   return categories;
 }
 
-export function privacyManifestForBinaries(binaries, manifests = [], { mac = false, modules = false } = {}) {
+export function privacyManifestForBinaries(binaries, manifests = [], { mac = false, modules = false, mode = modules ? 'modules' : 'exact' } = {}) {
+  if (!['exact', 'modules', 'app-owned'].includes(mode) || (modules && mode !== 'modules')) throw new Error(`privacy manifest: unknown executable mode ${mode}`);
   const categories = new Set(binaries.flatMap(binaryPrivacyAPIs));
-  const merged = mergePrivacyManifests({ [TYPES]: [...categories].filter(c => EXACT_REASONS[c] && (!modules || c === 'FileTimestamp')).map(c => ({ [TYPE]: PREFIX + c, [REASONS]: EXACT_REASONS[c] })) }, ...manifests);
-  for (const category of categories) if (modules && EXACT_REASONS[category] && !merged[TYPES].some(row => row[TYPE] === PREFIX + category)) throw new Error(`privacy manifest: a native module in ${binaries.join(', ')} must declare its ${category} reason`);
+  const seeded = category => mode === 'exact' || (mode === 'modules' && category === 'FileTimestamp');
+  const merged = mergePrivacyManifests({ [TYPES]: [...categories].filter(c => EXACT_REASONS[c] && seeded(c)).map(c => ({ [TYPE]: PREFIX + c, [REASONS]: EXACT_REASONS[c] })) }, ...manifests);
+  for (const category of categories) {
+    const ownsReason = mode === 'app-owned' && APPROVED_REASONS[category] || mode === 'modules' && EXACT_REASONS[category];
+    if (ownsReason && !merged[TYPES].some(row => row[TYPE] === PREFIX + category)) {
+      const owner = mode === 'app-owned' ? 'an app-owned executable' : 'a native module';
+      throw new Error(`privacy manifest: ${owner} in ${binaries.join(', ')} must declare its ${category} reason`);
+    }
+  }
   // SQLite's filesystem-type/locking probes are not a disk-space reason. Do not invent E174.1 or 85F4.1.
   // Apple excludes macOS from required-reason reporting; macOS may still inspect filesystem types.
   if (!mac && categories.has('DiskSpace') && !merged[TYPES].some(row => row[TYPE] === PREFIX + 'DiskSpace')) throw new Error(`privacy manifest: ${binaries.join(', ')} uses disk-space APIs without an audited reason; remove the call or supply its truthful declaration`);
@@ -148,9 +156,9 @@ export function privacyManifestForBinaries(binaries, manifests = [], { mac = fal
 }
 
 /** `resources` is the owning bundle's resource directory, including a versioned Mac framework's Resources. */
-export function writePrivacyManifest(resources, binaries, { manifests = [], apiManifests = [], mac = false, modules = false } = {}) {
+export function writePrivacyManifest(resources, binaries, { manifests = [], apiManifests = [], mac = false, modules = false, mode = modules ? 'modules' : 'exact' } = {}) {
   const output = resolve(resources, 'PrivacyInfo.xcprivacy');
-  const manifest = privacyManifestForBinaries(binaries, [...manifests.map(capturedPrivacyManifest), ...apiManifests.map(privacyAPIManifest)], { mac, modules });
+  const manifest = privacyManifestForBinaries(binaries, [...manifests.map(capturedPrivacyManifest), ...apiManifests.map(privacyAPIManifest)], { mac, modules, mode });
   mkdirSync(resources, { recursive: true });
   writeFileSync(output, plistFile(manifest));
   return output;

@@ -292,7 +292,7 @@ final class AddressedTapIOSTests: XCTestCase {
         let p = session.presenter
         // This wire tree has no runner plan; layout and focus callbacks must not apply one.
         p.session = nil
-        p.onIntrinsic = nil; p.onCovers = nil; p.onClipboard = nil; p.onClose = nil
+        p.onIntrinsic = nil; p.onCovers = nil; p.onClipboard = nil; p.onClose = nil; p.onCancel = nil
         p.onPress = nil; p.onFocus = nil; p.onBlur = nil; p.onFocusEvent = nil; p.onKey = nil
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))

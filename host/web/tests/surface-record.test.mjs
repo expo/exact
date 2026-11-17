@@ -2,9 +2,10 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { fixture } from './surface.mjs';
 
-test('a connected registered publisher is duplicate even before the GPU gives it an id', async () => {
+test('a connected registered publisher keeps the name even before the GPU gives it an id', async () => {
   const f = await fixture({ duplicateDuringLoad: true });
-  assert.equal(f.diagnostics.filter(line => line.includes('duplicate live publisher')).length, 1);
+  assert.deepEqual(f.records, ['world\0{"value":1}']);
+  assert.deepEqual(f.diagnostics, []);
 });
 
 test('player restore flushes its public record before reporting success', async () => {
@@ -103,13 +104,12 @@ for (const stale of ['detached', 'unregistered']) test(`a ${stale} publisher yie
   assert.equal(f.records.at(-1), 'glass\0{"value":2}');
 });
 
-test('first live canvas alone publishes and clears, with one named duplicate diagnostic', async () => {
+test('first live canvas alone publishes and clears; a second canvas of the surface is no fault', async () => {
   const f = await fixture();
   f.create(1); f.create(2);
   f.exact.gpu.surface(2, 'world', []);
   assert.deepEqual(f.records, ['world\0{"value":1}']);
-  assert.equal(f.diagnostics.length, 1);
-  assert.match(f.diagnostics[0], /world.*duplicate/);
+  assert.deepEqual(f.diagnostics, []);
   f.destroy(2);
   assert.equal(f.records.length, 1);
   f.create(3); f.destroy(1);
@@ -805,16 +805,24 @@ test('a named update sends the module only the arguments that changed since its 
   assert.deepEqual(last(), [['full', {saved: '<saved>', count: 6}], ['changed', {count: 7}]]);
 });
 
-test('R14 the canvas size reaches the module before each bind, whole or changed, which may tick a new world',async()=>{
+test('R14 the canvas size reaches the module before its first bind, which may tick a new world, and then as it changes',async()=>{
   const f=await fixture(), calls=[];
+  let reads=0;
   f.gpu.gpu_size=(id,w,h)=>{calls.push(['size',id,w,h]);return true;};
   f.gpu.gpu_bind_at=id=>{calls.push(['bind',id]);return true;};
   f.gpu.gpu_bind_changed_at=id=>{calls.push(['changed',id]);return true;};
-  f.create(1);
-  for(const seed of [2,3]) await f.applyBatch({ops:[{op:'surface',id:1,name:'world',values:{seed}}],timers:false,motion:false});
-  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  const host=f.create(1), read=host.getBoundingClientRect;
+  host.getBoundingClientRect=function(){reads++;return read.call(this);};
   const size=['size',1,10,10];
-  assert.deepEqual(calls,[size,['bind',1],size,['bind',1],size,['changed',1],size,['changed',1]]);
+  assert.deepEqual(calls,[size,['bind',1]]);
+  // A bind in a batch reads no geometry, which would force the layout of what the batch wrote before it (#533).
+  for(const seed of [2,3]) await f.applyBatch({ops:[{op:'surface',id:1,name:'world',values:{seed}}],timers:false,motion:false});
+  assert.equal(reads,0);
+  // The ResizeObserver, after layout, tells a new size.
+  host.getBoundingClientRect=()=>({width:30,height:20});
+  f.resize();
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  assert.deepEqual(calls,[size,['bind',1],['bind',1],['changed',1],['size',1,30,20],['changed',1]]);
 });
 
 test('E10 focused Contract buttons consume activation keys before the world', async () => {
@@ -905,4 +913,30 @@ test('canvas metrics opt in only the named first publisher and clear on disposal
   assert.equal(on.metrics.at(-1), 'world');
   assert.equal(on.metricTimers.size, 0);
   const disposed = reads; on.pollMetrics(); assert.equal(reads, disposed);
+});
+
+test('canvas metrics start and stop after a commit without rebinding the canvas', async () => {
+  const options = { metricsName: null, snapshot: () => '{"frames":1}' };
+  const f = await fixture(options);
+  f.create(1);
+  assert.deepEqual(f.reporting, []);
+  assert.equal(f.metricTimers.size, 0);
+  for (let i = 0; i < 3; i++) {
+    options.metricsName = 'world';
+    f.applyBatch({ ops: [] });
+    assert.deepEqual(f.reporting.at(-1), [1, true]);
+    assert.equal(f.metricTimers.size, 1);
+    f.pollMetrics();
+    assert.equal(f.metrics.at(-1), 'world\0{"frames":1}');
+    options.metricsName = null;
+    f.applyBatch({ ops: [] });
+    assert.deepEqual(f.reporting.at(-1), [1, false]);
+    assert.equal(f.metricTimers.size, 0);
+    const before = f.metrics.length;
+    f.frame(); f.pollMetrics();
+    assert.equal(f.metrics.length, before);
+  }
+  assert.equal(f.reporting.length, 6);
+  f.destroy(1);
+  assert.equal(f.metrics.at(-1), 'world');
 });

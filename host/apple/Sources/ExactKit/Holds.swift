@@ -79,12 +79,12 @@ package final class FinishHold {
     }
 
     /// A UIKit background task on iOS and tvOS; nothing on the Mac, whose quit asks `mustFinish`.
-    static func platform() -> FinishHold {
+    static func platform(_ name: String = "finishing an answer's work") -> FinishHold {
         #if canImport(UIKit)
         // `.invalid` when the app may not run in the background
         var task = UIBackgroundTaskIdentifier.invalid
         return FinishHold(begin: { expired in
-                              task = UIApplication.shared.beginBackgroundTask(withName: "finishing an answer's work", expirationHandler: expired)
+                              task = UIApplication.shared.beginBackgroundTask(withName: name, expirationHandler: expired)
                               return task != .invalid
                           },
                           end: { UIApplication.shared.endBackgroundTask(task); task = .invalid })

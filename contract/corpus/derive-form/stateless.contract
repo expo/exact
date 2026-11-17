@@ -1,0 +1,22 @@
+component App
+  state title = "first"
+  state words = ["a", "b"]
+  action change
+    title = "second"
+    words = ["b", "c"]
+  view
+    column
+      button "change" press=change testId="change"
+      if true
+        Child(value=title)
+      for word in words key=word
+        if true
+          Child(value=word)
+component Child
+  props
+    value: string
+  derive label = value + "!"
+  view
+    if true
+      column
+        text label

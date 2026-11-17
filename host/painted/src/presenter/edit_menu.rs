@@ -306,7 +306,7 @@ mod tests {
     }
     fn fixture(extra: &str, attrs: &str) -> (Presenter<()>, ViewId, Rc<RefCell<String>>) {
         let source = format!("component App\n{extra}  view\n    input value=\"café 界 🦀\" testId=\"editor\" width=300 height=48 appearance=\"none\" {attrs}\n");
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (400., 200.),

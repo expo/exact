@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { streams, streamCandidates } from './push.mjs';
+import { APK_COMMAND, binaryCommand, changesAgainst, defaultRelease, publishedModule, publishStream, streamCandidates, streams, sunsetFor } from './publisher.mjs';
 import { requireReleasePins } from '../game/inputs.mjs';
 // `exact deploy` — the publisher (LLP 1030.000 D3 the verb, D4 the policies,
 // D5 one library in its own process, D7 where things live; LLP 1030 D3 the
@@ -7,7 +7,7 @@ import { requireReleasePins } from '../game/inputs.mjs';
 // The repo has no `exact` binary; this script is the verb:
 //
 //   bun scripts/deploy.mjs <app> [--origin <dir|url>] [--channel <name>]
-//       [--only bundle|origin] [--platform <p>]… [--snapshot <sha>] [--dirty]
+//       [--only bundle|origin] [--platform <p>]… [--variant <name>] [--snapshot <sha>] [--dirty]
 //       [--release <id>] [--keys <dir>] [--json] [--yes]
 //   bun scripts/deploy.mjs keygen <id> [--keys <dir>] [--json]
 //
@@ -42,31 +42,30 @@ import { requireReleasePins } from '../game/inputs.mjs';
 // the repository. `update/tests/it/publisher.rs` reads a head this script
 // produced and proves the client verifies it.
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { Refusal, refuse, assetIndex, canonicalBytes, canonicalJson, envelopeBytes, portableAssetNames, loadSigner, keygen, readAssetIndex, envelopeReport } from './deploy-signing.mjs';
+import { Refusal, refuse, canonicalBytes, canonicalJson, loadSigner, keygen, readAssetIndex, envelopeReport } from './deploy-signing.mjs';
 export { canonicalBytes, portableAssetNames, publicKeyFromRaw, loadSigner, readAssetIndex, sealEnvelope } from './deploy-signing.mjs';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
-import { homedir, hostname, tmpdir, userInfo } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildRust, publishedSignature, rustBundle, rustPackage, tieredNative } from './rust.mjs';
+import { buildRust, publishedSignature, rustBundle, rustPackage } from './rust.mjs';
 import { appleProduction } from '../host/apple/link.mjs';
 import { assertOwnTarget, bakedEntryAssets, bakeOutput, cargoReproducibilityFlags, readManifest, buildBake, bakeTarget, readBake, readBuilds, classifyArtifacts, resolveApp, shaderWatchRoots } from './app.mjs';
 import { gameShells } from "../game/app/shells.mjs";
 import { streamBundle, unbundledTextures } from './texture-families.mjs';
-import { blobPath, channelOrigin, openOrigin, OriginUnavailable, sha256, streamPath, parseWebRoot, webRootPath, webRootStream, webReleasePath, validateChannel } from './origin.mjs';
-import { admitHead, binaryInputFile, cohortReceipt, keepRecord, latestRecord, nextSeq } from './deploy-heads.mjs';
+import { channelOf, channelOrigin, openOrigin, OriginUnavailable, sha256, streamPath, parseWebRoot, webRootPath, webRootStream, webReleasePath, validateChannel } from './origin.mjs';
+import { admitHead, cohortReceipt, latestRecord, nextSeq } from './deploy-heads.mjs';
 export { admitHead, cohortReceipt, inspectHead } from './deploy-heads.mjs';
 import { filesystemLock, removePrivateTree } from './filesystem.mjs';
 import { listBuildFiles, listPublicFiles, readStaticCandidate } from '../host/web/serve.mjs';
 import { BESIDE, STAGE } from '../host/web/beside.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const PLATFORMS = ['web', 'ios', 'macos', 'linux'];
-const USAGE = 'usage: bun scripts/deploy.mjs <app> [--origin <dir|url>] [--channel <name>] [--only bundle|origin] [--platform <web|ios|macos|linux>]... [--snapshot <sha>] [--dirty] [--release <id>] [--keys <dir>] [--json] [--yes]\n       bun scripts/deploy.mjs keygen <id> [--keys <dir>] [--json]';
+const PLATFORMS = ['web', 'ios', 'macos', 'linux', 'android'];
+const USAGE = 'usage: bun scripts/deploy.mjs <app> [--origin <dir|url>] [--channel <name>] [--only bundle|origin] [--platform <web|ios|macos|linux|android>]... [--variant <name>] [--snapshot <sha>] [--dirty] [--release <id>] [--keys <dir>] [--json] [--yes]\n       bun scripts/deploy.mjs keygen <id> [--keys <dir>] [--json]';
 // ------------------------------------------------------------------ arguments
 function parseArgs(argv) {
   const opts = { platform: [], _: [] };
-  const valued = new Set(['--origin', '--channel', '--only', '--platform', '--snapshot', '--release', '--keys']);
+  const valued = new Set(['--origin', '--channel', '--only', '--platform', '--variant', '--snapshot', '--release', '--keys']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') opts.json = true;
@@ -83,6 +82,8 @@ function parseArgs(argv) {
   }
   for (const p of opts.platform) if (!PLATFORMS.includes(p)) refuse(`--platform ${p}: one of ${PLATFORMS.join(', ')}`);
   if (opts.only && opts.only !== 'bundle' && opts.only !== 'origin') refuse(`--only ${opts.only}: bundle or origin`);
+  // As EXACT_VARIANT, which the flag replaces; resolveApp scopes it to the app (LLP 1030.008 D3).
+  if (opts.variant) { process.env.EXACT_VARIANT = opts.variant; delete process.env.EXACT_VARIANT_APP; }
   if (opts.release && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(opts.release)) refuse(`--release ${opts.release}: start with a letter or digit, then use letters, digits, . _ - only (it names a directory and a file)`);
   opts.keys = resolve(opts.keys ?? process.env.EXACT_SIGNING_KEY_DIR ?? resolve(homedir(), '.config/exact/keys'));
   return opts;
@@ -103,7 +104,7 @@ function canonicalPath(path) {
 }
 /** A source snapshot omits build outputs and Exact's design corpus at explicit roots, not recursive basename patterns
  * (`assets/dist/a.png` and `fixtures/target/input.rs` remain inputs when the app carries them). */
-export function sourcePathspec(repo, app, exactRoot) {
+export function sourcePaths(repo, app, exactRoot) {
   const workspace = canonicalPath(app.workspace ?? app.dir);
   const dist = ['dist', ...BESIDE.map((name) => `dist.${name}`), `dist.${STAGE}*`]; // what `dist` keeps beside it: beside.mjs
   const outputs = [resolve(repo, 'target'), resolve(repo, 'node_modules'),
@@ -125,13 +126,30 @@ export function sourcePathspec(repo, app, exactRoot) {
     }
   }
   for (const output of [...app.manifest?.game ? ['target', '.shells', 'artifacts'] : [], ...dist]) outputs.push(resolve(app.dir, output));
+  const android = resolve(exactRoot, 'host/android');
+  outputs.push(...['build', '.gradle', '.kotlin', 'settings-gradle.lockfile'].map(name => resolve(android, name)));
+  const crashes = [];
+  if (existsSync(android)) for (const entry of readdirSync(android, {withFileTypes:true})) {
+    const path = resolve(android, entry.name);
+    if (entry.isDirectory() && existsSync(resolve(path, 'build.gradle.kts'))) outputs.push(resolve(path, 'build'));
+    // A failed Gradle JVM writes crash reports beside the root project.
+    if (entry.isFile() && /^(?:hs_err_pid.*\.(?:log|mdmp)|replay_pid.*\.log)$/.test(entry.name)) crashes.push(path);
+  }
   // Keep the lexical path as well as its canonical alias. In particular,
   // `target -> /shared/cache` is still the declared in-repo output root; if
   // we realpath it first, the symlink itself re-enters the source inventory.
-  const candidates = outputs.flatMap((path) => [resolve(path), canonicalPath(path)]);
-  const excluded = [...new Set(candidates.filter((path) => path !== repo && inside(repo, path))
+  const roots = (paths) => [...new Set(paths.flatMap((path) => [resolve(path), canonicalPath(path)])
+    .filter((path) => path !== repo && inside(repo, path))
     .map((path) => unixPath(relative(repo, path))))];
-  return ['.', ...excluded.flatMap((path) => [`:(exclude,top,literal)${path}`, `:(exclude,top,glob)${path}/**`])];
+  // A fixed set of patterns keeps accumulated crash reports off Git's command line.
+  const crashPatterns = roots(['hs_err_pid*.log', 'hs_err_pid*.mdmp', 'replay_pid*.log'].map(name => resolve(android, name)));
+  const pathspec = ['.', ...roots(outputs).flatMap((path) => [`:(exclude,top,literal)${path}`, `:(exclude,top,glob)${path}/**`]),
+    ...crashPatterns.map(path => `:(exclude,top,glob)${path}`)];
+  // Standalone tools build beside their manifests. Keep these roots in memory:
+  // passing every crate to Git exceeds Windows' command-line limit.
+  const manifests = gitText(repo, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
+    'Cargo.toml', '**/Cargo.toml'], 'could not inventory Cargo output roots').split('\0').filter(Boolean);
+  return { pathspec, excluded: roots([...outputs, ...crashes, ...manifests.map((manifest) => resolve(repo, dirname(manifest), 'target'))]) };
 }
 const SOURCE_MAX_BUFFER = 512 * 1024 * 1024;
 function gitResult(repo, args, what, options = {}) {
@@ -236,16 +254,47 @@ export function assertCapturedContractSources(graph, sourceRoot) {
   }
 }
 
+function packageDependencies(root) {
+  const manifest = resolve(root, 'package.json');
+  if (!existsSync(manifest)) return [];
+  const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+  return Object.entries({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies });
+}
+
+export function assertCapturedPackageDependencies(root, sourceRoot) {
+  const captured = realpathSync.native(sourceRoot), visited = new Set();
+  const checked = path => {
+    const file = realpathSync.native(path);
+    if (!inside(captured, file) || resolve(captured, relative(captured, file)) !== file)
+      refuse(`${path}: a local package dependency outside the captured snapshot`);
+    return file;
+  };
+  const walk = path => {
+    const file = checked(path);
+    if (visited.has(file)) return;
+    visited.add(file);
+    // Bun can link individual files while the package directory stays inside.
+    if (statSync(file).isDirectory()) for (const name of readdirSync(file)) walk(resolve(file, name));
+  };
+  for (const [name, spec] of packageDependencies(root)) {
+    if (typeof spec !== 'string' || !/^(file|link):/.test(spec)) continue;
+    for (let at = root; inside(captured, at); at = dirname(at)) {
+      const installed = resolve(at, 'node_modules', name);
+      if (!existsSync(installed)) continue;
+      if (spec.startsWith('file:')) checked(resolve(root, spec.slice(5)));
+      walk(installed);
+      break;
+    }
+  }
+}
+
 function contractPackageRoots(app, exactRoot, compiler) {
-  // A library installed by an absolute `file:` path or a `link:` would be
-  // reinstalled from the live tree after capture: only a relative `file:`
-  // path moves with the snapshot.
-  const manifest = resolve(app.workspace ?? app.dir, 'package.json');
-  if (existsSync(manifest)) {
-    const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
-    for (const [name, spec] of Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })) {
+  // Only relative file: paths move with the snapshot. Check every manifest
+  // whose lockfile materializeSnapshot can install before reading packages.
+  for (const root of new Set([exactRoot, app.workspace ?? app.dir, app.dir])) {
+    for (const [name, spec] of packageDependencies(root)) {
       if (unrelocatableContractDependency(spec))
-        refuse(`${manifest}: "${name}": "${spec}" would be read live after the snapshot; use a relative \`file:\` path`);
+        refuse(`${resolve(root, 'package.json')}: "${name}": "${spec}" would be read live after the snapshot; use a relative \`file:\` path`);
     }
   }
   const owned = new Set([repoTop(app.dir, 'app source'), repoTop(exactRoot, 'Exact source')]);
@@ -316,15 +365,14 @@ function captureRepository(source, sources, captureRoot, stagedRoot, common, app
   env.GIT_OBJECT_DIRECTORY = objects;
   env.GIT_ALTERNATE_OBJECT_DIRECTORIES = [originalObjects, process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES].filter(Boolean).join(delimiter);
   try {
-    const pathspec = sourcePathspec(source.repo, app, exactRoot);
-    const excluded = pathspec.slice(1).filter((path) => path.startsWith(':(exclude,top,literal)'))
-      .map((path) => path.slice(':(exclude,top,literal)'.length));
+    const { pathspec, excluded } = sourcePaths(source.repo, app, exactRoot);
     const tracked = gitText(source.repo, ['ls-files', '-z', '--cached'], 'could not inventory tracked output conflicts').split('\0');
     const hidden = tracked.find(path => excluded.some(root => path === root || path.startsWith(`${root}/`)));
     if (hidden) refuse(`${source.repo}: tracked source ${hidden} lies beneath an inferred output root; move the source or declare a different output root`);
     gitResult(source.repo, ['read-tree', source.commit], 'could not start the captured Git tree', { env });
-    if (excluded.length) gitResult(source.repo, ['--literal-pathspecs', 'rm', '-r', '-f', '--cached', '--ignore-unmatch', '--', ...excluded],
-      'could not remove generated outputs from the captured tree', { env });
+    if (excluded.length) gitResult(source.repo, ['--literal-pathspecs', 'rm', '-r', '-f', '--cached', '--ignore-unmatch',
+      '--pathspec-from-file=-', '--pathspec-file-nul'], 'could not remove generated outputs from the captured tree',
+    { env, input: Buffer.from(`${excluded.join('\0')}\0`) });
     const allowed = (path) => !excluded.some((root) => path === root || path.startsWith(`${root}/`));
     const committed = gitText(source.repo, ['ls-tree', '-rz', '--name-only', source.commit],
       'could not inventory committed source').split('\0').filter((path) => path && allowed(path));
@@ -341,7 +389,7 @@ function captureRepository(source, sources, captureRoot, stagedRoot, common, app
     addCapturedPaths(source.repo, env, [...committed, ...present], true, 'could not capture tracked and untracked source');
     // Gitignore is not a source/output declaration: build.rs or another
     // committed tool can read beneath an ignored directory. Capture every
-    // ignored file except the precise roots in sourcePathspec.
+    // ignored file except the precise roots in sourcePaths.
     const ignored = gitText(source.repo, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--',
       ...pathspec], 'could not inventory ignored source inputs').split('\0').filter((path) => path && allowed(path));
     addCapturedPaths(source.repo, env, ignored, true, 'could not capture ignored source inputs');
@@ -375,7 +423,7 @@ function captureRepository(source, sources, captureRoot, stagedRoot, common, app
 
 /** The snapshot (LLP 1030.000 D3 item 1): capture every repository and every
  * dirty source byte the bake can read. Ignored files are source too, outside
- * the precise roots sourcePathspec excludes. */
+ * the precise roots sourcePaths excludes. */
 export function snapshotOf(app, opts, exactRoot = ROOT) {
   app.prepare?.(true);
   const compiler = opts.compiler ? resolve(opts.compiler) : contractCompiler(exactRoot);
@@ -503,6 +551,8 @@ function keepLiveMtimes(repo, staged) {
  * shipping bakes ignore a proof profile inherited from the caller's shell. */
 function sealedSourceEnv(sourceRoot, extra = {}) {
   const env = { ...process.env, ...extra, EXACT_GAME_PROOF_PROFILE: 'release', EXACT_SOURCE_ROOT: sourceRoot };
+  // A selected variant names the live app's directory; the captured process resolves the captured one.
+  delete env.EXACT_VARIANT_APP;
   for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
     'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) delete env[name];
   env.GIT_CEILING_DIRECTORIES = sourceRoot;
@@ -575,12 +625,13 @@ export function materializeSnapshot(snapshot, run, app, cache = null) {
   // node_modules is an output, never captured: a TypeScript app's bake runs Rolldown from it, ships SQLite WASM out of it,
   // and a module package's crate is under it (LLP 1133.001 D9). Install exactly what the captured bun.lock pins, from
   // Bun's cache, into the captured tree, before the Cargo closure is asserted.
-  for (const root of new Set([exactRoot, workspace])) {
+  for (const root of new Set([exactRoot, workspace, dir])) {
     if (!existsSync(resolve(root, 'package.json')) || !existsSync(resolve(root, 'bun.lock'))) continue;
     const installed = spawnSync(process.execPath, ['install', '--frozen-lockfile', '--prefer-offline'], {
       cwd: root, env: sealedSourceEnv(sourceRoot), stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' });
     if (installed.status !== 0) refuse(`${root}: bun install --frozen-lockfile failed in the captured source: ${(installed.stderr || installed.stdout || installed.error?.message || '').trim()}`);
   }
+  for (const root of new Set([exactRoot, workspace, dir])) assertCapturedPackageDependencies(root, sourceRoot);
   assertMaterializedCargoClosure([workspace, exactRoot], sourceRoot, target, {workspace, manifest});
   // Every Contract file the bake will read is in the captured tree: an
   // installed library that still leads outside it is live bytes (LLP 1091 D10).
@@ -600,13 +651,6 @@ export function disposeSnapshot(snapshot) {
   if (!capture) return;
   removePrivateTree(capture.captureRoot);
   snapshotCaptures.delete(snapshot);
-}
-
-/** A human correlation id with millisecond UTC time, snapshot prefix, and a
- * random run nonce. Two publishers of the same commit in one clock tick do
- * not share the receipt namespace. */
-export function defaultRelease(commit, now = new Date(), nonce = randomBytes(8).toString('hex')) {
-  return `r-${now.toISOString().replace(/[-:]/g, '')}-${commit.slice(0, 7)}-${nonce}`;
 }
 
 /** A private bake directory independent of the correlation id. Explicitly
@@ -750,14 +794,6 @@ export { classifyArtifacts } from './app.mjs';
 
 // --------------------------------------------------------------- classifying
 
-/** The channel the manifest bakes in: `deploy.channel`, else the only key of `deploy.channels`, else `prod` — the same rule as `Manifest::channel` in contract/cli. */
-export function channelOf(manifest) {
-  const deploy = manifest.deploy ?? {};
-  if (deploy.channel != null) return deploy.channel;
-  const names = Object.keys(deploy.channels ?? {});
-  return names.length === 1 ? names[0] : 'prod';
-}
-
 /** Native deployment targets, including binary-only L=0: what `deploy.store` and `deploy.binaries` name, else what `host` names (LLP 1153 D1.1). An explicit selection omits unselected targets before validation. */
 export function nativePlatforms(manifest, selection = []) {
   const deploy = manifest.deploy ?? {};
@@ -771,78 +807,8 @@ export function nativePlatforms(manifest, selection = []) {
 /** Whether the manifest names a native platform, under `host` or `deploy`; one that names none ships the web root alone, with no stream and no envelope, and its deploy bakes nothing (LLP 1153 D1.5, D3.6). */
 export const namesNative = (manifest) => [manifest.host, manifest.deploy?.store, manifest.deploy?.binaries].some((table) => Object.keys(table ?? {}).some((p) => p !== 'web'));
 
-function sunsetFor(app, stream) {
-  const cards = app.manifest.deploy?.sunset;
-  const key = `${stream.channel}/${stream.compatibilityId}`;
-  return cards && Object.hasOwn(cards, key) ? cards[key] : cards?.[stream.compatibilityId] ?? null;
-}
-
-/** Plan and asset changes by digest, plus the stream's advisory card. */
-function changesAgainst(bundle, head, sunset = null) {
-  const changes = [];
-  const card = (value) => value ? [value.message, value.store || null] : null;
-  if (JSON.stringify(card(sunset)) !== JSON.stringify(card(head?.sunset))) changes.push({ name: 'sunset', change: !sunset ? 'removed' : !head?.sunset ? 'new' : 'changed' });
-  if (!head) {
-    changes.push({ name: 'app.plan', change: 'new' });
-    for (const a of bundle.assets) changes.push({ name: a.name, change: 'new' });
-    return changes;
-  }
-  const plan = head.plan;
-  if (plan?.sha256 !== bundle.plan.sha256 || plan?.bytes !== bundle.plan.bytes.length
-    || plan?.url !== `../../blobs/${bundle.plan.sha256}` || plan?.formatVersion !== bundle.plan.formatVersion
-    || plan?.kernelSchema !== bundle.plan.kernelSchema) changes.push({ name: 'app.plan', change: 'changed' });
-  const before = new Map((head.assets ?? []).map((a) => [a.name, a]));
-  for (const a of bundle.assets) {
-    const had = before.get(a.name);
-    if (had === undefined) changes.push({ name: a.name, change: 'new' });
-    else if (had.sha256 !== a.sha256 || had.bytes !== a.bytes.length || had.url !== `./${a.sha256}`) {
-      changes.push({ name: a.name, change: 'changed', note: a.name.endsWith('.wgsl') ? 'interface unchanged: asset' : undefined });
-    }
-    before.delete(a.name);
-  }
-  for (const name of before.keys()) changes.push({ name, change: 'removed' });
-  return changes;
-}
-
-/** A stream's asset index, a blob beside the ones it names: its cards
- * resolve against its own URL, so each is `./<sha256>`. Null for no assets. */
-export function streamIndex(bundle) {
-  portableAssetNames(bundle.assets.map((asset) => asset.name));
-  return assetIndex(bundle.assets.map((asset) => ({ name: asset.name, url: `./${asset.sha256}`, sha256: asset.sha256, bytes: asset.bytes.length })),
-    (sha) => `../../blobs/${sha}`);
-}
-
-/** The unsigned stream head. One producer keeps its identity/name and blob
- * pointers identical across classification fixtures and publication. */
-export function streamHead({ app, bundle, stream, seq, release, sunset = null }) {
-  const index = streamIndex(bundle);
-  const head = {
-    exact: 1,
-    app: { id: app.id, name: app.displayName },
-    plan: { url: `../../blobs/${bundle.plan.sha256}`, sha256: bundle.plan.sha256, bytes: bundle.plan.bytes.length,
-      formatVersion: bundle.plan.formatVersion, kernelSchema: bundle.plan.kernelSchema },
-    ...(index ? { assets: index.card } : {}),
-    stream: { app: app.id, channel: stream.channel, compatibilityId: stream.compatibilityId, seq },
-    release,
-  };
-  if (sunset) head.sunset = sunset.store ? { message: sunset.message, store: sunset.store } : { message: sunset.message };
-  return head;
-}
-
-/** The signed native Rust module of the stream's last published release: its
- * head authenticated, its blob the one the head names. Else null. */
-export async function publishedModule(origin, app, stream) {
-  try {
-    const admission = await admitHead(origin, await origin.head(stream), app, stream);
-    const card = admission.usable && admission.authenticated ? admission.head.assets?.find((a) => /^rust\/app\.module\.(dylib|bin)$/.test(a.name)) : null;
-    const bytes = card ? await origin.get(blobPath(card.sha256)) : null;
-    if (!bytes || sha256(bytes) !== card.sha256) return null;
-    return card.name.endsWith('.bin') ? tieredNative(bytes) : bytes;
-  } catch { return null; }
-}
-
 /** The table (LLP 1030 D3; 1030.000 D3 item 3): the origin row, a row per stream, a binary row per stream whose cohort this snapshot is not. Nothing is written. */
-export async function classify({ app, opts, origin, channel, snapshot, release, web, bundle, compat, builds, platforms, wantOrigin, candidates = new Map(), knownStreams = [] }) {
+export async function classify({ app, opts, origin, channel, snapshot, release, web, bundle, compat, builds, platforms, wantOrigin, candidates = new Map(), knownStreams = [], anchors = new Map() }) {
   const notes = [];
   if (snapshot.dirty) {
     const shown = snapshot.changes.slice(0, 20);
@@ -879,7 +845,9 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
       ...(unavailable ? { reason: unavailable } : {}) });
   }
 
-  const own = platforms.filter(platform => compat[platform]).map(platform=>({platform,compatibilityId:compat[platform].id}));
+  // This snapshot's own cohorts, and a stream a production receipt starts (an Android APK's, LLP 1030.007 D4).
+  const own = [...platforms.filter(platform => compat[platform]).map(platform=>({platform,compatibilityId:compat[platform].id})),
+    ...knownStreams.filter(s=>s.build&&!s.head&&!compat[s.platform]).map(s=>({platform:s.platform,compatibilityId:s.stream.compatibilityId}))];
   const declared = app.manifest.deploy?.streams?.filter(s=>s.channel===channel) ?? null;
   let others=[];
   if(platforms.some(p=>compat[p]?.inputs?.store?.L!=='0')) {
@@ -895,7 +863,7 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
   for(const item of [...own,...others.map(compatibilityId=>({platform:null,compatibilityId}))]) {
     let {platform,compatibilityId}=item;
     const stream={channel,compatibilityId};
-    if(platform && compat[platform].inputs?.store?.L==='0') {binary.set(platform,{compatibilityId,reason:'store.L=0: links no update store; deliver changes in the platform binary'});continue;}
+    if(platform && compat[platform]?.inputs?.store?.L==='0') {binary.set(platform,{compatibilityId,reason:'store.L=0: links no update store; deliver changes in the platform binary'});continue;}
     let head,record,admission;
     try { head=await origin.head(stream); record=await latestRecord(origin,app,stream); admission=head?await admitHead(origin,head,app,stream):null; }
     catch(error) {
@@ -913,9 +881,15 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
     const candidate=update?.build ?? builds?.[platform];
     // No stream yet: the build that will embed the initial publication owns
     // the capabilities. Existing streams require their signed frozen receipt.
-    const installed=frozen ?? (!head&&!record&&candidate?cohortReceipt(candidate):null);
+    // A stream a production receipt starts is that binary's cohort.
+    const started=!head&&!record?knownStreams.find(s=>s.build&&s.stream.compatibilityId===compatibilityId):null;
+    const installed=frozen ?? started?.cohort ?? (!head&&!record&&candidate?cohortReceipt(candidate):null);
+    if(started) notes.push(`${platform} stream ${compatibilityId.slice(0,8)} starts from the production build receipt ${anchors.get(compatibilityId) ?? '(its path not given)'}: binary ${started.cohort.binary.slice(0,12)}`);
     const check=classifyArtifacts(candidate,installed,signingKey);
     if (update?.reason) { check.bundle = false; check.missing = [update.reason]; }
+    // A plan whose first frame the binary's own data crate baked is for the binary built from that crate (LLP 1030.007
+    // D5): an older binary keeps its bundle, and only a new binary carries the change.
+    if (update?.nativeData?.length) { check.bundle = false; check.warnings = []; check.missing = [`its binary predates these native sources: ${update.nativeData.join(', ')}`]; }
     const inputs=installed?.compat.inputs ?? compat[platform]?.inputs;
     const selectedBundle=update?.bundle ?? streamBundle(bundle,platform,inputs);
     const changes=admission?.usable?changesAgainst(selectedBundle,admission.head,sunsetFor(app,stream)):head?[{name:'exact.json',change:'repair',note:admission.problem}]:changesAgainst(selectedBundle,null,sunsetFor(app,stream));
@@ -935,8 +909,19 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
       action:check.bundle?(changes.length?'bundle':'current'):'binary',seq,changes:check.bundle?changes:[],
       ...(check.bundle?{receipt:installed}:{reason:check.missing.join('; ')}),
     });
-    if (candidate?.pendingInputs?.length) binary.set(platform, { compatibilityId, reason: `binary inputs changed: ${candidate.pendingInputs.join(', ')}; a native bake determines the new compatibility id` });
+    const pending=candidate?.pendingInputs ?? [], listed=pending.length>12?`${pending.slice(0,12).join(', ')} and ${pending.length-12} more (all are in --json)`:pending.join(', ');
+    if (pending.length) binary.set(platform, { compatibilityId, pendingInputs: pending, reason: platform==='android'
+      ? `native inputs differ from the APK's: ${listed}; ${binaryCommand(app,'android')}`
+      : `binary inputs changed: ${listed}; a native bake determines the new compatibility id` });
     else if(candidate&&compat[platform]&&(check.binary||!head&&!record)) binary.set(platform,{compatibilityId:compat[platform].id,reason:`binary inputs ${installed?.binary===candidate.binary.sha256?'have no previous release':'changed'}; compatibility id ${installed?.compat.id===candidate.compat.id?'unchanged':`moves to ${candidate.compat.id}`}`});
+  }
+  // Android's binary is the APK, which its own verb builds (LLP 1030.006 D6, LLP 1030.007 D5).
+  if(platforms.includes('android')) {
+    const apk=binaryCommand(app,'android');
+    const android=rows.filter(r=>r.kind==='stream'&&r.platform==='android');
+    if(app.manifest.deploy?.store?.android!=='A') binary.set('android',{compatibilityId:null,reason:`deploy.store.android is "0": the APK links no update store; deliver changes in ${apk}`});
+    else if(!android.length) binary.set('android',{compatibilityId:null,reason:`no Android stream on ${channel} and no production APK receipt to start one: ${apk}, with EXACT_UPDATE_GENESIS=1 for a new stream; then deploy or push publishes its first update`});
+    else for(const row of android.filter(r=>r.action==='binary')) row.reason=`${row.reason}; ${apk}`;
   }
   for(const [platform,card] of binary) rows.push({kind:'binary',platform,action:'binary',...card});
 
@@ -990,88 +975,15 @@ export function renderTable(table) {
       : row.changes.map((c) => `${c.name} ${c.change}${c.note ? ` (${c.note})` : ''}`).join(', ');
     out.push(line('', detail, `bundle seq ${row.seq}`));
   }
-  const binaries = table.rows.filter((r) => r.action === 'binary');
-  if (binaries.length) out.push(`binary needed: ${binaries.map((r) => `${r.platform ?? '?'} ${r.compatibilityId.slice(0, 8)}`).join(', ')} — a later verb (LLP 1030.000 §6); independently safe bundle rows still publish`);
+  const binaries = table.rows.filter((r) => r.action === 'binary'), names = (rows) => [...new Set(rows.map((r) => [r.platform ?? '?', r.compatibilityId?.slice(0, 8)].filter(Boolean).join(' ')))].join(', ');
+  const apks = binaries.filter((r) => r.platform === 'android'), later = binaries.filter((r) => r.platform !== 'android');
+  if (later.length) out.push(`binary needed: ${names(later)} — a later verb (LLP 1030.000 §6); independently safe bundle rows still publish`);
+  if (apks.length) out.push(`new APK needed: ${names(apks)} — ${APK_COMMAND}; independently safe bundle rows still publish`);
   out.push(...renderReach(table.reach));
   return out.join('\n');
 }
 
 // ---------------------------------------------------------------- publishing
-
-/** Publish one stream (LLP 1030.000 D3 item 5): under its lock, refuse a
- * reused immutable receipt, read the head and allocate seq, put and verify
- * content-addressed blobs, prepare the immutable release record, then swap
- * the signed head conditionally. A failure before that last operation leaves
- * every URL in the prior head untouched and its bytes still retrievable. */
-export async function publishStream({ origin, row, bundle, compat, app, signer, release, snapshot, opts, log, build }) {
-  const stream = { channel: row.channel, compatibilityId: row.compatibilityId };
-  const base = streamPath(stream);
-  const recordPath = `${base}/releases/${release}.json`;
-  const index = streamIndex(bundle);
-  const files = [{ name: 'app.plan', sha256: bundle.plan.sha256, bytes: bundle.plan.bytes }, ...(index ? [{ name: 'assets.json', sha256: index.card.sha256, bytes: index.bytes }] : []), ...bundle.assets];
-  if (await origin.get(recordPath)) refuse(`release ${release} already has an immutable record at ${origin.describe()}/${recordPath}; choose another --release`);
-  return origin.withLock(stream, async () => {
-    if (await origin.get(recordPath)) refuse(`release ${release} already has an immutable record at ${origin.describe()}/${recordPath}; choose another --release`);
-    const current = await origin.head(stream);
-    const previousDigest = current?.sha256 ?? null;
-    const admission = current ? await admitHead(origin, current, app, stream) : null;
-    let installed = null;
-    if (build) {
-      const frozen = admission?.usable && admission.authenticated ? admission.head.cohort : row.receipt;
-      installed = frozen ?? (!current ? cohortReceipt(build) : null);
-      const checked = classifyArtifacts(build, installed, {id:signer.keyId,public:app.manifest.deploy?.signing?.keys?.[signer.keyId]});
-      if (!checked.bundle || installed.compat.id !== stream.compatibilityId) refuse(`the locked cohort rejects the candidate: ${checked.missing.join('; ')}`);
-      const evidence = binaryInputFile(build);
-      if (evidence && evidence.sha256 === installed.binaryInputs?.sha256) files.push(evidence);
-    }
-    const changes = admission?.usable
-      ? changesAgainst(bundle, admission.head, sunsetFor(app, stream))
-      : current ? [{ name: 'exact.json', change: 'repair', note: admission.problem }] : changesAgainst(bundle, null, sunsetFor(app, stream));
-    if (admission?.usable && !changes.length && admission.seq > (opts.seqAbove ?? 0)) return { ...row, action: 'current', seq: admission.seq, note: 'the head is admissible and already names this bundle (published meanwhile)' };
-    // `seqAbove`: a stream moving to a new origin starts above every seq its clients accepted from the old one.
-    const seq = await nextSeq(origin, app, stream, admission, `the locked head at ${origin.describe()}/${base}/exact.json`, opts.seqAbove ?? 0);
-    let written = 0;
-    for (const file of files) {
-      if (await origin.put(blobPath(file.sha256), file.bytes, { immutable: true }) === 'written') written++;
-      const back = await origin.get(blobPath(file.sha256));
-      if (!back || sha256(back) !== file.sha256) refuse(`the blob ${file.sha256} (${file.name}) read back from ${origin.describe()} is not what was written`);
-    }
-    log(`  ${row.platform} ${row.compatibilityId.slice(0, 8)}: ${files.length} blobs on the origin (${written} written, ${files.length - written} present), each read back and checked`);
-    const sunset = sunsetFor(app, stream);
-    const head = streamHead({ app, bundle, stream, seq, release, sunset });
-    if (installed) head.cohort = installed;
-    head.signature = signer.sign(head);
-    const bytes = envelopeBytes(head);
-    const originDigest = sha256(bytes);
-    const entryDigest = sha256(canonicalBytes(head));
-    const record = {
-      release, at: new Date().toISOString(), by: userInfo().username, host: hostname(),
-      platform: row.platform, stream: head.stream, seq, snapshot,
-      head: { entryDigest, originDigest, bytes: bytes.length, keyId: signer.keyId }, previous: previousDigest,
-      compat: { id: compat.id, inputs: compat.inputs }, row: { action: row.action, changes },
-      // The asset index as JSON: its blob is this value's canonical bytes,
-      // which a release bake checks against the head (bake/src/receipt.rs).
-      envelope: head, ...(index ? { assets: JSON.parse(index.bytes.toString('utf8')) } : {}),
-    };
-    await origin.put(recordPath, Buffer.from(JSON.stringify(record, null, 2) + '\n', 'utf8'), { immutable: true });
-    keepRecord(origin, stream, `${release}.json`, seq);
-    try {
-      await origin.putHead(stream, bytes, { previousDigest });
-    } catch (error) {
-      let observed;
-      try {
-        observed = await origin.head(stream);
-      } catch (readError) {
-        const unknown = new Error(`the head write failed (${error.message}) and its outcome could not be read back (${readError.message})`);
-        unknown.headOutcomeUnknown = true;
-        throw unknown;
-      }
-      if (!observed?.bytes.equals(bytes)) throw error;
-      log(`  ${row.platform} ${row.compatibilityId.slice(0, 8)}: the head write response failed, but readback confirms seq ${seq}`);
-    }
-    return { ...row, action: 'published', seq, changes, head: { seq, sha256: originDigest, entryDigest, release }, previous: previousDigest };
-  });
-}
 
 /** A web root's public files: the wasm build's allowlist, and a JS-target
  * root's whole tree besides (its content-named chunks and rendered pages;
@@ -1210,7 +1122,9 @@ async function deployCaptured(opts, capsule) {
   process.env.CARGO_TARGET_DIR = canonicalPath(capsule.app.target);
   if (capsule.app.external) process.env.EXACT_APP_DIR = canonicalPath(capsule.app.dir);
   else delete process.env.EXACT_APP_DIR;
-  const app = resolveApp(opts._[0]);
+  // A path names the live tree; a name must retain the caller's crate identity.
+  const selector = opts._[0];
+  const app = resolveApp(/[\\/]|^\.\.?$/.test(selector ?? '') ? capsule.app.dir : selector);
   requireReleasePins(app);
   if (canonicalPath(app.dir) !== canonicalPath(capsule.app.dir)
     || canonicalPath(app.workspace) !== canonicalPath(capsule.app.workspace)) {
@@ -1225,7 +1139,10 @@ async function deployCaptured(opts, capsule) {
   const origin = openOrigin(originSpec);
   // An origin that holds only update streams (AppDrop) publishes no web root.
   if (origin.servesWeb === false && (opts.only === 'origin' || opts.platform.includes('web'))) refuse(`${origin.describe()} holds update streams, not a web app: publish the web root to another origin`);
-  const wantOrigin = origin.servesWeb !== false && opts.only !== 'bundle' && (!opts.platform.length || opts.platform.includes('web'));
+  // Nor does a variant, on any origin: it would replace the site with the variant's build (LLP 1030.008 D7).
+  const variant = app.manifest.variant?.name;
+  if (variant && (opts.only === 'origin' || opts.platform.includes('web'))) refuse(`variant ${variant} publishes no web root or association files (LLP 1030.008 D7): deploy its native streams, or the app without --variant`);
+  const wantOrigin = !variant && origin.servesWeb !== false && opts.only !== 'bundle' && (!opts.platform.length || opts.platform.includes('web'));
   const platforms = opts.only === 'origin' ? [] : nativePlatforms(app.manifest, opts.platform);
   if (!wantOrigin && !platforms.length) refuse(`nothing to classify: ${opts.only ? `--only ${opts.only}` : ''} ${opts.platform.length ? `--platform ${opts.platform.join(',')}` : ''} leaves no row`);
   const log = (text) => process.stderr.write(`${text}\n`);
@@ -1237,8 +1154,13 @@ async function deployCaptured(opts, capsule) {
   if (signer) origin.useSigner?.(signer);
 
   const env = sealedSourceEnv(sourceRoot, { CARGO_TARGET_DIR: app.target, EXACT_UPDATE_TRUST: 'production' });
-  const knownStreams = platforms.length ? await streams(origin, app, channel, env, { deploying: true, platforms }) : [];
-  const nativeBakes = platforms.filter(platform => !knownStreams.some(s => s.platform === platform && s.cohort));
+  // Android has no binary lane here: its cohort is the production APK's build receipt, which the launcher read from the
+  // live app's bake output, and which starts its stream as push's does (LLP 1030.006 D6, LLP 1030.007 D4).
+  const receipts = capsule.receipts;
+  if (!Array.isArray(receipts) || receipts.some((r) => typeof r?.path !== 'string' || r.build?.version !== 1 || r.build.compat?.inputs?.app !== app.id)) refuse('the private deploy capsule names malformed production receipts');
+  const knownStreams = platforms.length ? await streams(origin, app, channel, { deploying: true, platforms, builds: receipts.map((r) => r.build) }) : [];
+  const anchors = new Map(receipts.map((r) => [r.build.compat.id, r.path]));
+  const nativeBakes = platforms.filter(platform => platform !== 'android' && !knownStreams.some(s => s.platform === platform && s.cohort));
   const webOnly = app.manifest.game === undefined && !namesNative(app.manifest);
   log(`snapshot ${snapshot.id}${snapshot.sources.length > 1 ? ` (${snapshot.sources.map((source) => `${source.roles.join('+')} ${source.commit.slice(0, 7)}`).join(', ')})` : ''}${snapshot.dirty ? ' + uncommitted changes (--dirty)' : ''}; ${webOnly ? 'building the web root, no stream named,' : 'baking'} into ${run}`);
   const web = webOnly ? null : bake(app, run, exactRoot, sourceRoot);
@@ -1272,7 +1194,7 @@ async function deployCaptured(opts, capsule) {
 
   const updates = await streamCandidates(app, origin, knownStreams.filter(s => s.cohort), env, { snapshot: { bundle, compat: builds.web?.compat, graph: builds.web?.graph } });
   const candidates = new Map(updates.map(update => [update.row.compatibilityId, update]));
-  const table = await classify({ app, opts, origin, channel, snapshot, release, web: webRoot, bundle, compat, builds, platforms, wantOrigin, candidates, knownStreams });
+  const table = await classify({ app, opts, origin, channel, snapshot, release, web: webRoot, bundle, compat, builds, platforms, wantOrigin, candidates, knownStreams, anchors });
   if (webOnly) table.notes.push('app.json names no native platform under host or deploy, so this publishes the web root alone: no stream, and no envelope for a native client');
   if (!opts.json) console.log(renderTable(table));
 
@@ -1294,7 +1216,7 @@ async function deployCaptured(opts, capsule) {
       try { published.push(await publishRoot({ origin, row, web: webRoot, log })); } catch (e) { failed.push({ kind: 'origin', error: e.message }); log(`  origin: failed — ${e.message}`); }
       continue;
     }
-    const name = `${row.platform ?? '?'} ${row.kind} ${row.compatibilityId.slice(0, 8)}`;
+    const name = [row.platform ?? '?', row.kind, row.compatibilityId?.slice(0, 8)].filter(Boolean).join(' ');
     if (row.action === 'unavailable') { failed.push({ platform: row.platform, compatibilityId: row.compatibilityId, error: row.reason }); log(`  ${name}: unavailable — ${row.reason}`); continue; }
     if (row.action === 'binary') { refused.push({ platform: row.platform, compatibilityId: row.compatibilityId, reason: row.reason }); log(`  ${name}: refused — ${row.reason}`); continue; }
     try {
@@ -1326,6 +1248,7 @@ async function deployCaptured(opts, capsule) {
  * What is captured, and how it is frozen, is unchanged. */
 async function deploy(opts) {
   const locatedApp = resolveApp(opts._[0]);
+  if ((locatedApp.manifest.host?.web?.base ?? "/") !== "/") throw new Error("host.web.base: deploy and the signed update store require /; publish the web-build directory at its configured base with a static host or serve");
   requireReleasePins(locatedApp);
   const target = process.env.CARGO_TARGET_DIR ? canonicalPath(process.env.CARGO_TARGET_DIR) : null;
   if (!target || [locatedApp.dir, ROOT].some((dir) => inside(repoTop(dir), target))) return launch(locatedApp, opts);
@@ -1347,6 +1270,14 @@ async function deploy(opts) {
   }
 }
 
+/** The production build receipts of the app's Android APKs at "A", each with its path: what a new Android stream
+ * starts from (LLP 1030.007 D4). */
+function androidReceipts(app) {
+  const env = { EXACT_UPDATE_TRUST: 'production' }, directory = bakeOutput(app, env);
+  return readBuilds(app, env).filter((build) => build.trust === 'production' && build.compat.inputs.platform === 'android' && build.compat.inputs.store?.L !== '0')
+    .map((build) => ({ path: resolve(directory, `android-${build.compat.target}.build.json`), build }));
+}
+
 /** The live module graph is only a launcher: freeze and relocate all source,
  * then execute the publisher itself from that captured Exact tree. This keeps
  * app resolution, bake, classification, signing, and publication on one
@@ -1365,6 +1296,8 @@ function launch(locatedApp, opts, cache = {}) {
         workspace: materialized.app.workspace, target: materialized.app.target,
         external: canonicalPath(locatedApp.workspace) !== canonicalPath(ROOT),
       },
+      // The live app's production Android receipts: the captured process bakes into its own target, where none is.
+      receipts: androidReceipts(locatedApp),
     };
     const capsulePath = resolve(materialized.sourceRoot, '.deploy-capsule.json');
     writeFileSync(capsulePath, `${JSON.stringify(capsule)}\n`, { flag: 'wx', mode: 0o600 });

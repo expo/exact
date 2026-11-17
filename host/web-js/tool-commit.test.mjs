@@ -158,7 +158,7 @@ test('topic re-asks keep their last ask origin without joining its invocation', 
       globalThis.__exactRender = true;
       const rt = await import('/host/web-js/rt.js'), { modules } = await import('/host/web-js/modules.js');
       const { tools } = await import('/host/web-js/calls.js');
-      await import('/host/web-js/ts-data.js');
+      await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       rt.clock.agent = true;
       modules({ guard: ['guard.read', false, { origin: 'app', default: 'allowed' }, 's'] });
       const requests = [], replies = [], guarded = [], parses = [], output = {};
@@ -202,7 +202,7 @@ test('topic re-asks keep their last ask origin without joining its invocation', 
     expect(result).toEqual({ before: 'running', owner: 0, reaskedOwner: 0, completed: 'ok',
       requests: [['wait', 'tool'], ['count', 'tool'], ['count', 'tool'], ['count', 'tool'], ['count', 'tool'], ['count', 'app']],
       parses: [['count', 'tool', 1], ['wait', 'tool', 1], ['count', 'tool', 0], ['count', 'tool', 0], ['count', 'tool', 0], ['count', 'app', 0]],
-      guarded: [...Array(4).fill('guard.read: NotAllowedError'), 'allowed'] });
+      guarded: [...Array(4).fill('guard.read: NotAllowedError: person-required'), 'allowed'] });
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
 
@@ -611,6 +611,95 @@ test('a call stays running until its deferred tree update, which skips its comma
       return output;
     });
     expect(result).toEqual({ deferred: true, during: 'running', ended: ['ok', 'applied', ['focus']], focused: '' });
+  } finally { await browser.close(); server.stop(true); }
+}, 60000);
+
+test('a freeze preserves tool command reporting while discarding held output starts', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      const started = [], sent = [], vibrated = [];
+      const parameter = value => ({ value, cancelScheduledValues() {}, setValueAtTime() {}, linearRampToValueAtTime() {} });
+      let decoded = 0;
+      globalThis.AudioContext = class {
+        state = 'running'; currentTime = 0; destination = {};
+        getOutputTimestamp() { return { contextTime: 0, performanceTime: performance.now() }; }
+        async decodeAudioData() { return { duration: 1, decoded: decoded++ }; }
+        async resume() {}
+      };
+      globalThis.AudioBufferSourceNode = class {
+        constructor(_, { buffer, playbackRate }) { this.buffer = buffer; this.playbackRate = parameter(playbackRate); }
+        connect() { return this; }
+        start() { started.push(this.buffer.decoded); }
+        stop() {}
+      };
+      globalThis.GainNode = class {
+        constructor(_, { gain }) { this.gain = parameter(gain); }
+        connect() { return this; }
+        disconnect() {}
+      };
+      globalThis.StereoPannerNode = class {
+        constructor(_, { pan }) { this.pan = parameter(pan); }
+        connect() { return this; }
+        disconnect() {}
+      };
+      const output = { id: 'synth', name: 'synth', manufacturer: 'test', state: 'connected', send(data) { sent.push([...data]); } };
+      const access = { inputs: new Map(), outputs: new Map([['synth', output]]), onstatechange: null };
+      Object.defineProperty(navigator, 'permissions', { value: { query: async () => ({ state: 'granted' }) }, configurable: true });
+      Object.defineProperty(navigator, 'requestMIDIAccess', { value: async () => access, configurable: true });
+      Object.defineProperty(navigator, 'userActivation', { value: { hasBeenActive: true }, configurable: true });
+      Object.defineProperty(navigator, 'vibrate', { value: value => (vibrated.push(value), true), configurable: true });
+
+      const rt = await import('/host/web-js/rt.js'), { tools } = await import('/host/web-js/calls.js');
+      const { install } = await import('/host/web-js/sounds.js'), { midi } = await import('/host/web-js/midi.js');
+      const { haptic } = await import('/host/web-js/commands.js');
+      const source = 'data:audio/wav;base64,AAAA', side = rt.sig(false);
+      rt.data.grants = 'device.midi test';
+      rt.useCommands({ haptic });
+      install([[source, 48000, 48000]]);
+      midi({}, true);
+      const panel = text => parent => {
+        const el = document.createElement('div'); el.textContent = text; el.dataset.sharedElement = 'panel';
+        el.style.setProperty('--exact-layout-transition', '20 0 linear'); parent.append(el); rt.pr(el);
+      };
+      rt.mount(root => rt.when(root, side, panel('new'), panel('old')));
+      await rt.pieces();
+      // Contract refuses sound and MIDI in a tool's reach; the runtime row checks the same guard for already-formed plans.
+      tools({ output: [() => rt.act(() => {
+        rt.W(side, true);
+        rt.C('haptic', ['impact-light']);
+        rt.C('playSound', [source, rt.clock.now, 1, '']);
+        rt.C('sendMIDI', ['synth', [0x90, 60, 100], rt.clock.now]);
+      }), {}, 'writes', [false, false, true], 'Output.'] });
+      const flush = async () => { for (let i = 0; i < 32; i++) await Promise.resolve(); };
+      window.freezeTool = { rt, started, sent, vibrated, flush };
+    });
+    await page.waitForFunction(() => exact.sounds?.state().output.decoded === '1/1' && exact.midi?.state().state === 'granted');
+    const result = await page.evaluate(async () => {
+      const { rt, started, sent, vibrated, flush } = freezeTool;
+      const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+      let transition;
+      document.startViewTransition = update => transition = start(async () => { await gate.promise; return update(); });
+      const { call } = exact.calls.call({ tool: 'output' }); await flush();
+      const deferred = !!transition;
+      document.dispatchEvent(new Event('freeze'));
+      document.dispatchEvent(new Event('resume'));
+      await flush();
+      const during = exact.calls.called(call).state;
+      gate.resolve(); await transition.updateCallbackDone; await transition.finished; await flush();
+      const completed = exact.calls.called(call);
+      return {
+        deferred, during, outcome: completed.outcome, certainty: completed.certainty, skipped: completed.skipped,
+        started, sent, vibrated,
+        diagnostics: rt.journal.map(line => line.replace(/^t=\S+ /, '')).filter(line => /^(haptic: skipped|playSound: refused|sendMIDI: refused)/.test(line)),
+      };
+    });
+    expect(result).toEqual({
+      deferred: true, during: 'running', outcome: 'ok', certainty: 'applied', skipped: ['haptic'],
+      started: [], sent: [], vibrated: [],
+      diagnostics: ['haptic: skipped in a tool call', 'playSound: refused: in a tool call', 'sendMIDI: refused: in a tool call'],
+    });
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
 

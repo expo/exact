@@ -11,6 +11,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, toNamespacedPath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MODULE = resolve(fileURLToPath(new URL('./gpu-cache.mjs', import.meta.url)));
 const LOCK = resolve(fileURLToPath(new URL('../web/build-lock.mjs', import.meta.url)));
@@ -155,6 +156,7 @@ test('build locks keep one inode, release once, and treat their contents only as
   expect(existsSync(lock)).toBe(false);
   const release = takeLock(lock), inode = statSync(lock).ino;
   expect(lockHeld(lock)).toBe(true);
+  expect(readFileSync(lock, 'utf8')).toBe(String(process.pid)); // the holder reads it too, as foreignBeside does
   release();
   expect(lockHeld(lock)).toBe(false);
   expect(existsSync(lock)).toBe(true);
@@ -215,7 +217,7 @@ test('shared inspection readers are not reported as build owners', () => {
       expect(BigInt(handle)).not.toBe(0xffffffffffffffffn);
       release = () => symbols.CloseHandle(handle);
       const overlapped = new Uint8Array(32);
-      new DataView(overlapped.buffer).setUint32(16, 64, true);
+      new DataView(overlapped.buffer).setUint32(20, 1, true); // the byte build-lock.mjs locks, at 4 GiB
       expect(symbols.LockFileEx(handle, 1, 0, 1, 0, overlapped)).not.toBe(0); // LOCKFILE_FAIL_IMMEDIATELY, shared
     } else {
       const { symbols } = dlopen(process.platform === 'darwin' ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6', { flock: { args: ['i32', 'i32'], returns: 'i32' } });

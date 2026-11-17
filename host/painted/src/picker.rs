@@ -22,19 +22,19 @@ fn identity(name: &str) -> bool {
 }
 
 fn leaf(name: &str) -> bool {
-    if name.is_empty() || matches!(name, "." | "..") || name.contains('\0') {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        let mut parts = Path::new(name).components();
-        if exact_grants::WindowsPath::validate_component(name).is_err()
-            || !matches!(parts.next(), Some(std::path::Component::Normal(_)))
-            || parts.next().is_some()
-        {
-            return false;
-        }
-    }
+    !(name.is_empty() || matches!(name, "." | "..") || name.contains('\0')) && platform_leaf(name)
+}
+
+#[cfg(windows)]
+fn platform_leaf(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    exact_grants::WindowsPath::validate_component(name).is_ok()
+        && matches!(parts.next(), Some(std::path::Component::Normal(_)))
+        && parts.next().is_none()
+}
+
+#[cfg(not(windows))]
+fn platform_leaf(_: &str) -> bool {
     true
 }
 
@@ -115,6 +115,13 @@ fn empty_landings_below(temporary: &Path, depth: usize) {
     eprintln!("exact: app:/tmp/picked and app:/tmp/shared are not emptied: {refused}");
 }
 
+/// Whether a scripted drive runs this process, so that its storage is the
+/// drive's and never the app's own ([`app_dirs`]), whatever the drive binds
+/// as in production (`--bind`).
+pub fn scripted() -> bool {
+    std::env::var_os("EXACT_AGENT").is_some()
+}
+
 /// The app's `app:/data`, `app:/cache` and `app:/tmp` (LLP 1027.001): under
 /// the XDG bases (Windows: the user's LocalAppData), or a scripted drive's scratch tree (`--storage`), apart
 /// from the app's real files, with that tree when an authored test starts it
@@ -124,12 +131,13 @@ fn empty_landings_below(temporary: &Path, depth: usize) {
 pub(crate) fn app_dirs(app_id: &str) -> Result<Option<([PathBuf; 3], Option<PathBuf>)>, DataError> {
     // Scripted drives must not read or write the developer's app files;
     // one that names a scratch tree gets storage there instead.
-    let scratch = match std::env::var_os("EXACT_AGENT") {
-        Some(_) => match agent_scratch()? {
+    let scratch = if scripted() {
+        match agent_scratch()? {
             Some(name) => Some(name),
             None => return Ok(None),
-        },
-        None => None,
+        }
+    } else {
+        None
     };
     if app_id.is_empty() {
         return Ok(None);
@@ -178,7 +186,8 @@ pub(crate) fn store_root(app_id: &str) -> Result<Option<PathBuf>, DataError> {
 /// the app keeps them in its own data root,
 /// `$XDG_DATA_HOME/exact/<app id>` (`~/.local/share` when unset), as Ibex's
 /// file backends: a file per secret, `0600` in a `0700` directory, written
-/// whole and renamed into place, not encrypted (LLP 1027.007 D13, ibex LLP
+/// whole and renamed into place. Android encrypts them with a Keystore-wrapped
+/// key (LLP 1133.017 D3); the other file backends are not encrypted (LLP 1027.007 D13, ibex LLP
 /// 0069 §3). `None` keeps them in memory: a drive that names no scratch
 /// store, an app with no id, and Windows outside the agent (until its
 /// credential vault).
@@ -291,12 +300,16 @@ pub fn know_roots(app_id: &str) {
 
 /// The app's `data`, `cache` and `tmp` directories. A scripted drive
 /// without a scratch store has none; its picks land in a directory of this
-/// process's own.
+/// process's own, removed at its exit.
 pub fn roots() -> [PathBuf; 3] {
     if let Some(r) = ROOTS.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         return r;
     }
-    let base = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
+    let base = agent_roots();
+    #[cfg(unix)]
+    ibex2::process::wait_at_exit(|| {
+        let _ = std::fs::remove_dir_all(agent_roots());
+    });
     let r = [
         base.join("data"),
         base.join("cache"),
@@ -304,6 +317,11 @@ pub fn roots() -> [PathBuf; 3] {
     ];
     *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(r.clone());
     r
+}
+
+/// The directory of this process's own that [`roots`] falls back to.
+fn agent_roots() -> PathBuf {
+    std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()))
 }
 
 /// Where an `app:/data|cache|tmp/…` path names (D7), for a file the host
@@ -500,11 +518,20 @@ fn read_dimensions(source: impl std::io::Read) -> Option<(f64, f64)> {
 /// `app:/tmp/picked/`), and describe it as `change` delivers it. The type
 /// comes from the provider or the name; a video's duration is not read here.
 pub fn copy_in(source: &Path, app_path: &str, mime: &str) -> Result<exact_runner::Picked, String> {
+    copy_in_with(source, app_path, mime, |from, to| std::fs::copy(from, to))
+}
+
+pub(crate) fn copy_in_with(
+    source: &Path,
+    app_path: &str,
+    mime: &str,
+    copy: impl FnOnce(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<exact_runner::Picked, String> {
     let target = resolve(app_path).ok_or_else(|| format!("{app_path}: not an app path"))?;
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    let size = copy_size(source, &target, |from, to| std::fs::copy(from, to))?;
+    let size = copy_size(source, &target, copy)?;
     let (width, height) = if matches!(
         mime,
         "image/png" | "image/jpeg" | "image/gif" | "image/webp"
@@ -930,12 +957,14 @@ mod tests {
                 .env_remove("XDG_CACHE_HOME")
                 .output()
                 .unwrap();
+            let made = home.exists();
+            let _ = std::fs::remove_dir_all(&home);
             assert!(
                 output.status.success(),
                 "{}",
                 String::from_utf8_lossy(&output.stdout)
             );
-            assert!(!home.exists(), "knowing the roots creates nothing");
+            assert!(!made, "knowing the roots creates nothing");
             return;
         }
         know_roots("test.exact.roots");

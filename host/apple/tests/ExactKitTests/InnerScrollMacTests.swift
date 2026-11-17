@@ -171,7 +171,10 @@ final class InnerScrollMacTests: XCTestCase {
             XCTAssertLessThan(b.maxX, a.minX, "\(style): the second column is left of the first")
             let rules = try XCTUnwrap(parent.layer?.sublayers?.first { $0.name == "exact-column-rules" })
             let rule = try XCTUnwrap(rules.sublayers?.first)
-            XCTAssertEqual(rule.frame.midX, (b.maxX + a.minX) / 2, accuracy: 0.001, "\(style): the rule is in the gap")
+            // Exact on a 2x display. On a 1x one (a headless Mac's virtual display) the columns snap to whole points while
+            // the rule, from the unsnapped column records (`layoutColumnRules`), stays: half a device pixel apart.
+            let snap = window.backingScaleFactor >= 2 ? 0.001 : 0.5 / window.backingScaleFactor
+            XCTAssertEqual(rule.frame.midX, (b.maxX + a.minX) / 2, accuracy: snap, "\(style): the rule is in the gap")
         }
     }
 }

@@ -89,7 +89,7 @@ final class Canvas2DCaptureTests: XCTestCase {
         XCTAssertEqual(engine.stack(named: "CaptureFont"), 8)
         host.textEngine = { engine }
         let tile = try XCTUnwrap(Canvas2DSpace.srgb8.image([0, 255, 0, 255], width: 1, height: 1))
-        let bytes = try XCTUnwrap(canvas2DPNG(tile))
+        let bytes = try XCTUnwrap(canvas2DEncode(tile, type: "image/png", quality: nil))
         host.assetBytes = { _ in bytes }
         let loaded = expectation(description: "capture image decoded")
         host.onImage = { _, _ in loaded.fulfill() }
@@ -134,7 +134,7 @@ final class Canvas2DCaptureTests: XCTestCase {
         recording.draw(in: context)
         let shown = Self.rgba(try XCTUnwrap(context.makeImage()), 300, 200)
         let tile = try XCTUnwrap(Canvas2DSpace.srgb8.image([0, 255, 0, 255], width: 1, height: 1))
-        let bytes = try XCTUnwrap(canvas2DPNG(tile))
+        let bytes = try XCTUnwrap(canvas2DEncode(tile, type: "image/png", quality: nil))
         host.assetBytes = { _ in bytes }
         let loaded = expectation(description: "image decoded after the frame")
         host.onImage = { _, _ in loaded.fulfill() }

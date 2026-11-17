@@ -366,7 +366,7 @@ fn network(
             if length <= inner.limits.entry
                 && inner
                     .storing
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                         (n < inner.limits.entries).then_some(n + 1)
                     })
                     .is_ok()

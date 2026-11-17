@@ -2,14 +2,14 @@
 //! host's decoder takes only its own: a terminal plan is refused by every
 //! GUI host, a GUI plan by the terminal.
 
+use crate::scratch::Scratch;
 use exact_plan::{Plan, PlanError};
 
 const SOURCE: &str = "shape Note\n  text: string\ncomponent App\n  view\n    text \"Hello\"\n";
 
 #[test]
 fn every_compile_writes_its_surface_and_decoding_refuses_the_other() {
-    let dir = std::env::temp_dir().join(format!("contract-plan-surface-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-plan-surface-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, SOURCE).unwrap();
     let gui = [

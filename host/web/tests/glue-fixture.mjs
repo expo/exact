@@ -30,7 +30,7 @@ export function glueDeclarations(source, names) {
   for (const entry of parsed.program.body) {
     const statement = entry.type === 'ExportNamedDeclaration' ? entry.declaration : entry;
     if (!statement) continue;
-    if (statement.type === 'FunctionDeclaration') declarations.set(statement.id.name, source.slice(statement.start, statement.end));
+    if (statement.type === 'FunctionDeclaration' || statement.type === 'ClassDeclaration') declarations.set(statement.id.name, source.slice(statement.start, statement.end));
     if (statement.type === 'VariableDeclaration') for (const declaration of statement.declarations) {
       if (declaration.id.type === 'Identifier') declarations.set(declaration.id.name, `${statement.kind} ${source.slice(declaration.start, declaration.end)};`);
     }

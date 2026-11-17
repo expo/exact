@@ -21,6 +21,32 @@ final class FlightsIOSTests: XCTestCase {
         return p
     }
 
+    func testAFlightDoesNotStoreAnEmptyPanelsTemporaryAccessibilitySuppression() throws {
+        for authoredHidden in [false, true] {
+            let p = presenter()
+            p.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "view", "props": ["testId": "root"]],
+                ["op": "create", "id": 2, "kind": "view", "props": ["testId": "panel", "accessibilityRole": "tabpanel"]],
+                ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+                ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+                ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 200.0, "h": 300.0]]))
+            let panel = try XCTUnwrap(p.views[2])
+            panel.accessibilityElementsHidden = authoredHidden
+            p.navigation.tabPanels = [panel.id]
+            XCTAssertTrue(panel.accessibilityElementsHidden)
+            let flight = Flight(id: panel.id, source: FlightSource(rect: panel.convert(panel.bounds, to: nil), radius: 0))
+            p.flights[panel.id] = flight
+            p.flightsBatchApplied()
+            XCTAssertTrue(p.isFlying(panel))
+            XCTAssertTrue(panel.accessibilityElementsHidden, "a flying view stays suppressed")
+            p.landFlight(flight)
+            XCTAssertFalse(p.isFlying(panel))
+            XCTAssertTrue(panel.accessibilityElementsHidden, "the landed empty shell stays suppressed")
+            panel.addSubview(UILabel())
+            XCTAssertEqual(panel.accessibilityElementsHidden, authoredHidden, "landing restores the stored setting")
+        }
+    }
+
     /// A photo whose thumbnail is `cover` in a 326×245 box opens into a
     /// `contain` 402×874 box (Signal Clone's viewer). Each end is exactly
     /// its own drawing, and between them the drawn rectangle is the straight

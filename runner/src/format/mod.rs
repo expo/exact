@@ -42,6 +42,7 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
             let style = match style(2)? {
                 "medium" => Style::Medium,
                 "month-year" => Style::MonthYear,
+                "month-day" => Style::MonthDay,
                 "iso" => Style::Iso,
                 _ => return None,
             };
@@ -55,13 +56,15 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
                 "day" => DayMode::Day,
                 "day-time" => DayMode::DayTime,
                 "list" => DayMode::List,
+                "section" => DayMode::Section,
                 _ => return None,
             };
             day_label(num(0)?, num(1)?, num(2)?, mode)
         }
-        Stdlib::FormatNumber => match style(1)? {
-            "compact" => compact(num(0)?),
-            other => styled(num(0)?, other, style(2).unwrap_or(""))?,
+        Stdlib::FormatNumber => match (style(1)?, num(2)) {
+            ("compact", _) => compact(num(0)?),
+            ("decimal", Some(d)) => decimal_digits(num(0)?, digits(d, 100)? as usize),
+            (other, _) => styled(num(0)?, other, style(2).unwrap_or(""))?,
         },
         Stdlib::ToFixed => to_fixed(num(0)?, digits(num(1)?, 100)?),
         Stdlib::FormatDecimal => format_decimal(num(0)?, digits(num(1)?, 20)?),
@@ -95,11 +98,13 @@ fn date_wall(input: &Value, offset: f64) -> Option<f64> {
 enum Style {
     Medium,
     MonthYear,
+    MonthDay,
     Iso,
 }
 
 /// `Sep 26, 2026` (`{ dateStyle: "medium" }`), `September 2026`
-/// (`{ month: "long", year: "numeric" }`) or `2026-09-26` (LLP 1102 §3.4: the
+/// (`{ month: "long", year: "numeric" }`), `Sep 26` (`{ month: "short", day:
+/// "numeric" }`) or `2026-09-26` (LLP 1102 §3.4: the
 /// date part of `toISOString`) of a wall time in range. `en-US`'s short months are the first three letters of
 /// the long ones.
 fn date(wall: f64, style: Style) -> String {
@@ -121,6 +126,12 @@ fn date(wall: f64, style: Style) -> String {
         return out;
     }
     let name = MONTHS[month as usize - 1];
+    if style == Style::MonthDay {
+        out.push_str(&name[..3]);
+        out.push(' ');
+        push_number(f64::from(day), &mut out);
+        return out;
+    }
     if style == Style::MonthYear {
         out.push_str(name);
     } else {
@@ -140,6 +151,7 @@ enum DayMode {
     Day,
     DayTime,
     List,
+    Section,
 }
 
 /// `formatDay(thenMs, nowMs, utcOffset, mode)` (LLP 1116.020 D8): `then`'s
@@ -151,7 +163,11 @@ enum DayMode {
 /// - `DayTime`: that, ` at `, and the short time (`Oct 11, 2026 at 4:42 PM`);
 /// - `List`: the short time today, `Yesterday`, the weekday two to six days
 ///   back (seven back is today's weekday, so a date), else `M/D/YY`, as
-///   `{ dateStyle: "short" }` prints it, a later day's too.
+///   `{ dateStyle: "short" }` prints it, a later day's too;
+/// - `Section`: a chat's day separator (LLP 1168.000 D5): `Today`,
+///   `Yesterday`, `Tomorrow`, the weekday two to six days either side, else
+///   the weekday, month and day (`Thu, Oct 15`), with the year when it is
+///   not `now`'s (`Sun, May 4, 2025`).
 ///
 /// `""` when either instant is invalid (D7).
 fn day_label(then: f64, now: f64, offset: f64, mode: DayMode) -> Value {
@@ -161,6 +177,28 @@ fn day_label(then: f64, now: f64, offset: f64, mode: DayMode) -> Value {
     let day = |w: f64| (w / 86_400_000.0).floor() as i64;
     let (days, apart) = (day(wall), day(wall) - day(today));
     let time = || format_time(then, offset);
+    if mode == DayMode::Section {
+        return Value::str(&match apart {
+            0 => "Today".to_owned(),
+            -1 => "Yesterday".to_owned(),
+            1 => "Tomorrow".to_owned(),
+            -6..=6 => WEEKDAYS[(days + 4).rem_euclid(7) as usize].to_owned(),
+            _ => {
+                let (year, month, day) = civil(days);
+                let mut out = format!(
+                    "{}, {} ",
+                    &WEEKDAYS[(days + 4).rem_euclid(7) as usize][..3],
+                    &MONTHS[month as usize - 1][..3]
+                );
+                push_number(f64::from(day), &mut out);
+                if !same_year(wall, today) {
+                    out.push_str(", ");
+                    push_number(year as f64, &mut out);
+                }
+                out
+            }
+        });
+    }
     if mode == DayMode::List {
         return match apart {
             0 => time(),
@@ -191,6 +229,12 @@ fn day_label(then: f64, now: f64, offset: f64, mode: DayMode) -> Value {
         out.push_str(time().as_str().unwrap_or_default());
     }
     Value::str(&out)
+}
+
+/// Whether two wall times fall in one calendar year.
+fn same_year(wall: f64, other: f64) -> bool {
+    let year = |w: f64| civil((w / 86_400_000.0).floor() as i64).0;
+    year(wall) == year(other)
 }
 
 /// Rust's `{}` of a finite `x ≥ 0`, its shortest round-trip digits, never
@@ -320,8 +364,22 @@ const CURRENCIES: [(&str, &str, u32); 24] = [
 ///
 /// `None` for a style or code the compiler would have refused.
 fn styled(n: f64, style: &str, code: &str) -> Option<Value> {
+    styled_in(n, style, code, None)
+}
+
+/// `formatNumber(n, "decimal", digits)`: [`styled`]'s `decimal` with exactly
+/// `digits` fraction digits (`minimumFractionDigits` and
+/// `maximumFractionDigits` both `digits`).
+fn decimal_digits(n: f64, digits: usize) -> Value {
+    styled_in(n, "decimal", "", Some(digits)).expect("decimal is a style")
+}
+
+fn styled_in(n: f64, style: &str, code: &str, digits: Option<usize>) -> Option<Value> {
     let (symbol, min, max, shift) = match style {
-        "decimal" => ("", 0, 3, 0),
+        "decimal" => match digits {
+            Some(d) => ("", d, d, 0),
+            None => ("", 0, 3, 0),
+        },
         "percent" => ("", 0, 0, 2),
         "currency" => {
             let &(_, symbol, digits) = CURRENCIES.iter().find(|c| c.0 == code)?;

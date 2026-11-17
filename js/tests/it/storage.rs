@@ -175,6 +175,29 @@ fn native_modules_are_deferred_retired_and_unavailable_to_validation() {
     );
 }
 
+/// A validation pass has no storage, so a resource that reads a file or opens
+/// SQLite at boot is left pending, as at bake, and the generation boots
+/// (#676); the committed session asks it again with storage.
+#[test]
+fn validation_leaves_a_boot_read_of_storage_pending() {
+    for op in ["read", "count"] {
+        let root = Root::new();
+        let src = format!("shape Result\n  text: string\ncomponent App\n  resource r = work(\"{op}\", \"x\") as shape Result\n  view\n    text r.text\n");
+        let mut m = root.module();
+        m.activate_for_validation().unwrap();
+        let r = Runner::boot(
+            contract::compile(&src).unwrap(),
+            m,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap_or_else(|e| panic!("{op}: {e:?}"));
+        assert!(r.failed_resources().is_empty(), "{op}");
+        assert!(!root.0.exists(), "{op}: validation touched storage");
+    }
+}
+
 #[test]
 fn storage_is_lazy_persistent_isolated_and_grant_checked() {
     let root = Root::new();
@@ -1076,8 +1099,9 @@ fn storage_refusals_carry_a_stable_code() {
         .lines()
         .map(|l| l.split(' ').take(2).collect::<Vec<_>>().join(" "))
         .collect();
+    let (common, folder) = codes.split_at(5);
     assert_eq!(
-        codes,
+        common,
         [
             "Unavailable ENOENT",
             "Unavailable denied",
@@ -1086,6 +1110,20 @@ fn storage_refusals_carry_a_stable_code() {
             "Unavailable denied"
         ]
     );
+    // A folder read or copied from as a file is EISDIR, and the copy leaves
+    // no file. Unix only: the Windows app filesystem still refuses both with
+    // a message that carries no filesystem code, so they read as `failed`.
+    #[cfg(unix)]
+    assert_eq!(
+        folder,
+        [
+            "Unavailable EISDIR",
+            "Unavailable EISDIR",
+            "Unavailable ENOENT"
+        ]
+    );
+    #[cfg(not(unix))]
+    let _ = folder;
 }
 
 /// No later UI request is needed to finish writes these answers already

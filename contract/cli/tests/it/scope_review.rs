@@ -638,9 +638,11 @@ fn a_component_argument_named_surface_is_a_call_like_any_other() {
         "use Card from \"./ui.contract\"\nfn val(): number = 1\ncomponent App\n  view\n    column\n      Card()\n      text `${val()}`\n",
     );
     // The same program with the library's `fn` spelled apart: one plan.
+    // `Card` stays, since a computed argument's row is named by its use's
+    // number, which counts the uses expanded before it.
     let flat = dir.write(
         "flat.contract",
-        "fn two(): number = 2\nfn val(): number = 1\ncomponent App\n  view\n    column\n      Label(surface=two())\n      text `${val()}`\ncomponent Label\n  props\n    surface: number\n  view\n    text `${surface}`\n",
+        "fn two(): number = 2\nfn val(): number = 1\ncomponent App\n  view\n    column\n      Card()\n      text `${val()}`\ncomponent Card\n  view\n    Label(surface=two())\ncomponent Label\n  props\n    surface: number\n  view\n    text `${surface}`\n",
     );
     assert_eq!(
         contract::compile_path(&root).unwrap().encode(),

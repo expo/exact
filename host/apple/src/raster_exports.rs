@@ -14,6 +14,21 @@ macro_rules! raster_exports {
         pub extern "C" fn exact_raster_session_budget(id: u64, budget: u64) {
             $crate::raster::session_budget(id, budget)
         }
+        /// Retain the most recently used cold pictures within `bytes`.
+        #[no_mangle]
+        pub extern "C" fn exact_raster_session_trim(id: u64, bytes: u64) {
+            $crate::raster::session_trim(id, bytes)
+        }
+        /// Drop a source generation's cold pictures, preserving live requests and leases.
+        #[no_mangle]
+        pub extern "C" fn exact_raster_session_trim_generation(id: u64, generation: u64) {
+            $crate::raster::session_trim_generation(id, generation)
+        }
+        /// Forget a source's decoded entries, preserving surviving backing charges.
+        #[no_mangle]
+        pub extern "C" fn exact_raster_session_retire_generation(id: u64, generation: u64) {
+            $crate::raster::session_retire_generation(id, generation)
+        }
         /// Reset, pause, resume, shut down, or trim a raster account.
         #[no_mangle]
         pub extern "C" fn exact_raster_session_control(id: u64, op: u32) {

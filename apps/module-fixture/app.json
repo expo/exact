@@ -19,5 +19,6 @@
     "android": {
       "minimumOS": "10"
     }
-  }
+  },
+  "rust": { "data": { "crate": "module-fixture-data", "type": "module_fixture_data::Fixture", "source": "module_fixture_data::Fixture" } }
 }

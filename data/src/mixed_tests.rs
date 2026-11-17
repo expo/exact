@@ -526,6 +526,7 @@ fn run(dispatch: Dispatch) -> Outcome {
                 .expect("a reply")
         }
         Dispatch::Again => Dispatch::again_outcome(),
+        Dispatch::Run(Work::HttpResponse(_)) => panic!("HTTP fixtures require the HTTP executor"),
         Dispatch::Held => panic!("held"),
         Dispatch::Host(_) => panic!("host"),
         Dispatch::Missing => panic!("missing"),
@@ -988,21 +989,31 @@ fn two_targets_asking_a_placed_source_with_equal_arguments_keep_their_own_turns(
     let asked = r.take_requests();
     assert_eq!(names(&asked), ["first", "second"]);
     let first = run(r.dispatch_work(turn_token(&asked[0])));
-    let second = run(r.dispatch_work(turn_token(&asked[1])));
-    // The first turn yields storage, and that reply comes back before the
-    // second turn's envelope: it resumes the first call.
+    // The second waits for the first's reply: both read one Store.
+    assert!(matches!(
+        r.dispatch_work(turn_token(&asked[1])),
+        Dispatch::Held
+    ));
+    // The first turn yields storage; its reply lets the second go.
     r.fulfill(asked[0].ticket, first).unwrap();
     let storage = r.take_requests();
     assert_eq!(names(&storage), ["first"]);
+    let mut released = r.release_work();
+    assert_eq!(released.len(), 1);
+    let (token, dispatch) = released.remove(0);
+    assert_eq!(token, turn_token(&asked[1]));
+    let second = run(dispatch);
+    // The first call's storage reply comes back before the second turn's
+    // envelope: it resumes the first call.
     r.fulfill(storage[0].ticket, Outcome::Storage(b"one".to_vec()))
         .expect("the first call's storage reply resumes the first call");
     let resumed = r.take_requests();
     assert_eq!(names(&resumed), ["first"]);
-    let outcome = run(r.dispatch_work(turn_token(&resumed[0])));
-    r.fulfill(resumed[0].ticket, outcome).unwrap();
     r.fulfill(asked[1].ticket, second).unwrap();
     let storage = r.take_requests();
     assert_eq!(names(&storage), ["second"]);
+    let outcome = run(r.dispatch_work(turn_token(&resumed[0])));
+    r.fulfill(resumed[0].ticket, outcome).unwrap();
     r.fulfill(storage[0].ticket, Outcome::Storage(b"two".to_vec()))
         .unwrap();
     let resumed = r.take_requests();

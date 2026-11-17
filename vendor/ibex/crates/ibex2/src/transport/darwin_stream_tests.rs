@@ -359,3 +359,148 @@ fn an_uploads_bytes_sent_are_told_before_its_headers() {
     assert!(told.iter().all(|&(_, t)| t == total), "{told:?}");
     assert_eq!(told.last(), Some(&(total, total)));
 }
+
+/// A file body held in memory, read from its first byte for each attempt.
+struct MemoryFile(Vec<u8>);
+impl crate::stdlib::fetch::FileBody for MemoryFile {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn reader(&self) -> std::io::Result<Box<dyn Read + Send>> {
+        Ok(Box::new(std::io::Cursor::new(self.0.clone())))
+    }
+}
+
+type Told = std::sync::Arc<std::sync::Mutex<Vec<(u64, u64)>>>;
+
+fn file_upload(url: &str, bytes: Vec<u8>) -> (Request, Told) {
+    use crate::stdlib::fetch::{BodyFile, Sent};
+    let told = Told::default();
+    let seen = told.clone();
+    let mut request = Request::get(url);
+    request.method = "POST".into();
+    request.body_file = Some(BodyFile(std::sync::Arc::new(MemoryFile(bytes))));
+    request.sent = Some(Sent(
+        std::sync::Arc::new(move |loaded, total| seen.lock().unwrap().push((loaded, total))),
+        None,
+    ));
+    (request, told)
+}
+
+/// A file body (Exact patch 46) is a streamed upload task framed by its
+/// length, its bytes arriving whole, its progress rising to the whole.
+#[test]
+fn a_file_body_is_streamed_by_its_length() {
+    const SIZE: usize = 6 << 20;
+    let bytes: Vec<u8> = (0..SIZE as u32)
+        .map(|i| (i * 13 + i / 4093) as u8)
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let peer = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0];
+        while !head.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+        let mut body = vec![0; SIZE];
+        stream.read_exact(&mut body).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .unwrap();
+        (String::from_utf8(head).unwrap().to_ascii_lowercase(), body)
+    });
+    let (request, told) = file_upload(&url, bytes.clone());
+    let response = DarwinTransport::new().send(&request).unwrap();
+    assert_eq!(response.status, 201);
+    let (head, body) = peer.join().unwrap();
+    assert!(
+        head.contains(&format!("content-length: {SIZE}\r\n"))
+            && !head.contains("transfer-encoding"),
+        "{head}"
+    );
+    assert!(body == bytes, "the body differs from the file");
+    let told = told.lock().unwrap();
+    assert!(told.windows(2).all(|w| w[0].0 <= w[1].0), "{told:?}");
+    assert_eq!(told.last(), Some(&(SIZE as u64, SIZE as u64)));
+}
+
+/// A 413 before the body has gone is the reply, and progress stops at the
+/// bytes written (LLP 1133.008.000 D4).
+#[test]
+fn an_early_reply_is_the_reply_and_progress_stops_at_the_bytes_written() {
+    const SIZE: u64 = 64 << 20;
+    let (url, server) = server(move |mut stream| {
+        let mut some = vec![0; 64 << 10];
+        stream.read_exact(&mut some).unwrap();
+        let _ = stream.write_all(
+            b"HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        thread::sleep(Duration::from_millis(200));
+    });
+    let (request, told) = file_upload(&url, vec![1; SIZE as usize]);
+    let started = std::time::Instant::now();
+    let response = DarwinTransport::new().send(&request).unwrap();
+    server.join().unwrap();
+    assert_eq!(response.status, 413);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    let last = told.lock().unwrap().last().map_or(0, |&(n, _)| n);
+    assert!(last < SIZE, "told {last} of {SIZE}");
+}
+
+/// A file body that fails part way (a file cut shorter while it is sent)
+/// fails the exchange with the reader's words.
+#[test]
+fn a_file_body_that_fails_fails_the_exchange_with_its_words() {
+    struct Short;
+    impl crate::stdlib::fetch::FileBody for Short {
+        fn len(&self) -> u64 {
+            1 << 20
+        }
+        fn reader(&self) -> std::io::Result<Box<dyn Read + Send>> {
+            let cut = std::io::Cursor::new(vec![1; 4096]).chain(std::io::repeat(0).take(0));
+            struct Fails<R>(R);
+            impl<R: Read> Read for Fails<R> {
+                fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                    match self.0.read(out)? {
+                        0 => Err(std::io::Error::other(
+                            "exactBodyFrom app:/tmp/x: the file shrank while it was sent",
+                        )),
+                        n => Ok(n),
+                    }
+                }
+            }
+            Ok(Box::new(Fails(cut)))
+        }
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut sink = [0; 4096];
+        while stream.read(&mut sink).is_ok_and(|n| n > 0) {}
+    });
+    let mut request = Request::get(&format!("http://{address}/"));
+    request.method = "POST".into();
+    request.body_file = Some(crate::stdlib::fetch::BodyFile(std::sync::Arc::new(Short)));
+    let error = DarwinTransport::new().send(&request).unwrap_err();
+    // The read may fail before URLSession connects: release the accept.
+    let _ = TcpStream::connect(address);
+    peer.join().unwrap();
+    assert!(
+        format!("{error:?}").contains("the file shrank while it was sent"),
+        "{error:?}"
+    );
+}

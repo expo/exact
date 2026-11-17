@@ -153,12 +153,11 @@ fn sweep(js: bool) {
         "the corpus resources must become constant state"
     );
     let plan = contract::bake(contract::compile(&source).unwrap(), Empty).unwrap();
-    let dir = std::env::temp_dir().join(format!(
-        "exact-router-browser-{}{}",
-        std::process::id(),
-        if js { "-js" } else { "" }
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new(if js {
+        "exact-router-browser-js"
+    } else {
+        "exact-router-browser"
+    });
     std::fs::write(dir.join("app.plan"), encode(plan)).unwrap();
     let no_handler = contract::bake(
         contract::compile(&source.replace(" navigate=followLink", "")).unwrap(),
@@ -232,7 +231,7 @@ component App
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}`
           if e.name == "item"
-            image "/__test-slow.png" id="first" width=10 height=10 display="block"
+            image "/__test-slow.png" id="first" width=100 display="block"
 ROWS0            box id="moves" height=100
 ROWS20            box id="other" height=100
 ROWS40"##
@@ -249,7 +248,7 @@ ROWS40"##
     let output = Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
         .arg("host/web/tests/navigation.mjs")
         .env("EXACT_ROUTER_DIST", dist)
-        .env("EXACT_ROUTER_TEST", &dir)
+        .env("EXACT_ROUTER_TEST", &*dir)
         .env("EXACT_ROUTER_TARGET", if js { "js" } else { "wasm" })
         .current_dir(root)
         .output()
@@ -261,5 +260,4 @@ ROWS40"##
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    std::fs::remove_dir_all(dir).unwrap();
 }

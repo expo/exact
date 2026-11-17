@@ -21,6 +21,7 @@
 //! - [`transition`] — the declaration, and CSS's rules for starting,
 //!   interrupting, and reversing a transition.
 //! - [`path`] — a path's `d` as a value, and when two interpolate.
+//! - [`length`] — `translate` as px plus a percentage, `calc()` included.
 //! - [`color`] — CSS colours as premultiplied values (LLP 1055.000 D6).
 //! - [`animation`] — CSS `@keyframes` and `animation`, sampled in closed form
 //!   (LLP 1055 D5).
@@ -43,11 +44,14 @@ pub mod animation;
 pub mod color;
 pub mod easing;
 pub mod engine;
+pub mod filter;
 pub mod gesture;
+pub mod length;
 pub mod math;
 pub mod parse;
 pub mod path;
 pub mod property;
+pub mod rotation;
 pub mod spring;
 pub mod transition;
 pub mod uikit;
@@ -56,15 +60,16 @@ pub mod word;
 
 pub use animation::link as link_animations;
 pub use animation::{
-    Animation, AnimationError, Animations, Direction, FillMode, Keyframes, Phase, MAX_ANIMATIONS,
-    MAX_KEYFRAMES, MAX_VALUES,
+    Animation, AnimationError, Animations, Direction, FillMode, Keyframes, Phase, Picture,
+    MAX_ANIMATIONS, MAX_KEYFRAMES, MAX_VALUES,
 };
 pub use easing::{Easing, EasingError, LinearStop, StepPosition};
 pub use engine::{
     AnimationPlay, Change, Engine, EngineError, EngineLinks, HoldEnd, HoldStart, HoldToken,
     NamedTimeline, PlayedCurve, PlayedTransition, Presentation, SpringDescriptor, SpringFrames,
-    TransformHold, TransitionEnds,
+    TransformHold, TransitionEnds, HOLD_DEADLINE,
 };
+pub use filter::{FilterKind, FilterStep, FilterValue};
 pub use parse::ParseError;
 pub use path::{PathCommand, PathValue};
 pub use property::{Property, Value};

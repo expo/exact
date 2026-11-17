@@ -375,7 +375,7 @@ index 6d3aba5..9a7ac9e 100755
  // included). Not counted: JSON, lockfiles, tests, generated files, and verbatim copies of the
 -// provided design files (every app copies design/tokens.css).
 +// provided design files (every app copies design/tokens.css). An Exact app's pages are its
-+// .contract files; its app.tamber is design/tokens.css converted (`tamber import css`).
++// .contract files; its app.forma is design/tokens.css converted (`forma import css`).
  function codeStats() {
    const files = spawnSync('git', ['-c', 'safe.directory=*', 'ls-files', '--cached', '--others', '--exclude-standard', '.'], { cwd: appDir, encoding: 'utf8' })
      .stdout.split('\n')

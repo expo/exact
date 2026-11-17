@@ -58,6 +58,40 @@ final class BoxFilterTests: XCTestCase {
         return node
     }
 
+    func testBasicClipSettlesAtTheFinalSizeAfterAFilteredTransition() throws {
+        let box = node(1), child = node(2)
+        box.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        box.applyStyle(["background_color": [255, 0, 0, 255], "filter": try filter(), "clip_path": ["shape": "inset", "values": [
+            0, 25, 0, 25, 0, 25, 0, 25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]]])
+        child.frame = box.bounds
+        child.applyStyle(["background_color": [255, 0, 0, 255]])
+        box.container.addSubview(child)
+        #if os(macOS)
+        box.wantsLayer = true
+        window.displayIfNeeded()
+        #endif
+        box.applyBoxMask()
+        for size: CGFloat in [100, 150, 200] {
+            box.layoutResize = CGSize(width: size - 200, height: size - 200)
+            box.applySurface()
+            box.renderFilter(); settle()
+            let expected = CGRect(x: size / 4, y: size / 4, width: size / 2, height: size / 2)
+            XCTAssertEqual(try XCTUnwrap(box.clipPath).boundingBoxOfPath, expected)
+            let mask = try XCTUnwrap(box.boxFilter?.picture.mask as? CAShapeLayer)
+            XCTAssertEqual(try XCTUnwrap(mask.path).boundingBoxOfPath, expected)
+            let inside = CGPoint(x: size * 0.7, y: size * 0.7), outside = CGPoint(x: size * 0.2, y: size * 0.5)
+            #if os(macOS)
+            XCTAssertTrue(box.hitTest(box.convert(inside, to: box.superview)) === child)
+            XCTAssertFalse(box.hitTest(box.convert(outside, to: box.superview)) === child)
+            #else
+            XCTAssertTrue(box.hitTest(inside, with: nil) === child)
+            XCTAssertFalse(box.hitTest(outside, with: nil) === child)
+            #endif
+        }
+        XCTAssertNil(box.surface)
+    }
+
     private func filter() throws -> BatchValue {
         ["p": .array(try program().map(BatchValue.number))]
     }

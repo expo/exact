@@ -225,6 +225,8 @@ theorem runAction_slotsOK {p : Program} {o c name args rows c' out} (hp : SlotTy
   next answered hans =>
   split at h
   · exact keep h
+  split at h
+  · exact keep h
   next hw =>
   have hsends := (exec_sound hx).sends (hp.sends a (List.mem_of_find?_eq_some ha)) (by simp) rfl hp.sends
   have hok : SlotsOK p (Contract.applyWrites c.slots (answered ++ fx.writes)) := by
@@ -437,9 +439,9 @@ built. -/
 theorem reachable_slotsOK {p : Program} {c} (hp : WellTyped p) (h : Reachable p c) : SlotsOK p c.slots :=
   Reachable.invariant (fun c => SlotsOK p c.slots)
     (fun _ => boot_slotsOK hp.slotTyped)
-    (fun _ _ _ _ _ hc => hc)
+    (fun _ _ _ _ _ _ hc => hc)
     (fun _ _ _ _ _ _ _ _ _ _ _ _ hc _ _ hr => runAction_slotsOK hp.slotTyped hc hr)
-    (fun _ _ _ _ _ _ hc hr => runAction_slotsOK hp.slotTyped hc hr)
+    (fun _ _ _ _ _ _ _ _ hc hr => runAction_slotsOK hp.slotTyped hc hr)
     (fun _ _ _ _ _ hc hq hr => nextCommit_slotsOK hp.slotTyped hq hc hr) c h
 
 /-- The same as types: each root slot holds a value of its declared type

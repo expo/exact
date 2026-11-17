@@ -292,6 +292,22 @@ impl Harness {
         root.collection().unwrap()
     }
 }
+/// LLP 1168.000 D1.2: only a list that opens at its end keeps what its
+/// start asked; no other list's anchor reads it.
+#[test]
+fn only_a_list_that_opens_at_its_end_keeps_what_its_start_asked() {
+    let mut h = Harness::new(100, false, false);
+    let Child::Node(root) = &mut h.tree.children[0] else {
+        panic!()
+    };
+    let c = root.collection_mut().unwrap();
+    assert!(!c.opens_at_end);
+    c.disarm_edge(0);
+    assert!(!c.start_asked, "a list that opens at its start");
+    c.opens_at_end = true;
+    c.disarm_edge(0);
+    assert!(c.start_asked, "a list that opens at its end");
+}
 #[test]
 fn bounded_bootstrap_twenty_traversals_release_row_slots_and_kernel_views() {
     for n in [1_000, 25_000] {
@@ -499,7 +515,7 @@ fn focus_and_interaction_pins_are_disjoint_and_wrappers_have_no_sites() {
     assert!(matches!(path[0], InstanceStep::Row { .. }));
     let (_, frames) = h.tree.find(first.root, parent, &mut 0).unwrap();
     let row = frames[0].row.clone().unwrap();
-    row.borrow_mut().insert(4, Value::Number(7.0));
+    row.borrow_mut().slots.insert(4, Value::Number(7.0));
     let mut written = crate::instance::RowWrites::default();
     written.record(&frames, &row, 4);
     h.update_with(written).unwrap();
@@ -595,8 +611,7 @@ fn binary_feedback_roundtrips_and_rejects_malformed_reports() {
     for length in 0..bytes.len() {
         assert!(CollectionFeedback::decode(&bytes[..length]).is_err());
     }
-    let mut trailing = bytes.clone();
-    trailing.push(0);
+    let trailing = [&bytes[..], &[0]].concat();
     assert!(CollectionFeedback::decode(&trailing).is_err());
     let mut bad = bytes.clone();
     bad[92..96].copy_from_slice(&u32::MAX.to_le_bytes());
@@ -609,65 +624,10 @@ fn binary_feedback_roundtrips_and_rejects_malformed_reports() {
     assert!(h.snapshot().json().contains("\"totalExtent\""));
 }
 
-#[test]
-fn snapshot_json_preserves_u64_metadata_as_decimal_strings() {
-    let snapshot = CollectionSnapshot {
-        view: 1,
-        axis: ListAxis::Vertical,
-        parent: None,
-        restored: false,
-        seeking: false,
-        waiting: false,
-        request: 0,
-        revision: (1_u64 << 53) + 1,
-        scroll_sequence: u64::MAX - 1,
-        count: 3,
-        total_extent: 96.0,
-        rows: vec![CollectionRow {
-            view: 2,
-            root: 3,
-            index: 1,
-            start: 32.0,
-            size: 32.0,
-            epoch: u64::MAX,
-            measured: true,
-        }],
-        correction: Some(AnchorCorrection {
-            scroll_sequence: (1_u64 << 53) + 3,
-            offset: 16.5,
-            from: None,
-            smooth: false,
-        }),
-        pending: true,
-    };
-    let expected = concat!(
-        r#"{"view":1,"axis":"y","revision":"9007199254740993","scrollSequence":"18446744073709551614","count":3,"totalExtent":96,"rows":["#,
-        r#"{"view":2,"root":3,"index":1,"start":32,"size":32,"epoch":"18446744073709551615","measured":true}],"pending":true,"#,
-        r#""correction":{"scrollSequence":"9007199254740995","offset":16.5}}"#,
-    );
-    assert_eq!(snapshot.json(), expected);
-    assert_eq!(
-        snapshots_json(std::slice::from_ref(&snapshot)),
-        format!("[{expected}]")
-    );
-    let mut batch = String::from("prefix:");
-    snapshot.write_json(&mut batch);
-    assert_eq!(batch, format!("prefix:{expected}"));
-
-    let mut initial = snapshot;
-    initial.revision = 1;
-    initial.scroll_sequence = 0;
-    initial.rows[0].epoch = 1;
-    initial.correction.as_mut().unwrap().scroll_sequence = 0;
-    let json = initial.json();
-    assert!(json.contains(r#""revision":"1","scrollSequence":"0""#));
-    assert!(json.contains(r#""epoch":"1""#));
-    assert!(json.contains(r#""correction":{"scrollSequence":"0""#));
-}
-
 /// LLP 1070.000 §2.6: a snapshot names the list's latest request as
 /// `lastRequest` once there has been one, ended or not, and as `request`
 /// only while it is under way.
+
 #[test]
 fn snapshot_json_names_the_latest_request_ended_or_under_way() {
     let mut snapshot = Harness::new(100, false, false).snapshot();

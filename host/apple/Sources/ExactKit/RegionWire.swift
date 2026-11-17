@@ -58,6 +58,7 @@ struct RegionShapeRequest: Sendable {
     let height: CGFloat
     let generation: Int
     var compact = false
+    var exclusions: [TextFlowShape] = []
 }
 extension RegionTextSource {
     static func capture(wire: [String: Any], engine: TextEngine, dark: Bool) -> RegionTextSource? {
@@ -67,9 +68,19 @@ extension RegionTextSource {
             guard let size = row["size"] as? Double, size.isFinite, size >= 0,
                   let weight = row["weight"] as? Int, let family = row["family"] as? Int,
                   let spacing = row["spacing"] as? Double, spacing.isFinite else { return nil }
+            func settings(_ name: String) -> BatchValue {
+                .array((row[name] as? [[Any]] ?? []).compactMap { pair in
+                    guard pair.count == 2, let tag = pair[0] as? String, let value = pair[1] as? NSNumber else { return nil }
+                    return .array([.string(tag), .number(value.doubleValue)])
+                })
+            }
             var run = Run(text: row["text"] as? String ?? "", size: size, weight: weight, family: family,
                 italic: row["italic"] as? Bool ?? false,
                 lineHeight: (row["lineHeight"] as? Double).map { CGFloat($0) }, letterSpacing: spacing,
+                numeric: row["numeric"] as? Int ?? 0, ligatures: row["ligatures"] as? Int ?? 0,
+                stretch: CGFloat(row["stretch"] as? Double ?? 100),
+                variations: FontAxis.opticalSizing(row["opticalSizing"] as? String, FontAxis.of(settings("variations"))),
+                features: FontFeature.of(settings("features")),
                 color: row[dark ? "darkColor" : "color"] as? [Double],
                 decoration: row["decoration"] as? String ?? "", href: row["href"] as? String ?? "")
             // The colour is one its author fixed, not a role (LLP 1115.000 D7.9).

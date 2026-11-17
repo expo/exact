@@ -109,6 +109,15 @@ pub enum InputEvent {
         kind: PointerKind,
         /// The web's pressed-button bit mask.
         buttons: u32,
+        /// Shift was held (the web's `shiftKey`).
+        shift_key: bool,
+        /// Control was held (`ctrlKey`); a trackpad pinch's wheel sets it, as
+        /// browsers deliver one.
+        ctrl_key: bool,
+        /// Alt or Option was held (`altKey`).
+        alt_key: bool,
+        /// Meta (Command, the Windows key) was held (`metaKey`).
+        meta_key: bool,
         /// Host clock in milliseconds.
         at_ms: f64,
     },
@@ -127,7 +136,8 @@ pub enum InputEvent {
         /// Host clock in milliseconds.
         at_ms: f64,
     },
-    /// A wheel at a point in the canvas.
+    /// A wheel at a point in the canvas. A trackpad pinch is one with
+    /// `ctrl_key` set, its `dy` negative as the fingers spread.
     Wheel {
         /// Horizontal delta.
         dx: f32,
@@ -137,6 +147,14 @@ pub enum InputEvent {
         x: f32,
         /// Vertical point in the canvas.
         y: f32,
+        /// Shift was held (the web's `shiftKey`).
+        shift_key: bool,
+        /// Control was held (`ctrlKey`), or this is a trackpad pinch.
+        ctrl_key: bool,
+        /// Alt or Option was held (`altKey`).
+        alt_key: bool,
+        /// Meta (Command, the Windows key) was held (`metaKey`).
+        meta_key: bool,
         /// Host clock in milliseconds.
         at_ms: f64,
     },

@@ -111,6 +111,11 @@ fn a_draw_is_a_counted_read_and_refuses_during_initialization() {
     );
     assert_eq!(bytes.split(',').count(), 4, "{bytes}");
     assert_eq!(store.entropy_draws(), 3);
+    // An empty fill drew nothing
+    module
+        .answer(&mut store, "bytes", &[Value::Number(0.0)])
+        .unwrap();
+    assert_eq!(store.entropy_draws(), 3, "an empty fill draws nothing");
 
     // Refusals and shape: the same strings the browser realms answer.
     let before = store.reads();

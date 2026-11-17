@@ -10,6 +10,106 @@ use super::*;
 use exact_runner::runner::ScrollDrag;
 
 impl<D: DataSource> Presenter<D> {
+    /// Deterministic reader-scroll samples for the Android agent, not native
+    /// touch recognition or a fling. The regular pointer path owns neither.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn agent_scroll_drag(&mut self, r: &serde_json::Value) -> Result<String, String> {
+        let pair = |name: &str| -> Result<(f32, f32), String> {
+            let v = r[name]
+                .as_array()
+                .filter(|v| v.len() == 2)
+                .ok_or_else(|| format!("scroll drag: {name} needs two finite numbers"))?;
+            let n = |v: &serde_json::Value| v.as_f64().map(|n| n as f32).filter(|n| n.is_finite());
+            n(&v[0])
+                .zip(n(&v[1]))
+                .ok_or_else(|| format!("scroll drag: {name} needs two finite numbers"))
+        };
+        let id = r["id"]
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+            .ok_or("scroll drag: id needs a live view")?;
+        let (dx, dy) = pair("scrollDrag")?;
+        let ms = r["ms"]
+            .as_f64()
+            .filter(|ms| ms.is_finite() && (0.0..=2000.0).contains(ms))
+            .ok_or("scroll drag: duration must be 0–2000 ms")?;
+        if self.contact_position().is_some() {
+            return Err("scroll drag: another contact is down".into());
+        }
+        let (x, y, w, h) = self
+            .rect_of(id)
+            .ok_or("scroll drag: target has no painted box")?;
+        let start = if r.get("from").is_some() {
+            pair("from")?
+        } else {
+            (x + w / 2., y + h / 2.)
+        };
+        let hit = self
+            .hit(start.0, start.1)
+            .ok_or("scroll drag: start is not visible")?;
+        if !self.is_inside(hit, id) || !self.alert_allows(id) || self.host.route_visibility(id).1 {
+            return Err("scroll drag: target is hidden, inert or covered".into());
+        }
+        let limits = self.collection_scroll_limits();
+        let scroller = self
+            .scroller(id, &limits)
+            .ok_or("scroll drag: target is not a scroller")?;
+        let under = self.scrollers_at(start.0, start.1);
+        let primary_claimed = if dx.abs() > dy.abs() {
+            under.claims.0
+        } else {
+            under.claims.1
+        };
+        if primary_claimed && r["probe"] == true {
+            return Ok(serde_json::json!({"scrollDrag": "presenter"}).to_string());
+        }
+        if (dx != 0. && under.claims.0) || (dy != 0. && under.claims.1) {
+            return Err("scroll drag: a gesture owns this axis; use native input".into());
+        }
+        if under.field.is_some() {
+            return Err("scroll drag: a native text field owns the start; use native input".into());
+        }
+        if scroller.axes.0 || scroller.axes.1 {
+            let target = under
+                .chain
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("scroll drag: target is outside the scroll chain")?;
+            if (dx != 0. && scroller.axes.0 && !target.axes.0)
+                || (dy != 0. && scroller.axes.1 && !target.axes.1)
+            {
+                return Err("scroll drag: a nested scroller contains this axis".into());
+            }
+        }
+        if r["probe"] == true {
+            return Ok(serde_json::json!({"scrollDrag": "reader"}).to_string());
+        }
+        if scroller.axes.0 || scroller.axes.1 {
+            self.reader_under(start.0, start.1, 1.);
+            if let Some(error) = self.reader_drag_began(id) {
+                return Err(error);
+            }
+            let steps = ((ms / 16.).ceil() as usize).clamp(1, 128);
+            for _ in 0..steps {
+                self.reader_wheel(id, -dx / steps as f32, -dy / steps as f32)?;
+            }
+            if let Some(error) = self.reader_drag_ended(id, (0., 0.), None, false) {
+                return Err(error);
+            }
+        }
+        let after = self
+            .scroller(id, &self.collection_scroll_limits())
+            .ok_or("scroll drag: target was removed while scrolling")?
+            .offset;
+        Ok(serde_json::json!({
+            "tapped": id, "at": [start.0, start.1],
+            "scrolledBy": [after.0 - scroller.offset.0, after.1 - scroller.offset.1],
+            "delivery": "presenter", "native": "Presenter.reader_*",
+            "timing": "deterministic scroll samples; native touch and fling unobserved"
+        })
+        .to_string())
+    }
+
     /// The reader's finger began dragging scroller `id` (one it was told
     /// of): its `scrolldragstart`. From now until the drag, or the fling it
     /// throws, is over, the scroller's moves owe no `scrollend`

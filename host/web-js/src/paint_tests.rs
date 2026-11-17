@@ -618,6 +618,8 @@ pub(super) fn transition_values() -> Vec<String> {
         "d 1s, 200ms ease",
         "d 1s, opacity 1s",
         "opacity 1s, d 2s",
+        "filter 1s, d 2s",
+        "all -exact-spring(180, 12, 1)",
         "opacity 1s",
         "1s opacity",
         "translate 1s",
@@ -663,7 +665,15 @@ pub(super) fn transition_values() -> Vec<String> {
     let properties = exact_motion::Property::ALL
         .into_iter()
         .flat_map(|p| [p.name(), p.css_name()])
-        .chain(["all", "border-color", "d", "width", "", "opacity scale"]);
+        .chain([
+            "all",
+            "border-color",
+            "d",
+            "filter",
+            "width",
+            "",
+            "opacity scale",
+        ]);
     let easings = [
         "linear",
         "ease",
@@ -1049,7 +1059,7 @@ fn bound_animation_stacking_matches_kernel() {
         let mut style = exact_kernel::StyleProps::default();
         if let Ok(mut list) = exact_motion::Animations::parse(&value) {
             list.resolve(|name| rules.get(name));
-            style.animation = list;
+            style.animation = list.into();
             style.mask.set(StyleId::Animation);
         }
         let own = exact_kernel::paint_order::own_from(exact_kernel::paint_order::Facts {

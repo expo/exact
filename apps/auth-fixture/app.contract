@@ -90,6 +90,8 @@ component AuthFixture
     send prepared = prepareLoopbackSignIn(time.epochAtZero + performanceNow())
   action signIn
     send signed = signIn(time.epochAtZero + performanceNow())
+  action cancelSignIn
+    signed = none
   action prepareSecond
     send preparedSecond = prepareSecondSignIn(time.epochAtZero + performanceNow())
   action signInSecond
@@ -129,6 +131,9 @@ component AuthFixture
           text "Prepare loopback sign-in"
         button press=signIn disabled=busy testId="sign-in" padding=12 border-radius=8 background-color="#2f6fd6"
           text "Sign in" color="#ffffff" font-weight=600
+        if pending(signed)
+          button press=cancelSignIn testId="cancel-sign-in"
+            text "Cancel"
         button press=prepareSecond disabled=busySecond testId="prepare-second" padding=12 border-radius=8 background-color="#dfe5ee"
           text "Prepare a second loopback sign-in"
         button press=signInSecond disabled=busySecond testId="sign-in-second" padding=12 border-radius=8 background-color="#dfe5ee"

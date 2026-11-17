@@ -156,7 +156,7 @@ extension NodeView {
             if v.layer?.mask != nil { note("mask") }
             if v !== self, v is NSClipView || v.clipsToBounds || v.layer?.masksToBounds == true { note("clip") }
             #endif
-            if v !== self, (v.superview as? NodeView)?.overlay === v { note("canvas") }
+            if v !== self, v.canvasOverlayOwner != nil { note("canvas") }
             view = v.superview
         }
         return (nil, [])
@@ -277,9 +277,11 @@ final class GlassSlot: UIVisualEffectView {
 }
 
 extension NodeView {
-    /// What `container` names without a group: the scroll, the canvas
-    /// overlay, a glass's content view, the clip box, or the node.
-    var baseContainer: UIView { scroll ?? overlay ?? (Materials.glass(materialKind) || blurHostsChildren ? materialView?.contentView : nil) ?? clipBox ?? self }
+    /// A one-axis clip holds children outside the material's rounded mask.
+    var baseContainer: UIView {
+        scroll ?? overlay ?? (clipsOneAxis ? clipBox : nil)
+            ?? (Materials.glass(materialKind) || blurHostsChildren ? materialView?.contentView : nil) ?? clipBox ?? self
+    }
 
     /// The group view's place and spacing, or its absence (D2, D6).
     func syncGlassGroup() {
@@ -403,9 +405,8 @@ private final class GlassContent: NSView {
 }
 
 extension NodeView {
-    /// What `container` names without a group: the scroll's document, the
-    /// canvas overlay, a material's content, the clip box, or the node.
-    var baseContainer: NSView { scroll?.documentView ?? overlay ?? materialContent ?? clipBox ?? self }
+    /// A one-axis clip holds children outside the material's rounded mask.
+    var baseContainer: NSView { scroll?.documentView ?? overlay ?? (clipsOneAxis ? clipBox : nil) ?? materialContent ?? clipBox ?? self }
 
     /// The group view's content, where the children are while it exists.
     var glassGroupContent: NSView? {

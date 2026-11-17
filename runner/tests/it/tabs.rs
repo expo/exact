@@ -555,3 +555,35 @@ fn selected_panel_trap(contents: &str, component: &str, evaluation: &str) {
     assert!(r.is_poisoned(), "{text}");
     assert!(r.journal().any(|line| line.contains(&text)), "{text}");
 }
+
+#[test]
+fn panels_in_fixed_content_open_on_initial_selection_and_switching() {
+    let source = source(ARIA);
+    let start = source.find("      column\n").unwrap();
+    let end = source.find("      row role=\"tablist\"\n").unwrap();
+    let fixed = source[start..end]
+        .lines()
+        .map(|line| format!("  {line}\n"))
+        .collect::<String>();
+    let data = "        for item in [1, 2] key=item\n          text `${item}`\n";
+    for trail in [false, true] {
+        let children = if trail {
+            format!("{data}{fixed}")
+        } else {
+            format!("{fixed}{data}")
+        };
+        let source = format!(
+            "{}      list virtualized=true appearance=\"none\" height=400\n{children}{}",
+            &source[..start],
+            &source[end..]
+        );
+        let mut r = boot(&source, "/");
+        let tree = agent::tree(&r);
+        assert!(has(&tree, "bump-a"), "trail={trail}: {tree}");
+        assert!(unopened(&tree, "b") && unopened(&tree, "c"));
+        r.act("pick", vec![Value::str("b")]).unwrap();
+        let tree = agent::tree(&r);
+        assert!(has(&tree, "bump-b"), "trail={trail}: {tree}");
+        assert!(!unopened(&tree, "b") && unopened(&tree, "c"));
+    }
+}

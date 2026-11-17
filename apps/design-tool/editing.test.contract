@@ -1,8 +1,8 @@
-// The design tool's edits against its stand-in Tamber server, as in
+// The design tool's edits against its stand-in Forma server, as in
 // app.test.contract: the dials and component panels, typed fields, the token
 // grid and contrast, proposals before a write, undo, and scrubs.
 
-// stub/dials.tamber: dials of each kind a colour follows, with and without
+// stub/dials.forma: dials of each kind a colour follows, with and without
 // metadata, two groups, the three priorities (declared out of order), a
 // select with an option that is no literal, a range in scientific
 // notation, two axes and a residual.
@@ -32,7 +32,7 @@ test "the component panel: each component's params from describe, grouped and or
   clock data
   expect tree has "component-Card"
   expect text "component-Card-identity" == "app.contract#Card"
-  expect text "component-MapCard-identity" == "app.tamber#MapCard · a native view's"
+  expect text "component-MapCard-identity" == "app.forma#MapCard · a native view's"
   expect tree has "dial-app.contract#Card.fill-color"
   expect text "dial-app.contract#Card.fill-value" == "accent.fill"
   expect tree has "dial-app.contract#Card.pad-slider"
@@ -46,19 +46,19 @@ test "the component panel: each component's params from describe, grouped and or
   tap "more-Card-Colour"
   expect tree has "dial-app.contract#Card.tone-select"
   expect text "param-Card.tone-pinned" == "pinned: no longer follows surface.card"
-  expect tree has "dial-app.tamber#MapCard.zoom-stepper"
+  expect tree has "dial-app.forma#MapCard.zoom-stepper"
   expect text "param-MapCard.zoom-source" == "the default"
 
 test "the component panel's other kinds: a duration's slider writes ms, an icon param shows its sources, a panel edit beside an open param's branch is no stale draft"
   type "name" "Ada"
   tap "save-name"
   clock data
-  expect text "dial-app.tamber#MapCard.pan-bounds" == "0ms – 1000ms · step 50ms"
-  type "dial-app.tamber#MapCard.pan-slider" "400"
+  expect text "dial-app.forma#MapCard.pan-bounds" == "0ms – 1000ms · step 50ms"
+  type "dial-app.forma#MapCard.pan-slider" "400"
   expect state editKind == "set-param"
   expect state editValue == "400ms"
-  expect text "dial-app.tamber#MapCard.glyph-value" == "sf star · material star"
-  expect tree missing "dial-app.tamber#MapCard.glyph-field"
+  expect text "dial-app.forma#MapCard.glyph-value" == "sf star · material star"
+  expect tree missing "dial-app.forma#MapCard.glyph-field"
   // (That edit's proposal is docked over the window's bottom, the grid's cell under it: cancelled first.)
   tap "cancel-edit"
   clock data
@@ -350,13 +350,13 @@ test "another client's write after an edit was reviewed: Apply is refused naming
   type "dial-hue-stepper" "210"
   clock data
   expect text "proposal-tokens" == "hue"
-  // Bea writes app.tamber while Ada's proposal is open: it is asked again on the files as they are now.
-  request POST "/__stub/event" {"event": "changed", "client": "design-tool:bea", "files": {"app.tamber": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
+  // Bea writes app.forma while Ada's proposal is open: it is asked again on the files as they are now.
+  request POST "/__stub/event" {"event": "changed", "client": "design-tool:bea", "files": {"app.forma": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
   clock +1
   clock data
   tap "apply"
   clock data
-  expect text "write-error" == "Not written: app.tamber was changed by design-tool:bea since you reviewed it. Apply again to write over it, on the file as it is now."
+  expect text "write-error" == "Not written: app.forma was changed by design-tool:bea since you reviewed it. Apply again to write over it, on the file as it is now."
   expect text "undo" == "Undo (0)"
   tap "apply"
   clock data
@@ -368,8 +368,8 @@ test "another client's write after an edit was reviewed: Apply is refused naming
   tap "apply"
   clock data
   expect text "undo" == "Undo (2)"
-  // (app.tamber's digest back, as the later tests read it.)
-  request POST "/__stub/event" {"event": "changed", "files": {"app.tamber": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}} as ada
+  // (app.forma's digest back, as the later tests read it.)
+  request POST "/__stub/event" {"event": "changed", "files": {"app.forma": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}} as ada
 
 test "a cell shows the branch that won for its mode; an expression offers its inputs until pinned"
   type "name" "Ada"
@@ -413,7 +413,7 @@ test "cancel forgets only this mode, and another file forgets the draft"
   clock settle
   expect state editKind == "set-token"
   expect state editWhen == ""
-  type "file" "brand.tamber"
+  type "file" "brand.forma"
   clock settle
   expect state editKind == ""
   expect state selToken == ""
@@ -498,12 +498,12 @@ test "a scrub, chosen explicitly: each value previews, the files unchanged, and 
   expect text "undo" == "Undo (1)"
   clock +1
   clock data
-  expect text "change-2" == "app.tamber · design-tool:Ada"
+  expect text "change-2" == "app.forma · design-tool:Ada"
   clock +1
   clock data
   // What was written is the last value previewed (the stub's digest names it).
   tap "toggle-files"
-  expect text "digest-app.tamber" == "220000000000"
+  expect text "digest-app.forma" == "220000000000"
   tap "undo"
   clock data
   expect text "undo" == "Undo (0)"
@@ -555,7 +555,7 @@ test "a scrub cancelled writes nothing; one the server ends says why, and the ne
   request POST "/__stub/refuse-release" {"by": "agent:codex"} as ada
   tap "scrub-keep"
   clock data
-  expect text "write-error" == "Not written: app.tamber was changed by agent:codex since the scrub opened; the running copies have the committed value back."
+  expect text "write-error" == "Not written: app.forma was changed by agent:codex since the scrub opened; the running copies have the committed value back."
   expect text "undo" == "Undo (0)"
   request POST "/__stub/restart" {} as ada
 
@@ -640,7 +640,7 @@ test "no scrub for an edit that rebuilds, nor without a dev loop: said before th
   type "dial-hue-stepper" "210"
   clock data
   expect disabled "scrub-start"
-  expect text "scrub-unavailable" == "Scrubbing previews on the running copies: open the tool through a dev loop (tamber tool --via)."
+  expect text "scrub-unavailable" == "Scrubbing previews on the running copies: open the tool through a dev loop (forma tool --via)."
   request POST "/__stub/live" {"live": true} as ada
   reload
   clock data
@@ -680,7 +680,7 @@ test "a package component's param: set for this app by default, the package's de
   tap "save-name"
   clock data
   // (The design read again, as a change on disk makes it.)
-  request POST "/__stub/event" {"client": null, "edited": ["app.tamber"], "files": {"app.tamber": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "brand.tamber": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
+  request POST "/__stub/event" {"client": null, "edited": ["app.forma"], "files": {"app.forma": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "brand.forma": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
   clock +1
   clock settle
   // Unset: the package's default, and a change here is set for this app; its token offered instead.
@@ -745,7 +745,7 @@ test "a package component's param's winning level in words, Back to the package 
   type "name" "Ada"
   tap "save-name"
   clock data
-  request POST "/__stub/event" {"client": null, "edited": ["app.tamber"], "files": {"app.tamber": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "brand.tamber": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
+  request POST "/__stub/event" {"client": null, "edited": ["app.forma"], "files": {"app.forma": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "brand.forma": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
   clock +1
   clock settle
   // The level that wins in the first tuple, read after the design, in words (the raw level its tooltip): one where both
@@ -785,7 +785,7 @@ test "a package param the server can't resolve has no level words; the design st
   type "name" "Ada"
   tap "save-name"
   clock data
-  request POST "/__stub/event" {"client": null, "edited": ["app.tamber"], "files": {"app.tamber": "9999999999999999999999999999999999999999999999999999999999999999", "brand.tamber": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
+  request POST "/__stub/event" {"client": null, "edited": ["app.forma"], "files": {"app.forma": "9999999999999999999999999999999999999999999999999999999999999999", "brand.forma": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
   clock +1
   clock settle
   expect tree missing "design-error"
@@ -800,7 +800,7 @@ test "a library component's variant props listed in its panel entry, each with i
   tap "save-name"
   clock data
   // The design read again (an edit's event), so describe gives the library components.
-  request POST "/__stub/event" {"client": null, "edited": ["app.tamber"], "files": {"app.tamber": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "brand.tamber": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
+  request POST "/__stub/event" {"client": null, "edited": ["app.forma"], "files": {"app.forma": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "brand.forma": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
   clock +1
   clock settle
   expect text "component-Chip-identity" == "@acme/cards/chip.contract#Chip"

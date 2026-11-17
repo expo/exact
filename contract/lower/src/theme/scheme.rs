@@ -3,7 +3,7 @@
 
 use super::{inline_design, packages, stand_in_profiles, vocab};
 use contract_syntax::File;
-use exact_tamber as tamber;
+use exact_forma as forma;
 use std::collections::{HashMap, HashSet};
 
 /// The app's tokens that are one opaque colour in light and dark in some app
@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) fn one_scheme_tokens(file: &File) -> Vec<(String, String, bool)> {
     let design = match (&file.design, &file.theme) {
         (None, Some(theme)) => inline_design(theme),
-        (Some(source), _) => match tamber::parse(&source.text) {
+        (Some(source), _) => match forma::parse(&source.text) {
             Ok(d) => d,
             Err(_) => return Vec::new(),
         },
@@ -30,7 +30,7 @@ pub(crate) fn one_scheme_tokens(file: &File) -> Vec<(String, String, bool)> {
     };
     // As the build stands one in (`profiles`): nothing to judge.
     stand_in_profiles(&mut design);
-    let Ok(folding) = tamber::check_design(design, &vocab()) else {
+    let Ok(folding) = forma::check_design(design, &vocab()) else {
         return Vec::new();
     };
     // A token fixed, or an alias of one (`ink = -exact-label` of a fixed
@@ -79,12 +79,12 @@ pub(crate) fn one_scheme_tokens(file: &File) -> Vec<(String, String, bool)> {
             // Opaque only: a translucent one is an overlay, which reads over
             // either scheme's ground, and a transparent one paints nothing.
             let one = t.values.iter().find(|v| {
-                matches!(v, tamber::Value::Color(tamber::Folded::One(h)) if h.wide().alpha >= 1.0 - 1e-9)
+                matches!(v, forma::Value::Color(forma::Folded::One(h)) if h.wide().alpha >= 1.0 - 1e-9)
             })?;
             let every = t
                 .values
                 .iter()
-                .all(|v| matches!(v, tamber::Value::Color(tamber::Folded::One(_))));
+                .all(|v| matches!(v, forma::Value::Color(forma::Folded::One(_))));
             Some((declared.name.value.clone(), one.css(), every))
         })
         .collect()

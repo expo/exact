@@ -15,6 +15,7 @@ name = "contract_lower"
 crate-type = ["rlib"]
 
 [dependencies]
+contract-checking = { path = "../checking" }
 contract-analyze = { path = "../analyze" }
 contract-syntax = { path = "../syntax" }
 contract-types = { path = "../types" }
@@ -27,11 +28,11 @@ exact-motion = { path = "../../motion" }
 exact-num = { path = "../../num" }
 # Which literal is a colour, for the one-scheme warning (LLP 1116.002 D1).
 exact-color = { path = "../../color" }
-# The build's one design evaluator (LLP 1121 D2): `theme` and `app.tamber`.
-exact-tamber = { path = "../../tamber" }
+# The build's one design evaluator (LLP 1121 D2): `theme` and `app.forma`.
+exact-forma = { path = "../../forma" }
 
 # CLDR script direction is baked per table; no locale data ships in a host.
-icu_locale = "=2.3.0"
+icu_locale = "2.3"
 # A declared sound's digest in the plan (LLP 1096 D1).
 sha2 = "0.10"
 # The targets `app.json` ships, which an icon needs a source for (LLP 1121 D10).

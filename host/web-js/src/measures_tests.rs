@@ -10,14 +10,14 @@ fn plan(tag: &str, design: &str, view: &str) -> exact_plan::Plan {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), design).unwrap();
+    std::fs::write(dir.join("app.forma"), design).unwrap();
     std::fs::write(dir.join("app.contract"), view).unwrap();
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     plan
 }
 
-const DESIGN: &str = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  space.row = 12px\n    when density=compact: 0.5rem\n  radius.card = 6px\n  size.title = -exact-title1\n  line.hair = -exact-hairline\n  opacity.faded: number = 0.5\n    when density=compact: 0.25\n  weight.strong = 600\n";
+const DESIGN: &str = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  space.row = 12px\n    when density=compact: 0.5rem\n  radius.card = 6px\n  size.title = -exact-title1\n  line.hair = -exact-hairline\n  opacity.faded: number = 0.5\n    when density=compact: 0.25\n  weight.strong = 600\n";
 
 #[test]
 fn a_varying_length_or_number_is_a_property_declared_by_each_tuples_rule() {
@@ -220,7 +220,7 @@ fn letter_spacing_before_width_keeps_their_bound_length_maps_distinct() {
 /// builds.
 #[test]
 fn sentinels_stay_apart_and_unitless_lengths_and_weights_are_handled() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  opacity.a: number = 0.5\n    when density=compact: 0.25\n  opacity.b: number = 0.75\n    when density=compact: 0.6\n  stroke.width = 2px\n  weight.strong = 600\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  opacity.a: number = 0.5\n    when density=compact: 0.25\n  opacity.b: number = 0.75\n    when density=compact: 0.6\n  stroke.width = 2px\n  weight.strong = 600\n";
     let plan = plan(
         "apart",
         design,
@@ -285,7 +285,7 @@ fn a_rows_map_takes_its_kinds_and_an_svg_attribute_writes_inline() {
         "{}",
         out.js
     );
-    let tile = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  tile = 8px\n  tile.varying = 8px\n    when density=compact: 6px\n";
+    let tile = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  tile = 8px\n  tile.varying = 8px\n    when density=compact: 6px\n";
     let view = |token: &str| {
         format!("component App\n  view\n    svg viewBox=\"0 0 24 24\" width=24 height=24\n      pattern id=\"p\" width=\"{token}\" height=\"{token}\"\n        path d=\"M0 0L4 4\"\n")
     };
@@ -311,7 +311,7 @@ fn a_rows_map_takes_its_kinds_and_an_svg_attribute_writes_inline() {
 /// test reads a constant token's value, and a varying one may be below 1.
 #[test]
 fn an_attribute_map_holds_constants_and_opacity_reads_a_tokens_value() {
-    let tile = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  tile = 8px\n  tile.varying = 8px\n    when density=compact: 6px\n  dim: number = 1\n  faded: number = 0.5\n    when density=compact: 0.25\n";
+    let tile = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  tile = 8px\n  tile.varying = 8px\n    when density=compact: 6px\n  dim: number = 1\n  faded: number = 0.5\n    when density=compact: 0.25\n";
     let plan = plan(
         "attribute",
         tile,
@@ -342,7 +342,7 @@ fn an_attribute_map_holds_constants_and_opacity_reads_a_tokens_value() {
 /// is no use of it; the build goes on.
 #[test]
 fn a_compared_name_is_no_inline_use() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  weight.strong: number = 600\n    when density=compact: 700\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  weight.strong: number = 600\n    when density=compact: 700\n";
     let plan = plan(
         "compared",
         design,
@@ -355,7 +355,7 @@ fn a_compared_name_is_no_inline_use() {
 /// value per tuple is the row's CSS; a bound shadow row maps its name.
 #[test]
 fn a_varying_shadow_is_a_property_and_a_bound_row_maps_its_name() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  shade = #00000040\n    when density=compact: #00000080\n  shadow.card: box-shadow = 0 1px 3px shade, inset 0 0 0 1px #ffffff\n  glow: text-shadow = 0 0 2px #ff0000\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  shade = #00000040\n    when density=compact: #00000080\n  shadow.card: box-shadow = 0 1px 3px shade, inset 0 0 0 1px #ffffff\n  glow: text-shadow = 0 0 2px #ff0000\n";
     let plan = plan(
         "shadows",
         design,
@@ -386,7 +386,7 @@ fn a_varying_shadow_is_a_property_and_a_bound_row_maps_its_name() {
 /// so a mode boundary writes the channel again (`$th`).
 #[test]
 fn a_bound_text_shadow_token_marks_its_read() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  glow: text-shadow = 0 0 2px light-dark(#000000, #ffffff)\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  glow: text-shadow = 0 0 2px light-dark(#000000, #ffffff)\n";
     let plan = plan(
         "text-shadow-read",
         design,
@@ -401,7 +401,7 @@ fn a_bound_text_shadow_token_marks_its_read() {
 /// maps it to that row's part; one that varies by an app axis is refused.
 #[test]
 fn a_type_token_is_its_parts_and_a_varying_one_is_refused() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  type.a = -exact-title1/1.2 Georgia, serif\n  type.b = 1.25rem/1.4 system-ui\n  family.mono: family = ui-monospace\n  type.vary = -exact-body/1.2\n    when density=compact: -exact-footnote/1.1\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  type.a = -exact-title1/1.2 Georgia, serif\n  type.b = 1.25rem/1.4 system-ui\n  family.mono: family = ui-monospace\n  type.vary = -exact-body/1.2\n    when density=compact: -exact-footnote/1.1\n";
     let fixed = plan(
         "type",
         design,
@@ -434,7 +434,7 @@ fn a_type_token_is_its_parts_and_a_varying_one_is_refused() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
+        dir.join("app.forma"),
         format!("{design}  family.shipped = \"Exciting\", serif\n"),
     )
     .unwrap();
@@ -460,7 +460,7 @@ fn a_type_token_is_its_parts_and_a_varying_one_is_refused() {
 /// its name to the property; a constant one stays its literal, as before.
 #[test]
 fn a_varying_type_or_family_token_is_a_property_a_row() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  type.a = italic 400 -exact-title1/1.2 Georgia, serif\n  type.vary = italic 600 -exact-body/1.2 Georgia, serif\n    when density=compact: italic 700 -exact-footnote/1.1 system-ui\n  family.vary: family = ui-monospace\n    when density=compact: Georgia, serif\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  type.a = italic 400 -exact-title1/1.2 Georgia, serif\n  type.vary = italic 600 -exact-body/1.2 Georgia, serif\n    when density=compact: italic 700 -exact-footnote/1.1 system-ui\n  family.vary: family = ui-monospace\n    when density=compact: Georgia, serif\n";
     let p = plan(
         "type-vary",
         design,
@@ -527,7 +527,7 @@ fn a_varying_type_or_family_token_is_a_property_a_row() {
 /// each row's property and its CSS per tuple (`parts`), never `inline`.
 #[test]
 fn a_development_build_makes_every_type_token_properties() {
-    let design = "tamber t\n\ntheme\n  type.a = 600 18px/1.4 Georgia, serif\n";
+    let design = "forma t\n\ntheme\n  type.a = 600 18px/1.4 Georgia, serif\n";
     let p = plan(
         "type-dev",
         design,
@@ -578,7 +578,7 @@ fn a_development_build_makes_every_type_token_properties() {
 /// a node with children stands, while the same row on a text reads it.
 #[test]
 fn a_type_tokens_properties_hold_their_edges() {
-    let design = "tamber t\n\naxes\n  density = regular | compact\n\ntheme\n  type.a-b = 600 18px/1.4 Georgia, serif\n  type.a.b = 600 20px/1.4 Georgia, serif\n  family.vary: family = ui-monospace\n    when density=compact: Georgia, serif\n";
+    let design = "forma t\n\naxes\n  density = regular | compact\n\ntheme\n  type.a-b = 600 18px/1.4 Georgia, serif\n  type.a.b = 600 20px/1.4 Georgia, serif\n  family.vary: family = ui-monospace\n    when density=compact: Georgia, serif\n";
     let p = plan(
         "type-edges",
         design,
@@ -637,7 +637,7 @@ fn a_type_tokens_properties_hold_their_edges() {
 /// writes none, in a development build as in release.
 #[test]
 fn a_bound_font_keeps_its_styles_weight_in_a_development_build() {
-    let design = "tamber t\n\ntheme\n  type.a = -exact-body Georgia, serif\n  type.b = -exact-title1 Georgia, serif\n";
+    let design = "forma t\n\ntheme\n  type.a = -exact-body Georgia, serif\n  type.b = -exact-title1 Georgia, serif\n";
     let p = plan(
         "type-bound-style",
         design,

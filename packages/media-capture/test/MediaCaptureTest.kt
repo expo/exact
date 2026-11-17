@@ -68,6 +68,170 @@ class MediaCaptureTest {
     private fun subscribe(id: String, consumer: Consumer, origin: String = "app", start: Boolean = false) =
         context.tracks.subscribe(id, consumer, start, origin)
 
+    @Test
+    @Config(shadows = [dev.exact.canvas.ExtensionInvokeTest.Host::class])
+    fun aThrowingViewfinderHatchRollsBackItsSubscription() {
+        val videos = VideoTracks(context) { 1 }
+        val tracks = org.robolectric.util.ReflectionHelpers.getField<MutableMap<String, VideoTracks.Track>>(videos, "tracks")
+        val camera = exact.camera.CameraModule(context)
+        try {
+            for (alreadyLeased in listOf(false, true)) {
+                val id = "camera-$alreadyLeased"
+                val track = VideoTracks.Track(id, "stream-$id")
+                tracks[id] = track
+                context.tracks.add(dev.exact.canvas.TrackEntry(id, "video", owner = videos))
+                val leave = if (alreadyLeased) videos.subscribe(id, Consumer(CameraCapture), false, "app") else null
+                var hatches = 0
+                exact.camera.CameraModule.useCasesHatch = { hatches++; throw IllegalStateException("hatch refused") }
+                val view = camera.view("exact-camera", "1", id, context.application, JSONObject().put("srcObject", id)) { _, _ -> }
+                try {
+                    camera.bound("1", id, "srcObject", "app")
+                    camera.displayed("1", id, true, "app")
+                    assertEquals(1, hatches)
+                    assertEquals(if (alreadyLeased) 1 else 0, track.consumers.size)
+                    assertEquals(alreadyLeased, track.leased)
+                    leave?.invoke()
+                    assertTrue(track.consumers.isEmpty())
+                    assertFalse(track.leased)
+                    exact.camera.CameraModule.useCasesHatch = { hatches++ }
+                    camera.displayed("1", id, true, "app")
+                    assertEquals(3, hatches)
+                    assertEquals(1, track.consumers.size)
+                    assertTrue(track.leased)
+                } finally {
+                    camera.destroyView(view)
+                    leave?.invoke()
+                }
+                assertTrue(track.consumers.isEmpty())
+                assertFalse(track.leased)
+            }
+        } finally {
+            exact.camera.CameraModule.useCasesHatch = null
+            videos.endAll("test ended")
+            CameraCapture.foreground(true)
+        }
+    }
+
+    @Test fun aThrowingAudioJoinRollsBackItsSubscription() {
+        for (alreadyActive in listOf(false, true)) {
+            for (callback in listOf("live", "muted", "unmuted")) {
+                if (alreadyActive && callback == "unmuted") continue
+                val id = open("audio")
+                val leave = if (alreadyActive) subscribe(id, Consumer(), start = true) else null
+                module.preferred(JSONObject().put("mediaStreamTrack", JSONObject().put("muted", callback == "muted")))
+                var deliveries = 0
+                val failure = IllegalStateException("join refused")
+                val consumer = object : TrackConsumer {
+                    private fun deliver(name: String) { deliveries++; if (name == callback) throw failure }
+                    override fun live(source: AudioSource?) = deliver("live")
+                    override fun muted(reason: String) = deliver("muted")
+                    override fun unmuted() = deliver("unmuted")
+                    override fun ended() = deliver("ended")
+                }
+                assertSame(failure, assertThrows(IllegalStateException::class.java) {
+                    context.tracks.subscribe(id, consumer, true)
+                })
+                val delivered = deliveries
+                assertEquals(alreadyActive, module.leased(id))
+                leave?.invoke()
+                assertFalse(module.leased(id))
+                val replacement = Consumer()
+                subscribe(id, replacement, start = true)()
+                call("stopTrack", JSONObject().put("track", id))
+                assertTrue("audio" in replacement.events)
+                assertEquals(delivered, deliveries)
+            }
+        }
+    }
+
+    @Test fun aFailedVideoStartNotifiesTheRemainingConsumer() {
+        val id = open()
+        foreground(false)
+        val remaining = Consumer()
+        val leave = subscribe(id, remaining)
+        val videos = context.tracks.lookup(id)!!.owner as VideoTracks
+        val failure = IllegalStateException("join refused")
+        val joining = object : TrackConsumer by Consumer() {
+            override fun liveVideo(source: VideoSource?) { throw failure }
+        }
+        // Admission is updated before the extension receives its foreground request.
+        context.foreground = true
+        assertSame(failure, assertThrows(IllegalStateException::class.java) {
+            context.tracks.subscribe(id, joining, false)
+        })
+        assertFalse(videos.leased(id))
+        assertEquals(listOf("idle", "video", "idle"), remaining.events)
+        assertEquals("idle", state(id).getString("muteReason"))
+        val retry = subscribe(id, Consumer())
+        assertEquals(listOf("idle", "video", "idle", "video", "unmuted"), remaining.events)
+        retry(); leave()
+        assertFalse(videos.leased(id))
+    }
+
+    @Test fun aFailedAudioStartNotifiesTheRemainingConsumer() {
+        val id = open("audio")
+        subscribe(id, Consumer())()
+        val remaining = Consumer()
+        val leave = subscribe(id, remaining)
+        val failure = IllegalStateException("join refused")
+        val joining = object : TrackConsumer by Consumer() {
+            override fun live(source: AudioSource?) { throw failure }
+        }
+        assertSame(failure, assertThrows(IllegalStateException::class.java) {
+            context.tracks.subscribe(id, joining, true)
+        })
+        assertFalse(module.leased(id))
+        assertEquals(listOf("idle", "audio", "idle"), remaining.events)
+        assertEquals("idle", state(id).getString("muteReason"))
+        val retry = subscribe(id, Consumer(), start = true)
+        assertEquals(listOf("idle", "audio", "idle", "audio", "unmuted"), remaining.events)
+        retry(); leave()
+        assertFalse(module.leased(id))
+    }
+
+    @Test fun aFailedFirstAudioReaderDoesNotConsumeTheFirstStart() {
+        val id = open("audio")
+        val failure = IllegalStateException("join refused")
+        val joining = object : TrackConsumer by Consumer() {
+            override fun live(source: AudioSource?) { throw failure }
+        }
+        assertSame(failure, assertThrows(IllegalStateException::class.java) {
+            context.tracks.subscribe(id, joining, false)
+        })
+        assertFalse(module.leased(id))
+        val replacement = Consumer()
+        val leave = subscribe(id, replacement)
+        assertTrue(module.leased(id))
+        assertEquals(listOf("audio", "unmuted"), replacement.events)
+        leave()
+        assertFalse(module.leased(id))
+    }
+
+    @Test fun aFailedAudioJoinDoesNotKeepTheFailedLeasesPlatformMute() {
+        val id = open("audio")
+        val tracks = org.robolectric.util.ReflectionHelpers.getField<Map<String, Any>>(module, "tracks")
+        val track = tracks.getValue(id)
+        val failure = IllegalStateException("join refused")
+        val joining = object : TrackConsumer by Consumer() {
+            override fun live(source: AudioSource?) {
+                // Agent activation skips Capture.lease, whose failure sets this before live is delivered.
+                org.robolectric.util.ReflectionHelpers.setField(track, "platformMute", "interrupted")
+                throw failure
+            }
+        }
+        assertSame(failure, assertThrows(IllegalStateException::class.java) {
+            context.tracks.subscribe(id, joining, false)
+        })
+        assertFalse(module.leased(id))
+        val replacement = Consumer()
+        val leave = subscribe(id, replacement)
+        assertTrue(module.leased(id))
+        assertEquals(listOf("audio", "unmuted"), replacement.events)
+        assertFalse(state(id).getBoolean("muted"))
+        leave()
+        assertFalse(module.leased(id))
+    }
+
     @Test fun anObserverNeverStartsOrHoldsTheCamera() {
         val id = open()
         val observer = Consumer()

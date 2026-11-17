@@ -70,7 +70,8 @@ final class NavigationCollapseIOSTests: XCTestCase {
     private func pushed(_ name: String) throws -> (ExactSession, UINavigationController, RouteController) {
         let session = try booted("EXACT_NAVIGATION_BARS_PLAN", label: "scroller-\(name)")
         let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
-        _ = Agent(session: session).tap(["id": Int(try node(session, "start-open-\(name)").id)])
+        let reply = Agent(session: session).tap(["id": Int(try node(session, "start-open-\(name)").id)])
+        XCTAssertNil(reply["error"], "the opener for \(name) is tapped")
         until("\(name) pushed") { nav.viewControllers.count == 2 && nav.transitionCoordinator == nil }
         spin(0.3)
         return (session, nav, try XCTUnwrap(nav.topViewController as? RouteController))
@@ -103,8 +104,33 @@ final class NavigationCollapseIOSTests: XCTestCase {
         if !beforeItsWindow { XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 402, height: 874)).error) }
         view.frame = host.view.bounds
         view.layoutIfNeeded()
-        spin(0.3)
+        waitForActivation(session)
+        waitFor("the navigation layout is ready") { !Agent(session: session).nativeInFlight() }
         return session
+    }
+
+    @MainActor
+    func testAViewportResizeAndItsRouteBlocksUseOneBatch() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "route resizing needs UIKit containment") }
+        let session = try booted("EXACT_FIXTURE_PLAN", label: "owner-resize")
+        let view = try XCTUnwrap(session.view), p = session.presenter
+        for width: CGFloat in [380, 402, 360, 402] {
+            waitFor("the previous layout is idle") { !session.ownerInFlight && !Agent(session: session).nativeInFlight() }
+            waitForMainQueue("the previous reports")
+            let batches = session.appliedBatches, syncs = p.navigation.syncCalls
+            let start = CACurrentMediaTime()
+            view.frame.size.width = width
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
+            let milliseconds = (CACurrentMediaTime() - start) * 1000
+            waitForMainQueue("the resize reports")
+            let route = try XCTUnwrap(p.navigation.activeRoute)
+            XCTAssertEqual(p.owners.told[route.node.id]?.block, .size(route.view.bounds.size))
+            XCTAssertEqual(route.node.bounds.size, route.view.bounds.size)
+            XCTAssertEqual(session.appliedBatches - batches, 1, "the viewport and route bounds share a layout")
+            XCTAssertEqual(p.navigation.syncCalls - syncs, 1, "navigation synchronizes once")
+            print("ROUTE-RESIZE width=\(width) ms=\(milliseconds) batches=\(session.appliedBatches - batches) syncs=\(p.navigation.syncCalls - syncs)")
+        }
     }
 
     func testTopScrollerFollowsOnlyLaidOutNeutralWrappers() throws {
@@ -226,6 +252,88 @@ final class NavigationCollapseIOSTests: XCTestCase {
         XCTAssertEqual(home.scrollOrigin, 0, "CSS scrollTop 0 is the top edge")
     }
 
+    func testATransparentBarsEmptyBandLeavesTouchesToThePage() throws {
+        let session = try booted("EXACT_TRANSPARENT_BAR_PLAN", label: "transparent-bar-touch", beforeItsWindow: true)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let bar = nav.navigationBar
+        let control = try node(session, "hero-control")
+        let point = CGPoint(x: 50, y: bar.bounds.midY)
+        control.frame = try XCTUnwrap(control.superview).convert(CGRect(x: 20, y: point.y - 10, width: 60, height: 20), from: bar)
+        XCTAssertNil(bar.hitTest(point, with: nil), "the clear band leaves the touch to the page")
+
+        func labels(_ view: UIView) -> [UILabel] { ((view as? UILabel).map { [$0] } ?? []) + view.subviews.flatMap(labels) }
+        let title = try XCTUnwrap(labels(bar).first { $0.text == "Product" && !$0.isHidden })
+        let titlePoint = title.convert(CGPoint(x: title.bounds.midX, y: title.bounds.midY), to: bar)
+        XCTAssertNotNil(bar.hitTest(titlePoint, with: nil), "the bar keeps its title")
+
+        let scroll = try XCTUnwrap(try node(session, "home-scroll").scroll)
+        scroll.contentOffset.y = 100
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the scrolled bar keeps its material's band")
+    }
+
+    func testATransparentBarsTouchesFollowTheNativeSelectedScroller() throws {
+        let session = try booted("EXACT_TRANSPARENT_BAR_PLAN", label: "transparent-native-scroll", beforeItsWindow: true)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        let automatic = try XCTUnwrap(route.collapseScrollView)
+        let native = UIScrollView(frame: route.view.bounds)
+        native.contentInsetAdjustmentBehavior = .never
+        native.contentSize = CGSize(width: native.bounds.width, height: 3000)
+        route.view.addSubview(native)
+        route.setContentScrollView(native, for: .top)
+        XCTAssertTrue(route.contentScrollView(for: .top) === native)
+        let bar = nav.navigationBar, point = CGPoint(x: 50, y: nav.navigationBar.bounds.midY)
+
+        automatic.contentOffset.y = 0
+        native.contentOffset.y = 100
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the selected scroller's material keeps the touch")
+
+        automatic.contentOffset.y = 100
+        native.contentOffset.y = -native.adjustedContentInset.top
+        nav.view.layoutIfNeeded()
+        XCTAssertNil(bar.hitTest(point, with: nil), "the selected scroller's clear edge leaves the touch to the page")
+
+        route.collapseScrollView = nil
+        native.contentOffset.y = 100
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "a native selection needs no collapse scroller")
+    }
+
+    func testATransparentBarKeepsTouchesOnNativeBackgroundOverrides() throws {
+        let session = try booted("EXACT_TRANSPARENT_BAR_PLAN", label: "transparent-native-appearance", beforeItsWindow: true)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        let bar = nav.navigationBar, point = CGPoint(x: 50, y: nav.navigationBar.bounds.midY)
+        let opaque = UINavigationBarAppearance()
+        opaque.configureWithOpaqueBackground()
+        route.navigationItem.scrollEdgeAppearance = opaque
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "an opaque route hatch background keeps the touch")
+
+        route.navigationItem.scrollEdgeAppearance = nil
+        bar.scrollEdgeAppearance = opaque
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the bar's fallback background keeps the touch")
+
+        let clear = UINavigationBarAppearance()
+        clear.configureWithTransparentBackground()
+        bar.scrollEdgeAppearance = clear
+        nav.view.layoutIfNeeded()
+        XCTAssertNil(bar.hitTest(point, with: nil), "a native clear background leaves the touch to the page")
+
+        nav.traitOverrides.verticalSizeClass = .compact
+        route.navigationItem.compactScrollEdgeAppearance = opaque
+        nav.view.layoutIfNeeded()
+        XCTAssertEqual(bar.traitCollection.verticalSizeClass, .compact)
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the compact edge's opaque background keeps the touch")
+        route.navigationItem.compactScrollEdgeAppearance = nil
+        bar.compactScrollEdgeAppearance = clear
+        nav.view.layoutIfNeeded()
+        XCTAssertNil(bar.hitTest(point, with: nil), "the compact edge's clear background leaves the touch to the page")
+    }
+
     /// LLP 1115.000 D11.1 over `scripts/fixtures/large-title.contract`: one
     /// stack with no tabs, the shape `exact new` makes, whose first screen
     /// names no scroller. Its large title opens expanded, its content below
@@ -341,8 +449,8 @@ final class NavigationCollapseIOSTests: XCTestCase {
     }
 
     /// An appearance, tint or text-size change that comes with a new size (an
-    /// iPhone Duo's snapshot of the app unfolded) applies the size in its
-    /// first batch, ahead of the change's own: every batch lays the
+    /// iPhone Duo's snapshot of the app unfolded) fits the native container
+    /// before the change's batches: every batch lays the
     /// navigation out, and UIKit must not lay it out in the old size's frames
     /// (ExactViewIOS's `fitAheadOfLayout`).
     @MainActor
@@ -367,7 +475,7 @@ final class NavigationCollapseIOSTests: XCTestCase {
             defer { observation.invalidate() }
             view.frame = CGRect(x: 0, y: 0, width: width, height: 700)
             make()
-            XCTAssertEqual(resizedIn, 1, "the batch the navigation took the new size in, counted from the \(change) change")
+            XCTAssertEqual(resizedIn, 0, "navigation takes the new size before the \(change) change's batches")
             XCTAssertGreaterThan(session.appliedBatches - before, 1, "the \(change) change applied a batch after the size")
         }
         resize(to: 600, with: "appearance") {
@@ -380,6 +488,158 @@ final class NavigationCollapseIOSTests: XCTestCase {
             window?.traitOverrides.preferredContentSizeCategory = .accessibilityLarge
             window?.updateTraitsIfNeeded()
         }
+    }
+
+    @MainActor
+    func testEveryBatchAfterAResizeUsesTheNewNavigationSize() throws {
+        let session = try booted("EXACT_LARGE_TITLE_PLAN", label: "batch-resize")
+        let view = try XCTUnwrap(session.view)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let feed = try node(session, "home-scroll"), scroll = try XCTUnwrap(feed.scroll)
+        feed.handlers.insert("refresh")
+        feed.props["refreshing"] = "true"
+        feed.updateRefresh()
+        let control = try XCTUnwrap(scroll.refreshControl)
+        control.beginRefreshing()
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top - 60), animated: false)
+        XCTAssertTrue(control.isRefreshing)
+        let refreshInset = scroll.adjustedContentInset.top - scroll.safeAreaInsets.top
+        defer { control.endRefreshing() }
+        func resize(_ width: CGFloat, _ source: String, bounds: Bool = false, _ batch: () -> Void) {
+            let before = session.appliedBatches
+            var resizedIn: Int?
+            let observation = nav.view.layer.observe(\.bounds, options: [.new]) { _, change in
+                if resizedIn == nil, change.newValue?.width == width { resizedIn = session.appliedBatches - before }
+            }
+            defer { observation.invalidate(); session.onApplyForTests = nil }
+            session.onApplyForTests = { _ in
+                XCTAssertEqual(nav.view.bounds.width, width, accuracy: 0.5, source)
+            }
+            if bounds { view.bounds.size = CGSize(width: width, height: 700) }
+            else { view.frame.size = CGSize(width: width, height: 700) }
+            batch()
+            XCTAssertEqual(resizedIn, 0, "\(source): the size precedes every batch")
+            XCTAssertEqual(nav.view.bounds.width, width, accuracy: 0.5, source)
+            XCTAssertEqual(scroll.adjustedContentInset.top - scroll.safeAreaInsets.top, refreshInset, accuracy: 0.5, source)
+            XCTAssertTrue(control.isRefreshing, source)
+        }
+        session.publishTickForTests(wireBatch([
+            ["op": "props", "id": Int(feed.id), "set": ["title": "published before resize"]],
+        ]))
+        resize(600, "a published batch before activation") { session.tellPage() }
+        resize(500, "scene") {
+            NotificationCenter.default.post(name: UIScene.didActivateNotification, object: window?.windowScene)
+        }
+        var queued = false
+        DispatchQueue.main.async {
+            resize(450, "main queue") { session.apply(session.runtime.tick(now: session.now())) }
+            queued = true
+        }
+        waitFor("the queued batch") { queued }
+        var fired = false
+        let timer = Timer(timeInterval: 0, repeats: false) { _ in
+            resize(550, "timer") { session.apply(session.runtime.advance(now: session.now())) }
+            fired = true
+        }
+        RunLoop.main.add(timer, forMode: .default)
+        defer { timer.invalidate() }
+        waitFor("the timer batch") { fired }
+        resize(480, "bounds", bounds: true) { session.tellPage() }
+        resize(650, "display scale") {
+            window?.traitOverrides.displayScale = 2
+            window?.updateTraitsIfNeeded()
+        }
+    }
+
+    @MainActor
+    func testAResizeAtAnAppearanceFlipDoesNotGiveInheritedTextItsOwnAppearance() throws {
+        let session = try booted("EXACT_LARGE_TITLE_PLAN", label: "resize-color")
+        let view = try XCTUnwrap(session.view)
+        let text = try node(session, "home-top")
+        window?.tintColor = .red
+        window?.overrideUserInterfaceStyle = .light
+        window?.updateTraitsIfNeeded()
+        for dark in [true, false] {
+            view.frame.size = CGSize(width: dark ? 600 : 450, height: 700)
+            window?.overrideUserInterfaceStyle = dark ? .dark : .light
+            window?.updateTraitsIfNeeded()
+            XCTAssertEqual(session.schemeDark, dark)
+            XCTAssertTrue(session.viewDark.isEmpty, "inherited colours must resolve by the session: \(session.viewDark)")
+            // Keep the child's inherited traits at the old appearance until
+            // after the session reports, as during UIKit's trait walk. A
+            // traitOverrides.userInterfaceStyle would give it a native override.
+            session.scheme(dark: !dark)
+            let parent = try XCTUnwrap(text.superview)
+            let index = try XCTUnwrap(parent.subviews.firstIndex(of: text))
+            let staging = UIWindow(frame: view.bounds)
+            staging.overrideUserInterfaceStyle = dark ? .light : .dark
+            staging.addSubview(text)
+            text.updateTraitsIfNeeded()
+            XCTAssertEqual(text.overrideUserInterfaceStyle, .unspecified, "the child's old traits are inherited")
+            view.bounds.size.width = dark ? 450 : 600
+            XCTAssertEqual(text.drawsDark, !dark)
+            XCTAssertTrue(session.unreported.contains(text.id), "the child's trait callback deferred its report")
+            XCTAssertTrue(session.viewDark.isEmpty, "the session's pending trait report is not a subtree override")
+            session.scheme(dark: dark)
+            XCTAssertNil(session.viewDark[text.id], "the session reported before the child's traits changed")
+            XCTAssertTrue(session.unreported.contains(text.id), "the child's own callback must finish its report")
+            parent.insertSubview(text, at: index)
+            text.updateTraitsIfNeeded()
+            XCTAssertFalse(session.unreported.contains(text.id), "the child's trait callback completed its report")
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
+            XCTAssertTrue(session.viewDark.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testResizingAndRotationKeepTheSettledSafeAreaWhileRefreshing() throws {
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "rotation of a refreshing navigation container")
+        }
+        let session = try booted("EXACT_COVER_SCROLL_PLAN", label: "resize-safe-area")
+        let view = try XCTUnwrap(session.view), window = try XCTUnwrap(window)
+        let host = try XCTUnwrap(window.rootViewController)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        window.frame = scene.coordinateSpace.bounds
+        view.frame = host.view.bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        window.layoutIfNeeded()
+        let feed = try node(session, "home-scroll"), scroll = try XCTUnwrap(feed.scroll)
+        feed.handlers.insert("refresh")
+        feed.props["refreshing"] = "true"
+        feed.updateRefresh()
+        let control = try XCTUnwrap(scroll.refreshControl)
+        control.beginRefreshing()
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top - 60), animated: false)
+        let wasLandscape = scene.interfaceOrientation.isLandscape
+        defer {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: wasLandscape ? .landscapeLeft : .portrait))
+        }
+        for landscape in [true, false] {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeLeft : .portrait))
+            waitFor("the scene rotates") { scene.interfaceOrientation.isLandscape == landscape }
+            window.frame = scene.coordinateSpace.bounds
+            for fraction: CGFloat in [0.75, 1] {
+                host.additionalSafeAreaInsets = UIEdgeInsets(top: 7, left: 11, bottom: 13, right: 17)
+                view.frame = CGRect(x: 0, y: 0, width: host.view.bounds.width * fraction, height: host.view.bounds.height)
+                session.tellPage()
+                window.layoutIfNeeded()
+                view.setNeedsLayout()
+                view.layoutIfNeeded()
+                waitFor("the native layout settles") { !Agent(session: session).nativeInFlight() }
+                XCTAssertEqual(session.presenter.insets, view.safeAreaInsets, "the layout rereads UIKit's settled safe area")
+                XCTAssertEqual(session.presenter.viewport.bounds.size, view.bounds.size)
+                XCTAssertEqual(nav.view.bounds.size, view.bounds.size)
+                XCTAssertTrue(control.isRefreshing)
+                window.overrideUserInterfaceStyle = landscape ? .dark : .light
+                window.updateTraitsIfNeeded()
+                XCTAssertTrue(session.viewDark.isEmpty)
+            }
+        }
+        control.endRefreshing()
+        waitFor("the refresh inset ends") { abs(scroll.contentOffset.y + scroll.adjustedContentInset.top) < 0.5 }
+        XCTAssertEqual(scroll.contentOffset.y + scroll.adjustedContentInset.top, 0, accuracy: 0.5)
     }
 
     /// LLP 1054 A4: the agent's drag pulls to refresh as a finger does. A

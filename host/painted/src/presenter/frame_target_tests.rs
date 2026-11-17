@@ -40,8 +40,9 @@ impl Backend for PresentPaint {
         c: &[Shape],
         t: Transform,
         tint: Option<[u8; 4]>,
+        rendering: exact_kernel::ImageRendering,
     ) {
-        self.inner.image(b, r, c, t, tint);
+        self.inner.image(b, r, c, t, tint, rendering);
     }
     fn text(
         &mut self,

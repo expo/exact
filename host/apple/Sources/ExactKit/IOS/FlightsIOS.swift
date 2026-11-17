@@ -267,7 +267,7 @@ extension Presenter {
             l.setPaintForeground()
             return l
         }()
-        f.saved = (view.isUserInteractionEnabled, view.accessibilityElementsHidden)
+        f.saved = (view.isUserInteractionEnabled, view.storedAccessibilityElementsHidden)
         f.view = view
         f.slot = slot
         f.container = layer

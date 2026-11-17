@@ -1,6 +1,7 @@
 //! D9's source sweep: imported components compile in their application, where
 //! their props and app-local native modules have meaning.
 
+use crate::scratch::Scratch;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -50,8 +51,7 @@ fn imported_sources(
 
 #[test]
 fn source_sweep_does_not_reload_completed_imports() {
-    let dir = std::env::temp_dir().join(format!("exact-sweep-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-sweep-{}", std::process::id()));
     let dir = dir.canonicalize().unwrap();
     let app = dir.join("app.contract");
     let branch = dir.join("a-branch.contract");
@@ -90,8 +90,7 @@ fn source_sweep_does_not_reload_completed_imports() {
 
 #[test]
 fn source_sweep_revisits_partial_import_graphs() {
-    let dir = std::env::temp_dir().join(format!("exact-sweep-partial-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-sweep-partial-{}", std::process::id()));
     let dir = dir.canonicalize().unwrap();
     let app = dir.join("app.contract");
     let broken = dir.join("broken.contract");
@@ -139,8 +138,8 @@ fn compile_sweep_root(
     let staged = Staged(dir);
     std::fs::copy(path, staged.0.join("app.contract")).unwrap();
     std::fs::copy(
-        path.with_file_name("dials.tamber"),
-        staged.0.join("app.tamber"),
+        path.with_file_name("dials.forma"),
+        staged.0.join("app.forma"),
     )
     .unwrap();
     let result = contract::compile_path_mapped(&staged.0.join("app.contract"));

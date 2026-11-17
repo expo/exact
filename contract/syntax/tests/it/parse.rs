@@ -1014,3 +1014,18 @@ fn midi_bytes_keep_leading_zeroes() {
         );
     }
 }
+
+#[test]
+fn test_preference_error_names_supported_facts_and_drive_only_forms() {
+    let e = contract_syntax::parse("test \"size\"\n  prefer root-font-size 24\n").unwrap_err();
+    assert_eq!(e.id, "syntax-expected-step");
+    for form in [
+        "media feature",
+        "page fact",
+        "module permission",
+        "Quote numbers",
+        "Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now",
+    ] {
+        assert!(e.message.contains(form), "{} lacks {form}", e.message);
+    }
+}

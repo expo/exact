@@ -41,7 +41,9 @@ pub fn surface_name<'a>(plan: &'a Plan, row: &ResourcesRow) -> Option<&'a str> {
     if row.args.len != 1 {
         return None;
     }
-    let code = plan.code(plan.arg(row.args.iter().next()?).expr);
+    let code = plan
+        .read_code(plan.code(plan.arg(row.args.iter().next()?).expr))
+        .0;
     if code.len() != 6 || code[0] != Opcode::Str as u8 || code[5] != Opcode::Return as u8 {
         return None;
     }

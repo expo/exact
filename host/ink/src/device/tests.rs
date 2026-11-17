@@ -259,7 +259,7 @@ fn consecutive_atlas_uploads(d: &mut impl Device) {
         .iter()
         .all(|c| c.abs_diff(73) <= 1));
     let result = d.readback(target).unwrap();
-    for (i, pixel) in result.chunks_exact(4).enumerate() {
+    for (i, pixel) in result.as_chunks::<4>().0.iter().enumerate() {
         let expected = if i % 16 < 8 { 73 } else { 211 };
         assert!(
             pixel.iter().all(|c| c.abs_diff(expected) <= 1),
@@ -329,7 +329,9 @@ fn in_flight_storage(d: &mut impl Device) {
     for (output, alpha) in outputs.into_iter().zip([73u8, 211]) {
         let pixels = d.readback(output).unwrap();
         assert!(pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|p| p.iter().all(|c| c.abs_diff(alpha) <= 1)));
     }
 }

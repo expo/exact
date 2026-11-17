@@ -45,7 +45,7 @@ enum FrameHealthAssessment {
     }
 
     static func reply(_ w: Window, health: FrameHealth) -> [String: Any] {
-        let blocked = health.virtual ? "virtual-clock" : health.enabled ? nil : health.unavailableCode ?? "collection-disabled"
+        let blocked = health.blocked
         let noSchedule = w.scheduledPeriodNs == 0 ? "schedule-unknown" : "no-frame-intervals"
         // Cadence compares frames with the platform's schedule
         let cadence: (String, String) =

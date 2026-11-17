@@ -50,7 +50,7 @@ The repair as printed builds with no refusal and no warning:
 `read` counts it as a read of the param (`rewrite.rs:752-765`). The hash is of the file's
 path, so the row breaks when the file is renamed, and the refusal then points at the param,
 not the row: in a file named `main.contract` the source with that row is `3:5
-[tamber-param-unused] param `main.contract#App.ink` is read by no row of `App``. A second
+[forma-param-unused] param `main.contract#App.ink` is read by no row of `App``. A second
 component that writes the hashed name reads `App`'s param too, which a param's scope is meant
 to prevent.
 

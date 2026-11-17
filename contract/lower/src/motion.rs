@@ -5,13 +5,13 @@
 //! and lowering again for a value an expansion carried in ([`attrs`]).
 //!
 //! A motion token's name is dotted (`duration.fast`; the crate refuses
-//! another, `tamber-motion-name`), and no CSS property, keyframes name or
+//! another, `forma-motion-name`), and no CSS property, keyframes name or
 //! easing keyword has a dot: so a dotted word of a motion row that is a
 //! token's name is that token wherever it stands in the shorthand. A word
 //! inside quotes, or touching a template's `${…}`, is left as written.
 
 use contract_syntax::{Attr, Expr, File, Node, Span, TemplatePart};
-use exact_tamber as tamber;
+use exact_forma as forma;
 
 /// Whether `name` is a motion row (a param may stand in one, D15).
 pub(crate) fn is_row(name: &str) -> bool {
@@ -26,6 +26,8 @@ fn row(name: &str) -> bool {
         "transition"
             | "animation"
             | "-exact-exit-animation"
+            | contract_syntax::VIEW_TRANSITION_NEW
+            | contract_syntax::VIEW_TRANSITION_OLD
             | "-exact-layout-transition"
             | "transition-duration"
             | "transitionDuration"
@@ -44,7 +46,7 @@ fn row(name: &str) -> bool {
 
 /// A literal that names a motion token: a row's, which the loader wrote the
 /// token into, or a component's argument, which an expansion carries into
-/// one. What `uses` reports (`tamber_uses::motion_sites`).
+/// one. What `uses` reports (`forma_uses::motion_sites`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Site {
     /// The literal.
@@ -60,7 +62,7 @@ pub struct Site {
 /// The design's duration and easing tokens, its packages' (LLP 1121 D11),
 /// and its components' params of those kinds, each name and value; none
 /// when it does not check (lowering reports why). An inline `theme`'s names
-/// are undotted, so it declares none (`tamber-motion-name`).
+/// are undotted, so it declares none (`forma-motion-name`).
 pub fn tokens(
     design: Option<&str>,
     packages: &[contract_syntax::DesignSource],
@@ -68,7 +70,7 @@ pub fn tokens(
     components: &[String],
 ) -> Vec<(String, String)> {
     let design = match design {
-        Some(text) => match tamber::parse(text) {
+        Some(text) => match forma::parse(text) {
             Ok(d) => Some(d),
             Err(_) => return Vec::new(),
         },
@@ -78,19 +80,19 @@ pub fn tokens(
     let mut design = match design {
         Some(d) => d,
         None if params.is_empty() => return Vec::new(),
-        None => tamber::Design::default(),
+        None => forma::Design::default(),
     };
     // A component's duration and easing params are written in as its rows
     // read them (LLP 1121 D15), the app's value (its `params` line) if set.
     crate::params::add_to(&mut design, params, components);
     crate::theme::stand_in_profiles(&mut design);
-    let Ok(folding) = tamber::check_design(design, &crate::theme::vocab()) else {
+    let Ok(folding) = forma::check_design(design, &crate::theme::vocab()) else {
         return Vec::new();
     };
     folding
         .tokens
         .iter()
-        .filter(|t| matches!(t.kind, tamber::Kind::Duration | tamber::Kind::Easing))
+        .filter(|t| matches!(t.kind, forma::Kind::Duration | forma::Kind::Easing))
         .filter_map(|t| Some((t.name.clone(), t.values.first()?.css())))
         .collect()
 }

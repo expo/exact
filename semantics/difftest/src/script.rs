@@ -338,8 +338,11 @@ fn deliver(step: &Step) -> Result<Option<Item>, String> {
         Step::ExpectSound { .. } => Item::Observe(step.span()),
         // Displayed wake-lock holders have no Lean oracle (LLP 1125 D11).
         Step::ExpectWakelock { .. } => Item::Observe(step.span()),
-        // A control's `disabled` is read from the host's tree (LLP 1116.010 D3), which Lean has no model of.
-        Step::ExpectDisabled { .. } => Item::Observe(step.span()),
+        // A control's `disabled` and the focus are read from the host's tree (LLP 1116.010 D3), and a box from its
+        // layout, which Lean has no model of.
+        Step::ExpectDisabled { .. } | Step::ExpectFocused { .. } | Step::ExpectLayout { .. } => {
+            Item::Observe(step.span())
+        }
         // The media session is the host's (LLP 1098 D12): an assertion on
         // it has no oracle, and a test that only asserts it still runs.
         // Its `tap` form is not a press, so it reaches `other` and the
@@ -384,6 +387,8 @@ fn delivered_kind(kind: &str) -> bool {
             | "ExpectSound"
             | "ExpectWakelock"
             | "ExpectDisabled"
+            | "ExpectFocused"
+            | "ExpectLayout"
             | "ExpectMediaSession"
             | "ExpectMediaSessionAction"
     )

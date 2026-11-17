@@ -23,6 +23,89 @@ impl Router {
     pub fn launch(table: &Table, location: &str) -> (Self, Option<Refusal>) {
         open(table, Self::default(), location)
     }
+
+    /// A rooted launch: the location's screen alone, as [`root`] makes it.
+    pub fn launch_rooted(table: &Table, location: &str) -> (Self, Option<Refusal>) {
+        root(table, Self::default(), location)
+    }
+}
+
+/// Make the location's screen the only visit: its declared tab selected
+/// and holding that one visit, with no ancestors beneath it and no other
+/// tab retained. Ids continue from `r`'s. A window opened at a route
+/// launches this way, and a link that targets it elsewhere does this again
+/// (LLP 1030.004 D2). Another tab is seeded at its root when it is first
+/// selected or opened.
+pub fn root(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal>) {
+    let chain = table.chain(location);
+    let Some(leaf) = chain.last().cloned() else {
+        return (r, Some(no_match(location)));
+    };
+    let result = (|| {
+        table.check().map_err(|e| refusal(e.message))?;
+        let mut out = Router {
+            tab: leaf.tab.clone(),
+            tabs: Vec::new(),
+            next: r.next,
+        };
+        let name = leaf.tab.clone();
+        let mut entry = mint(&mut out.next, leaf)?;
+        entry.fragment = fragment_of(location);
+        out.tabs.push(Tab {
+            name,
+            stack: vec![entry],
+        });
+        Ok(out)
+    })();
+    commit(r, result)
+}
+
+/// The index of the retained tab `name`, seeding it at its root, in
+/// declaration order, when it is a declared tab a rooted launch left out.
+fn seated(table: &Table, r: &mut Router, name: &str) -> Result<usize, Refusal> {
+    let unknown = || refusal(format!("unknown tab {name}"));
+    if let Some(index) = r.tabs.iter().position(|t| t.name == name) {
+        return r.tabs[index]
+            .stack
+            .is_empty()
+            .then(unknown)
+            .map_or(Ok(index), Err);
+    }
+    if r.tabs.is_empty() {
+        return Err(unknown());
+    }
+    let order = table.tab_names();
+    let rank = order.iter().position(|t| *t == name).ok_or_else(unknown)?;
+    let route = table
+        .routes
+        .iter()
+        .find(|route| route.name == name)
+        .ok_or_else(unknown)?;
+    let d = Destination {
+        name: route.name.clone(),
+        url: canonical(&route.pattern),
+        tab: route.name.clone(),
+        params: table.empty_params(),
+    };
+    let entry = mint(&mut r.next, d)?;
+    let index = r
+        .tabs
+        .iter()
+        .position(|t| {
+            order
+                .iter()
+                .position(|o| *o == t.name)
+                .is_some_and(|k| k > rank)
+        })
+        .unwrap_or(r.tabs.len());
+    r.tabs.insert(
+        index,
+        Tab {
+            name: name.to_owned(),
+            stack: vec![entry],
+        },
+    );
+    Ok(index)
 }
 
 /// The selected stack, root first. An empty/uninitialized value reads empty.
@@ -124,11 +207,7 @@ pub fn open(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal
                 });
             }
         }
-        let index = out
-            .tabs
-            .iter()
-            .position(|t| t.name == target)
-            .ok_or_else(|| refusal(format!("unknown tab {target}")))?;
+        let index = seated(table, &mut out, &target)?;
         let mut entries = Vec::with_capacity(chain.len());
         for (position, d) in chain.into_iter().enumerate() {
             let mut entry = match out.tabs[index]
@@ -192,7 +271,8 @@ pub fn push(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal
 }
 
 /// Rewrite the top visit while keeping its id and owning tab. At depth one
-/// only a location matching the tab's own root route can replace it.
+/// only a location matching the stack's own root route can replace it: the
+/// tab's, or a rooted launch's screen.
 pub fn replace(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal>) {
     if r.tabs.is_empty() {
         return open(table, r, location);
@@ -200,7 +280,7 @@ pub fn replace(table: &Table, r: Router, location: &str) -> (Router, Option<Refu
     let result = (|| {
         let d = destination(table, &r, location)?;
         let index = selected(&r)?;
-        if r.tabs[index].stack.len() == 1 && d.name != r.tabs[index].name {
+        if r.tabs[index].stack.len() == 1 && d.name != r.tabs[index].stack[0].name {
             return Err(refusal("replace cannot change the tab's root route"));
         }
         let mut out = r.clone();
@@ -232,15 +312,15 @@ pub fn back(_table: &Table, mut r: Router) -> (Router, Option<Refusal>) {
 }
 
 /// Show a retained tab; reselecting the current tab pops it to its root position.
+/// A declared tab a rooted launch left out is seeded at its root.
 /// An unknown tab leaves the entire value unchanged and reports one refusal.
-pub fn select(_table: &Table, mut r: Router, name: &str) -> (Router, Option<Refusal>) {
-    let Some(index) = r
-        .tabs
-        .iter()
-        .position(|t| t.name == name && !t.stack.is_empty())
-    else {
-        return (r, Some(refusal(format!("unknown tab {name}"))));
+pub fn select(table: &Table, r: Router, name: &str) -> (Router, Option<Refusal>) {
+    let mut out = r.clone();
+    let index = match seated(table, &mut out, name) {
+        Ok(index) => index,
+        Err(refusal) => return (r, Some(refusal)),
     };
+    let mut r = out;
     if r.tab == name {
         r.tabs[index].stack.truncate(1);
     }

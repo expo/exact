@@ -110,7 +110,7 @@ final class Picker: NSObject {
     init(session: ExactSession) { self.session = session }
 
     /// A picker shown for input `view`, in the session generation `issued`.
-    struct Request { let view: UInt32; let id: String; let accept: [String]; let multiple: Bool; let issued: GenerationStamp }
+    struct Request { let view: UInt32; let id: String; let accept: [String]; let multiple: Bool; let issued: SessionLease }
 
     private func object(_ s: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] ?? [:]
@@ -141,14 +141,14 @@ final class Picker: NSObject {
         guard open[view] != session.generation else { session.log("picker: \"\(id)\" is already open"); return nil }
         open[view] = session.generation
         return Request(view: view, id: id, accept: r["accept"] as? [String] ?? [], multiple: r["multiple"] as? Bool ?? false,
-                       issued: GenerationStamp(session))
+                       issued: SessionLease(session))
     }
 
     /// The platform's answer to `r`: the files chosen, or none when cancelled.
     /// A reload or plan replacement since it showed numbers nodes afresh, so
     /// `r.view` may now be another input: the answer is dropped.
     func finish(_ r: Request, files: [(url: URL, name: String)]) {
-        guard r.issued.session != nil else { return }
+        guard r.issued.session === session else { return }
         if files.isEmpty { cancel(r.view) } else { deliver(r.view, accept: r.accept, files: files) }
     }
 

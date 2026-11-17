@@ -1,10 +1,13 @@
-//! A CSS pseudo-element part (LLP 1104 D3, Charlie 2026-10-12): `::placeholder`
-//! on its own line, then an indented block of the part's declarations, in a
-//! `style` (literal) or under a field (computed, as its own attributes are).
+//! A CSS pseudo-element part: `::placeholder` (LLP 1104 D3, Charlie
+//! 2026-10-12) or `::backdrop` (LLP 1035.001 D11, Charlie 2026-11-14) on its
+//! own line, then an indented block of the part's declarations, in a `style`
+//! (literal) or under its element (computed, as its own attributes are).
 //! Each declaration is carried as an attribute named for the part and the
 //! property (`::placeholder color`, [`part_attr`]), so a class's and the
-//! node's merge as any row does and the node's own wins. Lowering admits
-//! `color` alone.
+//! node's merge as any row does and the node's own wins. Lowering admits a
+//! placeholder's `color` and a backdrop's `background-color` alone, and on a
+//! route `::view-transition-new`'s and `::view-transition-old`'s `animation`
+//! alone (LLP 1013.001 D1).
 
 use super::*;
 
@@ -26,7 +29,7 @@ impl Parser {
             return Err(SyntaxError {
                 id: "syntax-part",
                 message: format!(
-                    "`::` begins a part, `::placeholder`; found {}",
+                    "`::` begins a part, `::placeholder` or `::backdrop`; found {}",
                     describe(self.peek_kind())
                 ),
                 span,
@@ -38,12 +41,15 @@ impl Parser {
         };
         let part = format!("::{name}");
         let refusal = match name.as_str() {
-            "placeholder" => None,
+            "placeholder" | "backdrop" | "view-transition-new" | "view-transition-old" => None,
+            "view-transition-group" | "view-transition-image-pair" | "view-transition" => Some(format!(
+                "`{part}` has nothing to style: a route's transition is its picture alone, so its parts are `::view-transition-new` (its entrance) and `::view-transition-old` (its exit), each with `animation` (LLP 1013.001)"
+            )),
             "before" | "after" => Some(format!(
                 "`{part}` has no generated box in Contract: write what it would show as a child (a `text`, an `image`), which every host lays out, draws and reads aloud"
             )),
             _ => Some(format!(
-                "`{part}` is not a part Contract has; the one it has is `::placeholder` (its `color`), on an `input` or a `textarea`"
+                "`{part}` is not a part Contract has; it has `::placeholder` (its `color`), on an `input` or a `textarea`, `::backdrop` (its `background-color`), on a `dialog`, and `::view-transition-new` and `::view-transition-old` (their `animation`), on a route"
             )),
         };
         if let Some(message) = refusal {
@@ -70,7 +76,12 @@ impl Parser {
             return Err(SyntaxError {
                 id: "syntax-empty-block",
                 message: format!(
-                    "`{part}` needs its declarations indented under it: `color=\"#6b7280\"`"
+                    "`{part}` needs its declarations indented under it: {}",
+                    match name.as_str() {
+                        "placeholder" => "`color=\"#6b7280\"`",
+                        "backdrop" => "`background-color=\"#00000066\"`",
+                        _ => "`animation=\"fade-in 180ms ease-out both\"`",
+                    }
                 ),
                 span,
             });

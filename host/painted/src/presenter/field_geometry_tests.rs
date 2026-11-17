@@ -127,6 +127,9 @@ component Fields
     assert_eq!(presenter.field_value(id), "a😀c @alice end");
 }
 
+#[path = "field_shadow_tests.rs"]
+mod shadow_tests;
+
 fn boot(tag: &str, value: &str, extra: &str) -> (Presenter<()>, ViewId) {
     let source = format!(
         r##"component Fields

@@ -349,6 +349,10 @@ impl SlotSet {
         self.len == 0
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     /// Whether `slot` is in the set.
     pub(crate) fn contains(&self, slot: u32) -> bool {
         self.words
@@ -364,7 +368,7 @@ impl SlotSet {
 
     /// The slots in ascending order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = u32> + '_ {
-        self.words.iter().enumerate().flat_map(|(i, &word)| {
+        let slots = self.words.iter().enumerate().flat_map(|(i, &word)| {
             let mut rest = word;
             std::iter::from_fn(move || {
                 (rest != 0).then(|| {
@@ -373,7 +377,9 @@ impl SlotSet {
                     i as u32 * 64 + bit
                 })
             })
-        })
+        });
+        // Stop at the last member: words emptied by removals stay allocated
+        slots.take(self.len)
     }
 }
 

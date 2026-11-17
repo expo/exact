@@ -1,7 +1,25 @@
 //! The dist's files as the server names them (LLP 1048.000 D10): which
 //! paths are files, their types, and the build a URL names.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// The build's files named by their content (`routes.json` `files`, LLP
+/// 1153.004 D4): from the name each had (`app.js`; a chunk's own) to the
+/// name it is written as. Empty for a build without the table.
+pub(crate) fn content_files(dist: &Path) -> HashMap<String, String> {
+    std::fs::read(dist.join("routes.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|table| table.get("files")?.as_object().cloned())
+        .map(|files| {
+            files
+                .into_iter()
+                .filter_map(|(from, to)| Some((from, to.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Whether a path names a file (its last segment has an extension the
 /// server knows as a type) rather than a page.
@@ -40,8 +58,8 @@ fn digest_prefix(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Only the split build's `stages/<name>.<digest>.wasm` is content-addressed.
-/// Compare with the unencoded bytes' hash, not just the shape of the name.
+/// A split build's `stages/<name>.<digest>.wasm`, named by its content:
+/// compared with the unencoded bytes' hash, not just the shape of the name.
 pub(crate) fn named_stage(path: &str, tag: &str) -> bool {
     path.strip_prefix("/stages/")
         .filter(|name| !name.contains('/'))

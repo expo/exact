@@ -1,10 +1,10 @@
 // The build channel (LLP 1122 D4, LLP 1121 stage 4 commit 5): a development
 // build registers with its dev stream's nonce, reports its effective facts
-// and the digest of the plan it runs (tamber/1.9), and takes `pin` from the
+// and the digest of the plan it runs (forma/1.9), and takes `pin` from the
 // design server's clients, and `inspect` and `outline` where inspect mode is
 // compiled in (T2c, Inspect.swift); `hold` is reserved (stage 8), answered
 // unsupported. The server's half
-// is scripts/tamber-builds.mjs; the web page's, host/web/dev.js. A pin sets
+// is scripts/forma-builds.mjs; the web page's, host/web/dev.js. A pin sets
 // what the agent's `prefer` sets (Agent.swift), by the same means.
 #if os(macOS)
 import AppKit
@@ -12,7 +12,7 @@ import AppKit
 import UIKit
 #endif
 
-/// A pin as the server sends it (scripts/tamber-builds.mjs `pinRefused`).
+/// A pin as the server sends it (scripts/forma-builds.mjs `pinRefused`).
 struct BuildPin: Equatable {
     var scheme: String?, contrast: String?, mode: [String: String]?, rootFontSize: Double?
 
@@ -106,7 +106,11 @@ final class BuildHeld {
     let contrast = DisplayPreferences.agentContrast
     private(set) var sessions: [Session] = []
     #if os(macOS)
+    #if EXACT_AGENT
     let appearance = (system: Agent.systemAppearance, app: NSApp.appearance)
+    #else
+    let appearance = (system: Optional<NSAppearance>.none, app: NSApp.appearance)
+    #endif
     #else
     final class Scene { weak var scene: UIWindowScene?; let style: UIUserInterfaceStyle?, contrast: UIAccessibilityContrast?
         init(_ s: UIWindowScene) {
@@ -132,10 +136,14 @@ final class BuildHeld {
     /// The system appearance as it was: a pin's are set again over it.
     func restoreAppearance() {
         #if os(macOS)
+        #if EXACT_AGENT
         let following = Agent.followsSystem
         Agent.systemAppearance = appearance.system
         if following { NSApp.appearance = appearance.app }
         DisplayPreferences.changed()
+        #else
+        NSApp.appearance = appearance.app
+        #endif
         #else
         for held in scenes {
             guard let scene = held.scene else { continue }
@@ -240,11 +248,13 @@ extension ExactApp {
     /// refuses the pin's modes runs its own again, and it is reported.
     private func apply(_ pin: BuildPin?, to sessions: [ExactSession], _ held: BuildHeld) {
         DisplayPreferences.agentContrast = pin?.contrast ?? held.contrast
+        #if EXACT_AGENT
         for session in sessions where pin?.scheme != nil || pin?.contrast != nil {
             let agent = session.agentInstance
             if let scheme = pin?.scheme { agent.systemScheme(dark: scheme == "dark") }
             agent.systemContrast(more: DisplayPreferences.contrast == "more")
         }
+        #endif
         PageFacts.pinnedRootFontSize = pin?.rootFontSize
         for session in sessions { session.apply(session.runtime.setRootFontSize(PageFacts.rootFontSize)) }
         var refused: String?

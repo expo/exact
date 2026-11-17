@@ -94,7 +94,7 @@ fn first_paint_of_transferred_paragraph_does_not_build_ink_on_ui() {
         let before_visits = engine.ink_visits;
         let actual = clipped(&mut engine, p, y, 1.);
         assert_eq!(actual, full(p, y, 1.));
-        assert!(actual.chunks_exact(4).any(|px| px[3] != 0));
+        assert!(actual.as_chunks::<4>().0.iter().any(|px| px[3] != 0));
         let calls = engine.ink_visits - before_visits;
         assert!(calls < all / 10);
         visible_calls.push(calls);
@@ -346,7 +346,7 @@ fn prepared_query_supported_fractional_scale_matches_actual_clipped_paint() {
         assert!(p.prepared_ink_supports((0., y), scale, ts, clip));
         let actual = clipped(&mut engine, p, y, scale);
         assert_eq!(actual, full(p, y, scale));
-        assert!(actual.chunks_exact(4).any(|px| px[3] != 0));
+        assert!(actual.as_chunks::<4>().0.iter().any(|px| px[3] != 0));
     }
     assert_eq!(engine.ink_builds, 0);
     assert_eq!(ink::build_work(), work);

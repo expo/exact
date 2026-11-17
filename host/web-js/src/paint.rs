@@ -36,7 +36,8 @@ pub fn transitions() -> String {
     let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
         .iter()
         .flat_map(|p| [p.name(), p.css_name()])
-        .chain(["all", "border-color", "d"])
+        .chain(["all", "border-color"])
+        .chain(exact_motion::Property::TRANSITION_ONLY.map(|p| p.name()))
         .filter_map(|name| {
             let transition = exact_motion::Transitions::parse(name).ok()?;
             let mut style = StyleProps::default();
@@ -89,11 +90,17 @@ const DIM: u32 = 131072;
 pub fn attributes(node: &NodeFacts<'_>, attrs: &mut SortedMap<String, String>) {
     let s = node.style;
     let mut authored = s.clone();
-    for row in MOTION.into_iter().chain([StyleId::ZIndex]) {
+    for row in MOTION
+        .into_iter()
+        .chain([StyleId::ZIndex, StyleId::PressTranslate])
+    {
         authored.mask.clear(row);
     }
     let mut policy = StyleProps::default();
-    for row in MOTION.into_iter().chain([StyleId::TintColor]) {
+    for row in MOTION
+        .into_iter()
+        .chain([StyleId::TintColor, StyleId::PressTranslate])
+    {
         if s.mask.has(row) {
             policy.mask.set(row);
         }
@@ -306,6 +313,7 @@ pub fn binding(
         }
         StyleId::PressScale => "v!=null&&Number(v)!==1",
         StyleId::Perspective => "v!=null&&parseFloat(v)>0",
+        StyleId::PressTranslate => return flag(POLICY, "v!=null&&String(v).trim()!==\"\"&&!/^(none|unset|initial|revert|revert-layer)$/i.test(String(v).trim())"),
         StyleId::Translate
         | StyleId::Scale
         | StyleId::Rotate

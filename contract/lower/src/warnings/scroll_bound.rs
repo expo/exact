@@ -41,7 +41,8 @@
 use super::width::{last, rows};
 use super::BOXES;
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span, StyleDecl};
+use contract_checking::View;
+use contract_syntax::{Attr, Expr, Span, StyleDecl};
 use std::collections::BTreeSet;
 
 /// One wrapper of the run: where it is, its tag, and whether it is named.
@@ -85,7 +86,7 @@ impl Parent<'_> {
 }
 
 /// `lower-scroll-grows` over the whole view.
-pub(super) fn scroll_grows(view: &[Node], styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+pub(super) fn scroll_grows(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
     let mut seen = BTreeSet::new();
     // The view's roots sit in the window, whose height is definite and
     // which contains what is absolutely positioned at the root.
@@ -95,100 +96,89 @@ pub(super) fn scroll_grows(view: &[Node], styles: &[StyleDecl], out: &mut Vec<Lo
         positioned: true,
         ..Parent::unknown()
     };
-    walk(view, &window, styles, &mut seen, out);
+    for _ in view.walk_with(window, |node, parent| {
+        next(node, parent, styles, &mut seen, out)
+    }) {}
 }
 
-fn walk<'a>(
-    nodes: &'a [Node],
+fn next<'a>(
+    node: contract_checking::Visit<'a>,
     parent: &Parent<'a>,
     styles: &[StyleDecl],
     seen: &mut BTreeSet<(u32, u32, u32, u32)>,
     out: &mut Vec<LowerError>,
-) {
-    for node in nodes {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                span,
-                ..
-            } => {
-                let Some(all) = rows(attrs, styles) else {
-                    walk(children, &Parent::unknown(), styles, seen, out);
-                    continue;
-                };
-                let scrolls = scroll_container(tag, &all);
-                if scrolls == Some(true) && grows_unbounded(&all) && parent.run_bounded {
-                    for &(wrapper, wrapper_tag, named) in &parent.wrappers {
-                        if named {
-                            flag((wrapper, wrapper_tag), (*span, tag), seen, out);
-                        }
-                    }
-                }
-                let flex = flex_of(&all);
-                let min = min_height(&all);
-                let min_auto = min == Some(true);
-                let column = scrolls == Some(false) && flex_column(tag, &all);
-                let zero_min = min == Some(false) || scrolls == Some(true);
-                // A route of a navigation root: iOS lays it out in its
-                // controller's view (OwnersIOS.swift, `OwnerBlocks`), and the
-                // web in the root. Its block is proven definite when it is a
-                // sheet, or when the root's height is.
-                let keyed = last(&all, "navigationKey").is_some();
-                let route = match parent.nav {
-                    Some(root) if keyed => {
-                        Some(root || word(&all, "navigationPresentation") == Some(Some("modal")))
-                    }
-                    _ => None,
-                };
-                let definite = definite(&all, parent, &flex, zero_min, route);
-                let bounded = definite || capped(&all, parent);
-                let nav = match parent.nav {
-                    None if keyed => Some(definite),
-                    nav => nav,
-                };
-                // A basis it cannot grow from, under a zero minimum, caps
-                // what it passes up (CSS Flexbox §9.9.3); a box that cannot
-                // shrink keeps its content's height whatever its minimum.
-                let caps = min == Some(false)
-                    && !flex.grow.is_some_and(|g| g > 0.0)
-                    && flex.content != Some(true);
-                let shrinks = flex.shrink.is_some_and(|s| s > 0.0);
-                let (wrappers, run_bounded) =
-                    if column && passes_content(&all) && !caps && shrinks && min.is_some() {
-                        let mut run = parent.wrappers.clone();
-                        let named = parent.column && min_auto;
-                        run.push((*span, tag.as_str(), named));
-                        // A run's first wrapper is bounded only as a flex item:
-                        // in a block it is as tall as its content.
-                        let above = if parent.wrappers.is_empty() {
-                            parent.column && parent.bounded
-                        } else {
-                            parent.run_bounded
-                        };
-                        (run, above)
-                    } else {
-                        (Vec::new(), false)
-                    };
-                let next = Parent {
-                    column,
-                    definite,
-                    bounded,
-                    positioned: positions(&all) || route.is_some(),
-                    nav,
-                    wrappers,
-                    run_bounded,
-                };
-                walk(children, &next, styles, seen, out);
-            }
-            Node::Use { children, .. } => walk(children, &Parent::unknown(), styles, seen, out),
-            node => {
-                for list in node.child_lists() {
-                    walk(list, parent, styles, seen, out);
-                }
+) -> Parent<'a> {
+    let Some((tag, _, attrs)) = node.element() else {
+        return if node.component_use().is_some() {
+            Parent::unknown()
+        } else {
+            parent.clone()
+        };
+    };
+    let span = node.span();
+    let Some(all) = rows(attrs, styles) else {
+        return Parent::unknown();
+    };
+    let scrolls = scroll_container(tag, &all);
+    if scrolls == Some(true) && grows_unbounded(&all) && parent.run_bounded {
+        for &(wrapper, wrapper_tag, named) in &parent.wrappers {
+            if named {
+                flag((wrapper, wrapper_tag), (span, tag), seen, out);
             }
         }
+    }
+    let flex = flex_of(&all);
+    let min = min_height(&all);
+    let min_auto = min == Some(true);
+    let column = scrolls == Some(false) && flex_column(tag, &all);
+    let zero_min = min == Some(false) || scrolls == Some(true);
+    // A route of a navigation root: iOS lays it out in its
+    // controller's view (OwnersIOS.swift, `OwnerBlocks`), and the
+    // web in the root. Its block is proven definite when it is a
+    // sheet, or when the root's height is.
+    let keyed = last(&all, "navigationKey").is_some();
+    let route = match parent.nav {
+        Some(root) if keyed => {
+            Some(root || word(&all, "navigationPresentation") == Some(Some("modal")))
+        }
+        _ => None,
+    };
+    let definite = definite(&all, parent, &flex, zero_min, route);
+    let bounded = definite || capped(&all, parent);
+    let nav = match parent.nav {
+        None if keyed => Some(definite),
+        nav => nav,
+    };
+    // A basis it cannot grow from, under a zero minimum, caps
+    // what it passes up (CSS Flexbox §9.9.3); a box that cannot
+    // shrink keeps its content's height whatever its minimum.
+    let caps =
+        min == Some(false) && !flex.grow.is_some_and(|g| g > 0.0) && flex.content != Some(true);
+    let shrinks = flex.shrink.is_some_and(|s| s > 0.0);
+    let (wrappers, run_bounded) =
+        if column && passes_content(&all) && !caps && shrinks && min.is_some() {
+            let mut run = parent.wrappers.clone();
+            let named = parent.column && min_auto;
+            run.push((span, tag, named));
+            // A run's first wrapper is bounded only as a flex item:
+            // in a block it is as tall as its content.
+            let above = if parent.wrappers.is_empty() {
+                parent.column && parent.bounded
+            } else {
+                parent.run_bounded
+            };
+            (run, above)
+        } else {
+            (Vec::new(), false)
+        };
+    Parent {
+        column,
+        definite,
+        bounded,
+        positioned: positions(&all) || route.is_some(),
+        nav,
+        wrappers,
+        run_bounded,
     }
 }
 

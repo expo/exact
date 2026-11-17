@@ -24,8 +24,10 @@ mod fields;
 mod fit;
 mod hoist;
 mod inline_images;
+mod measurement;
 #[cfg(test)]
 mod memo_tests;
+use measurement::{MeasureContext, Measurement};
 pub(crate) mod order;
 mod publication;
 mod rebuild;
@@ -101,34 +103,6 @@ fn from_available(space: AvailableSpace) -> AxisOffer {
 /// pass and repeated native measurement (LLP 1044 F6).
 const LEAF_OFFERS: usize = 16;
 
-// @ref LLP 1043.000 §3 D3 — keep the proof with Taffy's measured leaf.
-#[derive(Default, Clone, Debug)]
-struct MeasureContext {
-    slot: u32,
-    kind: alert::Kind,
-    pass: u64,
-    height_measured: bool,
-    text_item: Option<Frame>,
-    // At most LEAF_OFFERS per live leaf; text/style invalidation clears them.
-    measurements: Vec<Measurement>,
-    // @ref LLP 1043.000 §8 — the shapes an admitted auto-height leaf is
-    // measured around (border-box coordinates), written only by settle_flow;
-    // changing them clears `measurements`, whose key does not include them.
-    flow: Vec<exact_textflow::FlowShape>,
-    // A fitted paragraph's unscaled min-content width (`fit`), cleared with
-    // `measurements`.
-    fit_natural: Option<f32>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Measurement {
-    width: AxisOffer,
-    height: AxisOffer,
-    metrics: TextMetrics,
-    // The scale a fitted paragraph was measured at; 1 for any other.
-    scale: f32,
-}
-
 /// The engine tree. Measured leaves retain their height proof and bounded offers.
 /// A copy is a trial's (`Kernel::measure_block`): laid out and dropped.
 #[derive(Clone)]
@@ -140,6 +114,7 @@ pub struct LayoutTree {
     field_minima: IdMap<NodeId, f32>,
     button_records: IdMap<NodeId, buttons::ButtonRecord>,
     provisional_chrome: bool,
+    pending_text_changes: IdMap<NodeId, bool>,
     slots: IdMap<NodeId, u32>,
     // Generated alert title items, keyed by their authored owning slot. They
     // have no arena identity and never enter wire, paint or accessibility.
@@ -393,6 +368,7 @@ impl LayoutTree {
             field_minima: IdMap::default(),
             button_records: IdMap::default(),
             provisional_chrome: false,
+            pending_text_changes: IdMap::default(),
             slots: IdMap::default(),
             alert_prefixes: IdMap::default(),
             deferred: IdMap::default(),
@@ -864,6 +840,7 @@ impl LayoutTree {
         if let Some(context) = self.taffy.get_node_context_mut(node) {
             context.measurements.clear();
             context.fit_natural = None;
+            context.asynchronous = false;
         }
     }
 
@@ -1010,6 +987,7 @@ impl LayoutTree {
             .filter(|(node, _, _)| self.baselines_unread(*node))
             .map(|(node, _, _)| *node)
             .collect();
+        let pending_changes = &mut self.pending_text_changes;
         let button_records = &mut self.button_records;
         #[cfg(test)]
         let leaves = &mut self.work.1;
@@ -1041,7 +1019,7 @@ impl LayoutTree {
             }) {
                 minima.insert(node, minimum);
                 adjusted = style.clone();
-                adjusted.min_size.height = taffy::LengthPercentageAuto::length(minimum);
+                adjusted.min_size.height = taffy::Dimension::length(minimum);
                 &adjusted
             } else {
                 style
@@ -1082,6 +1060,10 @@ impl LayoutTree {
                 // exactly upstream's border-box known dimensions (old Patch 7).
                 _ => inputs.known_dimensions.height.is_some(),
             };
+            let was_pending = context.as_ref().is_some_and(|c| c.pending);
+            if let Some(context) = context.as_deref_mut() {
+                context.begin(pass);
+            }
             let (mut output, placement) =
                 text_item::compute(arena, slot, inputs, style, |known, space| {
                     let Some(context) = context.as_deref_mut() else {
@@ -1106,6 +1088,7 @@ impl LayoutTree {
                         height_free,
                         &mut invalid_metrics,
                     ) {
+                        context.pending |= metrics.pending;
                         first_baseline = metrics.first_baseline;
                         line_height = metrics.height;
                         return size;
@@ -1212,9 +1195,6 @@ impl LayoutTree {
                         else {
                             return Size::ZERO;
                         };
-                        if context.measurements.len() == LEAF_OFFERS {
-                            context.measurements.remove(0);
-                        }
                         crate::time::reserve(arena, slot, measurer, &mut metrics);
                         let m = Measurement {
                             width,
@@ -1222,7 +1202,7 @@ impl LayoutTree {
                             metrics,
                             scale,
                         };
-                        context.measurements.push(m);
+                        context.remember(m);
                         metrics
                     } else {
                         let stamp = arena.paragraph_stamp(slot); // held: no runs to flatten
@@ -1264,11 +1244,8 @@ impl LayoutTree {
                             invalid_metrics.get_or_insert_with(|| arena.local_id(slot));
                             return Size::ZERO;
                         }
-                        if context.measurements.len() == LEAF_OFFERS {
-                            context.measurements.remove(0);
-                        }
                         crate::time::reserve(arena, slot, measurer, &mut metrics);
-                        context.measurements.push(Measurement {
+                        context.remember(Measurement {
                             width,
                             height,
                             metrics,
@@ -1292,6 +1269,7 @@ impl LayoutTree {
                             .unwrap_or(2);
                         metrics.height *= rows as f32 / 2.0;
                     }
+                    context.pending |= metrics.pending;
                     first_baseline = metrics.first_baseline;
                     line_height = metrics.height;
                     Size {
@@ -1299,6 +1277,11 @@ impl LayoutTree {
                         height: metrics.height,
                     }
                 });
+            if let Some(context) = context.as_ref() {
+                if context.pending != was_pending {
+                    pending_changes.entry(node).or_insert(was_pending);
+                }
+            }
             if inputs.run_mode == taffy::tree::RunMode::PerformLayout {
                 if let Some(context) = context {
                     context.text_item = placement;

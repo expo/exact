@@ -2,22 +2,41 @@
 //! Layout, presentation holds and values the compiler cannot resolve stay undecided.
 
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span, StyleDecl};
+use contract_checking::View;
+use contract_syntax::{Attr, Expr, Span, StyleDecl};
 use exact_kernel::{
     BoxSizing as Sizing, Dimension, Display, NodeType, Overflow, RowValue, StyleId, StyleMask,
     StyleProps, StyleValue,
 };
 use std::collections::BTreeSet;
 
-pub(super) fn check(view: &[Node], styles: &[StyleDecl], out: &mut Vec<LowerError>) {
-    walk(
-        view,
-        styles,
-        &mut Vec::new(),
-        true,
-        &mut BTreeSet::new(),
-        out,
-    );
+pub(super) fn check(view: &View<'_>, styles: &[StyleDecl], out: &mut Vec<LowerError>) {
+    let mut seen = BTreeSet::new();
+    let mut path = Vec::new();
+    let mut rooted = true;
+    let mut uses = Vec::new();
+    for (node, (), entering) in view.events((), |_, _| Some(())) {
+        if let Some((tag, _, attrs)) = node.element() {
+            if entering {
+                path.push(Element {
+                    tag,
+                    rows: rows(tag, attrs, styles),
+                    span: node.span(),
+                });
+                binding(&path, rooted, &mut seen, out);
+            } else {
+                path.pop();
+            }
+        } else if node.component_use().is_some() {
+            // An unresolved use does not establish a direct kernel parent.
+            if entering {
+                uses.push((std::mem::take(&mut path), rooted));
+                rooted = false;
+            } else {
+                (path, rooted) = uses.pop().unwrap();
+            }
+        }
+    }
 }
 
 struct Element<'a> {
@@ -57,51 +76,6 @@ fn rows(tag: &str, attrs: &[Attr], styles: &[StyleDecl]) -> Option<Vec<Attr>> {
             .chain(attrs.iter().filter(|a| a.name != "class").cloned())
             .collect(),
     )
-}
-
-fn walk<'a>(
-    view: &'a [Node],
-    styles: &'a [StyleDecl],
-    path: &mut Vec<Element<'a>>,
-    rooted: bool,
-    seen: &mut BTreeSet<(Span, String, String)>,
-    out: &mut Vec<LowerError>,
-) {
-    for node in view {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                span,
-                ..
-            } => {
-                let rows = rows(tag, attrs, styles);
-                path.push(Element {
-                    tag,
-                    rows,
-                    span: *span,
-                });
-                binding(path, rooted, seen, out);
-                walk(children, styles, path, rooted, seen, out);
-                path.pop();
-            }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                walk(then, styles, path, rooted, seen, out);
-                walk(otherwise, styles, path, rooted, seen, out);
-            }
-            Node::Each { body, .. } => walk(body, styles, path, rooted, seen, out),
-            Node::Match { some, none, .. } => {
-                walk(&some.1, styles, path, rooted, seen, out);
-                walk(none, styles, path, rooted, seen, out);
-            }
-            // An unexpanded use or slot does not establish a direct kernel parent.
-            Node::Use { children, .. } => walk(children, styles, &mut Vec::new(), false, seen, out),
-            Node::Children { .. } => {}
-        }
-    }
 }
 
 fn literal<'a>(element: &'a Element<'_>, name: &str) -> Option<&'a str> {

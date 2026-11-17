@@ -1,4 +1,4 @@
-// Several live copies of the app (LLP 1122 T7, tamber/1.14): a grid of the
+// Several live copies of the app (LLP 1122 T7, forma/1.14): a grid of the
 // dev loop's page, each copy pinned to one mode and text size; or the
 // selected view's states side by side, each copy holding one, in the
 // selection's mode. Each copy is a frame this page names `exact-copy-<n>`;
@@ -108,7 +108,7 @@ export function gridSources(call: Call, builds: () => Map<string, Build & { pinR
    * asked, or '' with the reply. */
   const send = async (mine: number, body: Record<string, unknown>) => {
     if (mine !== asks) return { why: 'superseded', ok: null as any };
-    const { error, reply, used } = await call('/__tamber', body, undefined, handle || undefined);
+    const { error, reply, used } = await call('/__forma', body, undefined, handle || undefined);
     if (!error && !handle) handle = used;
     return { why: error ? (reply.error?.unsupported ? `unsupported:${error}` : error) : '', ok: reply.ok };
   };

@@ -1,5 +1,6 @@
 //! Process-start requests and their boot handoff (LLP 1162.000 D4).
 use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservation, Preloads};
+use exact_executor::preload::preload_url;
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -41,6 +42,7 @@ struct Launch {
     #[cfg(test)]
     backend: Mutex<Option<Arc<dyn exact_data::secrets::Backend>>>,
     journal: Mutex<Vec<PreloadFact>>,
+    journal_pending: AtomicBool,
     marks: Mutex<Marks>,
     #[cfg(test)]
     reader: Mutex<Option<Arc<SecretReader>>>,
@@ -172,7 +174,7 @@ impl dyn LaunchWork {
         let mut pending = Vec::new();
         let mut fulfilled = Vec::new();
         let mut requests = runner.take_requests();
-        requests.sort_by_key(|request| request.ticket);
+        sort_requests(&mut requests);
         let mut requests = requests.into_iter();
         while let Some(request) = requests.next() {
             if !runner.holds(request.ticket) {
@@ -200,10 +202,16 @@ impl dyn LaunchWork {
             }
         }
         pending.extend(runner.take_requests());
-        pending.sort_by_key(|request| request.ticket);
+        sort_requests(&mut pending);
         pending.retain(|request| runner.holds(request.ticket));
         Ok((pending, fulfilled))
     }
+}
+
+// The initial requests and those issued during settlement share one sort.
+#[inline(never)]
+fn sort_requests(requests: &mut [exact_runner::RequestOut]) {
+    requests.sort_by_key(|request| request.ticket);
 }
 
 /// Begin at the top of main; the factory is evaluated only on the launch thread.
@@ -339,29 +347,8 @@ impl LaunchPreloads {
                 self.record_definition(definition, crate::executor::PreloadEvent::DroppedBySecret);
                 continue;
             }
-            match definition.fill(|name| secrets.get(name).cloned()) {
-                Ok(request) => {
-                    use crate::executor::PreloadEvent;
-                    use ibex2::stdlib::fetch;
-                    let invalid = if url::Url::parse(&request.url).is_err() {
-                        Some(PreloadEvent::InvalidUrl)
-                    } else if request.headers.iter().any(|(_, value)| {
-                        !fetch::is_valid_value(value) || fetch::normalize_value(value) != value
-                    }) {
-                        Some(PreloadEvent::InvalidHeader)
-                    } else {
-                        None
-                    };
-                    if let Some(outcome) = invalid {
-                        self.record_definition(definition, outcome);
-                        continue;
-                    }
-                    let preload = Preload {
-                        name: definition.name.into(),
-                        request,
-                        deadline_ms: definition.timeout_ms,
-                        secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
-                    };
+            match Preload::fill(definition, |name| secrets.get(name).cloned()) {
+                Ok(preload) => {
                     if when == PreloadWhen::Foreground
                         && self.0.phase.load(Ordering::Acquire) & OPENED == 0
                     {
@@ -378,9 +365,7 @@ impl LaunchPreloads {
                         ready.push(preload);
                     }
                 }
-                Err(_) => {
-                    self.record_definition(definition, crate::executor::PreloadEvent::MissingSecret)
-                }
+                Err(fact) => self.record_fact(fact),
             }
         }
         if let Some(set) = self.0.set.get() {
@@ -393,12 +378,12 @@ impl LaunchPreloads {
         outcome: crate::executor::PreloadEvent,
     ) {
         let origin = definition
-            .fill(|_| Some("redacted".into()))
+            .fill(|_| Some("redacted".into()), preload_url)
             .ok()
             .and_then(|r| url::Url::parse(&r.url).ok())
             .map(|u| u.origin().ascii_serialization())
             .unwrap_or_default();
-        self.0.journal.lock().unwrap().push(PreloadFact {
+        self.record_fact(PreloadFact {
             name: definition.name.into(),
             origin,
             outcome,
@@ -463,7 +448,7 @@ impl LaunchPreloads {
                 .iter()
                 .any(|(name, version)| versions.get(name).copied().unwrap_or(0) != *version)
             {
-                self.0.journal.lock().unwrap().push(PreloadFact {
+                self.record_fact(PreloadFact {
                     name: definition.preload.name.clone(),
                     origin: rust::origin(&definition.preload.request),
                     outcome: crate::executor::PreloadEvent::DroppedBySecret,
@@ -487,8 +472,18 @@ impl LaunchPreloads {
             .control
             .extend(vec![preload], grants, observer);
     }
+    fn record_fact(&self, fact: PreloadFact) {
+        let mut journal = self.0.journal.lock().unwrap();
+        journal.push(fact);
+        self.0.journal_pending.store(true, Ordering::Release);
+    }
     pub(crate) fn journal(&self) -> Vec<PreloadFact> {
-        let mut facts = std::mem::take(&mut *self.0.journal.lock().unwrap());
+        let mut facts = Vec::new();
+        if self.0.journal_pending.load(Ordering::Acquire) {
+            let mut journal = self.0.journal.lock().unwrap();
+            self.0.journal_pending.store(false, Ordering::Release);
+            facts = std::mem::take(&mut *journal);
+        }
         if let Some(set) = self.0.set.get() {
             facts.extend(set.control.take_journal());
         }
@@ -498,6 +493,9 @@ impl LaunchPreloads {
         self.0.marks.lock().unwrap().tickets.remove(&ticket)
     }
     pub(crate) fn committed(&self, names: Vec<String>, sequence: u64) {
+        if names.is_empty() {
+            return;
+        }
         let mut marks = self.0.marks.lock().unwrap();
         for (name, mark) in &mut marks.entries {
             if mark.committed == 0. && names.iter().any(|n| n.as_str() == name) {

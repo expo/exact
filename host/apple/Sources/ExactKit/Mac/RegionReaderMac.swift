@@ -355,6 +355,10 @@ final class RegionReaderParagraph {
             if !changed { requestViewport() }
         case .abandoned:
             shapeWidth = nil; update(node)
+        case .nativeFlow(let request):
+            guard request.width == wantedWidth else { return }
+            failed = "incomplete text flow"
+            node.needsDisplay = true
         case .refused(let job, let reason):
             switch job {
             case .selection(let request): guard wantedSelection == request else { return }

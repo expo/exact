@@ -125,7 +125,7 @@ fn boot(name: &str) -> Presenter<Source> {
     boot_source(name, APP)
 }
 fn boot_source(name: &str, app: &str) -> Presenter<Source> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(app),
         Source(
             format!("test.canvas.{}.{name}", std::process::id()),

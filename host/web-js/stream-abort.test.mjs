@@ -218,18 +218,19 @@ test("every cache mode reaches the browser from a JS fetch, a stream and a wasm 
   const fixture = runtime('exact-fetch-cache-'), browser = globalThis.fetch, pageLocation = globalThis.location, sent = [];
   globalThis.location = new URL('https://example.test/');
   try {
-    const { cmd, pre } = webCompiler();
+    const { cmd, pre, env: toolEnv } = webCompiler();
     if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
     const grants = resolve(fixture, 'grants.txt');
     writeFileSync(grants, 'net.fetch https://example.test\nnet.fetch https://another.test');
-    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { cwd: root, encoding: 'utf8' });
+    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { env: toolEnv, cwd: root, encoding: 'utf8' });
     expect(normalized.status).toBe(0);
     writeFileSync(resolve(fixture, 'admission-data.js'), `import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(${normalized.stdout});`);
     globalThis.fetch = async (input, init) => {
+      init = new Request(input, init);
       sent.push(init);
       if (init.cache === 'only-if-cached') {
         expect(init.mode).toBe('same-origin');
-        if (new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request');
+        if (new URL(init.url).origin !== location.origin) throw new TypeError('cross-origin cache-only request');
       }
       return responseAt(input, 'reply');
     };
@@ -267,16 +268,16 @@ test("every cache mode reaches the browser from a JS fetch, a stream and a wasm 
     }
     for (const cache of [undefined, 'default', 'reload']) {
       const controller = new AbortController();
-      globalThis.fetch = async (input, init) => { sent.push(init); controller.abort(); return responseAt(input, null, { status: 204 }); };
+      globalThis.fetch = async (input, init) => { init = new Request(input, init); sent.push(init); controller.abort(); return responseAt(input, null, { status: 204 }); };
       const poll = { cursor: 'since', from: 'seq', sameCursorEvent: false };
       await request({ method: 'GET', url: 'https://example.test/poll', headers: [], cache, stream: true, longPoll: poll }, { grantSet: tsGrantSet, controllers: new Set(), controller });
       expect(sent.at(-1).cache).toBe(cache ?? 'no-store');
       const next = new AbortController();
-      globalThis.fetch = async (input, init) => { sent.push(init); next.abort(); return responseAt(input, null, { status: 204 }); };
+      globalThis.fetch = async (input, init) => { init = new Request(input, init); sent.push(init); next.abort(); return responseAt(input, null, { status: 204 }); };
       await open({ input: 'https://example.test/poll', init: { cache, exactStream: e => e.data, exactLongPoll: { cursor: 'since', from: 'seq' } } }, v => v, tsGrantSet, () => {}, next);
       expect(sent.at(-1).cache).toBe(cache ?? 'no-store');
     }
-    globalThis.fetch = async (input, init) => { sent.push(init); if (init.cache === 'only-if-cached' && new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request'); return responseAt(input, 'reply'); };
+    globalThis.fetch = async (input, init) => { init = new Request(input, init); sent.push(init); if (init.cache === 'only-if-cached' && new URL(init.url).origin !== location.origin) throw new TypeError('cross-origin cache-only request'); return responseAt(input, 'reply'); };
     writeFileSync(resolve(fixture, 'ts-data.js'), readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8')
       .replace("'__APP_TS__'", "'./app.js'").replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
     writeFileSync(resolve(fixture, 'names.js'), "export const sourceTypes = {cached:[['s'],'s']};\n");
@@ -331,10 +332,10 @@ test('a JS upload with effective only-if-cached fails before sending; a forced u
     getAllResponseHeaders() { return ''; }
   };
   try {
-    const { cmd, pre } = webCompiler();
+    const { cmd, pre, env: toolEnv } = webCompiler();
     const grants = resolve(fixture, 'grants.txt');
     writeFileSync(grants, 'net.fetch https://example.test');
-    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { cwd: root, encoding: 'utf8' });
+    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { env: toolEnv, cwd: root, encoding: 'utf8' });
     expect(normalized.status).toBe(0);
     const { createGrantSet } = await import(at(fixture, 'admission.js'));
     const set = createGrantSet(JSON.parse(normalized.stdout));

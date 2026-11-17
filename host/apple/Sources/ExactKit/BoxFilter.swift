@@ -181,8 +181,13 @@ final class BoxFilter {
         if picture.mask !== clip { picture.mask = clip }
         let now = Drawn(node: node, size: b.size, scale: scale, dark: dark)
         guard fresh || drawn != now else { return }
-        let region = CGRect(x: b.minX + CGFloat(program[0]), y: b.minY + CGFloat(program[1]),
-                            width: b.width + CGFloat(program[2]), height: b.height + CGFloat(program[3]))
+        // Out to whole device pixels: over a fraction of one the box is drawn
+        // resampled and shifted by it, and a moving blur's region changes
+        // every frame, so its picture would wobble (LLP 1003.002 D8).
+        let (left, top) = (floor((b.minX + CGFloat(program[0])) * scale), floor((b.minY + CGFloat(program[1])) * scale))
+        let right = ceil((b.maxX + CGFloat(program[0]) + CGFloat(program[2])) * scale)
+        let bottom = ceil((b.maxY + CGFloat(program[1]) + CGFloat(program[3])) * scale)
+        let region = CGRect(x: left / scale, y: top / scale, width: (right - left) / scale, height: (bottom - top) / scale)
         let extent = SvgIsland.extent(region, k: scale, seen: nil, limit: SvgIsland.budget / 24)
         // The tree reads as drawn, over the same region: the drawing stands.
         if drawn == now, let kept, let (rect, _, _, _) = extent, rect == kept.job.rect, let was = kept.inputs, RenderInputs(box) == was {

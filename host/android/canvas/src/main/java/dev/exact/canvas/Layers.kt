@@ -11,7 +11,7 @@ internal inline fun Structure.walkColorLayer(ops: IntArray, visit: (Int) -> Unit
     while (i < ops.size) {
         visit(i)
         i = when (ops[i]) {
-            1, 2, 4, 5, 6, 7, 9, 19, 40, 45, 46, 47 -> end(b, i)
+            1, 2, 4, 5, 6, 7, 9, 19, 40, 45, 46, 47, 49 -> end(b, i)
             else -> ops.size
         }
     }
@@ -24,7 +24,8 @@ internal inline fun Structure.walkColorLayer(ops: IntArray, visit: (Int) -> Unit
  * phases, fill, iterations, direction, keyframe intervals and their easings), on the engine's clock (op 33).
  */
 internal class Layers(
-    private val record: (RenderNode, IntArray, Float, Float, PathMemo) -> Unit,
+    /** A layer's drawing recorded again: its node, ops, origin, path memo, and the scale its node is drawn at. */
+    private val record: (RenderNode, IntArray, Float, Float, PathMemo, Float) -> Unit,
     /** A font by its key in the stream (op 10/41), for a text layer recorded again from its kept runs. */
     private val font: (Int) -> android.graphics.fonts.Font? = { null },
 ) {
@@ -96,7 +97,10 @@ internal class Layers(
         var py = 0f
         val base = FloatArray(7)
         var tracks: Array<Track> = emptyArray()
-        /** Its drawing and where its dash phase is in it (-1: none), to record it again with a phase. */
+        /** Its drawing (null before its op 30), to record it again: at a dash phase, in a colour transition's
+         * colours, at a pixelated image's scale, or once HWUI let its node's drawing go ([drawn]). HWUI does that to
+         * a node that leaves every tree (its rows freed before another drew it), and exact2 sends a drawing only when
+         * it changes. [dashAt] is where its dash phase is in it (-1: none). */
         var ops: IntArray? = null
         var dashAt = -1
         var phase = Float.NaN
@@ -129,6 +133,11 @@ internal class Layers(
         var rot = Float.NaN; var sc = Float.NaN
         /** Drawn through a compositing layer while a scale plays ([sample]). */
         var composited = false
+        /** It draws a `pixelated` image (op 49 value 2), whose integer enlargement depends on the node's scale: it is
+         * recorded again as a scale plays, at [recordedScale], and never through a compositing layer, whose bitmap
+         * would be smoothed at the scale. */
+        var pixelated = false
+        var recordedScale = 1f
         /** Where [node] sits in the stream's pixels: its drawing is recorded that far moved, and its pivot is
          * relative to it. */
         var ox = 0f; var oy = 0f
@@ -147,7 +156,32 @@ internal class Layers(
         Layer(RenderNode("exact layer").apply { setPosition(0, 0, 1 shl 14, 1 shl 14); setClipToBounds(false) })
     }.node
 
-    fun lookup(id: Int): RenderNode? = layers[id]?.node
+    /** Layers whose drawing HWUI let go, met ([drawn]) while another was being recorded again: [record]'s Player
+     * replays one drawing at a time, so they wait for it to end. */
+    private val lost = ArrayList<Layer>()
+    private var recording = false
+
+    /** Layer [id]'s node as a row's recording draws it (op 29). One whose drawing HWUI let go is recorded again from
+     * its kept ops, as a slot's is ([Slots.refill]): drawn by reference, the node holds it by the time HWUI renders. */
+    fun drawn(id: Int): RenderNode? {
+        val l = layers[id] ?: return null
+        val ops = l.ops
+        if (ops != null && !l.node.hasDisplayList()) { if (recording) lost.add(l) else again(l, ops) }
+        return l.node
+    }
+
+    /** [l]'s drawing recorded again from its kept ops, then each layer that recording met without its own. */
+    private fun again(l: Layer, ops: IntArray) {
+        recording = true
+        try {
+            record(l.node, ops, l.ox, l.oy, l.memo, l.recordedScale)
+            while (lost.isNotEmpty()) {
+                val next = lost.removeAt(0)
+                val kept = next.ops
+                if (kept != null && !next.node.hasDisplayList()) record(next.node, kept, next.ox, next.oy, next.memo, next.recordedScale)
+            }
+        } finally { recording = false; lost.clear() }
+    }
 
     /** Layer [id]'s drawing is one filled shape ([Layer.flat]). */
     fun flat(id: Int, flat: Boolean) { layers[id]?.flat = flat }
@@ -176,6 +210,18 @@ internal class Layers(
     fun originX(id: Int) = layers[id]?.ox ?: 0f
     fun originY(id: Int) = layers[id]?.oy ?: 0f
 
+    /** A shared source through the layer as it is displayed, in stream coordinates. */
+    fun mapShared(id: Int, rect: android.graphics.RectF) {
+        val layer = layers[id] ?: return
+        val matrix = Matrix()
+        layer.node.getMatrix(matrix)
+        rect.offset(-layer.ox, -layer.oy)
+        matrix.mapRect(rect)
+        rect.offset(layer.ox, layer.oy)
+    }
+
+    fun sharedOpacity(id: Int): Float = layers[id]?.node?.alpha ?: 1f
+
     /** A snapshot for the worker: one shared by every row recorded until a layer comes or goes (a fast fling records
      * many rows a frame, and copying the map for each cost the main thread ~2%). */
     private var snapshot: Map<Int, RenderNode>? = null
@@ -195,11 +241,19 @@ internal class Layers(
         val dash = b.get(at + 15)
         val recolored = dash == -2
         l.dashAt = if (dash == -1 || recolored) -1 else dash
-        l.ops = if (l.dashAt >= 0 || recolored) IntArray(len - 16) { b.get(at + 16 + it) } else null
+        l.pixelated = pixelated(b, at + 16, at + len)
+        l.recordedScale = 1f
+        l.ops = IntArray(len - 16) { b.get(at + 16 + it) }
         l.glyphColors = null; l.backgroundAt = -1; l.runs = null
         if (recolored) colors(l)
         l.memo = PathMemo()
         l.phase = Float.NaN
+    }
+
+    private fun pixelated(b: IntBuffer, from: Int, to: Int): Boolean {
+        var i = from
+        while (i < to) { if (b.get(i) == 49 && b.get(i + 1) == 2) return true; i = structure.end(b, i) }
+        return false
     }
 
     /** Where a recoloured layer's colours are: every glyph run's (op 9), and the first rounded rect's (op 2, the
@@ -331,12 +385,12 @@ internal class Layers(
             if (alpha != l.alpha) { l.alpha = alpha; l.node.alpha = alpha }
             // A dash offset: the path again with the phase (author units × path units per unit), when it moved.
             val ops = l.ops
-            if (ops != null && !v[6].isNaN()) {
+            if (ops != null && l.dashAt >= 0 && !v[6].isNaN()) {
                 val phase = v[6] * l.base[6]
                 if (phase != l.phase && (!live || l.row == 0 || rowShows?.shows(l.row) != false)) {
                     l.phase = phase
                     ops[l.dashAt] = java.lang.Float.floatToRawIntBits(phase)
-                    record(l.node, ops, l.ox, l.oy, l.memo)
+                    again(l, ops)
                 }
             }
             // A colour transition: the layer again in this frame's colour (the target once it ended), when it changed.
@@ -347,7 +401,7 @@ internal class Layers(
                     l.glyphColors?.let { for (at in it) ops[at] = text }
                     if (l.backgroundAt >= 0) ops[l.backgroundAt] = background
                     val runs = l.runs
-                    if (runs != null) recolor(l, runs, text) else record(l.node, ops, l.ox, l.oy, l.memo)
+                    if (runs != null) recolor(l, runs, text) else again(l, ops)
                 }
             }
             if (l.turns) {
@@ -367,13 +421,14 @@ internal class Layers(
                 if (tx != l.tx || ty != l.ty) { l.tx = tx; l.ty = ty; l.node.translationX = tx; l.node.translationY = ty }
                 if (v[3] != l.rot) { l.rot = v[3]; l.node.rotationZ = v[3] }
                 if (s != l.sc) { l.sc = s; l.node.scaleX = s; l.node.scaleY = s }
+                if (l.pixelated && ops != null && s != l.recordedScale) { l.recordedScale = s; again(l, ops) }
             }
             // While a scale plays, the layer is drawn once into an offscreen layer and that layer scaled: drawn
             // straight, its text was rasterized again at every scale (a dialog's 0.9 -> 1 entrance left ~5 MB of glyph
             // images in Skia's caches). The layer goes when the scale settles. Not for a layer whose drawing could not
             // be bounded (it holds another layer): its node is 16384 px square, and an offscreen layer that size cost
             // a Vulkan allocation of over 400 ms at each start (Expo Services' login mark, LLP 1115.003).
-            val offscreen = scaling && !l.flat && l.bounded
+            val offscreen = scaling && !l.flat && l.bounded && !l.pixelated
             if (offscreen != l.composited) { l.composited = offscreen; l.node.setUseCompositingLayer(offscreen, null) }
         }
         return moving

@@ -7,8 +7,9 @@ import { rolldown } from 'rolldown';
 import { chromium as playwright } from 'playwright-core';
 import { chromium } from '../../../../scripts/agent-launch.mjs';
 import { renderer } from '../../../web-js/render.mjs';
-import { stageHostGlue } from '../../../web-js/glue.mjs';
+import { localImports, stageHostGlue } from '../../../web-js/glue.mjs';
 import { hostFixtureFile } from '../glue-fixture.mjs';
+import { buildMotion } from '../../../web-js/module.mjs';
 import { decodePng } from '../../../../scripts/png.mjs';
 
 const work = process.argv[2], root = resolve(import.meta.dir, '../../../..');
@@ -16,11 +17,13 @@ const { executable, unavailable } = chromium();
 if (unavailable) throw new Error(unavailable);
 const names = JSON.parse(readFileSync(resolve(work, 'cases.json')));
 const pages = new Map();
+let motion;
 const readIsolation = () => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => [e.dataset.testid, getComputedStyle(e).isolation]));
 const withoutScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
-const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
+const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
   const path = new URL(req.url).pathname;
   if (path === '/favicon.ico') return new Response(null, { status: 204 });
+  if (path.endsWith('/motion.wasm')) return new Response(Bun.file(await (motion ??= buildMotion())));
   if (pages.has(path)) return new Response(pages.get(path), { headers: { 'content-type': 'text/html' } });
   return new Response(Bun.file(resolve(work, '.' + path)));
 } });
@@ -33,18 +36,18 @@ try {
       mkdirSync(gen, { recursive: true });
       // The same runtime files the app build copies, with JS target modules
       // taking precedence over the host's glue.
-      for (const folder of ['host/web', 'host/web-js']) for (const file of readdirSync(resolve(root, folder)).filter(f => f.endsWith('.js'))) writeFileSync(resolve(gen, file), hostFixtureFile(resolve(root, folder, file)));
+      for (const folder of ['host/web', 'host/web-js']) for (const file of readdirSync(resolve(root, folder)).filter(f => f.endsWith('.js'))) writeFileSync(resolve(gen, file), localImports(hostFixtureFile(resolve(root, folder, file), 'utf8')));
       stageHostGlue(root, gen);
       for (const f of ['app.js', 'names.js', 'paint.js']) copyFileSync(resolve(dir, f), resolve(gen, f));
       writeFileSync(resolve(gen, 'entry.js'), `import app from './app.js'; import { journal } from './rt.js'; app(); globalThis.journal=journal; globalThis.ready=true;`);
-      writeFileSync(resolve(gen, 'server-entry.js'), `import app from './app.js'; globalThis.__start=async()=>{app();return {activate:'eager',policy:'build'}};globalThis.__render=async()=>({root:document.rootHTML(),time:0,answers:'[]',pending:[],open:[],readers:[]});`);
+      writeFileSync(resolve(gen, 'server-entry.js'), `import app from './app.js'; globalThis.__start=async()=>{app();return {activate:'eager',policy:'build'}};globalThis.__render=async()=>({hero:document.heroPreload(),root:document.rootHTML(),time:0,answers:'[]',pending:[],open:[],readers:[]});`);
       for (const [entry, file] of [['entry.js', 'app.js'], ['server-entry.js', '.gen/server.js']]) {
         const bundle = await rolldown({ input: resolve(gen, entry), logLevel: 'silent', external: ['./draw.js'] });
         await bundle.write({ file: resolve(dir, file), format: 'iife', codeSplitting: false });
         await bundle.close();
       }
       const css = readFileSync(resolve(dir, 'app.css'), 'utf8');
-      const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" src="./app.js"></script></body></html>`;
+      const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" data-entry src="./app.js"></script></body></html>`;
       writeFileSync(resolve(dir, 'shell.html'), shell);
       const rendered = (await renderer(dir)('/')).html;
       const rust = readFileSync(resolve(dir, 'rust.html'), 'utf8');

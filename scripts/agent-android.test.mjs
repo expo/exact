@@ -1,29 +1,125 @@
 // The Android carrier's reader variables, drive setup and reverse mappings (agent-android.mjs).
 // Stand-in adb devices exercise relay cleanup without an emulator or a device.
-import { test, expect } from 'bun:test';
-import { spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect, spyOn } from 'bun:test';
+import { ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { once, EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { pollUntil } from './agent-launch.mjs';
-import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, reverseRoot } from './agent-android.mjs';
+import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, androidPermissionPrompt, reverseRoot } from './agent-android.mjs';
 
+const focusCommand = "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'";
 const screenFixtures = resolve(import.meta.dir, 'fixtures/android-screen');
 const screenDump = (state, kind) => readFileSync(resolve(screenFixtures, `${state}.${kind}.txt`), 'utf8');
 
+test('Android names JDK-8335662 only for affected AArch64 JDK versions', async () => {
+  const { androidJdkRisk } = await import('./agent-android.mjs');
+  const settings = (version, arch = 'aarch64') => `Property settings:\n    java.version = ${version}\n    os.arch = ${arch}\n`;
+  for (const version of ['17', '17.0.6', '17.0.15+6', '18.0.2', '19', '20.0.2', '21', '21.0.7', '22', '23.0.2']) {
+    const risk = androidJdkRisk(settings(version));
+    expect(risk).toContain(`JDK ${version} on aarch64`);
+    expect(risk).toContain('JDK-8335662');
+    expect(risk).toContain('17.0.16');
+    expect(risk).toContain('21.0.8');
+    expect(risk).toContain('24');
+    expect(risk).toContain('JAVA_HOME');
+  }
+  for (const version of ['11.0.20', '16.0.2', '17.0.16', '17.0.16+8', '17.0.17', '21.0.8', '21.0.8.1', '24', '25.0.1'])
+    expect(androidJdkRisk(settings(version))).toBeNull();
+  for (const arch of ['x86_64', 'amd64', 'x86', 'arm']) expect(androidJdkRisk(settings('17.0.6', arch))).toBeNull();
+  expect(androidJdkRisk(settings('21.0.7', 'arm64'))).toContain('arm64');
+  for (const text of ['', 'no properties', settings('unknown'), 'java.version = 17.0.6']) expect(androidJdkRisk(text)).toBeNull();
+});
+
+test.skipIf(process.platform === 'win32')('setup and Gradle name the selected affected JDK before running Gradle', async () => {
+  const { sdkReport, platformReport } = await import('./exact.mjs');
+  const { bringPlatform } = await import('./app-shells.mjs');
+  const { runGradle } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-jdk-risk-'));
+  const errors = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    mkdirSync(resolve(dir, 'bin'));
+    const java = version => writeFileSync(resolve(dir, 'bin/java'), `#!/bin/sh\necho 'openjdk version "${version}"' >&2\necho '    java.version = ${version}' >&2\necho '    os.arch = aarch64' >&2\n`, { mode: 0o755 });
+    writeFileSync(resolve(dir, 'bin/javac'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const env = { ...process.env, JAVA_HOME: dir, JAVA_TOOL_OPTIONS: '-Xint' };
+    java('17.0.6');
+    const rows = sdkReport(env, { only: 'android' });
+    const risk = rows.find(row => row.name === 'Android JDK JIT');
+    expect(risk?.ok).toBe(false);
+    expect(risk?.fix).toContain('17.0.6');
+    const report = await platformReport('android', rows);
+    // Other prerequisites are ready: the affected JDK must not refuse a first Android build.
+    const ready = report.map(row => row.name === 'Android JDK JIT' ? row : { ...row, ok: true });
+    const app = resolve(dir, 'app'); mkdirSync(app);
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Fixture', app: { id: 'dev.exact.fixture', name: 'Fixture' }, host: { web: {} } }));
+    writeFileSync(resolve(app, 'Cargo.toml'), '[workspace]\nmembers = []\n');
+    expect((await bringPlatform(app, 'android', { report: ready })).refused).toBeUndefined();
+    expect(JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')).host.android).toBeDefined();
+    expect(report.some(row => row.name === risk?.name)).toBe(false);
+    const scoped = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'setup', '--check', '--platform', 'android'], {
+      env, encoding: 'utf8', timeout: 30_000,
+    });
+    expect(scoped.error).toBeUndefined();
+    expect(scoped.stdout).toContain('Android JDK JIT');
+    expect(scoped.stdout).toContain('JDK-8335662');
+    expect(scoped.stderr).not.toMatch(/Android JDK JIT[^\n]*missing or differ/);
+    expect(sdkReport(env, { only: 'web' }).some(row => row.name === 'Android JDK JIT')).toBe(false);
+    let called = 0;
+    const run = (_command, _args, options) => {
+      expect(options.env.JAVA_HOME).toBe(dir);
+      expect(errors.mock.calls.flat().join('\n')).toContain('JDK-8335662');
+      called++; return { status: 0 };
+    };
+    expect(runGradle(['help'], { env, cwd: dir }, process.platform, { run })).toBe(true);
+    expect(called).toBe(1);
+    errors.mockClear();
+    java('17.0.16');
+    expect(sdkReport(env, { only: 'android' }).some(row => row.name === 'Android JDK JIT')).toBe(false);
+    expect(runGradle(['help'], { env, cwd: dir }, process.platform, { run: () => ({ status: 0 }) })).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+  } finally { errors.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test('a failed Gradle run names a matching JVM crash log, including one left by an earlier run', async () => {
+  const { runGradle } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-gradle-crash-'));
+  const errors = spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const log = resolve(dir, 'hs_err_pid123.log');
+    const run = status => runGradle(['help'], { cwd: dir, env: { JAVA_HOME: resolve(dir, 'absent'), PATH: '' } }, process.platform, { run: () => ({ status }) });
+    writeFileSync(log, '# SIGSEGV in an unrelated library\n');
+    expect(run(1)).toBe(false);
+    expect(errors).not.toHaveBeenCalled();
+    writeFileSync(log, '# Internal Error (assembler_aarch64.hpp:267)\n# guarantee(chk == -1 || chk == 0) failed: Field too big for insn\nV LIR_Assembler::osr_entry()\n');
+    expect(run(0)).toBe(true);
+    expect(errors).not.toHaveBeenCalled();
+    expect(run(1)).toBe(false);
+    expect(errors.mock.calls.flat().join('\n')).toContain(log);
+    expect(errors.mock.calls.flat().join('\n')).toContain('JDK-8335662');
+    expect(errors.mock.calls.flat().join('\n')).toContain('earlier run');
+    expect(errors.mock.calls.flat().join('\n')).toContain('JAVA_HOME');
+  } finally { errors.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('the Android reader variable filter and activity allowlist include the auth fixture; loopback URLs select ports', async () => {
   const { readerVariables, reversedPorts } = await import('./agent-android.mjs');
-  const vars = readerVariables({ EXACT_AGENT: '1', EXACT_AGENT_STORAGE: 's', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791', EXACT_APP_DIR: '/a', HOME: '/h' });
-  expect(vars).toEqual({ EXACT_AGENT: '1', EXACT_AGENT_STORAGE: 's', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791' });
-  expect(reversedPorts(vars)).toEqual(['4791']);
+  const vars = readerVariables({ EXACT_AGENT: '1', EXACT_AGENT_STORAGE: 's', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791', EXACT_APP_DIR: '/a', HOME: '/h',
+    EXACT_UPDATE_ORIGIN: 'http://127.0.0.1:8790/', EXACT_UPDATE_DIR: '/u' });
+  expect(vars).toEqual({ EXACT_AGENT: '1', EXACT_AGENT_STORAGE: 's', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791', EXACT_UPDATE_ORIGIN: 'http://127.0.0.1:8790/', EXACT_UPDATE_DIR: '/u' });
+  expect(reversedPorts(vars)).toEqual(['4791', '8790']);
   expect(reversedPorts({ EXACT_AUTH_FIXTURE: 'http://[::1]:4791' })).toEqual(['4791']);
   expect(reversedPorts({ EXACT_DEV_PLAN: 'http://localhost:8080/', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:8080' })).toEqual(['8080']);
   expect(reversedPorts({ EXACT_DEV_PLAN: 'https://example.com/plan' })).toEqual([]);
   const activity = readFileSync(resolve(import.meta.dir, '../host/android/canvas/src/main/java/dev/exact/canvas/ExactActivity.kt'), 'utf8');
   expect(Object.keys(vars).map((name) => `x_${name.slice('EXACT_'.length).toLowerCase()}`).filter((extra) => !activity.includes(`"${extra}"`))).toEqual([]);
 });
+
+// A test that times out never reaches its own `finally`.
+const driveFixtures = [];
+afterAll(() => { for (const fixture of driveFixtures) fixture.dispose(); });
 
 // The stand-in device reaches the fixture only while its reverse mapping exists.
 function androidDriveFixture(reader, destination = null, reacquire = false, failedRemoval = null, stuckShell = false, screen = {}) {
@@ -40,12 +136,13 @@ function androidDriveFixture(reader, destination = null, reacquire = false, fail
   } });
   mkdirSync(resolve(dir, 'platform-tools'));
   writeFileSync(resolve(dir, 'platform-tools/adb'), `#!${process.execPath}
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
-const cmd = args.slice(2);
+const cmd = args.slice(2), pipedFocus = cmd[0] === 'shell' && cmd[1] === ${JSON.stringify(focusCommand)};
+if (pipedFocus) cmd.splice(1, 1, 'dumpsys', 'window');
 const display = ${JSON.stringify(display)}, screen = JSON.parse(readFileSync(display, 'utf8'));
 if (cmd[0] === 'shell' && cmd[1] === 'dumpsys') {
   if (screen.failDump === cmd[2]) { console.error('dump failed'); process.exit(1); }
@@ -56,6 +153,13 @@ if (cmd[0] === 'shell' && cmd[1] === 'dumpsys') {
   const state = screen.wakefulness === 'Asleep' ? (screen.showing ? (screen.secure ? 'asleep-pin' : 'asleep-swipe') : 'asleep-no-lock')
     : screen.showing ? (screen.secure ? 'awake-pin' : 'awake-swipe') : screen.dismissals ? 'awake-dismissed' : 'awake-unlocked';
   if (cmd[2] === 'power') process.stdout.write(screen.power ?? readFileSync(${JSON.stringify(screenFixtures)} + '/' + state + '.power.txt', 'utf8'));
+  if (cmd[2] === 'window' && (!cmd[3] || ['windows', 'displays'].includes(cmd[3]))) {
+    if (screen.failFocus) { if (screen.focus) process.stdout.write(screen.focus); console.error('focus dump failed'); process.exit(1); }
+    const focus = screen.focus ?? 'mCurrentFocus=null\\n  mFocusedApp=null\\n';
+    if (pipedFocus) process.stdout.write(focus);
+    else if (cmd[3] === 'displays' && (screen.api ?? 29) < 30) process.stdout.write('WINDOW MANAGER DISPLAY CONTENTS\\n  Display: mDisplayId=0\\n');
+    else process.stdout.write('WINDOW MANAGER WINDOWS\\n' + ((screen.api ?? 29) < 30 ? '  ' : '  Display: mDisplayId=0\\n    ') + focus);
+  }
   if (cmd[2] === 'window' && cmd[3] === 'policy') {
     if (screen.largePolicy) process.stdout.write('Window policy details\\n'.repeat(100000));
     let policy = screen.window ?? readFileSync(${JSON.stringify(screenFixtures)} + '/' + state + '.policy.txt', 'utf8');
@@ -116,9 +220,10 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
   const env = { ...process.env, ANDROID_HOME: dir, ANDROID_SERIAL: serial,
     XDG_CACHE_HOME: resolve(dir, 'cache'), EXACT_AGENT: '1', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791' };
   for (const name of ['EXACT_DEV_PLAN', 'EXACT_PLAN', 'EXACT_WORLD', 'EXACT_LAUNCH_URL']) delete env[name];
-  return { port: server.port, app: { id: 'dev.exact.fixture', dir }, bin, env, closed, connected,
+  const fixture = { port: server.port, app: { id: 'dev.exact.fixture', dir }, bin, env, closed, connected,
     commands: () => readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse),
     mappings: () => JSON.parse(readFileSync(mappings, 'utf8')), stopSocket: () => server.stop(true),
+    focus: (focus, failFocus = false) => writeFileSync(display, JSON.stringify({ ...JSON.parse(readFileSync(display, 'utf8')), focus, failFocus })),
     replace: destination => writeFileSync(mappings, JSON.stringify(destination ? { 'tcp:4791': destination } : {})),
     failNextReverse: action => writeFileSync(mappings + '.' + action + '.fail', ''),
     shells: () => readFileSync(resolve(dir, 'shells'), 'utf8').trim().split('\n').map(Number),
@@ -131,7 +236,211 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
     },
     dispose() { server.stop(true); rmSync(dir, { recursive: true, force: true }); rmSync(reverseRoot(serial), { recursive: true, force: true }); },
   };
+  driveFixtures.push(fixture);
+  return fixture;
 }
+test('the Android reader uses a variant\'s package for lookup, launch and drive storage, and refuses another package\'s APK', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const { resolveVariant } = await import('./variants.mjs');
+  const fixture = androidDriveFixture(true);
+  fixture.app.manifest = resolveVariant({ app: { id: fixture.app.id }, host: { android: { id: 'com.example.android_app' } },
+    variants: { dev: { idSuffix: '.dev', name: 'Dev' } } }, 'dev');
+  const id = 'com.example.android_app.dev';
+  let child;
+  try {
+    // The deleted knob is refused by name, and an APK built as the plain package is not launched as the variant.
+    expect(() => androidDeploy(fixture.app, fixture.bin, { ...fixture.env, ORG_GRADLE_PROJECT_idSuffix: '.dev' })).toThrow(/ORG_GRADLE_PROJECT_idSuffix is deleted/);
+    const record = resolve(dirname(fixture.bin), 'exact-build.json');
+    writeFileSync(record, JSON.stringify({ package: 'com.example.android_app' }));
+    expect(() => androidDeploy(fixture.app, fixture.bin, fixture.env)).toThrow(`installs as com.example.android_app, not ${id}: build it again (bun exact.mjs android --variant dev)`);
+    writeFileSync(record, JSON.stringify({ package: id }));
+    const deployed = androidDeploy(fixture.app, fixture.bin, fixture.env);
+    expect(deployed.dir).toBe(`/data/local/tmp/exact/${id}`);
+    child = deployed.spawn();
+    const closed = once(child, 'close');
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect(await closed).toEqual([0, null]);
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.some(args => args[0] === 'shell' && args[1].includes(`pm path '${id}'`))).toBe(true);
+    expect(commands.some(args => args[0] === 'shell' && args[1].includes(`${id}/dev.exact.app.MainActivity`))).toBe(true);
+    expect(commands.some(args => args.join(' ').includes(fixture.app.id))).toBe(false);
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+test('Android permission detection reads only the focused window and activity', () => {
+  const component = 'com.android.permissioncontroller/com.android.permissioncontroller.permission.ui.GrantPermissionsActivity';
+  for (const line of [`mCurrentFocus=Window{abc u0 ${component}}`, `mFocusedApp=ActivityRecord{abc u0 ${component} t42}`,
+    `mCurrentFocus=null\n  mFocusedApp=ActivityRecord{abc u0 ${component} t42}`]) expect(androidPermissionPrompt(line)).toBe(component);
+  for (const line of ['', 'mCurrentFocus=null', 'mCurrentFocus=Window{abc u0 dev.exact.app/.MainActivity}',
+    `Window #0 Window{abc u0 ${component}}`, `mLastFocus=Window{abc u0 ${component}}`,
+    `mCurrentFocus=Window{abc u0 ${component}Extra}`]) expect(androidPermissionPrompt(line)).toBeNull();
+});
+
+for (const [api, controller] of [[29, 'com.android.permissioncontroller'], [30, 'com.google.android.permissioncontroller']]) test(`the Android reader reports a surviving API ${api} ${controller} permission dialog`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const component = `${controller}/com.android.permissioncontroller.permission.ui.GrantPermissionsActivity`;
+  const fixture = androidDriveFixture(true, null, false, null, false, { api, focus: `mCurrentFocus=Window{123 u0 ${component}}` });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close');
+    let error = '', output = '';
+    child.stderr.on('data', data => { error += data; });
+    child.stdout.on('data', data => {
+      output += data;
+      if (output.trim().split('\n').length === 1) child.stdin.write('{"op":"state"}\n');
+      else if (output.trim().split('\n').length === 2) {
+        fixture.focus('mCurrentFocus=Window{abc u0 dev.exact.fixture/dev.exact.app.MainActivity}');
+        child.stdin.write('{"op":"state"}\n');
+      } else if (output.trim().split('\n').length === 3) {
+        fixture.focus(null, true);
+        child.stdin.write('{"op":"state"}\n');
+      } else child.stdin.end('{"op":"quit"}\n');
+    });
+    expect(await closed).toEqual([0, null]);
+    expect(error).toContain(`a permission dialog is up (${component})`);
+    expect(output.trim().split('\n').slice(1)).toEqual(Array(3).fill('{"fixture":true}'));
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands).not.toContainEqual(['shell', 'dumpsys', 'window']);
+    const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
+    expect(commands.slice(0, launch)).toContainEqual(['shell', focusCommand]);
+    expect(commands.slice(launch + 1)).not.toContainEqual(['shell', focusCommand]);
+    expect(commands.filter(args => args[0] === 'shell' && args[1] === 'am' && args[2] === 'force-stop').every(args => args[3] === fixture.app.id)).toBe(true);
+    expect(commands.some(args => args.join(' ').match(/\b(?:grant|revoke|keyevent|stack remove)\b/))).toBe(false);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+for (const screen of [
+  { api: 29, focus: 'mCurrentFocus=Window{123 u0 com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity}' },
+  { api: 30, focus: 'mFocusedApp=ActivityRecord{123 u0 com.google.android.permissioncontroller/com.android.permissioncontroller.permission.ui.GrantPermissionsActivity t42}' },
+  { api: 29, focus: '  mTopFocusedDisplayId=0\n' },
+  { api: 30, failFocus: true },
+  { api: 29, failFocus: true, focus: 'mCurrentFocus=Window{123 u0 com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity}' },
+]) test(`the Android CLI preserves JSON and reports startup focus: ${JSON.stringify(screen)}`, async () => {
+  const fixture = androidDriveFixture(true, null, false, null, false, screen);
+  writeFileSync(resolve(fixture.app.dir, 'app.json'), JSON.stringify({ name: 'fixture', app: { id: fixture.app.id, name: 'Fixture' } }));
+  writeFileSync(resolve(fixture.app.dir, 'app.contract'), 'component App\n  view\n    text "Fixture"\n');
+  let driver;
+  try {
+    driver = spawn(process.execPath, [resolve(import.meta.dir, 'agent.mjs'), 'android', '--reader', '--json', '--app', fixture.app.dir, 'state'],
+      { env: { ...fixture.env, EXACT_ANDROID_BIN: fixture.bin }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const closed = once(driver, 'close');
+    let output = '', error = '';
+    driver.stdout.on('data', data => { output += data; });
+    driver.stderr.on('data', data => { error += data; });
+    expect(await closed).toEqual([0, null]);
+    expect(JSON.parse(output).fixture).toBe(true);
+    expect(error).toContain(screen.focus?.includes('GrantPermissionsActivity') ? 'a permission dialog is up ('
+      : screen.failFocus ? 'focus dump failed' : 'focus was unreadable');
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (driver?.exitCode === null && driver.signalCode === null) { const closed = once(driver, 'close'); driver.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+test('an unexpected carrier exit fails a pending request before its pipes close and starts cleanup', async () => {
+  const android = await import('./agent-android.mjs');
+  const { openStdio } = await import('./agent-stdio.mjs');
+  const { waitAtMost } = await import('./agent-wire.mjs');
+  const fixture = androidDriveFixture(false), before = process.env.EXACT_ANDROID_BIN;
+  writeFileSync(resolve(fixture.app.dir, 'app.json'), JSON.stringify({ name: 'fixture', app: { id: fixture.app.id, name: 'Fixture' } }));
+  writeFileSync(resolve(fixture.app.dir, 'app.contract'), 'component App\n  view\n    text "Fixture"\n');
+  const child = new EventEmitter();
+  Object.assign(child, { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null });
+  let released, session;
+  const cleaned = new Promise(resolve => { released = resolve; });
+  const deploy = spyOn(android, 'androidDeploy').mockReturnValue({ spawn: () => child, cleanup: released });
+  try {
+    process.env.EXACT_ANDROID_BIN = fixture.bin;
+    const opening = openStdio({ host: 'android', app: fixture.app.dir, onProcess() {
+      setImmediate(() => child.stdout.write('{"ready":true}\n'));
+    } });
+    session = await opening;
+    const request = session.ask({ op: 'state' });
+    const ended = spyOn(child.stdin, 'end');
+    child.stderr.write('fatal: boom');
+    await new Promise(resolve => setImmediate(resolve));
+    child.exitCode = 1; child.emit('exit', 1, null);
+    const failure = waitAtMost(request, 1000, () => { throw new Error('request waited for the open pipes'); });
+    await expect(failure).rejects.toThrow('the app exited (exit code 1)');
+    // A fragment with no newline is in the hangup, and the exited child's stdin is left alone.
+    await expect(failure).rejects.toThrow('app: fatal: boom');
+    expect(ended).not.toHaveBeenCalled();
+    expect(child.stdout.destroyed).toBe(false);
+    await waitAtMost(cleaned, 6000, () => { throw new Error('unexpected exit did not start cleanup'); });
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally {
+    child.emit('close', 1, null);
+    await session?.close();
+    for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy();
+    deploy.mockRestore();
+    if (before === undefined) delete process.env.EXACT_ANDROID_BIN; else process.env.EXACT_ANDROID_BIN = before;
+    fixture.dispose();
+  }
+}, 8000);
+
+for (const unexpected of [false, true]) test(`Windows carrier cleanup kills only its recorded pipe owners (unexpected exit: ${unexpected})`, async () => {
+  const { windowsCarrier } = await import('./agent-android.mjs');
+  const child = new EventEmitter(), killed = [];
+  child.kill = signal => { killed.push([10, signal]); child.emit('exit', null, signal); return true; };
+  windowsCarrier(child, (pid, signal) => killed.push([pid, signal]));
+  child.emit('message', { adbPipe: 11 });
+  child.emit('message', { adbPipe: 12 });
+  child.emit('message', { adbPipe: 12, exited: true });
+  child.emit('message', { reverse: 13 });
+  if (unexpected) child.emit('exit', 1, null); else expect(child.kill('SIGKILL')).toBe(true);
+  expect(killed).toEqual(unexpected ? [[11, 'SIGKILL']] : [[11, 'SIGKILL'], [10, 'SIGKILL']]);
+  // A spawn notification already in flight when the carrier died still owns a pipe.
+  child.emit('message', { adbPipe: 14 });
+  expect(killed.at(-1)).toEqual([14, 'SIGKILL']);
+});
+
+for (const alreadyExited of [false, true]) test(`closing a carrier bounds inherited pipes left open (already exited: ${alreadyExited})`, async () => {
+  const { closeStdio } = await import('./agent-stdio.mjs');
+  const child = new EventEmitter();
+  Object.assign(child, { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: alreadyExited ? 1 : null, signalCode: null });
+  let killed = false, released = false;
+  child.kill = () => { killed = true; child.signalCode = 'SIGKILL'; child.emit('exit', null, 'SIGKILL'); };
+  const closed = once(child, 'close');
+  try {
+    await closeStdio(child, closed, () => { released = true; });
+    expect(killed).toBe(!alreadyExited);
+    expect(released).toBe(true);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { for (const stream of [child.stdin, child.stdout, child.stderr]) stream.destroy(); child.emit('close'); }
+}, 7000);
+
+test('the Android reader logs a failed focused activity read, launches and releases its mappings', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { failFocus: true });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close');
+    let error = '';
+    child.stderr.on('data', data => { error += data; });
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect(await closed).toEqual([0, null]);
+    expect(error).toContain('Android focused activity: adb shell dumpsys window: focus dump failed');
+    expect(fixture.commands().some(args => args[2] === 'shell' && args[3].startsWith('am start '))).toBe(true);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
 test('Android screen dumps recognize both delegate headings and stop at the next section', () => {
   for (const [name, wakefulness, showing, secure] of [
     ['awake-unlocked', 'Awake', false, false], ['asleep-no-lock', 'Asleep', false, false],
@@ -164,11 +473,11 @@ for (const wakefulness of ['Asleep', 'Awake']) test(`the Android reader checks a
     expect(await closed).toEqual([0, null]);
     const commands = fixture.commands().map(args => args.slice(2));
     const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
-    const screenCalls = commands.filter(args => args[0] === 'shell' && ['dumpsys', 'input', 'wm'].includes(args[1]));
+    const screenCalls = commands.filter(args => args[0] === 'shell' && ['dumpsys', 'input', 'wm', focusCommand].includes(args[1]));
     const check = [['shell', 'dumpsys', 'power'], ['shell', 'dumpsys', 'window', 'policy']];
-    expect(screenCalls).toEqual(wakefulness === 'Awake' ? check : [
+    expect(screenCalls).toEqual([...(wakefulness === 'Awake' ? check : [
       ...check, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'], ...check, ['shell', 'wm', 'dismiss-keyguard'], ...check,
-    ]);
+    ]), ['shell', focusCommand]]);
     expect(commands.indexOf(screenCalls.at(-1))).toBeLessThan(launch);
   } finally {
     if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
@@ -197,7 +506,6 @@ for (const [name, screen, dismissals] of [
     const commands = fixture.commands().map(args => args.slice(2));
     expect(commands.filter(args => args[1] === 'wm')).toHaveLength(dismissals);
     expect(commands).toContainEqual(['shell', 'dumpsys', 'window', 'policy']);
-    expect(commands).not.toContainEqual(['shell', 'dumpsys', 'window']);
     const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
     const lastDismissal = commands.findLastIndex(args => args[1] === 'wm');
     expect(launch).toBeGreaterThan(lastDismissal);
@@ -355,15 +663,18 @@ async function carrierEnded(pid) {
   }, Boolean, { bound: 8000 })).toBe(true);
 }
 
-for (const kill of ['child', 'pid']) test(`killing the Android headless ${kill} stops its adb shell before releasing its reverse`, async () => {
-  const { androidDeploy } = await import('./agent-android.mjs');
+for (const windows of [false, true]) for (const kill of ['child', 'pid']) test(`killing the Android headless ${kill} stops its adb shell before releasing its reverse (Windows cleanup: ${windows})`, async () => {
+  const { androidDeploy, windowsCarrier } = await import('./agent-android.mjs');
   const fixture = androidDriveFixture(false, null, false, null, true);
   let child, closed, shell;
   try {
     child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    if (windows) { child.removeAllListeners('exit'); child.kill = ChildProcess.prototype.kill.bind(child); windowsCarrier(child); }
+    const announced = once(child, 'message');
     closed = once(child, 'close');
     await once(child.stdout, 'data');
     [shell] = fixture.shells();
+    expect((await announced)[0].adbPipe).toBe(shell);
     const exited = once(child, 'exit');
     if (kill === 'child') child.kill('SIGKILL'); else process.kill(child.pid, 'SIGKILL');
     await exited;
@@ -380,24 +691,112 @@ for (const kill of ['child', 'pid']) test(`killing the Android headless ${kill} 
   }
 }, 15000);
 
-test('killing an Android carrier group leaves an in-flight reverse mutation running', async () => {
+test.skipIf(process.platform === 'win32')('Android reverse cleanup waits for a signalled adb shell to close', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(false, null, false, null, true);
+  let child, closed, signal;
+  const kill = process.kill.bind(process);
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    closed = once(child, 'close');
+    await once(child.stdout, 'data');
+    // A group signal need not finish every member before the carrier's exit is observed.
+    signal = spyOn(process, 'kill').mockImplementation((pid, value) => {
+      if (pid !== -child.pid) return kill(pid, value);
+      setImmediate(() => { try { kill(pid, value); } catch (error) { if (error.code !== 'ESRCH') throw error; } });
+      return true;
+    });
+    kill(child.pid, 'SIGKILL');
+    await closed;
+    expect(fixture.liveShellsAtRemoval()).toEqual([]);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    signal?.mockRestore();
+    if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (closed) await closed;
+    fixture.dispose();
+  }
+}, 15000);
+
+test.skipIf(process.platform !== 'darwin')('Android group cleanup accepts EPERM only when no member is live', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(false, null, false, null, true);
+  let child, closed, signal, refused = true;
+  const kill = process.kill.bind(process), denied = Object.assign(new Error('fixture group permission error'), { code: 'EPERM' });
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    closed = once(child, 'close');
+    await once(child.stdout, 'data');
+    signal = spyOn(process, 'kill').mockImplementation((pid, value) => {
+      if (refused && pid === -child.pid) throw denied;
+      return kill(pid, value);
+    });
+    expect(() => child.kill('SIGKILL')).toThrow(denied.message);
+    refused = false;
+    child.kill('SIGKILL');
+    await closed;
+    // Darwin can report EPERM while only unreaped zombies retain the group.
+    refused = true;
+    expect(child.kill('SIGKILL')).toBe(false);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    signal?.mockRestore();
+    if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (closed) await closed;
+    fixture.dispose();
+  }
+}, 15000);
+
+test.skipIf(process.platform === 'win32')('closing an Android session waits for carrier cleanup', async () => {
+  const { openStdio } = await import('./agent-stdio.mjs');
+  const fixture = androidDriveFixture(false, null, false, null, true), before = process.env.EXACT_ANDROID_BIN;
+  writeFileSync(resolve(fixture.app.dir, 'app.json'), JSON.stringify({ name: 'fixture', app: { id: fixture.app.id, name: 'Fixture' } }));
+  writeFileSync(resolve(fixture.app.dir, 'app.contract'), 'component App\n  view\n    text "Fixture"\n');
+  let child, closed, signal;
+  const kill = process.kill.bind(process);
+  try {
+    process.env.EXACT_ANDROID_BIN = fixture.bin;
+    const session = await openStdio({ host: 'android', app: fixture.app.dir, env: fixture.env,
+      onProcess(process) { child = process; closed = once(child, 'close'); } });
+    signal = spyOn(process, 'kill').mockImplementation((pid, value) => {
+      if (pid !== -child.pid) return kill(pid, value);
+      setImmediate(() => { try { kill(pid, value); } catch (error) { if (error.code !== 'ESRCH') throw error; } });
+      return true;
+    });
+    kill(child.pid, 'SIGKILL');
+    await session.close();
+    expect(fixture.mappings()).toEqual({});
+    expect(fixture.liveShellsAtRemoval()).toEqual([]);
+  } finally {
+    signal?.mockRestore();
+    if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (closed) await closed;
+    if (before === undefined) delete process.env.EXACT_ANDROID_BIN; else process.env.EXACT_ANDROID_BIN = before;
+    fixture.dispose();
+  }
+}, 15000);
+
+for (const windows of [false, true]) test(`killing an Android carrier group leaves an in-flight reverse mutation running (Windows cleanup: ${windows})`, async () => {
   const fixture = androidDriveFixture(false), gate = fixture.holdReverse('--remove');
   let driver, closed, holder;
   try {
     driver = spawn(process.execPath, ['--eval', `
-      import { androidDeploy } from ${JSON.stringify(resolve(import.meta.dir, 'agent-android.mjs'))};
+      import { ChildProcess } from 'node:child_process';
+      import { androidDeploy, windowsCarrier } from ${JSON.stringify(resolve(import.meta.dir, 'agent-android.mjs'))};
       const child = androidDeploy(${JSON.stringify(fixture.app)}, ${JSON.stringify(fixture.bin)}, process.env).spawn();
-      child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
-      child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\\n'));
-      process.stdin.once('data', () => { child.kill('SIGKILL'); console.log('killed'); });
+      if (${windows}) { child.removeAllListeners('exit'); child.kill = ChildProcess.prototype.kill.bind(child); windowsCarrier(child); }
+      child.stderr.pipe(process.stderr);
+      child.stdout.once('data', () => { console.log(JSON.stringify({ carrier: child.pid })); child.stdin.end('{"op":"quit"}\\n'); });
+      process.stdin.once('data', () => child.kill('SIGKILL'));
       child.on('close', code => process.exit(code ?? 1));
     `], { env: fixture.env, stdio: ['pipe', 'pipe', 'pipe'] });
     closed = once(driver, 'close');
-    await once(driver.stdout, 'data');
+    const [ready] = await once(driver.stdout, 'data'), { carrier } = JSON.parse(ready);
     holder = await pollUntil(gate.entered, Boolean, { bound: 8000 });
     expect(holder).toBeGreaterThan(0);
-    const killed = once(driver.stdout, 'data');
-    driver.stdin.write('kill'); await killed;
+    driver.stdin.write('kill');
+    // The driver's close handler waits for this held helper and can block stdout from flushing.
+    await carrierEnded(carrier);
     const status = spawnSync('ps', ['-o', 'stat=', '-p', String(holder)], { encoding: 'utf8' });
     expect(status.status).toBe(0);
     expect(status.stdout.trim().startsWith('Z')).toBe(false);
@@ -768,42 +1167,6 @@ test.skipIf(process.platform === 'win32')('Android tries PATH after an unusable 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-const releaseJavaEnv = androidJavaEnv(process.env);
-const releaseSdk = androidSdk(process.env);
-test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
-  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('Android release metadata and signing reach Gradle without patching its source', async () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-release-'));
-  try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: 'dev.exact.ci', name: 'CI' } }));
-    writeFileSync(resolve(dir, 'upload.jks'), 'configuration fixture');
-    const init = resolve(dir, 'inspect.gradle');
-    writeFileSync(init, `allprojects { repositories { maven { url = uri('https://127.0.0.1:9/unused-ci-mirror') } } }
-    gradle.projectsEvaluated {
-      def app = gradle.rootProject.project(':app')
-      app.tasks.register('inspectRelease') {
-        doLast {
-          def android = app.extensions.getByName('android')
-          def signing = android.buildTypes.release.signingConfig
-          println('EXACT_RELEASE=' + groovy.json.JsonOutput.toJson([
-            code: android.defaultConfig.versionCode, version: android.defaultConfig.versionName,
-            signing: signing.name, store: signing.storeFile.name,
-            passwords: signing.storePassword == 'store-secret' && signing.keyPassword == 'key-secret',
-            alias: signing.keyAlias]))
-        }
-      }
-    }`);
-    const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
-      ':app:inspectRelease', '-Papp=ci', `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
-    { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
-      env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
-        EXACT_BUILD_NUMBER: '42', EXACT_VERSION: '2.3.4', EXACT_KEYSTORE: resolve(dir, 'upload.jks'),
-        EXACT_KEYSTORE_PASSWORD: 'store-secret', EXACT_KEY_ALIAS: 'upload', EXACT_KEY_PASSWORD: 'key-secret' } });
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    const line = result.stdout.split('\n').find(line => line.startsWith('EXACT_RELEASE='));
-    expect(JSON.parse(line.slice('EXACT_RELEASE='.length))).toEqual({ code: 42, version: '2.3.4', signing: 'upload', store: 'upload.jks', passwords: true, alias: 'upload' });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-}, 200000);
-
 // The package suites read the roster, manifest and APK from apkBuildDir; under the reader's own build directory an
 // outside app's were never found.
 test("apkBuildDir holds the APK build --apk makes: an outside app's own target, a checkout app's the reader's", async () => {
@@ -848,24 +1211,6 @@ test('Android distribution refuses bad metadata and incomplete credentials befor
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a production Android build with the Linux bake store on and no stream is refused before compiling (#48)', async () => {
-  const { androidStreamRefusal } = await import('./agent-android.mjs');
-  const production = { EXACT_UPDATE_TRUST: 'production' };
-  expect(androidStreamRefusal('a', {}, production)).toContain('deploy.store.linux to "0"');
-  expect(androidStreamRefusal('a', { deploy: { store: { android: '0' } } }, production)).toContain('deploy.store.android does not');
-  expect(androidStreamRefusal('a', { deploy: { store: { linux: '0' } } }, production)).toBeNull();
-  expect(androidStreamRefusal('a', {}, {})).toBeNull();
-  expect(androidStreamRefusal('a', {}, { ...production, EXACT_UPDATE_GENESIS: '1' })).toBeNull();
-  expect(androidStreamRefusal('a', {}, { ...production, EXACT_UPDATE_RECEIPT: '/receipt.json' })).toBeNull();
-  expect(androidStreamRefusal('a', {}, { ...production, EXACT_BAKE_ANALYSIS: '1' })).toBeNull();
-  // The verb says it in its first second: `--bundle` bakes production trust, and this app's store is on.
-  const env = { ...process.env };
-  for (const key of ['EXACT_UPDATE_TRUST', 'EXACT_UPDATE_RECEIPT', 'EXACT_UPDATE_GENESIS', 'EXACT_BAKE_ANALYSIS']) delete env[key];
-  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'auth-fixture', '--bundle'], { encoding: 'utf8', env, timeout: 30000 });
-  expect(r.status).toBe(1);
-  expect(r.stderr).toContain('set deploy.store.linux to "0" in app.json');
-});
-
 test('Android bundles and unattended APKs have explicit command flags', async () => {
   const { guardFlags } = await import('./help.mjs');
   expect(guardFlags('android', ['--bundle', '--json'])).toEqual(['--bundle', '--json']);
@@ -879,21 +1224,17 @@ test('Android bundles and unattended APKs have explicit command flags', async ()
 });
 
 test('an APK carries each GPU library the bake built, by the name Cargo gave it, unstripped (#306)', async () => {
-  const { bakeGpuLibraries, carriesGpu, stageGpuLibraries } = await import('./agent-android.mjs');
+  const { bakeGpuLibraries, stageGpuLibraries } = await import('./agent-android.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-gpu-'));
   try {
     const app = { hasGpu: true, manifest: { gpu: { modules: { extra: ['extra'] } } } };
-    expect(carriesGpu(app)).toBe(true);
-    // An app whose surfaces are all in named modules has no primary, and still bakes them.
-    expect(carriesGpu({ ...app, hasGpu: false })).toBe(true);
-    expect(carriesGpu({ hasGpu: false, manifest: {} })).toBe(false);
     // The named module's crate sets `[lib] name = "extra"`: Cargo builds libextra.so, not libfiddl_gpu_extra.so.
     const products = ['libfiddl_gpu.so', 'libextra.so'].map((file) => resolve(dir, file));
     let asked;
     const bake = (...args) => { asked = args; for (const product of products) expect(args[3].prepareGpu(product)).toBe(product); };
     const libraries = bakeGpuLibraries(app, { profile: 'release', env: { A: '1' } }, bake);
     expect(libraries).toEqual(products);
-    expect(asked.slice(0, 3)).toEqual([app, 'linux', 'aarch64-linux-android']);
+    expect(asked.slice(0, 3)).toEqual([app, 'android', 'aarch64-linux-android']);
     expect(asked[3]).toMatchObject({ profile: 'release', env: { A: '1' }, kind: 'android' });
     for (const library of libraries) writeFileSync(library, library);
     const jniLibs = resolve(dir, 'jniLibs/arm64-v8a');
@@ -968,3 +1309,192 @@ test('a locked Gradle failure keeps its output and names lock repair only for de
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('an Android picker answer carries local file bytes and names to either carrier', async () => {
+  const { sessionInput } = await import('./agent-input.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-agent-pick-'));
+  try {
+    const names = ['notes with spaces.txt', 'photo.png', ...(process.platform === 'win32' ? [] : ['foo\\bar.txt'])];
+    const paths = names.map(name => resolve(dir, name));
+    const bytes = [Buffer.from('notes\n'), readFileSync(resolve(import.meta.dir, 'fixtures/picker/photo.png')), Buffer.from('backslash\n')];
+    paths.forEach((path, i) => writeFileSync(path, bytes[i]));
+    const calls = [], s = {
+      op: async req => {
+        if (req.op === 'state') return { pending: [{ ticket: 7, device: { capability: 'pick' } }] };
+        calls.push(req); return {};
+      },
+      landed: async r => r,
+    };
+    Object.assign(s, sessionInput(s, { carrier: {}, host: 'android' }));
+    await s.answer('type', '@7', paths.join('\n'));
+    expect(calls).toEqual([{ op: 'type', ticket: 7, text: paths.join('\n') + '\n',
+      files: names.map((name, i) => ({ name, bytes: bytes[i].toString('base64') })),
+    }]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('wireless adb entries for one phone select its address; distinct or unreadable devices refuse', async () => {
+  const { androidDevice } = await import('./agent-android.mjs');
+  const mdns = 'adb-R5CT1234ABC-a1B2c3 (2)._adb-tls-connect._tcp', ip = '192.168.1.20:37099';
+  const env = {}, phone = id => ({ id, serial: 'R5CT1234ABC', androidId: 'd423b93a7ac32ef1' });
+  let devices = [], calls = [];
+  const run = (tool, args) => {
+    calls.push(args);
+    if (args.join(' ') === 'devices') return { status: 0,
+      stdout: 'List of devices attached\n' + devices.map(d => d.id + '\t' + (d.state ?? 'device')).join('\n') };
+    const identity = args[3] === 'settings';
+    expect(args.slice(2)).toEqual(identity ? ['shell', 'settings', 'get', 'secure', 'android_id'] : ['shell', 'getprop', 'ro.serialno']);
+    const d = devices.find(d => d.id === args[1]);
+    const value = (identity ? d?.androidId : d?.serial) ?? '';
+    return { status: (identity ? d?.identityStatus : d?.status) ?? 0, stdout: `${value}\r\n` };
+  };
+  const select = listed => {
+    devices = listed;
+    calls = [];
+    return androidDevice(env, run);
+  };
+  const factory = '0123456789ABCDEF';
+  expect(() => select([{ ...phone(ip), serial: factory },
+    { ...phone(factory), serial: factory, androidId: 'another-phone' }]))
+    .toThrow(`2 Android devices are ready (${ip}, ${factory}): set ANDROID_SERIAL to the one to use`);
+  expect(() => select([{ ...phone(ip), serial: factory, androidId: 'null' },
+    { ...phone(factory), serial: factory, androidId: 'null' }]))
+    .toThrow(`2 Android devices are ready (${ip}, ${factory}): set ANDROID_SERIAL to the one to use`);
+  expect(() => select([{ ...phone(ip), serial: 'unknown', androidId: 'null' },
+    { ...phone('unknown'), serial: 'unknown', androidId: 'null' }]))
+    .toThrow(`2 Android devices are ready (${ip}, unknown): set ANDROID_SERIAL to the one to use`);
+  for (const other of [
+    { ...phone(mdns), androidId: '' }, { ...phone(mdns), androidId: '   ' },
+    { ...phone(mdns), identityStatus: 1 },
+  ]) expect(() => select([phone(ip), other]))
+    .toThrow(`2 Android devices are ready (${ip}, ${mdns}): set ANDROID_SERIAL to the one to use`);
+  for (const ids of [[mdns, ip], [ip, mdns], [mdns, 'R5CT1234ABC', ip]]) {
+    expect(select(ids.map(phone))).toBe(ip);
+    expect(calls).toEqual([
+      ['devices'], ...ids.map(id => ['-s', id, 'shell', 'getprop', 'ro.serialno']),
+      ...ids.map(id => ['-s', id, 'shell', 'settings', 'get', 'secure', 'android_id']),
+    ]);
+  }
+  for (const id of [mdns, ip, 'emulator-5554']) {
+    expect(select([{ id }, { id: 'offline-phone', state: 'offline' }])).toBe(id);
+    expect(calls).toEqual([['devices']]);
+  }
+  for (const ids of [[mdns, 'R5CT1234ABC'], ['R5CT1234ABC', mdns], [ip, 'R5CT1234ABC']])
+    expect(select(ids.map(phone))).toBe(ids.includes(ip) ? ip : 'R5CT1234ABC');
+  for (const ids of [
+    ['emulator-5554', 'emulator-5556'], [ip, '192.168.1.21:37099'],
+    ['USB123', 'USB456'], [mdns, 'USB123'],
+    [mdns, 'adb-R5CT1234ABC-other._adb-tls-connect._tcp'],
+    [ip, 'adb-OTHER-a1B2c3._adb-tls-connect._tcp'],
+  ]) {
+    expect(() => select(ids.map(phone))).toThrow(`${ids.length} Android devices are ready (${ids.join(', ')}): set ANDROID_SERIAL to the one to use`);
+  }
+  for (const other of [
+    { id: 'other-phone', serial: 'OTHER' }, { id: 'emulator-5554', serial: 'EMULATOR35X1' },
+    { id: mdns }, { id: mdns, serial: '   ' }, { id: mdns, serial: 'R5CT1234ABC', status: 1 },
+  ]) {
+    expect(() => select([phone(ip), other])).toThrow(`2 Android devices are ready (${ip}, ${other.id}): set ANDROID_SERIAL to the one to use`);
+  }
+  expect(() => select([])).toThrow('no Android device or emulator is ready');
+  calls = [];
+  expect(androidDevice({ ...env, ANDROID_SERIAL: mdns }, run)).toBe(mdns);
+  expect(calls).toEqual([]);
+});
+
+test('android --run --url launches the app following that dev loop, stopping a running one first (#585)', async () => {
+  const { launchArgs, reversedPorts } = await import('./agent-android.mjs');
+  expect(launchArgs('com.example.app')).toEqual(['shell', 'am', 'start', '-W', '-n', 'com.example.app/dev.exact.app.MainActivity']);
+  expect(launchArgs('com.example.app', 'http://127.0.0.1:9147/')).toEqual(['shell', 'am', 'start', '-W', '-S', '-n',
+    'com.example.app/dev.exact.app.MainActivity', '--es', 'x_dev_plan', 'http://127.0.0.1:9147/']);
+  expect(reversedPorts({ EXACT_DEV_PLAN: 'http://127.0.0.1:9147/' })).toEqual(['9147']);
+  const refused = (...args) => spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', ...args], { encoding: 'utf8', timeout: 30_000 });
+  expect(refused('--url', 'http://127.0.0.1:9147/').stderr).toContain('--url is the dev loop the launched APK follows');
+  expect(refused('--run', '--headless', '--url', 'http://127.0.0.1:9147/').stderr).toContain('it goes with --run, not --headless');
+  expect(refused('--run', '--url', 'shelf.contract').stderr).toContain("--url takes a dev loop's http(s) URL");
+});
+
+
+test('Android compilers and GPU bakes use the requested x86_64 ABI', async () => {
+  const { androidToolchainEnv, bakeGpuLibraries, soundLibraryCommand } = await import('./agent-android.mjs');
+  const { ANDROID_PAGE_SIZE: page, androidCargo } = await import('./cargo-check.mjs');
+  const [, intelArgs, intelOptions] = androidCargo('cargo', ['build', '--target=x86_64-linux-android'],
+    { env: { CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS: '-llog' } });
+  expect(intelArgs).toContain(`build.rustflags=["${page}","-Clink-arg=-lc++abi"]`);
+  expect(intelOptions.env.CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS).toBe(`-llog ${page} -Clink-arg=-lc++abi`);
+  const { androidAbis, androidHermesDir } = await import('./android-abi.mjs');
+  expect(androidAbis()).toEqual(['arm64-v8a']);
+  expect(androidAbis('arm64-v8a,x86_64,x86_64')).toEqual(['arm64-v8a', 'x86_64']);
+  expect(() => androidAbis('armeabi-v7a')).toThrow('--abis');
+  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR: '/host' }, '/arm64', 'x86_64-linux-android')).toBeNull();
+  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/intel' }, '/arm64', 'x86_64-linux-android')).toBe('/intel');
+  const { guardFlags } = await import('./help.mjs');
+  expect(guardFlags('android', ['--abis', 'arm64-v8a,x86_64'])).toEqual(['--abis', 'arm64-v8a,x86_64']);
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-abi-'));
+  try {
+    const bin = resolve(dir, 'toolchains/llvm/prebuilt/darwin-x86_64/bin');
+    mkdirSync(bin, { recursive: true });
+    for (const target of ['aarch64-linux-android', 'x86_64-linux-android'])
+      writeFileSync(resolve(bin, `${target}29-clang`), '');
+    const target = 'x86_64-linux-android';
+    const env = androidToolchainEnv({ ANDROID_NDK_HOME: dir }, 'darwin', 29, target);
+    expect(env.CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER).toBe(resolve(bin, `${target}29-clang`));
+    expect(env.CXX_x86_64_linux_android).toBe(resolve(bin, `${target}29-clang++`));
+    expect(env.HERMES_LEAN_SYS_DIR_x86_64_linux_android).toBeUndefined();
+    expect(soundLibraryCommand('libexact_sound.so', env, target)[0]).toBe(env.CC_x86_64_linux_android);
+    let baked;
+    bakeGpuLibraries({}, { target, profile: 'host-dev', env }, (...args) => { baked = args; });
+    expect(baked[2]).toBe(target);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('APK rebuilds preserve selected ABIs and freshness covers both libraries', async () => {
+  const { apkBuildFirst, apkDirs } = await import('./agent-android.mjs');
+  const { apkChanges, androidRebuild } = await import('./agent-stdio.mjs');
+  const cp = await import('node:child_process');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-inputs-'));
+  const app = { dir, target: resolve(dir, 'target'), name: 'fixture', manifest: { app: { id: 'dev.fixture' } } };
+  writeFileSync(resolve(dir, 'exact.mjs'), '');
+  const apk = resolve(apkDirs(app).app, 'outputs/apk/release/app-release.apk');
+  const record = resolve(dirname(apk), 'exact-build.json');
+  const libraries = ['arm64', 'x86_64'].map(abi => resolve(dir, abi + '.so'));
+  const sources = ['shared.rs', 'arm64.rs', 'x86_64.rs'].map(file => resolve(dir, file));
+  const before = new Date(Date.now() - 60_000), after = new Date(Date.now() + 60_000);
+  mkdirSync(dirname(apk), { recursive: true });
+  sources.forEach(file => { writeFileSync(file, 'input'); utimesSync(file, before, before); });
+  libraries.forEach((file, i) => writeFileSync(file.replace(/\.so$/, '.d'), `${file}: ${sources[0]} ${sources[i + 1]}\n`));
+  const run = spyOn(cp, 'spawnSync').mockReturnValue({ status: 0, stdout: '', stderr: '' });
+  try {
+    for (const abis of [['x86_64'], ['arm64-v8a', 'x86_64']]) {
+      writeFileSync(record, JSON.stringify({ started: new Date().toISOString(), abis, libraries, workspace: dir, sources: [] }));
+      expect(androidRebuild(app, true)).toEndWith(`android --abis ${abis.join(',')})`);
+      expect((await apkBuildFirst(app)).code).toBe(0);
+      expect(run.mock.calls.at(-1)[1]).toEqual([resolve(import.meta.dir, 'agent-android.mjs'), 'build', dir, '--apk', '--abis', abis.join(',')]);
+      writeFileSync(apk, 'APK');
+      utimesSync(sources[0], after, after);
+    }
+    utimesSync(sources[0], before, before);
+    expect(apkChanges(app, apk)).toEqual([]);
+    for (const source of sources) {
+      utimesSync(source, after, after);
+      expect(apkChanges(app, apk)).toHaveLength(1);
+      expect(apkChanges(app, apk)[0]).toEndWith(source.split('/').at(-1));
+      utimesSync(source, before, before);
+    }
+    rmSync(sources[2]);
+    expect(apkChanges(app, apk)[0]).toEndWith('x86_64.rs');
+    writeFileSync(record, '{}');
+    expect(apkChanges(app, apk)[0]).toContain('no complete ABI build record');
+  } finally { run.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('TypeScript x86_64 refuses before compiling even with a Hermes override', () => {
+  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', '--apk', '--abis', 'x86_64'], {
+    encoding: 'utf8', env: { ...process.env, HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/unused-bundle' },
+  });
+  expect(r.status).toBe(1);
+  expect(r.stderr).toContain('vendored Hermes resolver does not support Android x86_64 ICU');
+  expect(r.stderr).toContain('Use --abis arm64-v8a');
+  expect(r.stderr).not.toContain('Compiling');
+}, 30_000);

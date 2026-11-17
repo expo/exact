@@ -68,6 +68,102 @@ fn total(session: &RasterSession) -> u64 {
 }
 
 #[test]
+fn rest_retains_recent_cold_pictures_and_pressure_drops_them() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let drops = Arc::new(AtomicUsize::new(0));
+    for source in 1..=3 {
+        let request = session.request(demand(source, source, 2, 0)).unwrap();
+        complete(gate.next_decode().unwrap(), &drops);
+        drop(session.take_ready(request).unwrap());
+        session.cancel(request);
+    }
+    let live = session.request(demand(4, 4, 2, 0)).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    let displayed = session.take_ready(live).unwrap();
+
+    session.trim_to(4 * MIB);
+    assert_eq!(session.stats().cold_bytes, 4 * MIB);
+    assert_eq!(session.stats().evicted, 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    let again = session.request(demand(2, 2, 2, 0)).unwrap();
+    assert!(gate.next_decode().is_none());
+    drop(session.take_ready(again).unwrap());
+    session.cancel(again);
+
+    session.trim_to(2 * MIB);
+    assert_eq!(session.stats().cold_bytes, 2 * MIB);
+    assert_eq!(session.stats().evicted, 2);
+    let recent = session.request(demand(2, 2, 2, 0)).unwrap();
+    assert!(gate.next_decode().is_none());
+    drop(session.take_ready(recent).unwrap());
+    session.cancel(recent);
+    assert_eq!(session.stats().dedup_hits, 2);
+
+    session.trim();
+    assert_eq!(session.stats().cold_bytes, 0);
+    assert_eq!(session.stats().cold_entries, 0);
+    assert_eq!(session.stats().evicted, 3);
+    assert_eq!(drops.load(Ordering::SeqCst), 3);
+    assert_eq!(session.stats().pinned_bytes, 2 * MIB);
+    assert_eq!(total(&session), 2 * MIB);
+    session.cancel(live);
+    drop(displayed);
+    session.trim();
+    assert_eq!(total(&session), 0);
+}
+
+#[test]
+fn trimming_a_generation_drops_only_its_cold_pictures() {
+    let gate = Gate::new();
+    let session = gate.session();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let small = demand(1, 1, 1, 0);
+    let live = session.request(demand(2, 1, 2, 0)).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    let displayed = session.take_ready(live).unwrap();
+    let request = session.request(small).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    drop(session.take_ready(request).unwrap());
+    session.cancel(request);
+
+    let pinned = session.request(demand(3, 1, 3, 0)).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    let lease = session.take_ready(pinned).unwrap();
+    session.cancel(pinned);
+    let mut other = demand(4, 2, 1, 0);
+    other.key.generation = 2;
+    let request = session.request(other).unwrap();
+    complete(gate.next_decode().unwrap(), &drops);
+    drop(session.take_ready(request).unwrap());
+    session.cancel(request);
+    let queued = session.request(demand(5, 1, 4, 0)).unwrap();
+
+    session.trim_generation(1);
+    assert_eq!(session.stats().cold_entries, 1);
+    assert_eq!(session.stats().evicted, 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(session.stats().subscribers, 2);
+    assert_eq!(session.status(live), Some(RequestStatus::Ready));
+    assert_eq!(session.status(queued), Some(RequestStatus::Queued));
+    assert_eq!(session.stats().pinned_bytes, 5 * MIB);
+    assert_eq!(total(&session), 6 * MIB);
+    assert_eq!(displayed.key().pixels.height, 2 * 1024);
+    assert_eq!(lease.key().pixels.height, 3 * 1024);
+
+    let request = session.request(other).unwrap();
+    assert_eq!(session.status(request), Some(RequestStatus::Ready));
+    session.cancel(request);
+    session.cancel(queued);
+    let request = session.request(small).unwrap();
+    let permit = gate.next_decode().unwrap();
+    assert_eq!(permit.key(), small.key);
+    complete(permit, &drops);
+    drop(session.take_ready(request).unwrap());
+    assert_eq!(session.stats().dedup_hits, 1);
+}
+
+#[test]
 fn cancelled_allocated_decoders_keep_budget_and_slots_until_real_owner_drop() {
     let gate = Gate::new();
     let session = gate.session();

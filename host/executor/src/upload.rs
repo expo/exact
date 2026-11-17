@@ -18,12 +18,16 @@ use ibex2::stdlib::{
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
-/// What an executor's uploads may hold at once, the platform's copies
-/// counted: 256 MiB, the four 64 MiB file bodies reads may hold at once
-/// (`body.rs` `MAX_READERS`). An upload's own lane, 64 MiB, could
-/// not hold a 50 MB body beside Apple's copy of it.
-const UPLOAD_BYTES: usize =
-    super::super::body::MAX_READERS * exact_runner::MAX_BODY_FROM_BYTES as usize;
+/// What an executor's uploads may hold at once: [`RUNNING`] uploads, each an
+/// inline body at a request's bound with the platform's copies, or a file
+/// body's reader, which streams it (`body.rs` `READ_BOUND`; LLP
+/// 1133.008.000 D4).
+const UPLOAD_BYTES: usize = RUNNING
+    * if super::super::MAX_REQUEST * COPIES > super::super::body::READ_BOUND {
+        super::super::MAX_REQUEST * COPIES
+    } else {
+        super::super::body::READ_BOUND
+    };
 
 /// The most uploads an executor sends at once, as upstream T3 Code sends
 /// three per environment: the 16 streams' other places stay the app's.
@@ -83,9 +87,10 @@ struct Queued {
     grants: String,
     host: StreamHost,
     abort: AbortController,
-    /// Its room: its body's length, or for a file not read yet the most a
-    /// file body may be, which [`Held::keep`] lowers once it is read.
+    /// Its room: an inline body's copies, or a file body's reader.
     need: usize,
+    /// A file body's reader place, taken as it starts.
+    place: Option<super::super::body::Place>,
 }
 
 /// An upload's place in the budget and among those going out, given back
@@ -93,8 +98,14 @@ struct Queued {
 pub(in super::super) struct Held {
     shared: Arc<Shared>,
     bytes: usize,
+    /// A file body's reader place, taken as it started, which its body keeps.
+    place: Option<super::super::body::Place>,
 }
 impl Held {
+    /// The reader place taken for its file body, once.
+    pub(super) fn place(&mut self) -> Option<super::super::body::Place> {
+        self.place.take()
+    }
     /// Keep only `bytes` of the place, once the body's size is known.
     pub(super) fn keep(&mut self, bytes: usize) {
         if bytes < self.bytes {
@@ -190,9 +201,9 @@ pub(in super::super) fn queue(
     host: StreamHost,
     abort: AbortController,
 ) {
-    let body = match request.body_from {
-        Some(_) => exact_runner::MAX_BODY_FROM_BYTES as usize,
-        None => request.body.len(),
+    let need = match request.body_from {
+        Some(_) => super::super::body::READ_BOUND,
+        None => request.body.len().saturating_mul(COPIES),
     };
     let queued = Queued {
         ticket,
@@ -201,7 +212,8 @@ pub(in super::super) fn queue(
         grants,
         host,
         abort,
-        need: body.saturating_mul(COPIES),
+        need,
+        place: None,
     };
     {
         let mut budget = shared.uploads.0.lock().unwrap();
@@ -212,10 +224,11 @@ pub(in super::super) fn queue(
 }
 
 /// Start each upload waiting at the head that has room in the budget, a
-/// stream's place, one of the [`RUNNING`], and room in its lane for its
+/// stream's place, one of the [`RUNNING`], room in its lane for its
 /// buffers and its reply's ceiling (`Running::limit`, as the core charges
-/// a stream at admission): that place, a thread, a count and those bytes
-/// are its from now on. One the runner has let go meanwhile ends unsent.
+/// a stream at admission), and for a file body one of the process's reader
+/// places: those, a thread, a count and those bytes are its from now on.
+/// One the runner has let go meanwhile ends unsent.
 pub(in super::super) fn start(shared: &Arc<Shared>) {
     let (mut starting, mut gone) = (Vec::new(), Vec::new());
     {
@@ -241,7 +254,16 @@ pub(in super::super) fn start(shared: &Arc<Shared>) {
             if limit > BYTES[lane].saturating_sub(state.bytes[lane] + parked) {
                 break;
             }
-            let next = budget.pop().expect("a head");
+            // Given back, a place starts this executor's uploads again.
+            let place = match next.request.body_from {
+                Some(_) => match super::super::body::take_place(shared) {
+                    Some(place) => Some(place),
+                    None => break,
+                },
+                None => None,
+            };
+            let mut next = budget.pop().expect("a head");
+            next.place = place;
             (run.stream, run.waiting, run.charge) = (true, false, limit);
             state.counts[lane] += 1;
             state.bytes[lane] += limit;
@@ -275,9 +297,11 @@ pub(in super::super) fn start(shared: &Arc<Shared>) {
         );
     }
     for q in starting {
+        let mut q = q;
         let held = Held {
             shared: shared.clone(),
             bytes: q.need,
+            place: q.place.take(),
         };
         let ticket = q.ticket;
         let spawned = std::thread::Builder::new()

@@ -1,0 +1,51 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/notifications@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {
+    "AndroidNotificationSettings": {
+      "areNotificationsEnabled": "bool",
+      "shouldShowRationale": "bool",
+      "permanentlyDenied": "bool",
+      "channels": "AndroidNotificationChannel[]"
+    },
+    "AndroidNotificationChannel": {
+      "id": "string",
+      "importance": "enum<none|min|low|default|high|max>"
+    }
+  },
+  "options": {
+    "showNotification": {
+      "channelId": "string",
+      "category": "enum<alarm|call|email|err|event|location_sharing|message|missed_call|navigation|progress|promo|recommendation|reminder|service|social|status|stopwatch|sys|transport|workout>",
+      "number": "number"
+    }
+  },
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "manifest": {
+    "receivers": [
+      {
+        "name": "exact.notifications.PostReceiver"
+      },
+      {
+        "name": "exact.notifications.ArmReceiver",
+        "actions": [
+          "android.intent.action.BOOT_COMPLETED",
+          "android.intent.action.MY_PACKAGE_REPLACED"
+        ]
+      }
+    ]
+  },
+  "artifacts": [],
+  "class": "exact.notifications.NotificationsModule"
+}

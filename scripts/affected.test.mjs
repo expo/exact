@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { GLOBAL, Graph, Repo, auditProfile, cargoTests, commands, jsSources, rustLiterals, rustSource, select, suites } from './affected.mjs';
+import { GLOBAL, Graph, Repo, auditProfile, cargoTests, commands, gameAppleLeg, jsSources, rustLiterals, rustSource, select, suites } from './affected.mjs';
 import { classesReached, hostedTests } from '../host/apple/xctest.mjs';
 
 /** A repository of `files` (path → text) and Cargo packages (`{ name, dir, deps }`), with its metadata given; a package
@@ -486,6 +486,18 @@ test("this checkout's selection keeps an app's change to that app's suites", () 
   expect(only(['host/apple/tests/ExactKitTests/EventWaits.swift'])).toEqual({ 'xctest:ios': 'every class', 'xctest:macos': 'every class' });
   expect(picked(['docs/testing.md'])).toEqual([]);
   expect(picked(['kernel/src/lib.rs'])).toEqual([...watched].sort());
+}, 120_000);
+
+// The shared game Apple shell is in no workspace's metadata (#559): what it compiles selects its check.
+test("this checkout selects the shared game Apple shell's check for what it compiles", () => {
+  const repo = new Repo(), graph = new Graph(repo);
+  const catalogue = suites(repo).filter(s => s.id === 'compile:game-apple');
+  const picked = file => select(graph, [file], catalogue).map(s => s.suite.id);
+  for (const file of ['game/app/apple/src/lib.rs', 'game/app/apple/Cargo.toml', 'host/apple/src/lib.rs', 'runner/src/lib.rs', 'game/app/shells.mjs']) {
+    expect(picked(file), file).toEqual(['compile:game-apple']);
+  }
+  for (const file of ['host/apple/Sources/ExactKit/Mac/CaptureMac.swift', 'docs/testing.md']) expect(picked(file), file).toEqual([]);
+  expect(commands(catalogue.map(suite => ({ suite })))).toEqual([['sh', '-c', gameAppleLeg]]);
 }, 120_000);
 
 // A parity smoke's Linux leg runs for the paint walk and its own gallery, and for no Apple change.

@@ -212,6 +212,20 @@ fn words(text: &str) -> Vec<&str> {
 }
 
 fn border(name: &str, text: &str, span: Span) -> Result<[String; 3], LowerError> {
+    let [width, style, color] = border_parts(name, text, span)?;
+    Ok([
+        width.unwrap_or("3px".into()),
+        style.unwrap_or("none".into()),
+        color.unwrap_or("currentcolor".into()),
+    ])
+}
+
+/// Authored components before the shorthand resets its omitted longhands.
+pub(crate) fn border_parts(
+    name: &str,
+    text: &str,
+    span: Span,
+) -> Result<[Option<String>; 3], LowerError> {
     let mut width = None;
     let mut style = None;
     let mut color = None;
@@ -283,13 +297,13 @@ fn border(name: &str, text: &str, span: Span) -> Result<[String; 3], LowerError>
                 // token is a length, which the refusal below names.
                 use exact_kernel::style::{scale, theme};
                 let length = scale::is_base(word)
-                    || crate::theme::measure_named(word) == Some(exact_tamber::Kind::Length);
+                    || crate::theme::measure_named(word) == Some(exact_forma::Kind::Length);
                 if crate::theme::scan::dotted_name(word)
                     && theme::bound()
                     && !theme::names(word)
                     && !length
                 {
-                    return err("tamber-unknown-token", format!("`{name}=\"{text}\"`: `{word}` is no token of this app's design and no role"), span);
+                    return err("forma-unknown-token", format!("`{name}=\"{text}\"`: `{word}` is no token of this app's design and no role"), span);
                 }
                 return err("lower-css-shorthand", format!("`{word}` is not an admitted `{name}` width, style or color; widths are nonnegative px/pt lengths, `-exact-hairline` or thin/medium/thick"), span);
             }
@@ -309,11 +323,7 @@ fn border(name: &str, text: &str, span: Span) -> Result<[String; 3], LowerError>
             span,
         );
     }
-    Ok([
-        width.unwrap_or("3px".into()),
-        style.unwrap_or("none".into()),
-        color.unwrap_or("currentcolor".into()),
-    ])
+    Ok([width, style, color])
 }
 
 // `columns`: `<column-width> || <column-count>`, each `auto` when not given.
@@ -612,12 +622,12 @@ impl Lowerer<'_> {
 
 /// Native interaction limits must also cover computed expressions, not only literals.
 pub(crate) fn portable_literal(value: &Expr, name: &str) -> Result<(), LowerError> {
-    match value {
-        Expr::Str(_, _) => Ok(()),
-        Expr::Ternary(_, yes, no, _) | Expr::Match { some: yes, none: no, .. } => { portable_literal(yes, name)?; portable_literal(no, name) },
-        Expr::Let { body, .. } => portable_literal(body, name),
-        _ => err("lower-css-interaction", format!("`{name}` takes a CSS keyword literal or a choice of literals so native support can be checked; computed strings cannot be checked"), value.span()),
+    for leaf in contract_checking::value_leaves(value) {
+        if !matches!(leaf, Expr::Str(..)) {
+            return err("lower-css-interaction", format!("`{name}` takes a CSS keyword literal or a choice of literals so native support can be checked; computed strings cannot be checked"), leaf.span());
+        }
     }
+    Ok(())
 }
 
 /// CSS `text-box-trim` on a block cuts its first and last formatted lines,

@@ -155,7 +155,13 @@ mod tests {
     #[test]
     fn imageio_keeps_rows_crop_channels_and_premultiplied_alpha() {
         let mut source = tiny_skia::Pixmap::new(4, 4).unwrap();
-        for (i, pixel) in source.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, pixel) in source
+            .data_mut()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             pixel.copy_from_slice(&[i as u8 * 8, 32, 64, 128]);
         }
         let bytes = source.encode_png().unwrap();
@@ -170,10 +176,17 @@ mod tests {
         assert!(decode(b"not an image", [4, 4], [0, 0, 4, 4]).is_none());
         let jpeg = include_bytes!("../../../apple/tests/ExactKitTests/ColorFixtures/adobe-rgb.jpg");
         let pixels = decode(jpeg, [12, 8], [0, 0, 12, 8]).unwrap();
-        assert!(pixels.data().chunks_exact(4).all(|pixel| pixel[3] == 255));
         assert!(pixels
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 255));
+        assert!(pixels
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[..3] != [0; 3]));
     }
 }

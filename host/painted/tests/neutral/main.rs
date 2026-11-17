@@ -84,6 +84,8 @@ const APP: &str = r##"component App
         text "Go"
       button appearance="auto" -exact-control-size="small" testId="small"
         text "Go"
+      text "Go" font-weight=500 testId="line"
+      text "Go" font-size=14 font-weight=500 testId="small-line"
 "##;
 
 fn id(p: &Presenter<()>, name: &str) -> ViewId {
@@ -161,8 +163,9 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     assert!(error.is_none(), "{error:?}");
 
     // The kernel sizes what the author left unsaid as the page's sheet
-    // does: a control is 36 px at the body size whatever the font's own
-    // line, a mark the line's height, a switch 36 by 20.
+    // does: a control is 36 px at the body size, its title on the font's own
+    // line (`line`), a mark the line's height, a switch 36 by 20.
+    let line = size(&mut p, "line").1;
     assert_eq!(size(&mut p, "unsaid").1, 36.0);
     assert!(size(&mut p, "unsaid").0 > 36.0, "its title and the padding");
     assert_eq!(size(&mut p, "filled").1, 36.0);
@@ -175,14 +178,14 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     // A size the author wrote is the box: the look's floor and padding step
     // aside.
     assert_eq!(size(&mut p, "sized"), (84.0, 24.0));
-    assert_eq!(size(&mut p, "flush").1, 20.0);
-    assert_eq!(size(&mut p, "one-side").1, 27.0);
-    assert_eq!(size(&mut p, "outline").1, 22.0);
+    assert_eq!(size(&mut p, "flush").1, line);
+    assert_eq!(size(&mut p, "one-side").1, line + 7.0);
+    assert_eq!(size(&mut p, "outline").1, line + 2.0);
     for role in ["segment", "menu"] {
         assert_eq!(size(&mut p, &format!("{role}-padded")), (36.0, 36.0));
         assert_eq!(size(&mut p, &format!("{role}-unsaid")).1, 36.0);
     }
-    for expected in [20.0, 36.0] {
+    for expected in [line, 36.0] {
         p.tap(id(&p, "segment-padded")).unwrap();
         assert_eq!(size(&mut p, "segment-padded").1, expected);
         assert_eq!(size(&mut p, "menu-padded").1, expected);
@@ -195,11 +198,14 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     assert_eq!(size(&mut p, "large-field").1, 25.0 + 2.0 * 8.75 + 2.0);
     // A mini or small button is titled as the page titles it at a 16 px root,
     // in the subheadline's 14 px: its line, its padding and its edge.
+    // (Within the half pixel a fractional box snaps by.)
+    let small_line = size(&mut p, "small-line").1;
     for name in ["mini", "small"] {
-        assert_eq!(
-            size(&mut p, name).1,
-            14.0 * 1.25 + 2.0 * 14.0 * 0.4375 + 2.0,
-            "{name}"
+        let height = size(&mut p, name).1;
+        let wanted = small_line + 2.0 * 14.0 * 0.4375 + 2.0;
+        assert!(
+            (height - wanted).abs() <= 0.5,
+            "{name}: {height}, expected {wanted}"
         );
     }
 

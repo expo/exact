@@ -59,6 +59,10 @@ pub(crate) struct ChildState {
 }
 
 impl<D: DataSource> Runner<D> {
+    pub(in crate::runner) fn has_work_clock(&self) -> bool {
+        self.extensions.processes.clock.is_some()
+    }
+
     /// Hand the host's process work its clock under the agent (LLP
     /// 1133.007 §7): each advance runs what is due on it, its next deadline
     /// is a due time `clock settle` reaches, and outcomes it owes keep a

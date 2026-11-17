@@ -1,0 +1,180 @@
+{
+  "kind": "interface",
+  "name": "@exact/window-management",
+  "version": "1.0.0",
+  "grants": [
+    "device.window-management"
+  ],
+  "permission": {
+    "name": "window-management",
+    "targets": [
+      "web"
+    ],
+    "status": "windowManagementStatus",
+    "field": "state",
+    "denied": "NotAllowedError"
+  },
+  "shapes": {
+    "ScreenDetailed": {
+      "left": "number",
+      "top": "number",
+      "width": "number",
+      "height": "number",
+      "availLeft": "number",
+      "availTop": "number",
+      "availWidth": "number",
+      "availHeight": "number",
+      "devicePixelRatio": "number",
+      "isPrimary": "bool",
+      "isInternal": "bool",
+      "label": "string"
+    },
+    "ScreenDetails": {
+      "screens": "ScreenDetailed[]",
+      "currentScreen": "ScreenDetailed"
+    },
+    "ScreenInViewport": {
+      "left": "number",
+      "top": "number",
+      "width": "number",
+      "height": "number",
+      "availLeft": "number",
+      "availTop": "number",
+      "availWidth": "number",
+      "availHeight": "number",
+      "devicePixelRatio": "number",
+      "isPrimary": "bool",
+      "isInternal": "bool",
+      "label": "string",
+      "clientRect": "option<DOMRect>"
+    },
+    "PointerPosition": {
+      "screenX": "number",
+      "screenY": "number",
+      "clientX": "option<number>",
+      "clientY": "option<number>",
+      "screen": "ScreenInViewport"
+    },
+    "WindowManagementStatus": {
+      "available": "bool",
+      "state": "enum<granted|prompt|denied>"
+    }
+  },
+  "names": [
+    {
+      "source": "getScreenDetails",
+      "live": true,
+      "request": "when-prompt",
+      "answers": "ScreenDetails",
+      "substitute": {
+        "default": {
+          "screens": [
+            {
+              "left": 0,
+              "top": 0,
+              "width": 1440,
+              "height": 900,
+              "availLeft": 0,
+              "availTop": 0,
+              "availWidth": 1440,
+              "availHeight": 900,
+              "devicePixelRatio": 2,
+              "isPrimary": true,
+              "isInternal": true,
+              "label": "Agent display"
+            }
+          ],
+          "currentScreen": {
+            "left": 0,
+            "top": 0,
+            "width": 1440,
+            "height": 900,
+            "availLeft": 0,
+            "availTop": 0,
+            "availWidth": 1440,
+            "availHeight": 900,
+            "devicePixelRatio": 2,
+            "isPrimary": true,
+            "isInternal": true,
+            "label": "Agent display"
+          }
+        },
+        "unsupported": [
+          "ios",
+          "android",
+          "tvos",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "getPointerPosition",
+      "answers": "PointerPosition",
+      "substitute": {
+        "from": "getPointerPosition",
+        "default": {
+          "screenX": 720,
+          "screenY": 450,
+          "clientX": 720,
+          "clientY": 450,
+          "screen": {
+            "left": 0,
+            "top": 0,
+            "width": 1440,
+            "height": 900,
+            "availLeft": 0,
+            "availTop": 0,
+            "availWidth": 1440,
+            "availHeight": 900,
+            "devicePixelRatio": 2,
+            "isPrimary": true,
+            "isInternal": true,
+            "label": "Agent display",
+            "clientRect": {
+              "x": 0,
+              "y": 0,
+              "width": 1440,
+              "height": 900
+            }
+          }
+        },
+        "unsupported": [
+          "web",
+          "ios",
+          "android",
+          "tvos",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "source": "windowManagementStatus",
+      "live": true,
+      "answers": "WindowManagementStatus",
+      "substitute": {
+        "default": {
+          "available": true,
+          "state": "granted"
+        },
+        "targets": {
+          "ios": {
+            "available": false,
+            "state": "denied"
+          },
+          "android": {
+            "available": false,
+            "state": "denied"
+          },
+          "tvos": {
+            "available": false,
+            "state": "denied"
+          },
+          "terminal": {
+            "available": false,
+            "state": "denied"
+          }
+        }
+      }
+    }
+  ]
+}

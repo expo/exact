@@ -362,7 +362,7 @@ pub(super) fn subst_stmts(
                 args,
                 span,
             } => Stmt::Send {
-                target: target.clone(),
+                target: names.get(target).cloned().unwrap_or_else(|| target.clone()),
                 source: source.clone(),
                 args: args.iter().map(|a| subst_expr(a, s)).collect(),
                 span: *span,

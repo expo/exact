@@ -18,9 +18,9 @@ beforeAll(() => {
   expect(built.status, built.stdout + built.stderr).toBe(0);
   const input = resolve(fixture, 'grants.txt');
   writeFileSync(input, 'net.fetch local-network development');
-  const { cmd, pre } = webCompiler();
+  const { cmd, pre, env: toolEnv } = webCompiler();
   if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-  const normalized = spawnSync(cmd, [...pre, 'normalize-grants', input], { cwd: root, encoding: 'utf8' });
+  const normalized = spawnSync(cmd, [...pre, 'normalize-grants', input], { env: toolEnv, cwd: root, encoding: 'utf8' });
   expect(normalized.status, normalized.stderr).toBe(0);
   grants = JSON.parse(normalized.stdout);
 }, 180_000);

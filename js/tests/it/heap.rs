@@ -155,11 +155,13 @@ fn overlapping_large_replies_collect_once_none_is_pending() {
 }
 
 #[test]
-#[cfg_attr(
-    not(exact_js_oom),
-    ignore = "requires an exception-on-OOM Hermes receipt"
-)]
 fn heap_oom_retires_the_runtime_and_the_next_request_succeeds() {
+    const {
+        assert!(
+            cfg!(exact_js_oom),
+            "the pinned Hermes bundle must enable heap OOM recovery"
+        )
+    };
     let mut m = module();
     let mut s = Store::new(GRANTS, []);
     let args = [Value::Number(100.)];

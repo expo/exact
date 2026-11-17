@@ -19,7 +19,7 @@ set -euo pipefail
 # (ufw and sshd print words this script reads: in English, whatever the host's locale)
 export LC_ALL=C
 
-APP=tamber-relay
+APP=forma-relay
 OPT=/opt/$APP
 ETC=/etc/$APP
 VAR=/var/lib/$APP
@@ -45,12 +45,12 @@ put() {
 # Points symlink $1 at $2 in one rename. Returns 1 when it couldn't (never half-done).
 relink() { ln -sfn "$2" "$1.new" && mv -T "$1.new" "$1"; }
 
-# An upload removed: its private directory, when it is one deploy.sh made (/tmp/tamber-relay-upload.<random>/<file>);
+# An upload removed: its private directory, when it is one deploy.sh made (/tmp/forma-relay-upload.<random>/<file>);
 # any other path is left alone.
 unload() {
   local f
   for f in "$@"; do
-    if [[ $f =~ ^/tmp/tamber-relay-upload\.[A-Za-z0-9]+/[A-Za-z0-9._-]+$ ]]; then rm -rf "$(dirname "$f")"; else say "not removing $f: no upload of deploy.sh's"; fi
+    if [[ $f =~ ^/tmp/forma-relay-upload\.[A-Za-z0-9]+/[A-Za-z0-9._-]+$ ]]; then rm -rf "$(dirname "$f")"; else say "not removing $f: no upload of deploy.sh's"; fi
   done
 }
 
@@ -193,7 +193,7 @@ EOF
     put $ETC/dns-hook 0750 root:$APP <<'EOF'
 #!/bin/sh
 # PLACEHOLDER (relay/deploy): no DNS provider yet. Replace with the provider's script (runbook, "DNS").
-echo "tamber-relay dns-hook: no DNS provider is configured on this relay yet" >&2
+echo "forma-relay dns-hook: no DNS provider is configured on this relay yet" >&2
 exit 1
 EOF
   fi
@@ -232,8 +232,8 @@ EOF
 
   put $UNIT 0644 root:root <<EOF
 [Unit]
-Description=tamber relay (SNI pass-through for tamber serve --relay)
-Documentation=https://github.com/ccheever/exact2/blob/main/docs/tamber-relay-service.md
+Description=forma relay (SNI pass-through for forma serve --relay)
+Documentation=https://github.com/ccheever/exact2/blob/main/docs/forma-relay-service.md
 After=network-online.target
 Wants=network-online.target
 

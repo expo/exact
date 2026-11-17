@@ -1,6 +1,6 @@
 # Settings (Paperback): notes
 
-Built with Exact (`app.contract` + `app.tamber`; `app.ts` answers no sources). Installed on simulator
+Built with Exact (`app.contract` + `app.forma`; `app.ts` answers no sources). Installed on simulator
 486FD498-0E3E-4B64-8E4B-152BD8265EE7 as `dev.bakeoff.settings.bd5e961` ("Settings").
 `bun exact.mjs verify` and `verify ios` are both clean: 10 tests pass, light/dark, largest text size,
 UIKit-like scrolling.

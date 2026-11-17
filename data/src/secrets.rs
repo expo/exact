@@ -286,7 +286,9 @@ impl Marker {
             return Ok(Self::default());
         }
         bytes[..len]
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .filter_map(|slot| {
                 if Sha256::digest(&slot[..17])[..15] != slot[17..] || slot[16] > 3 {
                     return None;

@@ -13,9 +13,11 @@ pub enum ListTextPolicy {
 /// A text position that survives retirement of a list row's native views.
 #[derive(Debug, Clone, Copy)]
 pub struct ListTextPosition<'a> {
-    /// The opaque key published on the row wrapper.
+    /// The opaque row-wrapper key; ignored for fixed positions.
     pub key: &'a str,
-    /// Zero-based paragraph within the row.
+    /// Fixed lead (`Some(false)`) or trail (`Some(true)`); `None` addresses a row.
+    pub fixed: Option<bool>,
+    /// Zero-based paragraph within the row or fixed region.
     pub paragraph: usize,
     /// UTF-16 offset within that paragraph, as on the DOM and Apple text APIs.
     pub offset: usize,
@@ -172,6 +174,15 @@ impl<D: DataSource> Runner<D> {
         settled: bool,
         update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
     ) -> Result<CommitReceipt, RunnerError> {
+        self.render_owned(settled, update)
+    }
+
+    /// One render, applied.
+    pub(super) fn render_once(
+        &mut self,
+        settled: bool,
+        update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
+    ) -> Result<CommitReceipt, RunnerError> {
         let (ops, surfaces, _) = self.update_ops(settled, update)?;
         match self.apply(ops) {
             Ok(receipt) => {
@@ -197,6 +208,8 @@ impl<D: DataSource> Runner<D> {
         settled: bool,
         update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
     ) -> Result<UpdateOps, RunnerError> {
+        let owned = self.sync_owned();
+        let owned_sends = self.sync_sends();
         let mut tree = self.tree.take().expect("booted");
         let mut ids = std::mem::take(&mut self.ids);
         let rows = std::mem::take(&mut self.row_writes);
@@ -214,6 +227,8 @@ impl<D: DataSource> Runner<D> {
             u.full = self.full;
             u.discard = self.kernel.is_detached();
             u.rows = rows;
+            u.owned = owned;
+            u.owned_sends = owned_sends;
             u.reuse = self.reuse;
             update(&mut tree, &mut u)
                 .map(|_| (u.ops, u.surfaces, u.notes, u.renewed, u.shown, u.work))

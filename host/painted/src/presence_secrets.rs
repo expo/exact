@@ -1,6 +1,6 @@
 //! The presence backend's vault on this host and Android's reader (LLP
 //! 1133.010 D4, D6, §7). The moves are the runner's ([`Backend`]); the vault
-//! keeps a name's plain copy where `secret.keep` keeps any (`<root>/secrets`),
+//! keeps a name's unprompted copy in the shared secret backend (encrypted on Android),
 //! its record in the kv store (`exact.presence`), and its locked items:
 //!
 //! - under the agent, in the drive's kv store (`exact.presence.agent`), or in
@@ -17,7 +17,6 @@
 
 use exact_runner::presence::{Backend, MemoryVault, Presence, Vault};
 use ibex2::kv::KvStore;
-use ibex2::secrets::SecretStore;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -49,9 +48,39 @@ enum Locked {
 }
 
 struct HostVault {
-    secrets: ibex2::secrets::FileStore,
+    secrets: std::sync::Arc<dyn exact_data::secrets::Backend>,
     kv: ibex2::kv::FileStore,
     locked: Locked,
+}
+
+#[cfg(not(target_os = "android"))]
+struct PlainFiles(ibex2::secrets::FileStore);
+
+#[cfg(not(target_os = "android"))]
+impl exact_data::secrets::Backend for PlainFiles {
+    fn read(&self, name: &str) -> Result<Option<String>, String> {
+        ibex2::secrets::SecretStore::get(&self.0, name).map_err(err)
+    }
+    fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        match value {
+            Some(value) => ibex2::secrets::SecretStore::set(&self.0, name, value),
+            None => ibex2::secrets::SecretStore::forget(&self.0, name),
+        }
+        .map_err(err)
+    }
+}
+
+fn plain_backend(root: &std::path::Path) -> std::sync::Arc<dyn exact_data::secrets::Backend> {
+    #[cfg(target_os = "android")]
+    {
+        crate::host::system::secret_backend(root)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        std::sync::Arc::new(PlainFiles(ibex2::secrets::FileStore::new(
+            root.join("secrets"),
+        )))
+    }
 }
 
 fn err(e: impl std::fmt::Debug) -> String {
@@ -60,14 +89,11 @@ fn err(e: impl std::fmt::Debug) -> String {
 
 impl Vault for HostVault {
     fn plain(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
-        Ok(self.secrets.get(name).map_err(err)?.map(String::into_bytes))
+        Ok(self.secrets.read(name)?.map(String::into_bytes))
     }
     fn put_plain(&mut self, name: &str, value: Option<&[u8]>) -> Result<(), String> {
-        match value {
-            Some(v) => self.secrets.set(name, &String::from_utf8_lossy(v)),
-            None => self.secrets.forget(name),
-        }
-        .map_err(err)
+        self.secrets
+            .write(name, value.map(String::from_utf8_lossy).as_deref())
     }
     fn record(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
         self.kv.get(RECORDS, name).map_err(err)
@@ -199,7 +225,7 @@ pub fn backend(app_id: &str, grants: &str) -> Option<Installed> {
                 _ => None,
             };
             let vault = HostVault {
-                secrets: ibex2::secrets::FileStore::new(root.join("secrets")),
+                secrets: plain_backend(&root),
                 kv: ibex2::kv::FileStore::new(root.join("kv")),
                 locked,
             };

@@ -77,7 +77,7 @@ fn a_group_in_a_menu_is_a_section_headed_by_its_label() {
         .map(|e| match e {
             Entry::Item(row) => row.title.clone(),
             Entry::Separator => "—".into(),
-            Entry::Header(title, _) => format!("# {title}"),
+            Entry::Header(title, _, _) => format!("# {title}"),
         })
         .collect();
     assert_eq!(

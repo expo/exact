@@ -355,6 +355,20 @@ theorem boot_sound {p : Program} (hp : WellTyped p) (o : Oracle) : OutcomeOK (bo
     obtain ⟨t, htk, ha, hg, hk⟩ := startTimers_tasks ht tm htm
     refine ⟨by rw [ha]; exact hp.taskActions t htk, ?_⟩
     rw [hg, hk]; exact hp.taskGates t htk
+  -- A late resource's settlement, once the late slots exist (LLP 1035.005.004 D2).
+  split
+  · next e he =>
+    split at he
+    · exact ofW (settle_strict (o := o) (now := 0) (prev := st) (force := []) (lateReady := true) N.resources
+        (settleEnvOK hp ((hpres.of_keys hkeys).of _) fun _ _ hx _ => hs.valTy hp hx) hok) he
+    · cases he
+  next st₂ hst₂ =>
+  have hst₂' : SettledOK p st₂ ∧ Complete p st₂ := by
+    split at hst₂
+    · exact ⟨settle_settledOK N.resources hok hst₂, settle_complete hst₂⟩
+    · cases hst₂; exact ⟨hok, hc⟩
+  clear hok hc
+  obtain ⟨hok, hc⟩ := hst₂'
   -- The gate step at boot (LLP 1092 D8): a key that is no key refuses it.
   split
   · next e he =>
@@ -365,8 +379,8 @@ theorem boot_sound {p : Program} (hp : WellTyped p) (o : Oracle) : OutcomeOK (bo
   · trivial
   · next e he =>
     exact ofW (renderTabs_good hp (E := Strict) (fun _ h hn => ⟨h, hn⟩) fuel
-      (cx := { env := { prog := p, slots, derives := st.derives, resources := st.resources, now := 0, idle := st.idle },
-               store := [], tabs := { every := o.everyTab } })
+      (cx := { env := { prog := p, slots, derives := st₂.derives, resources := st₂.resources, now := 0, idle := st₂.idle },
+               store := [], tabs := renderTabContext o [], oracle := o })
       ⟨rfl, hs, hpres.of_keys hkeys, RowsOK.nil, hok.1, hok.2⟩ (.inl hc) StoreOK.nil) he
 
 /-! ## Runs -/

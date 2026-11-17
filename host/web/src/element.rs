@@ -17,6 +17,7 @@ mod symbol;
 use exact_kernel::svg::Paint;
 use exact_kernel::SortedMap;
 use exact_kernel::{Kernel, NodeFacts, NodeRef, NodeType, ObjectFit, PropId, PropValue, StyleId};
+pub use semantic::{attributes_by_data, tags_by_data};
 pub(super) use svg::svg_props;
 pub use svg::{attribute_rows, svg_props_of};
 
@@ -74,20 +75,20 @@ pub fn folds(
 /// flex button becomes one only where its height is its content's: none of
 /// its own, nothing to grow into, and not stretched across a row by `outer`.
 fn content_tall(b: &NodeFacts<'_>, outer: Option<&NodeFacts<'_>>) -> bool {
-    use exact_kernel::{AlignItems, AlignSelf, Dimension, Display, FlexDirection, PositionType};
+    use exact_kernel::{AlignItems, AlignSelf, Display, FlexDirection, PositionType};
     let s = b.style;
     let Some(o) = outer.map(|o| o.style) else {
         return false;
     };
-    let sized = s.height != Dimension::Auto
-        || s.min_height != Dimension::Auto
+    let sized = !s.height.is_content_sized()
+        || !s.min_height.is_content_sized()
         || s.rare.aspect_ratio != Default::default()
         || s.position_type == PositionType::Absolute;
     !sized
         && match (o.display, o.flex_direction) {
             (Display::Block, _) => true,
             (Display::Flex, FlexDirection::Column | FlexDirection::ColumnReverse) => {
-                s.flex_grow == 0.0 && s.flex_basis == Dimension::Auto
+                s.flex_grow == 0.0 && s.flex_basis.is_content_sized()
             }
             (Display::Flex, _) => match s.align_self {
                 AlignSelf::Auto => {
@@ -276,7 +277,7 @@ pub fn host_css_of(
             && probe.mask.has(StyleId::MarginLeft)
         {
             css.push_str("--exact-symbol-lead:");
-            crate::css::dimension(&mut css, probe.margin_left);
+            crate::css::dimension(&mut css, probe.margin_left.clone());
             css.push(';');
         }
     }
@@ -605,7 +606,7 @@ pub(super) fn animation_style<'a>(
     mut style: std::borrow::Cow<'a, exact_kernel::StyleProps>,
 ) -> std::borrow::Cow<'a, exact_kernel::StyleProps> {
     if !node.style.animation.0.is_empty() && kernel.awaits_view(node) {
-        style.to_mut().animation = kernel.animation_row(node);
+        style.to_mut().animation = kernel.animation_row(node).into();
     }
     style
 }
@@ -697,17 +698,18 @@ pub fn css_style_of<'a>(
         style.rare.svg_mask = exact_kernel::svg::MarkerRef(Some(dom_id(target).into()));
     }
     // @ref LLP 1055.000 D9 — a marker by the id the page gives it.
+    let rows = &mut *style.ordinary;
     for marker in [
-        &mut style.marker_start,
-        &mut style.marker_mid,
-        &mut style.marker_end,
+        &mut rows.marker_start,
+        &mut rows.marker_mid,
+        &mut rows.marker_end,
     ] {
         if let Some(target) = marker.url().and_then(|id| resolve(node.id, id)) {
             *marker = exact_kernel::svg::MarkerRef(Some(dom_id(target).into()));
         }
     }
     // @ref LLP 1055.000 D3 — a paint server by the id the page gives it.
-    for paint in [&mut style.fill, &mut style.stroke] {
+    for paint in [&mut rows.fill, &mut rows.stroke] {
         if let Paint::Url(id, fallback) = paint {
             if let Some(target) = resolve(node.id, id) {
                 *paint = Paint::Url(dom_id(target).into(), *fallback);
@@ -857,6 +859,7 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::AccessibilityHint => "aria-description",
             PropId::AccessibilityOrientation => "aria-orientation",
             PropId::AccessibilityControls => "aria-controls",
+            PropId::AccessibilityActiveDescendant => "aria-activedescendant",
             PropId::AccessibilityHeadingLevel => "aria-level",
             PropId::AccessibilityPosInSet => "aria-posinset",
             PropId::AccessibilitySetSize => "aria-setsize",
@@ -876,6 +879,9 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::Value => "value",
             PropId::ScrollTop => "scrollTop",
             PropId::ScrollLeft => "scrollLeft",
+            // This host draws a zoomable scroller at zoom 1 and drops a
+            // write; it says so once (`Host::open`, LLP 1057.001.000 §5).
+            PropId::ScrollZoom => continue,
             PropId::ScrollFollowEnd => "scrollFollowEnd",
             PropId::ViewportFit => "viewportFit",
             PropId::InteractiveWidget => "interactiveWidget",
@@ -967,6 +973,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::RequiresLinearPlayback => "requiresLinearPlayback",
             PropId::PreferredPeakBitRate => "preferredPeakBitRate",
             PropId::PreferredForwardBufferDuration => "preferredForwardBufferDuration",
+            PropId::PreferredMaximumResolution => "preferredMaximumResolution",
+            PropId::StartsOnFirstEligibleVariant => "startsOnFirstEligibleVariant",
             PropId::AutomaticallyWaitsToMinimizeStalling => "automaticallyWaitsToMinimizeStalling",
             PropId::PreventsDisplaySleepDuringVideoPlayback => {
                 "preventsDisplaySleepDuringVideoPlayback"
@@ -1320,7 +1328,7 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
     // (`noreferrer`, say), which keeps its own (LLP 1141.002 D1).
     if element(node) == "a" {
         let need: &[&str] = match out.get("target").map(String::as_str) {
-            Some("_blank") => &["noopener"],
+            Some(t) if t.eq_ignore_ascii_case("_blank") => &["noopener"],
             Some(_) => &[],
             None if out.get("href").is_some_and(|h| leaves_app(h)) => {
                 out.insert("target".into(), "_blank".into());

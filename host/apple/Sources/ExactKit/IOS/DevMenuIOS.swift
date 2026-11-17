@@ -212,6 +212,7 @@ public enum DevMenu {
     /// controller has presented (a route's sheet, a UIKit sheet), never
     /// refused for it.
     static var presenter: UIViewController? {
+        session?.presenter.navigation.finishBootOwner()
         guard var top = controller else { return nil }
         while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
         return top

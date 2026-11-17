@@ -3,7 +3,7 @@ name = "select-walk-fixture-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The select-walk fixture on the web: inspect select by the page's own tree (tamber/1.17)"
+description = "The select-walk fixture on the web: inspect select by the page's own tree (forma/1.17)"
 publish = false
 build = "build.rs"
 

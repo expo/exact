@@ -80,5 +80,28 @@ macro_rules! canvas_jni_keys {
             let request = string(env, request);
             with(|h| h.share(&request));
         }
+
+        /// The first activity's launch URL over a host booted with none
+        /// (`CanvasHost::launch`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_launch(
+            env: *mut JNIEnv,
+            _class: jclass,
+            href: jstring,
+        ) {
+            let href = string(env, href);
+            with(|h| h.launch(&href));
+        }
+
+        /// That activity's share (`CanvasHost::launch_share`).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_launchShare(
+            env: *mut JNIEnv,
+            _class: jclass,
+            request: jstring,
+        ) {
+            let request = string(env, request);
+            with(|h| h.launch_share(&request));
+        }
     };
 }

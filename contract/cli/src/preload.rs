@@ -11,13 +11,15 @@ pub fn preload_expression(parsed: &Value) -> String {
             .as_array()
             .unwrap()
             .iter()
-            .map(|part| {
-                let kind = if part[0] == "literal" {
-                    "Literal"
-                } else {
-                    "Secret"
-                };
-                format!("{root}::PreloadPart::{kind}({})", text(&part[1]))
+            .map(|part| match part[0].as_str().unwrap() {
+                "literal" => format!("{root}::PreloadPart::Literal({})", text(&part[1])),
+                "secret" => format!("{root}::PreloadPart::Secret({})", text(&part[1])),
+                "env" => format!(
+                    "{root}::PreloadPart::Env({}, {})",
+                    text(&part[1]),
+                    text(&part[2])
+                ),
+                _ => unreachable!("checked preload part"),
             })
             .collect::<Vec<_>>()
             .join(",");

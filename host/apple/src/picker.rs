@@ -242,6 +242,11 @@ pub(super) fn roots() -> [PathBuf; 3] {
     let mut held = ROOTS.lock().unwrap_or_else(|e| e.into_inner());
     held.get_or_insert_with(|| {
         let base = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
+        // The process's own directory goes at its exit.
+        ibex2::process::wait_at_exit(|| {
+            let dir = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(dir);
+        });
         [
             base.join("data"),
             base.join("cache"),
@@ -441,8 +446,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_reset_refuses_a_scratch_tree_reached_through_a_link() {
-        let base =
-            std::env::temp_dir().join(format!("exact-apple-unlinked-{}", std::process::id()));
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-unlinked-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&base);
         let real = base.join("real-data");
         std::fs::create_dir_all(real.join("s1")).unwrap();
@@ -471,8 +477,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn landings_are_not_emptied_through_a_link() {
-        let base =
-            std::env::temp_dir().join(format!("exact-apple-landings-{}", std::process::id()));
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-landings-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&base);
         let app = base.join("cache/exact/app.id");
         let temporary = app.join("temporary");
@@ -512,7 +519,7 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     /// A fresh tree: `data`, `cache`, `tmp`, an outside file, and the copy's place.
-    fn tree(name: &str) -> (PathBuf, [PathBuf; 3]) {
+    fn tree(name: &str) -> (crate::TempDir, [PathBuf; 3]) {
         let base =
             std::env::temp_dir().join(format!("exact-share-copy-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -525,7 +532,7 @@ mod tests {
         std::fs::create_dir_all(base.join("outside/backups")).unwrap();
         std::fs::write(base.join("outside/secret"), b"secret").unwrap();
         std::fs::write(base.join("outside/backups/notes.json"), b"other").unwrap();
-        (base, roots)
+        (crate::TempDir(base), roots)
     }
 
     const GRANTS: &str = "fs.read app:/data\n";

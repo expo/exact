@@ -299,7 +299,7 @@ impl Collection {
     ) -> Result<Mounted, InstanceError> {
         let plan = u.env.plan;
         let token = self.index.invalidate_row(text).map_err(index_error)?;
-        let slots: RowSlots = Rc::new(RefCell::new(BTreeMap::new()));
+        let slots: RowSlots = crate::vm::Owned::shared();
         let row = &mut mounted.row;
         row.frame = Frame {
             item: Some(self.items[position].clone()),
@@ -334,7 +334,7 @@ impl Collection {
                         plan.str(s.name),
                     ));
                 }
-                slots.borrow_mut().insert(i as u32, value);
+                slots.borrow_mut().slots.insert(i as u32, value);
             }
         }
         row.slots = Some(slots);

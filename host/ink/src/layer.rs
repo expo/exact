@@ -86,9 +86,9 @@ impl Pool {
         let mut available = None;
         let mut resizable = None;
         let mut blocked = false;
-        for i in self.used..self.targets.len() {
-            if self.targets[i].2 == size {
-                if device.last_use(self.targets[i].0)? <= completed {
+        for (i, target) in self.targets.iter().enumerate().skip(self.used) {
+            if target.2 == size {
+                if device.last_use(target.0)? <= completed {
                     available = Some(i);
                     break;
                 }
@@ -96,7 +96,7 @@ impl Pool {
                     blocked = true;
                     counters::add(Counter::TargetCandidatesBlocked, 1);
                 }
-            } else if resizable.is_none() && device.last_use(self.targets[i].0)? <= completed {
+            } else if resizable.is_none() && device.last_use(target.0)? <= completed {
                 resizable = Some(i);
             }
         }

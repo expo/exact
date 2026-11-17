@@ -8,9 +8,11 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePathspec, streamHead, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, assertCapturedPackageDependencies, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePaths, unrelocatableContractDependency } from './deploy.mjs';
+import { streamHead } from './publisher.mjs';
 import { bakeOutput, bakeTarget, buildBake } from './app.mjs';
 import * as asyncLane from './async.mjs';
+import { gameAppleLeg } from './affected.mjs';
 import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
 
@@ -269,7 +271,7 @@ test('a deploy snapshot leaves out dist and everything a build keeps beside it, 
     reapGenerations(dist, { newest: 1, ageMs: 0, bytes: 2 ** 30 });
     const release = leaseGeneration(dist, readdirSync(`${dist}.gen`)[0]);
     write('dist.lock', '1'); write('dist.stage-a1b2c3/app.js', 'half a build'); write('dist.previous/app.js', 'aside');
-    const ignored = git('ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...sourcePathspec(repo, { dir: repo, workspace: repo, manifest: {} }, resolve(repo, 'exact2')));
+    const ignored = git('ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--', ...sourcePaths(repo, { dir: repo, workspace: repo, manifest: {} }, resolve(repo, 'exact2')).pathspec);
     expect(ignored.status, ignored.stderr).toBe(0);
     expect(existsSync(`${dist}.gen.reaped`)).toBe(true);
     expect(ignored.stdout.split('\0').filter(Boolean)).toEqual(['local.json']);
@@ -351,9 +353,9 @@ test('async names the suites of each failure its log attributes', () => {
   });
 });
 
-test('async runs a check only for the suites selected, its Rust tests built as a full run builds them', () => {
+test('hourly runs the full checks and selects the remaining suites, sharing workspace test builds', () => {
   const none = asyncLane.nothing();
-  expect(asyncLane.checks('new', 'old', none).map(([name]) => name)).toEqual(['build', 'clippy', 'fmt', 'caps', 'boot', 'web-bytes', 'lean', 'vm-extract', 'difftest', 'difftest-js', 'metrics']);
+  expect(asyncLane.checks('new', 'old', none).map(([name]) => name)).toEqual(['build', 'workspace-build', 'workspace', 'prepare', 'default-test', 'clippy', 'workspace-clippy', 'fmt', 'caps', 'boot', 'wasm', 'web-bytes', 'tvos-install', 'linux', 'windows', 'windows-arm64', 'android', 'difftest-quick', 'lean', 'vm-extract', 'difftest', 'difftest-js', 'metrics']);
   const selection = {...none, cargo:['exact-painted'], conform:['caltrain'], ios:true, glue:['./host/web/a.test.mjs'], lane:['a_lane_test']};
   const some = asyncLane.checks('new', 'old', selection);
   const step = name => some.find(([n]) => n === name);
@@ -367,7 +369,7 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   expect(step('conform-webkit')).toBeUndefined();
   expect(step('glue')[2].at(-1)).toContain('./host/web/a.test.mjs');
   for (const name of ['prepare', 'ios']) expect(step(name)).toBeDefined();
-  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
+  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'game-apple', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
   expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-painted']);
   expect(asyncLane.covers('conform-browsers', selection)).toEqual(['conform:caltrain']);
   expect(asyncLane.covers('ios', selection)).toBe(null);
@@ -381,11 +383,11 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   expect(ranTwo.failures).toEqual(['ios: ExactKitTests.CTests testC failed', 'ios: exit 65 (see log)']);
   const full = asyncLane.checks('new', 'old', {lane:[], glue:['./x.test.mjs']});
   expect(full.find(([n]) => n === 'test')[2]).toEqual(expect.arrayContaining(['cargo', 'test', '--workspace']));
-  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(full.some(([n]) => n === name)).toBe(true);
+  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'game-apple', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(full.some(([n]) => n === name)).toBe(true);
   // A parity leg builds its gallery's Linux host, then drives the smoke on a fresh web build
   expect(full.find(([n]) => n === 'parity-svg').slice(1)).toEqual(['sh', ['-c', 'cargo build --profile host-dev -p svg-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs svg --hosts linux']]);
   // What a selection can leave out is what a full run has and an empty selection has not.
-  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-browsers', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-browsers', 'game', 'game-apple', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
 });
 
 test('async runs each module drive whole and keeps its failure until it runs again', () => {
@@ -424,6 +426,12 @@ test('async compiles tvOS per commit with no simulator, and tier 2 installs it',
   const ran = {checks: {tvos: {status: 0}}, failures: []};
   retainSkippedFailures(['tvos: IOS/RemoteTVOS.swift: cannot find type'], ran);
   expect(ran.failures).toEqual([]);
+});
+
+test('async compiles the shared game Apple shell when the lane selects it (#559)', () => {
+  const step = selection => asyncLane.checks('new', 'old', selection).filter(([name]) => name === 'game-apple');
+  expect(step({...asyncLane.nothing(), gameApple: true})).toEqual([['game-apple', 'sh', ['-c', gameAppleLeg]]]);
+  expect(step(asyncLane.nothing())).toEqual([]);
 });
 
 test('async compiles watchOS per commit with no simulator, and tier 2 does not again', () => {
@@ -489,7 +497,7 @@ test('async glue runs the capture fixtures and the web JS target\'s tests, less 
   expect(glue).toContain('./host/web-js/conformance/net.test.mjs');
   expect(glue).toContain('./host/web-js/live-clock.test.js');
   expect(glue).not.toContain('./host/web-js/bundle-size.test.mjs');
-  expect(glue).not.toContain('./host/web-js/document-agent.test.mjs');
+  expect(glue).toContain('./host/web-js/document-agent.test.mjs');
 });
 
 test('async glue runs a script test no list names', () => {
@@ -572,6 +580,251 @@ test('a deploy snapshot omits the Exact corpus link and still validates applicat
   const app = { name: 'test', dir: external, workspace: external, manifest: {} };
   expect(() => snapshotOf(app, { compiler, dirty: true }, exact)).toThrow(/symlink llp.*escapes the captured source repositories/);
 }, 30000);
+
+test('a deploy omits each Cargo crate target and still refuses dirty source', () => {
+  const root = mkdtempSync(join(fixture, 'cargo-outputs-'));
+  const exact = join(root, 'exact'), external = join(root, 'app');
+  const compiler = contractCompiler(compilerRoot('fn main() { print!(r#"{{"packages":[],"sources":[],"consulted":[],"errors":[]}}"#); }\n'));
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  };
+  const write = (repo, name, text) => {
+    const path = join(repo, name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+  };
+  const crate = 'vendor/ibex/crates/hermes-lean-sys-installer';
+  for (const repo of [exact, external]) {
+    write(repo, '.gitignore', 'target/\n/local.rs\n');
+    write(repo, 'app.contract', 'app Test\n');
+    write(repo, `${crate}/Cargo.toml`, '[workspace]\n[package]\nname="installer"\nversion="0.1.0"\n');
+    write(repo, `${crate}/src/main.rs`, 'fn main() {}\n');
+    write(repo, 'fixtures/target/input.rs', 'source named target\n');
+    git(repo, 'init', '-q');
+    git(repo, 'add', '-A');
+    git(repo, 'add', '--force', 'fixtures/target/input.rs');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm', 'fixture');
+    write(repo, `${crate}/target/debug/incremental/output.o`, 'build output');
+  }
+  const app = { name: 'test', dir: external, workspace: external, manifest: {} };
+  const snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    const captured = materializeSnapshot(snapshot, join(root, 'run'), app);
+    for (const repo of [captured.exactRoot, captured.app.dir]) {
+      expect(existsSync(join(repo, crate, 'target'))).toBe(false);
+      expect(readFileSync(join(repo, 'fixtures/target/input.rs'), 'utf8')).toBe('source named target\n');
+    }
+  } finally { disposeSnapshot(snapshot); }
+  for (const repo of [exact, external]) {
+    for (const path of ['local.rs', 'fixtures/target/local.rs', 'untracked.rs']) {
+      write(repo, path, 'uncommitted source\n');
+      expect(() => snapshotOf(app, { compiler }, exact)).toThrow(`A  ${path}`);
+      rmSync(join(repo, path));
+    }
+    write(repo, `${crate}/src/main.rs`, 'fn main() { panic!() }\n');
+    expect(() => snapshotOf(app, { compiler }, exact)).toThrow(/uncommitted or ignored source files:[\s\S]*src\/main.rs/);
+    write(repo, `${crate}/src/main.rs`, 'fn main() {}\n');
+  }
+  git(exact, 'add', '--force', `${crate}/target/debug/incremental/output.o`);
+  expect(() => snapshotOf(app, { compiler, dirty: true }, exact)).toThrow(/tracked source .*target.*inferred output root/);
+}, 30_000);
+
+test('Android build products leave Git and deploy clean while host source edits refuse', () => {
+  const root = mkdtempSync(join(fixture, 'android-outputs-'));
+  const exact = join(root, 'exact'), dir = join(root, 'app');
+  const compiler = contractCompiler(compilerRoot('fn main() { print!(r#"{{"packages":[],"sources":[],"consulted":[],"errors":[]}}"#); }\n'));
+  const write = (name, bytes) => {
+    const path = join(exact, 'host/android', name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes);
+  };
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  };
+  write('.gitignore', readFileSync(new URL('../host/android/.gitignore', import.meta.url)));
+  write('build.gradle.kts', '// root project\n');
+  for (const module of ['canvas', 'widgets']) write(`${module}/build.gradle.kts`, '// module\n');
+  write('canvas/src/Canvas.kt', 'class Canvas\n');
+  for (const repo of [exact, dir]) {
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, 'app.contract'), 'app Test\n');
+    git(repo, 'init', '-q');
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm',
+      'fixture\n\nCo-Authored-By: GPT-6.1 Sol <noreply@openai.com>');
+  }
+  const products = ['build/reports/dependencies.html', '.gradle/caches/state.bin', '.kotlin/sessions/session',
+    'canvas/build/intermediates/classes.jar', 'widgets/build/outputs/widget.aar', 'settings-gradle.lockfile',
+    'hs_err_pid123.log', 'replay_pid123.log', 'hs_err_pid123.mdmp'];
+  for (const product of products) write(product, 'generated');
+  const app = { name: 'test', dir, workspace: dir, manifest: {} };
+  const snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    expect(git(exact, 'status', '--porcelain')).toBe('');
+    const captured = materializeSnapshot(snapshot, join(root, 'run'), app);
+    for (const product of products) expect(existsSync(join(captured.exactRoot, 'host/android', product))).toBe(false);
+    expect(readFileSync(join(captured.exactRoot, 'host/android/canvas/src/Canvas.kt'), 'utf8')).toBe('class Canvas\n');
+  } finally { disposeSnapshot(snapshot); }
+  write('canvas/src/Canvas.kt', 'class Changed\n');
+  expect(() => snapshotOf(app, { compiler }, exact)).toThrow('host/android/canvas/src/Canvas.kt');
+  write('canvas/src/Canvas.kt', 'class Canvas\n');
+  for (const source of ['canvas/hs_err.kt', 'fixtures/build/input.kt']) {
+    write(source, 'source');
+    expect(() => snapshotOf(app, { compiler }, exact)).toThrow(`host/android/${source}`);
+    rmSync(join(exact, 'host/android', source));
+  }
+}, 30_000);
+
+test('Cargo manifests and JVM crash reports do not grow deployment Git arguments', () => {
+  const repo = mkdtempSync(join(fixture, 'many-manifests-'));
+  const app = { dir: repo, workspace: repo, manifest: {} };
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  git('init', '-q');
+  const argv = paths => ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...paths].join(' ').length;
+  const before = argv(sourcePaths(repo, app, repo).pathspec);
+  for (let index = 0; index < 400; index++) {
+    const crate = join(repo, 'vendor/crates', `standalone-installer-${index}`);
+    mkdirSync(crate, { recursive: true });
+    writeFileSync(join(crate, 'Cargo.toml'), '[workspace]\n');
+  }
+  git('add', '-A');
+  const after = argv(sourcePaths(repo, app, repo).pathspec);
+  expect(after).toBeLessThan(32767);
+  expect(after).toBe(before);
+  const android = join(repo, 'host/android');
+  mkdirSync(android, { recursive: true });
+  for (let index = 10000; index < 10400; index++) {
+    for (const name of [`hs_err_pid${index}.log`, `replay_pid${index}.log`, `hs_err_pid${index}.mdmp`]) {
+      writeFileSync(join(android, name), 'crash report');
+    }
+  }
+  const crashes = argv(sourcePaths(repo, app, repo).pathspec);
+  expect(crashes).toBeLessThan(32767);
+  expect(crashes).toBe(before);
+});
+
+test('an external app installs its own captured lockfile before Contract discovery', () => {
+  const root = mkdtempSync(join(fixture, 'app-lock-'));
+  const exact = join(root, 'exact'), dir = join(root, 'app');
+  const compiler = contractCompiler(resolve(import.meta.dir, '..'));
+  const write = (name, text) => {
+    const path = join(root, name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text);
+  };
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  const commit = repo => {
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm', 'fixture\n\nCo-Authored-By: GPT-6.1 Sol <noreply@openai.com>');
+  };
+  const pkg = { name: 'app', private: true, dependencies: { '@fixture/ui': 'file:../exact/packages/ui' } };
+  write('app/.gitignore', 'node_modules/\n');
+  write('app/package.json', JSON.stringify(pkg));
+  write('app/app.json', JSON.stringify({ name: 'Test', app: { id: 'com.exact.test', name: 'Test' } }));
+  write('app/app.contract', 'use Label from "@fixture/ui"\n\ncomponent App\n  view\n    Label()\n');
+  write('exact/packages/ui/package.json', JSON.stringify({ name: '@fixture/ui', version: '1.0.0', exports: './index.contract' }));
+  write('exact/packages/ui/index.contract', 'component Label\n  view\n    text "Captured package"\n');
+  write('exact/packages/extra/package.json', JSON.stringify({ name: '@fixture/extra', version: '1.0.0' }));
+  const installed = spawnSync(process.execPath, ['install'], { cwd: dir, encoding: 'utf8' });
+  expect(installed.status, installed.stderr).toBe(0);
+  for (const repo of [exact, dir]) { git(repo, 'init', '-q'); commit(repo); }
+  const app = { name: 'test', dir, workspace: join(dir, '.exact/shells'), manifest: {} };
+  const lock = readFileSync(join(dir, 'bun.lock'));
+  let snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    const captured = materializeSnapshot(snapshot, join(root, 'run'), app);
+    const library = join(captured.app.dir, 'node_modules/@fixture/ui/index.contract');
+    expect(readFileSync(library, 'utf8')).toContain('Captured package');
+    expect(realpathSync(library).startsWith(captured.sourceRoot + sep)).toBe(true);
+    expect(readFileSync(join(captured.app.dir, 'bun.lock'))).toEqual(lock);
+  } finally { disposeSnapshot(snapshot); }
+
+  pkg.dependencies['@fixture/extra'] = 'file:../exact/packages/extra';
+  write('app/package.json', JSON.stringify(pkg));
+  commit(dir);
+  snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    expect(() => materializeSnapshot(snapshot, join(root, 'stale-lock'), app)).toThrow('bun install --frozen-lockfile failed');
+    expect(readFileSync(join(dir, 'bun.lock'))).toEqual(lock);
+  } finally { disposeSnapshot(snapshot); }
+}, 30000);
+
+test('every install manifest refuses absolute file and link dependencies before discovery', () => {
+  const root = mkdtempSync(join(fixture, 'live-dependency-'));
+  const exact = join(root, 'exact'), dir = join(root, 'app'), workspace = join(dir, '.exact/shells');
+  const marker = join(root, 'discovered');
+  const compiler = contractCompiler(compilerRoot(`fn main() {
+    std::fs::write(r#"${marker}"#, "read").unwrap();
+    print!(r#"{{"packages":[],"sources":[],"consulted":[],"errors":[]}}"#);
+  }`));
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  mkdirSync(exact);
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  for (const repo of [exact, dir]) {
+    git(repo, 'init', '-q');
+    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm',
+      'fixture\n\nCo-Authored-By: GPT-6.1 Sol <noreply@openai.com>');
+  }
+  const app = { name: 'test', dir, workspace, manifest: {} };
+  // Neither target exists: refusal must precede resolution or installation.
+  for (const manifestRoot of [dir, workspace, exact]) {
+    for (const spec of [`file:${join(root, 'live-package')}`, 'link:live-package']) {
+      writeFileSync(join(manifestRoot, 'package.json'), JSON.stringify({ dependencies: { helper: spec } }));
+      writeFileSync(join(manifestRoot, 'bun.lock'), '{}');
+      expect(() => {
+        const snapshot = snapshotOf(app, { compiler, dirty: true }, exact);
+        disposeSnapshot(snapshot);
+      }).toThrow('would be read live after the snapshot');
+      expect(existsSync(marker)).toBe(false);
+    }
+    rmSync(join(manifestRoot, 'package.json'));
+    rmSync(join(manifestRoot, 'bun.lock'));
+  }
+}, 30000);
+
+test('installed local packages cannot reach outside the captured source', () => {
+  const root = mkdtempSync(join(fixture, 'installed-local-'));
+  const source = join(root, 'source'), app = join(source, 'app'), installed = join(app, 'node_modules/helper');
+  const local = join(source, 'helper'), live = join(root, 'live');
+  for (const dir of [installed, local, live]) mkdirSync(dir, { recursive: true });
+  const manifest = spec => writeFileSync(join(app, 'package.json'), JSON.stringify({ dependencies: { helper: spec } }));
+  manifest('file:../helper');
+  writeFileSync(join(local, 'index.ts'), 'captured');
+  writeFileSync(join(live, 'index.ts'), 'live');
+  symlinkSync(join(local, 'index.ts'), join(installed, 'index.ts'));
+  expect(() => assertCapturedPackageDependencies(app, source)).not.toThrow();
+  rmSync(join(installed, 'index.ts'));
+  symlinkSync(join(live, 'index.ts'), join(installed, 'index.ts'));
+  expect(() => assertCapturedPackageDependencies(app, source)).toThrow('outside the captured snapshot');
+  rmSync(installed, { recursive: true });
+  symlinkSync(live, installed, process.platform === 'win32' ? 'junction' : 'dir');
+  manifest('link:helper');
+  expect(() => assertCapturedPackageDependencies(app, source)).toThrow('outside the captured snapshot');
+  rmSync(installed);
+  mkdirSync(installed);
+  manifest('file:../../live');
+  expect(() => assertCapturedPackageDependencies(app, source)).toThrow('outside the captured snapshot');
+});
 
 test('Contract discovery builds in the selected private Cargo target', () => {
   const root = compilerRoot(), target = mkdtempSync(join(fixture, 'cargo-target-'));

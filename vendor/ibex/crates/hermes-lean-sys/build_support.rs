@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 #[path = "receipt_schema.rs"]
 mod receipt_schema;
 
-pub(crate) const RELEASE_TAG: &str = "hermes-vanilla-d412d3bd8512-v5";
+pub(crate) const RELEASE_TAG: &str = "hermes-vanilla-d412d3bd8512-v6";
 const DEFAULT_RELEASE_BASE_URL: &str = "https://github.com/expo/ibex/releases/download";
 pub(crate) const CACHE_ARCHIVE: &str = ".hermes-lean-sys-bundle.tar.gz";
 
@@ -24,7 +24,7 @@ pub(crate) struct BundlePin {
 
 // @ref LLP 0057.000#l1--the-bindings-door — this table is the trust root for
 // the compiler/VM identity shared by the bindings and the owning runtime.
-// These are the authenticated immutable v5 release digests. Keep this tag and
+// These are the authenticated immutable v6 release digests. Keep this tag and
 // complete table together until a successor release is published and every
 // archive attestation is verified; scripts/update-hermes-lean-sys-pins.mjs
 // performs that single transition.
@@ -32,57 +32,57 @@ pub(crate) const PINNED_BUNDLES: &[BundlePin] = &[
     BundlePin {
         target: "aarch64-apple-darwin",
         asset: "hermes-vanilla-aarch64-apple-darwin.tar.gz",
-        sha256: "bc71c7b398f1d41a5390761b75ce72e7be234aa48cb1ddec947224188ed6a4f2",
+        sha256: "e6db264a7531461dae40aecda87163db7e5470ca58036885683c4914d2d2c5db",
     },
     BundlePin {
         target: "x86_64-apple-darwin",
         asset: "hermes-vanilla-x86_64-apple-darwin.tar.gz",
-        sha256: "2464a7f989c5c8e318cfc5ab477d70ae05370010421b21ba7e1392d2e3f76fb6",
+        sha256: "1b20955cfc8eb40dfe53473f45a863aa126fa88bbe8676eae444a78d629475e0",
     },
     BundlePin {
         target: "aarch64-apple-ios",
         asset: "hermes-vanilla-aarch64-apple-ios.tar.gz",
-        sha256: "6a2ecef87fd552c90284aca0d9a58898b63c8c77e6f6d04ea3192c420654039f",
+        sha256: "472c2c0e2489c6f6b84b051571b14ce73328ca09edf56ca01409d26204e568bf",
     },
     BundlePin {
         target: "aarch64-apple-ios-sim",
         asset: "hermes-vanilla-universal-apple-ios-simulator.tar.gz",
-        sha256: "bd15b09b7e448d4eaec268309cee653dd4b880bcfe17d277d886daae5db0696e",
+        sha256: "38552a30f15da5cff57839ba606f2319ebb1552372d3170badf7016dbc599b65",
     },
     BundlePin {
         target: "x86_64-apple-ios",
         asset: "hermes-vanilla-universal-apple-ios-simulator.tar.gz",
-        sha256: "bd15b09b7e448d4eaec268309cee653dd4b880bcfe17d277d886daae5db0696e",
+        sha256: "38552a30f15da5cff57839ba606f2319ebb1552372d3170badf7016dbc599b65",
     },
     BundlePin {
         target: "aarch64-apple-tvos",
         asset: "hermes-vanilla-aarch64-apple-tvos.tar.gz",
-        sha256: "cad8a020ee9da2f4ba58e5524f13791793f613f66af0fcd8d165986103eeb10d",
+        sha256: "21096358ebd6c899396a233558d3529cb5a3bc72722393382c95a3efdb62077d",
     },
     BundlePin {
         target: "aarch64-apple-tvos-sim",
         asset: "hermes-vanilla-aarch64-apple-tvos-simulator.tar.gz",
-        sha256: "697c2789686b8f48a1ddeec9d7a57ac2a460d3ef65fc3c28e59df5a2d5ab6438",
+        sha256: "80b0044cf5ff2b1db484eede6e00aeb70dc6def6087fd65d437d4cc625fe1319",
     },
     BundlePin {
         target: "x86_64-unknown-linux-gnu",
         asset: "hermes-vanilla-x86_64-unknown-linux-gnu.tar.gz",
-        sha256: "5000324acd01cd2cc218682e4fec114632dd3b8c703f6a8eeca546f6744e17e2",
+        sha256: "44cf949d369b2e5386d114a47b9cee7ce3da469037626e55cb357bd0515c0e5a",
     },
     BundlePin {
         target: "aarch64-unknown-linux-gnu",
         asset: "hermes-vanilla-aarch64-unknown-linux-gnu.tar.gz",
-        sha256: "f7fc2621bf2c9396c7afd5d4e5128c1dd16c96bade14ff8c13934ef6489e6eb8",
+        sha256: "0ba28748512bb5d437952cb4037cd85e235a982ba16d0c2cb9cf0d7330b72e05",
     },
     BundlePin {
         target: "aarch64-linux-android",
         asset: "hermes-vanilla-aarch64-linux-android.tar.gz",
-        sha256: "f91fc8048be351320bc93fff83e94b75d0bcd3b879cc7d5f439ad462178701c6",
+        sha256: "7f6995e31dee7dd75aebf270c6af73a581f233399fce5aaee49d179d7248a9d6",
     },
     BundlePin {
         target: "x86_64-pc-windows-msvc",
         asset: "hermes-vanilla-x86_64-pc-windows-msvc.tar.gz",
-        sha256: "db9233d08c25a33d7b1cdd2d0eb9428e98020fa6de7ab396b0adfb241b61d1e0",
+        sha256: "a16901a5fef798e9cc6fd7a2da0f76a27da2632d1dfdd476efa2f8eef4cd1217",
     },
 ];
 

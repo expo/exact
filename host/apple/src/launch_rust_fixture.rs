@@ -41,7 +41,9 @@ impl DataSource for RustSource {
             self.base.answer(store, source, args)
         } else if source == "public" {
             Ok(Answer::Later(
-                self.base.definitions[0].fill(|_| None).unwrap(),
+                self.base.definitions[0]
+                    .fill(|_| None, preload_url)
+                    .unwrap(),
             ))
         } else {
             let mut request = self.request.clone();
@@ -81,7 +83,7 @@ pub(super) fn source(
     run: impl Fn(&mut dyn LaunchContext) + Send + Sync + 'static,
 ) -> RustSource {
     let base = server.source(PreloadWhen::Start, false);
-    let request = base.definitions[0].fill(|_| None).unwrap();
+    let request = base.definitions[0].fill(|_| None, preload_url).unwrap();
     RustSource {
         base,
         request,

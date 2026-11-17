@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * boot — the fifth check (rules/RULES.md §The six checks): parse and count
+ * boot — the gate's module-graph check (rules/RULES.md §The gate): parse and count
  * the module graph reachable before first pixel. A count cannot flake like a
  * timer, and parsing keeps valid HTML/ESM spellings from bypassing the count.
  */
@@ -46,11 +46,11 @@ const ALLOWED = new Set([...Object.keys(MODULES), ...Object.values(MODULES).flat
 // A served document may run exactly one inline script before its glue: the
 // host's capture script (LLP 1048.000 D6, 1048.001 D5; Charlie, 2026-09-23),
 // which records taps, once the page has painted starts an idle page's wasm
-// download, and stops that download when a link leaves the page; it holds no
+// download, stops it when a link leaves, and restores the saved scheme; it holds no
 // app logic. Pinned by hash and byte-capped; changing it means changing this
 // hash, in review.
-const CAPTURE = { path: 'host/web/capture.js', maxBytes: 1024,
-  sha256: '9f2f1e8ebbc83b2c2f928627384bceb66d94dc174a8a284360765cdf30d10a55' };
+const CAPTURE = { path: 'host/web/capture.js', maxBytes: 1536,
+  sha256: 'd86d9114b5a227581aa9deb4391907ab96df37f477c0277e327fbece1392a40e' };
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const rootPath = path => relative(ROOT, path).replaceAll('\\', '/');
 
@@ -216,7 +216,7 @@ function run() {
   // checkout has one, may run it and nothing else inline.
   const capture = { bytes: 0, sha256: '', checked: null, found: 0, stale: false };
   try {
-    const text = readFileSync(resolve(root, CAPTURE.path), 'utf8').trimEnd();
+    const text = (readFileSync(resolve(root, 'host/web/scheme.js'), 'utf8') + readFileSync(resolve(root, CAPTURE.path), 'utf8')).trimEnd();
     capture.bytes = Buffer.byteLength(text);
     capture.sha256 = createHash('sha256').update(text).digest('hex');
     if (capture.sha256 !== CAPTURE.sha256) problems.push(`${CAPTURE.path} changed (sha256 ${capture.sha256}); served pages may run only the pinned capture script (${CAPTURE.sha256})`);

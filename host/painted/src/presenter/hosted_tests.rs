@@ -81,7 +81,7 @@ const LONG: &str = r#"component Long
 "#;
 
 fn boot(source: &str) -> Presenter<()> {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (320., 480.),
@@ -171,6 +171,36 @@ fn read(words: &[i32]) -> Vec<Told> {
     }
     assert_eq!(at, words.len(), "the statement is read to its end");
     out
+}
+
+#[test]
+fn shared_flights_make_native_fields_inert_until_landing() {
+    let (_, _guard) = shell();
+    let mut p = boot(
+        r#"component App
+  state open = false
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      if open
+        column sharedElement="card" width=200 height=100 -exact-layout-transition="1s linear"
+          input testId="field" placeholder="Name"
+      else
+        view sharedElement="card" width=80 height=50 -exact-layout-transition="1s linear"
+"#,
+    );
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
+    p.host_mut().flights.enabled = true;
+    p.frame();
+    p.tap(id(&p, "toggle")).unwrap();
+    p.frame();
+    assert_eq!(read(&p.reader_fields(1.).unwrap())[0].flags & 2, 2);
+    p.tick(1001.);
+    p.frame();
+    assert_eq!(read(&p.reader_fields(1.).unwrap())[0].flags & 2, 0);
 }
 
 /// The statement as it now stands, whether or not it was told before.
@@ -354,7 +384,7 @@ component App
             .encode()
     };
     let boot_plan = |plan: &[u8]| {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             plan,
             (),
             (320., 480.),
@@ -796,6 +826,26 @@ fn a_finger_on_a_hosted_field_puts_android_back_in_touch_mode() {
     );
 }
 
+/// A person's input to the focused field is later than a `focus()` still
+/// waiting for its node to land, and supersedes it.
+#[test]
+fn input_to_a_hosted_field_supersedes_a_focus_waiting_for_landing() {
+    let (_shell, _hosting) = shell();
+    let mut p = boot(FORM);
+    p.serve_requests();
+    p.reader_fields(1.0);
+    let field = id(&p, "name");
+    p.reader_field_focused(field, 0, true, 1.0);
+    assert_eq!(p.focus(), Some(field));
+    let email = id(&p, "email");
+    let waiting = p.host().kernel().node(email).map(|n| n.key);
+    p.host_mut().flights.focus = waiting;
+    p.reader_field_input(field, 1, 1);
+    assert_eq!(p.host().flights.focus, waiting, "stale field input");
+    p.reader_field_input(field, 0, 1);
+    assert_eq!(p.host().flights.focus, None);
+}
+
 /// A hosted edit is told after the platform's field made it: its
 /// `beforeinput` runs first, and one it prevents never reaches the app, so
 /// the next statement answers the edit with the text from before, which
@@ -853,4 +903,29 @@ fn a_hosted_edit_asks_beforeinput_and_a_caret_move_is_a_selectionchange() {
     p.reader_field_edited(field, (0, 4), "ac", (2, 2), 6.0);
     p.run_commands(<()>::default);
     assert_eq!(log(&p), format!("{heard}<0-0><2-2>"));
+}
+
+#[test]
+fn rtl_hosted_fields_carry_direction_and_physical_alignment() {
+    let (_shell, _guard) = shell();
+    for direction in ["rtl", "ltr"] {
+        let source = format!(
+            r#"component App
+  view
+    column direction="{direction}"
+      input value="hello" testId="start"
+      input value="hello" direction="ltr" testId="own"
+      input value="hello" text-align="left" testId="left"
+"#
+        );
+        let mut p = boot(&source);
+        let fields = told(&mut p);
+        let rtl = direction == "rtl";
+        assert_eq!(fields[0].look[0] & 512 != 0, rtl);
+        assert_eq!(fields[0].look[5], if rtl { 2 } else { 0 });
+        assert_eq!(fields[1].look[0] & 512, 0);
+        assert_eq!(fields[1].look[5], 0);
+        assert_eq!(fields[2].look[0] & 512 != 0, rtl);
+        assert_eq!(fields[2].look[5], 0);
+    }
 }

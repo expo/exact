@@ -633,6 +633,7 @@ fn explicit_clears_preserve_special_host_row_contracts() {
             "--exact-placeholder-color:initial;",
             false,
         ),
+        (BackdropColor, "--exact-backdrop-color:initial;", false),
         (
             TintColor,
             "--exact-tint:var(--exact-symbol, var(--exact-accent, AccentColor));",

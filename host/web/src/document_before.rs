@@ -1,17 +1,51 @@
 //! The routes, document scroller and hero known before any opening tag streams.
 
 use super::{
-    bars::bar_header, props_of, tag_of, NodeFacts, PropId, Route, SortedMap, SortedSet, Source,
-    ViewId,
+    attribute, bars::bar_header, props_of, tag_of, NodeFacts, PropId, Route, SortedMap, SortedSet,
+    Source, ViewId,
 };
 use exact_plan::EventKind;
+
+/// The image selected for a JavaScript page's preload and fetch priority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeroImage {
+    /// The source URL before HTML escaping.
+    pub src: String,
+    /// The `<img>`'s `crossorigin` value, before HTML escaping.
+    pub crossorigin: Option<String>,
+    /// Byte offset in `Document::root` for adding a missing `fetchpriority` attribute.
+    pub priority_at: Option<usize>,
+}
+
+impl HeroImage {
+    /// The `<img>`'s priority attribute, which its preload carries too: the
+    /// preload starts the request, at the preload's priority, so a preload
+    /// without it fetches the hero at low priority (LLP 1048.007 D5).
+    pub const PRIORITY: &'static str = " fetchpriority=\"high\"";
+
+    /// The `<link rel="preload">` that makes the `<img>`'s request: its URL
+    /// and `crossorigin`, escaped as the `<img>` escapes them, and its
+    /// priority. Chrome leaves a preload of another CORS mode unused and
+    /// fetches the image twice. `None` for a value with a NUL character,
+    /// which the walk refuses too.
+    pub fn preload(&self) -> Option<String> {
+        let mut link = String::from("<link rel=\"preload\" as=\"image\"");
+        attribute(&mut link, "href", &self.src).ok()?;
+        if let Some(crossorigin) = &self.crossorigin {
+            attribute(&mut link, "crossorigin", crossorigin).ok()?;
+        }
+        link.push_str(Self::PRIORITY);
+        link.push('>');
+        Some(link)
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Before {
     pub routes: SortedMap<ViewId, Route>,
     pub bars: SortedSet<ViewId>,
     pub page: SortedSet<ViewId>,
-    pub hero: Option<(ViewId, String)>,
+    pub hero: Option<(ViewId, HeroImage)>,
     hero_seen: bool,
 }
 
@@ -32,6 +66,7 @@ impl Before {
                 *root,
                 false,
                 false,
+                exact_kernel::Visibility::Visible,
                 &mut Vec::new(),
                 &mut live,
             );
@@ -54,6 +89,7 @@ impl Before {
         id: ViewId,
         hidden: bool,
         covered: bool,
+        mut visibility: exact_kernel::Visibility,
         path: &mut Vec<ViewId>,
         live: &mut Vec<Vec<ViewId>>,
     ) {
@@ -71,19 +107,42 @@ impl Before {
         {
             live.push(path.clone());
         }
+        let tag = tag_of(&node, false);
+        // A popover or dialog is closed until a script opens it, and the
+        // browser does not show a closed one.
         let covered = covered
             || self.routes.get(&id).is_some_and(|r| r.inert)
             || node.props.bool(PropId::Inert) == Some(true)
-            || node.style.visibility == exact_kernel::Visibility::Hidden;
-        if !covered && !self.hero_seen && tag_of(&node, false) == "img" {
-            if let Some(source) = props_of(&node)
-                .get("src")
-                .filter(|source| !source.starts_with("data:") && !source.starts_with("symbol:"))
-            {
+            || node.style.display == exact_kernel::Display::None
+            || node.props.get(PropId::Popover).is_some()
+            || tag == "dialog";
+        // Unlike `inert`, CSS `visibility` is inherited, and a descendant may
+        // set it back to `visible`.
+        if node.style.mask.has(exact_kernel::StyleId::Visibility) {
+            visibility = node.style.visibility;
+        }
+        if !covered
+            && visibility == exact_kernel::Visibility::Visible
+            && !self.hero_seen
+            && tag == "img"
+        {
+            // A symbol is an icon, no hero, though one drawn from its file has
+            // that file for its source.
+            let props = props_of(&node);
+            if let Some(source) = props.get("src").filter(|source| {
+                !source.is_empty()
+                    && !source.starts_with("data:")
+                    && !props.contains_key("data-symbol-source")
+            }) {
                 // A first image in a repeated row is lazy; no later image replaces it.
                 self.hero_seen = true;
                 if !lazy(id) {
-                    self.hero = Some((id, source.to_owned()));
+                    let hero = HeroImage {
+                        src: source.to_owned(),
+                        crossorigin: props.get("crossorigin").cloned(),
+                        priority_at: None,
+                    };
+                    self.hero = Some((id, hero));
                 }
             }
         }
@@ -91,7 +150,9 @@ impl Before {
         self.route_children(src, handlers, &node, &children);
         path.push(id);
         for child in children.iter().copied() {
-            self.scan(src, handlers, lazy, child, hidden, covered, path, live);
+            self.scan(
+                src, handlers, lazy, child, hidden, covered, visibility, path, live,
+            );
         }
         path.pop();
     }

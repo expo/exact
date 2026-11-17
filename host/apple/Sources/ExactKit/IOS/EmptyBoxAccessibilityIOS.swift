@@ -67,4 +67,15 @@ extension NodeView {
             && !clipsToBounds && clipBox == nil && clipPath == nil && scroll == nil && !isAccessibilityElement
     }
 }
+
+extension NodeView {
+    /// UIKit presents a projected panel's routes elsewhere. Its empty
+    /// placeholder has no accessible content; virtual elements still count.
+    var isEmptyPanelPlaceholder: Bool {
+        props["accessibilityRole"] == "tabpanel" && presenter?.navigation.tabPanels.contains(id) == true
+            && container.subviews.isEmpty && !isAccessibilityElement && accessibilityElements?.isEmpty != false
+            && (container === self || subviews.allSatisfy({ $0 === container })
+                && !container.isAccessibilityElement && container.accessibilityElements?.isEmpty != false)
+    }
+}
 #endif

@@ -220,8 +220,14 @@ fn anisotropic_image_reduction_preserves_the_unreduced_axis() {
     let dir = std::env::temp_dir().join(format!("exact-ink-area-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut pixels = Pixmap::new(256, 256).unwrap();
-    for (y, row) in pixels.data_mut().chunks_exact_mut(256 * 4).enumerate() {
-        for pixel in row.chunks_exact_mut(4) {
+    for (y, row) in pixels
+        .data_mut()
+        .as_chunks_mut::<{ 256 * 4 }>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
+        for pixel in row.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(if y % 2 == 0 {
                 &[0, 0, 0, 255]
             } else {
@@ -262,7 +268,13 @@ fn repeating_patterns_filter_across_tile_edges_without_mip_seams() {
         return;
     }
     let mut tile = Pixmap::new(8, 2).unwrap();
-    for (n, p) in tile.data_mut().chunks_exact_mut(4).enumerate() {
+    for (n, p) in tile
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         p.copy_from_slice(match n % 8 {
             0 => &[255, 0, 0, 255],
             7 => &[0, 0, 255, 255],

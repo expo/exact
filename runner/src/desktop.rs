@@ -1,10 +1,10 @@
 //! A button's presentations past the window (LLP 1133.025 D4, D5): a
-//! `-exact-menu="status"` button is the app's status item on macOS, and one
-//! with `dock` among its ids an item of the Dock menu. Windows'
-//! notification-area icon is accepted and not built (LLP 1133.025 §14).
-//! The agent reads both from the session's tree on every host, as
-//! `state.statusItems` and `state.dockMenu`, so a drive sees what a Mac
-//! would place, and the buttons stay ordinary where no host places them.
+//! `-exact-menu="status"` button is the app's status item on macOS and its
+//! notification-area icon on Windows, and one with `dock` among its ids an
+//! item of the Dock menu. The agent reads both from the session's tree on
+//! every host, as `state.statusItems` and `state.dockMenu`, so a drive sees
+//! what a desktop would place, and the buttons stay ordinary where no host
+//! places them.
 
 use crate::{DataSource, Runner};
 use exact_kernel::{Display, Kernel, NodeType, PropId, PropList, ViewId};
@@ -44,7 +44,7 @@ fn shown(kernel: &Kernel, id: ViewId) -> bool {
 }
 
 /// A button's label: its `aria-label`, else its text.
-fn label(kernel: &Kernel, id: ViewId) -> String {
+pub fn label(kernel: &Kernel, id: ViewId) -> String {
     let Some(node) = kernel.node(id) else {
         return String::new();
     };
@@ -60,11 +60,17 @@ fn label(kernel: &Kernel, id: ViewId) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The `img` or `svg` a status item takes its image from: the button's
+/// first, in tree order.
+pub fn image_node(kernel: &Kernel, id: ViewId) -> Option<ViewId> {
+    let found = kernel.preorder_where(&[id], |t, _| matches!(t, NodeType::Image | NodeType::Svg));
+    found.first().copied()
+}
+
 /// The image of a status item: its `img` child's source, or `svg` for a
 /// drawn one.
 fn image(kernel: &Kernel, id: ViewId) -> Json {
-    let found = kernel.preorder_where(&[id], |t, _| matches!(t, NodeType::Image | NodeType::Svg));
-    let Some(node) = found.first().and_then(|d| kernel.node(*d)) else {
+    let Some(node) = image_node(kernel, id).and_then(|d| kernel.node(d)) else {
         return Json::Null;
     };
     match node.props.str(PropId::ImageSource) {

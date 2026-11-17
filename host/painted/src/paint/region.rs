@@ -99,17 +99,28 @@ enum Command {
 }
 enum Payload {
     Empty,
-    Image(Arc<Bitmap>, ObjectFit, Option<[u8; 4]>),
+    Image(
+        Arc<Bitmap>,
+        ObjectFit,
+        Option<[u8; 4]>,
+        exact_kernel::ImageRendering,
+    ),
     Text(
         Rc<Paragraph>,
-        Vec<RunPaint>,
         Option<Rc<inline_frame::Captured>>,
+        Vec<TextCommand>,
     ),
     /// An `svg`'s scene as resolved at capture (LLP 1055.000 §4: SVG in a
     /// retained region; the instant is the capture's), its wide colours
     /// settled for the capture's appearance (LLP 1121 stage 4).
     Svg(Rc<exact_kernel::svg::Scene>),
 }
+enum TextCommand {
+    Begin(f32, Vec<crate::text::backgrounds::InlinePaint>),
+    Ink(super::text_shadow::TextInk),
+    End(f32),
+}
+
 struct NodePaint {
     ordinal: usize,
     key: NodeKey,
@@ -186,6 +197,9 @@ impl Picture {
                     "content capture refuses input controls inside retained content".into(),
                 );
             }
+            if zoom::range(&node).is_some() {
+                return Err("content capture refuses a zoomable scroller".into());
+            }
             let axes = effective_overflow(&node);
             if axes.0 != Overflow::Visible || axes.1 != Overflow::Visible {
                 scroll.insert(
@@ -226,6 +240,8 @@ impl Picture {
                 .node(id)
                 .ok_or("content node removed during capture")?;
             if (scene.hidden)(id)
+                || scene.kernel.is_top_layer(id)
+                || scene.kernel.host_block(id).is_some()
                 || node.is_inline_run()
                 || node.style.display == Display::None
                 || node.props.str(PropId::SemanticTag) == Some("dialog")
@@ -276,13 +292,67 @@ impl Picture {
                             .ok_or("intrinsic answer cannot paint final content")?;
                         let palette = native.palette(painter.dark).to_vec();
                         let inline = inline_frame::Captured::new(scene.kernel, &node, p, &palette);
-                        Payload::Text(p.clone(), palette, inline)
+                        // The accepted source's opacities, except where the
+                        // engine presents another (an animation, a transition,
+                        // a press look), which the live painter shows too.
+                        let chains: Vec<inline_opacity::Chain> = native
+                            .opacity()
+                            .iter()
+                            .map(|chain| {
+                                chain
+                                    .iter()
+                                    .map(|&(id, kept)| {
+                                        let shown = (scene.presented)(id).opacity;
+                                        match scene.kernel.node(id) {
+                                            Some(n) if n.style.opacity != shown => {
+                                                (id, shown.clamp(0., 1.))
+                                            }
+                                            _ => (id, kept),
+                                        }
+                                    })
+                                    .collect()
+                            })
+                            .collect();
+                        let groups = inline_opacity::Groups::new(node.id, &chains);
+                        let backgrounds = text_backgrounds(scene.kernel, &node, painter.dark, None);
+                        let mut commands = Vec::new();
+                        groups.visit(&mut |paint| match paint {
+                            inline_opacity::Paint::Begin(index, alpha) => {
+                                let backgrounds: Vec<_> = backgrounds
+                                    .iter()
+                                    .map(|b| {
+                                        let b = b.as_ref()?;
+                                        let mut layers = std::iter::once(b)
+                                            .chain(b.outer.iter())
+                                            .filter(|b| groups.owner(scene.kernel, b.id) == index);
+                                        let mut b = layers.next()?.clone();
+                                        b.outer = layers.cloned().collect();
+                                        Some(b)
+                                    })
+                                    .collect();
+                                commands.push(TextCommand::Begin(
+                                    alpha,
+                                    p.inline_backgrounds(
+                                        &backgrounds,
+                                        &scene.kernel.env_of(node.id),
+                                    ),
+                                ));
+                            }
+                            inline_opacity::Paint::Text(range) => commands.push(TextCommand::Ink(
+                                painter.capture_text_ink(scene.kernel, p, &palette, None, range),
+                            )),
+                            inline_opacity::Paint::End(_, alpha) => {
+                                commands.push(TextCommand::End(alpha))
+                            }
+                        });
+                        Payload::Text(p.clone(), inline, commands)
                     }
                     NodeType::Image => scene.images.get(&id).map_or(Payload::Empty, |image| {
                         Payload::Image(
                             image.clone(),
                             node.style.object_fit,
                             super::image_tint(&node, &(scene.presented)(id), painter.dark),
+                            node.computed_row(StyleId::ImageRendering, |s| s.image_rendering),
                         )
                     }),
                     NodeType::Svg => {
@@ -307,19 +377,28 @@ impl Picture {
                     + paint.inset_shadow_fills(&geometry).len();
                 cost += match &payload {
                     Payload::Empty => 0,
-                    Payload::Text(..) => 1,
+                    Payload::Text(_, _, commands) => commands
+                        .iter()
+                        .map(|command| match command {
+                            TextCommand::Begin(alpha, fills) => {
+                                fills.len() + usize::from(*alpha < 1.)
+                            }
+                            TextCommand::Ink(_) => 1,
+                            TextCommand::End(alpha) => usize::from(*alpha < 1.),
+                        })
+                        .sum(),
                     Payload::Svg(s) => {
                         let mut n = 0;
                         s.walk(&mut |_| n += 1);
                         n
                     }
-                    Payload::Image(image, fit, _) => {
+                    Payload::Image(image, fit, _, _) => {
                         usize::from(object_fit(image.natural(), *fit, geometry.content).is_some())
                     }
                 };
                 cost += 2 * usize::from(opacity < 1.)
                     + 2 * usize::from(clips)
-                    + 2 * usize::from(!node.style.rare.clip_path.commands().is_empty())
+                    + 2 * usize::from(node.style.rare.clip_path.has_path())
                     + 2 * usize::from(scroll_offset.is_some());
             }
             command_cost = command_cost
@@ -477,6 +556,9 @@ impl Painter {
                     max: (0., 0.),
                 };
             }
+        }
+        if let Some(bounds) = self.zoom_bounds(kernel, node) {
+            return bounds;
         }
         if node.node_type == NodeType::TextInput {
             if let Some(field) = self.field_text.get(&node.id) {
@@ -674,13 +756,13 @@ impl<'a> Replay<'a> {
                                 .into_iter()
                                 .all(|(x, y)| x.is_finite() && y.is_finite());
                     });
-                    if let Payload::Image(image, fit, _) = &n.payload {
+                    if let Payload::Image(image, fit, _, _) = &n.payload {
                         finite &= object_fit(image.natural(), *fit, c).is_none_or(finite_rect);
                     }
                     if !finite {
                         return Err("nonfinite content paint geometry".into());
                     }
-                    if let Payload::Text(p, _, _) = &n.payload {
+                    if let Payload::Text(p, ..) = &n.payload {
                         let query_transform = Transform::from_scale(scale, scale)
                             .pre_concat(transform)
                             .pre_scale(1. / scale, 1. / scale);
@@ -743,20 +825,24 @@ impl<'a> Replay<'a> {
         let mut clip = outer_clip;
         let mut clips = Vec::new();
         let mut css_clips = Vec::new();
+        let mut hit_starts = Vec::new();
         for command in &self.picture.commands {
             match *command {
                 Command::Enter(i) => {
                     let n = &self.picture.nodes[i];
                     let r = &self.nodes[i];
                     let g = &r.geometry;
+                    hit_starts.push(walk.boxes.len());
                     // Containing-block transforms were refused before prepare.
                     let parent = r.transform;
                     if r.live_hit {
                         walk.boxes.push(PaintedBox {
+                            shape_clips: Vec::new(),
                             pointer_hit: n.pointer_hit,
                             projective: None,
                             affine: Some((parent, g.outer.rect)),
-                            press: 1.,
+                            unpress: Transform::identity(),
+                            hit: None,
                             id: n.id,
                             rect: bbox(parent, g.outer.rect),
                             clip,
@@ -771,9 +857,9 @@ impl<'a> Replay<'a> {
                     }
                     // @ref LLP 1043.000 §3 D7 — retain the same CSS outline
                     // through trunk's parent-first projection and replay.
-                    if !n.css_clip.commands().is_empty() {
+                    if n.css_clip.has_path() {
                         css_clips.push(painter.backend.push_css_clip(
-                            &n.css_clip,
+                            &n.css_clip.resolved(g.outer.rect.2, g.outer.rect.3),
                             parent.pre_translate(g.outer.rect.0, g.outer.rect.1),
                         ));
                     }
@@ -789,17 +875,19 @@ impl<'a> Replay<'a> {
                     }
                     match &n.payload {
                         Payload::Empty => {}
-                        Payload::Image(image, fit, tint) => {
+                        Payload::Image(image, fit, tint, rendering) => {
                             if let Some(dst) = object_fit(image.natural(), *fit, g.content) {
                                 let clips = [g.content_edge()];
                                 let placed = image.placed(dst);
-                                painter.backend.image(image, placed, &clips, parent, *tint);
+                                painter
+                                    .backend
+                                    .image(image, placed, &clips, parent, *tint, *rendering);
                             }
                         }
                         Payload::Svg(s) => {
                             painter.paint_svg(s, n.clips(), n.paint.content_shape(g), parent);
                         }
-                        Payload::Text(p, palette, inline) => {
+                        Payload::Text(p, inline, commands) => {
                             if let Some(inline) = inline {
                                 walk.inline.insert(
                                     n.id,
@@ -807,18 +895,49 @@ impl<'a> Replay<'a> {
                                 );
                             }
                             walk.text.insert(n.key, p.clone());
-                            painter.backend.text(
-                                &mut painter.text.borrow_mut(),
-                                p,
-                                palette,
-                                (g.content.0, g.content.1),
-                                parent,
-                            );
+                            for command in commands {
+                                match command {
+                                    TextCommand::Begin(alpha, fills) => {
+                                        if *alpha < 1. {
+                                            painter.backend.push_opacity(*alpha);
+                                        }
+                                        for paint in fills {
+                                            super::inline::paint_inline(
+                                                &mut *painter.backend,
+                                                paint,
+                                                (g.content.0, g.content.1),
+                                                parent,
+                                            );
+                                        }
+                                    }
+                                    TextCommand::Ink(ink) => painter.paint_text_ink(
+                                        p,
+                                        ink,
+                                        (g.content.0, g.content.1),
+                                        parent,
+                                        None,
+                                        None,
+                                    ),
+                                    TextCommand::End(alpha) => {
+                                        if *alpha < 1. {
+                                            painter.backend.pop_opacity();
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 Command::Leave(i) => {
                     let n = &self.picture.nodes[i];
+                    let r = &self.nodes[i];
+                    let (x, y, w, h) = r.geometry.outer.rect;
+                    shape::clip_hits(
+                        &mut walk.boxes[hit_starts.pop().unwrap()..],
+                        &n.css_clip.resolved(w, h),
+                        r.transform.pre_translate(x, y),
+                        r.transform.pre_translate(x, y),
+                    );
                     if n.opacity <= 0. {
                         continue;
                     }
@@ -826,7 +945,7 @@ impl<'a> Replay<'a> {
                         painter.backend.pop_clip();
                         clip = clips.pop().unwrap();
                     }
-                    if !n.css_clip.commands().is_empty() && css_clips.pop().unwrap() {
+                    if n.css_clip.has_path() && css_clips.pop().unwrap() {
                         painter.backend.pop_clip();
                     }
                     if n.opacity < 1. {
@@ -846,7 +965,8 @@ mod hit_tests {
         for degrees in [0.0, 45.0] {
             let ts = Transform::from_rotate_at(degrees, 50.0, 50.0);
             let rect = (0.0, 0.0, 100.0, 100.0);
-            let b = PaintedBox {
+            let mut b = PaintedBox {
+                shape_clips: Vec::new(),
                 pointer_hit: true,
                 id: 1,
                 rect: bbox(ts, rect),
@@ -854,11 +974,24 @@ mod hit_tests {
                 scroll: None,
                 projective: None,
                 affine: Some((ts, rect)),
-                press: 1.,
+                unpress: Transform::identity(),
+                hit: None,
             };
             assert!(b.contains(50.0, 50.0));
             assert!(!b.contains(200.0, 200.0));
             assert_eq!(b.contains(b.rect.0 + 1.0, b.rect.1 + 1.0), degrees == 0.0);
+            let css = exact_kernel::clip::ClipPath::parse("inset(25%)").unwrap();
+            shape::clip_hits(
+                std::slice::from_mut(&mut b),
+                &css.resolved(100., 100.),
+                ts,
+                ts,
+            );
+            for (x, y, hit) in [(5., 5., false), (50., 50., true), (95., 95., false)] {
+                let mut point = Point::from_xy(x, y);
+                ts.map_point(&mut point);
+                assert_eq!(b.contains(point.x, point.y), hit);
+            }
         }
     }
 }

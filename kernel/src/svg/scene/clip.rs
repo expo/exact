@@ -62,7 +62,25 @@ impl Resolver<'_, '_> {
         vp: Viewport,
         depth: usize,
     ) -> Option<Clip> {
-        let id = node.style.rare.clip_path.url()?;
+        let css = &node.style.rare.clip_path;
+        if css.shape_value_count() != 0 {
+            self.refused = Some("basic-shape clip-path on SVG elements is not implemented on native hosts; use a surrounding box or url(#id); ignoring this clip value");
+            return None;
+        }
+        if css.has_path() {
+            return Some(Clip {
+                shapes: bbox
+                    .filter(|&(_, _, w, h)| w > 0. && h > 0.)
+                    .map(|(x, y, _, _)| ClipShape {
+                        path: css.path().transformed(tf::translate(x, y)),
+                        even_odd: css.rule() == crate::FillRule::Evenodd,
+                    })
+                    .into_iter()
+                    .collect(),
+                then: None,
+            });
+        }
+        let id = css.url()?;
         let target = self.kernel.resolve_id(node.id, id)?;
         let clip = self.kernel.node(target)?;
         if clip.node_type != NodeType::SvgClipPath || depth > 8 {
