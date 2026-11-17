@@ -153,7 +153,8 @@ fn a_box_and_its_child_each_observe_what_reaches_them() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([50.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([50.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 2), 50.0);
     assert_eq!(top(&k, 3), 0.0, "3 starts where the band ends");
@@ -177,7 +178,8 @@ fn a_box_whose_observation_outgrows_it_reaches_the_bands_depth() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 100.0, ops);
-    k.set_owner_band(2, Some([46.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([46.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.observation(3).unwrap()[0], Some(46.0));
     assert!(
@@ -206,7 +208,8 @@ fn a_reader_moved_into_a_scroller_observes_none() {
         children(5, &[6]),
     ]);
     let mut k = owner(390.0, 100.0, ops);
-    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     for id in [4, 6] {
         assert_eq!(k.observation(id).unwrap()[2], Some(20.0), "{id}");
@@ -236,7 +239,8 @@ fn a_reader_follows_its_owners_block_narrowing_past_its_root() {
     ops.push(style(3, pad, &rows));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([0.0, 30.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([0.0, 30.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.observation(3).unwrap()[1], Some(0.0));
     let block = block(BlockAxis::Is(120.0), BlockAxis::Is(844.0));
@@ -257,7 +261,8 @@ fn a_move_elsewhere_keeps_a_readers_readout() {
         children(6, &[5]),
     ]);
     let mut k = owner(390.0, 100.0, ops);
-    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     k.apply(0, 2, &[children(6, &[]), children(7, &[5])])
         .unwrap();
@@ -281,7 +286,8 @@ fn a_centred_box_reaches_its_fixed_point_by_the_secant_step() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 100.0, ops);
-    k.set_owner_band(2, Some([46.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([46.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     let observed = k.observation(3).unwrap()[0].unwrap();
     assert!((observed - 20.0).abs() <= 0.5, "{observed}");
@@ -328,7 +334,8 @@ fn a_reader_with_no_fixed_point_is_left_unsettled() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3, 4])]);
     let mut k = owner(100.0, 844.0, ops);
-    k.set_owner_band(2, Some([20.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([20.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.safe_area_unsettled(), vec![4]);
     let readout = k.observation(4).unwrap()[0].unwrap();
@@ -383,7 +390,8 @@ fn a_box_observes_what_uikit_gives_a_view() {
     ops.push(style(2, vec![], &[(StyleId::Height, "100")]));
     ops.extend([children(1, &[2]), children(2, &[3, 4, 5, 6, 7, 8, 9])]);
     let mut k = owner(390.0, 100.0, ops);
-    k.set_owner_band(2, Some([40.0, 0.0, 30.0, 20.0])).unwrap();
+    k.set_owner_band(2, Some([40.0, 0.0, 30.0, 20.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     for (id, _, want) in cases {
         assert_eq!(k.observation(id), Some(want.map(Some)), "box {id}");
@@ -416,7 +424,8 @@ fn a_reader_follows_its_owner_growing_around_it() {
     let mut k = owner(390.0, 844.0, ops);
     let block = block(BlockAxis::Is(390.0), BlockAxis::AtMost(500.0));
     k.set_host_block(2, Some(block)).unwrap();
-    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.observation(4).unwrap()[2], Some(20.0));
     k.apply(0, 2, &[style(3, vec![], &[(StyleId::Height, "200")])])
@@ -460,17 +469,19 @@ fn an_unavailable_band_makes_the_fallback_apply() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, None).unwrap();
+    k.set_owner_band(2, None, &[]).unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 7.0);
     assert_eq!(k.observation(3), Some([None; 4]));
-    k.set_owner_band(2, Some([30.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([30.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 30.0);
     // A change solves from the input 3 has, as UIKit lays a view out from
     // where it is: what it observes does not depend on its own padding, so
     // one round settles it
-    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 40.0);
     assert_eq!(k.arena.observations.rounds, 1);
@@ -507,7 +518,8 @@ fn a_reader_follows_its_owner_shrinking_while_it_solves() {
     let mut k = owner(390.0, 844.0, ops);
     let block = block(BlockAxis::Is(390.0), BlockAxis::AtMost(500.0));
     k.set_host_block(2, Some(block)).unwrap();
-    k.set_owner_band(2, Some([20.0, 0.0, 30.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([20.0, 0.0, 30.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     // 3 observes 20 and is 80 tall; 2 fits it, 80; its band starts at 50
     assert_eq!(k.observation(4).unwrap()[2], Some(10.0), "60 less 50");
@@ -537,7 +549,8 @@ fn an_owner_root_under_a_scroller_observes_its_own_band() {
     k.apply(0, 1, &ops).unwrap();
     let block = block(BlockAxis::Is(390.0), BlockAxis::Is(844.0));
     k.set_host_block(2, Some(block)).unwrap();
-    k.set_owner_band(2, Some([50.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([50.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 2), 50.0, "the block cuts the scroller off");
 }
@@ -584,7 +597,8 @@ fn a_box_that_joins_the_top_layer_observes_the_session_band() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([100.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([100.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     k.set_session_band([20.0, 0.0, 0.0, 0.0]).unwrap();
     lay_out(&mut k);
     assert_eq!(k.observation(3).unwrap()[0], Some(100.0));
@@ -610,7 +624,8 @@ fn content_that_a_box_only_clips_observes_its_band() {
     ops.push(style(4, pad, &[(StyleId::Height, "10")]));
     ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.observation(4).unwrap()[0], Some(40.0));
     k.apply(
@@ -645,7 +660,8 @@ fn content_observes_none_while_a_box_around_it_scrolls() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(
         k.observation(4).unwrap()[0],
@@ -674,7 +690,8 @@ fn a_reader_that_returns_starts_again_from_zero() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([50.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([50.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 50.0);
     k.apply(0, 2, &[style(3, vec![(StyleId::PaddingTop, px(0.0))], &[])])
@@ -711,7 +728,8 @@ fn an_edge_that_settles_keeps_its_input_while_another_moves() {
     let mut k = owner(390.0, 100.0, ops);
     k.set_display_scale(3.0).unwrap();
     k.apply(0, 2, &[]).unwrap();
-    k.set_owner_band(2, Some([46.0, 0.0, 0.0, 20.0])).unwrap();
+    k.set_owner_band(2, Some([46.0, 0.0, 0.0, 20.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     let seen = k.observation(3).unwrap();
     assert!((seen[0].unwrap() - 2.0).abs() <= 0.2, "{seen:?}");
@@ -761,9 +779,11 @@ fn a_band_change_on_an_edge_no_reader_reads_adds_no_layout() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([20.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([20.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
-    k.set_owner_band(2, Some([20.0, 30.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([20.0, 30.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.arena.observations.rounds, 0);
     assert_eq!(
@@ -787,10 +807,12 @@ fn a_band_change_measures_only_its_owners_readers() {
     let block = block(BlockAxis::Is(390.0), BlockAxis::Is(400.0));
     k.set_host_block(5, Some(block)).unwrap();
     for id in [2, 5] {
-        k.set_owner_band(id, Some([30.0, 0.0, 0.0, 0.0])).unwrap();
+        k.set_owner_band(id, Some([30.0, 0.0, 0.0, 0.0]), &[])
+            .unwrap();
     }
     lay_out(&mut k);
-    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     let kept = |k: &Kernel, id| k.arena.observations.readouts.contains_key(&slot(k, id));
     assert!(!kept(&k, 3) && kept(&k, 6));
     lay_out(&mut k);
@@ -809,7 +831,8 @@ fn a_reader_follows_its_box_gaining_and_giving_back_a_block() {
     ops.push(style(4, pad, &[(StyleId::Height, "10")]));
     ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([30.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([30.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 4), 30.0);
     let block = block(BlockAxis::Is(390.0), BlockAxis::Is(100.0));
@@ -840,7 +863,8 @@ fn a_reader_that_reads_a_new_edge_is_measured_again() {
     ));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([20.0, 0.0, 0.0, 30.0])).unwrap();
+    k.set_owner_band(2, Some([20.0, 0.0, 0.0, 30.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     let both = vec![
         (StyleId::PaddingTop, observed(Edge::Top, None)),
@@ -861,12 +885,14 @@ fn a_popover_its_host_places_is_no_owner() {
     ops.extend([style(3, pad, &[(StyleId::Height, "10")]), popover(3)]);
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([40.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     k.set_session_band([40.0, 0.0, 0.0, 0.0]).unwrap();
     let block = block(BlockAxis::Is(200.0), BlockAxis::Is(100.0));
     k.set_host_block(3, Some(block)).unwrap();
     // A band sent for it is no owner's, which a top-layer box never is
-    k.set_owner_band(3, Some([40.0, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(3, Some([40.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert!(k.is_top_layer(3));
     assert_eq!(k.observation(3).unwrap(), [None; 4]);
@@ -890,7 +916,8 @@ fn a_display_scale_change_measures_every_reader_again() {
     ops.push(style(3, vec![(StyleId::PaddingTop, pad)], &rows));
     ops.extend([children(1, &[2]), children(2, &[3])]);
     let mut k = owner(390.0, 100.0, ops);
-    k.set_owner_band(2, Some([45.4, 0.0, 0.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([45.4, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 0.0);
     k.set_display_scale(3.0).unwrap();
@@ -1092,7 +1119,8 @@ fn a_reader_follows_its_owners_margin_growing_its_block() {
     let mut k = owner(390.0, 844.0, ops);
     let block = block(BlockAxis::Is(390.0), BlockAxis::AtMost(200.0));
     k.set_host_block(2, Some(block)).unwrap();
-    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0])).unwrap();
+    k.set_owner_band(2, Some([0.0, 0.0, 30.0, 0.0]), &[])
+        .unwrap();
     lay_out(&mut k);
     assert_eq!(k.observation(3).unwrap()[2], Some(30.0));
     k.apply(0, 2, &[style(2, vec![], &[(StyleId::MarginBottom, "20")])])
@@ -1137,7 +1165,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     ops.extend([children(1, &[2]), children(2, &[3, 4, 5])]);
     ops.splice(0..0, create(5..=5));
     let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_band(2, None).unwrap();
+    k.set_owner_band(2, None, &[]).unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 0.0);
     assert_eq!(top(&k, 4), 5.0);
@@ -1152,3 +1180,6 @@ mod cost;
 
 #[path = "targets_tests.rs"]
 mod targets;
+
+#[path = "provenance_tests.rs"]
+mod provenance;

@@ -32,7 +32,9 @@ fn observation_cost() {
             true => k
                 .set_local_insets(2, Some([0.0, 0.0, 0.0, left]))
                 .map(|_| ()),
-            false => k.set_owner_band(2, Some([0.0, 0.0, 0.0, left])).map(|_| ()),
+            false => k
+                .set_owner_band(2, Some([0.0, 0.0, 0.0, left]), &[])
+                .map(|_| ()),
         };
         let build = |readers: u32| {
             let mut ops = Vec::new();
@@ -89,7 +91,7 @@ fn observation_cost() {
             if model {
                 k.set_local_insets(2, Some(band)).unwrap();
             } else {
-                k.set_owner_band(2, Some(band)).unwrap();
+                k.set_owner_band(2, Some(band), &[]).unwrap();
             }
             lay_out(k);
             t.elapsed()
@@ -139,7 +141,7 @@ fn observation_cost_of_many_owners() {
         };
         let set = move |k: &mut Kernel, root: u32, left: f32, right: f32| match name {
             "observers" => k
-                .set_owner_band(root, Some([0.0, right, 0.0, left]))
+                .set_owner_band(root, Some([0.0, right, 0.0, left]), &[])
                 .map(drop),
             "raw readers" => {
                 let target = NativeTarget {
