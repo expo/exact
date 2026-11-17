@@ -83,7 +83,7 @@ final class PullDownPreviewIOSTests: XCTestCase {
 
     /// A page-drawn pill (`appearance: none`) filled 8 % white, its menu
     /// opened and then ended; `restyle` runs while the menu has it.
-    private func lendAndEnd(_ restyle: (Presenter, NodeView) -> Void) throws -> (invoker: NodeView, lent: CAShapeLayer, during: CGColor?) {
+    private func lendAndEnd(_ restyle: (Presenter, NodeView) throws -> Void) throws -> (invoker: NodeView, lent: CAShapeLayer, during: CGColor?) {
         let p = presenter(glass: false)
         defer { p.menus.reset() }
         let invoker = try XCTUnwrap(p.views[2])
@@ -99,7 +99,7 @@ final class PullDownPreviewIOSTests: XCTestCase {
         let lent = try XCTUnwrap(invoker.layer.sublayers?.first as? CAShapeLayer)
         XCTAssertEqual(lent.fillColor?.alpha ?? 0, 20.0 / 255, accuracy: 0.01)
         button.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
-        restyle(p, invoker)
+        try restyle(p, invoker)
         invoker.layer.setNeedsDisplay()
         invoker.layer.displayIfNeeded()
         XCTAssertNil(invoker.layer.backgroundColor, "a repaint while the menu has it paints the lent fill")
@@ -128,15 +128,15 @@ final class PullDownPreviewIOSTests: XCTestCase {
     func testABoxLayerAddedWhileTheFillIsLentPaintsAboveIt() throws {
         _ = try lendAndEnd { p, invoker in
             p.apply(wireBatch([["op": "style", "id": 2, "style": ["appearance": "none", "border_radius": 22, "background_color": [255, 255, 255, 20],
-                                                                   "border_width": 2, "border_color_top": [0, 0, 255, 255], "border_color_bottom": [255, 0, 0, 255]]]]))
+                                                                   "border_radius_top_left": 22, "border_radius_bottom_right": 4,
+                                                                   "background_image": ["linear": 180, "stops": [0, 5, 82, 240, 128, 1, 44, 107, 237, 128]]]]]))
             invoker.layer.setNeedsDisplay()
             invoker.layer.displayIfNeeded()
             let layers = invoker.layer.sublayers ?? []
-            guard let lent = invoker.extras?.lentFill, let border = invoker.boxBorder,
-                  let below = layers.firstIndex(of: lent), let above = layers.firstIndex(of: border) else {
-                return XCTFail("a lent fill and a drawn border")
-            }
-            XCTAssertLessThan(below, above, "the border paints over the lent fill, as over the layer's own")
+            let lent = try XCTUnwrap(invoker.extras?.lentFill, "the fill is still lent")
+            let gradient = try XCTUnwrap(invoker.boxGradient, "an uneven-corner box's gradient is a layer")
+            let below = try XCTUnwrap(layers.firstIndex(of: lent)), above = try XCTUnwrap(layers.firstIndex(of: gradient))
+            XCTAssertLessThan(below, above, "the gradient paints over the lent fill, as over the layer's own")
         }
     }
 
