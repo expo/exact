@@ -108,7 +108,8 @@ final class NotificationOriginTests: XCTestCase {
 
     /// The Expo push service sends a message's `data` as the payload's `body`
     /// object, beside keys of its own: a push opens that object's `navigate`,
-    /// and a top-level `navigate` comes first.
+    /// and a top-level `navigate` comes first. Another sender's `body` is not
+    /// read.
     func testAPushFromTheExpoPushServiceOpensItsBodysNavigate() {
         let expo: [AnyHashable: Any] = ["aps": ["alert": ["title": "Deploy", "body": "Finished in 2 minutes"]],
                                         "experienceId": "@owner/app", "scopeKey": "@owner/app", "projectId": "p",
@@ -116,9 +117,10 @@ final class NotificationOriginTests: XCTestCase {
         var both = expo
         both["navigate"] = "/top"
         for (info, opened) in [(expo, "/workflows/7"), (both, "/top"),
-                               (["body": ["navigate": 42]] as [AnyHashable: Any], nil),
-                               (["body": "/workflows/7"] as [AnyHashable: Any], nil),
-                               (["body": ["workflowRunId": "7"]] as [AnyHashable: Any], nil)] {
+                               (["scopeKey": "@owner/app", "body": ["navigate": 42]] as [AnyHashable: Any], nil),
+                               (["scopeKey": "@owner/app", "body": "/workflows/7"] as [AnyHashable: Any], nil),
+                               (["scopeKey": "@owner/app", "body": ["workflowRunId": "7"]] as [AnyHashable: Any], nil),
+                               (["body": ["navigate": "/workflows/7"]] as [AnyHashable: Any], nil)] {
             let (session, activations) = self.session()
             push(info, to: session)
             XCTAssertEqual(session.launchLocation, opened, "\(info)")
