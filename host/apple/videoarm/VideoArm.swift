@@ -124,7 +124,8 @@ private enum SharedAssets {
 }
 
 private final class VideoArm: NSObject, NowPlayingPlayer {
-    /// Use queue player for gapless looping by queuing a copy of the item after it.
+    /// A queue player: with loop it runs on into a copy of the item queued
+    /// behind it (`queueLoop`).
     let player = AVQueuePlayer()
     let container = VideoContainer(frame: .zero)
     let poster = PlatformImageView(frame: .zero)
@@ -154,8 +155,8 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var lastError: String?
     var invalidated = false
     var generation = 0
-    /// The item whose end we listen for. When the player's current item is no
-    /// longer this one, the queue has moved on to a loop's copy.
+    /// The item followed (`follow`). When the player's current item is
+    /// another, the queue has moved on to a loop's copy.
     var watched: AVPlayerItem?
     var posterGeneration = 0
     /// HTML's show-poster flag, cleared: playback or a seek has begun since
@@ -482,8 +483,8 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         set(\.automaticallyWaitsToMinimizeStalling, bool("automaticallyWaitsToMinimizeStalling", true))
         set(\.preventsDisplaySleepDuringVideoPlayback, bool("preventsDisplaySleepDuringVideoPlayback", true))
         // HTML's loop starts over at the end without pausing (no pause, play
-        // or ended). The queue advances into a copy of the item with no gap.
-        // Before, seeking back to the start left a gap.
+        // or ended). The queue advances into the item's copy; a seek to the
+        // start instead leaves an audible gap.
         set(\.actionAtItemEnd, bool("loop") ? .advance : .pause)
         if changed("poster") { loadPoster() }
         if changed("dynamicRangeLimit") { applyDynamicRange() }
@@ -540,18 +541,23 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     func set<Value: Equatable>(_ key: ReferenceWritableKeyPath<AVQueuePlayer, Value>, _ value: Value) {
         if player[keyPath: key] != value { player[keyPath: key] = value }
     }
+    /// The props' item settings, on `next` before the player has it, else on
+    /// every item in the queue: a loop's waiting copy plays with them too.
+    /// Only a changed value is set, as setting one on an item that is
+    /// playing interrupts its sound.
     func configureItem(_ next: AVPlayerItem? = nil) {
-        guard let item = next ?? player.currentItem else { return }
         let peak = number("preferredPeakBitRate", 0), buffer = number("preferredForwardBufferDuration", 0)
         let pitch: AVAudioTimePitchAlgorithm = bool("preservesPitch", true) ? .spectral : .varispeed
-        if item.preferredPeakBitRate != peak { item.preferredPeakBitRate = peak }
-        if item.preferredForwardBufferDuration != buffer { item.preferredForwardBufferDuration = buffer }
         // @ref LLP 1042.000 D1, D2 — unset, AVFoundation's own cap by the
         // presenter's size applies; the author's bound is under it.
         // The start bound is a variant within the author's bound (`boundedItem`).
         let resolution = startBound ?? props["preferredMaximumResolution"].flatMap(Self.resolution) ?? .zero
-        if item.preferredMaximumResolution != resolution { item.preferredMaximumResolution = resolution }
-        if item.audioTimePitchAlgorithm != pitch { item.audioTimePitchAlgorithm = pitch }
+        for item in next.map({ [$0] }) ?? player.items() {
+            if item.preferredPeakBitRate != peak { item.preferredPeakBitRate = peak }
+            if item.preferredForwardBufferDuration != buffer { item.preferredForwardBufferDuration = buffer }
+            if item.preferredMaximumResolution != resolution { item.preferredMaximumResolution = resolution }
+            if item.audioTimePitchAlgorithm != pitch { item.audioTimePitchAlgorithm = pitch }
+        }
     }
     /// HLS's `<width>x<height>` (RFC 8216 §4.3.4.2), as the compiler checks a literal.
     static func resolution(_ text: String) -> CGSize? {
@@ -589,7 +595,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// The source's item, given to the player.
     func makeItem(_ url: URL) {
         let asset = SharedAssets.asset(url)
-        guard bool("startsOnFirstEligibleVariant"), props["semanticTag"] != "audio" else { return giveItem(asset, url) }
+        guard bool("startsOnFirstEligibleVariant"), props["semanticTag"] != "audio" else { return giveItem(asset) }
         guard !container.bounds.isEmpty else {
             // The box has no size until the node is laid out. Past that turn
             // the start is AVFoundation's (a video with no box loads, as
@@ -598,11 +604,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             let token = generation
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.invalidated, self.generation == token, self.sizedLoad == url else { return }
-                self.sizedLoad = nil; self.giveItem(asset, url)
+                self.sizedLoad = nil; self.giveItem(asset)
             }
             return
         }
-        boundedItem(asset, url)
+        boundedItem(asset)
     }
     /// @ref LLP 1042.000 D3 — AVFoundation's first eligible variant does not
     /// weigh the view (measured, §2), so the listed
@@ -610,7 +616,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// variants on the asset the player then plays, until the first choice.
     /// No bound, no flag: a playlist that cannot be read or lists no sizes,
     /// or `object-fit: none`, starts where AVFoundation starts it.
-    func boundedItem(_ asset: AVURLAsset, _ url: URL) {
+    func boundedItem(_ asset: AVURLAsset) {
         let token = generation
         variantRead = Task { @MainActor [weak self] in
             let variants = (try? await asset.load(.variants)) ?? []
@@ -620,7 +626,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             let sizes = variants.compactMap { $0.videoAttributes?.presentationSize }
                 .filter { size in author.map { size.width <= $0.width && size.height <= $0.height } ?? true }
             let bound = self.neededVariant(sizes)
-            self.giveItem(asset, url, bound: bound, first: bound != nil)
+            self.giveItem(asset, bound: bound, first: bound != nil)
         }
     }
     /// The smallest of `sizes` that is at least the picture `object-fit`
@@ -647,7 +653,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         }
         return usable.first(where: fills) ?? usable.last
     }
-    func giveItem(_ asset: AVURLAsset, _ url: URL, bound: CGSize? = nil, first: Bool = false) {
+    func giveItem(_ asset: AVURLAsset, bound: CGSize? = nil, first: Bool = false) {
         // preload is a hint: AVKit may prepare an item so its native Play control works.
         let item = AVPlayerItem(asset: asset)
         // Read only before the item's first variant choice.
@@ -655,30 +661,40 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         startBound = bound
         configureItem(item)
         player.replaceCurrentItem(with: item)
+        follow(item)
+        if wantsPlay { play() }
+    }
+    /// Follows the item the player now plays, the source's own or a loop's
+    /// copy: its status, size, end and clock. What the source reports once
+    /// (its metadata, `canplay`, HDR) comes from its first item's readiness.
+    func follow(_ item: AVPlayerItem) {
         let token = generation
+        watched = item
         observations = [item.observe(\.status, options: [.initial, .new]) { [weak self, weak item] _, _ in
             DispatchQueue.main.async {
-                guard let self, let item, !self.invalidated, self.generation == token else { return }
+                guard let self, let item, !self.invalidated, self.generation == token, self.watched === item else { return }
                 if item.status == .failed {
                     self.clearPlaybackClock()
-                    SharedAssets.forget(url)
+                    if let url = (item.asset as? AVURLAsset)?.url { SharedAssets.forget(url) }
                     self.fail(Self.code(item.error, ready: self.itemReady), item.error?.localizedDescription ?? "Media could not be loaded")
                 }
-                if item.status == .readyToPlay {
+                guard item.status == .readyToPlay else { return }
+                self.naturalSize = item.presentationSize
+                if !self.itemReady {
+                    self.itemReady = true
                     // The first variant is chosen: after it, AVFoundation's own.
                     if self.startBound != nil { self.startBound = nil; self.configureItem() }
-                    if !self.itemReady { self.loadHDR(item, generation: token) }
-                    self.itemReady = true
-                    self.naturalSize = item.presentationSize
+                    self.loadHDR(item, generation: token)
                     self.emit(self.listeners.contains("loadedmetadata") ? "loadedmetadata" : "snapshot")
                     if item.duration.seconds.isFinite { self.emit("durationchange", payload: String(item.duration.seconds)) }
                     self.emit("canplay")
-                    if let time = self.pendingSeek { self.pendingSeek = nil; self.seek(time) }
-                    if self.wantsPlay { self.play() }
-                    self.observePlaybackClock()
-                    self.playbackClockChanged()
-                    self.layout()
                 }
+                if let time = self.pendingSeek { self.pendingSeek = nil; self.seek(time) }
+                if self.wantsPlay { self.play() }
+                self.observePlaybackClock()
+                self.playbackClockChanged()
+                self.queueLoop()
+                self.layout()
             }
         }, item.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async { [weak self] in
@@ -686,52 +702,47 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
                 self.naturalSize = item.presentationSize; self.layout(); self.emit()
             }
         }]
-        watchEnd(item, token)
-        queueLoop()
-        if wantsPlay { play() }
-    }
-    /// The item's end: HTML's end without loop is `pause`, then `ended`
-    /// (AVPlayer's own pause arrives after this notification; it is the same
-    /// one). With loop, the queue has already moved on to the copy.
-    func watchEnd(_ item: AVPlayerItem, _ token: Int) {
-        watched = item
         notifications.forEach(NotificationCenter.default.removeObserver)
         notifications = [NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak item] _ in
-            guard let self, !self.invalidated, self.generation == token else { return }
-            // With loop, the queue moves on to the copy by itself, and
-            // `advanced` follows it there.
-            guard !self.bool("loop") else { return }
+            guard let self, let item, !self.invalidated, self.generation == token else { return }
+            // With loop the queue has moved on to the copy (`advanced`).
+            guard !self.bool("loop"), self.player.currentItem === item else { return }
+            // HTML's end without loop: `pause`, then `ended` (AVPlayer's
+            // own pause arrives after this notification; it is the same one).
             self.wantsPlay = false; self.atEnd = true
             if !self.lastPaused { self.lastPaused = true; self.emit("pause") }
             self.emit("ended")
         }]
+        observePlaybackClock()
     }
-    /// Runs when the player's current item changes, whenever that happens.
-    /// With loop, the queue has moved on to the copy, which is already
-    /// playing: listen for its end, queue the next copy, and report the jump
-    /// to the start as a seek, as Chrome does. If the queue ran dry (loop was
-    /// turned on at the very end), start over.
+    /// The player's current item changed. When the queue has moved on to a
+    /// loop's copy, which already plays from the start, this follows it and
+    /// reports the jump to the start as a seek, as Chrome reports a loop. It
+    /// follows the copy even when `loop` was switched off since, so the
+    /// copy's end is reported. A queue that ran dry at the end (no copy was
+    /// ready) starts the source over.
     func advanced() {
-        guard !invalidated, bool("loop") else { return }
+        guard !invalidated, watched != nil else { return }
         guard let current = player.currentItem else {
-            if watched != nil, !(props["src"] ?? "").isEmpty { loadSource() }
+            if !(props["src"] ?? "").isEmpty { loadSource() }
             return
         }
         guard current !== watched else { return }
-        watchEnd(current, generation)
+        follow(current)
         queueLoop()
         emit("seeking"); emit("seeked"); emit("timeupdate", payload: String(seconds))
     }
-    /// With loop, keep one copy of the current item queued behind it.
-    /// Without loop, remove any queued copies.
+    /// With loop, keeps one copy of the current item queued behind it, so
+    /// the queue (`actionAtItemEnd` `.advance`) runs on into it with no gap.
+    /// The copy is made once the item is ready, when its start bound is
+    /// gone. Without loop, removes any copy.
     func queueLoop() {
-        let waiting = Array(player.items().dropFirst())
+        let waiting = player.items().dropFirst()
         guard let current = player.currentItem, bool("loop") else { waiting.forEach(player.remove); return }
-        if waiting.isEmpty {
-            let copy = AVPlayerItem(asset: current.asset)
-            configureItem(copy)
-            player.insert(copy, after: current)
-        }
+        guard waiting.isEmpty, current.status == .readyToPlay, startBound == nil else { return }
+        let copy = AVPlayerItem(asset: current.asset)
+        configureItem(copy)
+        player.insert(copy, after: current)
     }
     func play() {
         player.defaultRate = rate
@@ -1035,7 +1046,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             frame = CGRect(x: (frame.width - naturalSize.width * scale) / 2, y: (frame.height - naturalSize.height * scale) / 2, width: naturalSize.width * scale, height: naturalSize.height * scale)
         }
         if presentation.superview === container { presentation.frame = frame }
-        if let url = sizedLoad, !container.bounds.isEmpty { sizedLoad = nil; boundedItem(SharedAssets.asset(url), url) }
+        if let url = sizedLoad, !container.bounds.isEmpty { sizedLoad = nil; boundedItem(SharedAssets.asset(url)) }
         #if os(iOS)
         audioControls?.refresh()
         #endif

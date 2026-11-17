@@ -316,5 +316,85 @@ final class VideoPlayingTests: XCTestCase {
         waitForMainQueue()
         XCTAssertTrue(events.isEmpty, "a retired player cannot report a late clock change")
     }
+
+    func testALoopRunsOnIntoTheQueuedCopyAndFollowsIt() throws {
+        let arm = try loopingArm()
+        defer { arm.destroy() }
+        let first = try XCTUnwrap(arm.player.currentItem)
+        waitFor("the loop's copy queued", facts: { "\(self.events)" }) { arm.player.items().count == 2 }
+        waitFor("the first loop", late: 5, facts: { "\(self.events)" }) { self.events.contains("seeked") }
+        XCTAssertFalse(arm.player.currentItem === first, "the queue ran on into the copy rather than seeking")
+        XCTAssertEqual(events.filter { ["seeking", "seeked", "pause", "ended", "error"].contains($0) }, ["seeking", "seeked"])
+        waitFor("the copy's clock reported", facts: { "\(self.events)" }) { self.events.contains("playing") }
+        waitFor("the next copy queued") { arm.player.items().count == 2 }
+        events = []
+        arm.props["currentTime"] = "1"
+        try arm.send()
+        waitFor("a seek in the copy reporting playing", facts: { "\(self.events)" }) { self.events.contains("playing") }
+        XCTAssertEqual(events.filter { ["seeking", "seeked", "playing", "pause", "ended"].contains($0) }, ["seeking", "seeked", "playing"])
+    }
+
+    func testItemSettingsReachTheLoopsQueuedCopy() throws {
+        let arm = try loopingArm()
+        defer { arm.destroy() }
+        waitFor("the loop's copy queued") { arm.player.items().count == 2 }
+        arm.props["preservesPitch"] = "false"
+        arm.props["preferredForwardBufferDuration"] = "7"
+        try arm.send()
+        XCTAssertEqual(arm.player.items().map(\.audioTimePitchAlgorithm), [.varispeed, .varispeed])
+        XCTAssertEqual(arm.player.items().map(\.preferredForwardBufferDuration), [7, 7])
+        let first = arm.player.currentItem
+        waitFor("the first loop", late: 5, facts: { "\(self.events)" }) { self.events.contains("seeked") }
+        XCTAssertFalse(arm.player.currentItem === first)
+        XCTAssertEqual(arm.player.currentItem?.audioTimePitchAlgorithm, .varispeed, "the change holds across the loop")
+    }
+
+    /// An arm playing the 3-second fixture with loop, ready, its player and
+    /// its props; `events` records what it reports.
+    private func loopingArm() throws -> (player: AVQueuePlayer, props: Props, send: () throws -> Void, destroy: () -> Void) {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let library = try XCTUnwrap(VideoArmLibrary.handle)
+        func symbol<T>(_ name: String, _: T.Type) throws -> T {
+            unsafeBitCast(try XCTUnwrap(dlsym(library, "exact_video_" + name)), to: T.self)
+        }
+        let create = try symbol("create", Create.self), view = try symbol("view", View.self)
+        let update = try symbol("update", Update.self), destroy = try symbol("destroy", Destroy.self)
+        events = []
+        let handle = try XCTUnwrap(create(Unmanaged.passUnretained(self).toOpaque(), { context, bytes, count in
+            let test = Unmanaged<VideoPlayingTests>.fromOpaque(context!).takeUnretainedValue()
+            let message = try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any]
+            test.events.append(message["event"] as! String)
+        }))
+        let source = Bundle.module.url(forResource: "ColorFixtures", withExtension: nil)!.appendingPathComponent("sdr.mp4").absoluteString
+        let props = Props(["src": source, "paused": "false", "muted": "true", "playsinline": "true", "loop": "true",
+                           "automaticallyWaitsToMinimizeStalling": "false",
+                           "exactListeners": "play playing pause ended seeking seeked error"])
+        let send = {
+            let data = try JSONSerialization.data(withJSONObject: props.values)
+            data.withUnsafeBytes { update(handle, $0.bindMemory(to: UInt8.self).baseAddress, data.count) }
+        }
+        try send()
+        let rawView = try XCTUnwrap(view(handle))
+        #if os(macOS)
+        let container = Unmanaged<NSView>.fromOpaque(rawView).takeUnretainedValue()
+        let player = try XCTUnwrap(container.subviews.compactMap { ($0 as? AVPlayerView)?.player }.first as? AVQueuePlayer)
+        #else
+        let container = Unmanaged<UIView>.fromOpaque(rawView).takeUnretainedValue()
+        let player = try XCTUnwrap(container.subviews.compactMap { ($0.layer as? AVPlayerLayer)?.player }.first as? AVQueuePlayer)
+        #endif
+        waitFor("the item playing", facts: { "\(self.events)" }) { self.events.contains("playing") }
+        events = []
+        return (player, props, send, { destroy(handle) })
+    }
+    private final class Props {
+        var values: [String: String]
+        init(_ values: [String: String]) { self.values = values }
+        subscript(name: String) -> String? {
+            get { values[name] }
+            set { values[name] = newValue }
+        }
+    }
 }
 #endif
