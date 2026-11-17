@@ -1061,6 +1061,11 @@ const ICONS: &str = r##"component App
         image "symbol:add"
       button aria-label="Add" width=56 height=56 testId="sized"
         image "symbol:add"
+      row role="radiogroup" aria-label="View"
+        button role="radio" aria-checked=true aria-label="List" testId="segment"
+          image "symbol:bookmark" testId="segment-symbol"
+        button role="radio" aria-checked=false aria-label="Grid"
+          image "symbol:add"
 "##;
 
 /// A button holding only a symbol is Material's icon button
@@ -1134,4 +1139,10 @@ fn materials_icon_buttons_are_round_and_take_their_emphasis() {
     assert!(accented > 0, "a pressed toggle's icon is the accent");
     let sized = rect(&mut p, "sized");
     assert_eq!((sized.2, sized.3), (56.0, 56.0));
+    // A symbol-only radio of a segmented group keeps the segmented button's
+    // 18 dp icon, not an icon button's 24 dp.
+    let symbol = id(&mut p, "segment-symbol");
+    let kernel = p.host.kernel();
+    let size = crate::paint::button::image_size(kernel, &kernel.node(symbol).unwrap()).unwrap();
+    assert!(size < 24.0, "segment-symbol: {size}");
 }

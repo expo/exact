@@ -22,9 +22,14 @@ pub(crate) enum IconButton {
 
 /// The icon button a button is under the Material look: one holding a
 /// symbol and no title. A raster image keeps the ordinary face.
-pub(crate) fn material_icon(style: Option<&str>, face: &PressFace) -> Option<IconButton> {
+pub(crate) fn material_icon(
+    style: Option<&str>,
+    face: &PressFace,
+    rows: &exact_kernel::ButtonFaceStyle,
+) -> Option<IconButton> {
     let lone = face.symbol.is_some() && face.title.is_none() && face.subtitle.is_none();
-    if !lone || !look::material() {
+    // A radio of a segmented group keeps the segmented button's metrics.
+    if !lone || rows.segment.is_some() || !look::material() {
         return None;
     }
     Some(match style.map(super::look) {

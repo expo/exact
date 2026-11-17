@@ -229,7 +229,7 @@ pub(crate) fn image_size(kernel: &exact_kernel::Kernel, image: &NodeRef<'_>) -> 
     let face = kernel.press_face(parent.id)?;
     face.symbol.as_ref()?;
     let said = parent.props.str(PropId::ButtonStyle);
-    let icon = material_icon(said, &face).is_some();
+    let icon = material_icon(said, &face, &rows).is_some();
     let (_, _, style) = face_typography(&rows, material_filled(said) && !icon, icon);
     Some(style.font_size * symbol_scale(&face, &rows))
 }
@@ -564,7 +564,7 @@ pub(super) fn face_layout(
 
 pub(crate) fn measure(engine: &mut TextEngine, request: &ButtonMeasureRequest) -> ButtonMeasure {
     let said = request.button_style.as_deref();
-    let icon = material_icon(said, &request.face).is_some();
+    let icon = material_icon(said, &request.face, &request.style).is_some();
     let face = face_layout(
         engine,
         &request.face,
@@ -774,7 +774,7 @@ impl Painter {
         let dark = self.dark;
         let neutral = look::neutral();
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
-        let icon = material_icon(node.props.str(PropId::ButtonStyle), face);
+        let icon = material_icon(node.props.str(PropId::ButtonStyle), face, rows);
         let filled = material_filled(node.props.str(PropId::ButtonStyle)) && icon.is_none();
         // A radio of a segmented group: this face with the segment's chrome.
         let material_segment = rows.segment.filter(|_| look::material());
