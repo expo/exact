@@ -2,14 +2,17 @@ import { beforeAll, test, expect } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
+import { analyze } from './page-style.mjs';
 import { open } from '../../scripts/agent.mjs';
-import { appDigest, suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { drivable, need } from '../../scripts/coverage.mjs';
+import { appDigest, chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { renderedPages, warmRustRenderer } from './rendered-pages.mjs';
 import { builtFile } from './content-names.mjs';
 
+const chromeTest = need('chrome', chromium().unavailable);
 beforeAll(warmRustRenderer, 1_800_000);
 
-test('bare text styles keep their fills and inherited rows through server adoption', async () => {
+chromeTest('bare text styles keep their fills and inherited rows through server adoption', async () => {
   const source = 'routes nav\n  home "/" render=build\n\n' + readFileSync(new URL('./conformance/bare-text-style.contract', import.meta.url), 'utf8');
   for (const renderer of ['rust', 'js']) for (const weighted of [false, true]) await renderedPages(source.replace('state weighted = false', `state weighted = ${weighted}`), async (_, html, dist) => {
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
@@ -78,7 +81,7 @@ async function textStylePage(ids, check, weighted = false) {
   }, {}, {}, renderer);
 }
 
-test('keyed text styles track independent shorthand and longhand fields', async () => {
+chromeTest('keyed text styles track independent shorthand and longhand fields', async () => {
   await textStylePage(['keyed-child'], async (before, read, tap, browser) => {
     expect(before['keyed-child']).toEqual(['400', 'normal']);
     expect(await read()).toEqual(before);
@@ -103,7 +106,7 @@ test('keyed text styles track independent shorthand and longhand fields', async 
   });
 }, 60000);
 
-test('an unnamed dynamic text style inherits its ancestor rows', async () => {
+chromeTest('an unnamed dynamic text style inherits its ancestor rows', async () => {
   await textStylePage(['no-style'], async (before, read, tap) => {
     expect(before['no-style']).toEqual(['600', '40px']);
     expect(await read()).toEqual(before);
@@ -114,7 +117,7 @@ test('an unnamed dynamic text style inherits its ancestor rows', async () => {
   });
 }, 60000);
 
-test('blank text rows clear a shorthand start through adoption', async () => {
+chromeTest('blank text rows clear a shorthand start through adoption', async () => {
   await textStylePage(['blank-child'], async (before, read, tap) => {
     expect(before['blank-child']).toEqual(['600', 'normal']);
     expect(await read()).toEqual(before);
@@ -127,7 +130,7 @@ test('blank text rows clear a shorthand start through adoption', async () => {
 
 // @ref LLP 1153 D7.2 — the HTML parser puts a table's own rows in a `tbody`, and the plan has it, so
 // the parsed page is the one construction walks; a cell holding one text stays a `table-cell`.
-test('a table rendered ahead adopts without a rebuild, its cells still cells', async () => {
+chromeTest('a table rendered ahead adopts without a rebuild, its cells still cells', async () => {
   const source = `routes nav
   home "/" render=build
 
@@ -181,7 +184,7 @@ component Moves
 
 // A page built ahead serves every query its path is opened at; opened at one it was not built at, its list's rows are
 // not the list's items, so the runtime builds afresh rather than keep the rows past its items (LLP 1048.000 D6).
-test('a page built ahead and opened at another query shows its own rows, not the built ones', async () => {
+chromeTest('a page built ahead and opened at another query shows its own rows, not the built ones', async () => {
   const source = `routes nav
   home "/" render=build
 
@@ -214,7 +217,7 @@ component Rows
 
 // The parser's "in table" mode gives a row the table holds a `tbody` in either branch of a conditional
 // that makes a row in one and a row group in the other; the plan has one in each, so either adopts.
-test('a table rendered ahead adopts either branch of a conditional that makes rows', async () => {
+chromeTest('a table rendered ahead adopts either branch of a conditional that makes rows', async () => {
   const shape = `[...document.querySelector('table').children].map(e => e.localName + ':' + [...e.children].map(c => c.localName).join(','))`;
   for (const shown of [true, false]) {
     const source = `routes nav
@@ -259,7 +262,7 @@ component Branches
   }
 }, 300000);
 
-test('select and date text styles preserve shell leading only under a said row', async () => {
+chromeTest('select and date text styles preserve shell leading only under a said row', async () => {
   const ids = ['select-said','select-bound-said','date-said','time-bound-said','select-unsaid','select-bound-unsaid','date-unsaid','time-bound-unsaid'];
   for (const weighted of [false, true]) await textStylePage(ids, async (before, read, tap, browser) => {
     const expected = (small, coarse = false) => Object.fromEntries(ids.map(id => {
@@ -277,7 +280,7 @@ test('select and date text styles preserve shell leading only under a said row',
   }, weighted);
 }, 60000);
 
-test('removing a control style and its bound leading restores the shell', async () => {
+chromeTest('removing a control style and its bound leading restores the shell', async () => {
   const expected = removed => ({ 'select-removed': ['400', removed ? '34px' : '24px'], 'datetime-removed': ['400', removed ? '32px' : '24px'] });
   for (const weighted of [false, true]) await textStylePage(['select-removed', 'datetime-removed'], async (before, read, tap) => {
     expect(before).toEqual(expected(weighted));
@@ -630,7 +633,7 @@ test('JavaScript-rendered pages exclude the other retained tabs’ heads', async
 // bar's size, 22/17 of the 16 px body in its 1.2em box, over the 13 px written on it, before the page adopts and after:
 // no jump. A menu opener's heading belongs to its item, so its header is a bar without a title (LLP 1075.003 §9.10).
 // Without a title, plain text outside the items keeps the header in the page, its symbol at 13 px in a native face's 1.5em box.
-test('JavaScript-rendered pages mark the bar, whose symbols are the bar\'s size before the page adopts and after', async () => {
+chromeTest('JavaScript-rendered pages mark the bar, whose symbols are the bar\'s size before the page adopts and after', async () => {
   await renderedPages(`routes nav
   home "/" render=build
     menu "/menu" render=build
@@ -740,7 +743,7 @@ component Tabs
     // Whether the tab's scroller has scrolled, the document's offset, and the tab bar's box.
     const scroll = tab => [document.querySelector(`[data-testid="content-${tab}"]`).scrollTop > 0, document.scrollingElement.scrollTop,
       Object.values(document.querySelector('[role=tablist]').getBoundingClientRect().toJSON()).slice(0, 4)];
-    for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
       const suite = await suiteBrowser(engine, { timeout: 10000 });
       try {
         for (const how of ['js', 'rust']) for (const [path, tab] of [['', 'first'], ['/second', 'second']]) {
@@ -797,7 +800,7 @@ component Sheets
     });
     const expected = [['old', 'hidden', true], ['base', 'visible', true], ['lower', 'visible', true], ['top', 'visible', false]];
     try {
-      for (const engine of ['chromium', 'firefox', 'webkit']) {
+      for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
         const suite = await suiteBrowser(engine);
         try {
           const before = await suite.newPage({ javaScriptEnabled: false });
@@ -834,7 +837,7 @@ component Page
       }
       const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(Bun.file(resolve(dist, 'index.html'))) });
       try {
-        for (const engine of ['chromium', 'firefox', 'webkit']) {
+        for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
           const browser = await suiteBrowser(engine);
           try {
             const page = await browser.newPage({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });
@@ -871,7 +874,7 @@ test('both document renderers preload the runtime at low priority, and the shell
 
 // LLP 1048.007 D1: an undeclared route waits for the reader when its render left the runtime nothing to do, and runs it
 // at once when something is due; a page laid out by the viewport carries its comparisons, which wake it elsewhere.
-test('both document renderers infer an undeclared route\'s activation from its render', async () => {
+chromeTest('both document renderers infer an undeclared route\'s activation from its render', async () => {
   const activation = page => [/data-activate="([a-z]+)"/.exec(page)?.[1], page.match(/<link rel="modulepreload"[^>]*>/g) ?? [], /data-wake="([^"]*)"/.exec(page)?.[1]?.replace(/&(quot|gt|lt|amp);/g, (_, e) => ({ quot: '"', gt: '>', lt: '<', amp: '&' })[e])];
   for (const how of ['js', 'rust']) {
     await renderedPages(`use EmptyState from "exact:content"
@@ -965,7 +968,7 @@ const decided = page => page.evaluate(() => new Promise(done => {
 
 // LLP 1048.003 D5: a kept device secret starts the runtime of a page that waits for the reader, which then asks an answer
 // that read the store again (LLP 1048.000 D6), so the anonymous document gives way to the reader's account state.
-test('a JavaScript-rendered page that waits for the reader wakes where the device keeps a secret, and reads it', async () => {
+chromeTest('a JavaScript-rendered page that waits for the reader wakes where the device keeps a secret, and reads it', async () => {
   await renderedPages(`routes nav
   home "/" render=build
 
@@ -998,7 +1001,7 @@ export const answer = (_name: string, _args: unknown[], store: { get(name: strin
 // LLP 1048.003 D4: only the shown route's `scroll document` is the page's scroller. A hidden route's is
 // `data-exact-offpage`, scrolling inside its bound, so its content leaves the page's height; each route keeps its own
 // place in the page's scroll, so a route opened anew starts at its top and one shown again where the reader left it.
-test('both document renderers make only the shown route\'s page scroller the page\'s, and each route keeps its place', async () => {
+chromeTest('both document renderers make only the shown route\'s page scroller the page\'s, and each route keeps its place', async () => {
   for (const how of ['rust', 'js']) await renderedPages(`routes nav
   home "/" render=build activate=idle
     detail "/detail" render=build activate=idle
@@ -1053,7 +1056,7 @@ component Pages
 
 // LLP 1048.003 D4: a route's page under `scroll document` is at least the viewport tall and as tall as its content, so a
 // background on its frame reaches its end, before startup and after (a short page and a long one).
-test('both document renderers lay out a page scroller\'s frame the viewport tall or its content\'s, whichever is more', async () => {
+chromeTest('both document renderers lay out a page scroller\'s frame the viewport tall or its content\'s, whichever is more', async () => {
   for (const how of ['rust', 'js']) await renderedPages(`routes nav
   home "/" render=build activate=idle
     detail "/detail" render=build activate=idle
@@ -1096,7 +1099,9 @@ component Pages
 
 // LLP 1048.007 D4: a rendered page carries only the rules its document can match, and the runtime puts the whole sheet
 // back before its first render, so what it then shows is styled as on the shell.
-test('both document renderers give a page its own rules, and the runtime restores the whole sheet', async () => {
+// The sheet the runtime restores is the plan's (LLP 1047.003 D1): the rules its elements can match, so the `select` a
+// press shows is styled, and no rule that needs a `dialog` or a `progress` inside the root, which the plan has none of.
+chromeTest("both document renderers give a page its own rules, and the runtime restores the plan's sheet", async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
 
@@ -1117,7 +1122,9 @@ component Page
 `, async (_, html, dist) => {
     const page = html(''), sheet = builtFile(dist, 'style.css'), full = readFileSync(resolve(dist, sheet), 'utf8');
     const own = /<style data-exact-page>([\s\S]*?)<\/style>/.exec(page)?.[1];
-    expect([how, own?.length < full.length / 2, page.match(/<style[ >]/g)?.length, own?.includes('select:not([multiple])')]).toEqual([how, true, 1, false]);
+    expect([how, own?.length < full.length, page.match(/<style[ >]/g)?.length, own?.includes('select:not([multiple])')]).toEqual([how, true, 1, false]);
+    const rules = analyze(full), only = tag => rules.filter(([, , , within]) => within?.every(a => a.includes(`t:${tag}`))).length;
+    expect([how, only('select') > 0, only('dialog'), only('progress')]).toEqual([how, true, 0, 0]);
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: req => {
       const path = new URL(req.url).pathname;
       return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
@@ -1369,7 +1376,7 @@ const RSA = 'MIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEAx0Mg1whnO3050UXzx0W
 
 // LLP 1048.007 D10: a request route's page that waits for the reader names its answers past 1 KB rather than holding
 // them; the capture script fetches them with the runtime, and the page adopts. Answers no longer kept build it afresh.
-test('a waiting page names its answers past 1 KB, adopts once they come, and builds afresh without them', async () => {
+chromeTest('a waiting page names its answers past 1 KB, adopts once they come, and builds afresh without them', async () => {
   const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => Response.json(
     Array.from({ length: 80 }, (_, i) => ({ name: `Item number ${i}` })), { headers: { 'cache-control': 'no-store', 'access-control-allow-origin': '*' } }) });
   try {

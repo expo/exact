@@ -1,7 +1,7 @@
 //! LLP 1017 P7: `test` blocks parse to the agent's steps and print as JSON
 //! the driver reads (`scripts/agent.mjs --test`).
 
-use contract_syntax::{Expr, Step, TapForm};
+use contract_syntax::{Expr, StateComparison, Step, TapForm};
 
 #[test]
 fn authored_http_responses_are_launch_facts_and_steps() {
@@ -809,6 +809,36 @@ fn a_test_asserts_which_node_has_the_focus() {
     ] {
         let e = contract::tests(src).unwrap_err();
         assert_eq!(e.span.line, 2, "{src}: {e}");
+    }
+}
+
+#[test]
+fn a_test_bounds_a_nodes_laid_out_width_or_height() {
+    let src = "test \"t\"\n  expect layout \"status-mark\" height <= 24\n  expect layout \"status-mark\" width >= 12.5\n  expect layout \"rule\" height == 1\n";
+    let tests = contract::tests(src).unwrap();
+    assert!(matches!(
+        &tests[0].steps[0],
+        Step::ExpectLayout { target, dimension, comparison: StateComparison::AtMost, value, .. }
+            if target == "status-mark" && dimension == "height" && *value == 24.0
+    ));
+    let json = contract::tests_json(&tests);
+    for step in [
+        "{\"op\":\"expect-layout\",\"target\":\"status-mark\",\"dimension\":\"height\",\"comparison\":\"at-most\",\"value\":24,\"line\":2}",
+        "{\"op\":\"expect-layout\",\"target\":\"status-mark\",\"dimension\":\"width\",\"comparison\":\"at-least\",\"value\":12.5,\"line\":3}",
+        "{\"op\":\"expect-layout\",\"target\":\"rule\",\"dimension\":\"height\",\"comparison\":\"equal\",\"value\":1,\"line\":4}",
+    ] {
+        assert!(json.contains(step), "{step}\n{json}");
+    }
+    for (rest, says) in [
+        ("\"mark\" x <= 24", "reads `width` or `height`, not `x`"),
+        ("\"mark\" height < 24", "takes `==`, `<=` or `>=`"),
+        ("\"mark\" height <= 24px", "in points, written bare"),
+        ("\"mark\" height <= -1", "a size of 0 or more"),
+        ("mark height <= 24", "a testId"),
+    ] {
+        let e = contract::tests(&format!("test \"t\"\n  expect layout {rest}\n")).unwrap_err();
+        assert!(e.to_string().contains(says), "{rest}: {e}");
+        assert_eq!(e.span.line, 2, "{rest}: {e}");
     }
 }
 

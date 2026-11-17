@@ -73,13 +73,13 @@ export const SERVICE_BINDS = new Map([
 export const LIBRARY_SERVICES = new Map([['com.google.firebase.MESSAGING_EVENT', ['com.google.firebase.provider.FirebaseInitProvider']]]);
 
 /** The `<meta-data>` a package may declare, by name, with its one value or resource (LLP 1133.034 D13: Google Pay's
- * switch; LLP 1133.004.000 D6, D7: Firebase's messaging client off at launch and addressed by installation ID, and
+ * switch; Firebase's messaging client off at launch and using registration tokens for Expo's push service, and
  * the channel and small icon it gives a notification message shown while the app is in the background, which are the
  * app's default channel and its `exact_notification` drawable, `android-channels.mjs`'). */
 export const METADATA = new Map([
   ['com.google.android.gms.wallet.api.enabled', { value: 'true' }],
   ['firebase_messaging_auto_init_enabled', { value: 'false' }],
-  ['firebase_messaging_installation_id_enabled', { value: 'true' }],
+  ['firebase_messaging_installation_id_enabled', { value: 'false' }],
   ['com.google.firebase.messaging.default_notification_channel_id', { value: 'default' }],
   ['com.google.firebase.messaging.default_notification_icon', { resource: '@drawable/exact_notification' }],
 ]);
@@ -93,7 +93,7 @@ export const ALIAS_CATEGORIES = new Set(['android.intent.category.HEALTH_PERMISS
 
 /** The normal permissions a fragment may declare (LLP 1133.031 D12 item 1): `protectionLevel="normal"` in the
  * platform's own manifest, granted at install with no prompt. */
-export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE']);
+export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE', 'android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC']);
 
 /** The normal permissions every bound implementation's fragment declares, which the build adds as `<uses-permission>`
  * beside the grants' (`-Ppermissions`). Throws, naming the package, for any permission not on the list. */
@@ -199,7 +199,18 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
           lines.push(`        <meta-data android:name="${escape(c.name)}" android:${field}="${escape(c[field])}" />`);
           continue;
         }
+        if (kind === 'services' && c.name === 'androidx.work.impl.foreground.SystemForegroundService') {
+          if (c.foregroundServiceType !== 'dataSync' || c.directBootAware !== undefined || c.permission !== undefined || c.actions !== undefined) refuse('gives WorkManager a service declaration other than dataSync');
+          if (!names.has(c.name)) lines.push(`        <service android:name="${c.name}" android:exported="false" android:foregroundServiceType="dataSync" tools:node="merge" />`);
+          names.add(c.name);
+          continue;
+        }
         component(kind, c);
+        if (kind === 'services' && c.permission === 'android.permission.BIND_JOB_SERVICE') {
+          if (c.foregroundServiceType !== undefined || c.directBootAware !== undefined || c.actions !== undefined) refuse('gives a BIND_JOB_SERVICE service a foreground type, direct boot or actions');
+          lines.push(`        <service android:name="${c.name}" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />`);
+          continue;
+        }
         if (kind === 'activities') {
           const actions = c.actions ?? [];
           if (!Array.isArray(actions) || !actions.length) refuse(`gives ${c.name} no actions; an activity is only for one the system starts`);

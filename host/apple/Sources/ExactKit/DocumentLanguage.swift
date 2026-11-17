@@ -1,4 +1,4 @@
-// The strings table sets HTML's lang/dir on native presentation too.
+// The language op carries the resolved language and applied layout direction.
 #if os(macOS)
 import AppKit
 #else

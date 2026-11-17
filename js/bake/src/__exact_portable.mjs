@@ -3,6 +3,33 @@
 // every JavaScript file the capture bundles, and the syntax helpers it shares.
 // The native bake writes it beside that file in its stage (js/bake/src/resident.rs `PORTABLE`).
 
+// The standard library is what every executor runs: the browser, and Hermes
+// natively (js/src/standard.js fills what it lacks of ES2023). ES2024's
+// ArrayBuffer resizing, shared memory and the RegExp `v` flag are not in
+// Hermes, so they are not in the library. `WebWorker` is the web APIs a data
+// module may name, not the DOM's UI types; docs/reference.md lists which of
+// them each executor has. `.ts` import paths are the web's own (Bun, Deno,
+// TypeScript 5 all take them), and Rolldown resolves them.
+export const compilerOptions = {
+  noEmit: true,
+  strict: true,
+  // Installed declaration internals belong to their package; app sources stay strict.
+  skipLibCheck: true,
+  target: 'ES2023',
+  module: 'ESNext',
+  moduleResolution: 'bundler',
+  allowImportingTsExtensions: true,
+  resolveJsonModule: true,
+  // The app's own `.js` files are typed from their code, not checked; a
+  // package's JavaScript is never read for types (`maxNodeModuleJsDepth` 0).
+  allowJs: true,
+  lib: ['ES2023', 'ES2024.Object', 'ES2024.Collection', 'ES2024.Promise', 'ES2024.String', 'WebWorker'],
+  // No package's types are global unless a file names it: an installed
+  // `@types/node` or `@types/bun` would declare Node's timers and `process`, which
+  // no executor has.
+  types: [],
+};
+
 // `x!`, `(x)` and `x?.y` as written, down to the expression they wrap.
 export const bare=(node)=>{ while (node && ['TSNonNullExpression','ParenthesizedExpression','ChainExpression','TSAsExpression','TSSatisfiesExpression','TSTypeAssertion'].includes(node.type)) node=node.expression; return node; };
 // Literal bracket keys, destructuring keys and JSX members name the same properties as dot access.

@@ -1,7 +1,7 @@
-//! LLP 1055.001 on iOS: a box's `translate`, `scale`, `rotate` and
+//! LLP 1055.001: a box's `translate`, `scale`, `rotate` and
 //! `background-color` keyframes go to Core Animation where it plays them as
 //! CSS does, and the engine keeps no frames busy for them; the rest are
-//! sampled as before. The host here is flipped to iOS's lowering after boot.
+//! sampled as before. The iOS fixtures also enable live SVG filters.
 use super::*;
 use exact_kernel::MonospaceMeasurer;
 use exact_plan::Value;
@@ -126,6 +126,7 @@ fn keys(batch: &str, view: u32) -> Vec<String> {
 
 fn ios(host: &mut Host<NoData>) {
     host.svg.box_motion = true;
+    host.svg.live_filters = true;
     host.engine.set_lowered_properties(&svg::lowered(true));
 }
 
@@ -290,7 +291,7 @@ component A
 }
 
 #[test]
-fn hosts_without_box_lowering_sample_them() {
+fn the_native_host_lowers_box_keyframes() {
     let plan = contract::compile(APP).unwrap().encode();
     let (mut host, _) = Host::boot(
         &plan,
@@ -301,9 +302,11 @@ fn hosts_without_box_lowering_sample_them() {
     )
     .unwrap();
     // LLP 1126 D10: watchOS samples box motion; it has no Core Animation presenter.
-    assert!(!host.svg.box_motion || cfg!(any(target_os = "ios", target_os = "tvos")));
+    assert_eq!(host.svg.box_motion, svg::render_server());
     let on = host.dispatch_at(id(&host, "go"), Event::Press, 100.0);
-    if !cfg!(any(target_os = "ios", target_os = "tvos")) {
+    if svg::render_server() {
+        assert_eq!(keys(&on, id(&host, "pulse")), ["transform.scale"]);
+    } else {
         assert!(keys(&on, id(&host, "sweep")).is_empty(), "{on}");
         assert!(on.contains("\"motion\":true"));
     }
@@ -396,11 +399,13 @@ component A
     let node = exact_kernel::motion::motion_node(host.runner.kernel().node(view).unwrap().key);
     host.engine.set_node_sampled(node, false);
     assert_eq!(
-        svg_lower::resample(host.runner.kernel(), &mut host.engine, false),
+        svg_lower::resample(host.runner.kernel(), &mut host.engine, false, &|_| false),
         [view]
     );
     assert!(host.engine.node_sampled(node));
-    assert!(svg_lower::resample(host.runner.kernel(), &mut host.engine, false).is_empty());
+    assert!(
+        svg_lower::resample(host.runner.kernel(), &mut host.engine, false, &|_| false).is_empty()
+    );
 }
 
 /// A filtered box is drawn as a picture that Core Animation's animations
@@ -1464,6 +1469,9 @@ fn negative_z_rows_inherit_the_authored_axis() {
             .unwrap();
             if lowered {
                 ios(&mut host);
+            } else {
+                host.svg.box_motion = false;
+                host.engine.set_lowered_properties(&svg::lowered(false));
             }
             let batch = host.dispatch_at(id(&host, "go"), Event::Press, 0.);
             let node = motion_node(host.runner.kernel().node(id(&host, "box")).unwrap().key);

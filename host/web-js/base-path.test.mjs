@@ -9,6 +9,9 @@ import { installData } from '../../scripts/install-page.mjs';
 import { serveBuildTree } from '../web/serve.mjs';
 import { renderer, sitePages } from './render.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const root = resolve(import.meta.dir, '../..');
 const manifest = base => ({ name: 'Mounted', app: { id: 'test.mounted', name: 'Mounted', origin: 'https://site.invalid' }, host: { web: base === undefined ? {} : { base } } });
@@ -96,7 +99,7 @@ component App
           text "Part" id="part"
 `;
 
-test('build, request and cached pages, generation assets and install pages stay under the mount', async () => {
+engineTest.chromium('build, request and cached pages, generation assets and install pages stay under the mount', async () => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/'))); save(dir, 'app.contract', source.replace('item "/item" render=request', 'item "/item" render=request activate=interaction').replace('kept "/kept" render=cached', 'kept "/kept" render=cached activate=interaction').replace('component App\n', 'component App\n  resource message = message() as shape string else empty()\n').replace('          head title=e.name', '          text message\n          head title=e.name'));
@@ -132,7 +135,7 @@ test('build, request and cached pages, generation assets and install pages stay 
   } finally { await browser?.close(); rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test.each([false, true])('bundled fetches without a network grant stay in the mounted generation (production: %s)', async production => {
+engineTest.chromium.each([false, true])('bundled fetches without a network grant stay in the mounted generation (production: %s)', async production => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/')));
@@ -153,7 +156,7 @@ test.each([false, true])('bundled fetches without a network grant stay in the mo
   } finally { await browser?.close(); rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test.each(['item', '/../item'])('literal navigation canonicalizes %s before mounting and keeps its fragment', async location => {
+engineTest.chromium.each(['item', '/../item'])('literal navigation canonicalizes %s before mounting and keeps its fragment', async location => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/')));
@@ -184,7 +187,7 @@ test('the server redirects the slashless mount root and keeps its query', async 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.each([false, true])('slashless mount roots open home in the browser (static fallback: %s)', async fallback => {
+engineTest.chromium.each([false, true])('slashless mount roots open home in the browser (static fallback: %s)', async fallback => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/'))); save(dir, 'app.contract', source);
@@ -215,7 +218,7 @@ test('an explicit root base produces exactly the default build bytes', async () 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test('Shelf deep links, path links and pushes work under /app/, and an outside location draws notfound', async () => {
+engineTest.chromium('Shelf deep links, path links and pushes work under /app/, and an outside location draws notfound', async () => {
   const dir = workspace(); let browser;
   try {
     for (const name of ['app.json', 'app.contract', 'app.ts']) cpSync(resolve(root, 'apps/shelf', name), resolve(dir, name));
@@ -274,7 +277,7 @@ test('a mounted build publishes preferred native link claims', async () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test.each([' https://example.com/item', '\tht\ntps://example.com/item '])('a bound external link with URL whitespace leaves the mounted app: %j', async destination => {
+engineTest.chromium.each([' https://example.com/item', '\tht\ntps://example.com/item '])('a bound external link with URL whitespace leaves the mounted app: %j', async destination => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/')));
@@ -335,7 +338,7 @@ test.each(['request', 'cached'])('a dotted mount renders its %s home for Accept 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test.each(['links', 'parameter push'])('the routes corpus keeps %s and browser history under /app/', async mode => {
+engineTest.chromium.each(['links', 'parameter push'])('the routes corpus keeps %s and browser history under /app/', async mode => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/')));
@@ -376,7 +379,7 @@ test.each(['links', 'parameter push'])('the routes corpus keeps %s and browser h
 }, 120000);
 
 
-test.each(['media', 'markdown', 'head', 'head-whitespace', 'one-off'])('mounted URL boundary: %s before activation', async kind => {
+engineTest.chromium.each(['media', 'markdown', 'head', 'head-whitespace', 'one-off'])('mounted URL boundary: %s before activation', async kind => {
   const dir = workspace(); let browser;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/')));
@@ -442,7 +445,7 @@ test.each(['media', 'markdown', 'head', 'head-whitespace', 'one-off'])('mounted 
 }, 120000);
 
 
-test.each([['chrome', undefined], ['chrome', '/item'], ['firefox', undefined], ['webkit', undefined]])('the %s driver opens the mounted launch location %s', async (browser, url) => {
+for (const [browser, url] of [['chrome', undefined], ['chrome', '/item'], ['firefox', undefined], ['webkit', undefined]]) engineTest[browser](`the ${browser} driver opens the mounted launch location${url ? ` ${url}` : ''}`, async () => {
   const dir = workspace(); let session;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/'))); save(dir, 'app.contract', source);

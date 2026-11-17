@@ -480,3 +480,15 @@ fn metal_coverage_and_shadows_agree_with_the_shader_arithmetic() {
 fn d3d11_coverage_and_shadows_agree_with_the_shader_arithmetic() {
     agrees_with_the_shader_arithmetic(&mut super::d3d11::D3d11::new().unwrap());
 }
+
+#[test]
+fn fixed_programs_match_general_coverage_scenes_pixel_for_pixel() {
+    let mut d = wgpu::Wgpu::new().expect("wgpu device for program parity");
+    for scene in scenes() {
+        d.general_only = true;
+        let general = render(&mut d, &scene);
+        d.general_only = false;
+        let specialized = render(&mut d, &scene);
+        assert_eq!(general, specialized, "{}", scene.name);
+    }
+}

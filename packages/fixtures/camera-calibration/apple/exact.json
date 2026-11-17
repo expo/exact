@@ -1,0 +1,20 @@
+{
+  "kind": "implementation",
+  "implements": "@fixture/camera-calibration@^1.0",
+  "platform": "apple",
+  "targets": [
+    "ios",
+    "macos"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "hatches": [],
+  "sources": {
+    "swift": [
+      "CameraCalibration.swift"
+    ]
+  },
+  "artifacts": [],
+  "class": "CalibrationModule"
+}

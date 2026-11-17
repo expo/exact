@@ -818,6 +818,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "expect" "tree" ( "has" | "missing" ) STRING NL
               | "expect" ( "disabled" | "enabled" ) STRING NL  (* a control's `disabled` (LLP 1116.010 D3) *)
               | "expect" "focused" STRING NL         (* the node that holds the keyboard focus *)
+              | "expect" "layout" STRING ( "width" | "height" ) ( "==" | "<=" | ">=" ) NUMBER NL
+                                                     (* its laid-out size, in points *)
               | "expect" "refusal" STRING NL          (* one observed refusal of the named mutation slot *)
               | "expect" "text" STRING "==" STRING NL
               | "expect" "state" IDENT { "." ( IDENT | NUMBER ) }
@@ -948,7 +950,17 @@ Targets are driver test ids. `expect disabled "send"` (`enabled`) reads the cont
 does nothing, and fails its step on every host, `send is disabled`: say what the app refuses
 with `expect disabled`, then `expect enabled` once what enables it has happened. `expect
 focused "picker"` passes when that node holds the keyboard focus, as every host's tree marks it
-(`[focused]` in `agent <host> tree`): after a key moves the focus, or a dialog returns it. Each test is a session of its own, opened with its
+(`[focused]` in `agent <host> tree`): after a key moves the focus, or a dialog returns it.
+
+`expect layout "status-mark" height <= 24` bounds a node's laid-out `width` or `height` with
+`==`, `<=` or `>=`. The size is that of the box `agent <host> layout <target>` prints as `space
+viewport`: points (CSS pixels on the web) at two decimals, with a presentation transform folded
+in (LLP 1012). A failure names the size and the box, so an image a column stretched to its own
+width fails its test: `height of "status-mark" is 310, expected <= 24 (its box is 420×310)`.
+A size that comes from text, a platform control or the window differs by host: bound it, and
+keep `==` for a size the app sets.
+
+Each test is a session of its own, opened with its
 launch lines: `size 1200x800`, `epoch "2026-09-21T12:00:00Z"`, `time-zone
 "America/New_York"`, `locale "fr-FR"` and `seed 7` are the driver's `--size`,
 `--epoch`, `--time-zone`, `--locale` and `--seed`, so they lead the test's steps,
@@ -1087,7 +1099,11 @@ report unsupported. Scope these tests with `on web`.
 list's row into view by its key, so a row outside the rendered window can be
 tapped by its own id on the next step. `type "id" "text"` sets the field's
 value, as Playwright's `fill`; `append` adds the text after the value the tree
-shows (a prefilled reply). `type "id" key "Name"` presses the key;
+shows (a prefilled reply). `type "id" key "Name"` presses the key (on iOS,
+ArrowRight or ArrowLeft at an `input type="range"` that shows its `UISlider`
+is the slider's accessibility increment or decrement, the call VoiceOver's
+swipe makes; its halves are that step's keydown with the move, then its
+keyup, and a held key's repeats move it again);
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
 web page reloads its current URL in the same profile, keeping Back and Forward
@@ -2740,6 +2756,13 @@ macOS, iOS and iPadOS with a hardware keyboard, Linux):
   Tab moves the focus, arrows move the caret; on the web arrows, Space and
   the page keys also scroll the page or the focus's scroller (a native
   scroller does not scroll by key, so there is nothing there to prevent).
+  On a native host a screen reader's step of an `input type="range"`
+  (VoiceOver's swipe up or down; the increment and decrement macOS and
+  Windows offer; Android's scroll forward and backward) is its arrow keydown
+  first, ArrowRight to raise and ArrowLeft to lower (swapped where its
+  `direction` is `rtl`): a handler that calls `preventDefault()` makes the
+  move itself, as it does for a keyboard's arrow on the web, and otherwise
+  the host steps the range.
   Where Exact paints the group (on the web, Linux, Windows and Android's
   reader always; on the Mac and iOS where no segmented control, sidebar,
   toolbar or tab bar stands in for it), a
@@ -2863,9 +2886,9 @@ the virtual clock).
   same button. Help retains the system search field; the standard menus, and
   Develop in a development build, remain unless removed. Other hosts keep the ordinary button
   and ignore this Mac presentation hint. On a top-level root,
-  `-exact-menu-remove="show-tab-bar autofill close-all"` suppresses the named
+  `-exact-menu-remove="show-tab-bar close-all"` suppresses the named
   standard items and their menu equivalents. The literal whitespace-separated
-  ids are `close-all`, `autofill`, `show-tab-bar`, `show-all-tabs`,
+  ids are `close-all`, `show-tab-bar`, `show-all-tabs`,
   `enter-full-screen`, `minimize`, `zoom`, `bring-all-to-front`,
   `show-previous-tab`, `show-next-tab`, `move-tab-to-new-window`,
   `merge-all-windows`, `back` (Go ▸ Back), `forward` (Go ▸ Forward), `develop` (the Develop menu),
@@ -3133,7 +3156,7 @@ Presentation probe readings remain diagnostic until qualified on a physical devi
 | `screenLate` | ms a frame reached the screen after UIKit expected it (`UIUpdateInfo.estimatedPresentationTime`), when over half a period, as the presentation probe saw it: with UI updates, a recording keeps two transparent one-point Metal layers and, as each update for which a drawable of either is ready (cleared off the main thread) begins its commit, presents that drawable on its own; its `presentedTime` is when the composite holding it reached the screen. The simulator's Metal has no `presentedTime`: there the probe presents and hears nothing |
 | `unshown` | a frame whose probe drawable was never shown (a `presentedTime` of 0, as for a frame the render server skipped for a later one), so the frame before stayed on screen in its place; in a total, how many |
 | `probed` | in a total, the frames the probe reported, late or not |
-| `render` | on iOS and tvOS, what in the window costs the render server work of its own each frame it composites it, read once as the recording stops (`ms`, how long that took): `layers`, the visible layers; `rows` under `columns`, one per `kind`, `place` and `node` (the Exact node's test id, else `#` and its id, else `node` and its number), with the `top` and `height` its layers span and their `count`; a kind more than four nodes have in one place is one row, its `node` how many. A `kind` is `backdrop` (a `CABackdropLayer`, which UIKit's blur and glass use: it renders what lies behind it first), `portal` (another part of the tree rendered again), `filter`, `blend`, `mask`, `shadow` (without a `shadowPath`), `group` (group opacity) or `rasterize`, each an offscreen pass, or `metal` (a Metal layer, as MapKit's map, which the GPU draws itself). A `content` row is in the followed scroller's content coordinates, so a late frame's `offset` to `offset` plus the viewport's height is what was on screen; a `fixed` row (bars, overlays) is in the window's. The `fixed` rows come first. A list that builds its rows as they scroll in has only those near the viewport then. The compact copy keeps the rows that fit after its 12 worst late frames, and `shown` counts them |
+| `render` | on iOS and tvOS, what in the window costs the render server work of its own each frame it composites it, read once as the recording stops (`ms`, how long that took): `layers`, the visible layers; `rows` under `columns`, one per `kind`, `place` and `node` (the Exact node's test id, else `#` and its id, else `node` and its number), with the `top` and `height` its layers span and their `count`; a kind more than four nodes have in one place is one row, its `node` how many. A `kind` is `backdrop` (a `CABackdropLayer`, which UIKit's blur and glass use: it renders what lies behind it first), `portal` (another part of the tree rendered again), `filter`, `blend`, `mask`, `shadow` (without a `shadowPath`), `group` (group opacity) or `rasterize`, each an offscreen pass, or `metal` (a Metal layer, as MapKit's map, which the GPU draws itself). `backdrop` and `portal` are Core Animation's private classes, told by name only in a development build: a production build names none (LLP 1035.003), so there a backdrop's blur is a `filter` and a portal is not reported. A `content` row is in the followed scroller's content coordinates, so a late frame's `offset` to `offset` plus the viewport's height is what was on screen; a `fixed` row (bars, overlays) is in the window's. The `fixed` rows come first. A list that builds its rows as they scroll in has only those near the viewport then. The compact copy keeps the rows that fit after its 12 worst late frames, and `shown` counts them |
 | `scrolledPt` | a segment's distance, from where its first interval began; none for the first segment of a scroller taken as it moved |
 | `droppedFrames` | frames after the first 36,000 (five minutes at 120 Hz), which a recording does not keep |
 | `lateShown`, `shown` | how many late frames (and in the compact copy, scroll segments) the trace reports of all there were. The full report keeps up to 200 late frames in time order, those late the longest by `hitchMs` when there are more; the compact copy lists the ones that fit, those late the longest first, and leaves out the segments at rest |

@@ -7,6 +7,37 @@ import UIKit
 #endif
 
 final class ElementScrollTests: XCTestCase {
+    #if os(iOS)
+    /// A request to bring an element into view owns its scroller: a position Exact carries for it, still waiting for
+    /// the covers' answer, gives way to an instant reveal, and the answer's write leaves the reveal's offset
+    func testAnInstantRevealDropsAPositionExactCarries() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "view", "props": ["id": "target"]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 200.0, "h": 200.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 400.0, "w": 100.0, "h": 50.0],
+        ]))
+        let window = UIWindow(frame: p.viewport.frame)
+        window.addSubview(p.viewport)
+        defer { withExtendedLifetime(window) {} }
+        let node = try XCTUnwrap(p.views[1])
+        let sv = try XCTUnwrap(node.scrollView)
+        sv.contentSize = CGSize(width: 200, height: 1000)
+        node.retainScrollPosition(from: sv)
+        p.navigation.coversReported += 1
+        p.scrollElementIntoView(["target", "start", "nearest", "instant"])
+        XCTAssertNil(node.pendingScrollTop, "the reveal drops the carried position")
+        let revealed = sv.contentOffset.y
+        XCTAssertGreaterThan(revealed, 300)
+        p.navigation.writeCarriedScrollsWhenAnswered(through: p.navigation.coversReported)
+        XCTAssertEqual(sv.contentOffset.y, revealed, accuracy: 0.5, "the answer's write leaves the reveal's offset")
+    }
+    #endif
+
     func testPaddingAndMarginsAlignStartAndNearest() throws {
         #if os(macOS)
         _ = NSApplication.shared
@@ -560,22 +591,25 @@ final class ElementScrollTests: XCTestCase {
         host.view.addSubview(view)
         view.frame = host.view.bounds
         defer { window.isHidden = true }
+        // Boot a fixture before the first layout, which otherwise boots the test host's own app; the strip's ids are
+        // past the fixture's, so its ops make new views rather than reach the fixture's
+        XCTAssertNil(session.boot(plan: try fixturePlan("HEADLESS"), size: window.bounds.size).error)
         // The view finishes mounting (its navigation's `mounted`) at layout.
         view.layoutIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         let p = session.presenter
         p.apply(wireBatch([
-            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
-            ["op": "create", "id": 2, "kind": "view", "props": ["id": "chip-a"]],
-            ["op": "create", "id": 4, "kind": "view", "props": ["id": "chip-c"]],
-            ["op": "children", "id": 1, "ids": [2, 4]],
-            ["op": "roots", "ids": [1]],
-            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 200.0, "h": 60.0],
-            ["op": "frame", "id": 2, "x": 300.0, "y": 0.0, "w": 56.0, "h": 56.0],
+            ["op": "create", "id": 9_001, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
+            ["op": "create", "id": 9_002, "kind": "view", "props": ["id": "chip-a"]],
+            ["op": "create", "id": 9_004, "kind": "view", "props": ["id": "chip-c"]],
+            ["op": "children", "id": 9_001, "ids": [9_002, 9_004]],
+            ["op": "roots", "ids": [9_001]],
+            ["op": "frame", "id": 9_001, "x": 0.0, "y": 0.0, "w": 200.0, "h": 60.0],
+            ["op": "frame", "id": 9_002, "x": 300.0, "y": 0.0, "w": 56.0, "h": 56.0],
         ]))
-        let sv = try XCTUnwrap(p.views[1]?.scrollView)
+        let sv = try XCTUnwrap(p.views[9_001]?.scrollView)
         sv.contentSize = CGSize(width: 1000, height: 60)
-        let chip = try XCTUnwrap(p.views[4])
+        let chip = try XCTUnwrap(p.views[9_004])
         XCTAssertNotNil(chip.window, "the strip is in the window")
         p.scrollElementIntoView(["chip-c", "nearest", "start", "instant"])
         XCTAssertEqual(p.elementScrolls.names, ["chip-c"], "no size yet: held")

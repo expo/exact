@@ -8,6 +8,16 @@ use exact_kernel::{PropId, StyleId};
 use exact_plan::{BindingKind, EventKind, NodesId, Value};
 use std::fmt::Write as _;
 
+/// The rows presence plays (presence-glue.js, and shared.js for a route's
+/// entrance and exit, LLP 1013.001): a node whose inline declarations hold
+/// one registers with presence (`presence_registration`).
+pub(super) const PRESENCE_ROWS: [&str; 4] = [
+    "--exact-layout-transition:",
+    "--exact-exit-animation:",
+    "--exact-view-transition-new:",
+    "--exact-view-transition-old:",
+];
+
 impl Em<'_> {
     /// Resolve SVG rotation eligibility with the current animation name and axis.
     pub(super) fn svg_animation(
@@ -83,9 +93,14 @@ impl Em<'_> {
 
     /// The runtime function that registers node `i` with presence, if any. A bound
     /// exit takes `px`, which keeps its value from the start of each commit and
-    /// loads presence even when the first value is `none`; another node with a
-    /// declaration that `rows::presence_decls` moves inline (`declares`) takes `pr`.
-    pub(super) fn presence_registration(&self, i: u32, declares: bool) -> Option<&'static str> {
+    /// loads presence even when the first value is `none`; another node takes `pr`
+    /// when `inline` (the declarations `rows::presence_decls` moved inline)
+    /// holds one of `PRESENCE_ROWS`. The other inline declarations (a press, a
+    /// fit, a timeline) belong to other pieces and load no presence.
+    pub(super) fn presence_registration(&self, i: u32, inline: &str) -> Option<&'static str> {
+        let declares = inline
+            .split_inclusive(';')
+            .any(|decl| PRESENCE_ROWS.iter().any(|row| decl.starts_with(row)));
         let bound_exit = self
             .plan
             .node(NodesId(i))

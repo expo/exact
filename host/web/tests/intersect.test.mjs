@@ -1,9 +1,12 @@
 // LLP 1005: the adapter must preserve Chrome's IntersectionObserver entries.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
 
-test('intersection matches Chrome for margins, scroll, clipping, zero area and removal', async () => {
+const engineTest = await engineTests();
+
+engineTest.chromium('intersection matches Chrome for margins, scroll, clipping, zero area and removal', async () => {
   const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
   const browser = await suiteBrowser();
   try {
@@ -102,7 +105,7 @@ test('intersection matches Chrome for margins, scroll, clipping, zero area and r
 }, 120000);
 
 
-test('intersection initial entries follow scroll, resize and registration order', async () => {
+engineTest.chromium('intersection initial entries follow scroll, resize and registration order', async () => {
   const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
   const browser = await suiteBrowser();
   try {
@@ -130,7 +133,7 @@ test('intersection initial entries follow scroll, resize and registration order'
   } finally { await browser.close(); }
 }, 120000);
 
-test('invalid margins cannot block later intersection targets', async () => {
+engineTest.chromium('invalid margins cannot block later intersection targets', async () => {
   const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
   const browser = await suiteBrowser();
   try {
@@ -179,7 +182,7 @@ test('invalid margins cannot block later intersection targets', async () => {
   } finally { await browser.close(); }
 }, 120000);
 
-test('intersection geometry follows Chrome for rotated roots and sticky targets', async () => {
+engineTest.chromium('intersection geometry follows Chrome for rotated roots and sticky targets', async () => {
   const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
   const browser = await suiteBrowser();
   try {
@@ -234,7 +237,7 @@ test('intersection geometry follows Chrome for rotated roots and sticky targets'
 }, 120000);
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`intersection roots preserve margin and clipping semantics in ${engine}`, async function () {
+  engineTest[engine](`intersection roots preserve margin and clipping semantics in ${engine}`, async function () {
     const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
     const browser = await suiteBrowser(engine);
     const scrollportStyle = 'position:relative;width:300px;height:500px;overflow:auto';

@@ -206,6 +206,10 @@ function flush() {
   }
   while (FocusQueue.length) FocusQueue.shift()();
 }
+/** Whether the flush will run an effect. An effect queued because a derive it reads might change runs only if that
+ * derive did, and settlement marks the readers of each derive that changed: an effect not marked is due only while a
+ * derive it reads has still to settle. */
+const due = () => Queue.some(n => !n.gone && (n.s === DIRTY || n.src.some(s => s.fn && s.s !== CLEAN)));
 function untracked(f) {
   const l = Listener;
   Listener = null;
@@ -560,8 +564,9 @@ export function commit(f, what = 'commit', finished) {
   // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
   const update = () => {
     for (const f of Before) f();
-    // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
-    Pres?.before({ ops: Probes?.gains() ?? [] }, Views);
+    // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063); when the flush
+    // will run no effect it writes nothing, and presence measures nothing (`still`)
+    Pres?.before({ ops: Probes?.gains() ?? [], still: !due() }, Views);
     try {
       flush();
       openTabs();

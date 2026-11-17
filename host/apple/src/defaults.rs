@@ -50,6 +50,76 @@ extern "C" {
     fn CFPreferencesSetAppValue(key: CFTypeRef, value: CFTypeRef, app: CFTypeRef);
     fn CFPreferencesCopyKeyList(app: CFTypeRef, user: CFTypeRef, host: CFTypeRef) -> CFTypeRef;
     fn CFPreferencesAppSynchronize(app: CFTypeRef) -> u8;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFBundleGetMainBundle() -> CFTypeRef;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFBundleGetValueForInfoDictionaryKey(bundle: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFDictionaryGetTypeID() -> usize;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFDictionaryGetCount(value: CFTypeRef) -> CFIndex;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFDictionaryGetKeysAndValues(value: CFTypeRef, keys: *mut CFTypeRef, values: *mut CFTypeRef);
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFArrayGetTypeID() -> usize;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFBooleanGetTypeID() -> usize;
+    #[cfg(any(target_os = "watchos", test))]
+    fn CFBooleanGetValue(value: CFTypeRef) -> u8;
+}
+
+/// Read the signed main bundle's property, including in a widget process.
+#[cfg(any(target_os = "watchos", test))]
+pub(crate) fn bundle_value(key: &str) -> serde_json::Value {
+    let Some(key) = cf_string(key) else {
+        return serde_json::Value::Null;
+    };
+    // SAFETY: the main bundle owns its property graph for the process lifetime.
+    unsafe {
+        json_value(CFBundleGetValueForInfoDictionaryKey(
+            CFBundleGetMainBundle(),
+            key.0,
+        ))
+    }
+}
+
+#[cfg(any(target_os = "watchos", test))]
+unsafe fn json_value(value: CFTypeRef) -> serde_json::Value {
+    use serde_json::{json, Value};
+    if value.is_null() {
+        return Value::Null;
+    }
+    // SAFETY: every recursive value is borrowed from this live property graph;
+    // type IDs guard each cast and counts size both dictionary buffers.
+    unsafe {
+        let ty = CFGetTypeID(value);
+        if ty == CFStringGetTypeID() {
+            return json!(rust_string(value));
+        }
+        if ty == CFBooleanGetTypeID() {
+            return json!(CFBooleanGetValue(value) != 0);
+        }
+        if ty == CFArrayGetTypeID() {
+            return Value::Array(
+                (0..CFArrayGetCount(value))
+                    .map(|i| json_value(CFArrayGetValueAtIndex(value, i)))
+                    .collect(),
+            );
+        }
+        if ty == CFDictionaryGetTypeID() {
+            let count = CFDictionaryGetCount(value) as usize;
+            let mut keys = vec![std::ptr::null(); count];
+            let mut values = vec![std::ptr::null(); count];
+            CFDictionaryGetKeysAndValues(value, keys.as_mut_ptr(), values.as_mut_ptr());
+            return Value::Object(
+                keys.into_iter()
+                    .zip(values)
+                    .filter_map(|(k, v)| Some((rust_string(k)?, json_value(v))))
+                    .collect(),
+            );
+        }
+        Value::Null
+    }
 }
 
 /// An owned CoreFoundation object, released when dropped.

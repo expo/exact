@@ -6,12 +6,15 @@ import { symbolSheet } from './glue-fixture.mjs';
 // the mask's `<path>`s with `fill-rule="evenodd"`: a ring of two squares
 // wound alike is clear in its middle. The same path as a nonzero icon is
 // filled through, as before. Measured from the screen, in each engine.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../../..');
 // Two squares wound alike in a 24 box: even-odd leaves the inner one clear.
@@ -24,7 +27,7 @@ const RUNTIMES = {
   'host/web-js/symbols.js': ['const All = true, journal = [], clock = { now: 0 }, appSource = () => {}, Images = new Set(document.querySelectorAll("#exact-root img")), image = e => Images.add(e);', ['refresh'], 'refresh();'],
 };
 
-for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: an even-odd icon draws its hole, a nonzero one is filled through (${file})`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest[engine](`${engine}: an even-odd icon draws its hole, a nonzero one is filled through (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const style = symbolSheet(source);
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
@@ -65,7 +68,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
 // (kernel/tests/fixtures/icon-forms.json, which contract/cli/tests/it/icon_forms.rs holds Icon::parse to). And `draw` puts
 // it on the element: an even-odd form marked so, a nonzero one as before, one that is no icon drawing
 // nothing (no path, viewBox or rule).
-test('symbols.js iconForm and draw read a form as Icon::parse does', async () => {
+engineTest.chromium('symbols.js iconForm and draw read a form as Icon::parse does', async () => {
   const source = readFileSync(resolve(ROOT, 'host/web-js/symbols.js'), 'utf8'), suite = await suiteBrowser('chromium', { timeout: 10000 });
   const { cases } = JSON.parse(readFileSync(resolve(ROOT, 'kernel/tests/fixtures/icon-forms.json'), 'utf8'));
   try {
@@ -89,7 +92,7 @@ test('symbols.js iconForm and draw read a form as Icon::parse does', async () =>
 // runtime as its host changes it (the JS target's `draw`; the web host's element.rs attributes, swapped
 // as a props batch swaps them), its painter run after each. The ring and its middle are sampled each
 // time: the mask is rebuilt with the new `fill-rule`, and the previous rule's attribute is gone.
-for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: an icon whose rule changes is drawn by its new rule (${file})`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest[engine](`${engine}: an icon whose rule changes is drawn by its new rule (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8'), style = symbolSheet(source);
   const js = file.endsWith('symbols.js');
   const declarations = glueDeclarations(source, js ? [...names, 'iconForm', 'draw'] : [...names, 'applyProps']);

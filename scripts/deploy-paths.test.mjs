@@ -632,7 +632,56 @@ test('a deploy omits each Cargo crate target and still refuses dirty source', ()
   expect(() => snapshotOf(app, { compiler, dirty: true }, exact)).toThrow(/tracked source .*target.*inferred output root/);
 }, 30_000);
 
-test('Cargo manifest count does not grow deployment Git arguments', () => {
+test('Android build products leave Git and deploy clean while host source edits refuse', () => {
+  const root = mkdtempSync(join(fixture, 'android-outputs-'));
+  const exact = join(root, 'exact'), dir = join(root, 'app');
+  const compiler = contractCompiler(compilerRoot('fn main() { print!(r#"{{"packages":[],"sources":[],"consulted":[],"errors":[]}}"#); }\n'));
+  const write = (name, bytes) => {
+    const path = join(exact, 'host/android', name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes);
+  };
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  };
+  write('.gitignore', readFileSync(new URL('../host/android/.gitignore', import.meta.url)));
+  write('build.gradle.kts', '// root project\n');
+  for (const module of ['canvas', 'widgets']) write(`${module}/build.gradle.kts`, '// module\n');
+  write('canvas/src/Canvas.kt', 'class Canvas\n');
+  for (const repo of [exact, dir]) {
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, 'app.contract'), 'app Test\n');
+    git(repo, 'init', '-q');
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm',
+      'fixture\n\nCo-Authored-By: GPT-6.1 Sol <noreply@openai.com>');
+  }
+  const products = ['build/reports/dependencies.html', '.gradle/caches/state.bin', '.kotlin/sessions/session',
+    'canvas/build/intermediates/classes.jar', 'widgets/build/outputs/widget.aar', 'settings-gradle.lockfile',
+    'hs_err_pid123.log', 'replay_pid123.log', 'hs_err_pid123.mdmp'];
+  for (const product of products) write(product, 'generated');
+  const app = { name: 'test', dir, workspace: dir, manifest: {} };
+  const snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    expect(git(exact, 'status', '--porcelain')).toBe('');
+    const captured = materializeSnapshot(snapshot, join(root, 'run'), app);
+    for (const product of products) expect(existsSync(join(captured.exactRoot, 'host/android', product))).toBe(false);
+    expect(readFileSync(join(captured.exactRoot, 'host/android/canvas/src/Canvas.kt'), 'utf8')).toBe('class Canvas\n');
+  } finally { disposeSnapshot(snapshot); }
+  write('canvas/src/Canvas.kt', 'class Changed\n');
+  expect(() => snapshotOf(app, { compiler }, exact)).toThrow('host/android/canvas/src/Canvas.kt');
+  write('canvas/src/Canvas.kt', 'class Canvas\n');
+  for (const source of ['canvas/hs_err.kt', 'fixtures/build/input.kt']) {
+    write(source, 'source');
+    expect(() => snapshotOf(app, { compiler }, exact)).toThrow(`host/android/${source}`);
+    rmSync(join(exact, 'host/android', source));
+  }
+}, 30_000);
+
+test('Cargo manifests and JVM crash reports do not grow deployment Git arguments', () => {
   const repo = mkdtempSync(join(fixture, 'many-manifests-'));
   const app = { dir: repo, workspace: repo, manifest: {} };
   const git = (...args) => {
@@ -651,6 +700,16 @@ test('Cargo manifest count does not grow deployment Git arguments', () => {
   const after = argv(sourcePaths(repo, app, repo).pathspec);
   expect(after).toBeLessThan(32767);
   expect(after).toBe(before);
+  const android = join(repo, 'host/android');
+  mkdirSync(android, { recursive: true });
+  for (let index = 10000; index < 10400; index++) {
+    for (const name of [`hs_err_pid${index}.log`, `replay_pid${index}.log`, `hs_err_pid${index}.mdmp`]) {
+      writeFileSync(join(android, name), 'crash report');
+    }
+  }
+  const crashes = argv(sourcePaths(repo, app, repo).pathspec);
+  expect(crashes).toBeLessThan(32767);
+  expect(crashes).toBe(before);
 });
 
 test('an external app installs its own captured lockfile before Contract discovery', () => {

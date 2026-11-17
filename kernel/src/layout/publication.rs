@@ -64,7 +64,7 @@ pub(super) fn publish(
     let full = !arena.exclusion_slots.is_empty() || !arena.flow.is_empty();
     arena.begin_layout_publication(root);
     // A block's root: hidden with what holds it, whole when it took its block.
-    let (hidden, whole) = crate::kernel::publication_start(arena, root);
+    let (hidden, whole, (x, y)) = crate::kernel::publication_start(arena, root);
     let mut changed = Vec::new();
     let mut updated = Vec::new();
     let mut exclusions = Vec::new();
@@ -75,15 +75,7 @@ pub(super) fn publish(
     // `t` is the translation its subtree inherits; (ox, oy) stay flow-thread
     // origins, so a child is placed from its parent's unfragmented box.
     let mut stack = if full || has_sources || whole {
-        vec![(
-            root,
-            0.0,
-            0.0,
-            hidden,
-            full || whole,
-            false,
-            Shift::default(),
-        )]
+        vec![(root, x, y, hidden, full || whole, false, Shift::default())]
     } else {
         Vec::new()
     };

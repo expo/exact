@@ -23,6 +23,8 @@ pub use stats::{counter_state, Statistics, StatisticsReader};
 mod gradient;
 mod images;
 #[cfg(all(test, not(windows)))]
+mod memory_tests;
+#[cfg(all(test, not(windows)))]
 mod ordered_tests;
 mod rows;
 mod svg;
@@ -43,6 +45,7 @@ pub struct Ink {
     groups: Vec<clips::Group>,
     clips: Vec<()>,
     target: Option<TextureId>,
+    rotated_target: Option<TextureId>,
     draw_target: Option<TextureId>,
     draw_clear: Option<[f64; 4]>,
     size: [u32; 2],
@@ -86,6 +89,7 @@ impl Ink {
             groups: Vec::new(),
             clips: Vec::new(),
             target: None,
+            rotated_target: None,
             draw_target: None,
             draw_clear: Some([1.; 4]),
             size: [1, 1],
@@ -99,6 +103,48 @@ impl Ink {
             statistics: StatisticsReader::default(),
             rows: rows::Rows::default(),
         }
+    }
+
+    fn finish_pixels(
+        &mut self,
+        rotation: exact_ink::Rotation,
+    ) -> std::result::Result<Pixmap, String> {
+        exact_ink::counters::add(exact_ink::counters::Counter::PaintAttempts, 1);
+        if let Some(e) = &self.error {
+            return Err(e.clone());
+        }
+        let mut readback = Instant::now();
+        let result = (|| {
+            while !self.groups.is_empty() {
+                self.close_group()?;
+            }
+            let mut target = self.end_frame()?;
+            if rotation != exact_ink::Rotation::R0 {
+                let [w, h] = rotation.size(self.size);
+                let rotated = match self.rotated_target {
+                    Some(t) => self.device.resize_target(t, w, h)?,
+                    None => self.device.create_target(w, h)?,
+                };
+                self.rotated_target = Some(rotated);
+                rotation.blit(&mut self.device, target, self.size, rotated)?;
+                target = rotated;
+            }
+            readback = Instant::now();
+            self.device.readback(target)
+        })();
+        let bytes = self
+            .accept(result)
+            .ok_or_else(|| self.error.clone().unwrap())?;
+        let render_ms = self.layer_ms;
+        let pixels = Pixmap::from_vec(
+            bytes,
+            tiny_skia::IntSize::from_wh(rotation.size(self.size)[0], rotation.size(self.size)[1])
+                .unwrap(),
+        )
+        .ok_or("invalid ink readback")?;
+        self.last_ms = (render_ms, readback.elapsed().as_secs_f64() * 1000.);
+        self.update_statistics();
+        Ok(pixels)
     }
 
     /// Device and shader timings reported by the presenter.
@@ -327,13 +373,15 @@ impl Backend for Ink {
         Ok(self.info().clone())
     }
     #[cfg(target_os = "macos")]
-    fn repeat_apple_frame(&mut self) -> std::result::Result<(), String> {
-        let target = self.target.ok_or("no retained compose target")?;
+    fn repeat_apple_frame(&mut self) -> std::result::Result<bool, String> {
+        let Some(target) = self.target else {
+            return Ok(false);
+        };
         let result = self.device.present(target);
         self.last_ms.1 = self
             .accept(result)
             .ok_or_else(|| self.error.clone().unwrap())?;
-        Ok(())
+        Ok(true)
     }
     #[cfg(windows)]
     fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
@@ -409,8 +457,24 @@ impl Backend for Ink {
     fn needs_geometry_paint(&self) -> bool {
         true
     }
-    fn trim(&mut self) {
-        let result = self.pool.trim(&mut self.device);
+    fn trim(&mut self, hidden: bool) {
+        self.encoder = Encoder::new(self.size[0], self.size[1]);
+        self.groups.clear();
+        self.clips.clear();
+        self.draw_target = None;
+        let result = (|| {
+            // A visible window may still owe the compositor its first frame.
+            if hidden {
+                if let Some(target) = self.target.take() {
+                    self.device.retire_texture(target)?;
+                }
+            }
+            if let Some(target) = self.rotated_target.take() {
+                self.device.retire_texture(target)?;
+            }
+            self.images.trim(&mut self.device)?;
+            self.pool.trim(&mut self.device)
+        })();
         self.accept(result);
     }
     fn page(&mut self, color: [u8; 4]) {
@@ -747,31 +811,13 @@ impl Backend for Ink {
     }
 
     fn finish(&mut self) -> std::result::Result<Pixmap, String> {
-        exact_ink::counters::add(exact_ink::counters::Counter::PaintAttempts, 1);
-        if let Some(e) = &self.error {
-            return Err(e.clone());
-        }
-        let mut readback = Instant::now();
-        let result = (|| {
-            while !self.groups.is_empty() {
-                self.close_group()?;
-            }
-            let target = self.flush()?;
-            readback = Instant::now();
-            self.device.readback(target)
-        })();
-        let bytes = self
-            .accept(result)
-            .ok_or_else(|| self.error.clone().unwrap())?;
-        let render_ms = self.layer_ms;
-        let pixels = Pixmap::from_vec(
-            bytes,
-            tiny_skia::IntSize::from_wh(self.size[0], self.size[1]).unwrap(),
-        )
-        .ok_or("invalid ink readback")?;
-        self.last_ms = (render_ms, readback.elapsed().as_secs_f64() * 1000.);
-        self.update_statistics();
-        Ok(pixels)
+        self.finish_pixels(exact_ink::Rotation::R0)
+    }
+    fn finish_rotated(
+        &mut self,
+        rotation: exact_ink::Rotation,
+    ) -> Option<std::result::Result<Pixmap, String>> {
+        Some(self.finish_pixels(rotation))
     }
     fn finish_for(&mut self, target: FrameTarget) -> std::result::Result<Option<Pixmap>, String> {
         #[cfg(windows)]
@@ -793,7 +839,7 @@ impl Backend for Ink {
                     while !self.groups.is_empty() {
                         self.close_group()?;
                     }
-                    let texture = self.flush()?;
+                    let texture = self.end_frame()?;
                     self.last_ms = (self.layer_ms, self.device.present(texture)?);
                     Ok(())
                 })();
@@ -815,7 +861,7 @@ impl Backend for Ink {
                     while !self.groups.is_empty() {
                         self.close_group()?;
                     }
-                    let texture = self.flush()?;
+                    let texture = self.end_frame()?;
                     if let Selected::D3d11(device) = &mut self.device {
                         self.last_ms = (self.layer_ms, device.present(texture)?);
                     }

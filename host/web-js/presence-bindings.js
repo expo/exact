@@ -31,15 +31,18 @@ function present(own) {
 }
 
 export function presenceArm(view, subject, arm, bound) {
-  return view && ((...args) => {
+  if (!view) return view;
+  return (...args) => {
+    // The arm owns this binding cache across reruns of its region effect.
+    const current = bindingMemo(subject);
     owner().$presence = () => {
-      const value = subject();
+      const value = current();
       if ((bound ? value != null : !!value) !== (arm === 0)) return false;
       if (bound && value != null) write(bound.n, value);
       return true;
     };
     return view(...args);
-  });
+  };
 }
 
 export function presenceRows(row, list, key, identify = rowKey) {
@@ -60,13 +63,23 @@ export function presenceRows(row, list, key, identify = rowKey) {
   };
 }
 
+// Inspection publishes queued row and match values before checking the effect: those writes can make it stale.
+// Only S owns a last CSS write; motion-held and reference-resolving bindings keep their full probes.
+const quiet = (element, property) => element.$probeFx?.[property]?.s === 0 && !element.$css[property];
+export function track(element, property, fx) {
+  if (property === EXIT || property === LT) (element.$probeFx ??= {})[property] = fx;
+}
+
 // The runner ends an arm without updating its bindings (region.rs). Capture before writes, even when
 // shared.js defers the DOM update: its first flush can run several commits' coalesced effects.
 // A scope already absent from the logical tree keeps the snapshot taken before its removal.
 export function captureExits() {
   catchUp(() => inspect(() => {
     for (const [element, entry] of Exits) {
-      try { read(() => { if (present(entry.own)) element.$exit = entry.binding() ?? ''; }); }
+      try {
+        if (!present(entry.own)) continue;
+        element.$exit = quiet(element, EXIT) ? '' : read(entry.binding) ?? '';
+      }
       catch {} // The tree update owns a subject's or key's trap; a probe must not prevent the next action.
     }
   }));
@@ -86,9 +99,9 @@ export function exitBinding(element, property, unit, binding) {
 
 export function lt(element, parse, binding) {
   const own = owner();
-  Bound.set(element, () => {
+  Bound.set(element, { own, will: () => {
     try { return read(() => present(own) && parse(binding())?.css != null); } catch { return false; }
-  });
+  } });
   onEnd(() => Bound.delete(element));
   pr(element);
 }
@@ -98,9 +111,12 @@ export function lt(element, parse, binding) {
 export function gains() {
   return catchUp(() => inspect(() => {
     const ops = [];
-    for (const [element, will] of Bound) {
+    for (const [element, entry] of Bound) {
+      try {
+        if (present(entry.own) && quiet(element, LT)) { element.$lt = false; continue; }
+      } catch {} // The binding probe below leaves a trap to the tree update.
       element.$lt = !!element.style.getPropertyValue(LT);
-      if (!element.$lt && element.isConnected && will()) ops.push({ op: 'style', id: viewId(element), css: LT });
+      if (!element.$lt && element.isConnected && entry.will()) ops.push({ op: 'style', id: viewId(element), css: LT });
     }
     return ops;
   }));
@@ -109,6 +125,7 @@ export function gains() {
 export function restyled() {
   const ops = [];
   for (const element of Bound.keys()) {
+    if (!element.$lt && element.$probeFx?.[LT] && !element.$css[LT]) continue;
     const now = !!element.style.getPropertyValue(LT);
     if (element.isConnected && element.$lt !== now) ops.push({ op: 'create', id: viewId(element) });
     element.$lt = now;
@@ -117,4 +134,4 @@ export function restyled() {
 }
 
 /** What rt.js calls through `usePresenceBindings`. */
-export const presenceUse = () => ({ capture: captureExits, bind: exitBinding, arm: presenceArm, rows: presenceRows, gains, restyled });
+export const presenceUse = () => ({ capture: captureExits, bind: exitBinding, arm: presenceArm, rows: presenceRows, gains, restyled, track });

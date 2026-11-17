@@ -71,15 +71,55 @@ extension ControlHost {
         return ["typed": Int(node.id), "value": RangeSpec.format(slider.exact), "delivery": "host-activation", "native": "control"]
     }
 
-    /// VoiceOver's swipe up or down, as WebKit adjusts a range: a written
-    /// `step` is one move; without one, or with `any`, a twentieth of the
-    /// span, at least the default step.
-    private func adjustRange(_ slider: RangeSlider, by direction: Double) {
-        guard let node = presenter.views[UInt32(slider.tag)], slider.isEnabled, !node.inert else { return }
-        let range = RangeSpec(node.props), from = range.sanitize(slider.exact)
-        let authored = node.props["step"]?.isEmpty == false ? range.step : nil
-        let to = range.sanitize(from + direction * (authored ?? Swift.max((range.max - range.min) / 20, range.step ?? 0)))
-        if to != from { commitRange(slider, node, to) }
+    /// VoiceOver's swipe up or down: the range's arrow key, whose default
+    /// action is the slider's step. The author's `key` handler may take it
+    /// with `preventDefault()`, as it takes a keyboard's on the web: the
+    /// handler's change is then the move (LLP 1069.001, amended 2026-11-16).
+    /// Else, as WebKit adjusts a range: a written `step` is one move; without
+    /// one, or with `any`, a twentieth of the span, at least the default step.
+    private func adjustRange(_ slider: RangeSlider, by direction: Double, phase: String? = nil, repeats: Bool = false) {
+        guard let node = adjustable(slider) else { return }
+        node.adjustKeys(up: direction > 0, phase: phase, repeats: repeats) {
+            // The keydown's handler may have disabled, hidden or replaced the range.
+            guard adjustable(slider) === node else { return }
+            let range = RangeSpec(node.props), from = range.sanitize(slider.exact)
+            let authored = node.props["step"]?.isEmpty == false ? range.step : nil
+            let to = range.sanitize(from + direction * (authored ?? Swift.max((range.max - range.min) / 20, range.step ?? 0)))
+            if to != from { commitRange(slider, node, to) }
+        }
+    }
+
+    /// The agent's `type <range> key ArrowRight` or `ArrowLeft`: the slider's
+    /// own accessibility increment or decrement, whichever sends that key in
+    /// the range's `direction` (`adjustKeys`), so an authored test's arrow
+    /// takes the path VoiceOver's swipe does. A held key is that step in
+    /// halves: `phase` "down" its keydown and move, again for each repeat,
+    /// and "up" its keyup. Nil for another key or node, and for a range that
+    /// shows no slider (`appearance="none"`), whose `UISlider` is off the
+    /// window and holds none of its value or bounds: the keyboard's route
+    /// has those.
+    func rangeKey(_ node: NodeView, _ key: String, phase: String? = nil, repeats: Bool = false) -> [String: Any]? {
+        guard key == "ArrowRight" || key == "ArrowLeft", let slider = controls[node.id] as? RangeSlider, slider.window != nil else { return nil }
+        let ltr = (node.style["direction"]?.string ?? presenter.documentDirection) != "rtl"
+        let up = (key == "ArrowRight") == ltr
+        if phase == "up" {
+            node.adjustKeys(up: up, phase: phase)
+        } else if phase != nil || repeats {
+            adjustRange(slider, by: up ? 1 : -1, phase: phase, repeats: repeats)
+        } else if up {
+            slider.accessibilityIncrement()
+        } else {
+            slider.accessibilityDecrement()
+        }
+        var reply: [String: Any] = ["typed": Int(node.id), "key": key, "value": RangeSpec.format(slider.exact), "delivery": "host-activation", "native": "control"]
+        if let phase { reply["phase"] = phase }
+        return reply
+    }
+
+    /// The node whose range `slider` is, while VoiceOver may move it.
+    private func adjustable(_ slider: RangeSlider) -> NodeView? {
+        guard let node = presenter.views[UInt32(slider.tag)], controls[node.id] === slider, slider.isEnabled, !node.inert else { return nil }
+        return node
     }
 
     /// Puts the thumb at `value`, sanitized, and reports it as a released

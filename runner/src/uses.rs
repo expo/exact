@@ -338,7 +338,10 @@ pub fn uses(plan: &Plan) -> Uses {
     }
     // Kept answers and surface records both need the host's store, and a
     // declared source its network (LLP 1162.001 D3).
-    if plan.resources.iter().any(|r| r.reader || r.keep) || !plan.fetches.is_empty() {
+    if plan.resources.iter().any(|r| r.reader || r.keep)
+        || !plan.fetches.is_empty()
+        || plan.slots.iter().any(|s| s.persist)
+    {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -823,6 +826,33 @@ mod grant_tests {
         }
         for grants in ["", "secret.keep token", "device.local-auth purpose.lock"] {
             assert!(!Uses::NONE.with_grants(grants).has(Capability::Presence));
+        }
+    }
+
+    #[test]
+    fn persisted_slots_link_storage_without_resources() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+        for persist in [false, true] {
+            let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let boolean = b.primitive(TypeKind::Bool);
+            let mut initial = Asm::new();
+            initial.bool(false);
+            let initial = b.code(initial);
+            let slot = b.slot("liked", boolean, initial);
+            b.set_slot_persist(slot, persist);
+            b.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            assert_eq!(
+                super::uses(&b.finish().unwrap()).has(Capability::Io),
+                persist
+            );
         }
     }
 

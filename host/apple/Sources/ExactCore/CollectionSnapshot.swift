@@ -1,6 +1,38 @@
 import Foundation
 
 package struct CollectionSnapshot {
+    package struct Window {
+        package let built: [Double], retire: [Double], reveal: [Double], edges: [Double], margin: [Double]
+        package let mask: Int
+        package let leadSeconds: Double, maxLead: Double
+        init?(_ value: BatchValue) {
+            guard case .object(let o) = value,
+                  let built = o["built"]?.numbers, built.count == 2,
+                  let retire = o["retire"]?.numbers, retire.count == 2,
+                  let reveal = o["reveal"]?.numbers, reveal.count == 2,
+                  let edges = o["edges"]?.numbers, edges.count == 2,
+                  let margin = o["margin"]?.numbers, margin.count == 2,
+                  let flags = o["mask"]?.number, let mask = Int(exactly: flags), (0...15).contains(mask),
+                  let seconds = o["leadSeconds"]?.number, let maximum = o["maxLead"]?.number,
+                  (built + retire + reveal + edges + margin + [seconds, maximum]).allSatisfy({ $0.isFinite }),
+                  built[0] <= built[1], seconds >= 0, maximum >= 0 else { return nil }
+            self.built = built; self.retire = retire; self.reveal = reveal; self.edges = edges; self.margin = margin
+            self.mask = mask; leadSeconds = seconds; maxLead = maximum
+        }
+        package func owesEdge(offset: Double, port: Double, velocity: Double) -> Bool {
+            let extra = min(abs(velocity) * leadSeconds, maxLead)
+            let reached = [max(0, offset) - margin[0] - (velocity < 0 ? extra : 0) < edges[0],
+                max(0, offset) + port + margin[1] + (velocity > 0 ? extra : 0) > edges[1]]
+            return (0..<2).contains { mask & (1 << $0) != 0 && reached[$0] == (mask & (4 << $0) != 0) }
+        }
+        package func owesReveal(offset: Double, port: Double) -> Bool {
+            max(0, offset) < reveal[0] || max(0, offset) + port > reveal[1]
+        }
+        package func owesRetirement(offset: Double, port: Double, moving: Bool) -> Bool {
+            let bound = port + (moving ? maxLead : 0)
+            return retire[0] <= max(0, offset) - bound || retire[1] >= max(0, offset) + port + bound
+        }
+    }
     package struct Row {
         package let view: UInt32
         package let root: UInt32
@@ -53,6 +85,7 @@ package struct CollectionSnapshot {
     /// asked for a row in answer.
     package let lastRequest: UInt64
     package var underWay: Bool { seeking || waiting }
+    package var window: Window? = nil
 
 }
 
@@ -72,6 +105,7 @@ extension BatchReader {
         var view: UInt32?, parent: UInt32?, revision: UInt64?, sequence: UInt64?, extent: Double?
         var rows: [CollectionSnapshot.Row]?, fixed: [CollectionSnapshot.Fixed] = [], correction: CollectionSnapshot.Correction?
         var count: UInt64?, request: UInt64?, lastRequest: UInt64?
+        var window: CollectionSnapshot.Window?
         var horizontal = false, pending = false, seeking = false, waiting = false, valid = true
         try object { r, key in
             switch key {
@@ -87,6 +121,7 @@ extension BatchReader {
             case "waiting": waiting = try r.collectionBool()
             case "request": request = try r.collectionUInt()
             case "lastRequest": lastRequest = try r.collectionUInt()
+            case "window": window = CollectionSnapshot.Window(try r.value())
             case "rows":
                 r.whitespace()
                 guard r.byte == 91 else { try r.skip(); rows = nil; return }
@@ -112,7 +147,7 @@ extension BatchReader {
         return CollectionSnapshot(view: view, horizontal: horizontal, parent: parent, revision: revision,
             sequence: sequence, extent: extent, rows: rows, fixed: fixed, correction: correction,
             count: count.map { Int(clamping: $0) } ?? rows.count, pending: pending, seeking: seeking,
-            waiting: waiting, request: request ?? 0, lastRequest: lastRequest ?? 0)
+            waiting: waiting, request: request ?? 0, lastRequest: lastRequest ?? 0, window: window)
     }
 
     private mutating func collectionRow() throws -> CollectionSnapshot.Row? {

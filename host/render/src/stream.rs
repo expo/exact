@@ -54,6 +54,13 @@ pub(crate) fn preload_paths(shell: &str) -> Vec<String> {
         rest = &rest[at + "<link rel=\"modulepreload\" href=\"".len()..];
         let Some(end) = rest.find('"') else { break };
         let href = &rest[..end];
+        // Not the TypeScript seam's: a page loads it at its first ask (LLP
+        // 1047.003 D6).
+        let tag = &rest[end..rest.find('>').map_or(rest.len(), |at| at + 1)];
+        if tag.contains(crate::page::ASKS) {
+            rest = &rest[end..];
+            continue;
+        }
         if let Some(path) = href.strip_prefix("./") {
             if !path.contains(['<', '>', ',', ';', '\r', '\n', ' ']) {
                 found.push(format!("{base}{path}"));
@@ -241,8 +248,9 @@ mod tests {
                 "/.exact/root/web/releases/ab/app-Ab12Cd34.js",
             ),
         ] {
+            // The TypeScript seam's marked line is the shell's alone (LLP 1047.003 D6).
             let shell = format!(
-                "<base href=\"{base}\">\n<link rel=\"modulepreload\" href=\"./app-Ab12Cd34.js\">\n"
+                "<base href=\"{base}\">\n<link rel=\"modulepreload\" href=\"./app-Ab12Cd34.js\">\n<link rel=\"modulepreload\" href=\"./ts-data-Ab12Cd34.js\" data-exact-asks>\n"
             );
             assert_eq!(preload_paths(&shell), [url]);
         }

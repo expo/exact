@@ -38,7 +38,7 @@ pub(super) fn math_function(root: &Node, out: &mut String) {
             out.push(')');
         }
         // A non-math function as normal
-        Node::Env(..) | Node::Var(..) => tree(root, out),
+        Node::Env(..) | Node::Var(..) | Node::Observe(..) => tree(root, out),
         _ => {
             out.push_str("calc(");
             out.push_str(stripped(&serialized(root)));
@@ -84,6 +84,16 @@ fn tree(n: &Node, out: &mut String) {
             ident(&v.name, out);
             // A fallback is written as a length, which stands alone where a row's value does
             if let Some(fallback) = &v.fallback {
+                out.push_str(", ");
+                length(fallback, out);
+            }
+            out.push(')');
+        }
+        Node::Observe(o) => {
+            out.push_str("var(");
+            o.target.prefix(out);
+            out.push_str(o.edge.name());
+            if let Some(fallback) = &o.fallback {
                 out.push_str(", ");
                 length(fallback, out);
             }

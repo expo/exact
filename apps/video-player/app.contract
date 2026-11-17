@@ -32,6 +32,10 @@ component VideoPlayer
   state fullscreen = false
   // The video shown: the bundled one by default, else a sample over HTTPS.
   state source = "assets/motion.mp4"
+  // Times the clip has come round (loop=true): a time report near the
+  // start after one near the end. A seek back (Rewind, Back) sets the
+  // position first, so it is not counted.
+  state loops = 0
   // Where the bar shows: a pending Back or Forward target before its seek.
   derive shown = pending ? target : position
   derive filled = duration > 0 ? min(100, shown / duration * 100) : 0
@@ -51,6 +55,8 @@ component VideoPlayer
   action done
     focus("done")
   action timed(seconds)
+    if duration > 0 and position > duration - 1 and seconds < 1
+      loops = loops + 1
     position = seconds
   action measured(seconds)
     duration = seconds

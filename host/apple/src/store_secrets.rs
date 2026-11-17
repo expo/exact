@@ -8,6 +8,9 @@ impl Backend for SecretBackend {
         self.0.get(name).map_err(|error| error.to_string())
     }
     fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        if crate::watch_sync::read_only(name) {
+            return Err("watch replica is phone-owned".into());
+        }
         crate::launch_preloads::with_secret_write(name, || self.persist(name, value))
     }
 }

@@ -524,7 +524,7 @@ def instSlots (fuel : Nat) (cx : RCx) (C : CComponent) (f : Frame) (id : InstId)
 /-- An instance's requests, settled in its frame after its states, as
 `Runtime.settleOwned` settles an arm instance's: kept while their
 arguments are those their values answer, asked anew otherwise, idle (with
-their value, their type's zero before any) while their `when` is closed,
+their value, their placeholder before any) while their `when` is closed,
 passes repeating while one changes. -/
 def csettleOwned (fuel : Nat) (cx : RCx) (C : CComponent) (f : Frame) (id : InstId)
     (slots : List (String × Value)) : Result (List (String × Value)) :=
@@ -541,7 +541,7 @@ def csettleOwned (fuel : Nat) (cx : RCx) (C : CComponent) (f : Frame) (id : Inst
           | .none => pure true
           | .some g => do pure ((← ceval fuel ce f [] g) matches .bool true)
         if !isOpen then
-          let v := (lookup r.name s).getD (zeroOf rp.shapes (rp.shapes.length + 1) r.ty)
+          let v := (lookup r.name s).getD (placeholderValue rp r)
           if (lookup r.name s).isNone || (lookup (ownedArgs r.name) s).isSome then changed := true
           s := (putSlot s r.name v).filter (·.1 != ownedArgs r.name)
         else

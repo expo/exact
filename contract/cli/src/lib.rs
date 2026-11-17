@@ -69,6 +69,7 @@ pub mod snapshot;
 pub mod terminal;
 mod typescript;
 pub mod watch;
+pub mod watch_sync;
 pub use contract_lower::vocab::collection_edge_refusal;
 pub use contract_types::strings::Strings;
 /// The data seam, re-exported for an app's build script: the bake asks the

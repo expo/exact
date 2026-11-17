@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect } from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -6,8 +6,10 @@ import { resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { serveStatic } from '../web/serve.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
-import { need } from '../../scripts/coverage.mjs';
+import { engineTests, need } from '../../scripts/coverage.mjs';
 import { withLook } from '../web/look.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../..');
 const CASES = {
@@ -227,7 +229,7 @@ const bound = (runtime, mapped) => runtime === 'JS' ? [mapped[1], mapped[3]] : [
 const held = runtime => runtime === 'JS' ? ['running', '--local'] : ['paused'];
 
 for (const runtime of ['JS', 'wasm']) {
-  const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest.chromium;
   check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');
@@ -548,7 +550,7 @@ const SPELLINGS_SOURCE = `component App
 // A row whose value writes more than one property, a native button's said
 // size, and the root's background as the page's canvas, in each engine.
 for (const [runtime, engine] of [['JS', 'chromium'], ['wasm', 'chromium'], ['JS', 'firefox']]) {
-  const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest[engine];
   check(`${runtime} in ${engine}: a clear unsets every property its value writes, and keeps the row said`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       document.head.appendChild(document.createElement('style')).textContent =
@@ -582,7 +584,7 @@ for (const [runtime, engine] of [['JS', 'chromium'], ['wasm', 'chromium'], ['JS'
 }
 
 for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit']) {
-  const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest[engine];
   const feedback = (evaluate, page) => runtime === 'JS'
     ? evaluate(`(async () => { const { pieces } = await import('/rt.js'); await pieces(); })()`)
     : page.waitForFunction(() => typeof exact.hold === 'function');

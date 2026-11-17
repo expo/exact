@@ -86,6 +86,8 @@ impl<D: DataSource> Presenter<D> {
             images: _,
             assets: _,
             painted: _,
+            unshown: _,
+            launch_share: _,
             activation_failed: _,
             display: _,
             // Counts and the ids they give: never given again.

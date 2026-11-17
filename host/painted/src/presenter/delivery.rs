@@ -258,6 +258,28 @@ impl<D: DataSource> Presenter<D> {
         self.connect_hatches();
     }
 
+    /// The data module of a session nothing shows (LLP 1133.017 D7: one
+    /// booted with no view, or one whose view records no frame): no pixel
+    /// waits for it, so it activates now, and the pump asks again while its
+    /// image loads. A frame displayed afterwards ends this, so a later
+    /// generation's module waits for its own first pixel.
+    pub fn activate_unshown(&mut self) {
+        self.unshown = true;
+        if self.data_activating() {
+            self.activate_first_pixel();
+        }
+    }
+
+    /// The data module is active (1), has yet to activate (0), or failed to
+    /// (-1, [`Presenter::activation_error`]).
+    pub fn data_state(&self) -> i32 {
+        match (&self.activation_failed, self.host.data_pending()) {
+            (Some(_), _) => -1,
+            (None, true) => 0,
+            (None, false) => 1,
+        }
+    }
+
     /// First pixel has been acknowledged ([`Presenter::first_pixel`]).
     pub fn first_pixel_told(&self) -> bool {
         self.painted

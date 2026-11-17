@@ -10,7 +10,9 @@ pub mod layer;
 pub mod path;
 #[cfg(target_os = "macos")]
 mod present;
+pub mod rotation;
 pub mod rows;
+pub use rotation::Rotation;
 
 pub use device::wgpu::Wgpu;
 pub use instance::{Brush, Encoder, Frame, Instance, Kind};

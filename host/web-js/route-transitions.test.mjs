@@ -2,11 +2,14 @@
 // `::view-transition-new`, the route a pop removes its `::view-transition-old`, in a view transition that names
 // that route alone. The route beneath stays shown and the arriving route inert until it ends (D2, D6); `none` and
 // no part start none; reduce motion, a traversal the browser animated (D5) and a second change (D6) cut.
-import { test, expect, beforeAll, afterAll } from 'bun:test';
+import { expect, beforeAll, afterAll } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { webCompiler } from './module.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 // Long parts, so that a test sees the transition while it runs.
 const SOURCE = `routes nav
@@ -131,7 +134,7 @@ const tap = (p, id) => p.click(`[data-testid=${id}]`);
 const shown = s => s.routes.filter(r => !r.hidden).map(r => r.name);
 
 // Chrome, Firefox and Safari run same-document view transitions alike.
-test.each(['chromium', 'firefox', 'webkit'])('in %s a push plays the entrance over the route beneath, which stays shown while the arriving route is inert', async engine => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`in ${engine} a push plays the entrance over the route beneath, which stays shown while the arriving route is inert`, async () => {
   const { p, errors, state, ready, finished, close } = await page({ engine });
   try {
     await tap(p, 'item-home');
@@ -158,7 +161,7 @@ test.each(['chromium', 'firefox', 'webkit'])('in %s a push plays the entrance ov
   } finally { await close(); }
 }, 60_000);
 
-test('`none` and no part start no transition: the author\'s cut, and the platform\'s, which is a cut here', async () => {
+engineTest.chromium('`none` and no part start no transition: the author\'s cut, and the platform\'s, which is a cut here', async () => {
   const { p, errors, state, close } = await page();
   try {
     for (const [go, back] of [['cut-home', 'back-cut'], ['plain-home', 'back-plain']]) {
@@ -174,7 +177,7 @@ test('`none` and no part start no transition: the author\'s cut, and the platfor
   } finally { await close(); }
 }, 60_000);
 
-test('a second change ends the first at its end and plays its own', async () => {
+engineTest.chromium('a second change ends the first at its end and plays its own', async () => {
   const { p, errors, state, ready, finished, close } = await page();
   try {
     await tap(p, 'item-home');
@@ -194,7 +197,7 @@ test('a second change ends the first at its end and plays its own', async () => 
   } finally { await close(); }
 }, 60_000);
 
-test('reduce motion, and a traversal the browser animated, cut', async () => {
+engineTest.chromium('reduce motion, and a traversal the browser animated, cut', async () => {
   for (const options of [{ reducedMotion: 'reduce' }, { uaTransition: true }]) {
     const { p, errors, state, ready, finished, close } = await page(options);
     try {

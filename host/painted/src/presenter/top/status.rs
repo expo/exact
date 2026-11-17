@@ -26,6 +26,7 @@ pub(super) struct Menu {
     root: NodeKey,
     pub(super) room: (f32, f32),
     exit: bool,
+    pub(super) parents: Vec<(NodeKey, ViewId)>,
 }
 
 /// A `-exact-menu="status"` button as its host places it.
@@ -50,8 +51,10 @@ pub struct StatusItem {
 }
 
 /// The status menu as its host's window shows it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StatusMenu {
+    /// The root menu's accessible name.
+    pub label: String,
     /// Names this opening.
     pub serial: u32,
     /// Moves on whenever its picture changes.
@@ -164,7 +167,12 @@ impl<D: DataSource> Presenter<D> {
             return false;
         };
         let exit = exit && !self.status_quit_removed();
-        self.top.status = Some(Menu { root, room, exit });
+        self.top.status = Some(Menu {
+            root,
+            room,
+            exit,
+            parents: Vec::new(),
+        });
         let name = self.name_of(root);
         self.present(Some(root), &name, None, None, false, now_ms);
         let opened = self.top.open.as_ref().is_some_and(|open| open.detached);
@@ -183,6 +191,13 @@ impl<D: DataSource> Presenter<D> {
         self.sync_surface();
         let open = self.top.open.as_ref().filter(|open| open.detached)?;
         Some(StatusMenu {
+            label: self
+                .top
+                .status
+                .as_ref()
+                .and_then(|status| self.host.kernel().node_by_key(status.root))
+                .and_then(|node| self.access_label(&node))
+                .unwrap_or_default(),
             serial: open.serial,
             revision: open.revision,
             size: open.layout.size,
@@ -228,9 +243,54 @@ impl<D: DataSource> Presenter<D> {
 
     /// A key in the status menu's window, by `KeyboardEvent.key`'s name.
     pub fn status_menu_key(&mut self, name: &str, now_ms: f64) {
-        if self.top.open.as_ref().is_some_and(|open| open.detached) {
-            self.surface_key(name, now_ms);
+        if !self.top.open.as_ref().is_some_and(|open| open.detached) {
+            return;
         }
+        if matches!(name, "ArrowLeft" | "Escape") {
+            let parent = self.top.status.as_ref().and_then(|s| s.parents.last());
+            if let Some((_, from)) = parent.copied() {
+                self.collapse_status_menu(from, now_ms);
+                return;
+            }
+        }
+        self.surface_key(name, now_ms);
+    }
+
+    /// Collapse an expanded status-menu item, restoring its menu and focus.
+    pub fn collapse_status_menu(&mut self, from: ViewId, now_ms: f64) -> bool {
+        let Some(mut status) = self.top.status.clone() else {
+            return false;
+        };
+        let Some(index) = status.parents.iter().rposition(|(_, id)| *id == from) else {
+            return false;
+        };
+        let parent = status.parents[index].0;
+        status.parents.truncate(index);
+        self.close_surface(now_ms);
+        if self.host.kernel().node_by_key(parent).is_some() {
+            self.top.status = Some(status);
+            let name = self.name_of(parent);
+            self.present(Some(parent), &name, None, None, false, now_ms);
+            self.surface_focus(from);
+        }
+        true
+    }
+
+    /// Expanded ancestors whose providers survive the replacement flyout.
+    pub(in crate::presenter) fn status_menu_ancestors(&self) -> Vec<Row> {
+        let Some(status) = &self.top.status else {
+            return Vec::new();
+        };
+        status
+            .parents
+            .iter()
+            .filter_map(|(menu, view)| {
+                let menu = self.host.kernel().node_by_key(*menu)?;
+                let plan = self.surface_plan(menu.id, false)?;
+                let row = plan.rows().find(|row| row.node == *view).cloned();
+                row
+            })
+            .collect()
     }
 
     /// The status menu's window lost the person (a click outside, another
@@ -246,13 +306,42 @@ impl<D: DataSource> Presenter<D> {
         std::mem::take(&mut self.top.exited)
     }
 
+    /// Keep the status images loading while their buttons are outside the page.
+    /// Returns the accepted pictures' identities, so a load replaces the fallback.
+    pub fn sync_status_images(&mut self, sizes: &[(ViewId, u32)]) -> Vec<(ViewId, usize)> {
+        if sizes.is_empty() && self.images.status_sizes.is_empty() {
+            return Vec::new();
+        }
+        let sizes = sizes.iter().copied().collect();
+        if self.images.status_sizes != sizes {
+            self.images.status_sizes = sizes;
+            self.images.settled = None;
+        }
+        if let Some(error) = self.sync_images() {
+            self.host.log(error);
+        }
+        self.images
+            .status_sizes
+            .keys()
+            .map(|id| {
+                let pixels = self
+                    .images
+                    .bitmaps
+                    .get(id)
+                    .map_or(0, |bitmap| std::sync::Arc::as_ptr(bitmap) as usize);
+                (*id, pixels)
+            })
+            .collect()
+    }
+
     /// Status item `image`'s picture (the `img` or `svg` of
     /// [`StatusItem::image`]) for a square of `side` device pixels at `scale`
     /// device pixels a point, on a taskbar `dark` or light. A symbol
     /// (`symbol:`) is drawn in the taskbar's primary text colour, as the
     /// system draws its own glyphs there; an `svg` is drawn as authored, its
     /// `currentColor` and its colours' light and dark forms the taskbar's.
-    /// `None` for an image this host cannot draw yet (an `img` of a file).
+    /// A file-backed `img` uses the shared loader's decoded picture, fitted
+    /// inside the icon square. `None` while absent or still loading.
     pub fn status_icon(
         &mut self,
         image: ViewId,
@@ -282,9 +371,32 @@ impl<D: DataSource> Presenter<D> {
             ));
         }
         let source = node.props.str(PropId::ImageSource)?;
-        let role = source
+        let role = match source
             .strip_prefix("symbol:")
-            .filter(|_| crate::image::is_symbol(source))?;
+            .filter(|_| crate::image::is_symbol(source))
+        {
+            Some(role) => role,
+            None => {
+                let bitmap = self.images.bitmaps.get(&image)?;
+                let mut icon = Pixmap::new(side, side)?;
+                let factor =
+                    (side as f32 / bitmap.width() as f32).min(side as f32 / bitmap.height() as f32);
+                let x = (side as f32 - bitmap.width() as f32 * factor) / 2.;
+                let y = (side as f32 - bitmap.height() as f32 * factor) / 2.;
+                icon.draw_pixmap(
+                    0,
+                    0,
+                    bitmap.pixels(),
+                    &tiny_skia::PixmapPaint {
+                        quality: tiny_skia::FilterQuality::Bilinear,
+                        ..Default::default()
+                    },
+                    tiny_skia::Transform::from_scale(factor, factor).post_translate(x, y),
+                    None,
+                );
+                return Some(Ok(icon));
+            }
+        };
         // WinUI's TextFillColorPrimary, dark and light.
         let colour = if dark {
             [255, 255, 255, 255]

@@ -30,7 +30,7 @@ import kotlin.math.sign
  *
  * What crosses to exact2 and back is `host/painted/src/presenter/scrollers.rs`:
  * - at a touch's down the reader asks what is under it ([Native.under]): the scrollers, innermost first, and the axes
- *   exact2's own gestures claim there (a swipe row, a reorder grip, a `pan`);
+ *   exact2's own gestures claim there (a swipe row, a reorder grip, a `pan`, a sheet's drag);
  * - past the slop, a drag along an axis exact2 claims stays its own; along one a scroller under the finger scrolls
  *   on, the scroll wins: exact2's press and drag recognition for the touch is cancelled ([ExactView.forward] with a
  *   cancel) and no more of the touch reaches it;

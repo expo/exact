@@ -31,6 +31,17 @@ pub struct Carrier {
     secrets: Arc<dyn SecretStore>,
 }
 
+/// Preserve the source's gate while refusing credentials on transfer redirects too.
+struct TransferGate(Fetch);
+impl ibex2::boundary::HopGate for TransferGate {
+    fn admit(&self, url: &url::Url) -> Result<(), HostError> {
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(HostError::Failed("TypeError: invalid HTTP URL".into()));
+        }
+        self.0.admit(url.as_str())
+    }
+}
+
 /// One unfinished request. Files are already admitted and opened by the host.
 /// `upload` is the carrier's private snapshot, never the app's mutable original.
 /// `response` is an empty staging file, never `saveTo` itself. Publish it only
@@ -77,6 +88,8 @@ pub enum Failure {
     Fetch,
     /// The response would exceed the registration's remaining allowance.
     DownloadTotalExceeded,
+    /// A transport interruption that the platform may retry from byte zero.
+    Network,
     /// Reading credentials or accessing a carrier-owned file failed.
     Storage,
 }
@@ -109,6 +122,7 @@ pub struct Completed {
 impl Carrier {
     /// Use a host-endowed binding and its existing credential-store backend.
     pub fn new(fetch: Fetch, secrets: Arc<dyn SecretStore>) -> Self {
+        let fetch = fetch.clone().with_gate(Arc::new(TransferGate(fetch)));
         Self { fetch, secrets }
     }
 
@@ -207,7 +221,22 @@ impl Carrier {
         let mut response = self
             .fetch
             .stream(request, signal)
-            .map_err(|_| network_failure(signal))?;
+            .map_err(|error| match error {
+                HostError::InvalidArgument(_)
+                | HostError::Unavailable { .. }
+                | HostError::Denied { .. }
+                | HostError::DeniedRedirect { .. }
+                | HostError::NotAllowed { .. } => Failure::Fetch,
+                HostError::Failed(why)
+                    if why == "TypeError: invalid HTTP URL"
+                        || why == "TypeError: invalid URL"
+                        || why.starts_with("TypeError: invalid redirect target:")
+                        || why == "TypeError: Failed to fetch — too many redirects" =>
+                {
+                    Failure::Fetch
+                }
+                _ => network_failure(signal),
+            })?;
         let mut completed = Completed {
             url: public,
             status: response.status,
@@ -308,6 +337,11 @@ impl Drop for FinishProgress {
     }
 }
 
+/// Validate and project a URL with the same parser used by the transfer transport.
+pub fn validate_url(url: &str) -> Result<String, Refusal> {
+    credentials(url, &[]).map(|(_, public)| public)
+}
+
 fn credentials(url: &str, headers: &[(String, String)]) -> Result<(Request, String), Refusal> {
     if url.len() > METADATA_BYTES || headers.len() > HEADER_COUNT {
         return Err(Refusal::InvalidRequest);
@@ -372,7 +406,7 @@ fn network_failure(signal: &AbortSignal) -> Failure {
     if signal.aborted() {
         Failure::Cancelled
     } else {
-        Failure::Fetch
+        Failure::Network
     }
 }
 

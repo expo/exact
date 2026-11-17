@@ -100,6 +100,7 @@ final class VideoTracks: ExactTrackOwner {
             tracks[t.id] = t
             opened = true
             let entry = ExactTrackEntry(id: t.id, kind: "video", owner: self)
+            entry.startedAt = context.now()
             entry.state = { [weak self, weak t] in t.flatMap { self?.shape($0) } ?? [:] }
             entry.video = { [weak t] in t?.capture }
             context.tracks.add(entry)
@@ -579,13 +580,21 @@ final class VideoCapture: NSObject, ExactVideoSource {
 
     // MARK: ExactVideoSource
 
-    func configure(_ change: @escaping (AVCaptureSession) -> Void) {
+    func configure(stopped: Bool, _ change: @escaping (AVCaptureSession) -> Void) {
         let session = session
         queue.async {
-            session.beginConfiguration()
-            change(session)
-            session.commitConfiguration()
+            Self.configure(session, stopped: stopped, change)
         }
+    }
+
+    static func configure(_ session: AVCaptureSession, stopped: Bool, _ change: (AVCaptureSession) -> Void) {
+        // Intrinsic-matrix delivery is set on an output connection before startRunning().
+        let running = stopped && session.isRunning
+        if running { session.stopRunning() }
+        session.beginConfiguration()
+        change(session)
+        session.commitConfiguration()
+        if running { session.startRunning() }
     }
 
     func run(_ work: @escaping (AVCaptureSession) -> Void) {

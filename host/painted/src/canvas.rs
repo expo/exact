@@ -195,6 +195,9 @@ pub mod presence;
 #[path = "canvas/present.rs"]
 mod present;
 #[cfg(target_os = "android")]
+#[path = "canvas/secrets.rs"]
+pub mod secrets;
+#[cfg(target_os = "android")]
 #[path = "canvas/time.rs"]
 pub mod time;
 #[cfg(target_os = "android")]
@@ -330,6 +333,8 @@ pub struct Recorder {
     /// Each kept row's recording, so one recorded again the same is kept,
     /// and the pictures it draws (by allocation), drawn whenever it is.
     kept: HashMap<u32, (Vec<u32>, Vec<usize>)>,
+    /// Deletions may arrive between frames; keep them until a stream is finished.
+    freed_rows: Vec<u32>,
     /// While a picture slot records: the row's ops so far, its matrix, and
     /// which clips were written when it began.
     slot: Option<SlotRecording>,
@@ -396,6 +401,7 @@ impl Recorder {
             row: None,
             recorded: None,
             kept: HashMap::new(),
+            freed_rows: Vec::new(),
             slot: None,
             slots: HashMap::new(),
             slot_sets: Vec::new(),
@@ -982,7 +988,7 @@ impl Backend for Recorder {
         self.slot_contexts.remove(&id);
         self.layers.row_free(id);
         self.shared.rows.remove(&id);
-        self.ops.extend([ROW_FREE, id]);
+        self.freed_rows.push(id);
     }
 
     fn finish(&mut self) -> Result<Pixmap, String> {

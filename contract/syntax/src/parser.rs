@@ -16,6 +16,7 @@ mod decls;
 mod decorations;
 mod expr;
 mod keyframes;
+mod layout_step;
 mod media_session;
 mod midi;
 mod migration;

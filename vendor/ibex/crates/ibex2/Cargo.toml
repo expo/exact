@@ -55,8 +55,8 @@ webpki-roots = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
 ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "platform-verifier"] }
-# The local Android JNI companion implements this version's interface.
-rustls-platform-verifier = "=0.7.0"
+# android/ implements the 0.7 JNI interface (CertificateVerifierTest checks it).
+rustls-platform-verifier = "0.7.1"
 jni = { version = "0.22.4", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

@@ -338,6 +338,9 @@ impl std::fmt::Debug for Sent {
 /// gives at most `len` bytes, and fails rather than end early.
 pub trait FileBody: Send + Sync {
     fn len(&self) -> u64;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn reader(&self) -> std::io::Result<Box<dyn std::io::Read + Send>>;
 }
 
@@ -830,6 +833,33 @@ mod tests {
             assert_eq!(seen.len(), 2);
             assert_eq!(seen[0].1.as_deref(), Some("Bearer secret"));
             assert_eq!(seen[1].1.is_some(), kept, "{start} → {}", seen[1].0);
+        }
+    }
+
+    /// A URL that includes credentials is refused where Fetch refuses it: at
+    /// the request (<https://fetch.spec.whatwg.org/#dom-request>, "includes
+    /// credentials") and at a redirect to another origin
+    /// (<https://fetch.spec.whatwg.org/#http-redirect-fetch>). No server shares
+    /// an app's origin, so every redirect is one.
+    #[test]
+    fn a_url_with_userinfo_is_refused_at_the_request_and_at_a_redirect() {
+        for url in [
+            "https://user:password@host.example/file",
+            "https://user@host.example/file",
+        ] {
+            let refused = |start: &str, transport: &StubTransport| {
+                let error = fetch(transport, &granted("host.example"), Request::get(start))
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.ends_with("TypeError: invalid HTTP URL"), "{error}");
+            };
+            let transport = StubTransport::new(vec![response(200, None)]);
+            refused(url, &transport);
+            assert!(transport.seen().is_empty());
+            let transport = StubTransport::new(vec![response(302, Some(url)), response(200, None)]);
+            let start = "https://host.example/start";
+            refused(start, &transport);
+            assert_eq!(transport.seen(), vec![("GET".into(), start.into())]);
         }
     }
 

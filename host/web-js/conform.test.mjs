@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { conformArgs } from './conform-args.mjs';
 import { clockOnAll, clockVerdict, failedTests, parseStep } from './conform-steps.mjs';
 import { open } from '../../scripts/agent.mjs';
-import { launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { chromium, launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { spawnSync } from 'node:child_process';
@@ -11,11 +11,13 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 
+const chromeTest = need('chrome', chromium().unavailable);
+
 // Load the comparisons without starting the harness's builds and browser drives.
 const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
 async function fixtureDrive(browser, {
   refuse = null, broken = null, unavailable = null, poison = null, screenshotError = null,
-  appTests = false, settleAfterRefusal = false, knownTree = false, evaluate = async () => null, shot = async () => null,
+  appTests = false, settleAfterRefusal = false, knownTree = false, evaluate = async () => null, shot = async () => null, cut = [],
   script = 'tap scripted\nrefused tap refused\nreload\nwheel auto 12\nclock +5',
 } = {}) {
   const events = [], sessions = [], shots = [];
@@ -25,6 +27,8 @@ async function fixtureDrive(browser, {
   const deps = {
     ...comparisons, crossBrowser: browser, crossBrowsers: browser?.split(',') ?? [],
     readyBrowsers: browser?.split(',') ?? [], maxSteps: 3,
+    // The JS page's sheet cut for `cut`, which a stand-in page holds at every step.
+    sheetCut: () => new Set(cut), uncut: async (_evaluate, tokens) => [...tokens],
     STATE_KEYS: ['slots'], LINUX_APART: {}, LINUX_OPS: [], linuxFor: () => null, linuxRef: false,
     root: '/checkout', here: '/checkout/host/web-js', resolve, parseStep, clockOnAll, failedTests,
     resolveApp: () => ({ dir: '/fixture' }),
@@ -137,9 +141,13 @@ test('the wasm and JS drive still delivers every step to its two Chrome pages', 
   expect(run.report.failures).toEqual([]);
   expect(run.report.steps.map(s => s.step)).toEqual(['boot', 'tap scripted', 'refused tap refused', 'reload', 'wheel auto 12', 'clock +5', 'tap auto', 'clock +60000']);
   expect(run.report.steps.every(s => !s.browser && s.differences === 0)).toBe(true);
+  // A JS page holding a token its sheet was cut for fails each step it is seen at (LLP 1047.003 D1).
+  const cut = await fixtureDrive(null, { cut: ['t:dialog'] });
+  expect(cut.report.failures.filter(f => /^sheet: .* has t:dialog, which its sheet was cut for$/.test(f.what)).map(f => f.step))
+    .toEqual(cut.report.steps.map(s => s.step));
 });
 
-test('conformance screenshots pin only auto images to one filter, after both pages agree on each image\'s', async () => {
+chromeTest('conformance screenshots pin only auto images to one filter, after both pages agree on each image\'s', async () => {
   const browser = await suiteBrowser();
   const markup = first => `<img style="image-rendering:${first}"><img style="image-rendering:crisp-edges"><div style="image-rendering:pixelated"><img></div><img>`;
   const modes = page => page.locator('img').evaluateAll(images => images.map(image => [getComputedStyle(image).imageRendering, image.getAttribute('style')]));
@@ -548,7 +556,7 @@ test('a cached hidden copy cannot shadow the visible box with the same testId', 
   expect(diffLayout(layout, { nodes: [layout.nodes[1]] }, cached, selected)).toHaveLength(0);
 });
 
-test('a visible descendant of a hidden cached panel still fails conformance', async () => {
+chromeTest('a visible descendant of a hidden cached panel still fails conformance', async () => {
   const browser = await suiteBrowser('chromium');
   try {
     const page = await browser.newPage();
@@ -579,7 +587,7 @@ test('a visible descendant of a hidden cached panel still fails conformance', as
   } finally { await browser.close(); }
 });
 
-test('differing visible folded text in a hidden cached panel fails conformance', async () => {
+chromeTest('differing visible folded text in a hidden cached panel fails conformance', async () => {
   const browser = await suiteBrowser('chromium');
   try {
     // A folded text is its box's `display: contents` child, with no box of its own (host/web/src/element.rs, `folds`).
@@ -606,7 +614,7 @@ test('differing visible folded text in a hidden cached panel fails conformance',
   } finally { await browser.close(); }
 });
 
-test('visible painted runs in a hidden cached panel still fail conformance', async () => {
+chromeTest('visible painted runs in a hidden cached panel still fail conformance', async () => {
   const modules = new Set(['textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js']);
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
     const name = new URL(request.url).pathname.slice(1);

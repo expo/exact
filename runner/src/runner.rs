@@ -798,14 +798,7 @@ impl<D: DataSource> Runner<D> {
                 let Some(resource) = name.strip_prefix(Store::KEPT) else {
                     continue;
                 };
-                let compatible = same_logic
-                    && plan.resources.iter().any(|r| {
-                        plan.str(r.name) == resource
-                            && carried
-                                .store_readers
-                                .iter()
-                                .any(|(n, s)| n == resource && s == plan.str(r.source))
-                    });
+                let compatible = same_logic && kept::compatible_on_reload(plan, carried, resource);
                 let transient =
                     (plan.resources.iter()).any(|r| r.transient && plan.str(r.name) == resource);
                 if private || !compatible || transient {

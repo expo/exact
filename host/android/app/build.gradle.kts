@@ -62,7 +62,7 @@ android {
             require(it in 1..2100000000) { "EXACT_BUILD_NUMBER must be an integer from 1 to 2100000000" }
         }
         versionName = providers.environmentVariable("EXACT_VERSION").orElse("0.1.0").get()
-        ndk { abiFilters += "arm64-v8a" }
+        ndk { abiFilters += providers.gradleProperty("abis").orElse("arm64-v8a").get().split(',') }
         manifestPlaceholders["audioSession"] = manifest["audio_session"] as String? ?: "ambient"
         manifestPlaceholders["appName"] = providers.gradleProperty("appName").get()
         manifestPlaceholders["screenOrientation"] = screenOrientation

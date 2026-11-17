@@ -13,7 +13,7 @@
 //! record.json                              { codec, selected, lastGood, failures, stream, bad }
 //! blobs/<sha256>                            each file's bytes, once, verified before reuse
 //! entries/<canonical envelope sha256>/exact.json  the head, as it arrived
-//! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy where refused)
+//! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy on Android or where refused)
 //! entries/<envelope sha256>/assets.json     the asset index, likewise
 //! entries/<envelope sha256>/assets/<name>   likewise
 //! entries/.tmp-<something>/                 an entry being built; never selected

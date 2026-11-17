@@ -23,6 +23,7 @@ pub(in crate::presenter) struct Packages {
     lines: Rc<RefCell<Vec<String>>>,
     /// The runner's native slot, which every instance announces into.
     native: Slot,
+    pictures: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 /// The extension a body names.
@@ -75,6 +76,10 @@ impl Packages {
         std::mem::take(&mut *self.lines.borrow_mut())
     }
 
+    pub(super) fn take_pictures(&self) -> Vec<String> {
+        std::mem::take(&mut *self.pictures.lock().unwrap())
+    }
+
     /// Body `body` of a composed package's extension, at `now` on the
     /// session's clock: its instance (made now if this is the session's
     /// first call) is called. A call that the runner asks to admit first
@@ -94,7 +99,7 @@ impl Packages {
             return Reply::new(reply).error("NotSupportedError", Some("not a module call"));
         };
         let extension = request["extension"].as_str().unwrap_or_default();
-        let Some(at) = self.instance(extension) else {
+        let Some(at) = self.instance(extension, wake) else {
             return Reply::new(reply).error("NotSupportedError", None);
         };
         let (_, package, context) = &mut self.made[at];
@@ -162,19 +167,32 @@ impl Packages {
 
     /// The index of `extension`'s instance in this session, made now if
     /// none is.
-    fn instance(&mut self, extension: &str) -> Option<usize> {
+    fn instance(
+        &mut self,
+        extension: &str,
+        wake: &std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Option<usize> {
         if let Some(at) = self.made.iter().position(|(e, ..)| *e == extension) {
             return Some(at);
         }
         let entry = *self.table.iter().find(|e| e.extension == extension)?;
         #[cfg(windows)]
         crate::com::ensure_sta();
+        let (pictures, wake) = (self.pictures.clone(), wake.clone());
         let context = Context::new(
             entry.extension,
             self.agent.contains(&entry.extension),
             self.native.clone(),
             self.now.clone(),
             self.lines.clone(),
+            std::sync::Arc::new(move |source| {
+                let mut pending = pictures.lock().unwrap();
+                if !pending.iter().any(|s| s == source) {
+                    pending.push(source.to_owned());
+                }
+                drop(pending);
+                wake();
+            }),
         );
         let package = entry.make(context.clone());
         self.made.push((entry.extension, package, context));

@@ -16,7 +16,8 @@
 //!   (`fetch.rs`). `EXACT_DEV_PLAN` URLs continue polling after first pixel;
 //!   each verified change prepares and commits a carried-state replacement.
 //! - `EXACT_ASSETS=<dir>` — the asset root (the current directory otherwise).
-//! - `EXACT_SIZE=WxH` — the headless viewport, points (420×860 otherwise).
+//! - `EXACT_SIZE=WxH` — headless size in points (420×860 otherwise); on Linux,
+//!   the unrotated panel size. `EXACT_ROTATE=90` or `270` swaps it for layout.
 //! - `EXACT_SCALE=n` — device pixels per point (1 otherwise): what the frame is
 //!   drawn at and what the kernel is told the display's scale is, so a
 //!   hairline is one of those pixels (LLP 1115.000 D10.3).
@@ -183,6 +184,8 @@ pub struct Config {
     pub scale: f32,
     /// The headless viewport, points.
     pub size: (f32, f32),
+    /// Clockwise rotation of the completed Linux panel output.
+    pub output_rotation: exact_ink::Rotation,
     /// The agent API on stdio.
     pub agent: bool,
     /// One frame, the phases, exit.
@@ -413,6 +416,7 @@ impl Config {
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
             scale: scale(env("EXACT_SCALE"), size),
             size,
+            output_rotation: Default::default(),
             agent: env("EXACT_AGENT").as_deref() == Some("1"),
             smoke: env("EXACT_SMOKE").as_deref() == Some("1"),
             shot: env("EXACT_SHOT"),
@@ -488,7 +492,10 @@ pub fn boot_presenter<D: DataSource + Default>(
 ) -> Result<(Presenter<D>, Option<String>), String> {
     let painter =
         PainterBoot::from_env(crate::presenter::PainterChoice::from_baked(&config.compat));
-    boot_presenter_with_painter(config, viewport, painter)
+    let rotation = config.output_rotation;
+    let mut result = boot_presenter_with_painter(config, viewport, painter)?;
+    result.0.set_output_rotation(rotation);
+    Ok(result)
 }
 
 thread_local! {

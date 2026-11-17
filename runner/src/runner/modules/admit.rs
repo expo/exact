@@ -41,7 +41,7 @@
 //! commit's checkpoint, and an invocation is superseded only when the
 //! commit that let go of its work stands (`let_go`).
 
-use super::super::{CommitReceipt, DataSource, Runner, RunnerError, Target};
+use super::super::{CommitReceipt, DataSource, Event, Runner, RunnerError, Target};
 use super::{error_code, Decision, Json, ModulesRow, Waits};
 use exact_plan::Value;
 use serde_json::json;
@@ -157,6 +157,37 @@ pub(in crate::runner) struct Origins {
     /// The invocations whose work a commit let go of, each with whether
     /// that work was a send; taken when the commit stands.
     let_go: Vec<(u64, bool)>,
+    /// When the last activation-triggering input, or activation the host
+    /// raised, arrived, on the session's clock ([`Runner::user_activation`]).
+    activated: Option<f64>,
+}
+
+/// How long a person's input stands as user activation, in ms. HTML leaves
+/// the transient activation duration to the user agent, "at most a few
+/// seconds"; this is Chromium's.
+const TRANSIENT_ACTIVATION_MS: f64 = 5_000.0;
+
+/// Whether `event` is one of HTML's activation triggering input events
+/// (HTML §6.4.1, "Tracking user activation"): a keydown other than Escape,
+/// a mouse's `pointerdown`, a touch's or a pen's `pointerup`, and what a
+/// host makes of those same acts where the app hears no pointer or key (a
+/// press, a control's `input`, `change` and `submit`, a context menu).
+fn activates(event: &Event) -> bool {
+    match event {
+        Event::Key(key) | Event::Keycapture(key) => key.key != "Escape",
+        Event::Pointerdown(pointer) => pointer.pointer_type == "mouse",
+        Event::Pointerup(pointer) => pointer.pointer_type != "mouse",
+        Event::Press
+        | Event::PressWith(_)
+        | Event::Atompress(_)
+        | Event::Dblclick
+        | Event::Contextmenu
+        | Event::ContextmenuAt(_)
+        | Event::Input(_)
+        | Event::Change(_)
+        | Event::Submit => true,
+        _ => false,
+    }
 }
 
 /// The origin tables as a commit found them (`commit.rs`'s checkpoint).
@@ -204,6 +235,35 @@ impl<D: DataSource> Runner<D> {
     /// The origin of the commit being made.
     pub fn call_origin(&self) -> CallOrigin {
         self.extensions.origins.now
+    }
+
+    /// The host delivers `event`, the app's own commit: an activation
+    /// triggering one starts the window [`Self::user_activation`] reads.
+    pub(in crate::runner) fn note_input(&mut self, event: &Event) {
+        if self.call_origin() == CallOrigin::App && activates(event) {
+            self.extensions.origins.activated = Some(self.now_ms);
+        }
+    }
+
+    /// The host delivers an activation it raised as the app's (`events.rs`):
+    /// a person's act on the platform's own UI, a notification's tap, which
+    /// no input event carries. It starts the window as an input does, at the
+    /// clock's reading now, since no commit need have come before it.
+    pub(in crate::runner) fn note_activation(&mut self) {
+        self.sample();
+        self.extensions.origins.activated = Some(self.now_ms);
+    }
+
+    /// Whether a call `origin` makes now has HTML's transient activation:
+    /// the app makes it within [`TRANSIENT_ACTIVATION_MS`] of a person's
+    /// input or of an activation the host raised. Code a timer or an answer runs inside the window has it too,
+    /// as on the web, since a data-code call cannot be traced to the handler
+    /// that led to it. Nothing consumes the window: one press may start
+    /// several calls.
+    pub(in crate::runner) fn user_activation(&self, origin: CallOrigin) -> bool {
+        let at = self.extensions.origins.activated;
+        origin == CallOrigin::App
+            && at.is_some_and(|at| (0.0..TRANSIENT_ACTIVATION_MS).contains(&(self.now_ms - at)))
     }
 
     /// Run `f` as a commit of `origin`, part of invocation `id` (0: none).
@@ -536,6 +596,14 @@ impl<D: DataSource> Runner<D> {
             .filter_map(|p| o.tickets.get(&p.ticket).copied())
             .chain(self.tool_origin())
             .fold(o.now, CallOrigin::min)
+    }
+
+    /// [`Self::data_origin`] for a call that arrives now, outside any commit:
+    /// the clock is sampled first, so [`Self::user_activation`] reads the
+    /// window against the time of the call and not of the last commit.
+    pub(in crate::runner) fn arriving_data_origin(&mut self) -> CallOrigin {
+        self.sample();
+        self.data_origin()
     }
 
     /// Every input [`Self::data_origin`] folds, kept apart: the commit's

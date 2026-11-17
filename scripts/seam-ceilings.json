@@ -1476,7 +1476,7 @@
       ]
     },
     "runnerReceiptMethods": {
-      "ceiling": 78,
+      "ceiling": 79,
       "sites": [
         "runner/src/runner/activities.rs: Runner::link_activities",
         "runner/src/runner/activities.rs: Runner::set_activities",
@@ -1538,6 +1538,7 @@
         "runner/src/runner/router.rs: Runner::host_back_to",
         "runner/src/runner/router.rs: Runner::host_forward",
         "runner/src/runner/router.rs: Runner::host_go",
+        "runner/src/runner/router.rs: Runner::host_launch",
         "runner/src/runner/router.rs: Runner::host_root",
         "runner/src/runner/split.rs: Runner::show_split_placeholder",
         "runner/src/runner/surface_record.rs: Runner::set_surface_record",

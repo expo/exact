@@ -18,7 +18,7 @@
 // script: drives 7 and 8's module half).
 //
 // usage: bun packages/translation/test/web.mjs [chromium] [firefox] [webkit]
-//   (every engine by default; `bunx playwright@1.64.1 install firefox webkit` first)
+//   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { extname, join, resolve } from 'node:path';
 import { checker, discard, makeFixture, root, run } from '../../barcode-detection/test/fixture.mjs';
 

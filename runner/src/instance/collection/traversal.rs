@@ -273,7 +273,7 @@ impl Tree {
         })?;
         // JSON has no source strings. 1024 per row includes two worst-case
         // finite f64 decimal spellings, integer identities, names and punctuation;
-        // 1024 per collection includes fixed metadata, extent and correction.
+        // 1024 per collection includes fixed metadata, extent, correction and travel bounds.
         // Each fixed root adds a u32 and its separator (at most 12 bytes).
         // No snapshot clone precedes this conservative wire admission.
         let wire = counts
@@ -325,6 +325,7 @@ impl Tree {
                 rows,
                 correction: c.correction,
                 pending: c.asks_report(),
+                window: c.built_window(),
             });
             Ok(())
         })?;
@@ -362,13 +363,42 @@ impl Tree {
         }
         Ok(())
     }
+    /// Consume a host's latest quiet offset without evaluating or publishing.
+    pub(crate) fn collection_travel(
+        &mut self,
+        view: ViewId,
+        revision: u64,
+        sequence: u64,
+        offset: f64,
+    ) {
+        if !offset.is_finite() || offset.abs() > f64::from(f32::MAX) {
+            return;
+        }
+        let Some(c) = find_collection_mut(&mut self.children, view) else {
+            return;
+        };
+        if revision != c.revision {
+            return;
+        }
+        if let Some(g) = c
+            .geometry
+            .as_mut()
+            .filter(|g| sequence >= g.scroll_sequence)
+        {
+            g.offset = offset;
+            g.scroll_sequence = sequence;
+            // Main applied this snapshot's correction before noting travel.
+            c.correction = None;
+        }
+    }
+
     /// Targeted geometry update. Never evaluates collection data or key expressions,
     /// settles resources, or traverses unmounted rows. An edge is returned only
     /// for accepted geometry; the runner dispatches it after committing the ops.
     pub(crate) fn update_collection(
         &mut self,
         u: &mut Update<'_>,
-        feedback: CollectionFeedback,
+        mut feedback: CollectionFeedback,
         fill: CollectionFill,
     ) -> Result<(bool, Option<CollectionEdges>), InstanceError> {
         if !self.has_collections {
@@ -382,6 +412,18 @@ impl Tree {
             self.last_work = u.work;
             return Ok((false, None));
         };
+        // A queued build uses travel consumed before its owner job. Immediate
+        // reports still reject an older sequence: only main may retire rows.
+        if fill.create_only && feedback.revision == target.revision {
+            if let Some(g) = target
+                .geometry
+                .as_ref()
+                .filter(|g| g.scroll_sequence > feedback.scroll_sequence)
+            {
+                feedback.offset = g.offset;
+                feedback.scroll_sequence = g.scroll_sequence;
+            }
+        }
         let Some(by_view) = target.prepare_feedback(&feedback, fill)? else {
             self.last_work = u.work;
             return Ok((false, None));
@@ -795,7 +837,7 @@ impl Tree {
     pub(crate) fn reorder_collection(&self, view: ViewId) -> Option<&Collection> {
         find_collection(&self.children, view)
     }
-    pub(crate) fn edit_reorder<T>(
+    pub(crate) fn edit_collection<T>(
         &mut self,
         view: ViewId,
         u: &mut Update<'_>,

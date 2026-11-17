@@ -393,7 +393,7 @@ impl Build {
 
 impl<D: DataSource> Presenter<D> {
     /// `aria-labelledby`'s words, else `aria-label`, unless empty.
-    fn access_label(&self, node: &NodeRef<'_>) -> Option<String> {
+    pub(in crate::presenter) fn access_label(&self, node: &NodeRef<'_>) -> Option<String> {
         let kernel = self.host.kernel();
         let named = node.props.str(PropId::AccessibilityLabelledBy).map(|refs| {
             (refs.split_whitespace())
@@ -1314,7 +1314,14 @@ impl<D: DataSource> Presenter<D> {
         let Some(node) = self.access.nodes.iter().find(|n| n.id == id).cloned() else {
             return false;
         };
-        let live = |p: &Self| node.view != 0 && p.host.kernel().node(node.view).is_some();
+        let live = |p: &Self| {
+            node.view != 0
+                && (p.host.kernel().node(node.view).is_some()
+                    || node.view == super::top::EXIT
+                        && p.surface().is_some_and(|surface| {
+                            surface.targets.iter().any(|row| row.node == node.view)
+                        }))
+        };
         match (action, node.role) {
             (act::CLICK, role::UP) => self.system_back(now_ms),
             (act::CLICK, role::OPTION) => self.access_choose(node.view),
@@ -1368,32 +1375,56 @@ impl<D: DataSource> Presenter<D> {
                 offered && live(self) && self.access_step_range(node.view, up, now_ms)
             }
             (act::FORWARD | act::BACKWARD | act::SET, role::SLIDER) if live(self) => {
-                let range = (self.host.kernel().node(node.view))
-                    .filter(|n| n.node_type == NodeType::Control)
-                    .map(|n| exact_kernel::Range::of(n.props));
-                let Some(range) = range else { return false };
-                // A range with no step moves by a twentieth of its span.
-                let step = range.step.unwrap_or((range.max - range.min) / 20.0);
-                let now = f64::from(node.range[2]);
-                let to = range.sanitize(match action {
-                    act::FORWARD => now + step,
-                    act::BACKWARD => now - step,
-                    _ => f64::from(value),
-                });
-                to != now && self.set_control_value(node.view, &to.to_string()).is_ok()
+                let view = node.view;
+                // The range as it is when asked, if it may move: a keydown's
+                // handler may have moved it, bounded it anew, disabled it or
+                // made it inert.
+                let range = |p: &Self| {
+                    (p.host.kernel().node(view))
+                        .filter(|n| {
+                            n.node_type == NodeType::Control
+                                && n.props.bool(PropId::Disabled) != Some(true)
+                                && !p.host.route_visibility(view).1
+                        })
+                        .map(|n| exact_kernel::Range::of(n.props))
+                };
+                let step = |p: &mut Self| {
+                    let (Some(range), Some(now)) = (range(p), p.range_value(view)) else {
+                        return false;
+                    };
+                    // A range with no step moves by a twentieth of its span.
+                    let by = range.step.unwrap_or((range.max - range.min) / 20.0);
+                    let to = range.sanitize(match action {
+                        act::FORWARD => now + by,
+                        act::BACKWARD => now - by,
+                        _ => f64::from(value),
+                    });
+                    to != now && p.set_control_value(view, &to.to_string()).is_ok()
+                };
+                if action == act::SET {
+                    return step(self);
+                }
+                // A step is the range's arrow key, whose default action it
+                // is (LLP 1069.001, amended 2026-11-16); a disabled or inert
+                // range gets no key, as a keyboard's reaches none. Its answer
+                // is whether the value moved, by a handler or by the step.
+                let from = range(self).and_then(|_| self.range_value(view));
+                if from.is_none() {
+                    return false;
+                }
+                let up = action == act::FORWARD;
+                self.access_range_keys(view, up, false, now_ms, |p| _ = step(p));
+                self.range_value(view).is_some_and(|now| Some(now) != from)
             }
             _ => false,
         }
     }
 
     /// A service's step up (`up`) or down of a drawn `slider` or
-    /// `spinbutton`: a keydown and a keyup at it for the author's `key` and
-    /// `keyup` handlers to answer, as WebKit adjusts an ARIA range
-    /// (`AccessibilityNodeObject::postKeyboardKeysForValueChange`): ArrowUp or
-    /// ArrowDown for a spin button (ARIA's keys for one) or an
-    /// `aria-orientation="vertical"` slider, else ArrowRight or ArrowLeft,
-    /// swapped where the node's computed `direction` is `rtl`. No default
-    /// action follows. Whether it was such a node.
+    /// `spinbutton`, which only its author's keys move
+    /// ([`Self::access_range_keys`]): ArrowUp or ArrowDown for a spin button
+    /// (ARIA's keys for one) or an `aria-orientation="vertical"` slider.
+    /// Whether it was such a node.
     pub(crate) fn access_step_range(&mut self, view: ViewId, up: bool, now_ms: f64) -> bool {
         let Some(node) = self.host.kernel().node(view) else {
             return false;
@@ -1404,20 +1435,45 @@ impl<D: DataSource> Presenter<D> {
         }
         let vertical = aria == Some("spinbutton")
             || node.props.str(PropId::AccessibilityOrientation) == Some("vertical");
-        let forward =
-            up == (node.computed_row(StyleId::Direction, |s| s.direction) != Direction::Rtl);
-        let key = match (vertical, up, forward) {
+        self.access_range_keys(view, up, vertical, now_ms, |_| ());
+        true
+    }
+
+    /// A service's step of a range as its arrow key: a keydown and a keyup
+    /// at `view` for the author's `key` and `keyup` handlers, as WebKit
+    /// adjusts an ARIA range
+    /// (`AccessibilityNodeObject::postKeyboardKeysForValueChange`): ArrowUp or
+    /// ArrowDown for a `vertical` one, else ArrowRight or ArrowLeft, swapped
+    /// where the node's computed `direction` is `rtl`. `step` is the key's
+    /// default action: it runs between the two, as a keyboard's does, unless
+    /// a handler called `preventDefault()` on the keydown.
+    fn access_range_keys(
+        &mut self,
+        view: ViewId,
+        up: bool,
+        vertical: bool,
+        now_ms: f64,
+        step: impl FnOnce(&mut Self),
+    ) {
+        let rtl = (self.host.kernel().node(view))
+            .is_some_and(|n| n.computed_row(StyleId::Direction, |s| s.direction) == Direction::Rtl);
+        let key = match (vertical, up, up != rtl) {
             (true, true, _) => "ArrowUp",
             (true, false, _) => "ArrowDown",
             (false, _, true) => "ArrowRight",
             (false, _, false) => "ArrowLeft",
         };
-        for kind in [EventKind::Key, EventKind::Keyup] {
-            if let (Some(e), _) = self.key_event_at(Some(view), kind, key, key, false, now_ms) {
-                self.host.log(format!("accessibility: step: {e}"));
+        let send = |p: &mut Self, kind| {
+            let (error, prevented) = p.key_event_at(Some(view), kind, key, key, false, now_ms);
+            if let Some(e) = error {
+                p.host.log(format!("accessibility: step: {e}"));
             }
+            prevented
+        };
+        if !send(self, EventKind::Key) {
+            step(self);
         }
-        true
+        send(self, EventKind::Keyup);
     }
 }
 

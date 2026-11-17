@@ -384,6 +384,44 @@ final class GlassGroupIOSTests: XCTestCase {
         XCTAssertTrue(leafLayer(in: group), "and back")
     }
 
+    /// A grouped glass a layout transition resizes: its slot takes the shown
+    /// box and the material fills the slot, a material replaced or a slot
+    /// made during the transition included, and both fill the laid-out box
+    /// when it ends.
+    func testAGlassReplacedOrSlottedDuringALayoutTransitionFillsItsSlot() throws {
+        let p = presenter(cluster())
+        let glass = try XCTUnwrap(p.views[2])
+        func layout(_ id: Int, _ w: Double) {
+            p.apply(wireBatch([["op": "present", "id": id, "property": "layout", "x": 0.0, "y": 0.0, "w": w, "h": 0.0]]))
+        }
+        func fills(_ node: NodeView, _ width: CGFloat, _ step: String) throws {
+            let slot = try XCTUnwrap(node.glassSlot, step), material = try XCTUnwrap(node.materialView, step)
+            XCTAssertEqual(slot.frame, CGRect(x: 0, y: 0, width: width, height: 40), step)
+            XCTAssertTrue(material.superview === slot.contentView, step)
+            XCTAssertEqual(material.frame, slot.contentView.bounds, step)
+        }
+        layout(2, 20)
+        try fills(glass, 60, "resized")
+        p.apply(wireBatch([["op": "props", "id": 2, "set": ["backgroundMaterial": "glass-clear"], "clear": []]]))
+        try fills(glass, 60, "replaced during the transition")
+        layout(2, 10)
+        try fills(glass, 50, "the next frame")
+        layout(2, 0)
+        try fills(glass, 40, "ended")
+        XCTAssertEqual(glass.glassSlot?.frame, glass.bounds)
+
+        // A glass that joins a group while it resizes gets its slot at the shown box.
+        let q = presenter(box(1, w: 200) + box(2, ["backgroundMaterial": "glass"])
+            + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]])
+        let joining = try XCTUnwrap(q.views[2])
+        q.apply(wireBatch([["op": "present", "id": 2, "property": "layout", "x": 0.0, "y": 0.0, "w": 20.0, "h": 0.0]]))
+        XCTAssertNil(joining.glassSlot)
+        q.apply(wireBatch([["op": "props", "id": 1, "set": ["glassGroup": "12"], "clear": []]]))
+        try fills(joining, 60, "slotted during the transition")
+        q.apply(wireBatch([["op": "present", "id": 2, "property": "layout", "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0]]))
+        try fills(joining, 40, "slotted, ended")
+    }
+
     /// A view leaving the window has its touches cancelled by UIKit. euxy's
     /// capsule turned its glass off while the dice inside it were held, and
     /// the swap ended the hold: a material, a glass group, a clip box or a scroll that

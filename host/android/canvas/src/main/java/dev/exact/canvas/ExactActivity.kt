@@ -78,13 +78,13 @@ open class ExactActivity : Activity() {
         // adopts the one that runs ([Owner.boot], [Native.start]). The environment below is read once, as the library
         // loads and the host boots, and other threads read it from then on, so it is written only the first time.
         val again = Exact.live
+        // A host [Headless] booted has had no activity: this one's intent launches the app, as a new process's does.
+        val launching = !again || Exact.unshown
         // A history launch carries no new callback, and a new process has no auth session to resume.
-        if (!again || intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) intent.data?.takeIf { Auth.claims(this, it) }?.let { intent.data = null }
+        if (launching || intent.flags and android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) intent.data?.takeIf { Auth.claims(this, it) }?.let { intent.data = null }
         Exact.live = true
+        Exact.unshown = false
         take()
-        // Before anything loads exact2's library: mimalloc reads its options as it loads. Freed memory goes back at
-        // once (decoded pictures otherwise stay held).
-        if (!again) android.system.Os.setenv("MIMALLOC_PURGE_DELAY", "0", false)
         super.onCreate(state)
         nativeState = state?.getBundle("exact.hosted")
         hatchReader?.activity = this
@@ -94,6 +94,7 @@ open class ExactActivity : Activity() {
         val arrived = Shares.arrived(intent, state != null)
         if (!again) {
             environment(arrived)
+            Setup.nativeEnvironment()
             try { FilePicker.start(applicationContext) }
             catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
         }
@@ -103,7 +104,7 @@ open class ExactActivity : Activity() {
         Native.trust(applicationContext)
         // The modules' implementations the APK carries answer their names (LLP 1133.001 D5).
         Extensions.bind(this)
-        installAssets(File(storage, "app"))
+        Setup.assets(applicationContext)
         // What the host asks of the platform (LLP 1115.001 D5), acted on here, on the main thread.
         requests = Requests(this).also { it.back = { goes -> takeBack(goes) } }
         // No background of its own: the window's shows behind the page, the launch theme's surface until the host says
@@ -121,10 +122,19 @@ open class ExactActivity : Activity() {
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
         // A restored share keeps its route; an auth callback can recreate a destroyed activity with saved state.
-        if (again && (arrived || intent.data?.let { Auth.claims(this, it) } == true)) received(intent)
-        // A notification's tap that started the process: held until the first frame ([Activations]).
-        else if (!again && arrived) Activations.receive(this, intent)
+        if (!launching && (arrived || intent.data?.let { Auth.claims(this, it) } == true)) received(intent)
+        else if (launching && arrived) {
+            // The booted host read no launch location from the environment: it is given this intent's.
+            if (again) Shares.request(this, intent)?.let { Exact.launchShare(it) } ?: launchUrl()?.let { Exact.launch(it) }
+            // A notification's tap that started the app: held until the first frame ([Activations]).
+            Activations.receive(this, intent)
+        }
     }
+
+    /** The launching intent's URL (LLP 1133.023 D15 item 3): the activity is exported, so any app may start it with
+     * one, which reaches only what the navigation root routes, as a link does. */
+    private fun launchUrl(): String? =
+        intent.data?.takeUnless { Shares.isShare(intent) || Auth.claims(this, it) }?.toString() ?: pushed(intent)
 
     /** A URL or a share given to the running activity: its location, as a link's (LLP 1133.023 D15 item 3), or the
      * share's (LLP 1133.024 D5; `singleTask` brings this task forward for it). */
@@ -268,11 +278,13 @@ open class ExactActivity : Activity() {
     /** exact2's own thread ([Owner]), the process's one: its thread holds the host, which a reader made again adopts.
      * Null with owner=0: exact2 on the main thread (booting on its own thread first unless asyncboot=0), to compare. */
     private fun owner(): Owner? {
+        // The process's host runs on it, whatever this launch's extras say.
+        Exact.owner?.let { return it }
         if (intent.getStringExtra("owner") == "0") return null
         // exactprio=display: exact2's thread above the main thread (THREAD_PRIORITY_DISPLAY), to compare.
         val priority = if (intent.getStringExtra("exactprio") == "display") android.os.Process.THREAD_PRIORITY_DISPLAY
             else android.os.Process.THREAD_PRIORITY_DEFAULT
-        return Exact.owner ?: Owner(intent.getStringExtra("hwbuf") != "0", intent.getStringExtra("fast") != "0", priority, intent::getStringExtra).also { Exact.owner = it }
+        return Owner(intent.getStringExtra("hwbuf") != "0", intent.getStringExtra("fast") != "0", priority, intent::getStringExtra).also { Exact.owner = it }
     }
 
     /**
@@ -694,31 +706,14 @@ open class ExactActivity : Activity() {
     /** The launch extras that reach exact2 as its environment, written before its library loads; the launching
      * intent's URL or share only when it [arrived] now. */
     private fun environment(arrived: Boolean) {
-        android.system.Os.setenv("XDG_CACHE_HOME", cacheDir.absolutePath, true)
-        // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
-        // drive with no scratch store keeps its `app:/` files under it (`exact_painted::picker`).
-        android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, false)
-        val meta = packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.GET_META_DATA).metaData
-        // The `protocol_handlers` this APK registers (LLP 1038 D8): exact2 puts a URL of one's scheme at its template's
-        // `%s`, at launch and while the app runs, as the Apple hosts do with `ExactProtocolHandlers`.
-        meta?.getString("dev.exact.protocol_handlers")?.let { android.system.Os.setenv("EXACT_PROTOCOL_HANDLERS", it, true) }
-        // The launching intent's URL is the launch location (LLP 1133.023 D15 item 3): the activity is exported, so
-        // any app may start it with one, which reaches only what the navigation root routes, as a link does.
+        val meta = Setup.environment(applicationContext)
         if (arrived) {
-            (intent.data?.takeUnless { Shares.isShare(intent) || Auth.claims(this, it) }?.toString() ?: pushed(intent))
-                ?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it, true) }
+            launchUrl()?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it, true) }
             // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
             Shares.request(this, intent)?.let { android.system.Os.setenv("EXACT_SHARE", it, true) }
         }
-        // GPU modules (LLP 1009) come from this APK. Exported intents never select executable content.
-        android.system.Os.setenv("EXACT_NATIVE_LIBS", applicationInfo.nativeLibraryDir, true)
-        android.system.Os.setenv("EXACT_MOVE_TRACKS", "1", true)
-        // The logcat tag of the app's `console` lines, in every build (`host/painted/src/android.rs`, `console`): the
-        // package name, as Apple's subsystem is the bundle identifier. A label can be localized and hold spaces.
-        android.system.Os.setenv("EXACT_PACKAGE", packageName, true)
-        // A box's filter runs as a RenderEffect (LLP 1172.023.001 D1), which Android 12 brought; before it, and with
-        // filters=0 (to compare), exact2 runs the chain on the CPU.
-        if (android.os.Build.VERSION.SDK_INT < 31 || intent.getStringExtra("filters") == "0") android.system.Os.setenv("EXACT_FILTERS", "0", true)
+        // filters=0: a box's filter runs on the CPU, not as a RenderEffect (exact2's EXACT_FILTERS), to compare.
+        if (intent.getStringExtra("filters") == "0") android.system.Os.setenv("EXACT_FILTERS", "0", true)
         if (meta?.getBoolean("dev.exact.development", false) != true) return
         // rows=0: no kept rows, every frame walks every row (exact2's EXACT_ROWS), to compare.
         if (intent.getStringExtra("rows") == "0") android.system.Os.setenv("EXACT_ROWS", "0", true)
@@ -762,30 +757,6 @@ open class ExactActivity : Activity() {
         intent.getStringExtra("start")?.let { android.system.Os.setenv("BENCH_START_INDEX", it, true) }
         // kinds=17 (or a kind list): BENCH_KINDS, for an app whose source filters by it (as the Views app's `kinds`).
         intent.getStringExtra("kinds")?.let { android.system.Os.setenv("BENCH_KINDS", it, true) }
-    }
-
-    /** The APK's `app/` assets (the plan names `assets/…` under it, a GPU module's shaders `shaders/`), copied once
-     * per install, replacing the last install's: exact2 reads files. */
-    private fun installAssets(to: File) {
-        val stamp = packageManager.getPackageInfo(packageName, 0).lastUpdateTime.toString()
-        val done = File(to, ".done")
-        if (done.exists() && done.readText() == stamp) return
-        fun copy(from: String, dir: File) {
-            val names = assets.list(from) ?: return
-            if (names.isEmpty()) {
-                dir.parentFile?.mkdirs()
-                assets.open(from).use { i -> dir.outputStream().use { o -> i.copyTo(o) } }
-                return
-            }
-            dir.mkdirs()
-            for (n in names) copy("$from/$n", File(dir, n))
-        }
-        // A new install's tree replaces the old, an empty one included: a file the APK no longer has (a shader a
-        // module no longer names, which the host would register and the module refuse) does not linger.
-        to.deleteRecursively()
-        if (assets.list("app").isNullOrEmpty()) return
-        copy("app", to)
-        done.writeText(stamp)
     }
 
     private companion object {

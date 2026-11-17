@@ -7,6 +7,9 @@ import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
 import { createDocument } from './dom.js';
 import { listItem, unwrapListItem } from '../web/navigation/lists.js';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium', 'webkit']);
 
 test('the render DOM writes list items and unwraps their rows', () => {
   const previous = globalThis.document, doc = createDocument();
@@ -21,7 +24,7 @@ test('the render DOM writes list items and unwraps their rows', () => {
   } finally { if (previous === undefined) delete globalThis.document; else globalThis.document = previous; }
 });
 
-test('list role fallbacks agree with Chrome’s native accessibility tree', async () => {
+engineTest.chromium('list role fallbacks agree with Chrome’s native accessibility tree', async () => {
   const previous = globalThis.document, doc = createDocument();
   globalThis.document = doc;
   const cases = [['future LIST group', 'widget LISTITEM note', 'listitem'], ['group list', 'note', 'note'], ['list', 'note listitem', 'listitem'], ['directory list', 'note', 'listitem'], ['doc-chapter list', 'note', 'note'], ['list', 'doc-tip listitem', 'listitem'], ['graphics-document list', 'note', 'note'], ['list', 'graphics-object listitem', 'listitem'], ['comment list', 'note', 'note'], ['list', 'mark listitem', 'listitem'], ['doc-invalid list', 'note', 'listitem']];
@@ -51,7 +54,7 @@ test('list role fallbacks agree with Chrome’s native accessibility tree', asyn
   } finally { await browser.close(); }
 }, 60000);
 
-test.each(['chromium', 'webkit'])('list items keep links, layout and identity on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`list items keep links, layout and identity on ${engine}`, async () => {
   const root = resolve(import.meta.dir, '../..');
   const dir = mkdtempSync(resolve(root, 'target/list-items-'));
   const style = withLook(readFileSync(resolve(root, 'host/web/index.html'), 'utf8')).match(/<style>([\s\S]*?)<\/style>/)[1];

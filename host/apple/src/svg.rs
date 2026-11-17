@@ -7,8 +7,8 @@
 //! form of its animations. The presenter keeps one `CAShapeLayer` per shape,
 //! diffs by element id, and never restarts an animation whose spec is
 //! unchanged. A box's own `opacity` animation goes out as an `animations`
-//! op on its view, and on iOS its `translate`, `scale`, `rotate` and
-//! `background-color` too ([`BOX_LOWERED`]). The engine runs lowered for
+//! op on its view, along with its `translate`, `scale`, `rotate` and
+//! `background-color` ([`BOX_LOWERED`]). The engine runs lowered for
 //! these properties: it tracks each animation's start and pause, and never
 //! samples it per frame.
 
@@ -36,13 +36,12 @@ pub(crate) const LOWERED: [Property; 7] = [
     Property::Stroke,
 ];
 
-/// On iOS, a box's transform and background colour too (LLP 1055.001):
-/// UIKit anchors a view's layer at its centre, CSS's initial
+/// A box's transform and background colour too (LLP 1055.001):
+/// both presenters anchor an animated box at its centre, CSS's initial
 /// `transform-origin`, and Core Animation's `transform.translation`,
 /// `transform.rotation.z` and `transform.scale` key paths replace one
 /// component of the layer's transform and keep the others, composed
-/// translate, rotate, scale: CSS's individual transform properties. AppKit
-/// anchors a layer at its corner, so macOS samples them.
+/// translate, rotate, scale: CSS's individual transform properties.
 pub(crate) const BOX_LOWERED: [Property; 4] = [
     Property::Translate,
     Property::Scale,
@@ -105,10 +104,12 @@ pub(crate) struct SvgState {
     /// (LLP 1055.000 D13, refused on this host).
     foreign: bool,
     /// Whether boxes' transforms and background colours are lowered
-    /// ([`BOX_LOWERED`]): iOS.
+    /// ([`BOX_LOWERED`]).
     pub(crate) box_motion: bool,
+    /// Whether filtered SVG scenes follow their layers on the GPU: UIKit.
+    pub(crate) live_filters: bool,
     /// Whether Core Animation plays boxes' eligible transforms, opacity and
-    /// background-colour transitions (`svg_lower::hand_over_transitions`): iOS.
+    /// background-colour transitions (`svg_lower::hand_over_transitions`).
     pub(crate) play_transitions: bool,
 }
 
@@ -117,6 +118,7 @@ impl SvgState {
     pub(crate) fn new(box_motion: bool) -> Self {
         Self {
             box_motion,
+            live_filters: cfg!(any(target_os = "ios", target_os = "tvos")),
             play_transitions: box_motion,
             ..Self::default()
         }
@@ -725,7 +727,7 @@ fn element(
             s.push_str(",\"m\":");
             affine_json(t.matrix, s);
             // The individual properties' lowered animations, for the outer
-            // layer (iOS: LLP 1055.001, as a box's), over the row's values.
+            // layer (LLP 1055.001, as a box's), over the row's values.
             let turns: Vec<Property> = [Property::Translate, Property::Rotate, Property::Scale]
                 .into_iter()
                 .filter(|p| engine.is_lowered(*p))

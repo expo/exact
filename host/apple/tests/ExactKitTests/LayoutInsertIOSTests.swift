@@ -99,6 +99,40 @@ final class LayoutInsertIOSTests: XCTestCase {
         waitFor("the sibling slides to its place") { below.layoutOffset == .zero }
     }
 
+    func testQueuedSliderLayoutsDrainBeforeTheirNativeMeasurementReports() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the slider insertion needs a scene window") }
+        let session = try boot()
+        waitForActivation(session)
+        session.drainFill()
+        let below = try XCTUnwrap(node(session, "below")), was = laidY(below)
+        var insert = session.runtime.press(try XCTUnwrap(node(session, "toggle")).id, now: session.now())
+        insert.journal.append("queued-insert")
+        session.publishTickForTests(insert)
+        var later = session.runtime.press(try XCTUnwrap(node(session, "nudge")).id, now: session.now())
+        later.journal.append("queued-later")
+        session.noticesInFlight += 1
+        session.publish(.notice, RuntimeCompletion(lease: session.runtime.completionLease, batch: later))
+        var landed = 0, measuredAfter: [Int] = []
+        session.onLandForTests = { _, batch in
+            if batch.journal.contains(where: { $0.hasPrefix("queued-") }) { landed += 1 }
+        }
+        let intrinsic = session.presenter.onIntrinsic
+        session.presenter.onIntrinsic = { sizes in
+            measuredAfter.append(landed)
+            intrinsic?(sizes)
+        }
+        waitForMainQueue("the queued slider layouts and their measurement")
+        XCTAssertEqual(landed, 2, "one main-queue drain applies both ready publications")
+        XCTAssertEqual(measuredAfter, [2], "native measurements follow every ready layout")
+        let row = try XCTUnwrap(node(session, "row")), box = try XCTUnwrap(node(session, "slider"))
+        let slider = try XCTUnwrap(session.presenter.controls.controls[box.id])
+        XCTAssertGreaterThan(slider.frame.height, 16)
+        XCTAssertEqual(box.bounds.height, slider.frame.height, accuracy: 0.5, "a queued layout cannot restore the provisional height")
+        XCTAssertEqual(row.frame.maxY, laidY(below), accuracy: 0.5)
+        XCTAssertEqual(shownY(below), was, accuracy: 0.5)
+        XCTAssertFalse(session.presenter.controls.owesSizes)
+    }
+
     /// The insert lands as a slice the owner published, ahead of an input batch the
     /// runtime made after it that moves the slider. The slider measured as the slice
     /// applies is laid out after the input batch has applied too: laid out between

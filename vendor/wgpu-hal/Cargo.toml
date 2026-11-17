@@ -278,7 +278,7 @@ optional = true
 default-features = true
 
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.wasm-bindgen]
-version = "0.2.127"
+version = "0.2.130"
 optional = true
 default-features = false
 

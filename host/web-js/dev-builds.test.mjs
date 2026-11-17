@@ -7,12 +7,15 @@ import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { INPUT_TREE, OUTPUT, suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { shaderWatchRoots } from '../../scripts/app.mjs';
+import { within } from '../../scripts/paths.mjs';
+import { runInNewContext } from 'node:vm';
 import { installLock } from '../../scripts/filesystem.mjs';
 import { appSources } from '../web/serve.mjs';
 import { loopWebDist } from '../../scripts/web-build.mjs';
@@ -520,3 +523,44 @@ test('real loops keep their pages while test, verify and agent build the same ap
     await Promise.all(loops.map(loop => loop.stop())); rmSync(dir, { recursive: true, force: true });
   }
 }, 180_000);
+
+test('the JS watcher rebuilds for included Rust files and declared inputs with output extensions', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-output-watch-'));
+  const manifest = { gpu: { shaderRoots: ['shader-gen'] }, host: { macos: { resources: [{ from: 'declared.out' }, { from: 'tools/declared.err' }] } } };
+  const app = { dir, manifest };
+  const source = readFileSync(new URL('./dev.mjs', import.meta.url), 'utf8');
+  const begin = source.indexOf('  const outputIsInput = (name)');
+  const end = source.indexOf('  // The resident loop', begin);
+  expect(begin).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(begin);
+  try {
+    for (const name of ['local-crate/src', 'assets', 'shader-gen', 'tools']) mkdirSync(join(dir, name), { recursive: true });
+    writeFileSync(join(dir, 'app.json'), JSON.stringify(manifest));
+    writeFileSync(join(dir, 'local-crate/Cargo.toml'), '[package]\nname = "included"\nversion = "0.1.0"\n');
+    writeFileSync(join(dir, 'local-crate/src/lib.rs'), 'pub const MESSAGE: &str = include_str!("messages.err");\n');
+    let pending, rebuilds = 0;
+    const context = {
+      app, OUTPUT, INPUT_TREE, shaderWatchRoots, within, existsSync, dirname,
+      stopping: false, skipped: /^\.exact(?:\/|$)/, contractInput: () => false, settingsFile: () => false,
+      temporaryOfDesign: () => false, movedSince: () => true, since: Date.now() + 1000,
+      resolve, statSync, timer: null, saved: 0, edited: new Set(), residentChild: null,
+      starting: { failure: null }, inputs: 0, movedSinceBuild: new Set(), appeared: new Set(),
+      stopYoungBuild() {}, clearTimeout() {}, setTimeout: callback => { pending = callback; return 1; },
+      rebuild: () => { rebuilds++; },
+    };
+    runInNewContext(source.slice(begin, end) + '\nglobalThis.notify = changed(app.dir);', context);
+    for (const name of ['app.contract', 'app.forma', 'app.ts', 'unused.ts', 'helper.js', 'local-crate/src/messages.err', 'local-crate/src/captured.out', 'assets/captured.err', 'shader-gen/captured.out', 'declared.out', 'tools/declared.err']) {
+      writeFileSync(join(dir, name), 'edited');
+      context.notify('change', name);
+      expect(context.edited.has(join(dir, name)), name).toBe(true);
+      expect(pending, name).toBeFunction();
+      pending(); pending = null;
+    }
+    expect(rebuilds).toBe(11);
+    for (const name of ['macos.out', 'macos.err', 'other.OUT', '.exact/evidence.err']) {
+      context.notify('change', name);
+      expect(context.edited.has(join(dir, name)), name).toBe(false);
+      expect(pending, name).toBeNull();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

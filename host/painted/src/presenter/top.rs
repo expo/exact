@@ -326,7 +326,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// What `pop` is to the top layer, shown modally or as a popover: an
     /// alert, a menu, or nothing it shows. A select is its options' menu.
-    fn surface_plan(&self, pop: ViewId, modal: bool) -> Option<Plan> {
+    pub(in crate::presenter) fn surface_plan(&self, pop: ViewId, modal: bool) -> Option<Plan> {
         if self.is_select(pop) {
             return self.select_plan(pop);
         }
@@ -718,7 +718,10 @@ impl<D: DataSource> Presenter<D> {
             let name = self.name_of(i.target);
             let modal = i.action == Action::ShowModal;
             // A status menu's submenu takes its place in its window.
-            self.top.status = status.filter(|_| !modal);
+            self.top.status = status.filter(|_| !modal).map(|mut status| {
+                status.parents.push((menu, row.node));
+                status
+            });
             self.present(Some(i.target), &name, invoker, point, modal, now_ms);
             if self.top.open.as_ref().is_none_or(|open| !open.detached) {
                 self.top.status = None;
@@ -796,9 +799,8 @@ impl<D: DataSource> Presenter<D> {
         self.alert_takes_back() || self.top.open.is_some()
     }
 
-    #[cfg(windows)]
     pub(super) fn desktop_surface_access(&self) -> Option<(Option<ViewId>, (f32, f32))> {
-        let open = self.top.open.as_ref().filter(|open| !open.detached)?;
+        let open = self.top.open.as_ref()?;
         let focused = open
             .focused
             .and_then(|i| open.layout.targets.get(i))
@@ -806,8 +808,16 @@ impl<D: DataSource> Presenter<D> {
         Some((
             focused,
             (
-                open.frame[0] as f32 / open.scale,
-                open.frame[1] as f32 / open.scale,
+                if open.detached {
+                    0.
+                } else {
+                    open.frame[0] as f32 / open.scale
+                },
+                if open.detached {
+                    0.
+                } else {
+                    open.frame[1] as f32 / open.scale
+                },
             ),
         ))
     }
@@ -853,7 +863,7 @@ impl<D: DataSource> Presenter<D> {
             "Home" | "End" if self.top.overlay.enabled => self.surface_edge(name == "End"),
             "Enter" | " " => {
                 if let Some(index) = self.top.open.as_ref().and_then(|open| open.focused) {
-                    self.choose(index, now_ms, None);
+                    self.choose_with_keyboard(index, now_ms);
                 }
             }
             _ => {}
@@ -861,7 +871,8 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
-    /// A submenu replaces its parent, so Left has no parent to return to.
+    /// Move between alert buttons, or open a submenu to the right.
+    /// Detached status menus keep their parent in `status.rs`.
     fn surface_horizontal(&mut self, backward: bool, now_ms: f64) {
         let Some(open) = self.top.open.as_ref() else {
             return;
@@ -878,17 +889,21 @@ impl<D: DataSource> Presenter<D> {
                     .is_some_and(|row| row.enabled && row.opens.is_some())
             });
             if let Some(index) = index {
-                let serial = open.serial;
-                self.choose(index, now_ms, None);
-                if self
-                    .top
-                    .open
-                    .as_ref()
-                    .is_some_and(|open| open.serial != serial && open.focused.is_none())
-                {
-                    self.surface_step(false);
-                }
+                self.choose_with_keyboard(index, now_ms);
             }
+        }
+    }
+
+    fn choose_with_keyboard(&mut self, index: usize, now_ms: f64) {
+        let serial = self.top.last;
+        self.choose(index, now_ms, None);
+        if self
+            .top
+            .open
+            .as_ref()
+            .is_some_and(|open| open.serial != serial && open.focused.is_none())
+        {
+            self.surface_step(false);
         }
     }
 

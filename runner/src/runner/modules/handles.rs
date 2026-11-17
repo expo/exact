@@ -141,7 +141,7 @@ impl<D: DataSource> Runner<D> {
             .map(|h| h.keys().cloned().collect())
             .unwrap_or_default();
         let (handler, arrived, native) = (
-            self.native_slot().handler(),
+            self.native_slot().extension_handler(),
             self.extensions.arrived.clone(),
             self.native_slot(),
         );
@@ -215,7 +215,7 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         self.log(format!("dispose {extension} {}: {why}", ids.join(", ")));
-        if let Some(handler) = self.native_slot().handler() {
+        if let Some(handler) = self.native_slot().extension_handler() {
             let body = json!({ "extension": extension, "dispose": ids });
             handler(body.to_string().into_bytes(), Reply::new(|_| {}));
         }

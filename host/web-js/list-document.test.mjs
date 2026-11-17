@@ -2,6 +2,9 @@ import { beforeAll, afterAll, test, expect } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { drivable, engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium']);
 
 const rendered = new Map();
 beforeAll(async () => {
@@ -49,7 +52,7 @@ test.each(['js', 'rust'])('%s-rendered list items keep their links through adopt
   } });
   let browser;
   try {
-    for (const engine of ['chromium', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'webkit'])) {
       browser = await suiteBrowser(engine);
       const before = await browser.newPage({ javaScriptEnabled: false });
       await before.goto(server.url.href);
@@ -83,7 +86,7 @@ test.each(['js', 'rust'])('%s-rendered list items keep their links through adopt
   } finally { await browser?.close(); server.stop(true); }
 }, 60000);
 
-test('a Rust-rendered gated trail is inert before activation and skipped by Tab', async () => {
+engineTest.chromium('a Rust-rendered gated trail is inert before activation and skipped by Tab', async () => {
   const { dist } = rendered.get('rust');
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
@@ -102,7 +105,7 @@ test('a Rust-rendered gated trail is inert before activation and skipped by Tab'
   } finally { await browser.close(); server.stop(true); }
 }, 60000);
 
-test.each(['js', 'rust'])('%s-rendered fixed children keep early edits, focus and presses through activation', async renderer => {
+engineTest.chromium.each(['js', 'rust'])('%s-rendered fixed children keep early edits, focus and presses through activation', async renderer => {
   const { dist } = rendered.get(renderer);
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;

@@ -177,14 +177,15 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
             if (candidateEvents.size >= 240 || e.actionMasked == MotionEvent.ACTION_CANCEL) admit(false)
             else if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) admit()
             else if (dx > slop || dy > slop) {
-                admit(claims and (if (dx > dy) 1 else 2) == 0)
+                // Offered its down, the view may yet ask to keep the drag from a sheet.
+                admit(!claimed(dx, dy, true))
             } else if (e.actionMasked == MotionEvent.ACTION_UP) admit()
             return true
         }
         if (module.active && engine) {
             val dx = abs(e.x - downX); val dy = abs(e.y - downY)
             if (e.actionMasked == MotionEvent.ACTION_MOVE && (dx > slop || dy > slop)) {
-                if (claims and (if (dx > dy) 1 else 2) != 0) {
+                if (claimed(dx, dy, view.natives?.keeps == true)) {
                     module.clear(); releaseInterception()
                 } else endEngine()
             } else if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) endEngine()
@@ -206,6 +207,13 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         if (action == 1 || action == 3) engine = false
         return true
     }
+
+    /** Whether a drag past the slop, longer along [dx] or [dy], is Exact's and not the hosted view's. A gesture's claim
+     * on that axis always is (bits 0 and 1 of the hit reply's claims). Bit 2 says the up-and-down claim is a sheet's
+     * drag alone: the sheet intercepts as a parent does (Material's `BottomSheetBehavior` takes its drag in its
+     * `CoordinatorLayout`'s `onInterceptTouchEvent`), so not from a view that [kept] its touch. */
+    private fun claimed(dx: Float, dy: Float, kept: Boolean): Boolean =
+        if (dx > dy) claims and 1 != 0 else claims and 2 != 0 && !(kept && claims and 4 != 0)
 
     private fun admit(offer: Boolean = true) {
         val v = candidate ?: return

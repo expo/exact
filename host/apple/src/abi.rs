@@ -762,6 +762,9 @@ impl<D: DataSource> Bridge<D> {
         // A reload carries the running store (`Carried::store`). A fresh
         // session takes the granted platform snapshot before its first query,
         // just like boot_fresh; neither path releases effects until commit.
+        if let Err(reason) = crate::watch_sync::startup(data.grants(), data.app_id()) {
+            return self.refuse(&reason);
+        }
         let launch_store = self.links.io.and_then(|io| (io.preloads)()).map(|launch| {
             launch.watch_store(&|| {
                 carried.is_some() && self.host.as_ref().is_some_and(Host::launch_store_pending)

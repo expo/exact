@@ -16,6 +16,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.io.StringReader
 import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
 import java.security.Key
 import java.security.KeyStore
@@ -157,6 +158,23 @@ class CertificateVerifierTest {
     }
 
     private val leaf get() = File("../../../vendor/ibex/crates/ibex2/src/transport/testdata/distrusted/trusted-leaf.der").readBytes()
+
+    @Test fun theCompanionImplementsTheVerifiersJniInterface() {
+        val verifier = Class.forName("org.rustls.platformverifier.CertificateVerifier")
+        val result = Class.forName("org.rustls.platformverifier.VerificationResult")
+        val method = verifier.getDeclaredMethod("verifyCertificateChain", Context::class.java,
+            String::class.java, String::class.java, Array<String>::class.java, ByteArray::class.java,
+            Long::class.javaPrimitiveType, Array<ByteArray>::class.java)
+        assertTrue(Modifier.isStatic(method.modifiers))
+        assertEquals(result, method.returnType)
+        assertEquals(Int::class.javaPrimitiveType, result.getDeclaredField("code").type)
+        assertEquals(String::class.java, result.getDeclaredField("message").type)
+        val status = Class.forName("org.rustls.platformverifier.Status")
+        val code = status.getDeclaredField("code").apply { isAccessible = true }
+        assertEquals(mapOf("Ok" to 0, "Unavailable" to 1, "Expired" to 2, "UnknownCert" to 3,
+            "Revoked" to 4, "InvalidEncoding" to 5, "InvalidExtension" to 6),
+            status.enumConstants!!.associate { (it as Enum<*>).name to code.getInt(it) })
+    }
 
     private fun verify(host: String, certificates: Array<ByteArray> = arrayOf(leaf),
         usages: Array<String> = arrayOf("1.3.6.1.5.5.7.3.1"), now: Long = 1_794_633_663_000L): Int {

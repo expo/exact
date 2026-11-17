@@ -29,7 +29,13 @@ final class MenuHost: NSObject {
         let bubbled: Bool
         /// The run of `source` that opened it as its context menu (X77): its anchor.
         let run: UInt32?
-        weak var parent: NSView?
+        /// Its authored parent: the container of the node it was lifted out
+        /// of, as that node has it now. A material's arrival or departure
+        /// replaces a node's container (`updateMaterial`) while the popover
+        /// is out of it.
+        var parent: NSView? { home?.container ?? held }
+        private weak var home: NodeView?
+        private weak var held: NSView?
         weak var previous: NSView?
         var index: Int
         let selection: NSRange?
@@ -50,8 +56,9 @@ final class MenuHost: NSObject {
         init(_ popover: NodeView, source: NodeView?, previous: NSView?, run: UInt32?, bubbled: Bool = false) {
             self.popover = popover; self.source = source; sourced = source != nil; self.previous = previous; self.run = run
             self.bubbled = bubbled
-            parent = popover.superview
-            index = parent?.subviews.firstIndex(of: popover) ?? 0
+            held = popover.superview
+            if let node = popover.nodeSuperview, node.container === held { home = node }
+            index = held?.subviews.firstIndex(of: popover) ?? 0
             frame = popover.frame; value = popover.props["popover"]
             hasFallbacks = popover.style["position_try_fallbacks"] != nil
             selection = ((previous as? NSTextField)?.currentEditor() as? NSTextView)?.selectedRange()

@@ -9,12 +9,15 @@ import { Readable } from 'node:stream';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { failureMark, backendFetchPrefixes, churnLines, disabledExpectation, focusedExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, stateHolds, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
+import { failureMark, backendFetchPrefixes, churnLines, disabledExpectation, focusedExpectation, layoutExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, stateHolds, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
 import { axFindings } from './agent-ax.mjs';
 import { withEpoch } from './agent-launch.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
 import { sitePages } from '../host/web-js/render.mjs';
 import { fileURLToPath } from 'node:url';
+import { engineTests } from './coverage.mjs';
+
+const engineTest = await engineTests();
 // A fixture's build can fail before the `try` that removes its directory.
 const scratches = [];
 const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
@@ -313,7 +316,7 @@ export function answer() { return Promise.resolve().then(() => fetch('${url}')).
   } finally { await new Promise(resolve => server.close(resolve)); }
 }, 180_000);
 
-test.each([['rust', 0, 'chrome'], ['rust', 20 * 1024, 'chrome'], ['rust', 20 * 1024, 'firefox'], ['rust', 20 * 1024, 'webkit'], ['js', 0, 'chrome'], ['rust', 60 * 1024, 'chrome', 'cached'], ['js', 60 * 1024, 'chrome', 'cached']])('%s request rendering keeps %i-byte fixtures local on %s through launch and reload', async (how, padding, browser, policy = 'request') => {
+for (const [how, padding, browser, policy = 'request'] of [['rust', 0, 'chrome'], ['rust', 20 * 1024, 'chrome'], ['rust', 20 * 1024, 'firefox'], ['rust', 20 * 1024, 'webkit'], ['js', 0, 'chrome'], ['rust', 60 * 1024, 'chrome', 'cached'], ['js', 60 * 1024, 'chrome', 'cached']]) engineTest[browser](`${how} request rendering keeps ${padding}-byte fixtures local on ${browser} through launch and reload`, async () => {
   const root = fileURLToPath(new URL('..', import.meta.url)), dir = scratch('exact-rust-fixture-');
   const dist = join(dir, 'dist'), file = join(dir, 'app.test.contract');
   let requests = 0, configs = 0, renderer, lines, server;
@@ -531,6 +534,26 @@ test('expect focused reads the node every host\'s tree marks focused, and names 
   expect(focusedExpectation(tree, 'gone').message).toBe('expected "gone" focused, no view carries that testId');
   expect(focusedExpectation([tree[0], { ...tree[3], focused: true }], 'picker').message).toBe('expected "picker" focused, View#4 has it');
   expect(focusedExpectation([tree[0]], 'picker').message).toBe('expected "picker" focused, nothing has the focus');
+});
+
+test('expect layout bounds the width or height `layout <target>` prints, and says the size it found', async () => {
+  const tree = [{ id: 2, type: 'Image', props: { testId: 'status-mark' } }, { id: 6, type: 'Image', props: { testId: 'fixed-mark' } }, { id: 7, type: 'Text', props: { testId: 'tagline' }, unshown: why }];
+  const boxes = { 2: { x: 0, y: 0, w: 420, h: 309.778 }, 6: { x: 0, y: 0, w: 47, h: 19 } }, asked = [];
+  const s = { layout: async (id) => { asked.push(id); return { node: { space: boxes[id] ? { viewport: boxes[id] } : id === 8 ? { unavailable: 'native swipe action is not revealed' } : {} } }; } };
+  const step = (target, dimension, comparison, value) => layoutExpectation(s, tree, { target, dimension, comparison, value });
+  expect(await step('fixed-mark', 'height', 'at-most', 24)).toBeNull();
+  expect(await step('fixed-mark', 'width', 'at-least', 47)).toBeNull();
+  expect(await step('fixed-mark', 'height', 'equal', 19)).toBeNull();
+  expect(await step('status-mark', 'height', 'equal', 309.78)).toBeNull(); // the two decimals a layout reply carries
+  expect((await step('status-mark', 'height', 'at-most', 24)).message).toBe('height of "status-mark" is 309.78, expected <= 24 (its box is 420×309.78)');
+  expect((await step('status-mark', 'width', 'equal', 47)).message).toBe('width of "status-mark" is 420, expected 47 (its box is 420×309.78)');
+  expect((await step('fixed-mark', 'width', 'at-least', 64)).message).toBe('width of "fixed-mark" is 47, expected >= 64 (its box is 47×19)');
+  expect(asked).toEqual([6, 6, 6, 2, 2, 2, 6]);
+  expect((await step('gone', 'height', 'at-most', 24)).message).toBe('height of "gone" is absent (no view carries that testId)');
+  expect(await step('tagline', 'height', 'at-most', 24)).toEqual({ message: `testId "tagline" is in the tree, but ${why}`, unshown: true });
+  const boxless = (id) => layoutExpectation(s, [{ id, type: 'View', props: { testId: 'boxless' } }], { target: 'boxless', dimension: 'width', comparison: 'at-most', value: 1 });
+  expect((await boxless(8)).message).toBe('width of "boxless" is unknown: native swipe action is not revealed');
+  expect((await boxless(9)).message).toBe('width of "boxless" is unknown: the host reports no box for it');
 });
 
 // LLP 1116.010 D3 (chat-rooms and password-generator, round 12): a disabled control is asserted, and pressing one fails the step.

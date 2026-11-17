@@ -7,7 +7,9 @@
 //! past that the sheet follows the finger, what it pressed is let go, and
 //! on release it settles on the detent its speed carries it to, or leaves
 //! the window down, which is the route's Back. Where a scroller is under
-//! the finger the scroller has the drag.
+//! the finger the scroller has the drag. Android's reader cancels the
+//! contact, and the drag with it, where a module view under the finger
+//! asked to keep its touch (`Under::sheet` in `scrollers.rs`).
 //!
 //! **Predictive Back** (Android 14 and later, `OnBackAnimationCallback`):
 //! the shell passes the gesture's start, progress and cancel. A sheet that

@@ -140,6 +140,27 @@ test('the event-stream line ceiling counts invalid UTF-8 as received bytes', asy
   }
 });
 
+// #771: a line is assembled by slices, so where the reads split it, a CRLF or a surrogate pair cannot matter.
+test('the event-stream parser gives the same events however the bytes are split', async () => {
+  const { eventStream } = await import('./http-body.js');
+  const enc = s => new TextEncoder().encode(s), big = 'x'.repeat(2 << 20);
+  const parts = ['data: {"a":1}', '\r\n', '\r', '\n', 'event: é語😀', 'id: 7', 'data:', ': c', 'data: 😀😀', '\uFEFF'];
+  let seed = 771;
+  const next = n => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+  const corpora = [`data: {"p":"${big}"}\r\n\r\n`];
+  for (let k = 0; k < 200; k++) corpora.push(Array.from({ length: 30 }, () => parts[next(parts.length)]).join(''));
+  for (const text of corpora) {
+    const bytes = enc(text), whole = eventStream(4 << 20)(bytes, true);
+    for (const step of text.length > 4096 ? [65536, 65537] : [1, 2, 3, 1 + next(16)]) {
+      const parse = eventStream(4 << 20), out = [];
+      for (let i = 0; i < bytes.length; i += step) out.push(...parse(bytes.subarray(i, i + step)));
+      out.push(...parse(new Uint8Array(), true));
+      assert.deepEqual(out, whole, `step ${step}`);
+    }
+  }
+  assert.deepEqual(eventStream(4 << 20)(enc(corpora[0]), true), [{ event: '', id: '', data: `{"p":"${big}"}` }]);
+});
+
 // LLP 1016.000 D4: every event, in order; those of one read are one batch,
 // each but its last marked `more`.
 test('a stream delivers every event of each read as one batch, then its end', async () => {

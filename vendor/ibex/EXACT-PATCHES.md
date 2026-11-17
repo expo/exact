@@ -33,8 +33,9 @@ manager again after `KeyChain.ACTION_TRUST_STORE_CHANGED`, because a manager
 over an explicit keystore copies its anchors once. With that declaration,
 it initializes the default trust manager with a null keystore to honor the app's
 anchors and exclusions. Both paths pass the hostname to
-`X509TrustManagerExtensions`. The Rust crate is pinned to the companion's JNI
-interface. The Canvas reader compiles these
+`X509TrustManagerExtensions`. The companion implements the 0.7 JNI interface,
+unchanged in 0.7.1 (Android artifact 0.2.0); `CertificateVerifierTest` checks its
+static method, result fields and status codes. The Canvas reader compiles these
 classes and keeps them through R8. Other Android consumers must compile these
 classes instead of the published Android AAR and call
 `transport::initialize_android` before TLS; an uninitialized consumer receives
@@ -1092,10 +1093,17 @@ resource releases wait on a worker. Replay on a refresh.
 
 `Fetch::admit` checks the binding's grants and hop gate without sending a
 request; a later `stream` checks them again at every hop. HTTP admission
-refuses userinfo and non-HTTP schemes. Redirects rewrite POST on 301/302,
+refuses non-HTTP schemes and, at the first hop and at every redirect, a URL
+with userinfo: Fetch throws a `TypeError` for a
+[request URL that includes credentials](https://fetch.spec.whatwg.org/#dom-request)
+and answers a network error for a
+[redirect to one](https://fetch.spec.whatwg.org/#http-redirect-fetch) in
+another origin, which every server is to an app. The background-transfer
+carrier refuses userinfo in its own hop gate as well, beside the source's
+grant and gate. Redirects rewrite POST on 301/302,
 rewrite non-GET/HEAD on 303, and drop body headers when dropping the body,
-as [Fetch's redirect algorithm](https://fetch.spec.whatwg.org/#http-redirect-fetch)
-requires. Authorization remains removed after any origin change.
+as Fetch's redirect algorithm requires. Authorization remains removed after
+any origin change.
 Redirect credential stripping compares parsed URL origins, leaving hostless
 and non-HTTP targets to hop admission. Such targets fail URL validation,
 not HTTP-origin extraction, so a carrier never retries them as network faults.
@@ -1107,3 +1115,8 @@ wins; a reused connection restores the next request's own timeouts. TLS,
 trust selection and HTTP framing are unchanged. The Android carrier uses
 this through the same endowed fetch binding as ordinary requests (LLP
 1133.017). Replay on a refresh.
+
+`AppDirectories::publish_file` admits a destination under pinned directories and
+renames a completed host-owned file into it on the same filesystem. Recovery
+recognizes an already-published destination; storage errors preserve the source
+for retry. This avoids requiring another response-sized allocation at publication.

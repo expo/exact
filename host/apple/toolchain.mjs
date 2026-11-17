@@ -162,8 +162,9 @@ function portableSigning(args, env) {
     ...(values['--options'] ?? '').split(',').filter(Boolean).flatMap(flag => ['--code-signature-flags', flag]), path]];
 }
 
-/** Return an executable and argv, never a shell command. Native hosts retain their toolchain unchanged. */
+/** Return an executable and argv, never a shell command. Mac Swift uses the Xcode selection the build validates. */
 export function appleCommand(command, args, { macDevelopmentSign, ...options } = {}, platform = process.platform) {
+  if (platform === 'darwin' && (command === 'swift' || command === 'swiftc')) return ['xcrun', [command, ...args], options];
   if (platform === 'darwin' && command === 'codesign' && args.includes('--sign') && args.includes('--timestamp=none') && valueAfter(args, '--sign') !== '-') {
     options = { timeout: 30_000, ...options, killSignal: 'SIGKILL' };
   }

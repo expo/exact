@@ -4,7 +4,7 @@ import { afterAll, test, expect, spyOn } from 'bun:test';
 import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { once, EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
@@ -136,7 +136,7 @@ function androidDriveFixture(reader, destination = null, reacquire = false, fail
   } });
   mkdirSync(resolve(dir, 'platform-tools'));
   writeFileSync(resolve(dir, 'platform-tools/adb'), `#!${process.execPath}
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 const args = process.argv.slice(2);
@@ -1412,3 +1412,89 @@ test('android --run --url launches the app following that dev loop, stopping a r
   expect(refused('--run', '--headless', '--url', 'http://127.0.0.1:9147/').stderr).toContain('it goes with --run, not --headless');
   expect(refused('--run', '--url', 'shelf.contract').stderr).toContain("--url takes a dev loop's http(s) URL");
 });
+
+
+test('Android compilers and GPU bakes use the requested x86_64 ABI', async () => {
+  const { androidToolchainEnv, bakeGpuLibraries, soundLibraryCommand } = await import('./agent-android.mjs');
+  const { ANDROID_PAGE_SIZE: page, androidCargo } = await import('./cargo-check.mjs');
+  const [, intelArgs, intelOptions] = androidCargo('cargo', ['build', '--target=x86_64-linux-android'],
+    { env: { CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS: '-llog' } });
+  expect(intelArgs).toContain(`build.rustflags=["${page}","-Clink-arg=-lc++abi"]`);
+  expect(intelOptions.env.CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS).toBe(`-llog ${page} -Clink-arg=-lc++abi`);
+  const { androidAbis, androidHermesDir } = await import('./android-abi.mjs');
+  expect(androidAbis()).toEqual(['arm64-v8a']);
+  expect(androidAbis('arm64-v8a,x86_64,x86_64')).toEqual(['arm64-v8a', 'x86_64']);
+  expect(() => androidAbis('armeabi-v7a')).toThrow('--abis');
+  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR: '/host' }, '/arm64', 'x86_64-linux-android')).toBeNull();
+  expect(androidHermesDir({ HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/intel' }, '/arm64', 'x86_64-linux-android')).toBe('/intel');
+  const { guardFlags } = await import('./help.mjs');
+  expect(guardFlags('android', ['--abis', 'arm64-v8a,x86_64'])).toEqual(['--abis', 'arm64-v8a,x86_64']);
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-abi-'));
+  try {
+    const bin = resolve(dir, 'toolchains/llvm/prebuilt/darwin-x86_64/bin');
+    mkdirSync(bin, { recursive: true });
+    for (const target of ['aarch64-linux-android', 'x86_64-linux-android'])
+      writeFileSync(resolve(bin, `${target}29-clang`), '');
+    const target = 'x86_64-linux-android';
+    const env = androidToolchainEnv({ ANDROID_NDK_HOME: dir }, 'darwin', 29, target);
+    expect(env.CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER).toBe(resolve(bin, `${target}29-clang`));
+    expect(env.CXX_x86_64_linux_android).toBe(resolve(bin, `${target}29-clang++`));
+    expect(env.HERMES_LEAN_SYS_DIR_x86_64_linux_android).toBeUndefined();
+    expect(soundLibraryCommand('libexact_sound.so', env, target)[0]).toBe(env.CC_x86_64_linux_android);
+    let baked;
+    bakeGpuLibraries({}, { target, profile: 'host-dev', env }, (...args) => { baked = args; });
+    expect(baked[2]).toBe(target);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('APK rebuilds preserve selected ABIs and freshness covers both libraries', async () => {
+  const { apkBuildFirst, apkDirs } = await import('./agent-android.mjs');
+  const { apkChanges, androidRebuild } = await import('./agent-stdio.mjs');
+  const cp = await import('node:child_process');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-inputs-'));
+  const app = { dir, target: resolve(dir, 'target'), name: 'fixture', manifest: { app: { id: 'dev.fixture' } } };
+  writeFileSync(resolve(dir, 'exact.mjs'), '');
+  const apk = resolve(apkDirs(app).app, 'outputs/apk/release/app-release.apk');
+  const record = resolve(dirname(apk), 'exact-build.json');
+  const libraries = ['arm64', 'x86_64'].map(abi => resolve(dir, abi + '.so'));
+  const sources = ['shared.rs', 'arm64.rs', 'x86_64.rs'].map(file => resolve(dir, file));
+  const before = new Date(Date.now() - 60_000), after = new Date(Date.now() + 60_000);
+  mkdirSync(dirname(apk), { recursive: true });
+  sources.forEach(file => { writeFileSync(file, 'input'); utimesSync(file, before, before); });
+  libraries.forEach((file, i) => writeFileSync(file.replace(/\.so$/, '.d'), `${file}: ${sources[0]} ${sources[i + 1]}\n`));
+  const run = spyOn(cp, 'spawnSync').mockReturnValue({ status: 0, stdout: '', stderr: '' });
+  try {
+    for (const abis of [['x86_64'], ['arm64-v8a', 'x86_64']]) {
+      writeFileSync(record, JSON.stringify({ started: new Date().toISOString(), abis, libraries, workspace: dir, sources: [] }));
+      expect(androidRebuild(app, true)).toEndWith(`android --abis ${abis.join(',')})`);
+      expect((await apkBuildFirst(app)).code).toBe(0);
+      expect(run.mock.calls.at(-1)[1]).toEqual([resolve(import.meta.dir, 'agent-android.mjs'), 'build', dir, '--apk', '--abis', abis.join(',')]);
+      writeFileSync(apk, 'APK');
+      utimesSync(sources[0], after, after);
+    }
+    utimesSync(sources[0], before, before);
+    expect(apkChanges(app, apk)).toEqual([]);
+    for (const source of sources) {
+      utimesSync(source, after, after);
+      expect(apkChanges(app, apk)).toHaveLength(1);
+      expect(apkChanges(app, apk)[0]).toEndWith(source.split('/').at(-1));
+      utimesSync(source, before, before);
+    }
+    rmSync(sources[2]);
+    expect(apkChanges(app, apk)[0]).toEndWith('x86_64.rs');
+    writeFileSync(record, '{}');
+    expect(apkChanges(app, apk)[0]).toContain('no complete ABI build record');
+  } finally { run.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('TypeScript x86_64 refuses before compiling even with a Hermes override', () => {
+  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', '--apk', '--abis', 'x86_64'], {
+    encoding: 'utf8', env: { ...process.env, HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/unused-bundle' },
+  });
+  expect(r.status).toBe(1);
+  expect(r.stderr).toContain('vendored Hermes resolver does not support Android x86_64 ICU');
+  expect(r.stderr).toContain('Use --abis arm64-v8a');
+  expect(r.stderr).not.toContain('Compiling');
+}, 30_000);

@@ -344,6 +344,92 @@ final class AccessibilityTreeMacTests: XCTestCase {
         XCTAssertNil(p.controls.lastRange[11])
     }
 
+    /// An assistive app's increment or decrement of a range is first its
+    /// arrow key (LLP 1069.001, amended 2026-11-16): where a `key` handler
+    /// calls `preventDefault()` the move is the handler's and AppKit's step
+    /// does not happen; where none does, AppKit steps as before.
+    func testARangesAccessibilityStepIsItsArrowKeyFirst() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 11, "kind": "control",
+             "props": ["type": "range", "min": "0", "max": "240", "step": "any", "value": "40"],
+             "handlers": ["input", "change", "key", "keyup"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 11]],
+            ["op": "frame", "id": 11, "x": 0, "y": 140, "w": 129, "h": 24],
+        ]))
+        let slider = try XCTUnwrap(p.controls.controls[11] as? NSSlider)
+        let cell = try XCTUnwrap(slider.cell as? NSSliderCell)
+        var keys: [String] = [], sent: [String] = [], takes = true
+        p.onControlValue = { _, value, _, _ in sent.append(value) }
+        p.onKey = { id, key in
+            keys.append("\(id):\(key.up ? "up" : "down"):\(key.chord)")
+            if takes, !key.up { p.defaultPrevented = true }
+        }
+        XCTAssertFalse(cell.accessibilityPerformIncrement(), "the answer is whether the value moved")
+        XCTAssertFalse(slider.accessibilityPerformDecrement(), "the control's own method is the cell's")
+        XCTAssertEqual(keys, ["11:down:ArrowRight", "11:up:ArrowRight", "11:down:ArrowLeft", "11:up:ArrowLeft"])
+        XCTAssertEqual(slider.doubleValue, 40, "the handler took both: AppKit moved nothing")
+        XCTAssertEqual(sent, [])
+        // The handler's change to the bound value is the move.
+        p.apply(wireBatch([["op": "props", "id": 11, "set": ["value": "50"]]]))
+        XCTAssertEqual(slider.doubleValue, 50)
+
+        takes = false
+        keys = []
+        XCTAssertTrue(cell.accessibilityPerformIncrement())
+        XCTAssertEqual(keys, ["11:down:ArrowRight", "11:up:ArrowRight"], "heard, and left to AppKit")
+        XCTAssertEqual(slider.doubleValue, 62, "AppKit's own step, a twentieth of the span")
+        XCTAssertEqual(sent, ["62", "62"], "input, then change")
+
+        p.apply(wireBatch([["op": "props", "id": 11, "set": ["disabled": "true"]]]))
+        takes = true
+        keys = []
+        _ = cell.accessibilityPerformIncrement()
+        XCTAssertEqual(keys, [], "a disabled range sends no key")
+        XCTAssertEqual(slider.doubleValue, 62)
+    }
+
+    /// A step nothing prevented is the key's default action: AppKit makes
+    /// it between the keydown and the keyup, as a keyboard's arrow lands,
+    /// from the value the keydown's handler left; and a range that handler
+    /// disabled or made inert does not move, as an inert one gets no key.
+    func testAnUnpreventedRangeStepFollowsItsKeydown() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 11, "kind": "control",
+             "props": ["type": "range", "min": "0", "max": "240", "step": "any", "value": "40"],
+             "handlers": ["input", "change", "key", "keyup"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 11]],
+            ["op": "frame", "id": 11, "x": 0, "y": 140, "w": 129, "h": 24],
+        ]))
+        let slider = try XCTUnwrap(p.controls.controls[11] as? NSSlider)
+        let cell = try XCTUnwrap(slider.cell as? NSSliderCell)
+        var heard: [String] = [], onKeydown = ["value": "60"]
+        p.onControlValue = { _, value, input, change in
+            if input { heard.append("input:\(value)") }
+            if change { heard.append("change:\(value)") }
+        }
+        p.onKey = { _, key in
+            heard.append(key.up ? "up" : "down")
+            if !key.up { p.apply(wireBatch([["op": "props", "id": 11, "set": onKeydown]])) }
+        }
+        _ = cell.accessibilityPerformIncrement()
+        XCTAssertEqual(heard, ["down", "input:72", "change:72", "up"], "a twentieth past the handler's 60, before the keyup")
+        for prop in ["disabled", "inert"] {
+            onKeydown = [prop: "true"]
+            heard = []
+            _ = cell.accessibilityPerformIncrement()
+            XCTAssertEqual(heard, ["down"], prop)
+            XCTAssertEqual(slider.doubleValue, 72, prop)
+            p.apply(wireBatch([["op": "props", "id": 11, "clear": [prop]]]))
+        }
+        p.apply(wireBatch([["op": "props", "id": 11, "set": ["inert": "true"]]]))
+        heard = []
+        _ = cell.accessibilityPerformIncrement()
+        XCTAssertEqual(heard, [], "an inert range gets no key")
+        XCTAssertEqual(slider.doubleValue, 72)
+    }
+
     private func rangeCurrentEvent(_ type: NSEvent.EventType) throws {
         let event: NSEvent?
         switch type {

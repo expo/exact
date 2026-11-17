@@ -7,14 +7,9 @@
 import AppKit
 
 extension NSControl {
-    var ariaUnavailableFromNode: Bool {
-        var view: NSView? = self
-        while let current = view {
-            if let node = current as? NodeView { return node.ariaUnavailable }
-            view = current.superview
-        }
-        return false
-    }
+    /// The node whose box holds this control.
+    var ownerNode: NodeView? { sequence(first: self as NSView, next: \.superview).lazy.compactMap { $0 as? NodeView }.first }
+    var ariaUnavailableFromNode: Bool { ownerNode?.ariaUnavailable ?? false }
 }
 
 class AriaButtonCellMac: NSButtonCell {
@@ -64,6 +59,24 @@ final class SliderCellMac: NSSliderCell {
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
         if attribute == .enabled, (controlView as? NSControl)?.ariaUnavailableFromNode == true { return false }
         return super.accessibilityAttributeValue(attribute)
+    }
+    // An assistive app's increment or decrement is the range's arrow key,
+    // whose default action is AppKit's own step: the author's `key` handler
+    // may take it with `preventDefault()` (LLP 1069.001, amended 2026-11-16).
+    // The cell is the slider's accessibility element, and the control's own
+    // methods call these.
+    override func accessibilityPerformIncrement() -> Bool { adjust(up: true) { super.accessibilityPerformIncrement() } }
+    override func accessibilityPerformDecrement() -> Bool { adjust(up: false) { super.accessibilityPerformDecrement() } }
+    private func adjust(up: Bool, _ step: () -> Bool) -> Bool {
+        guard let node = (controlView as? NSControl)?.ownerNode else { return step() }
+        // Asked again after the keydown, whose handler may have disabled,
+        // hidden or replaced the range.
+        let adjustable = { self.isEnabled && !node.inert && node.presenter?.views[node.id] === node }
+        guard adjustable() else { return false }
+        // The answer is whether the value moved, by a handler or by AppKit's step.
+        let from = doubleValue
+        node.adjustKeys(up: up) { if adjustable() { _ = step() } }
+        return doubleValue != from
     }
 }
 

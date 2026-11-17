@@ -12,9 +12,13 @@ final class DialogHost {
     private(set) weak var presenter: Presenter?
     final class Entry {
         var dialog: NodeView
-        weak var parent: NSView?
+        /// Its authored parent: the container of the node it was lifted out
+        /// of, as that node has it now (`MenuHost.Entry.parent`).
+        var parent: NSView? { home?.container ?? held }
+        private weak var home: NodeView?
+        private weak var held: NSView?
         weak var previous: NSView?
-        let index: Int
+        var index: Int
         let selection: NSRange?
         var frame: NSRect
         let backdrop = DialogBackdrop(frame: .zero)
@@ -30,8 +34,9 @@ final class DialogHost {
             self.dialog = dialog; self.previous = previous; self.route = route
             selection = ((previous as? NSTextField)?.currentEditor() as? NSTextView)?.selectedRange()
                 ?? (previous as? NSTextView)?.selectedRange()
-            parent = dialog.superview
-            index = parent?.subviews.firstIndex(of: dialog) ?? 0
+            held = dialog.superview
+            if let node = dialog.nodeSuperview, node.container === held { home = node }
+            index = held?.subviews.firstIndex(of: dialog) ?? 0
             frame = dialog.frame
         }
     }
@@ -190,7 +195,8 @@ final class DialogHost {
             entry.backdrop.removeFromSuperview()
             if live(dialog), let parent = entry.parent {
                 let siblings = parent.subviews
-                parent.addSubview(dialog, positioned: .below, relativeTo: entry.index < siblings.count ? siblings[entry.index] : nil)
+                if entry.index < siblings.count { parent.addSubview(dialog, positioned: .below, relativeTo: siblings[entry.index]) }
+                else { parent.addSubview(dialog) }
                 dialog.frame = entry.frame
             }
         }
@@ -225,8 +231,10 @@ final class DialogHost {
     /// is in the top layer. Removing that edge retires its presentation.
     func children(_ parent: NSView, _ wanted: [NodeView]) {
         // A route's sheet leaves after the batch (`syncRoutes`), never inside it.
-        for entry in entries where !entry.route && (entry.parent === parent) != wanted.contains(where: { $0 === entry.dialog }) {
-            close(entry.dialog, notify: false)
+        for entry in entries where !entry.route {
+            let index = wanted.firstIndex(where: { $0 === entry.dialog })
+            if (entry.parent === parent) != (index != nil) { close(entry.dialog, notify: false) }
+            else if let index { entry.index = index }
         }
     }
     func frame(_ node: NodeView, _ frame: NSRect) -> Bool {

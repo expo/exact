@@ -62,15 +62,15 @@ public final class WindowManagementModule: ExactPackage {
     private var window: NSWindow? { context.view?.window }
 
     /// The top of the primary display, where AppKit's y is flipped.
-    private var primaryTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
+    private var primaryTop: CGFloat { ExactScreenGeometry.primaryTop }
 
     /// `rect` (AppKit's global space) as `[left, top, width, height]` in the web's.
     private func flipped(_ rect: NSRect) -> [CGFloat] {
-        [rect.minX, primaryTop - rect.maxY, rect.width, rect.height]
+        ExactScreenGeometry.flipped(rect)
     }
 
     private static func id(_ screen: NSScreen) -> CGDirectDisplayID {
-        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        ExactScreenGeometry.id(screen)
     }
 
     /// The screens in the specification's order, by `left` then `top`.
@@ -94,15 +94,7 @@ public final class WindowManagementModule: ExactPackage {
     }
 
     private func screen(_ s: NSScreen) -> [String: Any] {
-        let (r, a) = (flipped(s.frame), flipped(s.visibleFrame))
-        return [
-            "left": r[0], "top": r[1], "width": r[2], "height": r[3],
-            "availLeft": a[0], "availTop": a[1], "availWidth": a[2], "availHeight": a[3],
-            "devicePixelRatio": s.backingScaleFactor,
-            "isPrimary": NSScreen.screens.first.map(Self.id) == Self.id(s),
-            "isInternal": CGDisplayIsBuiltin(Self.id(s)) != 0,
-            "label": s.localizedName,
-        ]
+        ExactScreenGeometry.record(s)
     }
 
     private func details() -> [String: Any] {
@@ -131,12 +123,7 @@ public final class WindowManagementModule: ExactPackage {
         let (x, y) = (at.x, primaryTop - at.y)
         var on = screen(holder)
         let origin = viewOrigin()
-        if let origin {
-            let r = flipped(holder.frame)
-            on["clientRect"] = ["x": r[0] - origin.x, "y": r[1] - origin.y, "width": r[2], "height": r[3]]
-        } else {
-            on["clientRect"] = NSNull()
-        }
+        on["clientRect"] = ExactScreenGeometry.client(holder, view: context.view)
         return [
             "screenX": x, "screenY": y,
             "clientX": origin.map { x - $0.x } ?? NSNull(),

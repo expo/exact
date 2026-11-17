@@ -30,8 +30,11 @@ mod geometry;
 mod history;
 use history::RetainedReceipt;
 mod intrinsic;
+pub(crate) mod observe;
 pub(crate) mod owner;
+mod provenance;
 pub(crate) mod readers;
+pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod sticky;
@@ -47,6 +50,7 @@ pub(crate) use cover::{
     style_changed as cover_style_changed,
 };
 pub use cover::{credited_edges, HostCover};
+pub use provenance::{Contribution, Operation};
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
 
@@ -588,6 +592,20 @@ impl Kernel {
         }
         self.replace_env(self.arena.env().with_viewport(offer))?;
         self.imply_blocks();
+        let withheld = self.withhold_observations();
+        let mut result = self.region_pass(slot, offer, inputs)?;
+        self.solve_region_observations(slot, offer, inputs, &withheld, &mut result)?;
+        Ok(result)
+    }
+
+    /// One layout of the root `slot` with its content region: the region's
+    /// shell and content, then the top-layer subtrees.
+    fn region_pass(
+        &mut self,
+        slot: u32,
+        offer: Offer,
+        inputs: crate::RegionInputs,
+    ) -> Result<crate::RegionLayoutReceipt, KernelError> {
         let region = self
             .region
             .as_mut()
@@ -714,6 +732,8 @@ impl Kernel {
                 return Err(e.into());
             }
         };
+        let relayout = &mut |k: &mut Kernel| Ok(k.lay_out_roots(slot, offer)?);
+        self.solve_observations(slot, relayout, &[], &mut receipt)?;
         receipt.epoch = self.epoch;
         if engine(&mut self.layout).provisional_chrome() {
             self.provisional_layouts += 1;

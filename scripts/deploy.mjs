@@ -126,18 +126,30 @@ export function sourcePaths(repo, app, exactRoot) {
     }
   }
   for (const output of [...app.manifest?.game ? ['target', '.shells', 'artifacts'] : [], ...dist]) outputs.push(resolve(app.dir, output));
+  const android = resolve(exactRoot, 'host/android');
+  outputs.push(...['build', '.gradle', '.kotlin', 'settings-gradle.lockfile'].map(name => resolve(android, name)));
+  const crashes = [];
+  if (existsSync(android)) for (const entry of readdirSync(android, {withFileTypes:true})) {
+    const path = resolve(android, entry.name);
+    if (entry.isDirectory() && existsSync(resolve(path, 'build.gradle.kts'))) outputs.push(resolve(path, 'build'));
+    // A failed Gradle JVM writes crash reports beside the root project.
+    if (entry.isFile() && /^(?:hs_err_pid.*\.(?:log|mdmp)|replay_pid.*\.log)$/.test(entry.name)) crashes.push(path);
+  }
   // Keep the lexical path as well as its canonical alias. In particular,
   // `target -> /shared/cache` is still the declared in-repo output root; if
   // we realpath it first, the symlink itself re-enters the source inventory.
   const roots = (paths) => [...new Set(paths.flatMap((path) => [resolve(path), canonicalPath(path)])
     .filter((path) => path !== repo && inside(repo, path))
     .map((path) => unixPath(relative(repo, path))))];
-  const pathspec = ['.', ...roots(outputs).flatMap((path) => [`:(exclude,top,literal)${path}`, `:(exclude,top,glob)${path}/**`])];
+  // A fixed set of patterns keeps accumulated crash reports off Git's command line.
+  const crashPatterns = roots(['hs_err_pid*.log', 'hs_err_pid*.mdmp', 'replay_pid*.log'].map(name => resolve(android, name)));
+  const pathspec = ['.', ...roots(outputs).flatMap((path) => [`:(exclude,top,literal)${path}`, `:(exclude,top,glob)${path}/**`]),
+    ...crashPatterns.map(path => `:(exclude,top,glob)${path}`)];
   // Standalone tools build beside their manifests. Keep these roots in memory:
   // passing every crate to Git exceeds Windows' command-line limit.
   const manifests = gitText(repo, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
     'Cargo.toml', '**/Cargo.toml'], 'could not inventory Cargo output roots').split('\0').filter(Boolean);
-  return { pathspec, excluded: roots([...outputs, ...manifests.map((manifest) => resolve(repo, dirname(manifest), 'target'))]) };
+  return { pathspec, excluded: roots([...outputs, ...crashes, ...manifests.map((manifest) => resolve(repo, dirname(manifest), 'target'))]) };
 }
 const SOURCE_MAX_BUFFER = 512 * 1024 * 1024;
 function gitResult(repo, args, what, options = {}) {
@@ -1110,7 +1122,9 @@ async function deployCaptured(opts, capsule) {
   process.env.CARGO_TARGET_DIR = canonicalPath(capsule.app.target);
   if (capsule.app.external) process.env.EXACT_APP_DIR = canonicalPath(capsule.app.dir);
   else delete process.env.EXACT_APP_DIR;
-  const app = resolveApp(opts._[0]);
+  // A path names the live tree; a name must retain the caller's crate identity.
+  const selector = opts._[0];
+  const app = resolveApp(/[\\/]|^\.\.?$/.test(selector ?? '') ? capsule.app.dir : selector);
   requireReleasePins(app);
   if (canonicalPath(app.dir) !== canonicalPath(capsule.app.dir)
     || canonicalPath(app.workspace) !== canonicalPath(capsule.app.workspace)) {

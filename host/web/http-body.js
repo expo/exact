@@ -19,8 +19,19 @@ export async function boundedHttpBody(response, limit) {
 // event whose data is over `limit` bytes, or a line over `limit + 64`, is
 // refused, never truncated: received bytes for lines, decoded UTF-8 bytes for
 // event data.
-const utf8Length = (s) => { let n = 0; for (const c of s) n += charBytes(c); return n; };
-const charBytes = (c) => { const p = c.codePointAt(0); return p < 0x80 ? 1 : p < 0x800 ? 2 : p < 0x10000 ? 3 : 4; };
+// Both scans read code units: a string per code point made a long line's cost
+// its allocations (#771). Decoded text has no lone surrogate, so a high
+// surrogate starts a four-byte pair.
+const utf8Length = (s) => {
+  let n = s.length;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) continue;
+    n += c < 0x800 ? 1 : 2;
+    if (c >= 0xd800 && c < 0xdc00) i++;
+  }
+  return n;
+};
 export function eventStream(limit) {
   const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
   let line = '', lineBytes = 0, afterCr = false, started = false, event = '', data = '', dataBytes = 0, hasData = false, id = '';
@@ -51,16 +62,29 @@ export function eventStream(limit) {
   return (bytes, end = false) => {
     // Count before decoding: a BOM occupies three received bytes, and an
     // invalid byte may decode to a three-byte replacement character.
-    for (const byte of bytes ?? []) {
-      if (byte === 13 || byte === 10) lineBytes = 0;
-      else if (++lineBytes > limit + 64) throw Error('an event exceeds the response ceiling');
+    const length = bytes ? bytes.length : 0;
+    for (let i = 0, cr = length && bytes.indexOf(13), lf = length && bytes.indexOf(10); i < length; ) {
+      const stop = cr < 0 ? lf : lf < 0 ? cr : Math.min(cr, lf);
+      lineBytes += (stop < 0 ? length : stop) - i;
+      if (lineBytes > limit + 64) throw Error('an event exceeds the response ceiling');
+      if (stop < 0) break;
+      lineBytes = 0;
+      i = stop + 1;
+      if (stop === cr) cr = bytes.indexOf(13, i);
+      else lf = bytes.indexOf(10, i);
     }
     const text = decoder.decode(bytes, { stream: !end }), out = [];
-    for (const c of text) {
-      if (afterCr) { afterCr = false; if (c === '\n') continue; }
-      if (c === '\r' || c === '\n') { afterCr = c === '\r'; done(out); }
-      else line += c;
+    let start = 0;
+    if (afterCr && text.length) { afterCr = false; if (text.charCodeAt(0) === 10) start = 1; }
+    for (let i = start; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c !== 13 && c !== 10) continue;
+      line += text.slice(start, i);
+      done(out);
+      if (c === 13) { if (i + 1 === text.length) afterCr = true; else if (text.charCodeAt(i + 1) === 10) i++; }
+      start = i + 1;
     }
+    line += text.slice(start);
     return out;
   };
 }

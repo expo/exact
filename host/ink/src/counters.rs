@@ -48,8 +48,6 @@ counters! {
     A2Eligible => "a2_eligible",
     ImagePatches => "image_slot_patches",
     TargetsAllocated => "targets_allocated",
-    TargetBlocked => "target_reuse_blocked",
-    TargetCandidatesBlocked => "target_candidates_incomplete",
     TargetsRetired => "targets_retired",
     TargetsRetained => "targets_retained",
     TargetBytes => "target_bytes",

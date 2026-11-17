@@ -66,6 +66,7 @@ final class PresenceIOSTests: XCTestCase {
     }
 
     func testARIAUnavailableProjectedTabsStayEnabledForInput() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit makes a segment's element only for an assistive client") }
         let p = tabBarFixture()
         defer { p.reset(); window.isHidden = true }
         p.apply(wireBatch([["op": "props", "id": 11, "set": ["accessibilityDisabled": "true"]]]))
@@ -82,10 +83,10 @@ final class PresenceIOSTests: XCTestCase {
         let control = try XCTUnwrap(p.segments.control(of: 10) as? LabelledSegmentedControl)
         control.layoutIfNeeded()
         XCTAssertTrue(control.isEnabledForSegment(at: 0))
-        XCTAssertTrue(try XCTUnwrap(control.segmentViews.first).accessibilityTraits.contains(.notEnabled), "the projected segment speaks as disabled")
+        XCTAssertTrue(try XCTUnwrap(control.accessibilitySegments.first).accessibilityTraits.contains(.notEnabled), "the projected segment speaks as disabled")
         p.apply(wireBatch([["op": "props", "id": 11, "set": ["accessibilityDisabled": "false"]]]))
         control.layoutIfNeeded()
-        XCTAssertFalse(try XCTUnwrap(control.segmentViews.first).accessibilityTraits.contains(.notEnabled))
+        XCTAssertFalse(try XCTUnwrap(control.accessibilitySegments.first).accessibilityTraits.contains(.notEnabled))
     }
 
     func testAnUnstyledTabSymbolLeavesTheBarsNativeTint() throws {
@@ -364,8 +365,11 @@ final class PresenceIOSTests: XCTestCase {
     }
 
     /// A long press runs the `contextmenu` of the tab whose segment is under
-    /// it, also where UIKit sizes the segments by their content.
-    func testALongPressNamesTheSegmentUnderItWhenSegmentsAreSizedByContent() throws {
+    /// it, by equal shares of the control: where UIKit sizes the segments by
+    /// their content, nothing public gives their boxes, so between the half
+    /// and the segments' own boundary the share names the neighbour
+    /// (LLP 1035.003). Everywhere else it names the segment under the finger.
+    func testALongPressNamesTheSegmentUnderItByEqualSharesWhenSegmentsAreSizedByContent() throws {
         let p = fixture()
         defer { p.reset() }
         p.apply(wireBatch([
@@ -387,10 +391,14 @@ final class PresenceIOSTests: XCTestCase {
         XCTAssertEqual(views.count, 2)
         let boundary = try XCTUnwrap(views.first).convert(try XCTUnwrap(views.first).bounds, to: control).maxX
         XCTAssertGreaterThan(boundary, 85, "Temperature takes more than its half")
-        for x in stride(from: 2.0, to: 158.0, by: 4.0) where abs(x - boundary) > 1 {
+        let half = control.bounds.midX
+        for x in stride(from: 2.0, to: 158.0, by: 4.0) where abs(x - half) > 1 {
             let tab = p.segments.contextTab(at: CGPoint(x: x, y: control.bounds.midY), in: control)
-            XCTAssertEqual(tab?.id, x < boundary ? 31 : 32, "at x = \(x), the segments meeting at \(boundary)")
+            XCTAssertEqual(tab?.id, x < half ? 31 : 32, "at x = \(x): equal shares, the segments meeting at \(boundary)")
         }
+        let between = (half + boundary) / 2
+        XCTAssertEqual(p.segments.contextTab(at: CGPoint(x: between, y: control.bounds.midY), in: control)?.id, 32,
+                       "past the half, though still on Temperature's segment: the share names Length")
     }
 
     /// LLP 1116 D6: a text tab whose `aria-label` says more than its words
@@ -399,6 +407,7 @@ final class PresenceIOSTests: XCTestCase {
     /// where it fell back to the authored pills (unit-converter). LLP 1116
     /// D2: each segment, and a tab bar's item, carries its tab's `testId`.
     func testASegmentsAriaLabelIsItsAccessibilityLabelAndItsTestIdItsIdentifier() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit makes a segment's element only for an assistive client") }
         let p = tabBarFixture()
         defer { p.reset() }
         let owner = try XCTUnwrap(p.views[10])
@@ -421,14 +430,14 @@ final class PresenceIOSTests: XCTestCase {
         XCTAssertEqual(control.accessibilityIdentifier, "units")
         control.frame = CGRect(x: 0, y: 0, width: 300, height: 32)
         control.layoutIfNeeded()
-        let segments = control.segmentViews
+        let segments = control.accessibilitySegments
         XCTAssertEqual(segments.count, 2)
         XCTAssertEqual(segments.last?.accessibilityLabel, "Saved items", "the aria-label is the segment's name")
-        XCTAssertEqual(segments.map(\.accessibilityIdentifier), ["tab-home", "tab-saved"])
+        XCTAssertEqual(segments.map(\.readIdentifier), ["tab-home", "tab-saved"])
         // The label taken away: the segment's name is its words again.
         p.apply(wireBatch([["op": "props", "id": 12, "set": [:], "clear": ["accessibilityLabel"]]]))
         control.layoutIfNeeded()
-        XCTAssertNotEqual(control.segmentViews.last?.accessibilityLabel, "Saved items")
+        XCTAssertNotEqual(control.accessibilitySegments.last?.accessibilityLabel, "Saved items")
     }
 
     func testResetRestoresTabBarMembersAndDropsTheProjection() throws {

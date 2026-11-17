@@ -1,14 +1,15 @@
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
-import { test, expect } from 'bun:test';
+import { test as bunTest, expect } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { perfDelta } from '../../scripts/agent-inspect.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { webCompiler } from './module.mjs';
+const test = need('chrome', chromium().unavailable, { test: bunTest });
 
 function runtimeServer(development = false, names = [[], [], []], types = [[], [], []], map = null) {
   const bytes = JSON.stringify(map);

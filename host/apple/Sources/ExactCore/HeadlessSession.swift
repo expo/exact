@@ -271,6 +271,9 @@ public final class HeadlessSession {
         return try pump(at: now)
     }
 
+    /// Re-read an imported companion snapshot and invalidate its readers.
+    public func storeChanged() throws -> Snapshot { try turn { core.runtime.storeChanged() } }
+
     /// Drain ready replies and lay out their store changes: a live host's answer to its wake.
     @discardableResult
     public func pump(at now: Double) throws -> Snapshot {

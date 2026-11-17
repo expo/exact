@@ -71,7 +71,8 @@ enum ResetGate {
         "pointer(_:_:_:now:)": "a pointer event on the old tree",
         "pan(_:dx:dy:now:)": "a pan on the old tree",
         "panRelease(_:vx:vy:now:)": "a pan released as its view goes",
-        "scrolled(_:left:top:)": "an old scroller's offset as its view goes",
+        "scrolled(_:left:top:observing:)": "an old scroller's offset as its view goes",
+        "noteCollectionScroll(_:revision:sequence:offset:)": "the old list's travel; the replacement reports its own port",
         "timelineScrolled(_:left:top:)": "an old scroller's timelines as its view goes; the new tree's layout places its own",
         "canvasDrawAsync(done:)": "a draw of the old tree's canvases; the new tree's draw on mount",
         "intrinsics(_:)": "the old views' sizes; the new tree's views measure and report their own",
@@ -230,7 +231,7 @@ extension ExactSession {
                 view?.needsLayout = true
                 #endif
             case .page: tellPage()
-            case .collections: presenter.collections.flush()
+            case .collections: presenter.collections.flushIfNeeded()
             case .pump: pumpReplies()
             case .activation: if let held = pendingActivation, held.generation == generation { pendingActivation = nil; activateData(held.generation, token: held.token) } // (this turn: its batch, then its module events)
             case .modules: if dataGeneration == generation, !replays.contains(.activation) { deliverModuleEvents() } // (else this generation's activation drains them)

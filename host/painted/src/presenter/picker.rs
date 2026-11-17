@@ -1,11 +1,9 @@
-//! `showPicker` and its answer on Linux (LLP 1069.002 D8, D9): refused with
-//! `cancel` outside the agent (ruled: no desktop host yet); under the agent,
-//! held for `tap @t cancel` or `type @t <path>…`, whose files are copied
-//! into `app:/tmp/picked/` before `change` fires. `saveFile` likewise
-//! (LLP 1069.010 D3): refused with `cancel`, or held as `export` for
-//! `type @t <path>`, which the `app:/` file is copied to. The three
-//! document pickers (LLP 1069.010 D2) ask the desktop portal's file chooser
-//! on Linux (`portal.rs`), and are held for the agent as the others are.
+//! File selection and export (LLP 1069.002, LLP 1069.010, LLP 1173 D1).
+//! Windows hands dialogs to its window thread; Linux's document pickers ask
+//! the desktop portal. Linux's file input and export refuse outside the agent.
+//! The agent holds all these calls for an explicit answer. File inputs copy
+//! into `app:/tmp/picked/`; Windows and agent selections are borrowed, while
+//! Android's staged copies belong to the import and are removed afterwards.
 //! Notifications have no centre here either: refused, or listed for the
 //! agent. On a host with a shell (Android) the platform has every one of
 //! these, and the channel to it (`requests.rs`, LLP 1115.001 D5) carries
@@ -111,6 +109,29 @@ impl<D: DataSource> Presenter<D> {
             self.dirty = true;
             return;
         }
+        if self.requests.file_dialogs {
+            if let Some(input) = self.host.runner().picker(id) {
+                let picker = exact_runner::file_pickers::Picker {
+                    kind: exact_runner::file_pickers::Kind::Open,
+                    id: id.into(),
+                    multiple: input.multiple,
+                    suggested_name: String::new(),
+                    start_in: None,
+                };
+                self.queue_file_dialog(
+                    file_dialog::FileDialog {
+                        command: "picker",
+                        picker,
+                    },
+                    input.view,
+                    file_dialog::Route::Import,
+                );
+            } else {
+                self.host
+                    .log(format!("picker: refused: no file input with id {id:?}"));
+            }
+            return;
+        }
         self.host.log("picker: refused: unavailable");
         self.not_carried("showPicker", "unavailable");
         if let Some(view) = self.host.runner().picker(id).map(|p| p.view) {
@@ -207,6 +228,17 @@ impl<D: DataSource> Presenter<D> {
         view: Option<ViewId>,
         answer: Option<&str>,
     ) {
+        self.import_files(request, view, answer, true, "Android");
+    }
+
+    fn import_files(
+        &mut self,
+        request: u32,
+        view: Option<ViewId>,
+        answer: Option<&str>,
+        remove_sources: bool,
+        host: &str,
+    ) {
         let view = view.filter(|view| self.is_file_input(*view));
         let sources = match answer {
             None => Ok(Vec::new()),
@@ -238,12 +270,12 @@ impl<D: DataSource> Presenter<D> {
         }
         let targets = view.map_or_else(
             || Ok(Vec::new()),
-            |view| self.picked_targets(view, &sources, "Android"),
+            |view| self.picked_targets(view, &sources, host),
         );
         let job = Import {
             sources,
             targets,
-            remove_sources: true,
+            remove_sources,
         };
         self.requests
             .waiting
@@ -268,6 +300,29 @@ impl<D: DataSource> Presenter<D> {
                 self.finish_files(view, Err(error.to_string()));
             }
         }
+    }
+
+    pub(super) fn borrowed_files_chosen(
+        &mut self,
+        request: u32,
+        view: ViewId,
+        paths: Vec<PathBuf>,
+    ) {
+        let sources: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                serde_json::json!({
+                    "path": path, "name": path.file_name().unwrap_or_default().to_string_lossy(),
+                })
+            })
+            .collect();
+        self.import_files(
+            request,
+            Some(view),
+            Some(&serde_json::to_string(&sources).unwrap()),
+            false,
+            "Windows",
+        );
     }
 
     pub(super) fn finish_file_imports(&mut self) {
@@ -438,16 +493,41 @@ impl<D: DataSource> Presenter<D> {
             .collect()
     }
 
-    /// `saveFile(id, from, suggestedName)`: the runner's rule, with no panel.
+    /// `saveFile`: the runner's rule, then a dialog where the window provides one.
     pub(crate) fn save_file(&mut self, args: &[exact_plan::Value]) {
         use exact_runner::save_file::{arm, Arm, SaveFile};
         let request = SaveFile::from_args(args);
-        let agent = crate::picker::agent();
-        if let Arm::Refused(reason, view) = arm(self.host.runner_mut(), request, agent, false) {
-            self.not_carried("saveFile", &reason);
-            if let Some(view) = view {
-                self.deliver_picker(view, Event::Cancel);
+        let agent = self.agent || crate::picker::agent();
+        match arm(
+            self.host.runner_mut(),
+            request,
+            agent,
+            self.requests.file_dialogs,
+        ) {
+            Arm::Refused(reason, view) => {
+                self.not_carried("saveFile", &reason);
+                if let Some(view) = view {
+                    self.deliver_picker(view, Event::Cancel);
+                }
             }
+            Arm::Present(save, view) => {
+                let picker = exact_runner::file_pickers::Picker {
+                    kind: exact_runner::file_pickers::Kind::Save,
+                    id: save.id.clone(),
+                    multiple: false,
+                    suggested_name: save.suggested_name.clone(),
+                    start_in: save.start_in.clone(),
+                };
+                self.queue_file_dialog(
+                    file_dialog::FileDialog {
+                        command: "saveFile",
+                        picker,
+                    },
+                    view,
+                    file_dialog::Route::Export(save),
+                );
+            }
+            Arm::Held(_) => {}
         }
         self.dirty = true;
     }
@@ -470,14 +550,27 @@ impl<D: DataSource> Presenter<D> {
         }
         let q: serde_json::Value = serde_json::from_str(request).unwrap_or_default();
         let to = std::path::PathBuf::from(q["text"].as_str().unwrap_or("").trim());
-        let copied = match r["request"]["text"].as_str() {
-            Some(text) => std::fs::write(&to, text).map_err(|e| e.to_string()),
-            None => r["request"]["from"]
-                .as_str()
-                .and_then(crate::picker::open)
+        self.save_chosen(
+            view,
+            &to,
+            r["request"]["from"].as_str().unwrap_or(""),
+            r["request"]["text"].as_str(),
+        );
+    }
+
+    pub(super) fn save_chosen(
+        &mut self,
+        view: ViewId,
+        to: &std::path::Path,
+        from: &str,
+        text: Option<&str>,
+    ) {
+        let copied = match text {
+            Some(text) => std::fs::write(to, text).map_err(|e| e.to_string()),
+            None => crate::picker::open(from)
                 .ok_or_else(|| "no app file to copy".to_owned())
                 .and_then(|mut from| {
-                    let mut to = std::fs::File::create(&to).map_err(|e| e.to_string())?;
+                    let mut to = std::fs::File::create(to).map_err(|e| e.to_string())?;
                     std::io::copy(&mut from, &mut to)
                         .map(drop)
                         .map_err(|e| e.to_string())
@@ -497,22 +590,38 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// `showOpenFilePicker`, `showDirectoryPicker`, `showSaveFilePicker`
-    /// (LLP 1069.010 D2): the runner's rule, then the desktop portal's
-    /// chooser on Linux; refused elsewhere.
+    /// (LLP 1069.010 D2): the runner's rule, then the window's dialog or
+    /// the desktop portal's chooser on Linux.
     pub(crate) fn document_picker(&mut self, name: &str, args: &[exact_plan::Value]) {
         use exact_runner::file_pickers::{arm, Arm, Kind, Picker};
         let Some(kind) = Kind::of(name) else {
             return;
         };
         let request = Picker::from_args(kind, args);
-        let agent = crate::picker::agent();
+        let agent = self.agent || crate::picker::agent();
         let portal = cfg!(target_os = "linux") && !self.has_shell();
-        match arm(self.host.runner_mut(), kind, request, agent, portal) {
+        match arm(
+            self.host.runner_mut(),
+            kind,
+            request,
+            agent,
+            portal || self.requests.file_dialogs,
+        ) {
             Arm::Refused(reason, view) => {
                 self.not_carried(name, &reason);
                 if let Some(view) = view {
                     self.deliver_picker(view, Event::Cancel);
                 }
+            }
+            Arm::Present(picker, view) if self.requests.file_dialogs => {
+                self.queue_file_dialog(
+                    file_dialog::FileDialog {
+                        command: kind.command(),
+                        picker,
+                    },
+                    view,
+                    file_dialog::Route::Document(kind),
+                );
             }
             #[cfg(unix)]
             Arm::Present(request, view) => {
@@ -662,7 +771,7 @@ impl<D: DataSource> Presenter<D> {
     /// What the person chose for the picker `name` at `view`: each path
     /// minted as a handle (D1), one per line in `change`, or `cancel` when
     /// none mints.
-    fn documents_chosen<'p>(
+    pub(super) fn documents_chosen<'p>(
         &mut self,
         view: ViewId,
         name: &str,
@@ -711,7 +820,7 @@ impl<D: DataSource> Presenter<D> {
         );
     }
 
-    fn deliver_picker(&mut self, view: ViewId, event: Event) {
+    pub(super) fn deliver_picker(&mut self, view: ViewId, event: Event) {
         if self.host.kernel().node(view).is_none() {
             return;
         }
@@ -796,6 +905,37 @@ fn an_old_worker_cannot_overwrite_a_pick_after_runner_replacement() {
 mod delivery_tests {
     use super::*;
     use exact_kernel::{MonospaceMeasurer, TextMeasureRequest, TextMeasurer, TextMetrics};
+
+    #[test]
+    fn borrowed_file_imports_leave_originals_on_success_refusal_and_stale_answers() {
+        for mode in ["success", "refused", "stale"] {
+            let (mut p, view, source, path) = fixture(mode);
+            let (wake, woken) = std::sync::mpsc::channel();
+            p.executor = crate::executor::Executor::start_notifying("", move || {
+                let _ = wake.send(());
+            });
+            p.borrowed_files_chosen(1, view, vec![path.clone()]);
+            if mode == "stale" {
+                p.picks_replaced();
+            }
+            woken
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("file import did not wake the presenter");
+            p.finish_file_imports();
+            assert!(p.requests.importing.is_empty(), "{mode}");
+            assert_eq!(std::fs::read(&path).unwrap(), b"picked bytes", "{mode}");
+            let published = p.host.runner().slot("path").unwrap().as_str().unwrap();
+            if mode == "success" {
+                let imported = crate::picker::resolve(published).unwrap();
+                assert_ne!(imported, path);
+                assert_eq!(std::fs::read(&imported).unwrap(), b"picked bytes");
+                std::fs::remove_file(imported).unwrap();
+            } else {
+                assert!(published.is_empty(), "{mode}");
+            }
+            drop(source);
+        }
+    }
 
     #[test]
     fn agent_files_cross_without_access_to_the_drivers_paths() {

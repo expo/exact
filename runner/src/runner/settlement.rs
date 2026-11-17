@@ -825,10 +825,9 @@ impl<D: DataSource> Runner<D> {
                             p.args.clone_from(&args);
                         }
                     }
-                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed, or
-                    // an entry waiting for its identity, ignores context, and
-                    // only for known, equal identifying arguments (`kept_wait`).
-                    // A refused commit restores `states` and the resource row.
+                    // @ref LLP 1027.005 D3/D4 — only a persisted boot seed, or an entry waiting
+                    // for its identity, ignores context, and only for known, equal identifying
+                    // arguments (`kept_wait`). A refused commit restores `states` and the row.
                     let kept = self.admit_kept(i, &args, valid_args, ready, &mut states);
                     let (kept_seed, hold) = (kept.kept_seed, kept.hold);
                     if kept.admitted_early {
@@ -927,6 +926,7 @@ impl<D: DataSource> Runner<D> {
                         Some(v) => v,
                         None if valid_args
                             && (launch || !ready && self.owned_row(i).is_none())
+                            && !(hold && ready && states[i].is_some())
                             && !exact_plan::runner_owned_source(self.plan.str(row.source))
                             && row.initial.len > 0
                             && !self.secrets_unseen(i, &row, &resources)

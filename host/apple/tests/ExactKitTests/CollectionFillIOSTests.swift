@@ -14,8 +14,7 @@ final class CollectionFillIOSTests: XCTestCase {
 
     /// Four 72-point rows from index `0` (or the indices given), each at its
     /// place in a 100-row list under 20 points of padding.
-    private func fixture(_ indices: [Int] = Array(0..<4)) throws -> (Presenter, UIWindow, UIScrollView) {
-        let p = Presenter()
+    private func fixture(_ indices: [Int] = Array(0..<4), presenter p: Presenter = Presenter()) throws -> (Presenter, UIWindow, UIScrollView) {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
         window.addSubview(p.viewport)
         p.viewport.frame = window.bounds
@@ -43,6 +42,7 @@ final class CollectionFillIOSTests: XCTestCase {
     /// Advance offsets and slices at 60 Hz, draining owner work between frames.
     /// The bounds include the final fill and retirement after the reversal.
     func testScriptedFlingCountsFillsFlushesAndSlices() throws {
+        var rests: [[Int]] = []
         for asynchronous in [false, true] {
             let previous = ExactSession.asyncFills
             ExactSession.asyncFills = asynchronous
@@ -61,6 +61,12 @@ final class CollectionFillIOSTests: XCTestCase {
             waitForMainQueue("initial list continuations")
             var time = CACurrentMediaTime()
             p.scrollPump.clock = { time }
+            var reports = 0, landings = 0
+            let feedback = p.collections.onFeedback, fill = p.collections.onFill
+            p.collections.onFeedback = { reports += 1; feedback?($0) }
+            if let fill { p.collections.onFill = { reports += 1; fill($0, $1) } }
+            session.onLandForTests = { kind, _ in if case .fill = kind { landings += 1 } }
+            var settledRows: [Int] = []
             let fills = p.scrollPump.fillPasses, flushes = p.collections.flushes, slices = p.collections.slices
             for frame in 0..<240 {
                 time += 1.0 / 60
@@ -71,6 +77,12 @@ final class CollectionFillIOSTests: XCTestCase {
                 FrameClock.shared.drop(p.scrollPump)
                 waitForMainQueue("frame's queued pump and collection continuation")
                 XCTAssertTrue(p.collections.covers(node.id), "frame \(frame) has every row it shows")
+                if frame == 119 || frame == 239 {
+                    time += 0.2
+                    p.collections.changed(node.id, user: true)
+                    p.scrollPump.settle()
+                    settledRows += p.collections.entries[node.id]!.snapshot.rows.map(\.index)
+                }
             }
             for _ in 0..<20 {
                 time += 1.0 / 60
@@ -83,11 +95,636 @@ final class CollectionFillIOSTests: XCTestCase {
             XCTAssertTrue(p.collections.fillPending.isEmpty)
             XCTAssertEqual(scroll.contentOffset.x, 0, accuracy: 0.001)
             let counts = [p.scrollPump.fillPasses - fills, p.collections.flushes - flushes, p.collections.slices - slices]
-            // What the host made before frames skipped text discovery, with a
-            // margin of two: unrelated changes to slicing move these by one.
+            XCTAssertEqual(settledRows, Array(7...13) + Array(0...3), "the two resting windows measured on base")
+            rests.append(settledRows)
+            if asynchronous {
+                XCTAssertLessThanOrEqual(reports, 60)
+                XCTAssertLessThanOrEqual(counts[1], 100)
+                XCTAssertLessThanOrEqual(landings, 30)
+                XCTAssertEqual(rests[0], rests[1], "the ordinary rest window is identical with synchronous fills")
+            }
+            XCTContext.runActivity(named: "T fling async=\(asynchronous) reports=\(reports) flushes=\(counts[1]) landings=\(landings) rest_rows=\(settledRows)") { _ in }
+            // The synchronous route keeps its existing slice budget.
             let baseline = asynchronous ? [248, 305, 124] : [240, 280, 120]
             for (count, bound) in zip(counts, baseline) { XCTAssertLessThanOrEqual(count, bound + 2) }
             print("J fling async=\(asynchronous) frames=240 fills=\(counts[0]) flushes=\(counts[1]) slices=\(counts[2])")
+        }
+    }
+
+    func testShopGridFortyFlingsWithReversalsAndRests() throws {
+        var rests: [[[Int]]] = []
+        for asynchronous in [false, true] {
+            let previous = ExactSession.asyncFills
+            ExactSession.asyncFills = asynchronous
+            defer { ExactSession.asyncFills = previous }
+            let session = ExactApp.shared.makeSession(label: "shop-grid-flings")
+            let p = session.presenter
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+            defer { session.destroy(); window.isHidden = true }
+            window.addSubview(p.viewport); p.viewport.frame = window.bounds; window.makeKeyAndVisible()
+            XCTAssertNil(session.boot(plan: try fixturePlan("SHOP_SCROLL"), size: window.bounds.size).error)
+            let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "product-grid" })
+            let scroll = try XCTUnwrap(node.scrollView)
+            settleAnimated(session)
+            waitForMainQueue("initial grid continuations")
+            var time = CACurrentMediaTime(), landings = 0, retirements = 0
+            let feedback = p.collections.onFeedback
+            p.collections.onFeedback = { bytes in
+                if bytes.withUnsafeBytes({ $0.loadUnaligned(fromByteOffset: 92, as: UInt32.self) }) & 4 != 0 { retirements += 1 }
+                feedback?(bytes)
+            }
+            p.scrollPump.clock = { time }
+            session.onLandForTests = { kind, _ in if case .fill = kind { landings += 1 } }
+            let encoded = CollectionFacts.encodedReports, flushes = p.collections.flushes
+            let posts = Owner.shared.postedJobsForTests
+            let entries = Owner.shared.sync { session.runtime.collectionFeedbackEntries }
+            var settledRows: [[Int]] = []
+            for fling in 0..<40 {
+                let direction = (fling / 5) % 2 == 0 ? 1.0 : -1.0
+                // A 3,000 pt/s release decays at UIKit's normal rate for one second.
+                for frame in 0..<60 {
+                    time += 1.0 / 60
+                    let step = direction * 3000 * pow(0.998, Double(frame) * 1000 / 60) / 60
+                    let maximum = scroll.contentSize.height - scroll.bounds.height
+                    scroll.contentOffset.y = min(maximum, max(0, scroll.contentOffset.y + step))
+                    p.scrollPump.pump()
+                    Owner.shared.sync {}
+                    FrameClock.shared.drop(p.scrollPump)
+                    waitForMainQueue("frame's owner publication and pump")
+                    waitFor("the frame's publication") { !session.hasPublished() }
+                    XCTAssertTrue(p.collections.covers(node.id), "fling \(fling), frame \(frame)")
+                }
+                time += 0.3
+                node.scrollViewDidEndDecelerating(scroll)
+                settleAnimated(session)
+                waitForMainQueue("grid at rest")
+                settledRows.append(p.collections.entries[node.id]!.snapshot.rows.map(\.index))
+            }
+            let reports = CollectionFacts.encodedReports - encoded
+            let owner = Owner.shared.sync { session.runtime.collectionFeedbackEntries } - entries
+            let flushed = p.collections.flushes - flushes
+            let posted = Owner.shared.postedJobsForTests - posts
+            XCTContext.runActivity(named: "T shop async=\(asynchronous) reports=\(reports) owner_entries=\(owner) owner_posts=\(posted) retirements=\(retirements) flushes=\(flushed) landings=\(landings)") { _ in }
+            print("T shop async=\(asynchronous) flings=40 reports=\(reports) owner_entries=\(owner) owner_posts=\(posted) retirements=\(retirements) flushes=\(flushed) landings=\(landings) rests=\(settledRows)")
+            rests.append(settledRows)
+            let base = [[2, 3, 4, 5, 6, 7, 8], [6, 7, 8, 9, 10, 11, 12], [10, 11, 12, 13, 14, 15, 16],
+                [15, 16, 17, 18, 19, 20], [19, 20, 21, 22, 23, 24, 25], [15, 16, 17, 18, 19, 20],
+                [10, 11, 12, 13, 14, 15, 16], [6, 7, 8, 9, 10, 11, 12], [2, 3, 4, 5, 6, 7, 8], [0, 1, 2, 3]]
+            XCTAssertEqual(settledRows, Array(repeating: base, count: 4).flatMap { $0 }, "rest windows recorded on T2")
+            XCTAssertLessThanOrEqual(reports, 600)
+            XCTAssertLessThanOrEqual(reports + posted, 600, "include every posted job, even jobs unrelated to travel")
+            XCTAssertLessThanOrEqual(owner, 600)
+            XCTAssertLessThanOrEqual(flushed, 400)
+            if asynchronous { XCTAssertEqual(rests[0], rests[1], "every resting window equals synchronous fills") }
+        }
+    }
+
+    func testQuietFramesEncodeNothingAndPostNoOwnerJobs() throws {
+        let (session, window, node, scroll) = try listFixture(plan: "SHOP_SCROLL", target: "product-grid")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter
+        waitForMainQueue("initial list continuations")
+        p.collections.fillSlice(node.id, limit: UInt32.max - 1)
+        session.drainFill()
+        settleAnimated(session)
+        waitForMainQueue("measured grid coverage")
+        var time = CACurrentMediaTime()
+        p.scrollPump.clock = { time }
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        let entry = try XCTUnwrap(p.collections.entries[node.id])
+        let band = try XCTUnwrap(entry.snapshot.window)
+        let previous = try XCTUnwrap(entry.lastFacts)
+        XCTAssertFalse(entry.snapshot.pending)
+        XCTAssertFalse(entry.owed || entry.gesture || entry.records.changed)
+        XCTAssertTrue(entry.records.unacknowledged.isEmpty)
+        XCTAssertNil(previous.focus); XCTAssertNil(previous.interaction)
+        let encoded = CollectionFacts.encodedReports, flushes = p.collections.flushes
+        let entries = Owner.shared.sync { session.runtime.collectionFeedbackEntries }
+        // Keep the owner occupied so only the mailbox can retain these moves.
+        Owner.shared.sync {
+            Owner.shared.callMain {
+                let posts = Owner.shared.postedJobsForTests
+                let sequence = entry.cursor.sequence
+                for offset in 1...40 {
+                    // Include a stale sample and two moves at the same time.
+                    if offset % 3 == 0 { time += 0.2 }
+                    else if offset % 3 == 1 { time += 1.0 / 60 }
+                    scroll.contentOffset.y = CGFloat(offset)
+                    let facts = p.collections.geometry(node.id)!
+                    let speed = p.scrollPump.velocity(node.id)
+                    let ahead = speed * p.scrollPump.leadTime(node.id)
+                    let top = max(0, facts.offset)
+                    XCTAssertGreaterThanOrEqual(top + min(0, ahead), band.built[0])
+                    XCTAssertLessThanOrEqual(top + facts.portMain + max(0, ahead), band.built[1])
+                    XCTAssertEqual([facts.portMain, facts.portCross, facts.cross, facts.paddingStart, facts.paddingEnd],
+                        [previous.portMain, previous.portCross, previous.cross, previous.paddingStart, previous.paddingEnd])
+                    XCTAssertFalse(band.owesReveal(offset: top, port: facts.portMain))
+                    XCTAssertFalse(band.owesEdge(offset: top, port: facts.portMain, velocity: speed))
+                    XCTAssertFalse(band.owesRetirement(offset: top, port: facts.portMain, moving: true))
+                    XCTAssertTrue(p.collections.fillPending.isEmpty)
+                }
+                XCTAssertEqual(CollectionFacts.encodedReports, encoded)
+                XCTAssertEqual(p.collections.flushes, flushes)
+                XCTAssertEqual(Owner.shared.postedJobsForTests, posts)
+                XCTAssertEqual(entry.cursor.sequence, sequence + 40)
+            }
+        }
+        Owner.shared.sync { XCTAssertEqual(session.runtime.collectionFeedbackEntries, entries) }
+    }
+
+    func testRetirementUsesAnExtentBandWithHysteresis() throws {
+        let (p, window, _) = try measuredWindow()
+        defer { p.reset(); window.isHidden = true }
+        let band = try XCTUnwrap(p.collections.entries[1]?.snapshot.window)
+        // Moving rows retire three ports away and a rest trims to one.
+        XCTAssertFalse(band.owesRetirement(offset: 651, port: 200, moving: true))
+        XCTAssertTrue(band.owesRetirement(offset: 672, port: 200, moving: true))
+        XCTAssertFalse(band.owesRetirement(offset: 251, port: 200, moving: false))
+        XCTAssertTrue(band.owesRetirement(offset: 272, port: 200, moving: false))
+    }
+
+    func testALandingThatOnlyNeedsLeadRequestsABuildWithoutRetiring() throws {
+        let (p, window, scroll) = try measuredWindow()
+        defer { p.reset(); window.isHidden = true }
+        var reports = 0, builds = 0, inFlight = false
+        p.collections.onFeedback = { _ in reports += 1 }
+        p.collections.onFill = { _, _ in builds += 1; inFlight = true }
+        p.collections.filling = { inFlight }
+        p.collections.fillSlice(1, limit: 3)
+        scroll.contentOffset.y = 60
+        p.collections.motion = { _ in 3000 }
+        inFlight = false
+        p.collections.landed(1, at: ProcessInfo.processInfo.systemUptime)
+        p.collections.fillSlice(1, limit: 3)
+        XCTAssertEqual(reports, 0, "missing lead alone cannot owe a retire-only report")
+        XCTAssertEqual(builds, 2)
+    }
+
+    private func measuredWindow(edge: Double = 7128, start: Double = 72, mask: Int = 0, presenter: Presenter = Presenter()) throws -> (Presenter, UIWindow, UIScrollView) {
+        let (p, window, scroll) = try fixture(presenter: presenter)
+        p.collections.onFeedback = { _ in }
+        p.collections.settle()
+        var op = snapshot(2, measured: true)
+        var items = try XCTUnwrap(op["items"] as? [[String: Any]])
+        items[0]["window"] = ["built": [0, 288], "retire": [72, 216], "reveal": [0, 7200], "edges": [start, edge],
+            "margin": [0, 0], "mask": mask, "leadSeconds": 0.25, "maxLead": 400] as [String: Any]
+        op["items"] = items
+        p.apply(wireBatch([op]))
+        p.collections.settle()
+        return (p, window, scroll)
+    }
+
+    func testQuietTravelKeepsPinChangesAndExplicitSlices() throws {
+        let (p, window, scroll) = try measuredWindow()
+        defer { p.reset(); window.isHidden = true }
+        var reports: [Data] = []
+        p.collections.onFeedback = { reports.append($0) }
+        let flushes = p.collections.flushes
+        for offset in 1...60 { scroll.contentOffset.y = CGFloat(offset) }
+        XCTAssertTrue(reports.isEmpty)
+        XCTAssertEqual(p.collections.flushes, flushes, "inside the window no flush is owed")
+        p.collections.pointer(2)
+        p.collections.settle()
+        XCTAssertEqual(p.collections.entries[1]?.lastFacts?.interaction, 2)
+        p.collections.pointer(nil)
+        p.collections.settle()
+        XCTAssertNil(p.collections.entries[1]?.lastFacts?.interaction)
+        let before = reports.count
+        scroll.contentOffset.y = 61
+        p.collections.fillSlice(1, limit: 5)
+        XCTAssertGreaterThan(reports.count, before, "an explicit slice cannot be discarded as travel")
+    }
+
+    func testTheEndBandOwesAFreshReportAtTheSameOffset() throws {
+        let (p, window, scroll) = try measuredWindow(edge: 260, mask: 10)
+        defer { p.reset(); window.isHidden = true }
+        let facts = try XCTUnwrap(p.collections.geometry(1))
+        let boundary = 260 - facts.portMain
+        p.collections.motion = { _ in nil }
+        var offsets: [Double] = []
+        p.collections.onFeedback = { bytes in
+            offsets.append(bytes.withUnsafeBytes { Double(bitPattern: $0.loadUnaligned(fromByteOffset: 24, as: UInt64.self)) })
+        }
+        for offset in 0...Int(boundary) + 1 {
+            scroll.contentOffset.y = CGFloat(offset) + CGFloat(facts.paddingStart)
+        }
+        XCTAssertEqual(offsets, [boundary + 1], "contact at the band's bound is silent; entering it reports immediately")
+    }
+
+    func testEnteringAnEdgeAndReversingDrainsAHeldPublicationBeforeReporting() throws {
+        let session = ExactApp.shared.makeSession(label: "held-edge-reversal")
+        let (p, window, scroll) = try measuredWindow(edge: 260, mask: 10, presenter: session.presenter)
+        defer { session.destroy(); window.isHidden = true }
+        let node = try XCTUnwrap(p.views[1])
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        p.collections.motion = { _ in nil }
+        let facts = try XCTUnwrap(p.collections.geometry(1))
+        let boundary = 260 - facts.portMain
+        scroll.contentOffset.y = CGFloat(boundary + facts.paddingStart)
+        var landed = 0, offsets: [Double] = []
+        session.onLandForTests = { _, _ in landed += 1 }
+        for _ in 0..<8 {
+            session.noticesInFlight += 1
+            session.publish(.notice, RuntimeCompletion(lease: session.runtime.completionLease, batch: wireBatch([])))
+        }
+        session.holdFillForTests()
+        session.publish(.fill(1), RuntimeCompletion(lease: session.runtime.completionLease, batch: wireBatch([])))
+        XCTAssertTrue(session.hasPublished())
+        p.collections.onFeedback = { bytes in
+            XCTAssertFalse(session.hasPublished(), "all earlier publications precede the fresh edge report")
+            XCTAssertEqual(landed, 9)
+            let offset = bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 24, as: Double.self) }
+            offsets.append(offset)
+            // Acknowledge entering the band so the reversal must rearm it.
+            var op = self.snapshot(2 + offsets.count, measured: true)
+            var items = op["items"] as! [[String: Any]]
+            items[0]["window"] = ["built": [0, 288], "retire": [72, 216], "reveal": [0, 7200],
+                "edges": [72, 260], "margin": [0, 0], "mask": offset > boundary ? 2 : 10,
+                "leadSeconds": 0.25, "maxLead": 400] as [String: Any]
+            op["items"] = items
+            p.apply(wireBatch([op]))
+        }
+        scroll.contentOffset.y += 1
+        XCTAssertEqual(offsets, [boundary + 1], "entering the edge reports before this callback returns")
+        scroll.contentOffset.y -= 2
+        XCTAssertEqual(offsets, [boundary + 1, boundary - 1], "the next callback rearms at its current offset")
+        XCTAssertTrue(p.collections.covers(1))
+    }
+
+    func testAccelerationAndReversalUseTheCurrentEdgeLead() throws {
+        let (p, window, scroll) = try measuredWindow(edge: 350, start: 0, mask: 15)
+        defer { p.reset(); window.isHidden = true }
+        var time = CACurrentMediaTime()
+        p.scrollPump.clock = { time }
+        var offsets: [Double] = []
+        p.collections.onFeedback = { bytes in
+            offsets.append(bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 24, as: Double.self) })
+        }
+        scroll.contentOffset.y = 20
+        for offset in [21, 22, 42] {
+            time += 1.0 / 60
+            scroll.contentOffset.y = CGFloat(offset)
+        }
+        let current = p.scrollPump.velocity(1)
+        XCTAssertGreaterThan(current, 600)
+        XCTAssertEqual(offsets, [42], "acceleration enters the expanded end band on this frame")
+        // At the next frame the velocity reverses: its start band expands now.
+        let before = offsets.count
+        time += 1.0 / 60
+        scroll.contentOffset.y = 32
+        XCTAssertLessThan(p.scrollPump.velocity(1), 0)
+        XCTAssertGreaterThan(offsets.count, before)
+        XCTAssertEqual(offsets.last, 32, "reversal uses this frame's start lead")
+    }
+
+    func testReenteringAnEdgeUsesTheRunnersRearmedWindow() throws {
+        let (session, window, node, scroll) = try listFixture(plan: "QUIET_EDGE")
+        let p = session.presenter
+        defer { session.destroy(); window.isHidden = true }
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        p.collections.motion = { _ in nil }
+        let feedback = p.collections.onFeedback
+        var offsets: [Double] = []
+        p.collections.onFeedback = { bytes in
+            offsets.append(bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 24, as: Double.self) })
+            feedback?(bytes)
+        }
+        func reaches() throws -> String {
+            try XCTUnwrap(p.views.values.first { $0.props["testId"] == "reaches" }).props["text"] ?? ""
+        }
+        let rows = try XCTUnwrap(p.collections.entries[node.id]).snapshot.rows.map(\.view)
+        let flushes = p.collections.flushes
+        for (offset, count) in [(201.0, "1"), (200.0, "1"), (201.0, "2")] {
+            scroll.contentOffset.y = CGFloat(offset)
+            XCTAssertEqual(try reaches(), count, "edge at \(offset)")
+            XCTAssertTrue(p.collections.covers(node.id))
+        }
+        XCTAssertEqual(offsets, [201, 200, 201], "exit publishes the mask that makes reentry report")
+        XCTAssertEqual(p.collections.flushes - flushes, 3)
+        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.rows.map(\.view), rows)
+    }
+
+    private func settleAnimated(_ session: ExactSession) {
+        for _ in 0..<8 {
+            session.presenter.scrollPump.settle()
+            session.drainFill()
+            if session.presenter.collections.fillPending.isEmpty { return }
+        }
+        XCTFail("the animated list still owes a fill after settlement")
+    }
+
+    private func listFixture(plan: String = "QUIET_SCROLL", target: String = "feed") throws -> (ExactSession, UIWindow, NodeView, UIScrollView) {
+        let session = ExactApp.shared.makeSession(label: "quiet-reveals")
+        let p = session.presenter
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        window.addSubview(p.viewport); p.viewport.frame = window.bounds; window.makeKeyAndVisible()
+        XCTAssertNil(session.boot(plan: try fixturePlan(plan), size: window.bounds.size).error)
+        session.apply(session.runtime.startOnFrame(false, at: session.now()))
+        settleAnimated(session)
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == target })
+        return (session, window, node, try XCTUnwrap(node.scrollView))
+    }
+
+    func testQuietTravelReportsWhenAPrefetchedAnimationFirstShows() throws {
+        let (session, window, _, scroll) = try listFixture()
+        let p = session.presenter
+        defer { session.destroy(); window.isHidden = true }
+        let coin = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "coin-4" })
+        func animation() throws -> CAAnimation {
+            let key = try XCTUnwrap(coin.layer.animationKeys()?.first { $0.contains("appear") })
+            return try XCTUnwrap(coin.layer.animation(forKey: key))
+        }
+        XCTAssertEqual(try animation().speed, 0, "prefetched animation is held")
+        var reports = 0
+        let feedback = p.collections.onFeedback
+        p.collections.onFeedback = { reports += 1; feedback?($0) }
+        session.holdFillForTests()
+        session.publish(.fill(try XCTUnwrap(p.collections.entries.keys.first)),
+            RuntimeCompletion(lease: session.runtime.completionLease, batch: wireBatch([])))
+        scroll.contentOffset.y = 150
+        XCTAssertFalse(session.hasPublished(), "the first reveal drains the earlier held publication")
+        XCTAssertGreaterThan(reports, 0, "first overlap reports synchronously, inside measured coverage")
+        XCTAssertEqual(try animation().speed, 1, "the animation starts in its first visible frame")
+    }
+
+    func testSuccessiveAnchorCorrectionsSurviveQuietTravelAndAHeldPublication() throws {
+        let (p, window, scroll) = try measuredWindow()
+        defer { p.reset(); window.isHidden = true }
+        var reports = 0
+        p.collections.onFeedback = { _ in reports += 1 }
+        func correction(_ revision: Int, from: Double, to: Double) throws -> Batch {
+            var op = snapshot(revision, measured: true)
+            var items = try XCTUnwrap(op["items"] as? [[String: Any]])
+            items[0]["correction"] = ["scrollSequence": p.collections.entries[1]!.cursor.sequence,
+                "from": from, "offset": to] as [String: Any]
+            items[0]["window"] = ["built": [0, 288], "retire": [72, 216], "reveal": [0, 7200],
+                "edges": [72, 7128], "margin": [0, 0], "mask": 0, "leadSeconds": 0.25, "maxLead": 400] as [String: Any]
+            op["items"] = items
+            return wireBatch([op])
+        }
+        // The runner regression checks that travel acknowledges the first
+        // correction and that the next publication retains a relative origin.
+        p.apply(try correction(3, from: 0, to: 10))
+        p.collections.settle()
+        XCTAssertEqual(scroll.contentOffset.y, 10, accuracy: 0.01)
+        let before = reports, flushes = p.collections.flushes
+        scroll.contentOffset.y = 15
+        let held = try correction(4, from: 15, to: 25)
+        scroll.contentOffset.y = 20
+        XCTAssertEqual(reports, before)
+        XCTAssertEqual(p.collections.flushes, flushes, "both frames take UIKit's quiet path")
+        XCTAssertFalse(p.collections.fillPending.contains(1))
+        p.apply(held)
+        XCTAssertEqual(scroll.contentOffset.y, 30, accuracy: 0.01,
+            "the held correction adds to travel since it was published")
+        XCTAssertTrue(p.collections.covers(1))
+    }
+
+    func testUncoveredTravelDrainsBeforeTheRetirementCheck() throws {
+        let (p, window, scroll) = try measuredWindow()
+        defer { p.reset(); window.isHidden = true }
+        var filling = true, drained = false, reports = 0
+        p.collections.filling = { filling }
+        p.collections.drain = { filling = false; drained = true }
+        p.collections.onFeedback = { _ in
+            XCTAssertTrue(drained)
+            reports += 1
+        }
+        scroll.contentOffset.y = 2000
+        XCTAssertTrue(drained, "a pending fill must land before rescuing uncovered rows")
+        XCTAssertGreaterThan(reports, 0, "the uncovered port reports in the callback")
+    }
+
+    func testAHeldAbsoluteCorrectionCannotReplaceTheCurrentFramesTravel() throws {
+        let session = ExactApp.shared.makeSession(label: "held-absolute-correction")
+        let indices = Array(12..<18)
+        let (p, window, scroll) = try fixture(indices, presenter: session.presenter)
+        defer { session.destroy(); window.isHidden = true }
+        p.collections.onFeedback = { _ in }
+        scroll.contentOffset.y = 1000
+        p.collections.settle()
+        let sequence = try XCTUnwrap(p.collections.entries[1]?.cursor.sequence)
+        let rows = indices.enumerated().map { index, row in
+            ["view": 2 + index, "root": 2 + index, "epoch": 1, "index": row, "size": 72, "measured": true] as [String: Any]
+        }
+        let batch = wireBatch([["op": "collections", "items": [["view": 1, "revision": 2,
+            "scrollSequence": sequence, "count": 100, "totalExtent": 7200, "pending": false,
+            "rows": rows, "correction": ["scrollSequence": sequence, "offset": 1100]]]]])
+        session.noticesInFlight += 1
+        session.publish(.notice, RuntimeCompletion(lease: session.runtime.completionLease, batch: batch))
+        XCTAssertTrue(session.hasPublished())
+        var landed = 0
+        session.onLandForTests = { _, _ in
+            landed += 1
+            XCTAssertEqual(p.collections.entries[1]?.cursor.sequence, sequence + 1,
+                "the reader's move precedes the held correction")
+        }
+        scroll.contentOffset.y = 990
+        XCTAssertEqual(landed, 0, "quiet travel leaves publication delivery outside the callback")
+        session.drainFill()
+        XCTAssertEqual(landed, 1)
+        XCTAssertFalse(session.hasPublished())
+        XCTAssertEqual(scroll.contentOffset.y, 990, accuracy: 0.01)
+        XCTAssertEqual(p.collections.entries[1]?.cursor.sequence, sequence + 1,
+            "one frame advances the sequence exactly once")
+        XCTAssertTrue(p.collections.covers(1))
+    }
+
+    func testAReversalWhilePublicationIsHeldKeepsTheRowsUnderTheFinger() throws {
+        let previous = ExactSession.asyncFills
+        ExactSession.asyncFills = true
+        defer { ExactSession.asyncFills = previous }
+        let session = ExactApp.shared.makeSession(label: "held-reversal")
+        let p = session.presenter
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        defer { session.destroy(); window.isHidden = true }
+        window.addSubview(p.viewport); p.viewport.frame = window.bounds; window.makeKeyAndVisible()
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: window.bounds.size).error)
+        p.scrollPump.settle()
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
+        let scroll = try XCTUnwrap(node.scrollView)
+        let initial = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        let pin = try XCTUnwrap(initial.rows.first?.root)
+        var held: RuntimeCompletion?, busy = false
+        p.collections.filling = { busy }
+        p.collections.onFill = { _, bytes in
+            busy = true
+            session.runtime.collectionFeedbackAsync(bytes, now: session.now()) { held = $0 }
+        }
+        let motion = p.collections.motion
+        p.collections.motion = { _ in 1800 }
+        scroll.contentOffset.x = 300
+        p.collections.fillSlice(node.id, limit: 20)
+        Owner.shared.sync {}
+        let completion = try XCTUnwrap(held)
+        XCTAssertTrue(busy)
+        XCTAssertTrue(p.views[pin] != nil, "unpublished construction cannot destroy the old row")
+        p.collections.pointer(pin)
+        scroll.contentOffset.x = 0
+        XCTAssertTrue(p.collections.covers(node.id), "the reversal still shows the original rows")
+        busy = false
+        session.publish(.fill(node.id), completion)
+        node.scrollViewDidScroll(scroll)
+        waitFor("the held publication lands outside the callback") { !session.hasPublished() }
+        XCTAssertFalse(session.hasPublished())
+        XCTAssertTrue(p.collections.covers(node.id))
+        XCTAssertNotNil(p.views[pin], "the fresh interaction pin survives retirement")
+        p.collections.pointer(nil)
+        p.collections.motion = motion
+        p.scrollPump.settle()
+        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.rows.map(\.index), initial.rows.map(\.index))
+    }
+
+    func testAHeldFillRefreshesQuietTravelBeforeAnAnchorDeletion() throws {
+        let (session, window, node, scroll) = try listFixture(plan: "SHOP_SCROLL", target: "product-grid")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter
+        let size = try XCTUnwrap(p.collections.entries[node.id]?.snapshot.rows.first?.size)
+        scroll.contentOffset.y = CGFloat(size * 10)
+        settleAnimated(session)
+        waitForMainQueue("the deep window settles")
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        let row = try XCTUnwrap(p.collections.entries[node.id]?.snapshot.rows.first {
+            guard let view = p.views[$0.view] else { return false }
+            let frame = view.convert(view.bounds, to: scroll)
+            return frame.minY <= scroll.contentOffset.y && frame.maxY > scroll.contentOffset.y
+        })
+        let wrapper = try XCTUnwrap(p.views[row.view])
+        let button = try XCTUnwrap(p.views.values.first { $0.kind == "button" && $0.isDescendant(of: wrapper) })
+        var held: RuntimeCompletion?, busy = false
+        p.collections.filling = { busy }
+        p.collections.onFill = { _, bytes in
+            busy = true
+            session.runtime.collectionFeedbackAsync(bytes, now: session.now()) { held = $0 }
+        }
+        p.collections.motion = { _ in 3000 }
+        p.collections.fillSlice(node.id, limit: UInt32.max - 1)
+        Owner.shared.sync {}
+        let completion = try XCTUnwrap(held)
+        let revision = try XCTUnwrap(p.collections.entries[node.id]?.snapshot.revision)
+        p.collections.motion = { _ in 0 }
+        let encoded = CollectionFacts.encodedReports, flushed = p.collections.flushes
+        scroll.contentOffset.y += CGFloat(size)
+        XCTAssertEqual(CollectionFacts.encodedReports, encoded, "travel after owner completion is quiet")
+        busy = false
+        session.publish(.fill(node.id), completion)
+        session.landFill()
+        XCTAssertGreaterThan(try XCTUnwrap(p.collections.entries[node.id]?.snapshot.revision), revision)
+        XCTAssertEqual(CollectionFacts.encodedReports, encoded + 1, "new rows need one host measurement report")
+        XCTAssertEqual(p.collections.flushes, flushed + 1)
+        XCTAssertNotNil(p.collections.entries[node.id]?.snapshot.window, "validated measurements restore quiet travel")
+        let before = scroll.contentOffset.y
+        // Delete the former anchor before another offset callback can refresh the mailbox.
+        let update = session.runtime.press(button.id, now: session.now())
+        let changed = try XCTUnwrap(update.ops.flatMap { $0.collections ?? [] }.first { $0.view == node.id })
+        XCTAssertEqual(changed.count, 119, "the data update deletes the former anchor")
+        XCTAssertEqual(try XCTUnwrap(changed.correction?.from), Double(before), accuracy: 0.01)
+        session.apply(update)
+        XCTAssertEqual(scroll.contentOffset.y, before - CGFloat(size), accuracy: 0.01)
+        XCTAssertTrue(p.collections.covers(node.id))
+    }
+
+    func testCoveredRetirementWaitsForThePumpAndUsesFreshFacts() throws {
+        let session = ExactApp.shared.makeSession(label: "deferred-retirement")
+        let indices = Array(0..<14)
+        let (p, window, scroll) = try fixture(indices, presenter: session.presenter)
+        defer { session.destroy(); window.isHidden = true }
+        p.collections.onFeedback = { _ in }
+        p.collections.settle()
+        let rows = indices.map { ["view": 2 + $0, "root": 2 + $0, "epoch": 1, "index": $0, "size": 72, "measured": true] as [String: Any] }
+        p.apply(wireBatch([["op": "collections", "items": [["view": 1, "revision": 2,
+            "scrollSequence": 0, "count": 100, "totalExtent": 7200, "pending": false, "rows": rows,
+            "window": ["built": [0, 1008], "retire": [72, 936], "reveal": [0, 7200], "edges": [72, 7128],
+                "margin": [0, 0], "mask": 0, "leadSeconds": 0.25, "maxLead": 400]]]]]))
+        p.collections.settle()
+        p.collections.motion = { _ in 0 }
+        let node = try XCTUnwrap(p.views[1])
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        scroll.contentOffset.y += CGFloat(671 - (try XCTUnwrap(p.collections.geometry(1))).offset)
+        var reports: [Data] = [], drains = 0
+        let drain = p.collections.drain
+        p.collections.drain = { drains += 1; drain?() }
+        p.collections.onFeedback = { reports.append($0) }
+        let encoded = CollectionFacts.encodedReports, flushed = p.collections.flushes
+        scroll.contentOffset.y += 1
+        XCTAssertTrue(p.collections.covers(1))
+        XCTAssertTrue(reports.isEmpty)
+        XCTAssertEqual(CollectionFacts.encodedReports, encoded)
+        XCTAssertEqual(p.collections.flushes, flushed)
+        XCTAssertEqual(drains, 0, "retirement cannot drain publications inside the scroll callback")
+        XCTAssertTrue(p.collections.fillPending.contains(1))
+        scroll.contentOffset.y += 2
+        p.collections.fillSlice(1, limit: 10)
+        XCTAssertEqual(reports.count, 1)
+        let report = try XCTUnwrap(reports.first)
+        XCTAssertEqual(report.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 24, as: Double.self) }, 674)
+        XCTAssertNotEqual(report.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 92, as: UInt32.self) } & 4, 0,
+            "the pump retires synchronously from its fresh offset")
+    }
+
+    func testAHeldWindowedFillRechecksRetirementAfterAReversal() throws {
+        let previous = ExactSession.asyncFills
+        ExactSession.asyncFills = true
+        defer { ExactSession.asyncFills = previous }
+        for reversal in [0.0, 100.0] {
+            let (session, window, node, scroll) = try listFixture(plan: "SHOP_SCROLL", target: "product-grid")
+            defer { session.destroy(); window.isHidden = true }
+            let p = session.presenter
+            waitForMainQueue("initial grid continuations")
+            var time = CACurrentMediaTime()
+            p.scrollPump.clock = { time }
+            node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+            p.collections.motion = { _ in 6000 }
+            scroll.contentOffset.y = 600
+            p.collections.fillSlice(node.id, limit: UInt32.max - 1)
+            session.drainFill()
+            waitForMainQueue("the extended window lands")
+            let entry = try XCTUnwrap(p.collections.entries[node.id])
+            let band = try XCTUnwrap(entry.snapshot.window)
+            let port = try XCTUnwrap(p.collections.geometry(node.id)).portMain
+            let crossing = band.retire[0] + port + band.maxLead + 1
+            XCTAssertLessThan(crossing + port, band.built[1], "the retire crossing stays covered")
+            var held: RuntimeCompletion?, busy = false
+            p.collections.filling = { busy }
+            p.collections.onFill = { _, bytes in
+                busy = true
+                session.runtime.collectionFeedbackAsync(bytes, now: session.now()) { held = $0 }
+            }
+            scroll.contentOffset.y += 1
+            p.collections.fillSlice(node.id, limit: UInt32.max - 1)
+            Owner.shared.sync {}
+            let completion = try XCTUnwrap(held)
+            var reports: [Data] = []
+            let feedback = p.collections.onFeedback
+            p.collections.onFeedback = { reports.append($0); feedback?($0) }
+            p.collections.motion = { _ in 0 }
+            scroll.contentOffset.y = CGFloat(crossing)
+            p.collections.fillSlice(node.id, limit: UInt32.max - 1)
+            XCTAssertTrue(reports.isEmpty, "the in-flight build holds retirement")
+            if reversal > 0 { scroll.contentOffset.y -= CGFloat(reversal) }
+            let offset = try XCTUnwrap(p.collections.geometry(node.id)).offset
+            XCTAssertEqual(band.owesRetirement(offset: offset, port: port, moving: true), reversal == 0)
+            let retained = entry.snapshot.rows.filter { row in
+                guard let view = p.views[row.view] else { return false }
+                let frame = view.convert(view.bounds, to: scroll)
+                return frame.maxY > offset - band.maxLead && frame.maxY <= offset - port
+            }
+            XCTAssertFalse(retained.isEmpty, "rows in the hysteresis band exercise the destruction cap")
+            busy = false
+            session.publish(.fill(node.id), completion)
+            session.landFill()
+            time += 0.1
+            p.scrollPump.pump()
+            waitForMainQueue("the fresh retirement decision")
+            XCTAssertEqual(reports.count, reversal == 0 ? 1 : 0)
+            if let report = reports.first {
+                XCTAssertEqual(report.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 88, as: UInt32.self) }, 0,
+                    "a windowed retirement cannot inherit the unlimited build limit")
+                XCTAssertNotEqual(report.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 92, as: UInt32.self) } & 4, 0)
+            }
+            for row in retained { XCTAssertNotNil(p.views[row.view], "row \(row.index) remains inside the retire band") }
+            XCTAssertTrue(p.collections.covers(node.id))
+            print("T held retirement reversal=\(reversal) reports=\(reports.count) retained=\(retained.count)")
         }
     }
 
@@ -405,7 +1042,7 @@ final class CollectionFillIOSTests: XCTestCase {
         let (p, window, scroll) = try fixture()
         defer { p.reset(); window.isHidden = true }
         p.collections.onFeedback = { _ in }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         let ready = expectation(description: "initial collection reports drained")
         DispatchQueue.main.async { ready.fulfill() }
         wait(for: [ready], timeout: 5)
@@ -440,16 +1077,46 @@ final class CollectionFillIOSTests: XCTestCase {
         defer { p.reset(); window.isHidden = true }
         var reports: [Data] = []
         p.collections.onFeedback = { reports.append($0) }
+        var time = CACurrentMediaTime()
+        p.scrollPump.clock = { time }
         func word(_ data: Data, _ at: Int) -> UInt32 { data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: at, as: UInt32.self) } }
         scroll.contentOffset.y = 10
         reports.removeAll()
+        time += 1.0 / 60
         scroll.contentOffset.y = 900
         XCTAssertEqual(word(try XCTUnwrap(reports.last), 92) & 16, 0, "a lone jump builds what shows")
+        time += 1.0 / 60
         scroll.contentOffset.y = 1800
         let glimpse = try XCTUnwrap(reports.last)
         XCTAssertEqual(word(glimpse, 92) & 16, 16, "the next step across a port is a glimpse")
         XCTAssertEqual(word(glimpse, 88), 2, "two rows before a glimpse's cost is measured")
         XCTAssertTrue(p.collections.glimpses.contains(1))
+    }
+
+    func testSeparatedPortCrossingsRescueTheWholeViewport() throws {
+        let previous = ExactSession.asyncFills
+        ExactSession.asyncFills = false
+        defer { ExactSession.asyncFills = previous }
+        let (session, window, node, scroll) = try listFixture()
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter
+        var time = CACurrentMediaTime()
+        p.scrollPump.clock = { time }
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        var reports: [Data] = []
+        let feedback = p.collections.onFeedback
+        p.collections.onFeedback = { reports.append($0); feedback?($0) }
+        scroll.contentOffset.y = 10
+        for offset in [1050, 2050] {
+            time += 0.05
+            reports.removeAll()
+            scroll.contentOffset.y = CGFloat(offset)
+            let report = try XCTUnwrap(reports.first)
+            XCTAssertEqual(report.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 92, as: UInt32.self) } & 16, 0,
+                "a step from three frames ago cannot turn this jump into a glimpse")
+            XCTAssertFalse(p.collections.glimpses.contains(node.id))
+            XCTAssertTrue(p.collections.covers(node.id), "all four partly visible rows are built in the callback")
+        }
     }
 
     func testScrollReportsOnlyNewRowMeasurements() throws {
@@ -460,7 +1127,7 @@ final class CollectionFillIOSTests: XCTestCase {
         func count(_ data: Data) -> UInt32 {
             data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 96, as: UInt32.self) }
         }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(count(try XCTUnwrap(reports.last)), 4)
         p.apply(wireBatch([snapshot(2, measured: true)]))
         p.collections.settle()
@@ -504,7 +1171,7 @@ final class CollectionFillIOSTests: XCTestCase {
                 }
             }
         }
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         // Model a host view the runner does not own, inside a mounted row.
         p.apply(wireBatch([
             ["op": "create", "id": 99, "kind": "view", "handlers": ["press"]],

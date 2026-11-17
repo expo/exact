@@ -81,6 +81,7 @@ const page = `<style>
   window.resizePresence = batch => { window.resizeBatch = batch; mediaChanged(); };
   window.surface = () => root.querySelector('[data-exiting] > div');
   window.readPresence = () => presence.live.observation();
+  window.tracking = () => presence.live.tracking();
   window.leave = css => presence.live.exit(document.getElementById('card'), css);
   window.ready = true;
 </script>`;
@@ -152,6 +153,36 @@ check('presence inspection reads the moving surface and the leaving ghost', asyn
   const leaving = (await read())[0];
   expect(leaving.exiting).toBe(true);
   expect(leaving.opacity).toBeCloseTo(.6, 3);
+});
+
+// GitHub #747: the runner's batch for a commit that changes nothing holds only its clock stamp.
+check('a batch that changes no tree measures no view, and the next that resizes one plays it', async () => {
+  await fixture(`<div id="card" style="${card}"></div>`);
+  const grown = JSON.stringify(card.replace('40px', '140px'));
+  expect(await evaluate(`(() => {
+    let reads = 0;
+    const rect = Element.prototype.getBoundingClientRect, computed = window.getComputedStyle;
+    Element.prototype.getBoundingClientRect = function () { reads++; return rect.call(this); };
+    window.getComputedStyle = function (...args) { reads++; return computed.apply(this, args); };
+    try {
+      batch({ops:[{op:'at',ms:5}]});
+      const still = reads;
+      batch({ops:[{op:'at',ms:6},{op:'style',id:'card',css:${grown}}]});
+      return [still, reads > still, document.getAnimations().length > 0];
+    } finally { Element.prototype.getBoundingClientRect = rect; window.getComputedStyle = computed; }
+  })()`)).toEqual([0, true, true]);
+});
+
+// A removed row stays in the set of declaring views, with its subtree, until a batch drops it; the agent's clock
+// steps by that set (`tracking`).
+check('removed views are tracked no longer when the batches after them change no tree', async () => {
+  await fixture(`<div id="list"><div id="card" style="${card}"></div><div id="next" style="${card}"></div></div>`);
+  expect(await evaluate(`(() => {
+    const was = tracking();
+    batch({ops:[{op:'at',ms:7},{op:'children',id:'list',ids:[]}]});
+    batch({ops:[{op:'at',ms:8}]});
+    return [was, document.getElementById('card'), tracking()];
+  })()`)).toEqual([true, null, false]);
 });
 
 check('resize snaps an active move and takes new boxes without a move', async () => {

@@ -345,7 +345,8 @@ public final class ExactPackageContext {
     public func after(_ ms: Double, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, false, body) }
 
     /// Coalesce a refresh across an agent seek: run at the next clock instant
-    /// at or past the deadline, without adding a stop or advancing settlement.
+    /// at or past the deadline, before pending package reads are dispatched,
+    /// without adding a stop or advancing settlement.
     /// On the live clock this waits as `after` does. Main thread.
     @discardableResult
     public func after(_ ms: Double, coalescing: Bool, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, coalescing, body) }
@@ -394,8 +395,8 @@ public final class ExactPackageContext {
         invokeFn(handle, handler, args, reply)
     }
 
-    /// A picture of the interface's `img` scheme changed (LLP 1133.019 D11
-    /// item 1): the host loads `source` again wherever it is shown.
+    /// A picture of the interface's `img` scheme or a published image file
+    /// changed: the host reloads its image and canvas handles.
     public func pictureChanged(_ source: String) { pictureFn(0, source) }
     /// A picture the app may no longer read (D2): the host clears it from
     /// every `img` that shows it and from its cache, cancels its loads and
@@ -868,10 +869,28 @@ public final class ExactTrackEntry {
     /// A video track's running capture, while its lease is held (LLP
     /// 1133.008 D3, D8 item 3); nil otherwise and under the agent.
     public var video: (() -> ExactVideoSource?)?
+    /// The session clock when getUserMedia opened this track.
+    public var startedAt: Double?
     /// Under the agent, where no capture exists: the picture a viewfinder of
     /// the track draws, upright and unmirrored, which an observer analyses as
     /// each frame (LLP 1133.027 D17 item 2). The camera package sets it.
-    public var picture: CGImage?
+    public var picture: CGImage? {
+        didSet {
+            if oldValue !== picture {
+                for notify in Array(pictureObservers.values) {
+                    do { try notify() }
+                    catch { NSLog("exact: track %@ picture observer: %@", id, String(describing: error)) }
+                }
+            }
+        }
+    }
+    private var pictureObservers: [UUID: () throws -> Void] = [:]
+    /// A thrown error is logged; remaining observers still run.
+    public func observePicture(_ changed: @escaping () throws -> Void) -> ExactSubscription {
+        let id = UUID()
+        pictureObservers[id] = changed
+        return ExactSubscription { [weak self] in self?.pictureObservers[id] = nil }
+    }
     public init(id: String, kind: String, tracks: [String] = [], owner: ExactTrackOwner? = nil) {
         self.id = id; self.kind = kind; self.tracks = tracks; self.owner = owner
     }
@@ -923,9 +942,11 @@ public protocol ExactVideoSource: AnyObject {
     /// The camera it captures from.
     var device: AVCaptureDevice { get }
     /// Run `change` on the session's queue between `beginConfiguration()`
-    /// and `commitConfiguration()`: add or remove inputs and outputs only.
-    /// Never waited for from the main thread.
-    func configure(_ change: @escaping (AVCaptureSession) -> Void)
+    /// and `commitConfiguration()`: add or remove inputs and outputs and
+    /// configure their connections. With `stopped`, stop capture first and
+    /// resume afterwards if it was running (intrinsic-matrix delivery must
+    /// be enabled before startRunning). Never waited for from the main thread.
+    func configure(stopped: Bool, _ change: @escaping (AVCaptureSession) -> Void)
     /// Run `work` on the session's queue, after every configuration asked
     /// before it: a capture from an output it added.
     func run(_ work: @escaping (AVCaptureSession) -> Void)
@@ -937,6 +958,11 @@ public protocol ExactVideoSource: AnyObject {
     func apply(_ constraints: [String: Any])
     /// Focus and expose at `point`, in the device's unit square.
     func focus(at point: CGPoint)
+}
+
+public extension ExactVideoSource {
+    /// Configure without stopping capture.
+    func configure(_ change: @escaping (AVCaptureSession) -> Void) { configure(stopped: false, change) }
 }
 
 /// A running audio capture, which a consumer taps.
@@ -1061,3 +1087,35 @@ public final class ExactAudioSession {
         _ = claimFn(active ? "call-activated" : "call-deactivated", [], false, { _ in })
     }
 }
+
+#if os(macOS)
+
+/// Shared by the display list and still capture (LLP 1178 D1–D3).
+public enum ExactScreenGeometry {
+    public static var primaryTop: CGFloat { NSScreen.screens.first?.frame.maxY ?? 0 }
+    public static func id(_ screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
+    public static func flipped(_ rect: NSRect) -> [CGFloat] {
+        [rect.minX, primaryTop - rect.maxY, rect.width, rect.height]
+    }
+    public static func record(_ screen: NSScreen) -> [String: Any] {
+        let (r, a) = (flipped(screen.frame), flipped(screen.visibleFrame))
+        return [
+            "left": r[0], "top": r[1], "width": r[2], "height": r[3],
+            "availLeft": a[0], "availTop": a[1], "availWidth": a[2], "availHeight": a[3],
+            "devicePixelRatio": screen.backingScaleFactor,
+            "isPrimary": NSScreen.screens.first.map(id) == id(screen),
+            "isInternal": CGDisplayIsBuiltin(id(screen)) != 0, "label": screen.localizedName,
+        ]
+    }
+    public static func client(_ screen: NSScreen, view: NSView?) -> Any {
+        guard let view, let window = view.window else { return NSNull() }
+        let content = window.convertToScreen(view.convert(view.bounds, to: nil))
+        let r = screen.frame
+        return ["x": r.minX - content.minX, "y": content.maxY - r.maxY,
+                "width": r.width, "height": r.height]
+    }
+}
+
+#endif

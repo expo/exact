@@ -18,6 +18,7 @@ package final class Presenter {
     @inline(never) static func endScrollSignpost(_ state: OSSignpostIntervalState) {
         signposts.endInterval("scrolled", state)
     }
+    var intersectHandlerCount = 0
     var clipboardHandlerCount = 0
     #if DEBUG
     var clipboardAncestryWalks = 0

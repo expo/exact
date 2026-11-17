@@ -3,7 +3,7 @@
 A `canvas surface=name(…)` that no data module draws is drawn by the app's GPU module: a crate
 `gpu/` beside app.json whose surfaces implement `exact_gpu::Surface`, loaded after the first pixel
 (`apps/caltrain/gpu` is a whole one). `exact_gpu::wgpu` is wgpu 30, whose fields differ from older
-tutorials': `gpu/README.md` has a shader pipeline, and performance, color and grants.
+tutorials': `gpu/README.md` covers shaders, dynamic offsets, performance and color.
 
 **It joins a workspace exact2 generates for the app's GPU crates** (LLP 1153.003 D5.1), `.exact/gpu/`, apart
 from the host's: write no root `Cargo.toml` and copy nothing up.

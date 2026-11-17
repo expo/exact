@@ -36,10 +36,64 @@ extension Agent {
     /// Under `--chrome platform`, the navigation bar a header button's item
     /// sits in and the item's box in it (r5 weather's Cities, r5 mood
     /// journal's sheet Save). Nil for any other node; a refusal for an item
-    /// UIKit has not placed.
+    /// the bar shows no control for. UIKit answers `frame(in:)` for such an
+    /// item too (#738): with its overflow button's frame for an item in the
+    /// overflow menu, and with a box at the bar's leading edge, where a
+    /// finger reaches Back, for a hidden item (iOS 27.0) or one it dropped
+    /// (reported on iOS 26.5). An item in the overflow menu
+    /// ([`overflowPresentationSource`](https://developer.apple.com/documentation/uikit/uinavigationitem/overflowpresentationsource))
+    /// is refused, not pressed there: a tap is one touch on the item's own
+    /// control, and that menu's rows have no identifier and can be scrolled
+    /// out of view. Any other item is placed only where `ownsControl` finds
+    /// its control.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
-        presenter.navigation.barItem(node)
+        let place = presenter.navigation.barItem(node)
+        #if os(iOS)
+        guard case .success(let (_, frame))? = place, let (bar, item, navigationItem) = presenter.navigation.barButtonItem(node) else { return place }
+        let middle = CGPoint(x: frame.midX, y: frame.midY)
+        if navigationItem.overflowPresentationSource?.frame(in: bar)?.contains(middle) == true { return .failure(BarItemMissing(overflowed: true)) }
+        // A readout's view is its item's own
+        if let own = item.customView { return own.window != nil ? place : .failure(BarItemMissing()) }
+        // Only a hit in this bar is judged: what covers the bar is `drawnCovered`'s to name
+        guard let hit = bar.window?.hitTest(bar.convert(middle, to: nil), with: nil), hit.isDescendant(of: bar) else { return place }
+        return ownsControl(item, of: navigationItem, frame: frame, hit: hit, in: bar) ? place : .failure(BarItemMissing())
+        #else
+        return place
+        #endif
     }
+
+    #if os(iOS)
+    /// Whether `hit`, what a finger at the middle of `frame` reaches in
+    /// `bar`, is in the control UIKit shows for `item`. UIKit has no public
+    /// way from a control to its item, and names a control by its item's
+    /// identifier only once its accessibility is loaded, which a `tap`
+    /// without a real touch does not do. What it does say is the item's
+    /// frame, which is its own control's box: so the item owns a control
+    /// with that box that nothing else claims. Another item reporting the
+    /// same frame claims it, as does UIKit's name for it when that is not
+    /// the item's. Back claims the control with none of the bar's on its
+    /// leading side: no item sits there (`leftItemsSupplementBackButton`).
+    private func ownsControl(_ item: UIBarButtonItem, of navigationItem: UINavigationItem, frame: CGRect, hit: UIView, in bar: UINavigationBar) -> Bool {
+        let same = { (a: CGRect, b: CGRect) in abs(a.minX - b.minX) <= 0.5 && abs(a.minY - b.minY) <= 0.5 && abs(a.maxX - b.maxX) <= 0.5 && abs(a.maxY - b.maxY) <= 0.5 }
+        let box = { (v: UIView) in v.convert(v.bounds, to: bar) }
+        // Every control of the bar, shown or not: while a push settles the bar's views are no guide to what it shows
+        var controls: [UIView] = [], pending = bar.subviews
+        while let v = pending.popLast() {
+            if v is UIControl { controls.append(v) } else { pending.append(contentsOf: v.subviews) }
+        }
+        // The control reached, or the only one with that box where the hit is in none: a group's shared glass can
+        // leave the line through an item's middle out of its hit shape (iOS 27.0)
+        let reached = sequence(first: hit, next: \.superview).prefix(while: { $0 !== bar }).filter { $0 is UIControl }, boxed = controls.filter { same(box($0), frame) }
+        guard let control = reached.isEmpty && boxed.count == 1 ? boxed[0] : reached.first(where: { same(box($0), frame) }) else { return false }
+        let named = sequence(first: control, next: \.superview).prefix(while: { $0 !== bar }).lazy.compactMap(\.accessibilityIdentifier).first { !$0.isEmpty }
+        if let named, named != item.accessibilityIdentifier { return false }
+        let items = (navigationItem.leftBarButtonItems ?? []) + (navigationItem.rightBarButtonItems ?? [])
+        if items.contains(where: { other in other !== item && other.frame(in: bar).map { same($0, frame) } == true }) { return false }
+        guard bar.backItem != nil, !navigationItem.hidesBackButton else { return true }
+        let rtl = bar.effectiveUserInterfaceLayoutDirection == .rightToLeft, own = box(control)
+        return controls.contains { $0 !== control && (rtl ? box($0).maxX > own.maxX + 0.5 : box($0).minX < own.minX - 0.5) }
+    }
+    #endif
 
     /// The control UIKit shows for the item standing for the tab `node` is
     /// (or is in), as VoiceOver and XCUITest find it (a `UITabBarItem` has no
@@ -83,15 +137,17 @@ extension Agent {
     /// `display: none`, so its nodes' boxes are no place on the screen (LLP
     /// 1080.000 D4). `region` is in `view`'s space; `barred`, that a bar
     /// draws it; `inBar`, that it is a bar item, whose hit `barItemTarget`
-    /// judges. Nil for any other node; a refusal for a bar item UIKit has
-    /// not placed.
+    /// judges. Nil for any other node; a refusal for a bar item the bar
+    /// shows no control for.
     func drawnPlace(_ node: NodeView) -> Result<(view: UIView, region: CGRect, barred: Bool, inBar: Bool), AimRefusal>? {
         if let (control, segment) = presenter.segments.drawn(node) {
             return .success((control, segment, presenter.navigation.barSegment(node) != nil, false))
         }
         switch barItem(node) {
         case .success(let (bar, frame))?: return .success((bar, frame, true, true))
-        case .failure?: return .failure(AimRefusal(why: "its bar item is not placed in the navigation bar; `clock settle` first waits out a push or sheet still moving"))
+        case .failure(let missing)?: return .failure(AimRefusal(why: missing.overflowed
+            ? "its bar item is in the navigation bar's overflow menu (UIKit's More button), which the agent does not open; the bar has no room for it"
+            : "its bar item is not placed in the navigation bar; `clock settle` first waits out a push or sheet still moving"))
         case nil: return nil
         }
     }
@@ -163,7 +219,8 @@ extension Agent {
     /// (its test id) among the views this session shows, since UIKit can host
     /// a glass item's button outside the bar's views; otherwise the bar. An
     /// item without a test id has no identifier to find its button by, so
-    /// only the bar counts for it.
+    /// only the bar counts for it, where `barItem` has found the hit in the
+    /// item's own control.
     func barItemTarget(_ node: NodeView, bar: UIView, hit: UIView) -> UIView {
         guard let id = node.props["testId"] else { return bar }
         let chain = sequence(first: hit, next: { $0.superview })
@@ -184,6 +241,4 @@ extension Agent {
         return nav.allNavigations.contains { $0.viewIfLoaded.map { view.isDescendant(of: $0) } == true }
     }
 }
-
-/// A header button's bar item that UIKit has not placed in its bar.
 #endif

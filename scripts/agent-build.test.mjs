@@ -240,10 +240,11 @@ test('an app launcher selects a native backend before checking its build', () =>
   const script = `
     import { mock } from 'bun:test';
     import * as processes from 'node:child_process';
+    import * as shells from './scripts/app-shells.mjs';
+    import * as builds from './scripts/web-build.mjs';
     const spawn = processes.spawn;
-    mock.module(${JSON.stringify(resolve(import.meta.dir, 'app-shells.mjs'))}, () => ({
-      platformOf: () => null,
-    }));
+    mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
+    mock.module('./scripts/web-build.mjs', () => ({ ...builds, privateNativeBuild: () => ({ env: {}, seed() {}, close() {} }) }));
     mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
       if (args[0].endsWith('/scripts/agent.mjs')) {
         return spawn(command, ['-e', 'console.log(process.env.EXACT_BACKEND_ORIGIN)'], options);
@@ -535,7 +536,7 @@ test('a missing or stale build is built first, said in one line; a fresh one run
     // A source edited since: the same refusal the driver makes, and the build first instead, naming what changed.
     utimesSync(resolve(dir, 'app.contract'), edited, edited);
     assert.deepEqual(nativeBuild('ios', app).changed.map(p => resolve(p)), [resolve(dir, 'app.contract')]);
-    assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /^Error: ios build is stale: .*app\.contract changed since .*; run \(cd .* && bun exact\.mjs ios\)$/);
+    assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /^Error: ios build is stale: .*app\.contract changed since .*; run \(cd .* && bun exact\.mjs ios\); if .*no build reads.*`\.exact\/`/);
     assert.equal(await drive('ios'), 0);
     // (A contract edit alone is a plan-only edit, which a build with no module receipt to check its bake against still rebuilds.)
     assert.deepEqual([said, builds.map(b => b.args)], [['building for iOS: the build is older than its sources (app.contract changed), and the build has no module receipt to check a new plan against; its log: ' + said[0].split('its log: ')[1]], [['--ios', 'field-log-apple', '--no-install']]]);

@@ -158,7 +158,7 @@ test('topic re-asks keep their last ask origin without joining its invocation', 
       globalThis.__exactRender = true;
       const rt = await import('/host/web-js/rt.js'), { modules } = await import('/host/web-js/modules.js');
       const { tools } = await import('/host/web-js/calls.js');
-      await import('/host/web-js/ts-data.js');
+      await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       rt.clock.agent = true;
       modules({ guard: ['guard.read', false, { origin: 'app', default: 'allowed' }, 's'] });
       const requests = [], replies = [], guarded = [], parses = [], output = {};

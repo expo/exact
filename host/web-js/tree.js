@@ -276,10 +276,11 @@ export const mapped = (v, map, clear) =>
 export function S(e, prop, unit, f) {
   Probes?.bind(e, prop, unit, f);
   let rendered = Adopt;
-  effect(() => {
+  const fx = effect(() => {
     css(e, prop, unit, f(), rendered);
     rendered = false;
   });
+  Probes?.track(e, prop, fx);
 }
 let Scratch = null;
 const Normal = new Map(),

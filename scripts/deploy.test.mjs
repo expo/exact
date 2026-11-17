@@ -113,6 +113,25 @@ async function rejects(action, matches) {
     const bytes = Buffer.from(text + '\n');
     return { json: JSON.parse(text), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
   };
+  for (const [before, after] of [
+    [{state:[],secrets:[]}, {state:['liked'],secrets:['seed']}],
+    [{state:['liked'],secrets:['seed']}, {state:['liked'],secrets:['other']}],
+    [{state:['liked'],secrets:['seed']}, {state:[],secrets:[]}],
+    [{state:['liked'],secrets:[],types:{liked:'Bool'}}, {state:['liked'],secrets:[],types:{liked:'Number'}}],
+  ]) {
+    const installed = signed(head => { head.cohort.compat.inputs.watchSync = before; });
+    const candidate = fixtureBuild(compatibilityId, bundle);
+    candidate.compat.inputs.watchSync = after;
+    candidate.graph.artifacts[0].requires.watchSync = after;
+    const table = await classify({app, opts:{platform:['linux']}, origin:{kind:'directory',describe:()=>dir,
+      get:async name => name===blobPath(streamIndex(bundle).card.sha256)?streamIndex(bundle).bytes:null,
+      head:async()=>found(installed), list:async()=>[]}, channel:stream.channel,
+      snapshot:{commit:'watch-policy',dirty:false,changes:[],repo:dir}, release:'policy', bundle,
+      builds:{linux:candidate}, compat:{linux:candidate.compat}, platforms:['linux'], wantOrigin:false});
+    const row = table.rows.find(row => row.kind === 'stream');
+    result(`deployment requires a new binary for watch policy ${JSON.stringify(before)} to ${JSON.stringify(after)}`,
+      row.action === 'binary' && row.reason.includes('watchSync'), JSON.stringify(row));
+  }
   const valid = signed();
   // The head's asset index, a blob the origin must also serve.
   const index = streamIndex(bundle), indexPath = blobPath(index.card.sha256);
@@ -1282,7 +1301,7 @@ test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only 
   const bindings = {
     ROOT: exactRoot, canonicalPath: x => x, basename: path => path.split('/').at(-1), dirname, inside: (parent, child) => child.startsWith(parent + '/'),
     process: { env: {}, stderr: { write() {} } }, console: { log: text => output.push(text) },
-    resolveApp: () => app, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
+    resolveApp: selector => { expect(selector).toBe(state === 'new' ? 'bundle' : app.dir); return app; }, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
     channelOrigin: () => root, openOrigin: () => ({ writable: true, describe: () => root }), nativePlatforms: () => ['ios'],
     loadSigner: () => ({ keyId: 'test' }), namesNative: () => true,
     bake: () => root, bakeJs: () => root, readBundle: () => bundle, readBuilds: () => [{ ...build, compat: { ...build.compat, inputs: { ...build.compat.inputs, platform: 'web' } } }],
@@ -1298,7 +1317,8 @@ test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only 
   const fn = source.slice(source.indexOf('async function deployCaptured('), source.indexOf('/** An explicitly supplied'));
   const deploy = new Function(...Object.keys(bindings), fn + ';return deployCaptured;')(...Object.values(bindings));
   try {
-    expect(await deploy({ _: ['bundle'], platform: ['ios'], keys: root, yes: true, json: true }, {
+    const selector = state === 'new' ? 'bundle' : state === 'invalid' ? '.' : resolve(root, 'live/app');
+    expect(await deploy({ _: [selector], platform: ['ios'], keys: root, yes: true, json: true }, {
       version: 1, run: resolve(root, 'run'), sourceRoot, exactRoot, release: 'update', app,
       snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] }, receipts: [],
     })).toBe(0);

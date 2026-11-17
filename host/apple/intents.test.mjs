@@ -221,8 +221,12 @@ struct ${moduleName}Action: AppIntent {
     func perform() async throws -> some IntentResult { .result() }
 }
 `);
+      // A native package arrives as an object the link takes, as build.mjs passes ExactPackage.o.
+      const pkg = resolve(dir, 'Package.c'), pkgObject = resolve(dir, 'ExactPackage.o');
+      writeFileSync(pkg, 'int exact_package_probe(void) { return 1; }\n');
+      runApple('xcrun', ['--sdk', 'iphonesimulator', 'clang', '-c', '-target', triple, '-isysroot', sdk, pkg, '-o', pkgObject]);
       const args = ['--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-module-name', moduleName,
-        '-target', triple, '-sdk', sdk, file, '-o', binary];
+        '-target', triple, '-sdk', sdk, file, pkgObject, '-o', binary];
       runApple('xcrun', args);
       const input = { moduleName, binary, sources: [file], args, directory: resolve(dir, 'constants'), swiftc: 'test', runApple };
       const collected = nativeIntentModule(input);

@@ -77,7 +77,11 @@ package enum GroupedAim { case view(UIView, port: UIScrollView), refused(String)
 
 /// A grouped list's collection view, which scrolls in its list's place
 /// (LLP 1084 D8).
-package protocol GroupedScroller: UIScrollView {}
+package protocol GroupedScroller: UIScrollView {
+    /// The list's node while this collection view is its `scrollView`: nil before the list
+    /// mounts and after it is removed.
+    var scrollingNode: NodeView? { get }
+}
 
 /// The grouped lists module's hooks, installed by the composition.
 package enum GroupedListsLink {

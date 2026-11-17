@@ -224,6 +224,8 @@ pub struct Images {
     views: BTreeMap<ViewId, View>,
     /// Shared immutable pictures. Removing a view never refunds another owner.
     pub bitmaps: BTreeMap<ViewId, Arc<Bitmap>>,
+    /// Images presented outside the page, at their requested device-pixel side.
+    pub(crate) status_sizes: BTreeMap<ViewId, u32>,
     /// Current loaded views and NATURAL pixel sizes; never traversal history.
     pub loaded: Vec<(String, (u32, u32))>,
     /// The views whose source's first picture has landed since the presenter
@@ -283,6 +285,7 @@ impl Images {
             backend,
             views: BTreeMap::new(),
             bitmaps: BTreeMap::new(),
+            status_sizes: BTreeMap::new(),
             loaded: Vec::new(),
             load_events: Vec::new(),
             boot_visible_only: false,
@@ -457,6 +460,11 @@ impl Images {
             view.object_fit = node.style.object_fit;
             view.rendering =
                 node.computed_row(exact_kernel::StyleId::ImageRendering, |s| s.image_rendering);
+            if let Some(side) = self.status_sizes.get(id) {
+                view.desired = (*side as f32, *side as f32);
+                view.fit = Some(exact_kernel::ObjectFit::Contain);
+                view.object_fit = exact_kernel::ObjectFit::Contain;
+            }
             // LLP 1011 §3: a symbol is a font-relative box no file fills (the
             // paint walk strokes a portable role's path into it, `symbol`),
             // never a file request and never the previously accepted raster.
@@ -626,6 +634,24 @@ impl Images {
         }
         self.natural(reports)
     }
+    /// A file was replaced: discard its source identity, pending loads and
+    /// decoded handles. The next sync reads the published file.
+    pub(crate) fn file_changed(&mut self, source: &str) {
+        if self.package.serves(source) {
+            return;
+        }
+        let ids: Vec<_> = self
+            .views
+            .iter()
+            .filter_map(|(&id, v)| (v.source == source).then_some(id))
+            .collect();
+        for id in ids {
+            self.remove(id);
+        }
+        self.backend.forget_source(self.generation, source);
+        self.settled = None;
+    }
+
     fn remove(&mut self, id: ViewId) {
         if let Some(view) = self.views.remove(&id) {
             if let Some((request, _)) = view.request {
@@ -1095,6 +1121,7 @@ impl Images {
         self.views.clear();
         self.package = std::mem::take(&mut self.package).reset();
         self.bitmaps.clear();
+        self.status_sizes.clear();
         self.loaded.clear();
         self.load_events.clear();
         self.generation = self.backend.generation();

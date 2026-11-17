@@ -243,6 +243,22 @@ mod tests {
         assert_eq!(frame.ops, ops);
     }
 
+    /// A row past a `u8` style id, in the style mask's fifth word, crosses
+    /// the wire and back (LLP 1123 D10).
+    #[test]
+    fn a_style_row_past_255_round_trips() {
+        let id = crate::StyleId::SafeAreaIgnore;
+        assert!(id.bit() > 255);
+        let mut patch = crate::generated::StyleProps::default();
+        let value = crate::StyleValue::Text("container top".into());
+        patch.set_dynamic(id, &value).unwrap();
+        let ops = vec![Op::SetStyle {
+            id: 2,
+            patch: Box::new(patch),
+        }];
+        assert_eq!(decode(&encode(0, 1, &ops)).unwrap().ops, ops);
+    }
+
     #[test]
     fn empty_frame_decodes_to_no_ops() {
         let bytes = encode(0, 1, &[]);

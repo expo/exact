@@ -1219,7 +1219,9 @@ package final class Presenter {
                 if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] ?? []) }
             case .canvas2d: if let v = views[id] { canvas2d.apply(id, op.payload, layer: v.layer) }
             case .svg: if let v = views[id] { svg.scene(id, op.payload, layer: v.layer, dark: v.drawsDark, clock: session?.clock, limit: v.style["dynamic_range_limit"]?.string, tint: v.viewTint) }
-            case .animations: svg.animations(id, op.payload, layer: views[id]?.layer, clock: session?.clock)
+            case .animations:
+                svg.animations(id, op.payload, layer: views[id]?.layer, clock: session?.clock)
+                views[id]?.applyTransform()
             case .command:
                 let name = op.payload["name"] as? String ?? ""
                 if name == "preventDefault" { defaultPrevented = true; break }

@@ -4,12 +4,14 @@ use crate::surface_record::surface_name;
 use exact_kernel::CommitReceipt;
 
 impl<D: DataSource> Runner<D> {
-    /// Whether this plan opts a named canvas into ephemeral HUD metrics.
+    /// Whether a live, awake resource reads this canvas's ephemeral HUD metrics.
     pub fn wants_canvas_performance(&self, name: &str) -> bool {
-        self.plan
-            .resources
-            .iter()
-            .any(|r| self.plan.str(r.source) == SOURCE && surface_name(&self.plan, r) == Some(name))
+        self.resources.iter().enumerate().any(|(i, resource)| {
+            let row = self.resource_row(i);
+            self.plan.str(row.source) == SOURCE
+                && surface_name(&self.plan, row) == Some(name)
+                && resource.state.as_ref().is_some_and(|s| !s.asleep)
+        })
     }
 
     /// Replace one opted-in canvas's latest metrics, or clear them on disposal.

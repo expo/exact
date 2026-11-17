@@ -208,6 +208,9 @@ class Natives(
         var asked = 0L
         var drawn = -1L
         val wrapped = HashMap<Long, android.graphics.Bitmap>()
+        /** The frame time, in milliseconds, after which its cap leaves the window's vote unless it draws again
+         * ([vote]). */
+        var rests = 0L
         /** Without its view ([near]): [view] is the stand-in, and [wanted] the props its view starts from. */
         var parked = false
         var wanted = ""
@@ -232,10 +235,13 @@ class Natives(
     private fun poll() {
         if (polling) return
         polling = true
-        Choreographer.getInstance().postFrameCallback {
+        Choreographer.getInstance().postFrameCallback { nanos ->
             polling = false
+            val now = nanos / 1_000_000
             var any = false
+            var capped = false
             var live = false
+            val drew = ArrayList<Element>()
             for (e in elements.values.toList()) {
                 if (e.view is SurfaceView) {
                     if (e.copying) { live = true; continue }
@@ -274,15 +280,24 @@ class Natives(
                 e.presentation.bufferFrame()
                 e.last = bmp
                 if (e.w <= 0 || e.h <= 0) continue
+                if (votes(e)) e.rests = now + (1000 / e.view.requestedFrameRate).toLong() + VOTE_HOLD_MS
+                drew.add(e)
+            }
+            // Recorded now that every canvas with a new frame is known: a capped one's vote counts them all ([vote]).
+            for (e in drew) {
+                val bmp = e.last!!
                 e.node.setPosition(0, 0, e.w, e.h)
                 val c = e.node.beginRecording(e.w, e.h)
                 src.set(0, 0, bmp.width, bmp.height); dst.set(0, 0, e.w, e.h)
                 c.drawBitmap(bmp, src, dst, bitmapPaint)
+                if (votes(e)) { vote(e, c, now); capped = true } else any = true
                 e.node.endRecording()
                 if (e.fullWindow && windowCanvas && !e.presentation.failed) presentation(e, true)
-                any = true
             }
-            if (any) frame()
+            // A frame only capped canvases drew is not asked for through [frame]: the view that draws would vote a
+            // category by its size, beside which SurfaceFlinger drops the window's rate on a panel of fixed modes
+            // (`FrameRate::isVoteValidForMrr`). The window is told its drawing changed, and records no view for it.
+            if (any) frame() else if (capped) parent?.onDescendantInvalidated(this, this)
             if (live) poll()
         }
     }
@@ -348,6 +363,33 @@ class Natives(
         clipChildren = false
         // Laid out, attached and "visible" to themselves, but drawn only through their nodes.
         setWillNotDraw(true)
+    }
+
+    /**
+     * Whether [e] is a canvas drawn here from its buffers that asks for a frame rate. A view's requested rate reaches
+     * its window only when the view is recorded after it was invalidated
+     * ([View.setRequestedFrameRate](https://developer.android.com/reference/android/view/View#setRequestedFrameRate(float))),
+     * and this canvas's view draws nothing, so [poll] has it vote with each frame ([vote]). The window keeps the rate
+     * between those frames: `ViewRootImpl` drops it at a frame drawn with no such vote more than 100 ms after the
+     * last, which a cap under 10 fps meets whenever the window draws anything else.
+     */
+    private fun votes(e: Element) = e.buffers && android.os.Build.VERSION.SDK_INT >= 35 && e.view.requestedFrameRate > 0f
+
+    /**
+     * Casts the window's rate with a frame of [e], whose node [c] records, at frame time [now]: [e]'s view,
+     * invalidated, is recorded, empty, beside the frame. The window has one rate, so the vote is the highest cap of
+     * the canvases drawn here from their buffers that are still drawing, whichever of them drew: given two rates in
+     * one frame of which neither divides the other, `ViewRootImpl.votePreferredFrameRate` sends the window's layer
+     * neither (Android 15 and 16). A canvas is still drawing until an interval of its cap and [VOTE_HOLD_MS] pass
+     * with no new frame of it, so one that rests stops raising the others' vote about when the view root would have
+     * dropped its rate had it drawn alone. Each canvas still paces its own cap.
+     */
+    private fun vote(e: Element, c: Canvas, now: Long) {
+        val own = e.view.requestedFrameRate
+        e.view.requestedFrameRate =
+            elements.values.maxOf { if (votes(it) && now <= it.rests) it.view.requestedFrameRate else 0f }
+        e.view.invalidate(); drawChild(c, e.view, drawingTime)
+        e.view.requestedFrameRate = own
     }
 
     /** Moving a controller to where it is drawn ([placeControls]): not a change of its drawing. */
@@ -1037,7 +1079,8 @@ class Natives(
 
     /** The frame rates GPU canvases ask for ([Native.frameRates]: view and rate pairs, 0 for the display's): a
      * canvas with a window of its own votes on its surface (Android 11 and later); one drawn in the reader's window
-     * votes on its view (Android 15 and later). These are platform hints; the module still paces its cap (LLP 1009). */
+     * votes on its view (Android 15 and later, [votes]). These are platform hints; the module still paces its cap
+     * (LLP 1009). */
     fun frameRates(rates: IntArray) {
         for (k in 0 until rates.size / 2) {
             val e = elements[rates[2 * k]] ?: continue
@@ -1137,6 +1180,9 @@ class Natives(
 /** A module's views kept for reuse: what a row leaving lends the row arriving. A kept view holds all a shown one does
  * (a MapLibre map ~135 MB on a Pixel 10 Pro XL), so a feed of them must not keep one for every row that ever left. */
 private const val MODULE_POOL = 2
+/** How long `ViewRootImpl` keeps a voted frame rate after the last vote for it (`FRAME_RATE_SETTING_REEVALUATE_TIME`,
+ * Android 15 and 16). */
+private const val VOTE_HOLD_MS = 100
 
 /** Video views kept with their players for reuse: the one a row leaving lends the row arriving, and one more for
  * two video rows near at once (a Media3 player holds a decoder and its threads; making one costs ~40 ms here). */

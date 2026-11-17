@@ -1,0 +1,16 @@
+use pushPermissionState, PushPermissionStatus from "@exact/push"
+
+component App
+  resource status = pushPermissionState() as shape PushPermissionStatus
+  resource idle = pushPermissionState() when false as shape PushPermissionStatus
+  resource placeholder = pushPermissionState() when false as shape PushPermissionStatus else empty(available=false, state="unknown")
+  view
+    column
+      text `${status.available} ${status.state}` testId="status"
+      text `${idle.available} ${idle.state}` testId="idle"
+      text `${placeholder.available} ${placeholder.state}` testId="placeholder"
+
+test "an unsupported target uses the package's substitute"
+  expect text "status" == "false unknown"
+  expect text "idle" == "false granted"
+  expect text "placeholder" == "false unknown"

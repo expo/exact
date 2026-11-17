@@ -1,0 +1,50 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/background-transfer@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "androidx.work:work-runtime:2.12.0"
+  ],
+  "artifacts": [],
+  "class": "exact.backgroundtransfer.BackgroundTransferModule",
+  "manifest": {
+    "permissions": [
+      "android.permission.ACCESS_NETWORK_STATE",
+      "android.permission.RUN_USER_INITIATED_JOBS",
+      "android.permission.FOREGROUND_SERVICE",
+      "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+    ],
+    "services": [
+      {
+        "name": "exact.backgroundtransfer.TransferJob",
+        "permission": "android.permission.BIND_JOB_SERVICE"
+      },
+      {
+        "name": "androidx.work.impl.foreground.SystemForegroundService",
+        "foregroundServiceType": "dataSync"
+      }
+    ],
+    "receivers": [
+      {
+        "name": "exact.backgroundtransfer.TransferBoot",
+        "actions": [
+          "android.intent.action.BOOT_COMPLETED",
+          "android.intent.action.MY_PACKAGE_REPLACED"
+        ]
+      }
+    ]
+  }
+}

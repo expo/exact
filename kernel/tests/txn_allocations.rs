@@ -159,14 +159,17 @@ fn create_move_destroy_churn_allocations() {
         measurements.push((mirrored, total));
     }
     // Without reservations: 536,507 / 545,519 allocations, 191,308,872 /
-    // 199,982,068 requested bytes, and 172,484 / 246,788 peak live bytes.
-    // Leave room for small changes while retaining the allocation reduction
-    // and keeping peak memory within 1% of the unreserved transaction.
+    // 199,982,068 requested bytes, and 172,484 / 246,788 peak live bytes,
+    // with a four-word style mask. Its fifth word, for style rows past 256,
+    // adds 8 bytes to each mask: 2,064,000 requested bytes here, and 2,080 /
+    // 2,048 peak live bytes. Leave room for small changes while retaining the
+    // allocation reduction and keeping peak memory within 1% of the
+    // unreserved transaction.
     for (mirrored, total) in measurements {
         let (calls, bytes, peak) = if mirrored {
-            (540_000, 198_000_000, 249_000)
+            (540_000, 200_000_000, 251_000)
         } else {
-            (531_000, 190_000_000, 174_000)
+            (531_000, 192_000_000, 176_000)
         };
         assert!(total.calls < calls, "{total:?}");
         assert!(total.bytes < bytes, "{total:?}");

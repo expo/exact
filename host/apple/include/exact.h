@@ -682,10 +682,13 @@ uint32_t exact_share_land(ExactRuntime rt);
  * A change's text, key's name, or guest message is the payload in the input
  * buffer's first len bytes. */
 uint32_t exact_dispatch(ExactRuntime rt, uint32_t view, uint32_t kind, size_t len, double now_ms);
-/* A scroll container the presenter shows (or, nonzero page, the page) now
+/* A scroll container the presenter shows (page 0, or 1 for the page) now
  * stands at left, top CSS px (scrollLeft, scrollTop), handler or not: what
  * frame() and measure() subtract from the kernel's scroll-free box, so an
- * action reads the box where the viewer sees it (LLP 1051.000 D1). No batch. */
+ * action reads the box where the viewer sees it (LLP 1051.000 D1). No batch.
+ * Page 2 consumes a collection mailbox: top is the main-axis offset; exact_in
+ * holds the snapshot revision and scroll sequence as two LE uint64_t words.
+ * It updates collection geometry without feedback, retirement or a batch. */
 void exact_scrolled(ExactRuntime rt, uint32_t page, uint32_t view, double left, double top);
 /* An inline run's shaped fragments, united in viewport coordinates. Called
  * synchronously on the runtime owner; UI work is served on main. */
@@ -712,7 +715,7 @@ const uint8_t *exact_field_decorations(const uint8_t *input, size_t len, size_t 
  * then an excluded rectangle (NaN at x means no exclusion).
  * Its hit region is independent of the content's clip and pointer events. */
 void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects, const double *clips, uint32_t count, uint32_t modal, uint32_t backdrop_view, const double *backdrop);
-/* Versioned LE collection feedback in exact_in; returns the ordinary batch. */
+/* Versioned LE collection feedback in exact_in. */
 uint32_t exact_collection_feedback(ExactRuntime rt, size_t len, double now_ms);
 /* Laid-out fixed sibling extent, side 0 (lead) or 1 (trail). Counts come
  * from the snapshot's fixed roots. NaN when the geometry is unavailable. */
@@ -1068,9 +1071,8 @@ uint32_t exact_tick_at(ExactRuntime rt, double now_ms, double frame_ms); /* LLP 
  * pixels wide, as on the web); a width or height ≤ 0 clears it (the load
  * failed, or the source was removed). Lays out again; the batch carries
  * every frame that moved. */
-uint32_t exact_intrinsic(ExactRuntime rt, uint32_t view, float width, float height);
-/* exact_intrinsic for several views under one layout: the input buffer's
- * first len bytes are LE records of (uint32 view, float width, float height). */
+/* The input buffer's first len bytes are LE records of
+ * (uint32 view, float width, float height), applied under one layout. */
 uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
 /* What native containers cover of boxes (LLP 1075.003 §3.5) under one
  * layout: LE records of (uint32 view, uint32 kind — 0 clears, 1 edges,
@@ -1229,6 +1231,9 @@ typedef struct {
 } ExactDeliveryApi;
 const ExactDeliveryApi *exact_delivery_api(void);
 uint32_t exact_delivery_sync(ExactRuntime rt);
+
+// Private callback for the optional watch transport; never a view or agent reply.
+void exact_watch_store(const uint8_t *plan, size_t plan_len, const uint8_t *input, size_t len, void (*seal)(const uint8_t *, size_t, void (*)(const uint8_t *, size_t, size_t), size_t), void (*reply)(const uint8_t *, size_t, size_t), size_t context);
 
 #ifdef __cplusplus
 }

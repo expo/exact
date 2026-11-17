@@ -1,12 +1,14 @@
 // Build exact-web-js once before running this test (docs/testing.md).
-import { test, expect } from 'bun:test';
+import { test as bunTest, expect } from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { webkit } from 'playwright-core';
 import { decodePng } from '../../scripts/png.mjs';
-import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { drivable, need } from '../../scripts/coverage.mjs';
+
+const test = need('chrome', chromium().unavailable, { test: bunTest });
 
 test('dynamic SVG attribute lengths are refused before reaching the DOM', async () => {
   const root = resolve(import.meta.dir, '../..');
@@ -269,7 +271,7 @@ test('compiled SVG geometry bindings render, change, unset and preserve zero', a
       expect(result.restored).toEqual(['10vh', '']);
     }
     await browser.close();
-    if (existsSync(webkit.executablePath())) {
+    if ((await drivable(['webkit'])).length) {
       browser = await suiteBrowser('webkit');
       const safari = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 2 });
       await safari.goto(server.url.href);

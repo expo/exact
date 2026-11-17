@@ -1,6 +1,6 @@
 //! Read contrast colors and observe changes, including sent window messages.
-//! The same subclass wakes the loop when the date may have jumped, for the
-//! loop's turn to retell it (`Presenter::follow_local_offset`).
+//! The same subclass wakes the loop to reread locale and zone settings,
+//! and the date when the clock changes or the machine resumes.
 #![allow(unsafe_code)]
 use exact_painted::presenter::ContrastPalette;
 use std::{
@@ -136,22 +136,69 @@ unsafe extern "system" fn changed(
         if message == WM_NCDESTROY {
             RemoveWindowSubclass(window, Some(changed), subclass);
             drop(Rc::from_raw(data as *const Cell<bool>));
-        } else if matches!(
+        } else if (matches!(
             message,
-            WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED
-        ) && !(*(data as *const Cell<bool>)).replace(true)
+            WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED | WM_TIMECHANGE
+        ) || (message == WM_POWERBROADCAST && wparam == PBT_APMRESUMEAUTOMATIC as usize))
+            && !(*(data as *const Cell<bool>)).replace(true)
         {
             // Sent broadcasts need a queued message to wake a waiting loop.
-            PostMessageW(window, WM_NULL, 0, 0);
-        } else if message == WM_TIMECHANGE
-            || (message == WM_POWERBROADCAST && wparam == PBT_APMRESUMEAUTOMATIC as usize)
-        {
-            // The system clock was set, or the system resumed from sleep
-            // ("delivered every time the system resumes"):
+            // A new zone or a resume also requires rereading the place.
             // https://learn.microsoft.com/windows/win32/sysinfo/wm-timechange
             // https://learn.microsoft.com/windows/win32/power/pbt-apmresumeautomatic
             PostMessageW(window, WM_NULL, 0, 0);
         }
         DefSubclassProc(window, message, wparam, lparam)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::{
+        core::w,
+        Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, SendMessageW},
+    };
+
+    #[test]
+    fn settings_time_and_resume_messages_request_a_refresh() {
+        unsafe {
+            // An invisible window receives the real messages without changing
+            // the person's settings or using a process-wide event loop.
+            let window = CreateWindowExW(
+                0,
+                w!("STATIC"),
+                w!("Exact settings test"),
+                0,
+                0,
+                0,
+                1,
+                1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            );
+            assert!(!window.is_null());
+            let changes = Changes::default();
+            let state = Rc::into_raw(changes.sent.clone());
+            assert_ne!(
+                SetWindowSubclass(window, Some(changed), 0, state as usize),
+                0
+            );
+            for (message, wparam, lparam) in [
+                (WM_SETTINGCHANGE, 0, w!("intl") as isize),
+                (WM_TIMECHANGE, 0, 0),
+                (WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC as usize, 0),
+            ] {
+                SendMessageW(window, message, wparam, lparam);
+                assert!(changes.take(), "message {message}");
+                assert!(!changes.take());
+            }
+            SendMessageW(window, WM_NULL, 0, 0);
+            assert!(!changes.take());
+            assert_ne!(DestroyWindow(window), 0);
+            assert_eq!(Rc::strong_count(&changes.sent), 1);
+        }
     }
 }

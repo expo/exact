@@ -1,0 +1,152 @@
+{
+  "kind": "interface",
+  "name": "@exact/screen-capture",
+  "version": "1.0.0",
+  "grants": [
+    "device.screen-recording"
+  ],
+  "substitute": "implementation",
+  "permission": {
+    "name": "screen-recording",
+    "targets": [
+      "macos"
+    ],
+    "status": "screenRecordingStatus",
+    "field": "state",
+    "denied": "NotAllowedError",
+    "whilePrompt": {
+      "error": "NotAllowedError",
+      "message": "requestScreenRecording first"
+    }
+  },
+  "agent": {
+    "screens": "ScreenInViewport[]"
+  },
+  "shapes": {
+    "ScreenInViewport": {
+      "left": "number",
+      "top": "number",
+      "width": "number",
+      "height": "number",
+      "availLeft": "number",
+      "availTop": "number",
+      "availWidth": "number",
+      "availHeight": "number",
+      "devicePixelRatio": "number",
+      "isPrimary": "bool",
+      "isInternal": "bool",
+      "label": "string",
+      "clientRect": "option<DOMRect>"
+    },
+    "ScreenCapture": {
+      "path": "string",
+      "width": "number",
+      "height": "number",
+      "type": "string",
+      "screen": "ScreenInViewport"
+    },
+    "ScreenCaptures": {
+      "captures": "ScreenCapture[]"
+    },
+    "ScreenRecordingStatus": {
+      "available": "bool",
+      "state": "enum<granted|prompt|denied>"
+    }
+  },
+  "names": [
+    {
+      "send": "captureScreens",
+      "origin": "app",
+      "options": {
+        "directory": {
+          "type": "path",
+          "access": "write"
+        },
+        "type": "option<string>",
+        "quality": "option<number>"
+      },
+      "answers": "ScreenCaptures",
+      "substitute": {
+        "from": "window-management.getScreenDetails",
+        "unsupported": [
+          "ios",
+          "android",
+          "tvos",
+          "watchos",
+          "visionos",
+          "terminal"
+        ]
+      },
+      "grants": [
+        "device.screen-recording"
+      ]
+    },
+    {
+      "source": "screenRecordingStatus",
+      "live": true,
+      "answers": "ScreenRecordingStatus",
+      "substitute": {
+        "default": {
+          "available": true,
+          "state": "granted"
+        },
+        "targets": {
+          "web": {
+            "available": false,
+            "state": "denied"
+          },
+          "linux": {
+            "available": false,
+            "state": "denied"
+          },
+          "ios": {
+            "available": false,
+            "state": "denied"
+          },
+          "android": {
+            "available": false,
+            "state": "denied"
+          },
+          "tvos": {
+            "available": false,
+            "state": "denied"
+          },
+          "watchos": {
+            "available": false,
+            "state": "denied"
+          },
+          "visionos": {
+            "available": false,
+            "state": "denied"
+          },
+          "terminal": {
+            "available": false,
+            "state": "denied"
+          }
+        }
+      }
+    },
+    {
+      "send": "requestScreenRecording",
+      "origin": "app",
+      "foreground": true,
+      "request": true,
+      "answers": "ScreenRecordingStatus",
+      "substitute": {
+        "answers": "screenRecordingStatus",
+        "deniedAnswers": true,
+        "unsupported": [
+          "ios",
+          "android",
+          "tvos",
+          "watchos",
+          "visionos",
+          "terminal"
+        ]
+      },
+      "grants": [
+        "device.screen-recording"
+      ]
+    }
+  ]
+}

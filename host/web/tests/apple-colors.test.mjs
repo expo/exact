@@ -7,6 +7,7 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // glue reports them to the kernel at boot and when contrast changes (wasm/boot.js, src/colors.rs).
 import { test, expect } from 'bun:test';
 import { withLook } from '../look.mjs';
+import { drivable, need } from '../../../scripts/coverage.mjs';
 import { chromium as browserPath, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 
 const web = new URL('../', import.meta.url);
@@ -38,7 +39,7 @@ test("every engine draws Exact's colour roles in Apple's palette", async () => {
     return file ? new Response(readFileSync(new URL(file, web), 'utf8'), { headers: { 'content-type': 'text/javascript' } }) : new Response(PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } }); } });
   const playwright = await import('playwright-core');
   try {
-    for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
       const browser = await playwright[engine].launch({ headless: true, ...(engine === 'chromium' ? { executablePath: browserPath().executable } : {}) });
       try {
         const page = await browser.newPage();
@@ -127,7 +128,7 @@ const DRAW = `export const drawer = {
   }, retire() {}
 };`;
 
-for (const target of ['wasm', 'js']) test(`${target}: contrast changes repaint canvases in both directions without replacing their bitmaps`, async () => {
+for (const target of ['wasm', 'js']) need('chrome', browserPath().unavailable)(`${target}: contrast changes repaint canvases in both directions without replacing their bitmaps`, async () => {
   const files = { '/canvas2d.js': '../web-js/canvas2d.js', '/canvas2d-glue.js': 'canvas2d-glue.js', '/navigation.js': 'navigation.js' };
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
     const path = new URL(req.url).pathname;

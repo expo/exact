@@ -16,6 +16,7 @@ pub(crate) const FIT_EPSILON: f64 = 0.005;
 /// The caller includes letter spacing and returns a nonnegative finite advance.
 /// Collapsible ASCII whitespace is measured as a space, including a tab range;
 /// format controls, soft hyphens and zero-width spaces have no ink advance.
+/// Where white space is preserved no range holds a carriage return or form feed.
 pub trait Measure {
     /// Return the advance of this range in the caller's shaping units.
     fn advance(&mut self, range: Range<usize>) -> f32;
@@ -48,6 +49,7 @@ pub enum WhiteSpace {
     #[default]
     Normal,
     /// Preserve spaces/tabs and break at segment breaks; trailing spaces hang.
+    /// A carriage return or form feed has no advance and no break beside it.
     PreWrap,
     /// Collapse like `normal` with no soft wrap opportunity: one line, however wide.
     Nowrap,
@@ -138,7 +140,7 @@ struct Segment {
 ///
 /// Each visible run is measured once (a UAX #14 segment, split around internal
 /// collapsed space runs where needed). `normal` collapses spaces, tabs and
-/// segment breaks; `pre-wrap` preserves spaces/tabs and mandatory breaks;
+/// segment breaks; `pre-wrap` preserves spaces/tabs and breaks at line feeds;
 /// `nowrap` collapses like `normal` and never breaks (`overflow-wrap` only
 /// applies where wrapping is allowed, so it admits no emergency cut either).
 /// A terminal break ends a line without a synthetic empty line.
@@ -199,12 +201,19 @@ impl Prepared {
             content_end: 0,
         };
         let preserve = options.white_space.preserves();
-        // A forced break only at a line feed. Of the rest, only a carriage
-        // return or a line feed collapses; a form feed, NEL, U+2028 or U+2029 is text.
+        // A forced break only at a line feed. What a line's end drops or hangs
+        // is the collapsible whitespace that is left, or, preserved, spaces
+        // and tabs with the carriage returns and form feeds among them.
         let forced = |ch| options.white_space.forces_break(ch);
-        let whitespace = |ch| collapsible(ch) && !forced(ch);
+        let whitespace = |ch| {
+            if preserve {
+                space(ch) || ignored(ch)
+            } else {
+                collapsible(ch) && !forced(ch)
+            }
+        };
         let mut start = 0;
-        for end in opportunities(text, words) {
+        for end in opportunities(text, words, preserve) {
             if end == start {
                 continue;
             }
@@ -212,10 +221,11 @@ impl Prepared {
                 continue;
             }
             let previous = text[..end].chars().next_back().unwrap();
-            // One whitespace run can cross several UAX mandatory boundaries:
-            // collapsed, or preserved after a carriage return, which CSS
-            // treats as a space.
-            if whitespace(previous) && text[end..].chars().next().is_some_and(whitespace) {
+            // One collapsed whitespace run can cross several boundaries.
+            if !preserve
+                && whitespace(previous)
+                && text[end..].chars().next().is_some_and(whitespace)
+            {
                 continue;
             }
             let source = &text[start..end];
@@ -239,39 +249,45 @@ impl Prepared {
                 0.0
             } else {
                 if preserve {
-                    advance(measure.advance(content_start..content_end))
+                    preserved_advance(text, content_start..content_end, measure)
                 } else {
                     collapsed_advance(text, content_start..content_end, measure)
                 }
             };
             let trailing = without_space.len();
-            let space_width = if trailing < without_break.len() {
-                let len = without_break[trailing..].chars().next().unwrap().len_utf8();
-                advance(measure.advance(
-                    start + trailing..if preserve {
-                        start + without_break.len()
-                    } else {
-                        start + trailing + len
-                    },
-                ))
-            } else {
+            let space_width = if trailing == without_break.len() {
                 0.0
+            } else if preserve {
+                preserved_advance(text, start + trailing..start + without_break.len(), measure)
+            } else {
+                let len = without_break[trailing..].chars().next().unwrap().len_utf8();
+                advance(measure.advance(start + trailing..start + trailing + len))
             };
             let atom_start = result.atoms.len();
             if options.overflow_wrap != OverflowWrap::Normal && !content.is_empty() {
                 let mut prefix = 0.0;
                 for cluster in grapheme_ranges(content) {
                     let range = content_start + cluster.start..content_start + cluster.end;
+                    // What Chrome ignores is no atom, or an emergency break
+                    // would give it a line: it goes with the cluster after
+                    // it, as in Chrome, or the last one before.
+                    if preserve && text[range.clone()].chars().all(ignored) {
+                        if cluster.end == content.len() {
+                            if let Some(atom) = result.atoms[atom_start..].last_mut() {
+                                atom.end = range.end;
+                            }
+                        }
+                        continue;
+                    }
                     let is_space = text[range.clone()].chars().all(space);
-                    let measured = if is_space && !preserve {
-                        range.start..range.start + 1
-                    } else {
-                        range.clone()
-                    };
                     prefix += if cluster.start == 0 && cluster.end == content.len() {
                         width as f64
+                    } else if preserve {
+                        preserved_advance(text, range.clone(), measure) as f64
+                    } else if is_space {
+                        advance(measure.advance(range.start..range.start + 1)) as f64
                     } else {
-                        advance(measure.advance(measured)) as f64
+                        advance(measure.advance(range.clone())) as f64
                     };
                     result.atoms.push(Atom {
                         end: range.end,
@@ -281,11 +297,11 @@ impl Prepared {
                 }
             }
             result.units += (result.atoms.len() - atom_start).max(1);
-            if !content.is_empty()
+            // Preserved spaces make a line; what Chrome ignores makes none.
+            let visible = !content.is_empty()
                 || without_space.contains('\u{200b}')
-                || hard
-                || (preserve && !without_break.is_empty())
-            {
+                || (preserve && without_break.contains(|ch| !ignored(ch)));
+            if visible || hard {
                 result.content_end = result.segments.len() + 1;
             }
             result.segments.push(Segment {
@@ -294,9 +310,7 @@ impl Prepared {
                 space: space_width,
                 hard,
                 hyphen,
-                visible: !content.is_empty()
-                    || without_space.contains('\u{200b}')
-                    || (preserve && !without_break.is_empty()),
+                visible,
                 atoms: atom_start..result.atoms.len(),
             });
             start = end;
@@ -305,12 +319,13 @@ impl Prepared {
     }
 
     /// Source ink range; trailing hanging spaces carry no ink, leading preserved spaces remain.
-    /// A preserved line ends in ink at a form feed, NEL, U+2028 or U+2029: the
-    /// walker measures them as text, so only what it hangs or breaks at is trimmed.
+    /// A preserved line ends in ink at NEL, U+2028 or U+2029: the walker measures
+    /// them as text, so only what it hangs, ignores or breaks at is trimmed.
     pub fn paint_range(&self, text: &str, range: Range<usize>) -> Range<usize> {
         let raw = &text[range.clone()];
         if self.options.white_space.preserves() {
-            range.start..range.start + raw.trim_end_matches(collapsible).len()
+            let trim = |ch| collapsible(ch) || ignored(ch);
+            range.start..range.start + raw.trim_end_matches(trim).len()
         } else {
             let trim = collapsible;
             let leading = raw.len() - raw.trim_start_matches(trim).len();
@@ -652,6 +667,24 @@ fn collapsed_advance(text: &str, range: Range<usize>, measure: &mut dyn Measure)
     }
     finite(total)
 }
+/// A preserved range's advance: its carriage returns and form feeds add
+/// nothing and are never measured, and the text on either side of one is
+/// measured apart, as Chrome shapes it: it neither kerns `A\rV` nor joins
+/// the ligature of `f\ri`.
+fn preserved_advance(text: &str, range: Range<usize>, measure: &mut dyn Measure) -> f32 {
+    if !text[range.clone()].contains(ignored) {
+        return advance(measure.advance(range));
+    }
+    let mut total = 0.0;
+    let mut from = range.start;
+    for piece in text[range].split(ignored) {
+        if !piece.is_empty() {
+            total += advance(measure.advance(from..from + piece.len())) as f64;
+        }
+        from += piece.len() + 1;
+    }
+    finite(total)
+}
 /// UTF-16 word boundaries, as `Intl.Segmenter` and `CFStringTokenizer` give
 /// them, to the UTF-8 byte offsets [`Prepared::with_words`] takes. A boundary
 /// inside a surrogate pair, out of order, or past the end is dropped.
@@ -677,7 +710,7 @@ fn inside_cluster(text: &str, end: usize) -> bool {
     let Some(previous) = text[..end].chars().next_back() else {
         return false;
     };
-    !hard_break(previous)
+    !boundary(previous)
         && text[end..].chars().next().is_some_and(|ch| {
             joins_previous(ch, previous)
                 && !(complex(ch) && complex(previous))
@@ -691,12 +724,13 @@ fn inside_cluster(text: &str, end: usize) -> bool {
 }
 
 /// Where a line may end, as UTF-8 byte offsets, the last `text.len()`: the
-/// walker's opportunities, Chrome's (see `opportunities`), outside clusters.
+/// walker's opportunities, Chrome's (see `opportunities`), outside clusters,
+/// for text whose white space collapses.
 /// `words` are a host segmenter's boundaries ([`Prepared::with_words`]). A host
 /// that breaks lines with its own typesetter takes its opportunities from here.
 /// @ref LLP 1043.000 §3 D6 — one source of break/cluster boundaries.
 pub fn line_breaks(text: &str, words: &[usize]) -> Vec<usize> {
-    let mut result = opportunities(text, words);
+    let mut result = opportunities(text, words, false);
     result.retain(|&end| end == text.len() || !inside_cluster(text, end));
     result
 }
@@ -710,9 +744,18 @@ fn complex(ch: char) -> bool {
 /// table between two Latin-1 characters, and otherwise UAX #14 under CSS
 /// `line-break: normal`, where small kana and `ー` (class CJ) break as ideographs,
 /// and inside SA runs the host's word boundaries stand in for ICU's dictionaries.
-/// A break beside a mandatory break stays UAX's. The last entry is `text.len()`.
+/// The last entry is `text.len()`.
+///
+/// Of UAX #14's mandatory breaks only a line feed is a segment break in CSS
+/// (CSS Text 3 §4.1): a line starts after one and never before it. Chrome 157
+/// lays the others out as `tests/it/controls.rs` records. A form feed or
+/// vertical tab takes no break on either side but after a space. A carriage
+/// return is a space where white space collapses; `preserved`, it and a form
+/// feed are ignored, and a space run with one inside ends where its last space
+/// does. A line may start after NEL, U+2028 or U+2029, and before one only
+/// after a space or another of them.
 /// @ref LLP 1043 §4 C — measured against Chrome by `tests/it/corpus.rs`.
-fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
+fn opportunities(text: &str, words: &[usize], preserved: bool) -> Vec<usize> {
     let starter = |c: char| break_property(c as u32) == BreakClass::ConditionalJapaneseStarter;
     // Swap each CJ character for an ideograph of the same UTF-8 length.
     let normal = if text.chars().any(starter) {
@@ -730,6 +773,9 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
     };
     let mut uax = linebreaks(&normal).map(|(at, _)| at).peekable();
     let latin1 = |c: char| ('\u{21}'..='\u{ff}').contains(&c);
+    let blank = |c: char| space(c) || (!preserved && c == '\r');
+    let glue = |c: char| c == '\u{b}' || c == '\u{c}' || (preserved && c == '\r');
+    let separator = |c: char| matches!(c, '\u{85}' | '\u{2028}' | '\u{2029}');
     let mut result = Vec::new();
     let mut words = words.iter().copied().peekable();
     let (mut before_before, mut before) = ('\0', None);
@@ -738,12 +784,26 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
         let listed = uax.peek() == Some(&at);
         while words.next_if(|&w| w < at).is_some() {}
         if let Some(previous) = before {
-            let open = if hard_break(previous) || hard_break(ch) {
-                listed
-            } else if space(ch) {
-                false
-            } else if space(previous) {
+            let open = if previous == '\n' {
                 true
+            } else if ch == '\n' || blank(ch) {
+                false
+            } else if glue(ch) {
+                // No line starts before an ignored run that only spaces, a
+                // line feed or the text's end follow.
+                blank(previous)
+                    && !(preserved
+                        && ignored(ch)
+                        && text[at..]
+                            .chars()
+                            .find(|c| !ignored(*c))
+                            .is_none_or(|c| space(c) || c == '\n'))
+            } else if glue(previous) {
+                false
+            } else if blank(previous) || separator(previous) {
+                true
+            } else if separator(ch) {
+                false
             } else if complex(previous) && complex(ch) {
                 words.peek() == Some(&at)
             } else if previous == '-' && ch.is_ascii_digit() {
@@ -899,11 +959,13 @@ fn space(ch: char) -> bool {
 fn collapsible(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '\n' | '\r')
 }
-fn hard_break(ch: char) -> bool {
-    matches!(
-        ch,
-        '\n' | '\r' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
-    )
+/// What Chrome ignores where white space is preserved: no advance, no break.
+fn ignored(ch: char) -> bool {
+    matches!(ch, '\r' | '\u{c}')
+}
+/// What no cluster continues across: Chrome starts a line at a mark after one.
+fn boundary(ch: char) -> bool {
+    matches!(ch, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }
 
 // Small conservative rule using the already-linked UAX table. An SA run is

@@ -1,0 +1,18 @@
+{
+  "name": "@fixture/camera-calibration",
+  "version": "1.0.0",
+  "private": true,
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json",
+    "./android": "./android/exact.json"
+  },
+  "peerDependencies": {
+    "@exact/media-capture": "1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@exact/media-capture": {
+      "optional": true
+    }
+  }
+}

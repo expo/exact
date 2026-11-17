@@ -1,7 +1,7 @@
 // What a Mac build signs that only a provisioning profile authorizes (Apple
 // TN3125; LLP 1133.010 D7): the device rows' Mac entitlements (push, App
 // Attest, the Declared Age Range, Group Activities, the iCloud key-value
-// store, Sensitive Content Analysis), the keychain group a locked secret is kept
+// store, CloudKit, Sensitive Content Analysis), the keychain group a locked secret is kept
 // in (a Mac keeps one only in the data-protection keychain, whose access
 // groups the signature names, TN3137), a passkey's associated domains, and
 // Sign in with Apple's and Apple Pay's entitlements (LLP 1030.005 §6 piece 4).
@@ -27,16 +27,21 @@ const KEYCHAIN = 'keychain-access-groups', DOMAINS = 'com.apple.developer.associ
 const SIGN_IN = 'com.apple.developer.applesignin', PAY = 'com.apple.developer.in-app-payments';
 /** `device.icloud-kv`'s entitlement, valued as the application identifier is: `<prefix>.<bundle id>`. */
 export const KEY_VALUE_STORE = 'com.apple.developer.ubiquity-kvstore-identifier';
+const CLOUDKIT_SERVICES = 'com.apple.developer.icloud-services';
+const CLOUDKIT_CONTAINERS = 'com.apple.developer.icloud-container-identifiers';
+const CLOUDKIT_ENVIRONMENT = 'com.apple.developer.icloud-container-environment';
 /** Each device row's Mac profile entitlement (`reach.profileEntitlements`, runner/src/device.rs): its line, what the
  * app reports while it is not signed, and whether a release without it is refused. A Mac release without push ships,
  * reporting it unavailable, as Android and the web do (LLP 1133.004 §9 P7), and so does one without SharePlay, whose
- * package is not exact2's to name (LLP 1133.001.000 D3); App Attest and the age range are refused (LLP 1133.028 D17),
+ * package is not exact2's to name, or CloudKit (LLP 1133.001.000 D3); App Attest and the age range are refused (LLP 1133.028 D17),
  * as are the iCloud key-value store and Sensitive Content Analysis, which fail without saying so. */
 const ROW_EFFECTS = {
   'com.apple.developer.aps-environment': ['device.push', 'pushPermissionState().available is false and subscribePush fails NotSupportedError', false],
   'com.apple.developer.devicecheck.appattest-environment': ['device.attestation', 'attestationStatus().available is false and attest fails NotSupportedError', true],
   'com.apple.developer.declared-age-range': ['device.age-range', 'ageRangeStatus().available is false and requestAgeRange fails NotSupportedError', true],
   'com.apple.developer.group-session': ['device.shareplay', 'SharePlay is unavailable to the app', false],
+  ...Object.fromEntries([CLOUDKIT_SERVICES, CLOUDKIT_CONTAINERS, CLOUDKIT_ENVIRONMENT]
+    .map(key => [key, ['device.cloudkit', 'CloudKit is unavailable to the app', false]])),
   // Unsigned, the store keeps values on this Mac without saying so, so a release that cannot sign it is refused.
   [KEY_VALUE_STORE]: ['device.icloud-kv', 'NSUbiquitousKeyValueStore keeps its values on this Mac and syncs none', true],
   // Unsigned, the analyzer finds nothing sensitive (Apple, "com.apple.developer.sensitivecontentanalysis.client").
@@ -84,12 +89,17 @@ export function macProfileNeeds(compat, app = null) {
   return needs;
 }
 
-/** Whether macOS profile `p` allows `name` for `app`: the keychain group as `<prefix>.<id>` or the team's
- * `<prefix>.*`, push's environment as the build signs it under `p`, and any other key by name. */
-export function macAllows(p, app, name) {
+/** The bake's entitlement values, with CloudKit's default container derived from the bundle id at signing. */
+export function grantEntitlementValues(app, reach) {
+  return { [CLOUDKIT_CONTAINERS]: [`iCloud.${app.id}`], ...reach?.entitlementValues };
+}
+
+/** Whether macOS profile `p` allows `name` for `app`: its keychain group, push's environment, or the
+ * entitlement's value when the bake gives one. CloudKit's environment follows the signature. */
+export function macAllows(p, app, name, values = {}) {
   if (name === KEYCHAIN) return p.keychain.includes(`${p.prefix}.${app.id}`) || p.keychain.includes(`${p.prefix}.*`);
   if (name === 'com.apple.developer.aps-environment') return allowsEntitlement(p, 'aps-environment');
-  return p.entitlements.includes(name);
+  return allowsEntitlement(p, name, values);
 }
 
 const signingChoice = method => method === 'developerid' || method === 'appstore'
@@ -103,9 +113,9 @@ const teamSelectedByEnvironment = (team, method) => method === 'development' && 
  * fit. Several teams are refused while the identity is unresolved; only DEVELOPMENT_TEAM requires a suitable profile. */
 export function macProfile(app, required, { method = 'development', installed = installedProfiles(),
   named = process.env.EXACT_MAC_PROFILE ? decodeProfile(process.env.EXACT_MAC_PROFILE) : null, udid,
-  team = process.env.DEVELOPMENT_TEAM?.trim(), accept = () => true } = {}) {
+  team = process.env.DEVELOPMENT_TEAM?.trim(), accept = () => true, values = {} } = {}) {
   const mac = (p) => p.platforms?.includes('OSX');
-  const lacking = (p) => required.filter((name) => !macAllows(p, app, name));
+  const lacking = (p) => required.filter((name) => !macAllows(p, app, name, values));
   const misfit = (p) => !mac(p) ? `is for ${p.platforms?.join(', ') || 'another platform'}, not macOS`
     : !profilesFor(app.id, [p]).length ? `is for ${p.appId}, not ${app.id}`
     : p.method !== method ? `is ${METHODS[p.method]}, not ${METHODS[method]}`
@@ -130,13 +140,14 @@ export function macProfile(app, required, { method = 'development', installed = 
  * merchant IDs. */
 export function macProfileEntitlements(app, profile, needs, compat) {
   const out = { 'com.apple.application-identifier': `${profile.prefix}.${app.id}`, 'com.apple.developer.team-identifier': profile.team };
+  const values = grantEntitlementValues(app, compat?.reach);
   for (const { entitlement } of needs) {
     if (entitlement === KEYCHAIN) out[KEYCHAIN] = [`${profile.prefix}.${app.id}`];
     else if (entitlement === DOMAINS) out[DOMAINS] = [...new Set([...associatedDomains(compat?.reach?.auth, profile.dev), ...(app.manifest ? appleLinkDomains(app.manifest) : [])])];
     else if (entitlement === SIGN_IN) out[SIGN_IN] = ['Default'];
     else if (entitlement === PAY) out[PAY] = compat?.reach?.payments?.merchantIds ?? [];
     else if (entitlement === KEY_VALUE_STORE) out[KEY_VALUE_STORE] = out['com.apple.application-identifier'];
-    else out[entitlement] = compat?.reach?.entitlementValues?.[entitlement] ?? (entitlement.endsWith('-environment') ? signedEnvironment(profile.dev) : true);
+    else out[entitlement] = values[entitlement] ?? entitlementValue(entitlement, profile.dev);
   }
   return out;
 }
@@ -152,7 +163,7 @@ export function macProvisioning(app, compat, { release = false, method = 'develo
   const always = method === 'appstore' && !reason;
   if (!needs.length && !always) return null;
   const required = [...new Set(needs.map((n) => n.entitlement))];
-  const profile = reason ? null : find(app, required, { method });
+  const profile = reason ? null : find(app, required, { method, values: grantEntitlementValues(app, compat?.reach) });
   if (profile) {
     log(`macOS profile: "${profile.name}" (team ${profile.team}, ${METHODS[profile.method]}) signs ${required.join(', ')} for ${needs.map((n) => n.lines).join(', ')}.`);
     return { profile, entitlements: macProfileEntitlements(app, profile, needs, compat) };
@@ -213,6 +224,7 @@ export function macSigning(app, compat, { current, widgets = null, release = fal
   const wantsWidgets = app.manifest && platformWidgetEntries(app, 'macos').length > 0;
   const wantsShare = !!app.manifest?.share_target;
   const method = store ?? (distribution ? 'developerid' : 'development');
+  const values = grantEntitlementValues(app, compat?.reach);
   // A store build signs the App Sandbox, as `mac --sandbox` does with the dev server's connection besides (LLP 1030.005
   // D4); a line the sandbox cannot take refuses either before any profile is looked for.
   const sandbox = store || sandboxed ? { ...sandboxEntitlements(compat), ...(store ? {} : { 'com.apple.security.network.client': true }) } : null;
@@ -225,10 +237,10 @@ export function macSigning(app, compat, { current, widgets = null, release = fal
     if (wantsWidgets && namedWidgetProfile === undefined) namedWidgetProfile = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null;
     const named = wantsWidgets && namedWidgetProfile?.platforms?.includes('OSX')
       ? widgetProfiles({ app, team: namedWidgetProfile.team, ...kind, log, named: namedWidgetProfile,
-        also: p => required.every(name => macAllows(p, app, name)) }) : null;
-    const profile = find(app, required, { method, ...(named ? { named: named.app } : {}),
+        also: p => required.every(name => macAllows(p, app, name, values)) }) : null;
+    const profile = find(app, required, { method, values, ...(named ? { named: named.app } : {}),
       accept: p => !wantsWidgets || (named ? p.path === named.app.path : !!widgetProfiles({ app, team: p.team, ...kind, log,
-        also: owner => owner.path === p.path })) });
+        also: owner => owner.path === p.path && required.every(name => macAllows(owner, app, name, values)) })) });
     if (!profile && ambiguous) throw new Error(`host/apple: Apple Development identities span several teams, and no installed macOS profile selects a team for ${app.id}; ${signingChoice(method)}`);
     if (!profile) throw new Error(`host/apple: Mac extensions for ${app.id} need a signing team; no installed macOS profile covers their requirements. ${distribution ? `Set ${identityVariable(distribution, store)}=<sha1> to ${kindPhrase(distribution, store)} identity` : 'Set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1> to choose an identity, or EXACT_IDENTITY=- to build without the extensions'}`);
     current = identityFor(profile, current, kind);
@@ -243,7 +255,7 @@ export function macSigning(app, compat, { current, widgets = null, release = fal
     ...(wantsShare ? { shareTeam: adHoc ? null : widgets?.team ?? teamOfKind(sha1), ...(shared ? { shareProfile: shared } : {}) } : {}) });
   let pair = null;
   const together = (a, required) => {
-    pair = widgetProfiles({ app: a, team: widgets.team, ...kind, log, also: (p) => required.every((name) => macAllows(p, a, name)) });
+    pair = widgetProfiles({ app: a, team: widgets.team, ...kind, log, also: (p) => required.every((name) => macAllows(p, a, name, values)) });
     if (!pair && teamSelectedByEnvironment(widgets.team, method)) throw new Error(`host/apple: no suitable macOS profile of team ${widgets.team} (DEVELOPMENT_TEAM) allows ${required.join(', ')} and the Mac widgets' shared groups; install matching app and extension profiles or name the app's with EXACT_PROFILE`);
     return pair?.app ?? null;
   };
@@ -293,19 +305,20 @@ export function signInEntitlement(auth, { simulator = false, team = null, allows
  * item 1). An environment follows the signing, not the compiler: `debuggable` is the signing profile's
  * `get-task-allow`, true on a simulator, so `development` there and under a development profile and `production`
  * under the others. App Attest's and push's (`aps-environment`, LLP 1133.004 §9 P2, which a Live Activity that takes
- * pushes signs too); Apple uses production for TestFlight and App Store builds whatever they say. */
+ * pushes signs too); CloudKit uses `Development` and `Production`. Apple uses production for TestFlight and
+ * App Store builds whatever they say. */
 export function entitlementValue(name, debuggable, identifier = null) {
-  if (name === 'com.apple.developer.devicecheck.appattest-environment' || name === 'aps-environment') return signedEnvironment(debuggable);
+  if (name.endsWith('-environment')) return signedEnvironment(debuggable, name);
   if (name === KEY_VALUE_STORE) return identifier;
   return true;
 }
 
 /** The grant entitlements (`reach.entitlements`) a bundle of `app` signs, and so the ones its profile must allow:
  * all of them for the app; for an App Clip, whose notifications are ephemeral (`NSAppClip`), or an extension, which
- * reads no token, none of push's (LLP 1133.004 §9 P2), and none of the iCloud key-value store's, which is the app's.
+ * reads no token, none of push's (LLP 1133.004 §9 P2), CloudKit's or the iCloud key-value store's, which are the app's.
  * The signature and the profile check both read this. */
 export function grantEntitlements(app, names = []) {
-  return app.clipParent || app.widgetAppId ? names.filter((name) => name !== 'aps-environment' && name !== KEY_VALUE_STORE) : names;
+  return app.clipParent || app.widgetAppId ? names.filter((name) => name !== 'aps-environment' && name !== KEY_VALUE_STORE && !name.startsWith('com.apple.developer.icloud-')) : names;
 }
 
 /** @ref LLP 1133.034 D13 — the `payment.apple-pay` grants' merchant IDs, where they can be signed: on a simulator, or

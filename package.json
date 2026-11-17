@@ -8,7 +8,7 @@
   "devDependencies": {
     "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "fflate": "0.8.3",
-    "playwright-core": "1.64.1",
+    "playwright-core": "1.65.1",
     "rolldown": "1.2.9",
     "snapback4": "0.4.33",
     "typescript": "7.0.2"

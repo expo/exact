@@ -256,9 +256,7 @@ final class ShortcutMenu: NSMenu {
     }
     private static let speechGroup: Set<String> = ["find", "spelling-and-grammar", "substitutions", "transformations"]
     static func standardID(_ item: NSMenuItem) -> String? {
-        // AutoFill has no command of its own: AppKit identifies the submenu,
-        // and the host its own submenus (`DevMenu.removable`).
-        if item.identifier?.rawValue == "_NSMenuItemAutoFillIdentifier" { return "autofill" }
+        // The host's own submenus, by the identifiers it gives them (`DevMenu.removable`).
         if let id = item.identifier, let name = DevMenu.removable.first(where: { $0.value == id })?.key { return name }
         // Paste and Match Style is the ⌥⇧⌘V `pasteAsPlainText:`; Edit's ⇧⌘V
         // one, when an app command stands in for it, is the app's.

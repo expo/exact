@@ -33,6 +33,15 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller {
         return insets
     }
 
+    weak var listNode: NodeView?
+    var scrollingNode: NodeView? { listNode?.scrollView === self ? listNode : nil }
+
+    /// VoiceOver's scroll is the reader's, as a drag is, and supersedes a position Exact carries (`dropCarriedScroll`)
+    override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        scrollingNode?.dropCarriedScroll()
+        return super.accessibilityScroll(direction)
+    }
+
     var card: (Int) -> NodeView? = { _ in nil }
     /// Each section's outer-shadow reach as the layout last decorated it.
     private var decorated: [Int: CGFloat] = [:]

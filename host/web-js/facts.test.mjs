@@ -64,12 +64,20 @@ test('canvas performance keeps unsupported metrics unavailable and refuses bad s
 export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {}; export function R(r) { answers[r.name] = data.reserved[r.source](null,null,r.name); }
 export function commit(f) { try { f(); return true; } catch { return false; } }`);
     const { canvasPerformance } = await import(resolve(dir, 'facts.js'));
-    const { data, answers } = await import(resolve(dir, 'rt.js'));
+    const { data, answers, Resources } = await import(resolve(dir, 'rt.js'));
     canvasPerformance({ hud: ['world', { frames: ['?', 'n'], gpuMs: ['?', 'n'] }] });
     const read = () => data.reserved.exactCanvasPerformance(null, null, 'hud');
     expect(read()).toEqual([null, null]);
     expect(exact.canvasPerformanceRequested('world')).toBe(true);
     expect(exact.canvasPerformanceRequested('unread')).toBe(false);
+    Resources[0].asleep = true;
+    expect(exact.canvasPerformanceRequested('world')).toBe(false);
+    Resources.push({ ...Resources[0], asleep: false });
+    expect(exact.canvasPerformanceRequested('world')).toBe(true);
+    Resources[1].gone = true;
+    expect(exact.canvasPerformanceRequested('world')).toBe(false);
+    Resources.pop();
+    Resources[0].asleep = false;
     exact.canvasPerformanceRecord('world', '{"frames":60}');
     expect(answers.hud).toEqual([60, null]);
     for (const bad of ['{"frames":"bad"}', '{"frames":1e999}', ' '.repeat(16385)]) {

@@ -295,7 +295,7 @@ fn ready(launch: &LaunchPreloads) {
 }
 fn memory_endow(grants: &str, _: &str, _: bool) -> crate::store::Endowed {
     let grants = format!(
-        "{}\nstorage.kv {}\nstorage.kv exact.state",
+        "{}\nstorage.kv {}\nstorage.kv exact.state\nstorage.kv exact.watch",
         exact_runner::io_grants(grants),
         crate::store::KEPT
     );

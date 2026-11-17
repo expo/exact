@@ -1,7 +1,7 @@
 // How a test that cannot run says so (scripts/coverage.mjs), and the async
 // lane's side of it: required coverage, this commit's fixtures, no test run.
-import { expect, test } from 'bun:test';
-import { need, notApplicable, required } from './coverage.mjs';
+import { expect, spyOn, test } from 'bun:test';
+import { drivable, engineTests, need, notApplicable, required } from './coverage.mjs';
 import { checks, failures, laneEnv } from './async.mjs';
 
 /** A stand-in for bun's `test` that records what was registered. */
@@ -9,6 +9,8 @@ function recorder() {
   const seen = [];
   const t = (name, fn) => seen.push({ name, fn, how: 'run' });
   t.skip = (name, fn) => seen.push({ name, fn, how: 'skip' });
+  t.each = table => (name, fn) => seen.push({ name, fn, how: 'run', table });
+  t.skip.each = table => (name, fn) => seen.push({ name, fn, how: 'skip', table });
   t.serial = t;
   return { t, seen };
 }
@@ -20,10 +22,39 @@ test('nothing missing is the test itself', () => {
   expect(notApplicable(null, { test: t })).toBe(t);
 });
 
-test('a missing prerequisite skips, naming its kind and why', () => {
+test('a missing prerequisite skips, saying why once and then naming each test, rows too', () => {
   const { t, seen } = recorder();
-  need('chrome', 'Chromium is missing', { test: t, env: {} })('presses');
-  expect(seen).toEqual([{ name: 'presses — missing chrome: Chromium is missing', fn: undefined, how: 'skip' }]);
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  let said;
+  try {
+    const chromeTest = need('chrome', 'Chromium is missing', { test: t, env: {} });
+    chromeTest('presses');
+    chromeTest.each([['taps', 1], ['drags', 2]])('%s with %d finger');
+    said = warn.mock.calls.map(c => c[0]);
+  } finally { warn.mockRestore(); }
+  expect(seen.map(s => [s.name, s.how])).toEqual([['presses — missing chrome', 'skip'], ['%s with %d finger — missing chrome', 'skip']]);
+  expect(said).toEqual([
+    'SKIP: missing chrome, so the tests that need it are skipped, not failed. This run lacks it; the code under test is not at fault. Chromium is missing',
+    'SKIP: presses — missing chrome', 'SKIP: taps with 1 finger — missing chrome', 'SKIP: drags with 2 finger — missing chrome',
+  ]);
+});
+
+test('a missing browser engine skips its own tests, and in a test of several engines only its part', async () => {
+  const { t, seen } = recorder();
+  const missing = async engine => engine === 'firefox' ? 'Firefox is missing' : null;
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  let said;
+  try {
+    const tests = await engineTests(['chromium', 'firefox', 'webkit'], { test: t, env: {}, missing });
+    expect([tests.chromium, tests.chrome, tests.webkit]).toEqual([t, t, t]);
+    tests.firefox('scrolls');
+    for (const _ of [1, 2]) expect(await drivable(['chrome', 'firefox', 'webkit'], { env: {}, missing })).toEqual(['chrome', 'webkit']);
+    said = warn.mock.calls.map(c => c[0]);
+  } finally { warn.mockRestore(); }
+  expect(seen).toEqual([{ name: 'scrolls — missing firefox', fn: undefined, how: 'skip' }]);
+  expect(said).toEqual([expect.stringMatching(/^SKIP: missing firefox, so .* Firefox is missing$/), 'SKIP: scrolls — missing firefox',
+    expect.stringMatching(/^SKIP: the firefox part of the test at scripts\/coverage\.test\.mjs:\d+ — missing firefox$/)]);
+  await expect(drivable(['webkit', 'firefox'], { env: { EXACT_REQUIRED: '1' }, missing })).rejects.toThrow('missing firefox: Firefox is missing (EXACT_REQUIRED=1)');
 });
 
 test('under EXACT_REQUIRED a missing prerequisite fails rather than skips', () => {
@@ -31,10 +62,13 @@ test('under EXACT_REQUIRED a missing prerequisite fails rather than skips', () =
   const check = need('fixture', 'no wasm dist', { test: t, env: { EXACT_REQUIRED: '1' } });
   check('adopts the document');
   check.serial('serially too');
+  check.each([1, 2])('row %d');
   expect(seen.map(s => [s.name, s.how])).toEqual([
     ['adopts the document — missing fixture: no wasm dist', 'run'],
     ['serially too — missing fixture: no wasm dist', 'run'],
+    ['row %d — missing fixture: no wasm dist', 'run'],
   ]);
+  expect(seen[2].fn).toThrow('missing fixture: no wasm dist (EXACT_REQUIRED=1)');
   expect(() => seen[0].fn()).toThrow('missing fixture: no wasm dist (EXACT_REQUIRED=1)');
 });
 

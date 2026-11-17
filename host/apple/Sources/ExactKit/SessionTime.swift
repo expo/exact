@@ -102,10 +102,9 @@ extension ExactSession {
     /// until `tellTime`. A running runner is not told.
     ///
     /// On the Mac, the process's layout direction too: AppKit fixes it at
-    /// launch from the system's language, not the bundle's, and draws the
-    /// window's chrome in it, so a direction the author left unsaid is it,
-    /// not the strings table's (an Arabic-only app on an English Mac is left
-    /// to right throughout, as a hand-built one is).
+    /// launch, including the standalone app's `host.macos.layoutDirection`.
+    /// It draws the window's chrome in that direction, which also governs
+    /// layout the author left unsaid, instead of the strings table's.
     func primeTime() {
         guard state != .destroyed else { return }
         let date = dateNow()

@@ -37,7 +37,9 @@
 //
 // The driver's own chrome (`--chrome agent`) paints it in the top layer as
 // before, and a menu's shape is painted there under either chrome: over the
-// page, or in the sheet of the dialog its invoker is in.
+// page, or in the sheet of the dialog its invoker is in. A painted menu
+// whose author wrote no surface stands on AppKit's menu panel
+// (`paintedMenuRadius`).
 #if os(macOS)
 import AppKit
 
@@ -110,6 +112,7 @@ extension MenuHost {
         entry.layer.setPaintForeground()
         entry.layer.addSubview(entry.popover)
         entry.popover.isHidden = false
+        entry.popover.updateMaterial()
     }
 
     /// The view that owns a painted popover's layer: its invoker's split
@@ -132,6 +135,7 @@ extension MenuHost {
             else { parent.addSubview(pop) }
             pop.frame = entry.frame
         }
+        pop.updateMaterial()
     }
 
     /// A style change moves the same open subtree between presentations;
@@ -321,6 +325,36 @@ extension MenuHost {
         guard let mark = dismissedByClick, mark.source == ObjectIdentifier(source), let event = NSApp.currentEvent,
               [.leftMouseDown, .leftMouseUp].contains(event.type), event.eventNumber == mark.click else { return false }
         return true
+    }
+}
+
+extension NodeView {
+    /// The corner of AppKit's menu panel under a menu this host paints: the
+    /// driver's (LLP 1021 D4), and a person's where no `NSMenu` shows it.
+    /// An `NSMenu`'s window holds an `NSGlassEffectView`, `.regular`, with
+    /// this corner (the metrics' `menu-radius`, sent as
+    /// `defaultSurfaceRadius`), and without it an unstyled menu is bare rows
+    /// over the page. Nil where its author wrote a surface in any state,
+    /// which is then the menu's (the compiler's `defaultSurface` says so, as
+    /// for any popover), and where it is not painted.
+    var paintedMenuRadius: CGFloat? {
+        guard superview is PopoverLayer, props["popover"] != nil, props["accessibilityRole"] == "menu",
+              props["defaultSurface"] == "true", backdropOperations.isEmpty,
+              let radius = props["defaultSurfaceRadius"].flatMap(Double.init) else { return nil }
+        return CGFloat(radius)
+    }
+
+    /// A scrolling menu's rows are its scroll view's, beside the panel and
+    /// not in its content: the scroll view takes the panel's corner while
+    /// the panel is there, as iOS's does (`syncDefaultSurfaceScroll`), so a
+    /// row scrolled against an edge stays inside the corners.
+    func syncMenuPanelScroll() {
+        guard let scroll else { return }
+        let corner = materialView != nil && paintedMenuRadius != nil ? effectiveCornerSizes(in: bounds).first?.width ?? 0 : 0
+        guard corner > 0 || (scroll.layer?.cornerRadius ?? 0) > 0 else { return }
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = corner
+        if corner > 0 { scroll.layer?.masksToBounds = true }
     }
 }
 #endif

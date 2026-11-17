@@ -216,7 +216,11 @@ impl<D: DataSource> Presenter<D> {
         // Where its painted box is in the viewport: None for a picture with no
         // painted box (not painted yet, or under `display: none`).
         let boot_visible_only = self.images.boot_visible_only;
+        let status_sizes = self.images.status_sizes.clone();
         let placed = |id: ViewId| -> Option<bool> {
+            if status_sizes.contains_key(&id) {
+                return Some(true);
+            }
             if host.route_visibility(id).0 {
                 return Some(false);
             }

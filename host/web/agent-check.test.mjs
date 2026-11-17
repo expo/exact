@@ -871,3 +871,10 @@ test('Shared Elements keeps Zoom Close painted, observed and usable after repeat
     await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
   }
 }, 120_000);
+
+test('check on the wasm web target names the target and where check runs', async () => {
+  const session = { host: 'web', op: async () => { throw Object.assign(new Error('check: unknown op: check'), { reply: { error: 'unknown op: check' } }); } };
+  await expect(checkOp(session)).rejects.toThrow('this web build is the wasm target (a game, or `--wasm`), which carries no check; the JS web target and iOS do, so run `agent ios check`');
+  const failed = { host: 'web', op: async () => { throw new Error('display failed'); } };
+  await expect(checkOp(failed)).rejects.toThrow('display failed');
+});

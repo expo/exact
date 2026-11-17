@@ -17,7 +17,7 @@
 // - `registerPeriodicSync` rejects `NotSupportedError` in data code.
 //
 // usage: bun packages/background/test/web.mjs [chromium] [firefox] [webkit]
-//   (every engine by default; `bunx playwright@1.64.1 install firefox webkit` first)
+//   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';

@@ -343,6 +343,7 @@ mod tests {
             let entry = crate::manifest::WatchEntry {
                 source: "watch.contract".into(),
                 component: component.into(),
+                sync: Default::default(),
             };
             crate::compile_watch(&self.0, &entry)
                 .err()

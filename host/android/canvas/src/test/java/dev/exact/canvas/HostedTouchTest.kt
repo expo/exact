@@ -653,6 +653,54 @@ class HostedTouchTest {
         }
     }
 
+    /** Claims 6: the hit reply on a sheet where the up-and-down claim is the sheet's drag alone. The sheet intercepts
+     * as BottomSheetBehavior does, so a view that disallowed interception keeps the drag (expo/exact#736). */
+    @Test fun inASheetAViewDisallowingInterceptionKeepsAVerticalDrag() {
+        for (late in listOf(false, true)) for (context in listOf(false, true)) {
+            val f = Fixture(claims = 6, disallow = true)
+            if (context) Engine.reply[Engine.reply.lastIndex] = 7
+            val moves = {
+                f.touch(2, y = 60f, time = 120)
+                f.touch(2, y = 20f, time = 140)
+                f.touch(1, y = 20f, time = 160)
+            }
+            if (late) Engine.beforeReply = moves
+            f.touch(0)
+            if (!late) moves()
+            assertEquals("late=$late context=$context", listOf(0, 2, 2, 1), f.events)
+            assertEquals("the sheet's drag is let go with Exact's contact", listOf(0, 3), Engine.touches)
+            f.view.running(false, false)
+        }
+    }
+
+    @Test fun aSheetTakesAVerticalDragFromAViewThatAllowsInterception() {
+        // A view that takes the down and asks nothing of its parents is cancelled, and the sheet hears the drag.
+        for (context in listOf(false, true)) {
+            val taken = Fixture(claims = 6)
+            if (context) Engine.reply[Engine.reply.lastIndex] = 7
+            taken.touch(0); taken.touch(2, y = 60f, time = 120); taken.touch(2, y = 20f, time = 140); taken.touch(1, y = 20f, time = 160)
+            assertEquals("context=$context", listOf(0, 3), taken.events)
+            assertEquals(listOf(0, 2, 2, 1), Engine.touches)
+        }
+        // One that declines the down hears nothing more.
+        val declined = Fixture(claims = 6, accepts = false)
+        declined.touch(0); declined.touch(2, y = 60f, time = 120); declined.touch(1, y = 60f, time = 140)
+        assertEquals(listOf(0), declined.events)
+        assertEquals(listOf(0, 2, 1), Engine.touches)
+        // A drag sideways is the view's, as the sheet does not move that way.
+        val across = Fixture(claims = 6)
+        across.touch(0); across.touch(2, x = 150f, time = 120); across.touch(1, x = 150f, time = 140)
+        assertEquals(listOf(0, 2, 1), across.events)
+        assertEquals(listOf(0, 3), Engine.touches)
+    }
+
+    @Test fun anExactGesturesVerticalClaimInASheetIsNotTheViewsToDisallow() {
+        val f = Fixture(claims = 2, disallow = true)
+        f.touch(0); f.touch(2, y = 60f, time = 120); f.touch(1, y = 60f, time = 140)
+        assertEquals(listOf(0, 3), f.events)
+        assertEquals(listOf(0, 2, 1), Engine.touches)
+    }
+
     @Test fun aStopDiscardsPendingContactsAndCancelsAnAcceptedOne() {
         for (late in listOf(false, true)) {
             val f = Fixture(scroller = true)

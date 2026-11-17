@@ -1,4 +1,123 @@
 use super::*;
+use placement::{Edge, Placement, Rect};
+
+fn rect([left, top, right, bottom]: [i32; 4]) -> Rect {
+    Rect {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+#[test]
+fn a_status_menu_stays_above_the_reported_auto_hide_taskbar() {
+    let monitor = rect([1920, 0, 3840, 1440]);
+    let icon = rect([3138, 1380, 3178, 1440]);
+    let taskbar = rect([1920, 1380, 3840, 1440]);
+    let placement = Placement::new(icon, monitor, monitor, Some((Edge::Bottom, taskbar)));
+    assert_eq!(placement.position((150, 96), false), (3138, 1284));
+}
+
+#[test]
+fn a_status_menu_excludes_its_icon_and_taskbar_on_every_edge() {
+    let monitor = rect([0, 0, 1920, 1080]);
+    let cases = [
+        (
+            Edge::Left,
+            [0, 0, 60, 1080],
+            [10, 960, 50, 1000],
+            [60, 0, 1920, 1080],
+            (60, 960),
+        ),
+        (
+            Edge::Top,
+            [0, 0, 1920, 60],
+            [1800, 10, 1840, 50],
+            [0, 60, 1920, 1080],
+            (1770, 60),
+        ),
+        (
+            Edge::Right,
+            [1860, 0, 1920, 1080],
+            [1870, 960, 1910, 1000],
+            [0, 0, 1860, 1080],
+            (1710, 960),
+        ),
+        (
+            Edge::Bottom,
+            [0, 1020, 1920, 1080],
+            [1800, 1030, 1840, 1070],
+            [0, 0, 1920, 1020],
+            (1770, 924),
+        ),
+    ];
+    for (edge, taskbar, icon, available, expected) in cases {
+        assert_eq!(Edge::of_bar(rect(taskbar), monitor), edge);
+        for auto_hide in [false, true] {
+            let work = if auto_hide { monitor } else { rect(available) };
+            let icon = rect(icon);
+            let taskbar = rect(taskbar);
+            let placement = Placement::new(icon, monitor, work, Some((edge, taskbar)));
+            let (x, y) = placement.position((150, 96), false);
+            let menu = rect([x, y, x + 150, y + 96]);
+            assert_eq!((x, y), expected, "{edge:?}, auto-hide {auto_hide}");
+            assert_eq!(placement.area, rect(available));
+            assert!(!menu.intersects(icon));
+            assert!(!menu.intersects(taskbar));
+            assert_eq!(
+                placement.position(placement.area.size(), false),
+                (placement.area.left, placement.area.top)
+            );
+        }
+    }
+}
+
+#[test]
+fn an_overflow_icons_menu_leaves_the_icon_clear() {
+    let monitor = rect([0, 0, 800, 600]);
+    let cases = [
+        (Edge::Left, [0, 0, 40, 600], [60, 200, 100, 240], (100, 200)),
+        (Edge::Top, [0, 0, 800, 40], [600, 60, 640, 100], (600, 100)),
+        (
+            Edge::Right,
+            [760, 0, 800, 600],
+            [700, 200, 740, 240],
+            (550, 200),
+        ),
+        (
+            Edge::Bottom,
+            [0, 560, 800, 600],
+            [600, 500, 640, 540],
+            (600, 404),
+        ),
+    ];
+    for (edge, bar, icon, expected) in cases {
+        let placement = Placement::new(rect(icon), monitor, monitor, Some((edge, rect(bar))));
+        assert_eq!(placement.position((150, 96), false), expected, "{edge:?}");
+        let without_bar = Placement::new(rect(icon), monitor, monitor, None);
+        assert_eq!(
+            without_bar.position((150, 96), false),
+            expected,
+            "{edge:?}: no app bar"
+        );
+    }
+}
+
+#[test]
+fn a_status_menu_uses_its_icons_monitor_and_the_persons_alignment() {
+    let monitor = rect([-1920, -1080, 0, 0]);
+    let icon = rect([-300, -50, -260, -10]);
+    let work = rect([-1920, -1080, 0, -60]);
+    // The system taskbar on another display must not trim this monitor.
+    let primary = rect([0, 1020, 1920, 1080]);
+    for bar in [None, Some((Edge::Bottom, primary))] {
+        let placement = Placement::new(icon, monitor, work, bar);
+        assert_eq!(placement.area, work);
+        assert_eq!(placement.position((150, 96), false), (-300, -156));
+        assert_eq!(placement.position((150, 96), true), (-410, -156));
+    }
+}
 
 /// `lParam` and `wParam` as version 4's callback packs them.
 fn packed(event: u16, icon: u16, (x, y): (i16, i16)) -> (usize, isize) {
@@ -196,4 +315,12 @@ fn the_menus_keys_are_named_as_the_page_names_them() {
 fn a_wheel_notch_scrolls_the_persons_lines() {
     assert_eq!(wheel(-120, 3), 48.);
     assert_eq!(wheel(240, 1), -32.);
+}
+
+#[test]
+fn status_icon_metrics_follow_the_current_displays_small_icon() {
+    assert_eq!(super::icon_metrics(16, 96), (16, 1.));
+    assert_eq!(super::icon_metrics(20, 120), (20, 1.25));
+    assert_eq!(super::icon_metrics(24, 144), (24, 1.5));
+    assert_eq!(super::icon_metrics(0, 0), (16, 1.));
 }

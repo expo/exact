@@ -116,6 +116,30 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
         self.force = true;
     }
+
+    /// The URL in the launching intent of the first activity made over a
+    /// host booted with none (`Headless`, LLP 1133.017 D7): the launch
+    /// location, which that boot had no `EXACT_LAUNCH_URL` to read.
+    pub fn launch(&mut self, href: &str) {
+        let now = self.now();
+        if let Some(error) = self.p.launch_location(href, now) {
+            eprintln!("exact: {error}");
+        }
+        self.force = true;
+    }
+
+    /// The share in that intent, `{"target", "share"}`, which that boot had
+    /// no `EXACT_SHARE` to claim.
+    pub fn launch_share(&mut self, request: &str) {
+        let now = self.now();
+        let launched = serde_json::from_str(request)
+            .map_err(|e| e.to_string())
+            .and_then(|q| self.p.launch_share(&q, now));
+        if let Err(error) = launched {
+            eprintln!("exact: share: {error}");
+        }
+        self.force = true;
+    }
 }
 
 /// A reader event's `eventTime` on the host's clock, which reads zero at

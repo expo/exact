@@ -367,6 +367,7 @@ extension NodeView {
                 made.contentView.addSubview(material)
             }
             glassSlot = made
+            sizeMaterial() // made during a layout transition, at its shown size
             return made
         }()
         return slot.isolate(!reasons.isEmpty)

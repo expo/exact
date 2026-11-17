@@ -17,11 +17,11 @@ impl Abi {
         self.bytes(length)
     }
 
-    pub(super) fn enable_performance(&self, id: u32) {
+    pub(super) fn set_performance(&self, id: u32, enabled: bool) {
         // SAFETY: the checked ABI; this canvas belongs to the module.
         unsafe {
             self.symbol::<unsafe extern "C" fn(u32, bool) -> bool>(b"gpu_performance_reporting")(
-                id, true,
+                id, enabled,
             )
         };
     }

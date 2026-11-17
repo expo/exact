@@ -75,6 +75,7 @@ macro_rules! widgets_jni {
             ) -> jbyteArray {
                 let dir = $crate::canvas::jni::utf8(env, dir);
                 environment(&dir);
+                $crate::canvas::secrets::attach(env);
                 let kind = $crate::canvas::jni::utf8(env, kind);
                 let props = optional(env, props);
                 let configuration = optional(env, configuration);
@@ -114,6 +115,7 @@ macro_rules! widgets_jni {
             ) -> jbyteArray {
                 let dir = $crate::canvas::jni::utf8(env, dir);
                 environment(&dir);
+                $crate::canvas::secrets::attach(env);
                 let kind = $crate::canvas::jni::utf8(env, kind);
                 let deadline = std::time::Instant::now()
                     + std::time::Duration::from_millis(budget.max(0) as u64);

@@ -34,7 +34,7 @@ exact-apple = { path = "../host/apple" }
 exact-runner = { path = "../runner" }
 # `exact setup` installs the wasm-bindgen CLI of this version, and the CLI
 # refuses a wasm built against any other. The two below follow it.
-wasm-bindgen = "=0.2.127"
+wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
 

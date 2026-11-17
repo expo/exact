@@ -24,7 +24,7 @@ final class Source: ExactVideoSource {
     private let queue = DispatchQueue(label: "dev.exact.camera.test.photo")
     private var objects: [String: AnyObject] = [:]
     init(_ device: AVCaptureDevice) { self.device = device }
-    func configure(_ change: @escaping (AVCaptureSession) -> Void) {
+    func configure(stopped: Bool, _ change: @escaping (AVCaptureSession) -> Void) {
         queue.async { [session] in session.beginConfiguration(); change(session); session.commitConfiguration() }
     }
     func run(_ work: @escaping (AVCaptureSession) -> Void) { queue.async { [session] in work(session) } }

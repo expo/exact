@@ -62,6 +62,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::field::attach(env, scale);
             $crate::canvas::legacy::attach(env);
             $crate::canvas::presence::attach(env);
+            $crate::canvas::secrets::attach(env);
             environment(env, dir, live);
             let store = string(env, store);
             match boot((width as u32, height as u32), scale, &store) {
@@ -118,6 +119,7 @@ macro_rules! canvas_jni_start {
             $crate::canvas::field::attach(env, scale);
             $crate::canvas::legacy::attach(env);
             $crate::canvas::presence::attach(env);
+            $crate::canvas::secrets::attach(env);
             // The environment is set here, before any other thread reads it.
             environment(env, dir, live);
             let store = string(env, store);

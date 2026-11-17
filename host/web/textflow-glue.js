@@ -600,10 +600,18 @@ export function createTextFlow({ views, request, advance, present, admitTimers =
       for (const r of s.runs) {
         const a = Math.max(f.paint_start, r.start), b = Math.min(end, r.end);
         if (a >= b) continue;
-        let text = s.text.slice(a, b).replace(/[\u00ad\u200b]/g, '');
-        if (!preserves(snapshot.whiteSpace)) text = text.replace(/[ \t\r\n\f\u0085\u2028\u2029]+/g, ' ');
-        if (b === end && snapshot.whiteSpace !== 'pre') text = text.trimEnd();
-        total += metrics.measure(r.font, text, lower(s.clusterStarts, b) - lower(s.clusterStarts, a), 0);
+        // Preserved, a carriage return or form feed has no advance and the text on each side is shaped apart,
+        // as the walker measures a line (`preserved_advance`, textflow/src/walker.rs); a canvas gives each a space's.
+        const raw = s.text.slice(a, b), keep = preserves(snapshot.whiteSpace);
+        const pieces = keep ? [...raw.matchAll(/[^\r\f]+/g)].map(m => [a + m.index, m[0]]) : [[a, raw]];
+        let hung = b === end && snapshot.whiteSpace !== 'pre';
+        for (const [at, piece] of pieces.reverse()) {
+          let text = piece.replace(/[\u00ad\u200b]/g, '');
+          if (!keep) text = text.replace(/[ \t\r\n\f\u0085\u2028\u2029]+/g, ' ');
+          // The spaces a line hangs can lie on both sides of an ignored control.
+          if (hung) { text = text.trimEnd(); hung = !text; }
+          total += metrics.measure(r.font, text, lower(s.clusterStarts, at + piece.length) - lower(s.clusterStarts, at), 0);
+        }
       }
       return total;
     };

@@ -26,7 +26,9 @@ impl<D: DataSource> Presenter<D> {
         self.agent_reader_turn();
         self.executor.begin_pump();
         self.host.runner_mut().take_fault_logs();
-        if self.painted && self.data_activating() {
+        if self.unshown {
+            self.activate_unshown();
+        } else if self.painted && self.data_activating() {
             self.first_pixel();
         }
         let performance_error = self.poll_canvas_performance();

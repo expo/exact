@@ -735,3 +735,331 @@ fn fixed_collection_geometry_reports_the_shared_flow_extents() {
     let batch = send(&mut bridge, &report, 1.0);
     assert!(batch.contains("\"error\":null"), "{batch}");
 }
+
+#[test]
+fn a_build_waits_for_validated_host_measurements_without_retirement() {
+    use exact_runner::CollectionFill;
+    let (mut bridge, _, _) = fixture(SOURCE);
+    let first = snapshot(&bridge);
+    send(&mut bridge, &facts(&first, 0.), 0.);
+    let first = snapshot(&bridge);
+    let before: Vec<_> = first.rows.iter().map(|r| r.view).collect();
+    let bytes = facts(&first, 1600.)
+        .encode_with(CollectionFill {
+            create_only: true,
+            limit: None,
+            ..CollectionFill::default()
+        })
+        .unwrap();
+    let writes = bridge.host.as_ref().unwrap().batch_writes;
+    bridge.input_write(&bytes);
+    let len = bridge.collection_feedback(bytes.len(), 0.);
+    let reply = String::from_utf8_lossy(bridge.output_bytes(len as usize));
+    assert!(reply.contains("\"error\":null"), "{reply}");
+    let built = snapshot(&bridge);
+    let added: Vec<_> = built
+        .rows
+        .iter()
+        .filter(|row| !before.contains(&row.view))
+        .collect();
+    assert!(!added.is_empty());
+    assert!(added.iter().all(|row| !row.measured));
+    assert!(built.window.is_none(), "host measurement is still owed");
+    assert!(
+        before
+            .iter()
+            .all(|view| built.rows.iter().any(|r| r.view == *view)),
+        "a build cannot retire"
+    );
+    assert_eq!(
+        bridge.host.as_ref().unwrap().batch_writes - writes,
+        1,
+        "one published commit"
+    );
+    let row = added[0];
+    let mut measurement = facts(&built, 1600.);
+    measurement.measurements.push(RowMeasurement {
+        view: row.view,
+        epoch: row.epoch,
+        size: 43.,
+    });
+    let before = state(&bridge);
+    for (revision, sequence) in [
+        (built.revision - 1, measurement.scroll_sequence),
+        (built.revision, built.scroll_sequence - 1),
+    ] {
+        let mut stale = measurement.clone();
+        stale.revision = revision;
+        stale.scroll_sequence = sequence;
+        let reply = send(&mut bridge, &stale, 1000.);
+        assert!(reply.contains("\"error\":null"), "{reply}");
+        assert_eq!(state(&bridge), before);
+    }
+    let mut bytes = measurement.encode().unwrap();
+    let flags = u32::from_le_bytes(bytes[92..96].try_into().unwrap()) | 1024;
+    bytes[92..96].copy_from_slice(&flags.to_le_bytes());
+    bridge.input_write(&bytes);
+    let len = bridge.collection_feedback(bytes.len(), 1000.);
+    let reply = String::from_utf8_lossy(bridge.output_bytes(len as usize));
+    assert!(reply.contains("malformed collection feedback"), "{reply}");
+    assert_eq!(
+        state(&bridge),
+        before,
+        "unknown flags cannot bypass validation"
+    );
+    let reply = send(&mut bridge, &measurement, 0.);
+    assert!(reply.contains("\"error\":null"), "{reply}");
+    assert!(snapshot(&bridge)
+        .rows
+        .iter()
+        .any(|r| r.view == row.view && r.measured && r.size == 43.));
+}
+
+#[test]
+fn leaving_an_edge_publishes_its_rearmed_window_without_a_view_commit() {
+    let source = include_str!("../tests/fixtures/quiet-edge.contract");
+    let (mut bridge, _, _) = fixture(source);
+    for _ in 0..8 {
+        let current = snapshot(&bridge);
+        if current.window.is_some() {
+            break;
+        }
+        let mut initial = facts(&current, 0.);
+        initial.port_main = 300.;
+        initial.measurements = current
+            .rows
+            .iter()
+            .map(|row| RowMeasurement {
+                view: row.view,
+                epoch: row.epoch,
+                size: 100.,
+            })
+            .collect();
+        send(&mut bridge, &initial, 0.);
+    }
+    assert!(snapshot(&bridge).window.is_some(), "all rows are measured");
+    for (offset, reaches) in [(201., 1.), (200., 1.), (201., 2.)] {
+        let before = snapshot(&bridge);
+        let mut report = facts(&before, offset);
+        report.port_main = 300.;
+        let batch = send(&mut bridge, &report, 0.);
+        let host = bridge.host.as_ref().unwrap();
+        assert_eq!(host.runner().slot("reaches"), Some(&Value::Number(reaches)));
+        if offset == 200. {
+            let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+            let ops = batch["ops"].as_array().unwrap();
+            assert_eq!(ops.len(), 1, "only the edge metadata changes: {batch}");
+            assert_eq!(ops[0]["op"], "collections");
+            let mask = ops[0]["items"][0]["window"]["mask"].as_u64().unwrap();
+            assert_ne!(mask & 8, 0, "the presenter can report the next entry");
+            assert_eq!(snapshot(&bridge).revision, before.revision);
+            assert_eq!(snapshot(&bridge).rows, before.rows);
+        }
+    }
+}
+
+#[test]
+fn quiet_travel_consumes_no_feedback_and_preserves_the_next_batch() {
+    let (mut bridge, _, _) = fixture(SOURCE);
+    let first = facts(&snapshot(&bridge), 320.0);
+    send(&mut bridge, &first, 0.0);
+    let before = snapshot(&bridge);
+    bridge
+        .host
+        .as_mut()
+        .unwrap()
+        .runner_mut()
+        .log("kept across quiet travel");
+    let writes = bridge.host.as_ref().unwrap().batch_writes;
+    let output = bridge.output_bytes(bridge.output.len()).to_vec();
+    let travel = facts(&before, 325.0);
+    bridge.input_write(
+        &[
+            travel.revision.to_le_bytes(),
+            travel.scroll_sequence.to_le_bytes(),
+        ]
+        .concat(),
+    );
+    bridge.scrolled(2, travel.view, 0.0, travel.offset);
+    let after = snapshot(&bridge);
+    assert_eq!(after.rows, before.rows);
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.scroll_sequence, travel.scroll_sequence);
+    assert_eq!(bridge.host.as_ref().unwrap().batch_writes, writes);
+    assert_eq!(bridge.output_bytes(output.len()), output);
+    bridge.input_write(&[0; 15]);
+    bridge.scrolled(2, travel.view, 0.0, 900.0);
+    assert_eq!(snapshot(&bridge).scroll_sequence, travel.scroll_sequence);
+    let batch = send(&mut bridge, &facts(&after, 325.0), 0.0);
+    assert!(batch.contains("kept across quiet travel"), "{batch}");
+}
+
+#[test]
+fn a_backward_build_waits_for_native_sizes_before_anchoring() {
+    for horizontal in [true, false] {
+        backward_build_waits_for_intrinsic("input type=\"checkbox\" role=\"switch\"", horizontal);
+    }
+}
+
+#[test]
+fn a_backward_build_waits_for_replaced_sizes_before_anchoring() {
+    for item in [
+        "image",
+        "image min-width=40",
+        "image min-height=40",
+        "image width=\"max-content\" height=\"min-content\"",
+        "video",
+        "svg",
+        "canvas",
+        "iframe",
+    ] {
+        for horizontal in [true, false] {
+            backward_build_waits_for_intrinsic(item, horizontal);
+        }
+    }
+    backward_build_waits_for_intrinsic("image aspect-ratio=1", true);
+}
+
+fn backward_build_waits_for_intrinsic(item: &str, horizontal: bool) {
+    use exact_runner::CollectionFill;
+    let layout = if horizontal {
+        r#"display="flex" width=240 height=240 overflow-x="scroll" overflow-y="hidden" estimated-item-width=100"#
+    } else {
+        r#"width=240 height=240 overflow-y="scroll" estimated-item-height=100"#
+    };
+    let source = format!(
+        r#"component App
+  view
+    list virtualized=true {layout}
+      for n in range(100) key=n
+        {item} flex-shrink=0 align-self="start"
+"#
+    );
+    let (mut bridge, _, _) = fixture(&source);
+    let mut report = facts(&snapshot(&bridge), 3000.);
+    report.port_main = 240.;
+    report.port_cross = 240.;
+    report.cross = 240.;
+    send(&mut bridge, &report, 0.);
+    let before = snapshot(&bridge);
+    let sizes: Vec<_> = before
+        .rows
+        .iter()
+        .map(|r| (r.root, Some((100., 100.))))
+        .collect();
+    let reply = bridge.host.as_mut().unwrap().set_intrinsics(&sizes);
+    assert!(reply.contains("\"error\":null"), "{reply}");
+    let measurement = |host: &Host<Rows>, row: &exact_runner::CollectionRow| {
+        let frame = host.runner().kernel().node(row.view).unwrap().frame;
+        RowMeasurement {
+            view: row.view,
+            epoch: row.epoch,
+            size: f64::from(if horizontal {
+                frame.width
+            } else {
+                frame.height
+            }),
+        }
+    };
+    // A fresh report acknowledges only rows already on main.
+    report = CollectionFeedback {
+        measurements: before
+            .rows
+            .iter()
+            .map(|r| measurement(bridge.host.as_ref().unwrap(), r))
+            .collect(),
+        ..facts(&before, 3000.)
+    };
+    report.port_main = 240.;
+    report.port_cross = 240.;
+    report.cross = 240.;
+    send(&mut bridge, &report, 0.);
+    let before = snapshot(&bridge);
+    let offset = 2700.;
+    let anchor = before
+        .rows
+        .iter()
+        .find(|r| r.start + r.size > offset)
+        .unwrap()
+        .view;
+    let main = |frame: exact_kernel::Frame| if horizontal { frame.x } else { frame.y } as f64;
+    let start = main(
+        bridge
+            .host
+            .as_ref()
+            .unwrap()
+            .runner()
+            .kernel()
+            .node(anchor)
+            .unwrap()
+            .frame,
+    );
+    let mut build = facts(&before, offset);
+    build.port_main = 240.;
+    build.port_cross = 240.;
+    build.cross = 240.;
+    let bytes = build
+        .encode_with(CollectionFill {
+            create_only: true,
+            limit: None,
+            ..CollectionFill::default()
+        })
+        .unwrap();
+    bridge.input_write(&bytes);
+    bridge.collection_feedback(bytes.len(), 0.);
+    let built = snapshot(&bridge);
+    let added: Vec<_> = built
+        .rows
+        .iter()
+        .filter(|r| !before.rows.iter().any(|old| old.view == r.view))
+        .collect();
+    assert!(
+        !added.is_empty(),
+        "the reversal builds rows before the visible window"
+    );
+    assert!(
+        added.iter().all(|r| !r.measured),
+        "{item}, horizontal={horizontal}: a host fallback is not a measurement"
+    );
+    assert!(
+        added.iter().all(|r| r.size > 0.),
+        "unresolved rows keep positive estimates"
+    );
+    assert!(
+        before
+            .rows
+            .iter()
+            .all(|r| built.rows.iter().any(|now| now.view == r.view)),
+        "a backward build cannot retire"
+    );
+    let host = bridge.host.as_mut().unwrap();
+    let sizes: Vec<_> = added.iter().map(|r| (r.root, Some((80., 80.)))).collect();
+    let reply = host.set_intrinsics(&sizes);
+    assert!(reply.contains("\"error\":null"), "{reply}");
+    let sized = snapshot(&bridge);
+    for row in &added {
+        let current = sized.rows.iter().find(|r| r.view == row.view).unwrap();
+        assert!(!current.measured);
+        assert_eq!(
+            current.size, row.size,
+            "layout cannot acknowledge a row size"
+        );
+    }
+    let mut measured = build;
+    measured.revision = built.revision;
+    measured.scroll_sequence = built.scroll_sequence + 1;
+    measured.measurements = added
+        .iter()
+        .map(|r| measurement(bridge.host.as_ref().unwrap(), r))
+        .collect();
+    let reply = send(&mut bridge, &measured, 0.);
+    assert!(reply.contains("\"error\":null"), "{reply}");
+    let after = snapshot(&bridge);
+    let host = bridge.host.as_ref().unwrap();
+    let end = main(host.runner().kernel().node(anchor).unwrap().frame);
+    let corrected = after.correction.as_ref().map_or(offset, |c| c.offset);
+    assert!(
+        (end - corrected - (start - offset)).abs() < 0.01,
+        "{item}, horizontal={horizontal}: measurements moved the visible row: {start} -> {end}, correction {corrected}"
+    );
+}

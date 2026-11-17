@@ -130,6 +130,56 @@ fn a_window_opened_at_a_route_is_rooted_there() {
     assert_eq!(text(&whole, "where"), "inbox inbox,compose");
 }
 
+/// A launch on a booted app makes the router a boot at that location makes,
+/// whatever it held, on visits no earlier one shares an id with.
+#[test]
+fn a_launch_on_a_booted_app_is_a_boot_at_its_location() {
+    let mut r = boot(ROUTES, Launch::NONE, "/");
+    r.act("follow", vec![Value::str("/compose")]).unwrap();
+    r.act("pick", vec![Value::str("settings")]).unwrap();
+    r.act("follow", vec![Value::str("/settings/general")])
+        .unwrap();
+    let ids = |r: &Runner<NoData>| {
+        let state: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::state(r)).unwrap();
+        let nav = &state["slots"]["nav"];
+        let mut ids = Vec::new();
+        for tab in nav["tabs"].as_array().unwrap() {
+            for entry in tab["stack"].as_array().unwrap() {
+                ids.push((
+                    entry["id"].as_u64().unwrap(),
+                    entry["url"].as_str().unwrap().to_owned(),
+                ));
+            }
+        }
+        ids
+    };
+    let before = ids(&r);
+    assert!(r.host_launch("/m/4").unwrap().is_some());
+    assert_eq!(text(&r, "where"), "inbox inbox,message");
+    let cold = boot(ROUTES, Launch::NONE, "/m/4");
+    let urls = |ids: Vec<(u64, String)>| ids.into_iter().map(|(_, url)| url).collect::<Vec<_>>();
+    assert_eq!(urls(ids(&r)), urls(ids(&cold)));
+    assert!(ids(&r)
+        .iter()
+        .all(|(id, _)| before.iter().all(|(old, _)| old != id)));
+    r.act("pick", vec![Value::str("settings")]).unwrap();
+    assert_eq!(text(&r, "where"), "settings settings");
+    assert!(r.host_launch("/nowhere").unwrap().is_none());
+    assert_eq!(text(&r, "where"), "settings settings");
+    assert_eq!(r.journal().filter(|l| l.contains("host launch")).count(), 1);
+    assert_eq!(
+        r.journal()
+            .filter(|l| l.contains("router launch refused"))
+            .count(),
+        1
+    );
+    // A window rooted at a screen launches rooted.
+    let mut rooted = boot(ROUTES, named(Some("compose"), true), "/compose");
+    assert!(rooted.host_launch("/settings/general").unwrap().is_some());
+    assert_eq!(text(&rooted, "where"), "settings pane");
+}
+
 /// A dev reload carries a rooted window's router, a stack that starts at
 /// its screen and only the tabs it selected, and launches rooted again
 /// when the table no longer fits it.

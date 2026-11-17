@@ -58,6 +58,8 @@ pub struct Row {
 pub enum Plan {
     /// Material's basic dialog.
     Alert {
+        /// The dialog's own written family; an inherited family stays on the page.
+        font_family: Option<u16>,
         /// The headline.
         title: Option<String>,
         /// The title's computed direction, from its text node or the dialog's label.
@@ -260,6 +262,11 @@ pub fn alert(
     let mut rows = vec![row(kernel, cancels[0], true)];
     rows.extend(actions.iter().map(|n| row(kernel, n, false)));
     Some(Plan::Alert {
+        font_family: pop
+            .style
+            .written
+            .has(StyleId::FontFamily)
+            .then(|| pop.computed_row(StyleId::FontFamily, |s| s.font_family)),
         title,
         title_direction,
         message,

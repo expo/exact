@@ -77,6 +77,9 @@ pub trait Routing {
     /// `location`'s screen as the only visit ([`exact_route::root`]); `None`
     /// when no route matches it.
     fn root(&self, value: &Value, location: &str) -> Option<Value>;
+    /// What a launch at `location` makes, its visit ids continuing from
+    /// `value`'s; `None` when no route matches it.
+    fn relaunch(&self, value: &Value, location: &str) -> Option<Value>;
     /// What changed since the last commit, for the host (LLP 1038 D7).
     fn change(&self, value: &Value) -> Result<Option<RouterChange>, RunnerError>;
     /// Remember `value` as committed, and keep `change` for the host.
@@ -414,18 +417,39 @@ impl RouterContext {
         }
     }
 
-    fn launch(&self, location: &str) -> Result<Router, RunnerError> {
-        let launch = if self.rooted {
+    /// The launch location, after the visits a reloaded web page's Back returns
+    /// to, one per line, oldest first (host/web/wasm/boot.js `launchVisits`; the
+    /// JS target's `launch`, host/web-js/router.js). Those that still match are
+    /// beneath it, as `go` to each in turn leaves them, so the browser's Back
+    /// pops to the visit beneath (#527). A rooted launch and a refused one keep
+    /// the location alone.
+    fn launch(&self, launch: &str) -> Result<Router, RunnerError> {
+        let mut visits: Vec<&str> = launch.split('\n').collect();
+        let location = visits.pop().unwrap_or_default();
+        let start = if self.rooted {
             Router::launch_rooted
         } else {
             Router::launch
         };
-        let (r, refusal) = launch(&self.table, location);
+        let (r, refusal) = start(&self.table, location);
+        if refusal.is_none() && !self.rooted {
+            let mut before = visits
+                .into_iter()
+                .filter(|v| Router::launch(&self.table, v).1.is_none());
+            if let Some(first) = before.next() {
+                let r = before
+                    .chain([location])
+                    .fold(Router::launch(&self.table, first).0, |r, v| {
+                        exact_route::go(&self.table, r, v).0
+                    });
+                return Ok(r);
+            }
+        }
         match refusal {
             None => Ok(r),
             Some(reason) => {
                 self.refuse_once("launch", &reason.message);
-                let (r, refusal) = launch(&self.table, "/");
+                let (r, refusal) = start(&self.table, "/");
                 if let Some(reason) = refusal {
                     return Err(invalid(reason.message));
                 }
@@ -698,6 +722,25 @@ impl Routing for RouterContext {
             (r, None) => Some(self.value(&r)),
             (_, Some(refusal)) => {
                 self.refuse_once("root", &refusal.message);
+                None
+            }
+        }
+    }
+
+    fn relaunch(&self, value: &Value, location: &str) -> Option<Value> {
+        let empty = Router {
+            next: self.router(value)?.next,
+            ..Router::default()
+        };
+        let launch = if self.rooted {
+            exact_route::root
+        } else {
+            exact_route::open
+        };
+        match launch(&self.table, empty, location) {
+            (r, None) => Some(self.value(&r)),
+            (_, Some(refusal)) => {
+                self.refuse_once("launch", &refusal.message);
                 None
             }
         }
@@ -1219,6 +1262,25 @@ impl<D: DataSource> Runner<D> {
         self.log_router_refusals();
         match next {
             Some(next) => self.host_commit(slot, next, "host root"),
+            None => Ok(None),
+        }
+    }
+
+    /// The launch location of an app that booted with nothing showing it
+    /// (LLP 1133.017 D7: Android's boot for a wake), given by the first
+    /// window to show it: the router becomes what a boot at `location`
+    /// makes, every tab at its root and the location's chain on its own,
+    /// with fresh visits, in one commit journaled as `host launch`. `None`
+    /// (nothing done) without a router, or when no route matches `location`.
+    pub fn host_launch(&mut self, location: &str) -> Result<Option<CommitReceipt>, RunnerError> {
+        let Some(context) = self.router.as_deref() else {
+            return Ok(None);
+        };
+        let slot = context.slot().0 as usize;
+        let next = context.relaunch(&self.slots[slot], location);
+        self.log_router_refusals();
+        match next {
+            Some(next) => self.host_commit(slot, next, "host launch"),
             None => Ok(None),
         }
     }

@@ -1172,7 +1172,7 @@ impl<D: DataSource> Runner<D> {
         }
         // A module's name called from data code: the runner's admission, then
         // the module (LLP 1133.002 D14).
-        if let Some(dispatch) = self.module_call(&request.body) {
+        if let Some(dispatch) = self.module_call(request) {
             return dispatch;
         }
         let handler = self.native_slot().handler();

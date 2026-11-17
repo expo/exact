@@ -1175,6 +1175,7 @@ export function applyBatch(batch) {
       // After a commit (its `at` op), a held press paints again over the boundaries as they are now (input-glue.js
       // `repaintPress`), as modes.js does after each JS-target commit: a boundary's `data-exact-from` may have moved.
       if (batch.ops?.some((op) => op.op === "at")) globalThis.exact.repaintPress?.();
+      globalThis.exact.gpu?.syncPerformance?.();
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
       globalThis.exact.committed?.();

@@ -11,6 +11,7 @@ pub(super) struct Images {
     /// unchanged size keeps its one texture instead of making another.
     spare: Vec<Spare>,
     pins: HashMap<TextureId, usize>,
+    used: std::collections::HashSet<TextureId>,
 }
 
 struct Uploaded {
@@ -44,6 +45,7 @@ impl Images {
     }
 
     pub fn begin(&mut self, device: &mut impl Device) -> Result<()> {
+        self.used.clear();
         let mut counts = HashMap::new();
         for &(address, _) in self.bitmaps.keys() {
             *counts.entry(address).or_insert(0) += 1;
@@ -78,6 +80,29 @@ impl Images {
         Ok(())
     }
 
+    pub(super) fn end(&mut self, device: &mut impl Device) -> Result<()> {
+        for (_, (_, texture)) in self
+            .bitmaps
+            .extract_if(|_, (_, t)| !self.used.contains(t) && !self.pins.contains_key(t))
+        {
+            device.retire_texture(texture)?;
+        }
+        for (_, u) in self.pixmaps.extract_if(|_, u| {
+            !self.used.contains(&u.texture) && !self.pins.contains_key(&u.texture)
+        }) {
+            device.retire_texture(u.texture)?;
+        }
+        for unused in self.spare.drain(..) {
+            device.retire_texture(unused.texture)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn trim(&mut self, device: &mut impl Device) -> Result<()> {
+        self.used.clear();
+        self.end(device)
+    }
+
     pub fn bitmap(
         &mut self,
         device: &mut impl Device,
@@ -86,6 +111,7 @@ impl Images {
     ) -> Result<TextureId> {
         let key = (Arc::as_ptr(image) as usize, size);
         if let Some((_, texture)) = self.bitmaps.get(&key) {
+            self.used.insert(*texture);
             return Ok(*texture);
         }
         #[cfg(target_os = "macos")]
@@ -102,6 +128,7 @@ impl Images {
             let pixels = tiny_skia::PixmapRef::from_bytes(&pixels, size[0], size[1]).unwrap();
             upload(device, pixels, true)?
         };
+        self.used.insert(texture);
         self.bitmaps.insert(key, (image.clone(), texture));
         Ok(texture)
     }
@@ -117,6 +144,7 @@ impl Images {
     ) -> Result<TextureId> {
         let key = Arc::as_ptr(image) as usize;
         if let Some(u) = self.pixmaps.get(&key) {
+            self.used.insert(u.texture);
             return Ok(u.texture);
         }
         let pixels = image.as_ref().as_ref();
@@ -130,6 +158,7 @@ impl Images {
             }
             None => upload(device, pixels, mipmapped)?,
         };
+        self.used.insert(texture);
         self.pixmaps.insert(
             key,
             Uploaded {

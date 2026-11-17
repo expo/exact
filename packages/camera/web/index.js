@@ -28,8 +28,12 @@
 //   picture, mirrored for a `user` camera, and `takePhoto` writes the
 //   picture's bytes unchanged (§9). The picture is the package's test card,
 //   or the app asset `prefer extension camera.picture={"path":"…"}` names.
+//   `camera.clip={"path":"…"}` instead selects decoded frames on the session clock;
+//   `takePhoto` writes the current frame as JPEG.
 //   The track's frame is that picture, unmirrored, for an observer such as a
 //   barcode scan to read (LLP 1133.027 D17 item 2).
+
+import { decodeClip, clipFrame } from './agent-clip.js';
 
 const MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic' };
 
@@ -92,11 +96,25 @@ class Viewfinder {
 
 export const roster = { 'exact-camera': { view: Viewfinder } };
 
-export function implementation({ changed, agent, log, tracks, files }) {
+export function implementation({ changed, agent, log, tracks, files, now = () => 0, clocked }) {
   const say = line => log?.(`camera: ${line}`);
   /** Each viewfinder by its node's id: what the runner said of it and what it consumes. */
   const views = new Map();
   let picture = null, pictureURL = null, pictureBitmap = null, taken = 0;
+  let clip = null, clipPath = null, generation = 0;
+  const starts = new Map();
+  const frameOf = id => {
+    if (!starts.has(id)) starts.set(id, tracks.lookup(id)?.startedAt ?? now());
+    return clip && clipFrame(clip, now() - starts.get(id));
+  };
+  function clock() {
+    if (!agent || !clip) return;
+    for (const v of views.values()) if (v.sub?.live && !v.sub.muted) {
+      const frame = frameOf(v.sub.track);
+      tracks.lookup(v.sub.track)?.owner?.picture?.(v.sub.track, frame.bitmap);
+      v.el?.show(null, frame.url, facingOf(v.sub.track) === 'user');
+    }
+  }
   // The camera app's call while it is up or its file not yet published: its number, which `cancel` names, and
   // whether it was let go (LLP 1133.008.000 D7). One at a time.
   let cameraApp = null;
@@ -141,6 +159,7 @@ export function implementation({ changed, agent, log, tracks, files }) {
       if (v.sub !== sub || !v.el) return;
       const mirrored = facingOf(sub.track) === 'user';
       if (agent) {
+        if (clip) { clock(); return; }
         framed(sub.track);
         agentPicture().then(url => v.sub === sub && sub.live && v.el?.show(null, url, mirrored));
       } else v.el.show(source, null, mirrored);
@@ -148,8 +167,8 @@ export function implementation({ changed, agent, log, tracks, files }) {
     let source = null;
     const consumer = {
       live(s) { source = s; sub.live = true; show(s); },
-      muted() { if (v.sub === sub) v.el?.blank(); },
-      unmuted() { if (sub.live) show(source); },
+      muted() { sub.muted = true; if (v.sub === sub) v.el?.blank(); },
+      unmuted() { sub.muted = false; if (sub.live) show(source); },
       ended() { sub.live = false; if (v.sub === sub) v.el?.blank(); },
     };
     v.sub = sub;
@@ -165,6 +184,7 @@ export function implementation({ changed, agent, log, tracks, files }) {
   /** The bytes and size of the photo `t` would take now. */
   async function capture(id, args) {
     if (agent) {
+      if (clip) return frameOf(id).blob;
       const blob = await (await fetch(await agentPicture())).blob();
       return blob.type ? blob : new Blob([blob], { type: 'image/jpeg' });
     }
@@ -284,7 +304,10 @@ export function implementation({ changed, agent, log, tracks, files }) {
     });
   }
 
+  clocked?.(clock);
+
   return {
+    destroy() { generation++; for (const v of views.values()) v.sub?.leave(); views.clear(); clip?.close(); clip = null; },
     made(view, el) { viewOf(view).el = el; reconcile(view); },
     /** A viewfinder's props: a new `srcObject` waits for the runner's report of it. */
     propsOf(view, props) {
@@ -364,13 +387,27 @@ export function implementation({ changed, agent, log, tracks, files }) {
     /** What `state.extensions` lists as this implementation's (D8 item 9): each photo, and each of the agent's videos
      *  (LLP 1133.008.000 D9), by path and SHA-256. */
     state: () => ({ photos, videos }),
-    /** Under the agent: the picture `prefer extension camera.picture={"path":…}` names (D8 item 9). */
-    preferred(values) {
-      const named = values?.picture?.path;
-      const next = typeof named === 'string' && named ? named : null;
-      if (next === picture) return;
+    /** A preference changes the source, never the tracks' playback phase. */
+    async preferred(values) {
+      if (!agent) return;
+      const next = values?.picture?.path || null, video = values?.clip?.path || null;
+      const turn = ++generation;
+      if (next && video) { say('refused: camera.picture and camera.clip cannot both be set; clear one first'); return; }
+      if (next === picture && video === clipPath) return;
+      let decoded = null;
+      if (video) {
+        try { decoded = await decodeClip(video); }
+        catch (e) { say(`refused camera.clip: ${e.message}`); return; }
+      }
+      if (turn !== generation) { decoded?.close(); return; }
+      const previous = clip;
+      clip = decoded; clipPath = video;
       picture = next; pictureURL = null; pictureBitmap = null;
-      for (const [id, v] of views) if (v.sub?.live) { framed(v.sub.track); v.sub.leave(); v.sub = null; reconcile(id); }
+      if (clip) say(`clip ${video} (${clip.duration} ms, sha256 ${clip.sha256})`);
+      for (const [id, v] of views) if (v.sub?.live) {
+        v.sub.leave(); v.sub = null; reconcile(id);
+      }
+      previous?.close();
     },
   };
 }

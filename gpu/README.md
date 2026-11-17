@@ -37,6 +37,20 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Android initialization
+
+`dlopen` runs no `JNI_OnLoad`, so a module that calls into Java exports the
+optional `uint32_t gpu_android_init(JavaVM *vm, JNIEnv *env, jobject context)`,
+which `exact_gpu::android_init!` defines
+(`docs/recipes/gpu-module-android.md`). The Android host calls it once for each loaded
+image in a process, on the thread that opens the module, after verifying the
+module's baked identity and before any other export. `context` is the
+application `Context`, a global reference the host keeps for the process. It
+returns 0, or nonzero with its reason in `gpu_error` on the same thread; a
+failure or a pending Java exception refuses the module, then and at every later
+open. The host keeps an image whose entry ran loaded for the life of the
+process. A module without the export is opened as before. See LLP 1009 D11.
+
 ## Target color space
 
 `Surface::color_space()` requests `ColorSpace::Srgb` (the default) or
@@ -70,6 +84,27 @@ HDR keeps D12b's encoded extended-sRGB output, including values above 1.
 
 `apps/caltrain/gpu` is a complete GPU module; the
 [GPU module recipe](../docs/recipes/gpu-module.md) shows a minimal surface.
+
+## Dynamic buffer offsets
+
+Shader reflection (`exact-gpu-reflect`) emits a constant per binding and a `GROUP_n`
+layout descriptor per group. Buffer entries disable dynamic offsets by default.
+To bind different slots of one buffer, enable offsets on the reflected entry:
+
+```rust
+const STEP: wgpu::BindGroupLayoutEntry = exact_gpu::dynamic_offset(shader::S);
+let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    label: Some("step"),
+    entries: &[STEP, shader::STATE],
+});
+```
+
+`dynamic_offset` preserves every other field, including the buffer type and minimum
+size. It panics on a non-buffer entry, a compile error in a `const` initializer.
+Bind a range sized to one slot (`BufferBinding::size`), align each offset to the
+device's uniform or storage buffer alignment, and pass it with
+`set_bind_group(0, &group, &[offset])`. `GROUP_n` and the shader's interface digest
+stay unchanged: dynamic offsets are the surface's binding choice.
 
 ## A fragment shader on a canvas
 
@@ -195,6 +230,104 @@ with `canvas surface=field() width="100%" height=240`. Its pixels follow the
 canvas's device pixels (`frame.pixels()`); `Frame` has the rest of what the
 host knows (its points, scale, the display's frame period).
 
+## Reading GPU results
+
+Record a copy into a `MAP_READ | COPY_DST` buffer in `Surface::render`, then
+call `map_async` in `Surface::submitted`, after the module submits the copy.
+On native hosts a surface may call `device.poll(wgpu::PollType::Poll)` to
+deliver ready callbacks. It does not wait for the GPU; one call need not finish
+the map. Return `true` from `render` while a result is pending so later frames
+can poll and consume it. The host schedules no frames for a resting surface
+just because it has a pending map.
+
+What drives completion depends on the path:
+
+| Path | Device progress |
+|---|---|
+| Native, all rendering paths | wgpu's later `Queue::submit` calls also poll and deliver ready callbacks. The submit preceding `submitted()` cannot deliver a map registered there. |
+| Apple direct presentation, Android `SurfaceView`, Windows direct window | No additional unconditional per-frame `Device::poll`. A surface can poll in `render` using the supplied device. |
+| Android buffered canvas | `Module::render_to_buffer` and `Module::buffer` poll with `PollType::Poll` while retiring frames. |
+| Native capture/readback (including Linux and Windows's composed canvases, Apple nested canvases and fixtures) | Readback waits on the module's device. Apple also uses `Module::sync` before reusing a child texture the module may still read. These waits are specific to those operations. |
+| Web | WebGPU delivers callbacks through the browser event loop; `Device::poll` is a no-op. Return control to the browser. |
+
+Keep live frame callbacks non-blocking: use `PollType::Poll`, never a
+`PollType::Wait`, a blocking channel receive or a loop waiting for completion.
+The map callback should only post its result; inspect bytes after success,
+drop every mapped view, then unmap before copying into the buffer again. See
+wgpu's [mapping contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async)
+and [`Device::poll`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Device.html#method.poll).
+
+For example, these fields and methods read one little-endian `u32` from an
+existing surface's `source` buffer (`COPY_SRC`, at least four bytes). Create
+`staging` with size 4, usage `MAP_READ | COPY_DST` and `mapped_at_creation: false`;
+initialize `copied` to false and `pending` and `value` to `None`. The surface's
+ordinary drawing passes are omitted:
+
+```rust
+use exact_gpu::{wgpu, Frame, Surface, SurfaceError, Value};
+use std::sync::mpsc;
+
+struct Status {
+    source: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    copied: bool,
+    pending: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    value: Option<u32>,
+}
+
+impl Surface for Status {
+    fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+        Ok(())
+    }
+
+    fn render(
+        &mut self,
+        _frame: &Frame,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        _target: &wgpu::TextureView,
+        _format: wgpu::TextureFormat,
+    ) -> bool {
+        if self.pending.is_some() {
+            device.poll(wgpu::PollType::Poll).expect("poll status");
+        }
+        if let Some(rx) = &self.pending {
+            if let Ok(result) = rx.try_recv() {
+                result.expect("status map");
+                let view = self.staging.get_mapped_range(..).expect("status bytes");
+                self.value = Some(u32::from_le_bytes(view[..4].try_into().unwrap()));
+                drop(view);
+                self.staging.unmap();
+                self.pending = None;
+            }
+        } else if self.value.is_none() {
+            encoder.copy_buffer_to_buffer(&self.source, 0, &self.staging, 0, 4);
+            self.copied = true;
+        }
+        self.value.is_none()
+    }
+
+    fn submitted(&mut self) {
+        if std::mem::take(&mut self.copied) {
+            let (tx, rx) = mpsc::channel();
+            self.staging
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = tx.send(r);
+                });
+            self.pending = Some(rx);
+        }
+    }
+}
+```
+
+An application reports poll/map errors through `Surface::take_error` rather
+than panicking as this small example does. Drop these device resources and
+pending results in `device_lost`, then recreate them on the new device. For
+continuous readback, use several staging buffers and skip any still awaiting
+a map or still mapped; each copied slot starts its map in `submitted()`.
+
 ## Frame pacing and timing
 
 A surface that rests returns `false` from `render`; the host then asks for no
@@ -223,7 +356,7 @@ the web, Android, Linux and Windows report unknown.
 |---|---|---|---|
 | web | yes | `gpu_due` in the `requestAnimationFrame` loop | callback times; thermal unknown |
 | iOS, tvOS, macOS | yes | capped `CADisplayLink` range and `gpu_due` per canvas | callback times, fastest period, thermal state |
-| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
+| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one drawn from its buffers in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
 | Linux (display) | no: a rendered canvas repaints every display frame | no | `gpu_period`: the DRM mode's pixel clock over its total pixels |
 | Linux headless, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
 
@@ -233,6 +366,20 @@ Android canvas caps use an interactive-content vote: AOSP suppresses global touc
 The request is a hint, so competing layers and device policy can still choose another rate; even
 presentation needs a device measurement. See [Surface.setFrameRate](https://developer.android.com/reference/android/view/Surface#setFrameRate(float,%20int))
 and [AOSP's refresh-rate selector](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/Scheduler/RefreshRateSelector.cpp).
+
+A canvas composed into the reader's window has no layer of its own, so its cap is a view's vote
+([View.setRequestedFrameRate](https://developer.android.com/reference/android/view/View#setRequestedFrameRate(float))),
+cast with each new canvas frame and sent by the window as a `FIXED_SOURCE` rate for its whole
+layer. The window has one rate, so capped canvases beside each other vote the highest cap of
+those still drawing: one that rests leaves the vote an interval of its cap and 100 ms after its
+last frame. The window keeps the rate between those frames, and drops it at a frame it draws
+with no such vote more than 100 ms after the last, so a cap under 10 fps holds only while nothing
+else in the window is drawn. Whatever else the window draws (a scroll, a playing layer, an uncapped
+canvas, a repaint of the page) casts a category as any view's does, beside which a panel of fixed
+modes ignores the rate, and a touch boosts the window's rate as it does any app's. So this cap
+can hold the panel only while the capped canvases are all that draws and nothing is touched. A
+full-window canvas that must hold its cap through touches returns `true` from `Surface::opaque`
+and gets a layer of its own (below).
 
 ## Performance
 

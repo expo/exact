@@ -98,7 +98,6 @@ impl<D: DataSource> Presenter<D> {
     /// The node of the open menu's row the keys are at, which is where the
     /// focus is while the menu is open (the combobox pattern's active
     /// descendant). Windows reads it (`desktop_access.rs`).
-    #[cfg(any(windows, test))]
     pub(in crate::presenter) fn access_menu_focus(&self) -> Option<i32> {
         let select = self.menu?;
         let at = self.menu_paint()?.chosen?;

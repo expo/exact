@@ -182,10 +182,9 @@ structure Settled where
   idle : List String := []
   deriving Inhabited
 
-/-- `ty`'s zero, what a resource idle before its first answer holds (LLP
-1161.002 D5): `0`, `""`, `false`, `()`, `none`, `[]`, and a record of its
-fields' zeros, as the runner's `zero`. A string enum is a `string` here,
-whose zero is `""` where the runner's is the enum's first member. -/
+/-- An unrefined type's zero: `0`, `""`, `false`, `()`, `none`, `[]`, and
+a record of its fields' zeros. The embedding carries an enum's first
+member in `ResourceDecl.placeholder` (LLP 1054.000.002). -/
 def zeroOf (shapes : List Shape) : Nat → Ty → Value
   | _, .number => .num 0
   | _, .bool => .bool false
@@ -200,10 +199,14 @@ def zeroOf (shapes : List Shape) : Nat → Ty → Value
     | .some sh => .record s (sh.fields.map fun f => zeroOf shapes n f.ty)
     | .none => .record s []
 
+/-- A resource's value before its first answer (LLP 1054.000.002). -/
+def placeholderValue (p : Program) (r : ResourceDecl) : Value :=
+  r.placeholder.getD (zeroOf p.shapes (p.shapes.length + 1) r.ty)
+
 /-- What an idle resource holds (LLP 1161.002 D2, D5): its previous
-value, else its type's zero. -/
+value, else its placeholder. -/
 def idleValue (p : Program) (prev : Settled) (r : ResourceDecl) : Value :=
-  (lookup r.name prev.resources).getD (zeroOf p.shapes (p.shapes.length + 1) r.ty)
+  (lookup r.name prev.resources).getD (placeholderValue p r)
 
 /-- Whether a resource's `when` holds (LLP 1161.002 D1): with none it
 always does; a value other than `true` closes it, as the runner reads it. -/
@@ -313,14 +316,14 @@ answered keeps that value and asks nothing, unless the commit refreshes it
 
 A resource whose `when` is false is idle (LLP 1161.002 D2): its arguments
 are not read and nothing is asked, even when the commit refreshes it; it
-keeps its previous value, or its type's zero, with no arguments, so the
-settlement that opens the gate asks again (D3).
+keeps its previous value, or its placeholder before its first answer,
+with no arguments, so the settlement that opens the gate asks again (D3).
 
 A child's resource (LLP 1035.005.004 D1) is asked in the render, by each
-instance (`settleOwned`): here it is idle, so the root holds its type's
-zero, which no root name reads. A late one, a child's used outside every
-region, is idle until `lateReady`: at boot, until the late slots it reads
-are initialized (D2). -/
+instance (`settleOwned`): here it is idle, so the root holds its
+placeholder, which no root name reads. A late one, a child's used outside
+every region, is idle until `lateReady`: at boot, until the late slots it
+reads are initialized (D2). -/
 def settle (p : Program) (o : Oracle) (slots : List (String × Value)) (now : F64)
     (prev : Settled := {}) (force : List String := []) (lateReady : Bool := true) : Result Settled :=
   let rec pass : Nat → Settled → Result Settled

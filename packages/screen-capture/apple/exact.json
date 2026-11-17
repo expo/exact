@@ -1,0 +1,21 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/screen-capture@^1.0",
+  "platform": "apple",
+  "targets": [
+    "macos"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "swift": [
+      "ScreenCapture.swift",
+      "CaptureFiles.swift"
+    ]
+  },
+  "artifacts": [],
+  "class": "ScreenCaptureModule"
+}

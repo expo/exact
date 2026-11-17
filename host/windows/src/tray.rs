@@ -1,14 +1,13 @@
 //! The notification area (LLP 1133.025 D4): each `-exact-menu="status"`
 //! button is an icon there, by `Shell_NotifyIconW` under
 //! `NOTIFYICON_VERSION_4`, and its `popovertarget` menu is the shared
-//! presenter's MenuFlyout in a popup window of its own at the pointer
+//! presenter's MenuFlyout in a popup window of its own beside the icon
 //! (`tray/flyout.rs`, LLP 1115.004 D10.1), so it opens with the app's window
 //! hidden.
 //!
 //! - **The icon** is the button's image (`Presenter::status_icon`), drawn at
-//!   the system's small-icon size for the system DPI, as `LoadIconMetric`'s
-//!   `LIM_SMALL` sizes a notification icon; a button with none, or one this
-//!   host cannot draw yet, shows the app's own icon (D7). A `disabled`
+//!   the system's small-icon size for its taskbar monitor's DPI. A button
+//!   with no image, or one still loading, shows the app's own icon (D7). A `disabled`
 //!   button's icon is dimmed to WinUI's disabled text opacity. The tooltip
 //!   is its label (`szTip`).
 //! - **The clicks**: the shell sends `NIN_SELECT` for a click and
@@ -221,6 +220,12 @@ pub(crate) fn icon_bgra(rgba: &[u8], dimmed: bool) -> Vec<u8> {
     out
 }
 
+/// The system's small-icon metric and the DPI it was measured for.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn icon_metrics(side: u32, dpi: u32) -> (u32, f32) {
+    (side.max(16), dpi.max(96) as f32 / 96.)
+}
+
 /// Whether the taskbar is dark, from `SystemUsesLightTheme` under
 /// `HKCU\…\Themes\Personalize` (the system mode the taskbar follows, apart
 /// from the apps' mode): 1 is light; 0, or a Windows that keeps no value
@@ -299,6 +304,8 @@ pub(crate) fn wheel(delta: i16, lines: u32) -> f32 {
 
 #[cfg(windows)]
 mod flyout;
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) mod placement;
 #[cfg(windows)]
 pub(crate) mod shell;
 #[cfg(windows)]

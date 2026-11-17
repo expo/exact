@@ -6,11 +6,57 @@
 import UIKit
 
 extension NodeView {
+    /// The end the reader was following moved during their interaction:
+    /// settle there when it ends, as a browser's scroll anchoring does.
+    package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) }
+        pagedDragEnded(scrollView)
+        guard scrollView === self.scrollView else { return }
+        // A follow of the end that animates ends with its animation.
+        if !decelerate, !followEndIfOwed() { endScroll() }
+    }
+    package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        presenter?.session?.frameHealth.endScroll(scrollView)
+        if scrollView === self.scrollView, !followEndIfOwed() { scrollMayHaveEnded(scrollView) }
+    }
+    package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
+        followingEndAnimated = false; authoredScrollAnimating = false
+        presenter?.elementScrolls.revealEnded(scrollView)
+        // A smooth correction's driver ends its own motion (`OffsetDriver`);
+        // a UIKit animation's end is not its end.
+        if let c = presenter?.collections, c.offsetDrivers[id] != nil || c.startOwed.contains(id) { return }
+        presenter?.collections.animationEnded(id, atTarget: endedAtTarget(scrollView))
+        scrollMayHaveEnded(scrollView)
+    }
+    /// Whether it started an animation.
+    @discardableResult private func followEndIfOwed() -> Bool {
+        guard followsEndAfterInteraction, let sv = scrollView else { return false }
+        followsEndAfterInteraction = false
+        let maximum = max(-sv.adjustedContentInset.top, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
+        anchoredScrollTop = maximum
+        guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5, !authorOwnsScroll(sv) else { return false }
+        sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: maximum), in: sv), animated: true)
+        return true
+    }
+
+    func trackIntersections(previous: Presenter? = nil, listening: Bool = true) {
+        if let previous, intersectListening {
+            previous.intersectHandlerCount -= 1
+            intersectListening = false
+        }
+        let current = listening && presenter != nil && handlers.contains("intersect")
+        if current != intersectListening {
+            presenter?.intersectHandlerCount += current ? 1 : -1
+            intersectListening = current
+        }
+    }
+
     /// The scroll view reported its offset (`scrollViewDidScroll`).
     func scrollEndMoved(_ sv: UIScrollView) {
         // A collapse (`display: none`) clamps the offset and sends no
         // `scroll`: nothing to end, and not a position to compare with.
-        guard (handlers.contains("scrollend") || presenter?.session?.timerAdmissions.enabled == true), hasScrollLayoutBox else { return }
+        guard (handlers.contains("scrollend") || presenter?.collections.owns(id) == true || presenter?.session?.timerAdmissions.enabled == true), hasScrollLayoutBox else { return }
         let end = scrollEnd ?? ScrollEnd()
         scrollEnd = end
         guard end.moved(to: [sv.contentOffset.x, sv.contentOffset.y, scrollTopInset(sv), sv.zoomScale]) else { return }
@@ -53,10 +99,11 @@ extension NodeView {
 
     /// The scroll is over: its last `scroll` first, then `scrollend`, once.
     func endScroll() {
-        guard (handlers.contains("scrollend") || presenter?.session?.timerAdmissions.enabled == true), presenter?.views[id] === self, let end = scrollEnd, !end.live, end.take(), hasScrollLayoutBox else { return }
+        guard presenter?.views[id] === self, let end = scrollEnd, !end.live, end.take(), hasScrollLayoutBox else { return }
         // The last `scroll` may run its handler at once, and a batch it
         // commits may give this view to another node.
         let node = id, token = incarnation
+        presenter?.collections.rested(node)
         sendScrollEvent()
         guard id == node, incarnation == token, presenter?.views[node] === self else { return }
         if handlers.contains("scrollend") { presenter?.scrollend(node) }

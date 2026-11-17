@@ -530,9 +530,11 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
 
     init(owner: NodeView, host: GroupedListHost) {
         self.owner = owner; self.host = host
-        collection = GroupedCollectionView(frame: owner.bounds, collectionViewLayout: UICollectionViewFlowLayout())
+        let collection = GroupedCollectionView(frame: owner.bounds, collectionViewLayout: UICollectionViewFlowLayout())
+        collection.listNode = owner
+        self.collection = collection
         super.init()
-        (collection as? GroupedCollectionView)?.card = { [weak self] index in
+        collection.card = { [weak self] index in
             guard let self, let section = section(at: index), section.card else { return nil }
             return section.cardView.flatMap { self.host.presenter.views[$0] }
         }
@@ -1379,6 +1381,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
         owner.scrollViewWillEndDragging(scrollView, withVelocity: velocity, targetContentOffset: targetContentOffset)
     }
+    #if os(iOS)
+    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool { owner.scrollViewShouldScrollToTop(scrollView) }
+    #endif
 
     /// A tap: UIKit's highlight, then the row's press.
     func select(_ id: UInt32) -> Bool {

@@ -32,7 +32,7 @@ const DRIVE = [
   ['--backend <url>', "select the backend for this build: app.ts needs one top-level const origin, a literal or import.meta.env.NAME ?? '<literal>', used in net.fetch ${origin}"],
   ['--storage <name>', 'a scratch store, kept on native hosts; Chrome\'s starts empty'],
   ['--keep-storage · --reset-storage', 'reopen a named store (Chrome, or a compare) · empty a named store first, on any host'],
-  ['--size <w>x<h>', 'the viewport (default 420x900; a simulator\'s own)'],
+  ['--size <w>x<h>', 'viewport; Linux: unrotated panel; 90/270 swap layout'],
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
   ['--live · --timing platform · --bind <extension>', 'macOS, iOS simulator: the wall clock and normal scheduling, input and reads only · Apple: native transitions · use a module implementation'],
@@ -41,7 +41,7 @@ const DRIVE = [
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
   ['--fail-fetch <prefix> · --permission <name>=<state> · --notification <entry> · --wake <entry> · --call \'<tool> <json>\'', 'each fetch whose URL starts with it fails, from the first data load · a module\'s permission at the start (geolocation=granted) · a relaunch handed a listed entry, as state.notifications printed it · a cold wake for a registration, as state.backgroundSync printed it · a cold call of a tool, as a system\'s call that started the app'],
   ['--process <target>=<file>|script:<file.json>|real · --login-env NAME=value · --home <dir>', 'macOS, Linux: what a child process is (none runs unnamed; `all=real` runs every one), the login shell\'s variables, home:/ for the data code (LLP 1133.007 §7)'],
-  ['--url <url> · --browser chrome|firefox|webkit', 'web: drive a page already served (the dev loop\'s) instead of building · web (default chrome; bunx playwright@1.64.1 install firefox webkit)'],
+  ['--url <url> · --browser chrome|firefox|webkit', 'web: drive a page already served (the dev loop\'s) instead of building · web (default chrome; bunx playwright@1.65.1 install firefox webkit)'],
   ['--sim <udid|name> · --variant <name>', 'iOS: which simulator (default: booted) · which app variant'],
   ['--device · --phone <udid|name> · --reader · --headless', 'a connected iPhone (built with ios --device), and which · Android: the APK (an `exact new` app\'s default) · the Linux host under adb shell'],
   ['--plan <file>', 'a compiled plan (contract build -o) in place of the app\'s'],
@@ -86,7 +86,7 @@ export const HELP = {
   },
   status: {line:'the game\'s web and prove runs: phase and elapsed time', usage:'bun exact.mjs status', flags:[], body:'Lists the game\'s web and prove invocations with their phase, elapsed time, previous duration and exit status.', example:'bun exact.mjs status'},
   web: {
-    line: 'the web dev loop: serves the app, reloading the page on every save (foreground)',
+    line: 'serve the app and reload on save (foreground)',
     usage: 'bun exact.mjs web [--port <n>] [--lan] [--allow-host <name>]… [--wasm]',
     common: ['web [--port <n>]    for a person watching: its URL, rebuilt on save'],
     flags: [
@@ -114,7 +114,7 @@ export const HELP = {
     example: 'bun exact.mjs web --port 9000      # then open http://127.0.0.1:9000/',
   },
   'web-build': {
-    line: 'build the web app once (the page test web and agent web drive)',
+    line: 'build the web app once',
     usage: 'bun exact.mjs web-build [--out <dir>] [--render rust|js|none] [--json]',
     flags: [
       ['--out <dir>', 'a release build there (inside the app: dist), as deploy publishes, and how a static host serves it'],
@@ -292,6 +292,50 @@ The link is kept in .exact/appdrop.json; the iPhone build takes minutes the firs
 Ports    none. Runs to completion.`,
     example: 'bun exact.mjs share',
   },
+  deploy: {
+    line: 'classify a release; --yes publishes',
+    usage: 'bun exact.mjs deploy [--yes] [--origin <dir|url>] [--channel <name>] [--platform <p>] [--dirty] [--json]',
+    flags: [
+      ['--yes', 'publish the classified release; without it, print the table only'],
+      ['--origin <dir|url>', 'the update origin, else app.json deploy.channels.<channel>'],
+      ['--channel <name>', 'the channel, else app.json deploy.channel'],
+      ['--platform <p>', 'web, ios, macos, linux or android; repeat to select several'],
+      ['--only bundle|origin', 'only signed bundles, or only the web root'],
+      ['--dirty', 'capture uncommitted source too, marked dirty in the table'],
+      ['--json', 'the table as JSON'],
+    ],
+    more: [
+      ['--snapshot <sha>', 'require this complete source snapshot, as printed by the dry run'],
+      ['--release <id>', 'the release name; defaults to a timestamp and snapshot digest'],
+      ['--keys <dir>', 'signing keys; else EXACT_SIGNING_KEY_DIR or ~/.config/exact/keys'],
+      ['--variant <name>', "select app.json variants.<name> (or EXACT_VARIANT)"],
+    ],
+    body: `Captures the app and Exact source, builds and classifies what each installed binary can take.
+A native stream needs its production build receipt and the manifest's signing key.
+Generate a key with bun <exact2>/scripts/deploy.mjs keygen <id>.
+To publish a working-tree edit to installed release binaries, use bun exact.mjs push.
+Ports    none. Runs to completion.`,
+    example: 'bun exact.mjs deploy --origin ./origin',
+  },
+  push: {
+    line: 'publish an edit to installed release apps',
+    usage: 'bun exact.mjs push [--watch] [--origin <dir|url>] [--channel <name>]',
+    flags: [
+      ['--watch', 'keep the baker running and publish after each save'],
+      ['--origin <dir|url>', 'the update origin, else app.json deploy.channels.<channel>'],
+      ['--channel <name>', 'the channel, else app.json deploy.channel'],
+    ],
+    more: [
+      ['--keys <dir>', 'signing keys; else EXACT_SIGNING_KEY_DIR or ~/.config/exact/keys'],
+      ['--seq-above <n>', 'start above the old origin’s sequence when moving a stream'],
+      ['--variant <name>', "select app.json variants.<name> (or EXACT_VARIANT)"],
+    ],
+    body: `Publishes the working tree immediately, including uncommitted changes. There is no dry run.
+Needs a production build receipt or existing stream and the manifest's signing key.
+Refuses an edit that needs a new binary. Publishes no web root; deploy handles that.
+Ports    none. Runs to completion, or until Ctrl-C with --watch.`,
+    example: 'bun exact.mjs push --watch',
+  },
   mac: {
     line: 'build the macOS app (--run launches it here)',
     usage: 'bun exact.mjs mac [--run|--prebuild] [--json] [--release] [--bundle] [--sandbox] [--url <url>] [--optimize speed|size|balanced]',
@@ -330,12 +374,13 @@ Ports    none. Runs to completion.`,
       ['--release', 'optimize the APK for speed; set EXACT_UPDATE_TRUST=production for distribution'],
       ['--bundle', 'build a production .aab with an upload key; implies --release and no install'],
       ['--headless', 'build the Linux host for Android instead (agent android --headless runs it under adb shell)'],
+      ['--abis <abis>', 'APK or bundle ABIs: arm64-v8a (default), x86_64, or both comma-separated; each needs its Rust target and Hermes bundle when used'],
       ['--write-locks', 'regenerate gradle.lockfile and gradle-verification.xml after graph changes; review and commit both'],
       jsonBuilt(', installed (the device\'s serial, or null with none ready)', '; printed after the install; not with --run'),
     ],
     // `--apk --install` are the verb's own.
     internal: ['--apk', '--install'],
-    body: `Builds android/ for aarch64-linux-android, packages it with exact2's Canvas reader
+    body: `Builds android/ for the selected ABIs (arm64-v8a by default), packages it with exact2's Canvas reader
 (host/android) into an APK under target/android/, prints its path and installs it on the
 device: ANDROID_SERIAL, else the one adb lists. Several entries must share a nonempty
 ro.serialno and secure android_id and contain at most one ip:port, one matching adb mDNS name and the USB serial
@@ -379,7 +424,7 @@ artifacts under game/target only. Ports none. Runs to completion.`,
   vocab [--json] [--all] [<name> …]       no name: the card, what an app writes, in one read (--all: every
                                           tag, attribute, CSS property and function); each name's entry in
                                           turn, a recipe whole, a pattern's summary; exit 1 if one is unknown
-  fmt [--check | --stdout] <file.contract> · fmt --uses <file.contract>
+  fmt [--check | --stdout | --stdin] <file.contract> · fmt --uses <file.contract>
   symbols <file.contract> [--name <name>] · sources <file.contract>
   build … --stdin · symbols … --stdin     the file's text is stdin's (an editor's unsaved buffer), read as
                                           if saved at <file.contract>; app.ts is not type-checked against it

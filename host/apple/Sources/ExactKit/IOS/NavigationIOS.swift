@@ -130,10 +130,18 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// The covers the kernel was last told (`deliverCovers`), each route's local insets (LLP 1123 D9), and
     /// the clearance its scrollers' insets hold (D3, ClearanceIOS.swift).
     var delivered: [UInt32: HostCover] = [:], localInsets = LocalInsetsReport(), clearance: [ObjectIdentifier: ClearanceInset] = [:]
-    var deliveringCovers = false
-    /// A header was lifted in a batch and the runtime's answer to its cover
-    /// is still to come (`coverLifted`, `deliverCovers`): a stack change waits.
-    var liftHeld = false
+    var deliveringCovers = false, deliverAgain = false
+    /// The chain of corrections the reports not yet told are told in, nil with none (`countReport`)
+    var untoldChain: CoversChain?
+    /// How many reports changed the covers, and the last of them whose answer the runtime has applied, or that a reset
+    /// made moot: while one is owed, a position Exact carries waits for its layout (`writeCarriedScrollsWhenAnswered`)
+    var coversReported = 0, coversAnswered = 0
+    var coversAnswerOwed: Bool { coversAnswered < coversReported }
+    /// The report of the last header lifted in a batch (`coverLifted`), and the last report whose lift a delivery has
+    /// released, just before the runtime's answer to it (`deliverCovers`): while a lift is unreleased a stack change
+    /// waits, and a delivery releases only the lifts it told, so a later one holds until its own delivery's answer
+    var liftReport = 0, liftReleased = 0
+    var liftHeld: Bool { liftReleased < liftReport }
     /// Whether this boot's first batch looked for the tablist the boot
     /// covered (`adoptBootCover`); every boot covers its own.
     private(set) var bootCoverSeen = false
@@ -438,11 +446,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         guard window != nil else { return }
         nativeMove = .none; settled = false
         syncing = true
+        // On every return, run the edge passes it held from a route's layout while it ran
         defer {
             #if os(iOS)
             endBootTransfer()
             #endif
-            syncing = false; presenter.flushPendingFocus(); presenter.elementScrolls.flush()
+            syncing = false; settleScrollEdges()
+            presenter.flushPendingFocus(); presenter.elementScrolls.flush()
         }
         guard let p = projection(batch) else {
             if bootOwner != nil || transferringBootOwner != nil { reset(clearFocus: false) }
@@ -576,6 +586,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         controllers = controllers.filter { routeIDs.contains($0.key) }
         presenter.modals.updatePermissions()
         if p.tabs != nil { replayTabs() }
+        // Before the covers, run the edge passes owed (a route hatch's selection may owe some), unless a transition holds them
+        runOwedScrollEdges()
         reportCovers()
         refitForBars()
         // A route that left every stack gives its block back (LLP 1123 D2)
@@ -699,7 +711,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func modalDidDismiss() {
-        guard pendingSync else { return }
+        // A presentation or dismissal ended: run the edge passes that a selection made during it owes, when no sync is pending
+        guard pendingSync else { return settleScrollEdges() }
         pendingSync = false
         sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         presenter.syncModal()
@@ -761,6 +774,16 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// that stack waits for it (`writable`).
     var changing: Bool {
         navigation.map { $0.viewIfLoaded?.window != nil && pushOrPop(on: $0) != nil } ?? false || routesInFlight(selectedStack)
+    }
+    /// More's own push or pop on screen, of a plain tab it shows (`PlainTab`), which `changing` does not read: More's
+    /// wrapper is no stack navigation follows
+    var moreChanging: Bool {
+        #if os(iOS)
+        guard let more = tabController?.moreNavigationController, more.viewIfLoaded?.window != nil else { return false }
+        return pushOrPop(on: more) != nil
+        #else
+        return false
+        #endif
     }
     var hasInteractiveTransition: Bool { allNavigations.contains { $0.transitionCoordinator?.isInteractive == true } }
 
@@ -1096,6 +1119,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         retireTabs()
         if let primaryNavigation { retireStack(primaryNavigation) }
         if !covers.isEmpty || !delivered.isEmpty || !localInsets.wanted.isEmpty {
+            // Clearing the covers or local insets changes them as a report does, and is answered as one
+            if !covers.isEmpty || !localInsets.wanted.isEmpty { countReport() }
             covers = [:]; localInsets.wanted = [:]
             presenter.afterBatch { [weak self] in self?.deliverCovers() }
         }

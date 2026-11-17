@@ -123,7 +123,7 @@ child resource whose owner is the arm, in declaration order, its `when`
 and arguments read with the instance's slots and locals. A request keeps
 its value while its arguments are those the value answers; one asked anew
 asks the oracle, whose every answer is synchronous; a closed `when` keeps
-the value (its type's zero before any), idle, with no arguments, so the
+the value (its placeholder before any), idle, with no arguments, so the
 render that opens it asks again. Passes repeat while a request changes, so
 one whose arguments read another's answer asks on that answer.
 
@@ -146,7 +146,7 @@ def settleOwned (fuel : Nat) (o : Oracle) (env : Env) (ls : Locals) (owner : Nat
           | .none => pure true
           | .some g => do pure ((← eval fuel env' false ls g) matches .bool true)
         if !isOpen then
-          let v := (lookup r.name s).getD (zeroOf env.prog.shapes (env.prog.shapes.length + 1) r.ty)
+          let v := (lookup r.name s).getD (placeholderValue env.prog r)
           if !conforms env.prog v r.ty then throw (.refused s!"resource `{r.name}` of the wrong shape")
           if (lookup r.name s).isNone || (lookup (ownedArgs r.name) s).isSome then changed := true
           s := (putSlot s r.name v).filter (·.1 != ownedArgs r.name)

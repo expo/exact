@@ -267,7 +267,7 @@ Per kind: the feed filtered to one kind (`BENCH_KINDS=<kind>`, 2,250 rows), flin
   not animate). LegendList 3.4.0 web bug: a horizontal list given `initialScrollOffset={0}` with `dataKey` stays at
   opacity 0; the filmstrip passes no offset when none is saved.
 - exact2 web app changes (a separate copy then; now folded into `../exact-xheavy/`, inert on Apple): a `web/` crate, the GPU crate's web deps (wasm-bindgen
-  0.2.127, exact2's pin), the feed parsed on first use and the shader photo decoded inline (the browser build has
+  0.2.127 at the measurement), the feed parsed on first use and the shader photo decoded inline (the browser build has
   no threads: the thread spawn trapped with "unreachable"), and the web `native-map` module. All 19 kinds render;
   the shader runs on WebGPU; the glass capsule **does** render on the web (the bug below is macOS-only).
 

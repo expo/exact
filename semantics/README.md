@@ -10,7 +10,7 @@ tested against it, differentially and at random.
 | `Contract/Trig.lean` | `sin` and `cos`: libm 0.2.16's kernels and argument reduction, including large arguments, over the exact F64 operations. No hardware floats or external oracle. |
 | `Contract/Binary64Facts.lean` | That model proved: correct rounding, overflow, monotonicity, exactness (below). |
 | `Contract/Number.lean` | `max`/`min` as JavaScript's `Math.max`/`Math.min` (NaN and signed zero included), and JavaScript's `Number#toString` over exact rationals. |
-| `Contract/Value.lean` | Values, structural equality as the runner's `compare::equal`, and the roster's string functions. |
+| `Contract/Value.lean` | Structural equality as the runner's `compare::equal`, and the roster's string functions. |
 | `Contract/Format.lean` | The roster's formats (`formatTime`, `formatDate`, `formatDay`, `formatNumber`) and `t(...)`'s strings tables, as the runner computes them. |
 | `Contract/Route.lean` | The router (LLP 1038): canonical locations, the route table's matching, `path`, launch, the six verbs and the reads. |
 | `Contract/Sort.lean` | `sortBy`'s order (LLP 1116.016 §5): a key per item (a number with NaN as +0, or a string's UTF-16 code units), core's `List.mergeSort` on the items decorated with their keys, ascending or descending. |
@@ -1120,21 +1120,23 @@ when cond`). `settle` reads it before the arguments (`gateOpen`; a value
 other than `true` closes it, as the runner reads it). Closed, the resource
 is idle: its arguments are not read, nothing is asked even when the commit
 refreshes it, it keeps its previous value (`idleValue`; before any value,
-its type's zero, `zeroOf`), it has no `Settled.args` entry, and its name is
-in `Settled.idle`. With no arguments kept, the settlement that opens the
+its placeholder, `placeholderValue`), it has no `Settled.args` entry, and its
+name is in `Settled.idle`. With no arguments kept, the settlement that opens the
 gate asks again, at the same arguments or new ones. `current(r)` reads
 `Env.idle`: every settled answer here answers its arguments, so it is true
 unless `r` is idle; the VM reads the runner's flag (`Vm.Env.currentResources`,
 `CurrentResource`), and the lowering proof takes the two to agree (`RefOk`).
-The corpus has `resources/current` and `resources/gate`.
+The embedding carries the materialized placeholder in `ResourceDecl.placeholder`:
+the type's zero with any `else empty(field=value, …)` overrides, including an
+enum's first member even though the embedding types enums as strings. It uses
+the compiler's `contract_types::placeholder::materialize`, as plan lowering does.
+The corpus has `resources/current`, `resources/gate`, `resources/idle-placeholder`
+and `resources/idle-enum`.
 
 What it does not carry:
 
-- A placeholder: a resource idle before its first answer holds its type's
-  zero, where the runner shows its `else`. A program that gates a resource
-  with an `else` placeholder disagrees until the first answer, and a string
-  enum's zero here is `""` (the embedding types an enum `string`) where the
-  runner's is its first member.
+- A source-backed placeholder (`else source(values…)`): the embedding emits
+  its source as a separate resource but does not use its answer as the idle value.
 - A request in flight when the gate closes, an upload's or a stream's, and
   the window between waking and the forced ask's answer, when the runner's
   `current` is false: answers here are synchronous. The runner's tests
@@ -1147,11 +1149,12 @@ A child component's resource other than a device fact is a request each
 instance owns. The expansion lifts it per use as `x#n`
 (`ResourceDecl.owner`: the region arm whose instances own it; `late` for
 a use outside every region). Root settlement holds an owned one idle at
-its type's zero and never reads it. Each arm instance settles its own in
+its placeholder and never reads it. Each arm instance settles its own in
 the render that makes or updates it (`Runtime.settleOwned`), after its
 states, its gate and arguments read with the instance's slots and locals:
 kept while its arguments are those its value answers, asked of the oracle
-otherwise, idle with its value and no arguments while its gate is closed.
+otherwise, idle with its previous value (its placeholder before any answer)
+and no arguments while its gate is closed.
 Passes repeat while one changes, so a request whose arguments read
 another's answer asks on that answer, in the same render. The value and
 its arguments (`x@args`) are the instance's row slots; in the instance's
@@ -1166,15 +1169,14 @@ line for an arm-owned row, which has a value per instance.
 Rendering stays safe (`render_good`) without typing a request's arguments
 in its arm's scope: `settleOwned` keeps its slots only where each conforms
 to its slot type and refuses the render on an evaluation error. The corpus
-has `resources/owned`.
+has `resources/owned` and `resources/idle-values`.
 
 What it does not carry:
 
 - An answer in flight: every owned answer here is synchronous, so the
   runner's later render of an immediate answer is this render's next pass.
-  An `else` placeholder (the semantics holds the type's zero, as for a
-  gated root resource) and an owned request with a placeholder row
-  (`x#n#else`) are outside it.
+- An owned request with a source-backed placeholder row (`x#n#else`):
+  the semantics does not use that row's answer as the idle value.
 
 ## A child's sends (LLP 1035.005.004 D6)
 

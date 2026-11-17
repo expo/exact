@@ -718,8 +718,12 @@ impl<D: DataSource> Host<D> {
             props.insert(super::layout::separator::PROP, line);
         }
         if node.props.bool(PropId::DefaultSurface) == Some(true) {
-            if let Some((radius, shadow)) = default_surface(exact_kernel::style::metrics::column())
-            {
+            let column = exact_kernel::style::metrics::column();
+            if node.props.str(PropId::AccessibilityRole) == Some("menu") {
+                if let Some(radius) = menu_surface(column) {
+                    props.insert("defaultSurfaceRadius", radius);
+                }
+            } else if let Some((radius, shadow)) = default_surface(column) {
                 props.insert("defaultSurfaceRadius", radius);
                 props.insert("defaultSurfaceShadow", shadow);
             }
@@ -747,6 +751,15 @@ fn default_surface(column: exact_kernel::style::metrics::Column) -> Option<(Stri
     let blur = length_in(metric::POPOVER_SHADOW_BLUR, column, 0.0, 0.0)?;
     let alpha = number_in(metric::POPOVER_SHADOW_ALPHA, column)?;
     Some((radius.to_string(), format!("{y} {blur} {alpha}")))
+}
+
+/// A menu's default surface as `column` says: the corner of the platform's
+/// menu panel (`menu-radius`), which the Mac draws under a menu it paints;
+/// none where the platform's own menu is the only one shown.
+fn menu_surface(column: exact_kernel::style::metrics::Column) -> Option<String> {
+    use exact_kernel::generated::metric;
+    let radius = exact_kernel::style::metrics::length_in(metric::MENU_RADIUS, column, 0.0, 0.0)?;
+    Some(radius.to_string())
 }
 
 /// Props by their own names, including derived text advances.

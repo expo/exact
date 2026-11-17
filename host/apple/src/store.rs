@@ -1,7 +1,9 @@
 //! The app's kept secrets on Apple platforms (LLP 1018 D6): `ibex2::host`'s
 //! `Secrets` — the Keychain (ibex LLP 0069) — read into a snapshot before the
-//! runner boots and written after each commit, on the main thread, never
-//! through Swift. The runner's kept answers (LLP 1027 D4) go through
+//! runner boots and written after each commit, on the owner thread. The optional
+//! watch export sends selected ordinary secrets only to its CryptoKit callback;
+//! its store reply contains only the sealed envelope (LLP 1018 D6).
+//! The runner's kept answers (LLP 1027 D4) go through
 //! `ibex2`'s kv store, a file per answer, written on a thread of their own
 //! (`flush_kept`).
 //!
@@ -204,10 +206,10 @@ impl ibex2::secrets::SecretStore for Shared {
     }
 }
 
-fn endow_in(host: Host, grants: &str) -> Result<Bindings, String> {
+pub(crate) fn endow_in(host: Host, grants: &str) -> Result<Bindings, String> {
     // Appended, so an error's line number is the app's own.
     let spec = format!(
-        "{}\nstorage.kv {KEPT}\nstorage.kv {STATE}\n{}",
+        "{}\nstorage.kv {KEPT}\nstorage.kv {STATE}\nstorage.kv exact.watch\n{}",
         exact_runner::io_grants(grants),
         crate::presence_secrets::scopes(),
     );
@@ -490,6 +492,13 @@ impl Platform {
     /// Keep or forget one write. A kept answer is handed to the writer and
     /// its failure, if any, is told later (`kept_failures`).
     pub fn write(&self, w: &StoreWrite) -> Result<(), HostError> {
+        if crate::watch_sync::read_only(&w.name) {
+            return Err(HostError::Failed("watch replica is phone-owned".into()));
+        }
+        self.write_import(w)
+    }
+
+    fn write_import(&self, w: &StoreWrite) -> Result<(), HostError> {
         if w.durable {
             return Ok(());
         }
@@ -529,6 +538,46 @@ impl Platform {
                     .map_err(HostError::Failed)
             }),
         }
+    }
+
+    pub(crate) fn watch_meta(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        self.kv
+            .get("exact.watch", key)
+            .map_err(|_| "watch metadata read failed".into())
+    }
+    pub(crate) fn watch_put_meta(&self, key: &str, value: &[u8]) -> Result<(), String> {
+        self.kv
+            .set("exact.watch", key, value)
+            .map_err(|_| "watch metadata write failed".into())
+    }
+    pub(crate) fn watch_presence(&self, name: &str) -> Result<bool, String> {
+        self.kv
+            .get(crate::presence_secrets::RECORDS, name)
+            .map(|v| v.is_some())
+            .map_err(|_| "watch presence read failed".into())
+    }
+    pub(crate) fn watch_read(&self, name: &str) -> Result<Option<String>, String> {
+        if let Some(key) = name.strip_prefix(Store::STATE) {
+            return match &self.prefs {
+                Prefs::Kv => self
+                    .kv
+                    .get_text(STATE, key)
+                    .map_err(|_| "watch state read failed".into()),
+                Prefs::Defaults(_) => Ok(self
+                    .prefs
+                    .read(&self.kv)
+                    .into_iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, b)| String::from_utf8_lossy(&b).into_owned())),
+            };
+        }
+        self.secrets
+            .get(name)
+            .map_err(|_| "watch secret read failed".into())
+    }
+    pub(crate) fn watch_write(&self, write: &StoreWrite) -> Result<(), String> {
+        self.write_import(write)
+            .map_err(|_| "watch import failed".into())
     }
 
     /// The kept answers the writer failed to write since the last call, as
@@ -694,8 +743,17 @@ fn wait_until_written(
 
 /// What the store holds under the granted names — the runner's snapshot.
 /// A name the store cannot read is absent, as an ungranted one is.
-pub fn snapshot_for(bindings: Option<&Bindings>, app_id: &str) -> Vec<(String, Vec<u8>)> {
-    snapshot_in(bindings, &Prefs::of(app_id))
+/// An entry's refresh is refused while a watch import overlaps the read: values
+/// from two snapshots, or none, must not reach its source as the account.
+pub fn snapshot_for(
+    bindings: Option<&Bindings>,
+    app_id: &str,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let Some(b) = bindings else {
+        return Ok(Vec::new());
+    };
+    crate::watch_sync::reading(&b.kv, || snapshot_in(bindings, &Prefs::of(app_id)))
+        .ok_or_else(|| "a watch import is unfinished".into())
 }
 
 /// The snapshot with the default preference store.
@@ -731,6 +789,29 @@ fn snapshot_parts(
     // kept writer can delay that turn; moving the read off-owner needs an
     // ordered snapshot handoff, not a read ahead of its flush.
     flush_kept();
+    #[cfg(not(any(target_os = "watchos", test)))]
+    return read_parts(secrets, kv, prefs, previous);
+    // A read a watch import overlapped is not one snapshot's: the caller keeps
+    // what it held and reads again.
+    #[cfg(any(target_os = "watchos", test))]
+    {
+        let prior = previous.clone();
+        crate::watch_sync::reading(kv, || read_parts(secrets, kv, prefs, previous)).unwrap_or(
+            StoreRead {
+                values: prior,
+                omitted: Vec::new(),
+                complete: false,
+            },
+        )
+    }
+}
+
+fn read_parts(
+    secrets: &Secrets,
+    kv: &Kv,
+    prefs: &Prefs,
+    previous: Vec<(String, Vec<u8>)>,
+) -> StoreRead {
     let mut values: std::collections::BTreeMap<_, _> = previous.into_iter().collect();
     let mut complete = true;
     let mut omitted = Vec::new();
@@ -852,6 +933,16 @@ pub(crate) fn group_root(app_id: &str) -> Option<std::path::PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
+/// Imports must invalidate account timelines before their journal is cleared.
+pub(crate) fn watch_changed(app: &str) -> Result<(), String> {
+    if let Some(root) = group_root(app) {
+        if !publish_widget_change(root, app.to_owned()) {
+            return Err("watch timeline invalidation failed".into());
+        }
+    }
+    Ok(())
+}
+
 /// Stage 1 has one writer: the app. Publish only a counter and a Darwin ping;
 /// another process re-reads the store, never a payload in the notification.
 pub(crate) fn widget_changed(app: &str) {
@@ -867,7 +958,7 @@ pub(crate) fn widget_changed(app: &str) {
         let (send, receive) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (root, app) in receive {
-                publish_widget_change(root, app);
+                let _ = publish_widget_change(root, app);
             }
         });
         send
@@ -876,7 +967,7 @@ pub(crate) fn widget_changed(app: &str) {
 }
 
 #[allow(unsafe_code)]
-fn publish_widget_change(root: std::path::PathBuf, app: String) {
+fn publish_widget_change(root: std::path::PathBuf, app: String) -> bool {
     // A kept answer reaches disk on its own writer: wait for it, so a refresh
     // that reads this counter reads the store the counter stands for.
     flush_kept();
@@ -900,7 +991,7 @@ fn publish_widget_change(root: std::path::PathBuf, app: String) {
     });
     let Some(_) = published else {
         let _ = std::fs::remove_file(&temporary);
-        return;
+        return false;
     };
     // WP11 must put both app and extension counter increments under its shared lock.
     // WP11's extension writer (Q1 B) posts this ping after releasing its
@@ -917,6 +1008,7 @@ fn publish_widget_change(root: std::path::PathBuf, app: String) {
     }
     #[cfg(not(target_vendor = "apple"))]
     let _ = app;
+    true
 }
 
 #[cfg(test)]

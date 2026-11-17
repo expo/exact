@@ -7,6 +7,7 @@ import AppKit
 import ExactCore
 
 final class SharedStoreRefresh {
+    var replicate: (() -> Void)?
     var observer: WidgetStoreObserver?
     private var drawn = false
     private var reloads: [() -> Void] = []
@@ -15,6 +16,12 @@ final class SharedStoreRefresh {
 }
 
 extension ExactApp {
+    /// Installed by a composition that selects companion replication.
+    public var replicateStore: (() -> Void)? {
+        get { sharedStore.replicate }
+        set { sharedStore.replicate = newValue }
+    }
+
     func observeSharedStore(root: URL? = nil, appID: String? = nil, kinds: [String]? = nil, reload: (([String]?) -> Void)? = nil) {
         #if canImport(UIKit)
         let foreground = [UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification]
@@ -77,6 +84,7 @@ extension ExactSession {
     /// (LLP 1030.004 D2).
     func relayStore(_ batch: Batch) {
         guard batch.stored || !batch.announced.isEmpty else { return }
+        if batch.stored { app.replicateStore?() }
         for peer in app.sessions where peer !== self && peer.booted && peer.state != .destroyed {
             if batch.stored { peer.refreshSharedStore { _ in } }
             for topic in batch.announced { peer.runtime.peerChanged(topic) }

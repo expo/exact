@@ -1,0 +1,20 @@
+shape Reply
+  state: enum<"first", "second">
+
+component App
+  resource reply = load() when false as shape Reply
+  resource empty = load() when false as shape Reply else empty()
+  resource explicit = load() when false as shape Reply else empty(state="second")
+  resource scalar = state() when false as shape enum<"first", "second">
+  view
+    column
+      text reply.state testId="reply"
+      text empty.state testId="empty"
+      text explicit.state testId="explicit"
+      text scalar testId="scalar"
+
+test "an idle enum uses its first member or the explicit placeholder"
+  expect text "reply" == "first"
+  expect text "empty" == "first"
+  expect text "explicit" == "second"
+  expect text "scalar" == "first"

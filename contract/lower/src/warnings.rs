@@ -18,6 +18,7 @@ use exact_kernel::StyleId;
 use exact_plan::Stdlib;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod border;
 mod container;
 mod counts;
 mod fixed_beside;
@@ -97,6 +98,7 @@ pub(crate) fn with_text_styles(
             }
             out.extend(roles::button(tag, attrs, visit, span).filter(|_| fresh));
             out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
+            out.extend(roles::alert_font(tag, attrs, &checked.file.styles).filter(|_| fresh));
             out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
             out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
             if fresh {
@@ -161,6 +163,7 @@ pub(crate) fn with_text_styles(
     width::width_padding(&checked_view, &checked.file.styles, &mut out);
     scroll_bound::scroll_grows(&checked_view, &checked.file.styles, &mut out);
     container::flex_on_block(&checked_view, &checked.file.styles, &mut out);
+    border::check(&checked_view, &checked.file.styles, lowered, &mut out);
     width::text_px_width(&checked_view, &checked.file.styles, lowered, &mut out);
     svg::use_foreign_object(&checked_view, &mut out);
     out.extend(

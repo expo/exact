@@ -1,11 +1,13 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { engineTests, need } from '../../../scripts/coverage.mjs';
 import { webCompiler } from '../../web-js/module.mjs';
 import { serveBuildTree, serveStatic } from '../serve.mjs';
+
+const engineTest = await engineTests();
 
 const root = resolve(import.meta.dir, '../../..');
 const fields = [
@@ -90,7 +92,7 @@ async function clears(page, id) {
 }
 
 for (const engine of ['chromium', 'webkit', 'firefox']) for (const target of ['js', 'wasm', 'document']) {
-  const check = target === 'wasm' ? need('fixture', wasmDist ? null : 'build a wasm web dist and name it with EXACT_WEB_DIST') : test;
+  const check = target === 'wasm' && !wasmDist ? need('fixture', 'build a wasm web dist and name it with EXACT_WEB_DIST') : engineTest[engine];
   check(`${engine} ${target}: only native search fields keep the browser's clear control`, async () => {
     const browser = await suiteBrowser(engine);
     try {

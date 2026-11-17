@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { namedRefusal, pageAim, pageOutside } from '../../scripts/agent-aim.mjs';
 import { tapWords } from '../../scripts/agent-keys.mjs';
+import { chromium } from '../../scripts/agent-launch.mjs';
 import { serveBuildTree } from './serve.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
 import { need } from '../../scripts/coverage.mjs';
@@ -110,7 +111,7 @@ const drive = async (session) => {
   expect(await slots()).toMatchObject({ post: 2, card: 2, like: 1 });
 };
 
-test('a plain web tap presses what it names: beside the card, never Like in a box without a press, refused when covered', async () => {
+need('chrome', chromium().unavailable)('a plain web tap presses what it names: beside the card, never Like in a box without a press, refused when covered', async () => {
   const session = await open({ host: 'web', url: await built() });
   try {
     await drive(session);
@@ -190,7 +191,7 @@ async function probe(session) {
   await session.carrier.evaluate('for (const id of [990010, 990011, 990012, 990013, 990014, 990015]) { exact.views.get(id).remove(); exact.views.delete(id); }');
 }
 
-test('a tap on a control a presentation has not yet brought into view says to advance the clock, not to scroll', async () => {
+need('chrome', chromium().unavailable)('a tap on a control a presentation has not yet brought into view says to advance the clock, not to scroll', async () => {
   const session = await open({ host: 'web', url: await built(SHEET) });
   try {
     await sheetDrive(session);
