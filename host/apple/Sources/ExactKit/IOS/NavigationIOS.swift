@@ -93,6 +93,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// bar for a root's hidden tablist (LLP 1075.003 §3.7, amended).
     weak var tablistRoot: RouteController?
     var tablistHidBar = false
+    /// The transition whose end settles the root's tablist (`followTablistAtRoot`), weak so that one gone without
+    /// completing frees it
+    weak var tablistTransition: UIViewControllerTransitionCoordinator?
     var tabItems: [String] = []
     /// The tabs the items were last made from, made again when the size
     /// class (a path glyph's size) changes.

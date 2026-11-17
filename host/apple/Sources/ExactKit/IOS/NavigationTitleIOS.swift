@@ -617,25 +617,25 @@ extension NavigationHost {
     /// shown one shows it only if Exact hid it (`tablistHidBar`), so a hatch's
     /// own hide stands, and between those moments nothing is written, so a
     /// hatch's own show stands too. Never mid-transition: a change made then
-    /// (a sheet presenting, a push or pop in flight) waits, and the root
-    /// arrives again at the next call that can move the bar. A shown tablist
-    /// leaves the bar as it is unless Exact hid it. iOS 17 has no
+    /// (a sheet presenting or dismissing, a push or pop in flight) waits for
+    /// the transition's end, where the selected root settles. iOS 17 has no
     /// `setTabBarHidden`: there the bar stays.
     func followTablistAtRoot(_ root: RouteController, hidden: Bool, in stack: UIViewController) {
-        let changed = root.tablistHidden != hidden
+        // A change makes the root arrive again, now or once the bar can follow it
+        if root.tablistHidden != hidden, tablistRoot === root { tablistRoot = nil }
         root.tablistHidden = hidden
-        guard root === stack.stackRoutes.last, stack.transitionCoordinator == nil, tabBarShows,
-              let tabs = tabController, stack.tabBarController === tabs else {
-            if changed, tablistRoot === root { tablistRoot = nil }
+        guard root === stack.stackRoutes.last, tabBarShows, let tabs = tabController, stack.tabBarController === tabs else { return }
+        guard #available(iOS 18.0, tvOS 18.0, *) else { return }
+        if let transition = stack.transitionCoordinator {
+            if tablistRoot !== root { settleTablist(after: transition) }
             return
         }
-        guard #available(iOS 18.0, tvOS 18.0, *) else { return }
         // Arrived: the root on top at rest for the first time since another
         // route or root was (a pushed route selected clears `tablistRoot`), or
-        // since a change of its own the bar could not follow (above).
+        // since its tablist changed.
         let arrived = tablistRoot !== root
         tablistRoot = root
-        guard changed || arrived else { return }
+        guard arrived else { return }
         let animated = stack.viewIfLoaded?.window != nil
         if hidden {
             // Exact owns the hide only if it made it: a hatch's own stands.
@@ -727,14 +727,36 @@ extension NavigationHost {
         followFloatingBar(nav, for: nav.topViewController!, animated: false)
     }
 
-    /// A transition settled (`didShow`): the root, if it is on top now,
-    /// reconciles the bar with its tablist.
-    func settleTablist(_ nav: UINavigationController) {
+    /// A transition settled (`didShow`, or the end `followTablistAtRoot` waits
+    /// for): the root, if it is on top now, reconciles the bar with its tablist.
+    func settleTablist(_ stack: UIViewController) {
         guard !ExactEnv.authoredChrome, let key = selectedKey,
-              let root = nav.stackRoutes.first as? RouteController, root.key == key, nav.topViewController === root,
+              let root = stack.stackRoutes.first as? RouteController, root.key == key, stack.stackRoutes.last === root,
               let list = adoptedTablist.flatMap({ presenter.views[$0] }) ?? container.flatMap({ NavigationTabs.of($0, presenter)?.tablist })
         else { return }
-        followTablistAtRoot(root, hidden: list.style["display"]?.string == "none", in: nav)
+        followTablistAtRoot(root, hidden: list.style["display"]?.string == "none", in: stack)
+    }
+
+    /// Settles the root selected when `transition` ends, on the turn after
+    /// its completion. A call that finds the same transition while that
+    /// settle is pending asks nothing more and loses nothing: whichever root
+    /// asked, the one that settles is the root selected then, the only one the
+    /// bar follows.
+    private func settleTablist(after transition: UIViewControllerTransitionCoordinator) {
+        guard tablistTransition !== transition else { return }
+        tablistTransition = transition
+        let settle = { [weak self] in
+            guard let self, let stack = routesStack(routerTab) else { return }
+            settleTablist(stack)
+        }
+        let release = { [weak self, weak transition] in
+            if self?.tablistTransition === transition { self?.tablistTransition = nil }
+        }
+        let queued = transition.animate(alongsideTransition: nil) { _ in DispatchQueue.main.async { release(); settle() } }
+        // A coordinator that refuses the block, as one does once its completions have begun (`ModalController.viewDidAppear`
+        // meets one still installed): settle on the next turn, holding the slot through that settle so it does not ask again;
+        // a stack that still reports it then leaves the move to the root's next arrival, as before any completion
+        if !queued { DispatchQueue.main.async { settle(); release() } }
     }
 }
 #endif
