@@ -7,7 +7,7 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // glue reports them to the kernel at boot and when contrast changes (wasm/boot.js, src/colors.rs).
 import { test, expect } from 'bun:test';
 import { withLook } from '../look.mjs';
-import { drivable } from '../../../scripts/coverage.mjs';
+import { drivable, need } from '../../../scripts/coverage.mjs';
 import { chromium as browserPath, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 
 const web = new URL('../', import.meta.url);
@@ -128,7 +128,7 @@ const DRAW = `export const drawer = {
   }, retire() {}
 };`;
 
-for (const target of ['wasm', 'js']) test(`${target}: contrast changes repaint canvases in both directions without replacing their bitmaps`, async () => {
+for (const target of ['wasm', 'js']) need('chrome', browserPath().unavailable)(`${target}: contrast changes repaint canvases in both directions without replacing their bitmaps`, async () => {
   const files = { '/canvas2d.js': '../web-js/canvas2d.js', '/canvas2d-glue.js': 'canvas2d-glue.js', '/navigation.js': 'navigation.js' };
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
     const path = new URL(req.url).pathname;

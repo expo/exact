@@ -52,7 +52,7 @@ updates and directory renames. Authored host crates keep their own names.
 Before a platform's first build, `bun <exact2>/scripts/exact.mjs setup --check --platform ios` (or `macos`, `android`, …) names what it lacks, the Xcode it needs among them: `exact new`'s table shows the web's rows alone.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
-On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
+On Linux or Windows through WSL, install the [iOS cross tools](../README.md#building-for-ios-on-linux-and-wsl)
 first. `ios` builds a simulator bundle without installing it; `ios --prebuild` does so
 in the background. Running an iOS simulator, including `verify ios` and `agent ios`, needs macOS.
 

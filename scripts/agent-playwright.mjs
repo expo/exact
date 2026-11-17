@@ -54,9 +54,8 @@ export async function browserMissing(name) {
     // The browser's own error lines, its headless notice aside, else Playwright's first line
     const said = new Set([...message.matchAll(/\[err\] (.+)/g)].map(m => m[1].trim().replace(/\.$/, '')).filter(line => !/running in headless mode/.test(line)));
     // macOS 27 reserves Firefox's app-data folder for Mozilla's signed Firefox, and Playwright's needs it to exist
-    const appData = resolve(homedir(), 'Library/Application Support/Firefox');
-    if (process.platform === 'darwin' && said.has('Could not find profile folder') && !existsSync(appData))
-      return `${label} at ${executable} does not launch: it needs ${appData}, which macOS lets only Mozilla's Firefox create; install Firefox from https://www.mozilla.org/firefox/ and open it once`;
+    if (process.platform === 'darwin' && said.has('Could not find profile folder') && !existsSync(resolve(homedir(), 'Library/Application Support/Firefox')))
+      return `${label} does not launch: it needs ~/Library/Application Support/Firefox, which macOS 27 lets only Mozilla's signed Firefox create; fixing this Mac takes a person, who installs Firefox from https://www.mozilla.org/firefox/ and opens it once`;
     return `${label} at ${executable} does not launch: ${[...said].join(' ') || message.split('\n')[0]}; ${PLAYWRIGHT} install --force ${name} reinstalls it`;
   }
 }

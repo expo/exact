@@ -24,7 +24,7 @@ test('the render DOM writes list items and unwraps their rows', () => {
   } finally { if (previous === undefined) delete globalThis.document; else globalThis.document = previous; }
 });
 
-test('list role fallbacks agree with Chrome’s native accessibility tree', async () => {
+engineTest.chromium('list role fallbacks agree with Chrome’s native accessibility tree', async () => {
   const previous = globalThis.document, doc = createDocument();
   globalThis.document = doc;
   const cases = [['future LIST group', 'widget LISTITEM note', 'listitem'], ['group list', 'note', 'note'], ['list', 'note listitem', 'listitem'], ['directory list', 'note', 'listitem'], ['doc-chapter list', 'note', 'note'], ['list', 'doc-tip listitem', 'listitem'], ['graphics-document list', 'note', 'note'], ['list', 'graphics-object listitem', 'listitem'], ['comment list', 'note', 'note'], ['list', 'mark listitem', 'listitem'], ['doc-invalid list', 'note', 'listitem']];

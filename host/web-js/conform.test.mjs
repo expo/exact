@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { conformArgs } from './conform-args.mjs';
 import { clockOnAll, clockVerdict, failedTests, parseStep } from './conform-steps.mjs';
 import { open } from '../../scripts/agent.mjs';
-import { launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { chromium, launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +10,8 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
+
+const chromeTest = need('chrome', chromium().unavailable);
 
 // Load the comparisons without starting the harness's builds and browser drives.
 const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
@@ -145,7 +147,7 @@ test('the wasm and JS drive still delivers every step to its two Chrome pages', 
     .toEqual(cut.report.steps.map(s => s.step));
 });
 
-test('conformance screenshots pin only auto images to one filter, after both pages agree on each image\'s', async () => {
+chromeTest('conformance screenshots pin only auto images to one filter, after both pages agree on each image\'s', async () => {
   const browser = await suiteBrowser();
   const markup = first => `<img style="image-rendering:${first}"><img style="image-rendering:crisp-edges"><div style="image-rendering:pixelated"><img></div><img>`;
   const modes = page => page.locator('img').evaluateAll(images => images.map(image => [getComputedStyle(image).imageRendering, image.getAttribute('style')]));
@@ -554,7 +556,7 @@ test('a cached hidden copy cannot shadow the visible box with the same testId', 
   expect(diffLayout(layout, { nodes: [layout.nodes[1]] }, cached, selected)).toHaveLength(0);
 });
 
-test('a visible descendant of a hidden cached panel still fails conformance', async () => {
+chromeTest('a visible descendant of a hidden cached panel still fails conformance', async () => {
   const browser = await suiteBrowser('chromium');
   try {
     const page = await browser.newPage();
@@ -585,7 +587,7 @@ test('a visible descendant of a hidden cached panel still fails conformance', as
   } finally { await browser.close(); }
 });
 
-test('differing visible folded text in a hidden cached panel fails conformance', async () => {
+chromeTest('differing visible folded text in a hidden cached panel fails conformance', async () => {
   const browser = await suiteBrowser('chromium');
   try {
     // A folded text is its box's `display: contents` child, with no box of its own (host/web/src/element.rs, `folds`).
@@ -612,7 +614,7 @@ test('differing visible folded text in a hidden cached panel fails conformance',
   } finally { await browser.close(); }
 });
 
-test('visible painted runs in a hidden cached panel still fail conformance', async () => {
+chromeTest('visible painted runs in a hidden cached panel still fail conformance', async () => {
   const modules = new Set(['textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js']);
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
     const name = new URL(request.url).pathname.slice(1);

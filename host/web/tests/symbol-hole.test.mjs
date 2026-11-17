@@ -6,7 +6,7 @@ import { symbolSheet } from './glue-fixture.mjs';
 // the mask's `<path>`s with `fill-rule="evenodd"`: a ring of two squares
 // wound alike is clear in its middle. The same path as a nonzero icon is
 // filled through, as before. Measured from the screen, in each engine.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
@@ -68,7 +68,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
 // (kernel/tests/fixtures/icon-forms.json, which contract/cli/tests/it/icon_forms.rs holds Icon::parse to). And `draw` puts
 // it on the element: an even-odd form marked so, a nonzero one as before, one that is no icon drawing
 // nothing (no path, viewBox or rule).
-test('symbols.js iconForm and draw read a form as Icon::parse does', async () => {
+engineTest.chromium('symbols.js iconForm and draw read a form as Icon::parse does', async () => {
   const source = readFileSync(resolve(ROOT, 'host/web-js/symbols.js'), 'utf8'), suite = await suiteBrowser('chromium', { timeout: 10000 });
   const { cases } = JSON.parse(readFileSync(resolve(ROOT, 'kernel/tests/fixtures/icon-forms.json'), 'utf8'));
   try {

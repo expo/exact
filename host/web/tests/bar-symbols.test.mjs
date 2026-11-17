@@ -10,7 +10,7 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // glue has marked the bar, nothing moves when the symbols are painted. Each runtime's symbol painter (glue.js
 // `refreshSymbols`, symbols.js `refresh`) runs under the shell, the neutral sheet and the navigation glue, in each
 // engine, measured from the screen.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
@@ -76,7 +76,7 @@ const RUNTIMES = {
   'host/web-js/symbols.js': ['const All = true, journal = [], clock = { now: 0 }, appSource = () => {}, Images = new Set(document.querySelectorAll("#exact-root img")), image = e => Images.add(e);', ['refresh'], 'refresh();'],
 };
 
-for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`symbol fitting reads geometry only for scale-down (${file})`, async () => {
+for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest.chromium(`symbol fitting reads geometry only for scale-down (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const cases = [['fill', 24], ['contain', 24], ['cover', 24], ['none', 24], ['scale-down', 24], ['scale-down', 10]];
   const content = cases.map(([fit, size], i) => `<img id="fit-${i}" data-symbol-source="symbol:add" data-symbol-path="${roles.add}" style="font-size:20px;--exact-symbol-scale:1;object-fit:${fit};width:${size}px;height:${size}px">`).join('');

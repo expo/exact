@@ -8,7 +8,7 @@ import { engineTests } from '../../../scripts/coverage.mjs';
 
 const engineTest = await engineTests();
 
-test('Chrome keeps pointer modality beyond a field or empty hit and preserves an unchanged focus ring', async () => {
+engineTest.chromium('Chrome keeps pointer modality beyond a field or empty hit and preserves an unchanged focus ring', async () => {
   const browser = await suiteBrowser();
   try {
     const page = await browser.newPage();
@@ -41,7 +41,7 @@ test('Chrome keeps pointer modality beyond a field or empty hit and preserves an
   } finally { await browser.close(); }
 });
 
-test('Chrome focus visibility follows input through canvas fallback and a remounted heading', async () => {
+engineTest.chromium('Chrome focus visibility follows input through canvas fallback and a remounted heading', async () => {
   const browser = await suiteBrowser();
   try {
     const page = await browser.newPage();
@@ -126,7 +126,7 @@ async function rovingFixture(target, run) {
   } finally { await browser.close(); server.stop(true); }
 }
 
-for (const target of ['wasm', 'js']) test(`${target}: roving Tab stops preserve authored exclusions and their updates`, () => rovingFixture(target, async page => {
+for (const target of ['wasm', 'js']) engineTest.chromium(`${target}: roving Tab stops preserve authored exclusions and their updates`, () => rovingFixture(target, async page => {
   const focused = () => page.evaluate(() => document.activeElement.id);
   const indices = () => page.evaluate(() => ['excluded', 'one', 'two'].map(id => document.getElementById(id).getAttribute('tabindex')));
   const key = async (key, id) => { await page.keyboard.press(key); expect(await focused()).toBe(id); };
@@ -174,7 +174,7 @@ for (const target of ['wasm', 'js']) test(`${target}: roving Tab stops preserve 
   expect(await indices()).toEqual(['-5', '0', '-1']);
 }), 60000);
 
-for (const target of ['wasm', 'js']) test(`${target}: Tab leaves a focused excluded or aria-disabled group member`, () => rovingFixture(target, async (page, role) => {
+for (const target of ['wasm', 'js']) engineTest.chromium(`${target}: Tab leaves a focused excluded or aria-disabled group member`, () => rovingFixture(target, async (page, role) => {
   const key = async (name, id) => { await page.keyboard.press(name); expect(await page.evaluate(() => document.activeElement.id)).toBe(id); };
   await page.evaluate(role => {
     const group = document.querySelector('[role="tablist"], [role="radiogroup"]');
@@ -204,7 +204,7 @@ for (const target of ['wasm', 'js']) test(`${target}: Tab leaves a focused exclu
   }
 }), 60000);
 
-for (const target of ['wasm', 'js']) for (const origin of ['fragment', 'route']) test(`${target}: ${origin} focus keeps an unauthored group member eligible`, () => rovingFixture(target, async (page, role) => {
+for (const target of ['wasm', 'js']) for (const origin of ['fragment', 'route']) engineTest.chromium(`${target}: ${origin} focus keeps an unauthored group member eligible`, () => rovingFixture(target, async (page, role) => {
   await page.evaluate(async ([role, origin]) => {
     const root = document.getElementById('exact-root'), state = role === 'tab' ? 'selected' : 'checked';
     const tag = origin === 'route' ? 'h2' : 'span';
@@ -408,7 +408,7 @@ test('declared shortcuts support named keys and leave text input and composition
 // field's ink is the look's grey (the role table's `GrayText`, which the
 // neutral sheet carries; LLP 1116 D1's look left it to the user agent), never
 // the page's own colour.
-test('bare fields restore keyboard focus and a disabled native field is the look\'s grey, not the page\'s ink', async () => {
+engineTest.chromium('bare fields restore keyboard focus and a disabled native field is the look\'s grey, not the page\'s ink', async () => {
   const {withLook} = await import('../look.mjs');
   const browser = await suiteBrowser();
   try {
@@ -507,7 +507,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
 }, 30000);
 
 // #282: the real HTML dialog path, reached through the JS target's commands.
-test('action dialog commands keep modal focus and preserve bare close as window close', async () => {
+engineTest.chromium('action dialog commands keep modal focus and preserve bare close as window close', async () => {
   const browser = await suiteBrowser();
   try {
     const page = await browser.newPage();
@@ -574,7 +574,7 @@ test('action dialog commands keep modal focus and preserve bare close as window 
   } finally { await browser.close(); }
 }, 60000);
 
-test('a queued dialog close cannot act after its conditional scope ends', async () => {
+engineTest.chromium('a queued dialog close cannot act after its conditional scope ends', async () => {
   const server = Bun.serve({port: 0, hostname: '127.0.0.1', async fetch(req) {
     const path = new URL(req.url).pathname;
     if (path === '/') return new Response('<div id="exact-root"><button id="opener">Open</button><div id="branch"></div></div>', {headers: {'Content-Type': 'text/html'}});
