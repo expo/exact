@@ -83,6 +83,12 @@ macro_rules! host {
             if EXACT_LINKS.io.is_none() { return 0; }
             $crate::launch_preloads::copy_name(index as usize, out, capacity)
         }
+        /// The optional WatchConnectivity adapter's private store callback.
+        #[no_mangle]
+        pub unsafe extern "C" fn exact_watch_store(plan: *const u8, plan_len: usize, input: *const u8, len: usize, seal: Option<$crate::watch_sync::Seal>, reply: $crate::watch_sync::Reply, context: usize) {
+            // SAFETY: the optional adapter holds these buffers through the callback.
+            unsafe { $crate::watch_sync::call(plan, plan_len, input, len, seal, reply, context) }
+        }
         $crate::pan_velocity_exports!();
         $crate::frame_health_exports!();
 
@@ -581,11 +587,11 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.dispatch(view, kind, len, now_ms), |n| n)
         }
 
-        /// A scroller (or, nonzero `page`, the page) now stands at `left`,
-        /// `top` CSS px: what `frame` subtracts (LLP 1051.000 D1). No batch.
+        /// A scroller (`page` 0) or the page (1) stands at `left`, `top`
+        /// CSS px (LLP 1051.000 D1); 2 consumes collection mailbox words. No batch.
         #[no_mangle]
         pub extern "C" fn exact_scrolled(rt: u32, page: u32, view: u32, left: f64, top: f64) {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.scrolled(page != 0, view, left, top), |_| ())
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.scrolled(page, view, left, top), |_| ())
         }
 
         /// The presenter's synchronous viewport union for an inline run.
@@ -1199,12 +1205,6 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.colors(len), |n| n)
         }
 
-        /// An image loaded (or failed: a size ≤ 0); returns the batch's length.
-        #[no_mangle]
-        pub extern "C" fn exact_intrinsic(rt: u32, view: u32, width: f32, height: f32) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.intrinsic(view, width, height), |n| n)
-        }
-
         /// Several images' intrinsic sizes from the input buffer, one layout;
         /// returns the batch's length.
         #[no_mangle]
@@ -1234,7 +1234,7 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.layout_stamp(), |_| 0)
         }
 
-        /// Common LE collection feedback from the input buffer; returns batch length.
+        /// Common LE collection feedback; returns batch length.
         #[no_mangle]
         pub extern "C" fn exact_collection_feedback(rt: u32, len: usize, now_ms: f64) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.collection_feedback(len, now_ms), |n| n)

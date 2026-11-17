@@ -16,7 +16,8 @@
 //!
 //! The displays and the pointer (LLP 1178 D6) are a service of their own,
 //! [`Displays`], which a host installs with [`install_displays`]: the
-//! Linux host binds it ([`FullScreen`]) though it binds none of the rest.
+//! Linux host binds it ([`FullScreen`]) though it binds none of the rest,
+//! and the Windows host installs its monitors' (`host/windows/src/displays.rs`).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

@@ -24,6 +24,7 @@ extension ExactSession {
         ExactLaunch.shared.drawn(self)
         guard activatedGeneration != drawnGeneration else { return }
         activatedGeneration = drawnGeneration
+        app.replicateStore?()
         #if os(iOS)
         if presenter.navigation.bootOwnerDrawn({ [weak self] in self?.queueFirstDraw(drawnGeneration, token: token) }) { return }
         #endif

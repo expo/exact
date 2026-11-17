@@ -10,6 +10,8 @@ import { tsGrantSet } from './admission-data.js';
 // captured when called and starts after its source returns, so a refused
 // one never starts; a module with none fetches at once, as before.
 export const SOCKET_AND_FETCH = 'a mutation cannot both send on a socket and fetch';
+// Set by the build where no module app.ts reaches spells `exactStream`: the page has no stream reader (LLP 1047.003 D5).
+export const STREAM_REFUSAL = null;
 // `exactHeld` (LLP 1016.000 D9), with Hermes's words (js/src/fetch.js): the server may hold the reply. Each
 // fetch is counted on its answer, held (`call.held`) or not (`call.plain`), or as tied to no answer
 // (`answering.loose`); an answer with only held fetches out counts for no clock (held.js `counted`, whose
@@ -36,6 +38,7 @@ function fetchInCall(input, options) {
     }
   }
   // Checked before any path, a mutation's captured fetch included (LLP 1016.000 D8).
+  if (STREAM_REFUSAL && options?.exactStream !== undefined) return Promise.reject(new TypeError(STREAM_REFUSAL));
   if (options?.exactLongPoll !== undefined && options.exactStream === undefined)
     return Promise.reject(new TypeError('exactLongPoll asks again for an answer that keeps coming: give exactStream too'));
   const upload = options?.exactUploadProgress; // LLP 1016.000 D10

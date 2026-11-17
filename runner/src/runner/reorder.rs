@@ -362,7 +362,7 @@ impl<D: DataSource> Runner<D> {
             let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
             u.fonts = Some(self.fonts.clone());
             u.reuse = self.reuse;
-            tree.edit_reorder(id, &mut u, edit)
+            tree.edit_collection(id, &mut u, edit)
                 .map(|r| (r, u.ops, u.notes, u.renewed, u.shown))
         };
         self.tree = Some(tree);

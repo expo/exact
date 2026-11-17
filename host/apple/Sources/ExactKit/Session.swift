@@ -465,7 +465,7 @@ public final class ExactSession {
     enum Published { case fill(UInt32), tick, advance, canvas, notice, reply }
     /// Batches the owner committed without main waiting, in its order: a
     /// slice's (with its list), a frame's tick's and a canvas draw's.
-    private let published = PublishedBatches()
+    let published = PublishedBatches()
     /// A frame's tick is on the owner (LLP 1072 §7.1): the next one waits.
     var tickInFlight = false
     /// A timer advance is on the owner (LLP 1072.000): the next one waits.
@@ -661,22 +661,6 @@ public final class ExactSession {
         }
     }
 
-    /// On the owner: queue a batch for main, in the owner's order.
-    func publish(_ kind: Published, _ completion: RuntimeCompletion) {
-        guard published.append((kind, completion)) else { return }
-        DispatchQueue.main.async { [weak self] in self?.landPublished() }
-    }
-    private func landPublished() {
-        if landing { published.yieldDrain(); return }
-        landFill()
-        if published.finishDrain() { DispatchQueue.main.async { [weak self] in self?.landPublished() } }
-    }
-
-    /// A published batch waits to land: any, or one that `which` picks.
-    private func hasPublished(_ which: (Batch) -> Bool = { _ in true }) -> Bool {
-        published.contains(which)
-    }
-
     /// Apply the slice the owner published, then what it owes and what
     /// waited for it. Before any other batch applies, so batches apply in
     /// the owner's order (T4).
@@ -845,7 +829,11 @@ public final class ExactSession {
         presenter.onScrollend = { [unowned self] id in applyUnlessEmpty(runtime.scrollend(id, now: now())) }
         presenter.onScrollDrag = { [unowned self] id, end in applyUnlessEmpty(end.map { runtime.scrolldragend(id, velocity: $0.velocity, target: $0.target, now: now()) } ?? runtime.scrolldragstart(id, now: now())) }
         presenter.onScrolled = { [unowned self] id, left, top in
+            #if os(iOS) || os(tvOS)
+            runtime.scrolled(id, left: left, top: top, observing: presenter.intersectHandlerCount > 0)
+            #else
             runtime.scrolled(id, left: left, top: top)
+            #endif
             timelineScrolled(id, left: left, top: top)
         }
         #if canImport(AppKit)
@@ -1233,7 +1221,7 @@ public final class ExactSession {
                 apply(performance ? runtime.canvasPerformanceRecord(name, json) : runtime.surfaceRecord(name, json))
             }
             drainReports()
-            presenter.collections.flush()
+            presenter.collections.flushIfNeeded()
             for hold in inputHolds.allObjects { hold.cancelIfInputIneligible() }
             heightInputHold?.cancelIfInputIneligible()
             transformInputHold?.cancelIfInputIneligible()
@@ -1379,16 +1367,6 @@ public final class ExactSession {
         applyUnlessEmpty(batch, scrolled: true, resized: change.size != nil)
     }
     private(set) var screenSize: CGSize? // the screen last told, for the agent's synthetic segments
-    /// The device's posture and the viewport segments a fold makes (LLP 1078 D4, D5): the view's reading,
-    /// kept for the agent's `layout.env` and told to the kernel and the runner in one batch.
-    /// Returns the batch's error, when the runtime refused the grid; the fold is kept only when it took it.
-    @discardableResult func segments(_ fold: ViewportFold) -> String? {
-        guard booted, state != .destroyed else { return nil }
-        let batch = runtime.segments(fold)
-        if batch.error == nil { presenter.fold = fold }
-        apply(batch)
-        return batch.error
-    }
     /// The view's appearance, for paint motion's `light-dark()` (LLP 1062).
     /// The platform's colours are reported first: before the first scheme
     /// that fills the kernel's table without motion, so nothing eases from a

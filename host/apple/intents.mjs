@@ -340,7 +340,10 @@ export function nativeIntentModule({ moduleName, binary, sources, args, director
   binary = binaries.length === 1 ? binaries[0] : resolve(dir, `${moduleName}.o`);
   if (!existsSync(values) || !existsSync(binary)) {
     mkdirSync(dir, { recursive: true });
-    const checking = args.filter((a, i) => a !== '-emit-library' && a !== '-o' && args[i - 1] !== '-o');
+    // A typecheck or object compile refuses object inputs, such as a native package's ExactPackage.o that the link takes.
+    const object = a => /\.[oa]$/.test(a ?? '');
+    const checking = args.filter((a, i) => a !== '-emit-library' && a !== '-o' && args[i - 1] !== '-o' && !object(a)
+      && !(a === '-Xlinker' && object(args[i + 1])));
     // The native build system can leave per-source objects. The extractor takes one binary, so compile a whole-module
     // object in that layout; a merged SwiftPM object needs only its constants typechecked.
     try { runApple('xcrun', [...checking, '-wmo', ...(binaries.length > 1 ? ['-c', '-o', binary] : ['-typecheck']), ...constValueArgs(values, dir)]); }

@@ -353,6 +353,15 @@ pub struct Env {
     /// 1123 D5), set, as `local` is, only in an environment made for that
     /// node.
     pub properties: Option<crate::style::safe_area_properties::Resolved>,
+    /// What one node's observations of its safe area are, top right bottom
+    /// left, `None` where one is unavailable (LLP 1123 D9): the solve's
+    /// inputs, set, as `local` is, only in an environment made for that
+    /// node.
+    pub observed: Option<[Option<f32>; 4]>,
+    /// The native targets one node reads raw insets from (LLP 1123 D9),
+    /// set, as `local` is, only in an environment made for a node that reads
+    /// one.
+    pub targets: Option<crate::style::targets::Scope>,
 }
 
 impl Default for Env {
@@ -386,6 +395,8 @@ impl Env {
             root_local: None,
             local: None,
             properties: None,
+            observed: None,
+            targets: None,
         }
     }
 
@@ -401,6 +412,17 @@ impl Env {
                 misread(edge);
                 self.root_inset(edge)
             }
+        }
+    }
+
+    /// What `leaf` observes at the node (LLP 1123 D9): its own safe area as
+    /// the solve gives it, or its target's raw insets; `None` where that is
+    /// unavailable, or the environment was made for no node.
+    pub fn observation(&self, leaf: &crate::style::calc::Observe) -> Option<f32> {
+        let edge = leaf.edge as usize;
+        match &leaf.target {
+            crate::style::targets::Target::Box => self.observed.and_then(|o| o[edge]),
+            target => self.targets.as_ref()?.insets(target).map(|i| i[edge]),
         }
     }
 

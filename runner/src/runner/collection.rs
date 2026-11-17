@@ -4,6 +4,12 @@ use crate::compare::{equivalent, equivalent_all};
 use crate::instance::collection::{CollectionFeedback, CollectionFill, CollectionSnapshot};
 
 impl<D: DataSource> Runner<D> {
+    /// Latest host travel, consumed before substantive work; no commit or edge.
+    pub fn collection_travel(&mut self, view: ViewId, revision: u64, sequence: u64, offset: f64) {
+        if let Some(tree) = &mut self.tree {
+            tree.collection_travel(view, revision, sequence, offset);
+        }
+    }
     /// Mounted collection metadata for a host's post-commit layout/measurement.
     pub fn collections(&self) -> Vec<CollectionSnapshot> {
         self.tree

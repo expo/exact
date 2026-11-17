@@ -57,12 +57,14 @@ struct HeldNode {
     }
 }
 
-struct BarItemMissing: Error {}
+/// A header button's bar item that the bar shows no control for; `overflowed`,
+/// that UIKit moved it into the bar's overflow menu.
+struct BarItemMissing: Error { var overflowed = false }
 
 extension NavigationHost {
-    /// The navigation item and its visible frame for an authored header node.
-    func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
-        #if os(iOS)
+    #if os(iOS)
+    /// The bar button item made for an authored header node, in the bar of the route that shows it.
+    func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? {
         guard !ExactEnv.authoredChrome else { return nil }
         let testId = node.props["testId"]
         for route in controllers.values {
@@ -71,12 +73,23 @@ extension NavigationHost {
             let items = (route.navigationItem.leftBarButtonItems ?? []) + (route.navigationItem.rightBarButtonItems ?? [])
             guard let item = items.first(where: { ($0.target as? BarPress)?.id == node.id })
                     ?? items.first(where: { $0.target == nil && testId != nil && $0.accessibilityIdentifier == testId }) else { continue }
-            let bar = controller.navigationBar
-            guard let frame = item.frame(in: bar), frame.width > 0, frame.height > 0 else { return .failure(BarItemMissing()) }
-            return .success((bar, frame))
+            return (controller.navigationBar, item, route.navigationItem)
         }
-        #endif
         return nil
+    }
+    #endif
+
+    /// The navigation bar and, in it, the frame UIKit presents from for an
+    /// authored header node's item: the bar's overflow button for an item in
+    /// its overflow menu.
+    func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
+        #if os(iOS)
+        guard let (bar, item, _) = barButtonItem(node) else { return nil }
+        guard let frame = item.frame(in: bar), frame.width > 0, frame.height > 0 else { return .failure(BarItemMissing()) }
+        return .success((bar, frame))
+        #else
+        return nil
+        #endif
     }
 }
 

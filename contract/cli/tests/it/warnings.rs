@@ -415,9 +415,9 @@ fn the_accent_pair_roles_and_artwork_are_not_named() {
         "main accent-color=\"light-dark(#0a7f5a, #3cc98f)\"\n  text \"a\"",
         "main accent-color=\"-exact-system-teal\"\n  text \"a\"",
         // Roles, and what is no colour of its own.
-        "text \"a\" color=\"-exact-secondary-label\" background-color=\"-exact-secondary-grouped-background\" border-color=\"-exact-separator\"",
+        "text \"a\" color=\"-exact-secondary-label\" background-color=\"-exact-secondary-grouped-background\" border-color=\"-exact-separator\" border-style=\"solid\"",
         "text \"a\" color=\"CanvasText\" background-color=\"AccentColor\" -exact-tint-color=\"-exact-system-red\"",
-        "text \"a\" color=\"currentColor\" background-color=\"transparent\" border-color=\"rgba(0, 0, 0, 0)\"",
+        "text \"a\" color=\"currentColor\" background-color=\"transparent\" border-color=\"rgba(0, 0, 0, 0)\" border-style=\"solid\"",
         "text \"a\" color=\"-exact-platform-color(ios systemPinkColor, #ff2d55)\"",
         // Artwork: an `svg`'s paint, and a shadow, which darkens in both.
         "svg viewBox=\"0 0 10 10\" width=10 height=10\n  circle cx=5 cy=5 r=4 fill=\"#ff0000\" stroke=\"#000000\"",

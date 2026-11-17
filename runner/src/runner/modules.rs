@@ -1091,7 +1091,8 @@ impl<D: DataSource> Runner<D> {
     /// names a module's source or send, `{"extension": …, "source": …,
     /// "args": {…}}`, admitted here as a Contract read or send is, before any
     /// module. `None` for any other body.
-    pub(super) fn module_call(&mut self, body: &[u8]) -> Option<Dispatch> {
+    pub(super) fn module_call(&mut self, native: &crate::Request) -> Option<Dispatch> {
+        let body = &native.body;
         let v: Json = serde_json::from_slice(body).ok()?;
         let extension = v.get("extension")?.as_str()?;
         let (declared, send) = match (v["source"].as_str(), v["send"].as_str()) {
@@ -1121,7 +1122,7 @@ impl<D: DataSource> Runner<D> {
         let mut args = v.get("args").cloned().unwrap_or(json!({}));
         self.clamp_bounds(&row, &mut args);
         self.resolve_of(&row, &mut args);
-        let origin = self.data_origin();
+        let origin = self.arriving_data_origin();
         let causes = self.data_causes();
         // A send that answers nothing (LLP 1133.004 D5) settles once done,
         // as does one that lists what it answers (`region_list.rs`).
@@ -1146,6 +1147,16 @@ impl<D: DataSource> Runner<D> {
                 // The implementation hears the origin admission read, and a
                 // Contract send keeps the number it went out with (`bound.rs`).
                 let mut body = self.as_origin(origin, |r| r.forward_body(&row, args, None));
+                // A send starts work that may outlive the call, so it names
+                // the grants it was admitted under: the scope of a mixed
+                // app's source, else the app's.
+                if send {
+                    let scope = native
+                        .grants
+                        .clone()
+                        .unwrap_or_else(|| self.data.grants().to_string());
+                    body = bound::with_authority(&body, &scope);
+                }
                 if let Some(n) = v["request"].as_u64() {
                     body = numbered(&body, n);
                     let ticket = self

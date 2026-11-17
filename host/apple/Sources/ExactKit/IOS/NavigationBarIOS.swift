@@ -28,11 +28,47 @@ struct HatchSource: Equatable {
 /// touch on none of its own controls to a shown control the top route's
 /// header keeps authored (`appearance="none"`, LLP 1075.003 §9.10) where
 /// that control lies under the bar, as a route drawn under its bar places it.
+/// At a transparent route's clear edge, the empty band also leaves touches
+/// to the page; the title, items and scrolled material keep theirs.
 final class RouteNavigationBar: UINavigationBar {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         let onControl = sequence(first: hit, next: { $0 === self ? nil : $0.superview }).contains { $0 is UIControl || $0 is UISearchBar }
-        return onControl || authoredControl(at: point) == nil ? hit : nil
+        if onControl { return hit }
+        if authoredControl(at: point) != nil { return nil }
+        guard let route = (delegate as? UINavigationController)?.topViewController as? RouteController,
+              NavigationHost.transparentBar(route.node) else { return hit }
+        if let scroll = route.contentScrollView(for: .top), scroll.contentOffset.y + scroll.adjustedContentInset.top > 0.5 { return hit }
+        let item = route.navigationItem
+        // Follow UINavigationBar's appearance fallback order; a hatch can
+        // replace the clear edge with a visible background.
+        let edge = item.scrollEdgeAppearance ?? scrollEdgeAppearance
+        var appearance = edge ?? item.standardAppearance ?? standardAppearance
+        #if os(iOS)
+        if traitCollection.verticalSizeClass == .compact {
+            appearance = item.compactScrollEdgeAppearance ?? compactScrollEdgeAppearance ?? edge
+                ?? item.compactAppearance ?? compactAppearance ?? item.standardAppearance ?? standardAppearance
+        }
+        #endif
+        guard appearance.backgroundEffect == nil, appearance.backgroundImage == nil,
+              (appearance.backgroundColor?.resolvedColor(with: traitCollection).cgColor.alpha ?? 0) == 0 else { return hit }
+        if let title = item.titleView, !title.isHidden, title.alpha >= 0.01,
+           title.bounds.contains(title.convert(point, from: self)) { return hit }
+        if ((item.leftBarButtonItems ?? []) + (item.rightBarButtonItems ?? [])).contains(where: { item in
+            guard let view = item.customView, view.window != nil, view.window === self.window,
+                  !view.isHidden, view.alpha >= 0.01 else { return false }
+            return view.bounds.contains(view.convert(point, from: self))
+        }) { return hit }
+        // UIKit's plain title is a noninteractive label, so it is not the
+        // view returned by hitTest. Use its visible bounds, without naming
+        // the private views UIKit wraps it in.
+        func hasLabel(_ view: UIView) -> Bool {
+            guard !view.isHidden, view.alpha >= 0.01 else { return false }
+            if let label = view as? UILabel, label.text?.isEmpty == false,
+               label.bounds.contains(label.convert(point, from: self)) { return true }
+            return view.subviews.contains(where: hasLabel)
+        }
+        return hasLabel(self) ? hit : nil
     }
 
     /// The shown authored control of the top route's header under `point`,

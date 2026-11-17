@@ -11,7 +11,7 @@
 //   the floor holds (D12's `flexInterval`).
 // - When WorkManager runs [BackgroundWorker], the live session's module raises the tag's event and the worker returns
 //   once its invocation ended. With no session in the process (the app's activity gone) the worker retries a `sync`
-//   at WorkManager's backoff and skips a `periodicsync`: the headless session is not built (§14 stage 3), and a `sync`
+//   at WorkManager's backoff and skips a `periodicsync`: the worker boots no session yet (§14 stage 3), and a `sync`
 //   still fires at the next launch.
 // - The status is `denied` while `ActivityManager.isBackgroundRestricted()` is true (D14), with the standby bucket.
 package exact.background

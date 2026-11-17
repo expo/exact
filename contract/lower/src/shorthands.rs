@@ -212,6 +212,20 @@ fn words(text: &str) -> Vec<&str> {
 }
 
 fn border(name: &str, text: &str, span: Span) -> Result<[String; 3], LowerError> {
+    let [width, style, color] = border_parts(name, text, span)?;
+    Ok([
+        width.unwrap_or("3px".into()),
+        style.unwrap_or("none".into()),
+        color.unwrap_or("currentcolor".into()),
+    ])
+}
+
+/// Authored components before the shorthand resets its omitted longhands.
+pub(crate) fn border_parts(
+    name: &str,
+    text: &str,
+    span: Span,
+) -> Result<[Option<String>; 3], LowerError> {
     let mut width = None;
     let mut style = None;
     let mut color = None;
@@ -309,11 +323,7 @@ fn border(name: &str, text: &str, span: Span) -> Result<[String; 3], LowerError>
             span,
         );
     }
-    Ok([
-        width.unwrap_or("3px".into()),
-        style.unwrap_or("none".into()),
-        color.unwrap_or("currentcolor".into()),
-    ])
+    Ok([width, style, color])
 }
 
 // `columns`: `<column-width> || <column-count>`, each `auto` when not given.

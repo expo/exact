@@ -384,6 +384,14 @@
         "component"
       ],
       "properties": {
+        "sync": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "state": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+          },
+          "description": "Phone-owned persisted state and ordinary secrets copied to the watch. Secrets are sealed to its device-local key and remain usable offline. The watch must run once; deletion is eventual."
+        },
         "source": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*\\.contract$",

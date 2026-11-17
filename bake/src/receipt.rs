@@ -712,7 +712,7 @@ fn artifact_graph(
     // A purpose's text and the bundle's languages are in the installed
     // binary's Info.plist: a bundle whose purposes or tables differ is a
     // binary release (LLP 1069.008 D5).
-    for key in ["grantPurposes", "localizations"] {
+    for key in ["grantPurposes", "localizations", "watchSync"] {
         if inputs.get(key).is_some() {
             requires.insert(key.into(), inputs[key].clone());
         }

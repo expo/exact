@@ -42,7 +42,7 @@ import { writeAppleBatchReader } from '../../kernel/build/apple-batch.mjs';
 import { platformWidgetEntries, activityEntries, hasEntries, widgetGroup, prepareWidgetCore, sharedWidgetCore, placeCoreFramework, dropLeftoverCore, entryProfiles, alarmActivity } from './widgets.mjs';
 import { assembleMac, assembleIOS, buildIntents, shortcutKeys, placeMacDylibs } from './bundle.mjs';
 import { EXTENSION_KINDS, assertNotificationServiceGrants, extensionKinds, notificationService, notificationServiceDirectory, notificationServicePlatformRefusal, withoutExtensions } from './extensions.mjs';
-import { buildWatch, watchCompanion, watchProfiles } from './watch.mjs';
+import { buildWatch, watchCompanion, watchProfiles, watchSyncSelected } from './watch.mjs';
 import { spawn, spawnSync } from './toolchain.mjs';
 import { metalRequired, metalToolchainInstructions } from './metal.mjs';
 import { metalVersion, svgFilterLibrary, svgFilterLibraryName } from './svg-filter.mjs';
@@ -263,7 +263,6 @@ export function assertAppleIdentity(app, executable, compatibilityId, shared = n
   }
   return identities[0].inputs.app;
 }
-
 /** Copy the app-visible static trees into a private Apple package stage.
  * Every leaf goes through the web host's no-symlink policy; `trees` maps an
  * app-relative source (notably `gpu/shaders`) to its bundle-visible name. */
@@ -678,6 +677,7 @@ async function main(args, lockHeld = false) {
   // No SDKROOT: each Cargo call asks xcrun for its target's own (scripts/cargo-check.mjs `appleCargo`).
   const cargoEnv = {
     ...developmentBuildEnv(),
+    EXACT_WATCH_SYNC: ios && !tv && watchSyncSelected(app) ? '1' : '0',
     EXACT_WIDGET_GALLERY: gallery ? '1' : '0',
     EXACT_APPLE_EXTENSIONS: [...packaged].join(','),
     // An iOS build's Mac side is its build scripts and proc macros: the host's target, as every cargo call's.
@@ -770,6 +770,7 @@ async function main(args, lockHeld = false) {
   const launchPartsDir = writeLaunchParts(pkg, app), swiftEnv = (libDir, composition, link = 'all') => withoutSdkRoot({
     ...process.env, ...(launchPartsDir ? { EXACT_LAUNCH_PARTS: launchPartsDir.slice(pkg.length + 1) } : {}),
     EXACT_APPLE_INTENT_FILES: !tv && Object.values(app.manifest.intents?.tools ?? {}).some(f => (!f.doors || f.doors.includes('apple')) && Object.values(f.parameters ?? {}).some(p => p.type === 'file')) ? '1' : '0',
+    EXACT_WATCH_SYNC: ios && !tv && watchSyncSelected(app) ? '1' : '0',
     EXACT_WIDGET_GALLERY: gallery ? '1' : '0',
     EXACT_APPLE_LINK: link, EXACT_UPDATE_TRUST: cargoEnv.EXACT_UPDATE_TRUST ?? 'development', // LLP 1047.001 D4 (link.mjs); a production build compiles no inspect mode (Package.swift)
     ...(tv ? { TVOS_DEPLOYMENT_TARGET: compiled.ios } : ios ? { IPHONEOS_DEPLOYMENT_TARGET: compiled.ios } : { MACOSX_DEPLOYMENT_TARGET: targets.macos }),

@@ -846,42 +846,38 @@ pub(super) fn presence_decls(css: &mut String) -> String {
     for decl in css.split_inclusive(';') {
         // The drag timelines' too (LLP 1057.003 D2, D4): motion-glue.js
         // reads each from the element's own declaration.
-        if [
-            "--exact-layout-transition:",
-            "--exact-exit-animation:",
-            // A route's entrance and exit (LLP 1013.001), which shared.js reads.
-            "--exact-view-transition-new:",
-            "--exact-view-transition-old:",
-            "--exact-drag-timeline:",
-            "--exact-animation-timeline:",
-            // A synced animation's clock (LLP 1055.002), read the same way.
-            "--exact-animation-clock:",
-            "--exact-animation-range:",
-            "--exact-timeline-scope:",
-            "--exact-scroll-timeline:",
-            // A browser timeline's consumer, which index.html's `[style*=…]` finds.
-            "--exact-css-timeline:",
-            "--exact-view-timeline:",
-            // The press feedback's factor (LLP 1061) and haptic (LLP 1077
-            // D14), which input-glue.js reads from the element's own style.
-            "--exact-press:",
-            "--exact-press-haptic:",
-            // The pressed paint (LLP 1061 D7), read the same way.
-            "--exact-press-translate:",
-            "--exact-press-x:",
-            "--exact-press-y:",
-            "--exact-base-translated:",
-            "--exact-press-opacity:",
-            "--exact-press-opacity-to:",
-            "--exact-press-background-color:",
-            "--exact-press-color:",
-            // A fitted text's (LLP 1116.001 D1.4), which navigation.js finds by it.
-            "--exact-fit:",
-            // A hit slop's sides, which index.html's `[style*=…]` finds.
-            "--exact-hit-slop-",
-        ]
-        .iter()
-        .any(|p| decl.starts_with(p))
+        if super::motion::PRESENCE_ROWS
+            .iter()
+            .chain(&[
+                "--exact-drag-timeline:",
+                "--exact-animation-timeline:",
+                // A synced animation's clock (LLP 1055.002), read the same way.
+                "--exact-animation-clock:",
+                "--exact-animation-range:",
+                "--exact-timeline-scope:",
+                "--exact-scroll-timeline:",
+                // A browser timeline's consumer, which index.html's `[style*=…]` finds.
+                "--exact-css-timeline:",
+                "--exact-view-timeline:",
+                // The press feedback's factor (LLP 1061) and haptic (LLP 1077
+                // D14), which input-glue.js reads from the element's own style.
+                "--exact-press:",
+                "--exact-press-haptic:",
+                // The pressed paint (LLP 1061 D7), read the same way.
+                "--exact-press-translate:",
+                "--exact-press-x:",
+                "--exact-press-y:",
+                "--exact-base-translated:",
+                "--exact-press-opacity:",
+                "--exact-press-opacity-to:",
+                "--exact-press-background-color:",
+                "--exact-press-color:",
+                // A fitted text's (LLP 1116.001 D1.4), which navigation.js finds by it.
+                "--exact-fit:",
+                // A hit slop's sides, which index.html's `[style*=…]` finds.
+                "--exact-hit-slop-",
+            ])
+            .any(|p| decl.starts_with(p))
         {
             taken.push_str(decl);
         } else {

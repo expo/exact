@@ -38,3 +38,17 @@ test "the specimen returns to Settings"
   tap "row-display"
   tap "specimen-install"
   expect state current.url == "/settings"
+
+// An arrow at the text-size slider. On iOS it is the slider's accessibility
+// increment or decrement, the call VoiceOver's swipe makes; on the web and
+// Linux a keyboard's arrow. macOS is left out: its arrow is a keyboard's
+// too, and a Mac with keyboard navigation off gives the slider no key.
+test "an arrow moves the text size one step" on web, ios, linux
+  tap "lock-unlock"
+  tap "dock-settings"
+  tap "row-display"
+  type "text-size" key "ArrowRight"
+  expect state scale == 1.01
+  type "text-size" key "ArrowLeft"
+  type "text-size" key "ArrowLeft"
+  expect state scale == 0.99

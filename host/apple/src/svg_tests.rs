@@ -27,6 +27,66 @@ fn scene(batch: &str) -> serde_json::Value {
 }
 
 #[test]
+fn a_circle_grows_from_a_zero_underlying_radius() {
+    for (radius, lowered) in [
+        ("", false),
+        ("r=0", false),
+        (r#"r="0%""#, false),
+        (r#"r="calc(0% + 0px)""#, false),
+        (r#"r="calc(-10% - 2px)""#, false),
+        (r#"r="0vw""#, false),
+        ("r=3", true),
+        (r#"r="50%""#, true),
+        (r#"r="calc(10% - 1px)""#, true),
+        (r#"r="calc(-10% + 10px)""#, true),
+        (r#"r="1vw""#, true),
+    ] {
+        let app = format!(
+            r#"keyframes grow
+  from r=0
+  to r=12
+component App
+  view
+    svg width=34 height=34
+      circle testId="disc" cx=17 cy=17 {radius} animation="grow 720ms linear both"
+"#
+        );
+        let (mut host, initial) = Host::boot(
+            &contract::compile(&app).unwrap().encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            100.,
+            100.,
+        )
+        .unwrap();
+        if lowered {
+            assert!(scene(&initial).to_string().contains("\"k\":\"r\""));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&initial).unwrap()["motion"],
+                false
+            );
+            continue;
+        }
+        let key = host.runner.kernel().find_by_test_id("disc")[0];
+        let node = exact_kernel::motion::motion_node(key);
+        for (at, expected) in [(360., 6.), (1000., 12.)] {
+            let batch = host.tick(at);
+            let els = scene(&batch)["els"].as_array().unwrap().clone();
+            assert_eq!(els.len(), 1, "{radius} at {at}: the disc is drawn");
+            let path = els[0]["p"].as_array().unwrap();
+            assert_eq!(path[1].as_f64().unwrap(), expected);
+            assert_eq!(
+                host.engine
+                    .sampled_value(node, exact_motion::Property::R)
+                    .unwrap()
+                    .x,
+                expected
+            );
+        }
+    }
+}
+
+#[test]
 fn a_blended_svg_samples_its_animated_backdrop() {
     for mode in ["normal", "multiply"] {
         let app = format!(

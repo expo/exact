@@ -562,8 +562,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     func updateMaterial() {
         let requested = props["backgroundMaterial"]
-        defer { applyBackdrop(); syncGlassSlot(); syncGlassGroup() }
-        let kind = requested ?? (needsSheetMaterial ? "sheet" : nil)
+        defer { applyBackdrop(); syncGlassSlot(); syncGlassGroup(); syncMenuPanelScroll() }
+        let kind = requested ?? (needsSheetMaterial ? "sheet" : paintedMenuRadius != nil && !unevenCorners ? "glass" : nil)
         if materialKind != kind {
             releaseGlassIsolation()
             let children = container.subviews.compactMap { $0 as? NodeView }
@@ -638,7 +638,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         guard let materialView else { return }
         materialView.wantsLayer = true
         guard let materialLayer = materialView.layer else { return }
-        let radius = BorderPaint.clip(materialLayer, in: bounds, radii: cornerSizes(in: bounds))
+        let radius = BorderPaint.clip(materialLayer, in: bounds, radii: effectiveCornerSizes(in: bounds))
         if #available(macOS 26.0, *), let glass = materialView as? NSGlassEffectView {
             glass.cornerRadius = radius
         } else {
@@ -1304,7 +1304,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         layerPaintCache = nil
         if hasBoxPaint || clipsToBounds || clipBox != nil { applyClipRadius() }
         syncEllipticalClip()
-        if materialView != nil { applyMaterialRadius() }
+        if materialView != nil { applyMaterialRadius(); syncMenuPanelScroll() }
         if !backdropOperations.isEmpty { applyBackdrop() }
         // Border, gradient and image sublayers follow the new size.
         if layerBoxEligible && (hasBoxPaint || kind == "image") { needsDisplay = true }

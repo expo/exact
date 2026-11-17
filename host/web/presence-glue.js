@@ -399,17 +399,22 @@ function createPresence(root) {
     // Before a batch's ops: the place of every view that declares the row or
     // gains it here, with what it has still to go (a view that gains the row
     // moves from where it was, as a CSS transition gained with its change
-    // runs), then the leaving views, before any op moves them.
+    // runs), then the leaving views, before any op moves them. A batch that
+    // changes no tree moves no view, so none is measured: the JS target
+    // says which (`still`, rt.js `commit`), and the wasm host's then holds
+    // only its clock stamp (`at`). A view the page no longer holds is
+    // tracked no longer, whether or not the batch measures.
     before(batch, views) {
       first = new Map();
       for (const el of surfaces) reveal(flips.get(el));
+      for (const el of tracked) if (!el.isConnected) tracked.delete(el);
+      const still = batch.still ?? !batch.ops?.some(op => op.op !== 'at');
       if (batch.presenceSnap) { for (const el of tracked) stop(el); }
-      else {
+      else if (!still) {
         const place = measure();
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
-          if (!el?.isConnected) { tracked.delete(el); continue; }
-          const at = place(el);
+          const at = el && place(el);
           if (at) first.set(el, [at, going(el)]);
         }
       }

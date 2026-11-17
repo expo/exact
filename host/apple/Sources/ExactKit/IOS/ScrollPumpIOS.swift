@@ -17,6 +17,8 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     private var epoch = 0
     private var inScroll = false
     private var travel: [UInt32: Travel] = [:]
+    private var rasterLimited = false
+    private var rasterTravelTimer: Timer?
     private var costs: [UInt32: FillCost] = [:]
     /// Seconds a glimpse took per row it built, per list.
     private var glimpseCosts: [UInt32: TimeInterval] = [:]
@@ -46,6 +48,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     deinit {
         FrameClock.shared.drop(self)
         restTimer?.invalidate()
+        rasterTravelTimer?.invalidate()
         RasterWorkers.shared.travelling(self, false)
         if let turnObserver { CFRunLoopRemoveObserver(CFRunLoopGetMain(), turnObserver, .commonModes) }
     }
@@ -58,6 +61,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     private var restTimer: Timer?
     /// Travel (points/s) past which images decode one at a time.
     static let fastTravel = 20_000.0
+    private static let travelLifetime = 0.15
 
     /// `step`: the speed of a step taken for a jump, which the next step
     /// confirms as travel when it repeats it.
@@ -68,7 +72,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         var port: CGFloat, extent: CGFloat, before: CGFloat, after: CGFloat
     }
     private struct Travel {
-        var top: CGFloat, time: TimeInterval, velocity = 0.0, step = 0.0, crossed: CGFloat = 0
+        var top: CGFloat, time: TimeInterval, velocity = 0.0, step = 0.0, crossed: CGFloat = 0, previousCrossed: CGFloat = 0
         var layout: ScrollLayout
     }
     private struct FillCost {
@@ -87,9 +91,10 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         }
     }
     func velocity(_ id: UInt32) -> Double {
-        guard !ExactEnv.agentFreezes, let t = travel[id], clock() - t.time < 0.15 else { return 0 }
+        guard !ExactEnv.agentFreezes, let t = travel[id], clock() - t.time < Self.travelLifetime else { return 0 }
         return t.velocity
     }
+    func leadTime(_ id: UInt32) -> Double { refreshInterval * 2 + (presenter?.collections.fillLatency[id] ?? 0) }
     /// Ports a frame at or past which a list outruns its slices.
     static let outrun = 1.0
     /// Whether `id` travels a port or more each frame (LLP 1050.000 D2 as
@@ -111,8 +116,8 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     }
     /// Whether `id`'s last step, within the last frame and a half, crossed a
     /// port: a scroll indicator dragged, whose steps vary too much from frame
-    /// to frame to read as travel, or a long animated scroll. `step`, this
-    /// frame's still unsampled, must cross one too.
+    /// to frame to read as travel, or a long animated scroll. An explicit
+    /// `step` must cross one too.
     func crossing(_ id: UInt32, step: CGFloat? = nil) -> Bool {
         guard let node = presenter?.views[id], let scroll = node.scrollView, let t = travel[id],
               clock() - t.time < refreshInterval * 1.5 else { return false }
@@ -130,9 +135,10 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         guard let p = presenter, let node = p.views[id], let scroll = node.scrollView else { return nil }
         if !p.collections.glimpses.contains(id) {
             let horizontal = p.collections.entries[id]?.snapshot.horizontal == true
-            let at = horizontal ? scroll.contentOffset.x : scroll.contentOffset.y, port = horizontal ? scroll.bounds.width : scroll.bounds.height
-            let step = travel[id].map { abs(at - $0.top) } ?? 0
-            guard crossing(id, step: step) || (scroll.isTracking && port > 0 && step >= port) else { return nil }
+            let port = horizontal ? scroll.bounds.width : scroll.bounds.height
+            let step = travel[id]?.crossed ?? 0
+            let repeated = travel[id].map { $0.previousCrossed >= port && step >= port } ?? false
+            guard (port > 0 && repeated) || (scroll.isTracking && port > 0 && step >= port) else { return nil }
         }
         return glimpseRows(id)
     }
@@ -145,6 +151,15 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         guard rows > 0 else { return }
         let sample = max(0.000001, seconds / Double(rows))
         glimpseCosts[id] = glimpseCosts[id].map { $0 * 0.5 + sample * 0.5 } ?? sample
+    }
+    func sampleScroll(_ node: NodeView) {
+        guard let p = presenter, !p.applying, !p.collections.correcting,
+              p.collections.owns(node.id), !p.collections.animating.contains(node.id),
+              let scroll = node.scrollView else { return }
+        sample(node, now: clock())
+        updateRasterTravel()
+        if p.collections.entries[node.id]?.snapshot.seeking == true,
+           scroll.isTracking || scroll.isDecelerating { p.collections.gestureBegan(node.id) }
     }
     private func sample(_ node: NodeView, now: TimeInterval) {
         guard let scroll = node.scrollView else { return }
@@ -166,6 +181,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
             return
         }
         let delta = top - t.top, elapsed = now - t.time
+        let previousCrossed = elapsed < refreshInterval * 1.5 ? t.crossed : 0
         // A step longer than the port that the travel so far doesn't predict
         // is a jump, not travel: nothing to lead. A fast fling moves more
         // than a small port each frame (an inner strip at 96k pt/s): the
@@ -173,12 +189,13 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         let port = layout.port
         let predicted = CGFloat((t.velocity != 0 ? t.velocity : t.step) * max(elapsed, 0))
         if abs(delta) > port && abs(delta - predicted) > port {
-            travel[node.id] = Travel(top: top, time: now, step: elapsed > 0 ? Double(delta) / max(elapsed, refreshInterval / 2) : 0, crossed: abs(delta), layout: layout)
+            travel[node.id] = Travel(top: top, time: now, step: elapsed > 0 ? Double(delta) / max(elapsed, refreshInterval / 2) : 0, crossed: abs(delta), previousCrossed: previousCrossed, layout: layout)
             return
         }
         if delta != 0, elapsed > 0 {
+            t.previousCrossed = previousCrossed
             let speed = Double(delta) / max(elapsed, refreshInterval / 2)
-            t.velocity = elapsed > 0.15 || speed * t.velocity <= 0 ? speed : t.velocity * 0.5 + speed * 0.5
+            t.velocity = elapsed > Self.travelLifetime || speed * t.velocity <= 0 ? speed : t.velocity * 0.5 + speed * 0.5
             t.top = top; t.time = now; t.crossed = abs(delta); t.layout = layout
         }
         travel[node.id] = t
@@ -198,16 +215,6 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         // The frame sampler measures a scroll's frames, UIKit's deceleration's included
         p.session?.sampler?.activity()
         armRest(after: Self.restDelay)
-        // A correction's move is not the reader's travel (LLP 1070.000 §2.5).
-        // Nor is a smooth correction's frame (`OffsetDriver`).
-        if let node, p.collections.owns(node.id), !p.collections.correcting, !p.collections.animating.contains(node.id) {
-            sample(node, now: lastScroll)
-            // The reader moving the port cancels a request admitted before it
-            // (LLP 1070.000 §2.5): a finger down when it landed drags on from
-            // there, and its sampled travel alone would be lost to each jump.
-            if p.collections.entries[node.id]?.snapshot.seeking == true, let scroll = node.scrollView,
-               scroll.isTracking || scroll.isDecelerating { p.collections.gestureBegan(node.id) }
-        }
         p.leaves.scrolled()
         p.menus.rehostPopovers()
         // What this frame shows has its text before it commits. A pass
@@ -324,8 +331,8 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         }
         return rows
     }
-    /// Frames from the app's clock (`FrameClock`) while a scroll moves or
-    /// work is owed, asked for once per scroll, not once per frame.
+    /// Frames from the app's clock (`FrameClock`) while rows or text owe work,
+    /// with one request shared by successive slices.
     private func start() {
         guard !FrameClock.shared.wants(self) else { return }
         FrameClock.shared.want(self, .scroll, rate: FrameClock.full(on: presenter?.viewport.window?.screen)) { [weak self] in self?.tick($0) }
@@ -350,7 +357,32 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
             presenter?.session?.rest()
         }
     }
-    private func stop() { FrameClock.shared.drop(self); RasterWorkers.shared.travelling(self, false) }
+    private func stop() { FrameClock.shared.drop(self) }
+    private func updateRasterTravel() {
+        let now = clock()
+        let expires = ExactEnv.agentFreezes ? nil : travel.values.lazy
+            .filter { abs($0.velocity) > Self.fastTravel && now - $0.time < Self.travelLifetime }
+            .map { $0.time + Self.travelLifetime }.max()
+        let fast = expires != nil
+        if fast != rasterLimited {
+            rasterLimited = fast
+            RasterWorkers.shared.travelling(self, fast)
+        }
+        // A finger can stay still while covered travel asks for no frames.
+        if let expires {
+            guard rasterTravelTimer == nil else { return }
+            let timer = Timer(timeInterval: expires - now, repeats: false) { [weak self] _ in
+                guard let self else { return }
+                self.rasterTravelTimer = nil
+                self.updateRasterTravel()
+            }
+            rasterTravelTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        } else {
+            rasterTravelTimer?.invalidate()
+            rasterTravelTimer = nil
+        }
+    }
     var observingTurns: Bool { turnObserver != nil }
     private func scheduleAfterScroll() {
         guard !queued else { return }
@@ -389,13 +421,11 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         }
         refreshText(deadline: deadline)
         // One image decode at a time while a list travels fast.
-        RasterWorkers.shared.travelling(self, p.listViews.keys.contains { abs(velocity($0)) > Self.fastTravel })
-        // Frames stay asked for until the scroll has been still for two of
-        // them, so a moving scroll keeps one steady request. Text that waits
-        // only for a worker's slot asks for none: nothing moves, and a slot
+        updateRasterTravel()
+        // Text that waits only for a worker's slot asks for no frames. A slot
         // that frees asks for the next pass (`TextRasterizer.slotFreed`).
         let textNeedsFrames = textPending && p.textRasters.hasRoom
-        if !textNeedsFrames && p.collections.fillPending.isEmpty && now - lastScroll >= refreshInterval * 2 { stop() }
+        if !textNeedsFrames && p.collections.fillPending.isEmpty { stop() }
     }
     private func refreshText(deadline: TimeInterval) {
         guard textPending, let p = presenter, !refreshingText else { return }
@@ -424,14 +454,15 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         afterScroll?.cancel(); afterScroll = nil
         restTimer?.invalidate(); restTimer = nil
         travel.removeAll(); costs.removeAll(); glimpseCosts.removeAll()
+        updateRasterTravel()
         textPending = false; textQueued = false
         lastScroll = -.infinity; lastSlice = -.infinity
     }
     func forget(_ id: UInt32) {
-        travel[id] = nil; costs[id] = nil; glimpseCosts[id] = nil
+        forgetTravel(id); costs[id] = nil; glimpseCosts[id] = nil
     }
     /// A smooth correction ended: no travel sample outlives it.
-    func forgetTravel(_ id: UInt32) { travel[id] = nil }
+    func forgetTravel(_ id: UInt32) { travel[id] = nil; updateRasterTravel() }
 
 }
 #endif

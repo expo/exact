@@ -313,7 +313,7 @@ pub struct Host<D: DataSource> {
     #[cfg(test)]
     finish_passes: usize,
     #[cfg(test)]
-    batch_writes: usize,
+    pub(crate) batch_writes: usize,
     /// The update store's last line this host journaled, so a sync after a check writes it once.
     update_line: Option<String>,
     delivery: Option<&'static crate::delivery::Hooks>,
@@ -538,6 +538,7 @@ impl<D: DataSource> Host<D> {
         );
         exact_runner::page::set_awaits_present(was);
         let mut runner = runner.map_err(HostError::Runner)?;
+        runner.read_only_store(crate::watch_sync::read_only_names());
         // Its own roles from here, not those of the session it replaces (a
         // caller's scope is that one's; LLP 1121 stage 5).
         let _roles = runner.bind_roles();

@@ -3,6 +3,7 @@
   "name": "@exact/background-transfer",
   "version": "1.0.0",
   "substitute": "implementation",
+  "start": "load",
   "shapes": {
     "BackgroundFetchHeader": {
       "name": "string",
@@ -95,12 +96,14 @@
         "default": { "available": false, "state": "unknown" },
         "targets": {
           "ios": { "available": true, "state": "granted" },
-          "macos": { "available": true, "state": "granted" }
+          "macos": { "available": true, "state": "granted" },
+          "android": { "available": true, "state": "granted" }
         }
       }
     },
     { "event": "backgroundfetchsuccess", "on": "root", "raised": "wake", "args": ["BackgroundFetchRegistration"], "hold": 16, "budget": 30000 },
     { "event": "backgroundfetchfail", "on": "root", "raised": "wake", "args": ["BackgroundFetchRegistration"], "hold": 16, "budget": 30000 },
-    { "event": "backgroundfetchabort", "on": "root", "raised": "wake", "args": ["BackgroundFetchRegistration"], "hold": 16, "budget": 30000 }
+    { "event": "backgroundfetchabort", "on": "root", "raised": "wake", "args": ["BackgroundFetchRegistration"], "hold": 16, "budget": 30000 },
+    { "event": "backgroundfetchclick", "on": "root", "raised": "activation", "args": ["BackgroundFetchRegistration"], "hold": 16 }
   ]
 }

@@ -243,6 +243,23 @@ impl<D: DataSource> Presenter<D> {
             .dispatch_at(root, Event::Navigate(location), now_ms)
             .or(self.after_commit())
     }
+
+    /// The launch URL of the first window to show a host that booted with
+    /// nothing showing it (LLP 1133.017 D7: Android's boot for a wake), read
+    /// as `EXACT_LAUNCH_URL` is at a boot. The refusal, else `None`.
+    pub fn launch_location(&mut self, href: &str, now_ms: f64) -> Option<String> {
+        let location = crate::app::incoming_location_at(href, self.host.web_mount.as_ref());
+        self.launch_at(&location, now_ms)
+    }
+
+    /// The router as a boot at `location` makes it ([`Runner::host_launch`]).
+    pub(crate) fn launch_at(&mut self, location: &str, now_ms: f64) -> Option<String> {
+        match self.host.host_launch(location, now_ms) {
+            Ok(true) => self.after_commit(),
+            Ok(false) => Some(format!("launch {location}: no route matches it")),
+            Err(error) => Some(error),
+        }
+    }
 }
 
 fn inline_sources(node: &exact_kernel::NodeRef<'_>) -> Vec<ViewId> {

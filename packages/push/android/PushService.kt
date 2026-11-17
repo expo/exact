@@ -7,8 +7,7 @@
 // - In front Firebase hands the message to [onMessageReceived] instead, which shows it the same way: the channel if
 //   the app declares it, the tag (Firebase's key: the tag, id 0, so a local post and `closeNotification` meet it), and
 //   a tap through the app's alias that opens `data.navigate`, or the app.
-// - A data message (no `notification`) is journaled and raises nothing: a server's wake needs Android's headless
-//   session and its own ruling (D8).
+// - A data message (no `notification`) is journaled and raises nothing: a server's wake needs its own ruling (D8).
 package exact.push
 
 import android.app.Notification

@@ -1,5 +1,8 @@
 // The app composition is chosen by the baked target's store level (LLP 1030 D4).
 import ExactKit
+#if EXACT_WATCH_SYNC && os(iOS)
+import ExactWatchSync
+#endif
 #if EXACT_LINK_GROUPED_LISTS
 import ExactGroupedLists
 #endif
@@ -61,6 +64,9 @@ public enum ExactComposition {
         ExactPresence.install()
         #endif
         let app = ExactApp.shared
+        #if EXACT_WATCH_SYNC && os(iOS)
+        app.replicateStore = ExactWatchSync.phone { line in app.sessions.forEach { $0.log(line) } }
+        #endif
         ExactUpdates.install(on: app)
         return app
     }()

@@ -1,5 +1,5 @@
 // The Android manifest fragment's allow-list (LLP 1133.030 D9): what a package may add, and each refusal by name.
-import { test } from 'bun:test';
+import { test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -337,4 +337,45 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   assert.match(all, /android:scheme="other.test"/);
   assert.match(all, /dev.exact.auth.callbacks/);
   assert.match(all, /android.intent.action.SEND/);
+});
+
+test('transfer fragments name only WorkManager dataSync and a protected package job', () => {
+  const impl = { extension: 'background-transfer', className: 'exact.backgroundtransfer.Module', manifest: {
+    services: [{ name: 'androidx.work.impl.foreground.SystemForegroundService', foregroundServiceType: 'dataSync' },
+      { name: 'exact.backgroundtransfer.TransferJob', permission: 'android.permission.BIND_JOB_SERVICE' }],
+    permissions: ['android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'],
+  } };
+  const xml = manifestFragment([impl]);
+  expect(xml).toContain('android:foregroundServiceType="dataSync" tools:node="merge"');
+  expect(xml).toContain('android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE"');
+  expect(fragmentPermissions([impl])).toEqual(impl.manifest.permissions);
+  for (const service of [
+    { name: 'androidx.work.impl.foreground.SystemForegroundService' },
+    { name: 'androidx.work.impl.foreground.SystemForegroundService', foregroundServiceType: 'camera' },
+    { name: 'androidx.work.impl.foreground.SystemForegroundService', foregroundServiceType: 'dataSync', directBootAware: true },
+    { name: 'other.library.Service', foregroundServiceType: 'dataSync' },
+    { name: 'exact.backgroundtransfer.TransferJob', permission: 'android.permission.BIND_JOB_SERVICE', directBootAware: true },
+  ]) expect(() => manifestFragment([{ ...impl, manifest: { services: [service] } }])).toThrow();
+});
+
+test('background transfers export only their imported Android implementation', () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-transfer-export-'));
+  try {
+    mkdirSync(resolve(app, 'node_modules/@exact'), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, '../packages/background-transfer'), resolve(app, 'node_modules/@exact/background-transfer'), 'dir');
+    writeFileSync(resolve(app, 'app.contract'), 'component App\n  view\n    text "plain"\n');
+    assert.deepEqual(androidImplementations(app, {}), []);
+    const bound = androidImplementations(app, { 'background-transfer': '@exact/background-transfer' });
+    assert.equal(bound.length, 1);
+    assert.equal(bound[0].className, 'exact.backgroundtransfer.BackgroundTransferModule');
+    assert.deepEqual(bound[0].maven, ['androidx.work:work-runtime:2.12.0']);
+    assert.ok(fragmentPermissions(bound).includes('android.permission.RUN_USER_INITIATED_JOBS'));
+    assert.ok(!fragmentPermissions(bound).includes('android.permission.POST_NOTIFICATIONS'));
+    const fragment = manifestFragment(bound);
+    assert.match(fragment, /exact\.backgroundtransfer\.TransferJob.*android:permission="android.permission.BIND_JOB_SERVICE"/);
+    assert.match(fragment, /SystemForegroundService.*android:foregroundServiceType="dataSync"/);
+    assert.match(fragment, /exact\.backgroundtransfer\.TransferBoot/);
+    assert.match(fragment, /android.intent.action.BOOT_COMPLETED/);
+    assert.match(fragment, /android.intent.action.MY_PACKAGE_REPLACED/);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });

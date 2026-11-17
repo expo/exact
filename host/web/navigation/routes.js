@@ -1085,52 +1085,6 @@ export const navigation = {
       drain();
     }
   },
-  // @ref LLP 1116.006 D4 — the agent's `back` from a route: the browser's Back where the entry beneath is the route beneath, else (a reload left none) the app bar's.
-  back(hostRoot) {
-    const nav = hostRoot?.querySelector("[navigationBack]"), routes = nav ? routesOf(nav) : [], route = nav && selectedRoute(nav), at = routes.indexOf(route), way = sheet(route) ? "sheet" : "route", key = nav?.getAttribute("navigationKey"), kept = () => nav.getAttribute("navigationKey") === key ? { refused: "the app kept the route: its Back control is disabled, its closedby is \"none\", or its navigate changed nothing (logs say which)" } : {};
-    if (at < 1) {
-      return { error: "back: nothing to go back from: no dialog is open, and no route is beneath the selected one" };
-    }
-    if (cursor > first && written[cursor]?.id === Number(route.getAttribute("navigationKey")) && written[cursor - 1]?.id === Number(routes[at - 1].getAttribute("navigationKey"))) {
-      return navigation.travel(nav, -1).then((r) => ({
-        ...r,
-        back: way,
-        ...kept()
-      }));
-    }
-    appBack(route);
-    return {
-      back: way,
-      delivery: "app-bar",
-      ...kept()
-    };
-  },
-  // @ref LLP 1038 D11 — the agent uses the real browser traversal.
-  travel(nav, delta) {
-    if (nav !== root.querySelector("[navigationBack]")) {
-      return { error: "history target is not the navigation root" };
-    }
-    if (!Number.isInteger(delta) || delta === 0) {
-      return {
-        malformed: true,
-        error: "history must be a nonzero integer"
-      };
-    }
-    return new Promise((resolve) => {
-      const timer = setTimeout(finish, 1e3);
-      // Once the traversal's tree update has run, which a view transition defers (shared.js `afterCommit`).
-      function finish() {
-        clearTimeout(timer);
-        waiters.delete(finish);
-        (globalThis.exact?.afterCommit ?? ((run) => run()))(() => resolve({
-          history: delta,
-          delivery: "platform"
-        }));
-      }
-      waiters.add(finish);
-      history.go(delta);
-    });
-  },
   project(root, log) {
     if (activationRequired.has(root) && !activated.has(root)) {
       return;
@@ -1284,25 +1238,74 @@ export const navigation = {
     globalThis.exact?.orientationLockGlue?.projected(root);
     pageTitle();
   },
-  observation(root) {
-    const nav = root.querySelector("[navigationBack]");
-    const routes = routesOf(nav);
-    const key = nav?.getAttribute("navigationKey") ?? null;
-    const index = routes.findIndex((r) => r.getAttribute("navigationKey") === key);
-    const selected = index >= 0 ? routes[index] : null;
-    return {
-      url: last?.url ?? null,
-      route: key,
-      stack: index >= 0 ? routes.slice(0, index + 1).map((r) => r.getAttribute("navigationKey")) : [],
-      presentation: ["modal", "fullscreen"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
-      source: selected?.getAttribute("navigationSource") ?? null,
-      closedby: selected?.getAttribute("closedby") ?? null,
-      transition: {
-        interactive: false,
-        phase: "idle"
-      },
-      popover: popoverObservation(root)
-    };
-  }
+  // The agent's methods, which a production bake leaves out with the agent (LLP 1069.007 D2, LLP 1047.002 D4.1).
+  ...(AGENT_ADMITTED && {
+    // @ref LLP 1116.006 D4 — the agent's `back` from a route: the browser's Back where the entry beneath is the route beneath, else (a reload left none) the app bar's.
+    back(hostRoot) {
+      const nav = hostRoot?.querySelector("[navigationBack]"), routes = nav ? routesOf(nav) : [], route = nav && selectedRoute(nav), at = routes.indexOf(route), way = sheet(route) ? "sheet" : "route", key = nav?.getAttribute("navigationKey"), kept = () => nav.getAttribute("navigationKey") === key ? { refused: "the app kept the route: its Back control is disabled, its closedby is \"none\", or its navigate changed nothing (logs say which)" } : {};
+      if (at < 1) {
+        return { error: "back: nothing to go back from: no dialog is open, and no route is beneath the selected one" };
+      }
+      if (cursor > first && written[cursor]?.id === Number(route.getAttribute("navigationKey")) && written[cursor - 1]?.id === Number(routes[at - 1].getAttribute("navigationKey"))) {
+        return navigation.travel(nav, -1).then((r) => ({
+          ...r,
+          back: way,
+          ...kept()
+        }));
+      }
+      appBack(route);
+      return {
+        back: way,
+        delivery: "app-bar",
+        ...kept()
+      };
+    },
+    // @ref LLP 1038 D11 — the agent uses the real browser traversal.
+    travel(nav, delta) {
+      if (nav !== root.querySelector("[navigationBack]")) {
+        return { error: "history target is not the navigation root" };
+      }
+      if (!Number.isInteger(delta) || delta === 0) {
+        return {
+          malformed: true,
+          error: "history must be a nonzero integer"
+        };
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(finish, 1e3);
+        // Once the traversal's tree update has run, which a view transition defers (shared.js `afterCommit`).
+        function finish() {
+          clearTimeout(timer);
+          waiters.delete(finish);
+          (globalThis.exact?.afterCommit ?? ((run) => run()))(() => resolve({
+            history: delta,
+            delivery: "platform"
+          }));
+        }
+        waiters.add(finish);
+        history.go(delta);
+      });
+    },
+    observation(root) {
+      const nav = root.querySelector("[navigationBack]");
+      const routes = routesOf(nav);
+      const key = nav?.getAttribute("navigationKey") ?? null;
+      const index = routes.findIndex((r) => r.getAttribute("navigationKey") === key);
+      const selected = index >= 0 ? routes[index] : null;
+      return {
+        url: last?.url ?? null,
+        route: key,
+        stack: index >= 0 ? routes.slice(0, index + 1).map((r) => r.getAttribute("navigationKey")) : [],
+        presentation: ["modal", "fullscreen"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
+        source: selected?.getAttribute("navigationSource") ?? null,
+        closedby: selected?.getAttribute("closedby") ?? null,
+        transition: {
+          interactive: false,
+          phase: "idle"
+        },
+        popover: popoverObservation(root)
+      };
+    },
+  }),
 };
 export { queue, sheet, commit, root, log, settled, AGENT_ADMITTED, agentParameters, pop, last };

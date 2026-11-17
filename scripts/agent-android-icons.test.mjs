@@ -134,7 +134,7 @@ test("an APK is stale when an icon it packaged changed or is gone, and not when 
   const { files: sources } = androidIcons({ icons: [{ src: 'assets/icon.png' }] }, dir, resolve(dir, 'res'));
   const apk = resolve(dir, 'build/app-release.apk'), icon = resolve(dir, 'assets/icon.png');
   mkdirSync(resolve(dir, 'build'));
-  writeFileSync(resolve(dir, 'build/exact-build.json'), JSON.stringify({ started: new Date().toISOString(), library: resolve(dir, 'libapp.so'), workspace: dir, sources }));
+  writeFileSync(resolve(dir, 'build/exact-build.json'), JSON.stringify({ started: new Date().toISOString(), abis: ['arm64-v8a'], libraries: [resolve(dir, 'libapp.so')], workspace: dir, sources }));
   const app = { dir };
   assert.deepEqual(apkChanges(app, apk), []);
   const later = new Date(Date.now() + 60_000);

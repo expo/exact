@@ -4,6 +4,9 @@
 //!
 //! - The Linux host's one display is its KMS connector, or the headless
 //!   buffer, at the host's scale; the pointer is the one the host draws.
+//! - The Windows host's are its monitors, laid out into CSS pixels, and
+//!   the system's pointer (`host/windows/src/displays.rs`), or with no
+//!   window the headless buffer; its `windows/exact.json` names this file.
 //! - Natively no permission guards the displays: the status is `granted`
 //!   wherever the host reports them, and `available: false` elsewhere.
 //! - The source watches the host's displays while this session reads it,

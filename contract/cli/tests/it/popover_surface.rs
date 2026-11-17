@@ -1,7 +1,8 @@
 //! A popover's default surface (LLP 1021; theme2 2026-10-21 18:45, 19:55):
 //! the compiler marks a `popover` whose author wrote no background, border,
 //! shadow or material, on it or its class, in any state (`defaultSurface`), for a host
-//! that paints the popover to draw the platform's surface under it.
+//! that paints the popover to draw the platform's surface under it. A menu is
+//! marked as any popover is, for a host that paints its rows (expo/exact#551).
 
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
@@ -47,6 +48,23 @@ component App
       column id="menu" popover="auto" role="menu" testId="menu"
         button testId="item"
           text "Item"
+      column id="menu-inked" popover="auto" role="menu" border-radius=8 padding=4 testId="menu-inked"
+        :hover
+          color="#0000ff"
+        :active
+          opacity=0.5
+      column id="menu-filled" popover="auto" role="menu" background-color="#0000ff" testId="menu-filled"
+      column id="menu-flat" popover="auto" role="menu" box-shadow="none" testId="menu-flat"
+      column id="menu-classed" popover="auto" role="menu" class=Card testId="menu-classed"
+      column id="menu-hovered" popover="auto" role="menu" testId="menu-hovered"
+        :hover
+          background-color="transparent"
+      column id="menu-focused" popover="auto" role="menu" testId="menu-focused"
+        :focus-visible
+          box-shadow="none"
+      column id="menu-pressed" popover="auto" role="menu" testId="menu-pressed"
+        :active
+          background-color="transparent"
       column testId="plain"
         text "No popover"
 "##;
@@ -74,8 +92,23 @@ fn a_popover_whose_author_wrote_no_surface_is_marked_for_the_platforms() {
     assert!(marked("bare"), "no surface: the platform's");
     assert!(marked("round"), "a corner draws no surface");
     assert!(marked("clipped"), "nor does a background's clip alone");
+    assert!(marked("menu"), "a menu with no surface: the platform's");
+    assert!(marked("menu-inked"), "a state's ink draws no surface");
     for t in [
-        "filled", "classed", "shadowed", "glass", "hovered", "pressed", "menu", "plain", "open",
+        "filled",
+        "classed",
+        "shadowed",
+        "glass",
+        "hovered",
+        "pressed",
+        "plain",
+        "open",
+        "menu-filled",
+        "menu-flat",
+        "menu-classed",
+        "menu-hovered",
+        "menu-focused",
+        "menu-pressed",
     ] {
         assert!(!marked(t), "{t}");
     }

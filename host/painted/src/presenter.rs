@@ -66,6 +66,8 @@ mod group;
 mod hatch;
 mod history;
 pub mod ime;
+#[cfg(test)]
+mod launch_tests;
 mod layout_json;
 mod media;
 mod number;
@@ -207,6 +209,12 @@ pub struct Presenter<D: DataSource> {
     pub(crate) surfaces: crate::surfaces::Surfaces,
     module: Option<crate::delivery::Module>,
     painted: bool,
+    /// Nothing shows the session, so its data module activates with no
+    /// pixel ([`Presenter::activate_unshown`]), until a frame is displayed.
+    unshown: bool,
+    /// A launch share's copies ([`Presenter::launch_share`]), until storage
+    /// is configured.
+    launch_share: Option<(exact_runner::share_in::Claimed, crate::picker::Held)>,
     /// Why the data module did not activate ([`Presenter::activation_error`]).
     activation_failed: Option<String>,
     dev: Option<crate::fetch::Poller>,
@@ -660,6 +668,8 @@ impl<D: DataSource> Presenter<D> {
             surfaces: Default::default(),
             module: None,
             painted: false,
+            unshown: false,
+            launch_share: None,
             activation_failed: None,
             dev: None,
             pending_dev: None,

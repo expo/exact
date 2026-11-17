@@ -1087,7 +1087,11 @@ report unsupported. Scope these tests with `on web`.
 list's row into view by its key, so a row outside the rendered window can be
 tapped by its own id on the next step. `type "id" "text"` sets the field's
 value, as Playwright's `fill`; `append` adds the text after the value the tree
-shows (a prefilled reply). `type "id" key "Name"` presses the key;
+shows (a prefilled reply). `type "id" key "Name"` presses the key (on iOS,
+ArrowRight or ArrowLeft at an `input type="range"` that shows its `UISlider`
+is the slider's accessibility increment or decrement, the call VoiceOver's
+swipe makes; its halves are that step's keydown with the move, then its
+keyup, and a held key's repeats move it again);
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
 web page reloads its current URL in the same profile, keeping Back and Forward
@@ -2740,6 +2744,13 @@ macOS, iOS and iPadOS with a hardware keyboard, Linux):
   Tab moves the focus, arrows move the caret; on the web arrows, Space and
   the page keys also scroll the page or the focus's scroller (a native
   scroller does not scroll by key, so there is nothing there to prevent).
+  On a native host a screen reader's step of an `input type="range"`
+  (VoiceOver's swipe up or down; the increment and decrement macOS and
+  Windows offer; Android's scroll forward and backward) is its arrow keydown
+  first, ArrowRight to raise and ArrowLeft to lower (swapped where its
+  `direction` is `rtl`): a handler that calls `preventDefault()` makes the
+  move itself, as it does for a keyboard's arrow on the web, and otherwise
+  the host steps the range.
   Where Exact paints the group (on the web, Linux, Windows and Android's
   reader always; on the Mac and iOS where no segmented control, sidebar,
   toolbar or tab bar stands in for it), a

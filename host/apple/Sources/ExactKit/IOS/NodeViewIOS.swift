@@ -16,6 +16,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     // The flags, together after `id`: each `Bool` between wider fields
     // took a word of its own, and every view pays its stored properties
     // (a 768-byte block, from 1,024).
+    var intersectListening = false
     var clipboardListening = false
     var paintLifted = false
     var paintGhost = false
@@ -118,6 +119,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package var handlers: Set<String> = [] {
         didSet {
             trackClipboardHandlers(true)
+            trackIntersections()
             updateContextGestures()
             updateSwipeGesture()
             updateLayoutPan()
@@ -261,6 +263,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     weak package var presenter: Presenter? {
         didSet {
+            trackIntersections(previous: oldValue)
             if clipboardListening { oldValue?.clipboardHandlerCount -= 1; clipboardListening = false }
             trackClipboardHandlers(true)
             oldValue?.owedText.remove(id)
@@ -617,7 +620,10 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         presenter = nil
     }
 
-    deinit { if clipboardListening { presenter?.clipboardHandlerCount -= 1 } }
+    deinit {
+        if clipboardListening { presenter?.clipboardHandlerCount -= 1 }
+        if intersectListening { presenter?.intersectHandlerCount -= 1 }
+    }
 
     init(id: UInt32, kind: String, presenter: Presenter) {
         self.id = id
@@ -703,36 +709,6 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// Where layout put this box and where it is drawn (`PixelGridIOS.swift`).
     package var grid: GridPlace?
 
-    /// The end the reader was following moved during their interaction:
-    /// settle there when it ends, as a browser's scroll anchoring does.
-    package func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { presenter?.session?.frameHealth.endScroll(scrollView) }; pagedDragEnded(scrollView)
-        guard scrollView === self.scrollView else { return }
-        // A follow of the end that animates ends with its animation.
-        if !decelerate, !followEndIfOwed() { endScroll() }
-    }
-    package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { presenter?.session?.frameHealth.endScroll(scrollView); if scrollView === self.scrollView, !followEndIfOwed() { scrollMayHaveEnded(scrollView) } }
-    package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
-        followingEndAnimated = false; authoredScrollAnimating = false
-        presenter?.elementScrolls.revealEnded(scrollView)
-        // A smooth correction's driver ends its own motion (`OffsetDriver`);
-        // a UIKit animation's end is not its end.
-        if let c = presenter?.collections, c.offsetDrivers[id] != nil || c.startOwed.contains(id) { return }
-        presenter?.collections.animationEnded(id, atTarget: endedAtTarget(scrollView))
-        scrollMayHaveEnded(scrollView)
-    }
-    /// Whether it started an animation.
-    @discardableResult private func followEndIfOwed() -> Bool {
-        guard followsEndAfterInteraction, let sv = scrollView else { return false }
-        followsEndAfterInteraction = false
-        let maximum = max(-sv.adjustedContentInset.top, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
-        anchoredScrollTop = maximum
-        guard sv.contentOffset.y >= maximum - 80, abs(sv.contentOffset.y - maximum) > 0.5, !authorOwnsScroll(sv) else { return false }
-        sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: maximum), in: sv), animated: true)
-        return true
-    }
-
     package func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         if let session = presenter?.session { session.frameHealth.beginScroll(scrollView, session: session) }
         presenter?.elementScrolls.userScrolled(scrollView) // its own scroller, or a grouped list's collection
@@ -760,11 +736,13 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if let post { Presenter.endScrollSignpost(post) }
             HostPhases.shared.end(phase)
         }
+        presenter.collections.advanceScrollSequence(id)
+        presenter.scrollPump.sampleScroll(self)
         // The kernel's authored frames already include this content room.
         // Keep the physical UI inset basis, but do not count native padding twice.
         let room = extras?.nativeScrollContentInsets ?? .zero
         presenter.onScrolled?(id, Double(scrollView.contentOffset.x + room.left), Double(scrollView.contentOffset.y + room.top + pageBand.top))
-        presenter.stickies.scrolled(id); presenter.collections.changed(id, user: true)
+        presenter.stickies.scrolled(id); presenter.collections.changed(id, user: true, sequenceAdvanced: true)
         #if os(iOS)
         if swipeOwner, scrollView.isTracking { presenter.swipeActions.painted.scrolled(self) }
         #endif

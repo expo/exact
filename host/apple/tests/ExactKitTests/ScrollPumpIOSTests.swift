@@ -363,6 +363,64 @@ final class ScrollPumpIOSTests: XCTestCase {
         XCTAssertFalse(p.scrollPump.asksForFrames, "no pass queued and no display link")
     }
 
+    func testQuietFastTravelLimitsDecodesUntilItSlowsOrEnds() throws {
+        let p = Presenter()
+        mount(p)
+        defer { p.reset(); window.isHidden = true }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]],
+            ["op": "collections", "items": [["view": 1, "revision": 1, "scrollSequence": 0,
+                "count": 1000, "totalExtent": 100_000, "pending": false, "rows": []]]],
+            ["op": "roots", "ids": [1]], ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 400],
+            ["op": "content", "id": 1, "w": 400, "h": 100_000],
+        ]))
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scrollView)
+        p.scrollPump.reset()
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        var time = CACurrentMediaTime()
+        p.scrollPump.clock = { time }
+        p.scrollPump.sampleScroll(node)
+        time += 1.0 / 60
+        scroll.contentOffset.y = 360
+        XCTAssertGreaterThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertTrue(RasterWorkers.shared.single, "quiet frames still keep the second decoder idle")
+        p.scrollPump.pump()
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertTrue(RasterWorkers.shared.single, "giving up the display link does not end travel")
+        let fills = p.scrollPump.fillPasses, flushes = p.collections.flushes
+        time += 0.16
+        XCTAssertEqual(p.scrollPump.velocity(1), 0)
+        waitFor("the fast sample expires while the finger stays still") { !RasterWorkers.shared.single }
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertEqual(p.scrollPump.fillPasses, fills, "expiry needs no pump")
+        XCTAssertEqual(p.collections.flushes, flushes, "expiry sends no report")
+        for _ in 0..<6 {
+            time += 1.0 / 60
+            scroll.contentOffset.y += 360
+        }
+        XCTAssertTrue(RasterWorkers.shared.single, "fresh travel limits decodes again")
+        time += 1.0 / 60
+        scroll.contentOffset.y += 1
+        XCTAssertLessThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
+        XCTAssertFalse(RasterWorkers.shared.single)
+        for _ in 0..<3 {
+            time += 1.0 / 60
+            scroll.contentOffset.y += 360
+        }
+        XCTAssertGreaterThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
+        XCTAssertTrue(RasterWorkers.shared.single)
+        p.collections.rested(1)
+        XCTAssertFalse(RasterWorkers.shared.single, "rest clears the latch without another pump")
+        time += 1.0 / 60
+        scroll.contentOffset.y += 360
+        time += 1.0 / 60
+        scroll.contentOffset.y += 360
+        XCTAssertTrue(RasterWorkers.shared.single)
+        p.scrollPump.reset()
+        XCTAssertFalse(RasterWorkers.shared.single)
+    }
+
     func testAScrollOverTextWithoutItsPixelsAsksForAPass() throws {
         let session = fixture("pump-owed")
         defer { session.destroy() }

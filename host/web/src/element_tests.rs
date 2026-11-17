@@ -769,3 +769,38 @@ fn an_active_descendant_is_written_as_the_aria_attribute() {
         );
     }
 }
+
+/// LLP 1047.003 D1: every attribute `props_of` writes by name (an `insert` or
+/// `get_or_insert_with` of a literal, in element.rs and the symbol marks) is in
+/// `attributes_by_data`, which the JS target's build counts where data sets a
+/// node's props or styles; one missing there could lose its rules.
+#[test]
+fn every_attribute_props_of_derives_is_one_data_can_give() {
+    let source = [
+        include_str!("element.rs"),
+        include_str!("element_symbol.rs"),
+    ]
+    .concat();
+    let body = &source[source.find("pub fn props_of").unwrap()..];
+    let listed: std::collections::BTreeSet<&str> = [
+        NodeType::View,
+        NodeType::Control,
+        NodeType::TextInput,
+        NodeType::Image,
+    ]
+    .into_iter()
+    .flat_map(super::attributes_by_data)
+    .collect();
+    let mut missing = Vec::new();
+    for call in ["insert(", "get_or_insert_with("] {
+        for at in body.match_indices(call).map(|(at, _)| at + call.len()) {
+            let rest = body[at..].trim_start();
+            if let Some(name) = rest.strip_prefix('"').and_then(|r| r.split('"').next()) {
+                if name != "data-" && !listed.contains(name) {
+                    missing.push(name.to_owned());
+                }
+            }
+        }
+    }
+    assert_eq!(missing, Vec::<String>::new());
+}

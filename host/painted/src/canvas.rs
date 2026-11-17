@@ -193,6 +193,9 @@ pub mod presence;
 #[path = "canvas/present.rs"]
 mod present;
 #[cfg(target_os = "android")]
+#[path = "canvas/secrets.rs"]
+pub mod secrets;
+#[cfg(target_os = "android")]
 #[path = "canvas/time.rs"]
 pub mod time;
 #[cfg(target_os = "android")]

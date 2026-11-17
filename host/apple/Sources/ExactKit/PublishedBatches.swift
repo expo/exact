@@ -70,3 +70,21 @@ final class PublishedBatches {
         }
     }
 }
+
+extension ExactSession {
+    /// On the owner: queue a batch for main, in the owner's order.
+    func publish(_ kind: Published, _ completion: RuntimeCompletion) {
+        guard published.append((kind, completion)) else { return }
+        DispatchQueue.main.async { [weak self] in self?.landPublished() }
+    }
+    func landPublished() {
+        if landing { published.yieldDrain(); return }
+        landFill()
+        if published.finishDrain() { DispatchQueue.main.async { [weak self] in self?.landPublished() } }
+    }
+
+    /// A published batch waits to land: any, or one that `which` picks.
+    func hasPublished(_ which: (Batch) -> Bool = { _ in true }) -> Bool {
+        published.contains(which)
+    }
+}

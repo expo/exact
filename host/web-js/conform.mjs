@@ -105,6 +105,7 @@ import { conformArgs } from './conform-args.mjs';
 import { withoutSlots } from './conform-linux.mjs';
 import { WASM_UNBOUND, markUnbound, referenceTapRefused } from './conform-marked.mjs';
 import { clockOnAll, failedTests, parseStep } from './conform-steps.mjs';
+import { tokens as pageTokens } from './page-style.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { reloadWeb } from '../../scripts/agent-test.mjs';
 import { refuseStale, webChanges } from '../../scripts/agent-launch.mjs';
@@ -432,6 +433,7 @@ async function target(t, report) {
 
 async function drive(t, report, targetFail, dir, ws, js) {
   let W, J, L, current;
+  const cut = sheetCut(t.dist);
   let peers = [], diverged = false;
   const live = () => peers.filter(p => p.active);
   const fail = (step, what, field = null, difference = false) => {
@@ -612,6 +614,7 @@ async function drive(t, report, targetFail, dir, ws, js) {
         const [fw, fj] = await pair(() => W.carrier.evaluate(paint), () => J.carrier.evaluate(paint));
         const op = []; diffJSON(fw, fj, 'paint', op); op.forEach(x => differ(step, x)); st += op.length;
       }
+      for (const token of await uncut(J.carrier.evaluate, cut)) { fail(step, `sheet: ${other} has ${token}, which its sheet was cut for`); st++; }
       // Cross-browser pictures are never compared (each engine rasterizes text its own way): both are kept only as
       // evidence for a checkpoint that differed
       if (crossBrowser && st === 0) {
@@ -920,7 +923,15 @@ async function activation(t, report, fail, url, browser) {
 // document for HOLD ms); once the runtime has adopted the settled page,
 // state holds both, the field its text, and the page one root.
 const HOLD = 1500;
+// `sheetCut`: the tokens a JS page's sheet was cut for (LLP 1047.003 D1: the tags and attributes nothing inside the
+// root writes, whose rules left the sheet), from its build's .gen/sheet-cut.json; none for a page served from a URL.
+// `uncut`: those of them an element inside a root has, boot or settled, which that element would show unstyled.
+const sheetCut = dist => new Set(dist && existsSync(resolve(dist, '.gen/sheet-cut.json')) ? JSON.parse(readFileSync(resolve(dist, '.gen/sheet-cut.json'), 'utf8')) : []);
+const uncut = async (evaluate, cut) => !cut.size ? []
+  : [...pageTokens(await evaluate(`[...document.querySelectorAll('#exact-root')].map(root => root.innerHTML).join('')`))].filter(t => cut.has(t));
+
 async function bootPress(t, report, fail, dist, browser) {
+  const cut = sheetCut(dist);
   const step = `${crossBrowser ? `${browser} ` : ''}boot press`;
   const bin = `${t.app}-render`;
   const at = [['linux', `${t.app}-linux`], ['web', `${t.app}-web`]].find(([dir]) => existsSync(resolve(root, 'apps', t.app, dir, 'src/bin', `${bin}.rs`)));
@@ -975,6 +986,7 @@ async function bootPress(t, report, fail, dist, browser) {
           return 'pressed'; })()`).catch(() => null);
       }
       if (pressed !== 'pressed') { fail(pass, pressed === 'late' ? 'the settled page arrived before the boot document could be pressed' : 'no boot document with boot-bump and boot-words'); continue; }
+      for (const token of await uncut(ev, cut)) fail(pass, `sheet: the boot document has ${token}, which its sheet was cut for`);
       let got = null;
       const want = `1 early|early|${focus ? 'boot-words' : ''}|1|`;
       for (const end = Date.now() + 15000; Date.now() < end; await new Promise(z => setTimeout(z, 50))) {
@@ -983,6 +995,7 @@ async function bootPress(t, report, fail, dist, browser) {
         if (got?.startsWith(want)) break;
       }
       if (!got?.startsWith(want)) fail(pass, `after adoption: ${got}, not ${want}… (state|field|focus|roots|title)`);
+      for (const token of await uncut(ev, cut)) fail(pass, `sheet: the settled page has ${token}, which its sheet was cut for`);
       report.steps.push({ target: t.name, step: pass, ...(crossBrowser ? { browser } : {}), differences: got?.startsWith(want) ? 0 : 1 });
     }
   } catch (e) {

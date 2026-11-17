@@ -27,6 +27,7 @@ pub use socket::{Socket, SocketCall};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Store {
     granted: Vec<String>,
+    read_only: Vec<String>,
     scope_reader: ScopeReader,
     /// Why nothing is granted: the grants did not parse.
     unparsed: Option<String>,
@@ -209,6 +210,12 @@ pub struct StoreChange {
     pub read: bool,
 }
 impl Store {
+    /// Names whose durable owner is another host. Reads remain granted.
+    pub fn read_only(&mut self, names: Vec<String>) {
+        self.writes.retain(|w| !names.contains(&w.name));
+        self.read_only = names;
+    }
+
     /// The store for `grants` (its `secret.keep <name>` lines, when the whole
     /// set parses), filled from `snapshot`; an entry the grant does not name
     /// is dropped. A value is bytes: a secret's text, or the runner's own.
@@ -293,6 +300,7 @@ impl Store {
         let opened_locked = presence::settle_entries(&mut values, &presence);
         let opened_with_secrets = opened_locked || values.keys().any(|n| !Store::is_kept(n));
         Store {
+            read_only: Vec::new(),
             granted,
             scope_reader,
             unparsed,
@@ -428,6 +436,9 @@ impl Store {
     /// to persist that bumps no revision, so store-reading resources do not
     /// re-answer because one of them was answered.
     pub(crate) fn keep(&mut self, name: &str, value: Vec<u8>) {
+        if self.read_only.iter().any(|n| n == name) {
+            return;
+        }
         debug_assert!(Store::is_kept(name));
         if self.values.get(name) == Some(&value) {
             return;
@@ -517,6 +528,9 @@ impl Store {
     /// a mandatory line) keeps nothing here: the write carries the value to
     /// the host's backend, which keeps it locked (LLP 1133.010 D5).
     pub fn set(&mut self, name: &str, value: &str) -> Result<(), StoreError> {
+        if self.read_only.iter().any(|n| n == name) {
+            return Err(StoreError::Refused(name.into()));
+        }
         if !self.is_granted(name) {
             return Err(self.refused(name));
         }
@@ -542,6 +556,9 @@ impl Store {
     /// kept); refused outside the grant. Forgetting an absent name leaves
     /// the revision unchanged, so its readers stay current.
     pub fn forget(&mut self, name: &str) -> Result<(), StoreError> {
+        if self.read_only.iter().any(|n| n == name) {
+            return Err(StoreError::Refused(name.into()));
+        }
         if !self.is_granted(name) {
             return Err(self.refused(name));
         }
@@ -566,6 +583,9 @@ impl Store {
     /// Validate a lease for a plain secret. Presence-protected names use the
     /// presence backend, whose unlock and occupancy cannot be bypassed.
     pub fn check_exclusive(&self, name: &str) -> Result<(), StoreError> {
+        if self.read_only.iter().any(|n| n == name) {
+            return Err(StoreError::Refused(name.into()));
+        }
         if !self.is_granted(name) || Store::is_kept(name) {
             return Err(self.refused(name));
         }
@@ -845,6 +865,25 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_owned_names_keep_reads_but_refuse_every_write_path() {
+        let state = format!("{}liked", Store::STATE);
+        let mut store = Store::new(
+            "secret.keep seed\nsecret.keep local",
+            [("seed".into(), b"old".to_vec())],
+        );
+        store.keep(&state, b"false".to_vec());
+        store.read_only(vec!["seed".into(), state.clone()]);
+        assert!(store.take_writes().is_empty());
+        assert_eq!(store.get("seed"), Some("old"));
+        assert!(store.set("seed", "new").is_err());
+        assert!(store.forget("seed").is_err());
+        assert!(store.check_exclusive("seed").is_err());
+        store.keep(&state, b"true".to_vec());
+        assert!(store.take_writes().is_empty());
+        assert!(store.set("local", "yes").is_ok());
+    }
 
     #[test]
     fn forgetting_changes_readers_only_when_a_value_or_presence_was_kept() {

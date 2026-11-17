@@ -1012,6 +1012,9 @@ pub fn resolve_sqlite(
     }
 }
 
+#[path = "app_fs_publish.rs"]
+mod publication;
+
 /// An app file written in pieces beside its target and put in its place
 /// whole (Exact local patch 19): the staging file is removed unless
 /// [`Staged::publish`] renames it over the target.

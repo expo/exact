@@ -10,7 +10,7 @@ pub use widgets::{Configuration, Parameter, Widget};
 mod activities;
 pub use activities::Activity;
 mod watch;
-pub use watch::{WatchEntry, WATCH_KIND};
+pub use watch::{WatchEntry, WatchSync, WATCH_KIND};
 mod variant;
 
 /// The unsuffixed id of the selected variant whose id is `id` (LLP 1030.008

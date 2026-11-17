@@ -4,6 +4,7 @@ use exact_runner::AnchorCorrection;
 
 fn snapshot() -> CollectionSnapshot {
     CollectionSnapshot {
+        window: None,
         fixed: Vec::new(),
         view: 1,
         axis: exact_runner::ListAxis::Vertical,

@@ -93,7 +93,7 @@ export const ALIAS_CATEGORIES = new Set(['android.intent.category.HEALTH_PERMISS
 
 /** The normal permissions a fragment may declare (LLP 1133.031 D12 item 1): `protectionLevel="normal"` in the
  * platform's own manifest, granted at install with no prompt. */
-export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE']);
+export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE', 'android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC']);
 
 /** The normal permissions every bound implementation's fragment declares, which the build adds as `<uses-permission>`
  * beside the grants' (`-Ppermissions`). Throws, naming the package, for any permission not on the list. */
@@ -199,7 +199,18 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
           lines.push(`        <meta-data android:name="${escape(c.name)}" android:${field}="${escape(c[field])}" />`);
           continue;
         }
+        if (kind === 'services' && c.name === 'androidx.work.impl.foreground.SystemForegroundService') {
+          if (c.foregroundServiceType !== 'dataSync' || c.directBootAware !== undefined || c.permission !== undefined || c.actions !== undefined) refuse('gives WorkManager a service declaration other than dataSync');
+          if (!names.has(c.name)) lines.push(`        <service android:name="${c.name}" android:exported="false" android:foregroundServiceType="dataSync" tools:node="merge" />`);
+          names.add(c.name);
+          continue;
+        }
         component(kind, c);
+        if (kind === 'services' && c.permission === 'android.permission.BIND_JOB_SERVICE') {
+          if (c.foregroundServiceType !== undefined || c.directBootAware !== undefined || c.actions !== undefined) refuse('gives a BIND_JOB_SERVICE service a foreground type, direct boot or actions');
+          lines.push(`        <service android:name="${c.name}" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />`);
+          continue;
+        }
         if (kind === 'activities') {
           const actions = c.actions ?? [];
           if (!Array.isArray(actions) || !actions.length) refuse(`gives ${c.name} no actions; an activity is only for one the system starts`);

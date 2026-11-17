@@ -44,7 +44,7 @@ final class ScrollSnapIOSTests: XCTestCase {
         let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
         let scroll = try XCTUnwrap(node.scroll)
         scroll.contentOffset.x = 3000
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
         let first = try XCTUnwrap(snapshot.rows.map(\.index).min())
         XCTAssertGreaterThan(first, 0)

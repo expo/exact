@@ -129,3 +129,5 @@ caltrain-data = { path = "../../apps/caltrain/data" }
 contract = { path = "../../contract/cli" }
 # A scripted socket transport names the URL type its trait takes.
 url = "2.5"
+# A stand-in Java VM's function tables (src/surfaces/android_init_tests.rs).
+jni-sys = "0.3"

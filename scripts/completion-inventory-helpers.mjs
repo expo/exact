@@ -249,7 +249,7 @@ export function helperClassifications(group) {
   ]),
   group("UI input", ["one-shot"], "current focus, menu, accessibility node or reader hit target", "UI-owned",
     "painted presenter routes accessibility, keys and reader hit tests through the live host; top/status.rs owns the current status menu and its input.", [
-    ["painted:host/painted/src/presenter/access.rs", "Presenter::access_step_range Presenter::access_tables"],
+    ["painted:host/painted/src/presenter/access.rs", "Presenter::access_range_keys Presenter::access_step_range Presenter::access_tables"],
     ["painted:host/painted/src/presenter/events.rs", "Presenter::key_event_at"],
     ["painted:host/painted/src/presenter/scrollers.rs", "Presenter::reader_module"],
     ["painted:host/painted/src/presenter/tabs.rs", "Presenter::type_ahead_key"],

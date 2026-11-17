@@ -106,8 +106,10 @@ pub struct IoLinks {
     pub start: StartIo,
 }
 
-/// Read a linked app's stores through its endowed bindings.
-pub type StoreSnapshot = fn(Option<&ibex2::host::Bindings>, &str) -> Vec<(String, Vec<u8>)>;
+/// Read a linked app's stores through its endowed bindings, or say why the
+/// read cannot be used.
+pub type StoreSnapshot =
+    fn(Option<&ibex2::host::Bindings>, &str) -> Result<Vec<(String, Vec<u8>)>, String>;
 
 /// How [`IoLinks`] starts the executor: over the bindings, for the grants,
 /// waking the presenter through the hook.

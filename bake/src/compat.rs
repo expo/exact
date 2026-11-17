@@ -312,16 +312,11 @@ pub(crate) fn store_level_of(manifest: &Manifest, platform: &str, appstore: bool
 }
 
 /// As [`compatibility_id_sources_with_entries`], with the TypeScript module's
-/// receipt and its `env` settings. With a store, the compiled module's sha256
-/// (`module.sha256`) enters the id as `typescriptModule`, so changing it
-/// changes the baked cohort; a receipt without the hash is refused either
-/// way. Signed delivery may carry a replacement module pair within an
-/// installed cohort, subject to its runtime, identity, grants and module
-/// policy; this helper does not decide candidate admission. An Android
-/// binary also records the module's Hermes bytecode version
-/// (`hermesBytecode`): its engine is part of its cohort, since the device
-/// refuses a pair of another version only after downloading it
-/// (LLP 1030.006 D4).
+/// receipt and environment. A receipt requires `module.sha256`; with a store,
+/// it enters the cohort as `typescriptModule`. This helper does not admit
+/// replacement module pairs: delivery checks runtime, identity, grants and
+/// module policy. Android also records `hermesBytecode` in the cohort because
+/// a device discovers a version mismatch only after download (LLP 1030.006 D4).
 #[allow(clippy::too_many_arguments)]
 pub fn compatibility_id_pinned(
     app_dir: &Path,
@@ -407,6 +402,10 @@ pub fn compatibility_id_pinned(
             compat.id = compatibility_digest(&compat.inputs);
         }
     }
+    let sync = manifest.watch()?.map(|w| w.sync).unwrap_or_default();
+    contract::watch_sync::grants(&sync, compat.inputs["grantCeiling"].as_str().unwrap_or(""))?;
+    compat.inputs["watchSync"] = contract::watch_sync::identity(&sync, plan.as_ref())?;
+    compat.id = compatibility_digest(&compat.inputs);
     crate::reach::derive(app_dir, platform, plan.as_ref(), &mut compat)?;
     localizations(platform, &mut compat);
     crate::sandbox::derive(app_dir, platform, plan.as_ref(), &mut compat);
@@ -1494,3 +1493,6 @@ mod notification_service_tests;
 #[cfg(test)]
 #[path = "compat_file_handlers_tests.rs"]
 mod file_handlers_tests;
+#[cfg(test)]
+#[path = "compat_watch_sync_tests.rs"]
+mod watch_sync_tests;

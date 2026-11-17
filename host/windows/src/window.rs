@@ -230,6 +230,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         return 1;
     }
     if !config.windowed() {
+        crate::displays::install_headless();
         return crate::clipboard::run_headless::<D>(&mut config, started);
     }
     let instance = match lifecycle::claim(frame_limit.is_some(), compat, name) {
@@ -895,6 +896,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                     .install(handle.hwnd.get(), self.proxy.clone());
                 self.modal.install(handle.hwnd.get(), self.proxy.clone());
                 self.desktop.set_window(handle.hwnd.get());
+                crate::displays::install(handle.hwnd.get());
                 if let Err(error) = self.clicks.install(handle.hwnd.get()) {
                     self.fail(events, error);
                     return;

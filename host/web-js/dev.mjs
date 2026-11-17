@@ -1029,7 +1029,8 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='forma-batch'||m.kind===
       return res.end(bytes);
     }
     // Inspect mode's half in the page (LLP 1122 T2b, the JS target): the
-    // dev client loads it; it is in no build.
+    // dev client loads it; it is in no build. It may write inside the root,
+    // so every build reads it for what the sheet keeps (build.mjs `cutSheet`).
     if (url.pathname === '/__dev/inspect.js' && (req.method === 'GET' || req.method === 'HEAD')) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(req.method === 'HEAD' ? undefined : readFileSync(resolve(root, 'host/web-js/inspect-dev.js')));

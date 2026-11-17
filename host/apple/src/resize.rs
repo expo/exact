@@ -5,8 +5,12 @@ use super::*;
 
 impl<D: DataSource> Host<D> {
     pub(super) fn finish_collection(&mut self) -> String {
+        // Rearming an edge changes its window even without a view receipt.
+        let mut batch = Batch::new();
+        let error = self.emit_collections(&mut batch).err();
         let deadline = self.runner.collection_timer_due_ms();
-        if self.finished_deadline == Some(self.route_overflow_due(deadline))
+        if error.is_none()
+            && self.finished_deadline == Some(self.route_overflow_due(deadline))
             && !self.presence.unauthored
             && !self.layout_owed
             && !self.layout_withheld
@@ -27,7 +31,9 @@ impl<D: DataSource> Host<D> {
                 }
             }
             self.request_route_overflow();
-            if self.finished_deadline == Some(self.route_overflow_due(deadline)) {
+            if batch.repeatable()
+                && self.finished_deadline == Some(self.route_overflow_due(deadline))
+            {
                 if let Some(key) = self.quiet_collection_key() {
                     if let Some((previous, reply)) = &self.quiet_collection {
                         if *previous == key {
@@ -36,11 +42,10 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
-            let mut batch = Batch::new();
             self.state_onto(&mut batch);
             return self.write_batch(batch, None, true);
         }
-        self.finish(Batch::new(), None)
+        self.finish(batch, error)
     }
 
     pub(super) fn quiet_collection_key(&self) -> Option<[u64; 8]> {

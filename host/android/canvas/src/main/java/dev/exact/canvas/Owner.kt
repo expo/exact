@@ -229,14 +229,19 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** Boot at the size the view is expected to have; [done] on the main thread with whether it booted. An activity
      * made again in this process (LLP 1115.001 D15.1) calls this for its own view: [Native.start] then adopts the host
-     * that runs on this thread, which paints everything again for the new reader, and starts no second one. */
-    fun boot(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean, done: (Boolean) -> Unit) {
+     * that runs on this thread, which paints everything again for the new reader, and starts no second one.
+     * [started] runs on this thread once the host has booted, before its first turn and before its data module can
+     * activate ([active]). */
+    fun boot(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean, started: () -> Unit = {},
+             done: (Boolean) -> Unit) {
         handler.post {
             android.os.Trace.beginSection("exact boot")
             try { Native.hardwarePictures(hwbuf) } catch (e: UnsatisfiedLinkError) { }
             val ok = Native.start(width, height, scale, dir, store, live)
             android.os.Trace.endSection()
             if (ok) {
+                booted = true
+                started()
                 // What was published or scrolled for the reader before this one is not this one's.
                 queue.clear(); made.clear(); seq = 0
                 accessAgain = true
@@ -253,6 +258,37 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             }
             postMain { done(ok) }
         }
+    }
+
+    /** Whether a [boot] has given this thread a host. */
+    @Volatile var booted = false
+        private set
+
+    /** Who waits to hear that the host's data module is active ([active]): the exact thread's own. */
+    private val activating = ArrayList<(Boolean) -> Unit>()
+
+    /**
+     * [done] hears, on the main thread, whether the host's data module is active, once it is or has failed to be;
+     * false at once where no boot gave this thread a host. A host no reader takes a frame from (no activity, or a
+     * stopped one) has no first pixel to wait for, so its module activates now (LLP 1133.017 D7); one a reader draws
+     * activates it after its first pixel, as it does with nobody waiting. A module whose image is still loading is
+     * asked again at each turn its wakes bring ([schedule]).
+     */
+    fun active(done: (Boolean) -> Unit) {
+        handler.post {
+            if (!booted) { postMain { done(false) }; return@post }
+            activating += done
+            schedule()
+        }
+    }
+
+    private fun activated() {
+        if (activating.isEmpty()) return
+        val state = Native.dataActive(!running)
+        if (state == 0) return
+        val waiting = activating.toList()
+        activating.clear()
+        postMain { waiting.forEach { it(state > 0) } }
     }
 
     /** The device's settings ([Device]): told before [boot] so the host boots with them (the library loads here, not on
@@ -574,6 +610,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
 
     private fun schedule() {
+        activated()
         wakes?.sync()
         if (!running) {
             val due = Native.background(timerReports.applying)
@@ -627,8 +664,12 @@ private const val AHEAD_US = 1500
 internal object Exact {
     /** The process's owner, from the first activity that made one on: an activity made again takes it. */
     var owner: Owner? = null
-    /** Whether an activity has set this process up for a host (its environment is written, its host may run). */
+    /** Whether an activity or [Headless] has set this process up for a host (its environment is written, its host
+     * may run). */
     var live = false
+    /** Whether [Headless] set the process up and no activity has been made in it since: the first one's launching
+     * intent is the launch's ([launch], [launchShare]). */
+    var unshown = false
     /** The activity whose view reads the host now. */
     var reader: java.lang.ref.WeakReference<ExactActivity>? = null
 
@@ -668,6 +709,10 @@ internal object Exact {
     /** A URL given to the running app ([Native.open], LLP 1133.023 D15 item 3): on exact2's thread, in order. */
     fun open(href: String) { val o = owner; if (o != null) { o.input(); o.call { Native.open(href) } } else Native.open(href) }
     fun share(request: String) { val o = owner; if (o != null) { o.input(); o.call { Native.share(request) } } else Native.share(request) }
+    /** The launch location of the first activity over a host [Headless] booted ([Native.launch], [Native.launchShare]):
+     * on exact2's thread, behind that boot and ahead of the first frame the activity's reader takes. */
+    fun launch(href: String) { owner?.call { Native.launch(href) } }
+    fun launchShare(request: String) { owner?.call { Native.launchShare(request) } }
 
     /** A driver's request ([Native.agent], [AgentDrive]): answered on exact2's thread, which then publishes what it
      * painted; waited for, since the driver's next request follows its answer. Carried only where exact2 has a
@@ -781,6 +826,14 @@ internal object Exact {
     internal fun executionEligible(): Boolean = !pageHidden || Claims.keepsExecution
     /** The page freeze drops gated streams before returning; socket close handshakes finish asynchronously. */
     fun hidden(hidden: Boolean) { pageHidden = hidden; publishExecution() }
+    /** The page of a host [Headless] boots is hidden from the start. What tells the host so, for its thread to run as
+     * the host boots ([Owner.boot]): told later, the first turn and the data module's activation would run in a
+     * visible page. What an activity or a claim says afterwards reaches that thread behind the boot. */
+    fun hiddenAtBoot(): () -> Unit {
+        pageHidden = true
+        val eligible = executionEligible()
+        return { Native.hidden(true, eligible) }
+    }
     internal fun executionChanged() { if (pageHidden) publishExecution() }
     private fun publishExecution() {
         val hidden = pageHidden

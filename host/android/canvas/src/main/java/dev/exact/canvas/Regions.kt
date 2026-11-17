@@ -14,7 +14,7 @@ import java.lang.ref.WeakReference
  * geofences and drops them at reboot and when location is turned off, so the package re-arms from it.
  *
  * A transition is written first and delivered second. [wake] hands the store's transitions to a live session's
- * package; with none (Android has no headless session yet, §9 item 6) the store keeps them, and the package delivers
+ * package; with none (no session with no view is booted for one yet, §9 item 6) the store keeps them, and the package delivers
  * them when a session next makes it (D14 step 3), each with its original time.
  */
 object ExactRegions {

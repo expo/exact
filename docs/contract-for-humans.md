@@ -1798,12 +1798,15 @@ If a resource fails, check the source implementation, its generated types and
 grants, and its bake behavior. If an event fails, check the captured arguments,
 payload type, current action binding, and whether the node exists.
 
-`app.json` also controls delivery policy. `bun scripts/deploy.mjs <app>` is a
+`app.json` also controls delivery policy. From the app, `bun exact.mjs deploy` is a
 dry run, which expects a committed tree (or `--dirty`); publication uses `--yes`,
 an origin, a signing key, and the configured signed streams. Before
 changing trust or publishing, read [the reference](reference.md) on
 `EXACT_UPDATE_TRUST` (LLP 1030.000). Writing Contract does not require inventing a deployment
-service. To put an iOS app on someone's iPhone, run `bun exact.mjs share`: it
+service. `bun exact.mjs push` publishes a working-tree edit to installed release binaries
+immediately; `--watch` repeats it on save. It needs a production build receipt or
+existing stream and the signing key. It has no dry run and publishes no web root.
+To put an iOS app on someone's iPhone, run `bun exact.mjs share`: it
 builds the app and prints an AppDrop link that installs it with their own Apple ID.
 
 ## Where to go next

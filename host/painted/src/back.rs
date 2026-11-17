@@ -25,6 +25,23 @@ impl<D: DataSource> Host<D> {
         }
     }
 
+    /// The router as a boot at `location` makes it ([`Runner::host_launch`]),
+    /// at `now_ms`. `false` when no route matches the location.
+    pub fn host_launch(&mut self, location: &str, now_ms: f64) -> Result<bool, String> {
+        self.now_ms = now_ms.max(self.now_ms);
+        match self.runner.host_launch(location) {
+            Ok(Some(receipt)) => {
+                let at_ms = self.now_ms;
+                match self.commit(&[Timed { at_ms, receipt }], None) {
+                    None => Ok(true),
+                    Some(error) => Err(error),
+                }
+            }
+            Ok(None) => Ok(false),
+            Err(e) => Err(format!("host launch: {e:?}")),
+        }
+    }
+
     /// Native Forward through the root's handler or the runner's own `go`.
     /// Timers run before the delivery acquires its Forward direction.
     pub fn host_forward(&mut self, root: ViewId, now_ms: f64) -> Option<String> {

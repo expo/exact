@@ -358,6 +358,8 @@ pub enum LayoutError {
     ContentRegion(&'static str),
     /// A host's containing block refused (LLP 1115.002 D8.2).
     HostBlock(&'static str),
+    /// A host's report of native targets refused (LLP 1123 D9).
+    NativeTarget(&'static str),
     /// A definite available-space offer is infinite or NaN.
     InvalidOffer,
     /// The id is not live.

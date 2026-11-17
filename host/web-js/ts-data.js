@@ -555,7 +555,7 @@ function storageOf(grants) {
   });
 }
 // A stream (LLP 1016.000; ts-fetch.js), opened by ts-stream.js, loaded on
-// first use so a module that never streams carries none of it.
+// first use. A page whose modules never spell `exactStream` has no ts-stream.js (LLP 1047.003 D5).
 const opener = (stream, conv, name) => (deliver, controller) => {
   controller.streamName = name;
   return import('./ts-stream.js').then(m => m.open(stream, conv, tsGrantSet, deliver, controller))

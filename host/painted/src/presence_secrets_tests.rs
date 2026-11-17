@@ -26,7 +26,7 @@ fn keystore(op: u32, request: &str, value: &str) -> Result<String, String> {
 
 fn vault(root: &std::path::Path, locked: Locked) -> HostVault {
     HostVault {
-        secrets: ibex2::secrets::FileStore::new(root.join("secrets")),
+        secrets: plain_backend(root),
         kv: ibex2::kv::FileStore::new(root.join("kv")),
         locked,
     }
@@ -117,4 +117,53 @@ fn where_nothing_is_kept_locked_an_optional_name_stays_plain() {
     );
     assert_eq!(backend.occupancy("token"), Some(Occupancy::Plain));
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_optional_unprompted_secret_uses_the_encrypted_backend() {
+    use base64::Engine;
+    let root = scratch("encrypted");
+    let mut vault = vault(&root, Locked::None);
+    vault.secrets = std::sync::Arc::new(crate::host::system::secret_files::EncryptedFiles::new(
+        root.clone(),
+        |op, _, value| {
+            let codec = base64::engine::general_purpose::STANDARD;
+            if op == 1 {
+                Ok(codec.encode(value))
+            } else {
+                String::from_utf8(codec.decode(value).unwrap()).map_err(err)
+            }
+        },
+    ));
+    let mut backend = Backend::new(Box::new(vault), lines(GRANTS));
+    backend.enqueue("token", Op::Write(Some(b"credential".to_vec())), None);
+    pump(&mut backend, false);
+    assert_eq!(backend.occupancy("token"), Some(Occupancy::Plain));
+    assert!(!root.join("secrets/token").exists());
+    assert_ne!(
+        std::fs::read(root.join("secrets-encrypted/token")).unwrap(),
+        b"credential"
+    );
+    backend.enqueue("token", Op::Write(None), None);
+    pump(&mut backend, false);
+    assert!(!root.join("secrets-encrypted/token").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn desktop_presence_writes_and_forgets_without_secret_lease_durability() {
+    let root = scratch("desktop-write-forget");
+    let mut backend = Backend::new(Box::new(vault(&root, Locked::Agent)), lines(GRANTS));
+    backend.enqueue("token", Op::Write(Some(b"kept".to_vec())), None);
+    pump(&mut backend, false);
+    assert!(backend.take_log().is_empty());
+    assert_eq!(backend.occupancy("token"), Some(Occupancy::Plain));
+    assert_eq!(backend.plain_value("token"), Some(b"kept".to_vec()));
+    backend.enqueue("token", Op::Write(None), None);
+    pump(&mut backend, false);
+    assert!(backend.take_log().is_empty());
+    assert_eq!(backend.occupancy("token"), Some(Occupancy::Absent));
+    assert_eq!(vault(&root, Locked::Agent).plain("token").unwrap(), None);
+    std::fs::remove_dir_all(root).unwrap();
 }

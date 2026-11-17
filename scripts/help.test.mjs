@@ -4,7 +4,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createApp } from '../game/new.mjs';
@@ -13,7 +13,7 @@ import { HELP, appleBuildRefusal, guardFlags, helpText, indexText, knownFlags } 
 import { scriptFlags } from './help-parity.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const APP_VERBS = ['web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'update', 'lock', 'add', 'contract', 'forma', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
+const APP_VERBS = ['web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'deploy', 'push', 'update', 'lock', 'add', 'contract', 'forma', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
 const timed = (args, options) => {
   const t = performance.now(), r = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 15_000, ...options });
   return { ...r, ms: performance.now() - t };
@@ -22,7 +22,7 @@ const timed = (args, options) => {
 test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2 and runs nothing', () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'exact-help-'));
   try {
-    const dir = resolve(parent, 'field-log'), sdk = resolve(parent, 'sdk'), started = resolve(parent, 'started');
+    const dir = resolve(parent, 'keygen'), sdk = resolve(parent, 'sdk'), started = resolve(parent, 'started');
     createApp(dir);
     const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, commands: { seed: ['bun', 'seed.mjs'] } }, null, 2));
@@ -30,7 +30,7 @@ test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2
     mkdirSync(resolve(sdk, 'scripts'), { recursive: true });
     mkdirSync(resolve(sdk, 'js/bake/src'), { recursive: true });
     for (const file of ['scripts/help.mjs', 'scripts/app-cli.mjs', 'scripts/bun.mjs', 'js/bake/src/__exact_env.mjs']) copyFileSync(resolve(ROOT, file), resolve(sdk, file));
-    for (const file of ['host/web/dev.mjs', 'host/web/build.mjs', 'host/web/serve.mjs', 'host/apple/build.mjs', 'scripts/agent.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'scripts/exact.mjs', 'scripts/feedback.mjs', 'scripts/share.mjs']) {
+    for (const file of ['host/web/dev.mjs', 'host/web/build.mjs', 'host/web/serve.mjs', 'host/apple/build.mjs', 'scripts/agent.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'scripts/exact.mjs', 'scripts/feedback.mjs', 'scripts/share.mjs', 'scripts/deploy.mjs', 'scripts/push.mjs']) {
       mkdirSync(resolve(sdk, file, '..'), { recursive: true });
       writeFileSync(resolve(sdk, file), `require('node:fs').appendFileSync(${JSON.stringify(started)}, ${JSON.stringify(file)} + '\\n');`);
     }
@@ -71,6 +71,14 @@ test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2
     assert.equal(exact('help', 'all', 'nope').status, 2);
     assert.ok(!existsSync(started), `help ran ${existsSync(started) && readFileSync(started, 'utf8')}`);
     assert.ok(!existsSync(resolve(dir, '.exact/commands.jsonl')), 'help is not a logged command');
+    for (const verb of ['deploy', 'push']) {
+      writeFileSync(resolve(sdk, `scripts/${verb}.mjs`), 'console.log(JSON.stringify({args:process.argv.slice(2),app:process.env.EXACT_APP_DIR}));');
+      const args = verb === 'deploy' ? ['--dirty', '--origin', './origin'] : ['--watch', '--channel', 'preview'];
+      const result = timed([resolve(dir, 'exact.mjs'), verb, ...args], { cwd: parent, env: { ...process.env, EXACT: sdk, EXACT_FEEDBACK: '0' } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { args: [verb === 'deploy' ? realpathSync(dir) : 'keygen', ...args], app: realpathSync(dir) });
+      assert.equal(appVerbs('game', dir, { game: true })[verb], undefined);
+    }
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 60_000); // One offline Cargo resolution.
 

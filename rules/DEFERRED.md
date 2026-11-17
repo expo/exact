@@ -2187,12 +2187,11 @@ seats chose to build it).
 **The displays and the pointer (LLP 1178; expo/exact#506).** The displays by
 the Window Management API's names (`getScreenDetails`,
 `windowManagementStatus` from `@exact/window-management`) and the pointer's
-position (`getPointerPosition`), on macOS, the Linux host (its one display)
-and the web (the display list, where the browser has it). Consumer:
+position (`getPointerPosition`), on macOS, Windows, the Linux host (its one
+display) and the web (the display list, where the browser has it). Consumer:
 Anthonyy232's screenshot annotation tool (#505, #506). Unblocks putting its
 toolbar on the display that holds the pointer without its own monitor code.
 Take: none offered; waived by Charlie, 2026-11-14, after the panel (decision
-D5: all three seats chose to build both). Still out: Windows (LLP 1178 piece
-4), a still of every display (`captureScreens`, pieces 6 and 7),
-`getDisplayMedia`, window placement, and the desktop Linux, iPadOS and
-Android cells.
+D5: all three seats chose to build both). Still out: a still of every display
+(`captureScreens`, pieces 6 and 7), `getDisplayMedia`, window placement, and
+the desktop Linux, iPadOS and Android cells.

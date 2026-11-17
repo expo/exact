@@ -1434,7 +1434,10 @@ both properties.
 indicator on iOS, and hides the status and navigation bars on Android (a swipe from the edge
 shows them for a moment), while that node's screen is under them, resolved the same way: a
 `fullscreen` route's wins over the stack, a `medium` sheet's does not (iOS), and a
-descendant's `false` shows them again.
+descendant's `false` shows them again. A notch's or Dynamic Island's inset and the home
+indicator's stay while the bars hide, and a route's content stays clear of them: a route
+that must fill the screen (a game's canvas) takes `-exact-safe-area="none"` and places its
+controls with `var(--exact-safe-area-inset-*)`.
 
 More: docs/contract-for-agents.md (`status-bar-style`, `system-bars-hidden`)
 
@@ -1676,9 +1679,12 @@ and its bars (UIKit's inset on the route's scroller, else the route's padding), 
 scroller's end clear of the home indicator, as a hand-built screen is. `env()` is CSS's, in
 any length (`padding-bottom="calc(env(safe-area-inset-bottom) + 16px)"`). On a native host
 under the default `viewport-fit="auto"` it is 0, so `env()` padding inside a route adds
-nothing; under the root's `viewport-fit="cover"` it is the device's insets, and a route's
-content goes under the bar unless its column pads `env(safe-area-inset-top)`. On the web it is
-the browser's. `env(-exact-layout-margins-inset-left)` is UIKit's layout margin.
+nothing; under the root's `viewport-fit="cover"` it is the device's insets. While an edge
+stays cleared, `env()` padding on a box inside the route adds that device inset again.
+After `-exact-safe-area` turns that edge's clearance off, padding by either `env()` or
+`var(--exact-safe-area-inset-*)` clears the inset once; the latter includes the route's
+bars. On the web `env()` is the browser's. `env(-exact-layout-margins-inset-left)` is
+UIKit's layout margin.
 
 `var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`, `-left`) is the safe area where
 the box is (LLP 1123 D9): inside a route, a tab or a sheet its own, the status bar, the bars

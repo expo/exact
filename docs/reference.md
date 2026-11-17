@@ -1036,8 +1036,64 @@ module sources. The watch bake refuses a TypeScript dependency by name until
 the watch Hermes gate passes (LLP 1126.001 §5 Q3); a mixed bake declares its
 Rust ownership through `build_mixed_with`'s source list. Such an app's complications are still omitted
 with a message, including its Rust refreshes. Rust-only apps' complications
-refresh against the watch's own App Group and store. No account transfer is
-performed.
+refresh against the watch's own App Group and store.
+
+Select phone-owned values explicitly in `watch.sync`:
+
+```json
+"watch": {
+  "source": "watch.contract", "component": "Watch",
+  "sync": { "state": ["liked"], "secrets": ["totp.entries"] }
+}
+```
+
+State names must be root `persist` states with matching types in both entries.
+Watch actions cannot assign them. Secrets require ordinary `secret.keep` grants;
+presence policies, including optional ones, are refused. Watch data sources and complication processes cannot
+write selected secrets or persisted states. Files, databases and kept resource answers do not transfer.
+Changing the selection, or a selected state's type, requires a new binary. The watch rechecks a retained context
+when its selection grows or shrinks, even at an already accepted revision. Removing a selection deletes only
+previously imported names after accepting a snapshot under the new selection.
+Removing the entire selection retires its state replicas the next time the watch app or
+a complication runs, and its secrets the next time the watch app runs, even if the app no
+longer uses storage or WatchConnectivity. Only the app reaches their Keychain group by then.
+
+Open the watch app once to create its device-local Keychain key and send its
+public key to the phone. The phone uses CryptoKit HPKE to seal the secrets before
+placing them in WatchConnectivity's retained application context. State stays
+plaintext; secret plaintext never enters that context. The watch imports secrets
+into its Keychain with `AfterFirstUnlockThisDeviceOnly` accessibility. Reinstalling
+the watch app generates a new key; a replacement pairing needs the new watch to
+run and announce its key. Old encrypted contexts cannot initialize that watch.
+
+The phone sends a complete snapshot at first pixel, after each durable change
+(a session's write, or a launch function's `set_secret` or `forget_secret`) and
+when a watch announces its key. Apple schedules delivery, so submission is not
+acknowledgement and intermediate values may be skipped. A send WatchConnectivity
+refuses is tried again while the app runs, after 1 s and then at doubling waits
+up to 32 s, and at each foreground. A snapshot whose application context would
+exceed 60,000 bytes is not sent: the session log says so once, the watch keeps
+its last copy, and the next change that fits is sent. A snapshot's revision is
+spent only when WatchConnectivity takes it.
+
+At launch the watch activates its session and imports the retained context
+before its readers open; an active scene does not open them earlier. A session
+that cannot activate, or a context for an old key or schema, leaves the last
+accepted store available offline. A failed or partial import keeps readers
+closed. The watch app tries it again while it is active, at the same waits, at
+each foreground and at each later delivery, without restarting. An import that
+lands after the session booted refreshes it. A phone
+edit, deletion or logout reaches it only after delivery and successful import.
+A watch already holding a TOTP seed can keep generating codes until that seed is
+replaced at the service; local logout does not revoke that copy remotely.
+Imports and replica retirement invalidate cached complication timelines and request
+a reload. A complication's refresh waits up to 100 ms for an import that overlaps
+its store read. If the import is still unfinished the refresh is refused without
+asking its source, and the import's end reloads the timeline. An app that selects nothing links
+no WatchConnectivity session or replication crypto path.
+
+See Apple's [application context](https://developer.apple.com/documentation/watchconnectivity/wcsession/updateapplicationcontext(_:))
+and [HPKE](https://developer.apple.com/documentation/cryptokit/hpke) documentation.
 For `accessoryInline`, emit exactly one `text` or `time` leaf plus at most one
 optional image. Only that leaf and image survive the inline archive; a
 container's background and layout do not. The bake evaluates the preview at
@@ -3026,8 +3082,8 @@ grant beside this one: see [Push](#push).
   completion as superseded; a response still awaiting declarations waits for
   the replacement.
 - On Android (LLP 1133.004.000 D5) an action is a button that brings the
-  app forward, with `foreground=false` too: Android has no headless session
-  yet, so no handler could run with the app in the background. Android shows
+  app forward, with `foreground=false` too: an action boots no session with
+  no view yet, so no handler runs with the app closed. Android shows
   three actions; a fourth is dropped there and journaled. A chosen action is
   raised only while the app still declares it as the post wrote it: a button
   posted before an update changed or removed it brings the app forward and
@@ -3252,8 +3308,8 @@ icon. Leave out `icon` and `color`: Firebase honours them for a notification it
 shows. A `tag` replaces a shown notification with that tag, a local one
 included, and `closeNotification(tag)` closes it. Its tap opens `navigate`,
 warm or at launch, as on Apple; the other `data` keys are not read. A data
-message (no `notification`) shows nothing and raises nothing: as a wake it
-waits for Android's headless session.
+message (no `notification`) shows nothing and raises nothing: it is no wake
+on Android yet.
 
 Under the agent nothing reaches APNs or FCM, and `pushSubscription()` reads null
 while the permission is not granted, as on the phone. A subscribe while
@@ -3858,7 +3914,8 @@ asks, from a press. [Recipe](recipes/displays.md).
 | macOS | `NSScreen.screens` flipped at the primary's top, `visibleFrame` for the work area, `CGDisplayIsBuiltin`, `localizedName`; the pointer from `NSEvent.mouseLocation` |
 | web | the browser's `window.getScreenDetails()` (Chromium on the desktop), `screenschange`, `currentscreenchange`; no pointer (`NotSupportedError`); elsewhere `available: false` |
 | Linux | the one display the host fills: the KMS connector (`label` its name, `isInternal` for eDP, LVDS and DSI) or the headless buffer, at the host's scale; the pointer the host draws |
-| Windows, iPadOS, Android | not built: `NotSupportedError` |
+| Windows | `EnumDisplayMonitors` and `GetMonitorInfoW` (`rcMonitor`, `rcWork` for the work area), each scale `GetDpiForMonitor`'s times the Text size setting, laid out into CSS pixels as Chromium lays monitors out, so the numbers are a page's in Chrome on the same machine; `label` (the EDID name, else empty) and `isInternal` from `QueryDisplayConfig` (an LVDS or DSI panel is internal here and not in Chrome); the pointer from `GetCursorPos`; `clientRect`, `clientX` and `clientY` from physical pixels over the window's own scale, which the Text size setting does not change. A run with no window (an agent's session) reports the buffer it paints as its one display, as the Linux host does |
+| iPadOS, Android | not built: `NotSupportedError` |
 
 ### Pick a file of any type
 
@@ -5102,9 +5159,12 @@ impl DataSource for Scores {
 `Store` (`store.get`, `store.set`, under `secret.keep <name>`) is for
 **secrets**: a session token, a key. Apple keeps them in the Keychain, Linux
 in a file per secret only the user can read (`0600`, under
-`$XDG_DATA_HOME/exact/<app id>/secrets`; not encrypted), and the web in
-`localStorage`; Windows keeps them in memory for now. The host reads them into a snapshot before boot, so a
-read is synchronous, and a scripted drive never keeps them. A best time is not
+`$XDG_DATA_HOME/exact/<app id>/secrets`; not encrypted), Android in AES-GCM
+files with Android Keystore-wrapped keys, and the web in `localStorage`; Windows
+keeps them in memory for now. Opening Android's secret store deletes legacy
+plaintext files without reading them; only encrypted entries are restored.
+The host reads secrets into a snapshot before boot, so a read is synchronous,
+and a scripted drive never keeps them. A best time is not
 a secret: keep it in app storage. A lease on a secret (`SharedSecrets::acquire`,
 from `configure_secrets`) needs the same grant: on Apple a name the grants do not
 keep reads and writes as `denied: secret.keep`.

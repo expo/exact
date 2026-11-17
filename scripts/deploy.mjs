@@ -1110,7 +1110,9 @@ async function deployCaptured(opts, capsule) {
   process.env.CARGO_TARGET_DIR = canonicalPath(capsule.app.target);
   if (capsule.app.external) process.env.EXACT_APP_DIR = canonicalPath(capsule.app.dir);
   else delete process.env.EXACT_APP_DIR;
-  const app = resolveApp(opts._[0]);
+  // A path names the live tree; a name must retain the caller's crate identity.
+  const selector = opts._[0];
+  const app = resolveApp(/[\\/]|^\.\.?$/.test(selector ?? '') ? capsule.app.dir : selector);
   requireReleasePins(app);
   if (canonicalPath(app.dir) !== canonicalPath(capsule.app.dir)
     || canonicalPath(app.workspace) !== canonicalPath(capsule.app.workspace)) {

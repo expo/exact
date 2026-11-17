@@ -15,7 +15,7 @@ import { basename, dirname, resolve } from 'node:path';
 const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
 async function fixtureDrive(browser, {
   refuse = null, broken = null, unavailable = null, poison = null, screenshotError = null,
-  appTests = false, settleAfterRefusal = false, knownTree = false, evaluate = async () => null, shot = async () => null,
+  appTests = false, settleAfterRefusal = false, knownTree = false, evaluate = async () => null, shot = async () => null, cut = [],
   script = 'tap scripted\nrefused tap refused\nreload\nwheel auto 12\nclock +5',
 } = {}) {
   const events = [], sessions = [], shots = [];
@@ -25,6 +25,8 @@ async function fixtureDrive(browser, {
   const deps = {
     ...comparisons, crossBrowser: browser, crossBrowsers: browser?.split(',') ?? [],
     readyBrowsers: browser?.split(',') ?? [], maxSteps: 3,
+    // The JS page's sheet cut for `cut`, which a stand-in page holds at every step.
+    sheetCut: () => new Set(cut), uncut: async (_evaluate, tokens) => [...tokens],
     STATE_KEYS: ['slots'], LINUX_APART: {}, LINUX_OPS: [], linuxFor: () => null, linuxRef: false,
     root: '/checkout', here: '/checkout/host/web-js', resolve, parseStep, clockOnAll, failedTests,
     resolveApp: () => ({ dir: '/fixture' }),
@@ -137,6 +139,10 @@ test('the wasm and JS drive still delivers every step to its two Chrome pages', 
   expect(run.report.failures).toEqual([]);
   expect(run.report.steps.map(s => s.step)).toEqual(['boot', 'tap scripted', 'refused tap refused', 'reload', 'wheel auto 12', 'clock +5', 'tap auto', 'clock +60000']);
   expect(run.report.steps.every(s => !s.browser && s.differences === 0)).toBe(true);
+  // A JS page holding a token its sheet was cut for fails each step it is seen at (LLP 1047.003 D1).
+  const cut = await fixtureDrive(null, { cut: ['t:dialog'] });
+  expect(cut.report.failures.filter(f => /^sheet: .* has t:dialog, which its sheet was cut for$/.test(f.what)).map(f => f.step))
+    .toEqual(cut.report.steps.map(s => s.step));
 });
 
 test('conformance screenshots pin only auto images to one filter, after both pages agree on each image\'s', async () => {

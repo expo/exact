@@ -64,4 +64,4 @@ and a pointer at its centre, the window at its top left. A drive replaces
 either with `prefer extension window-management.getScreenDetails={…}` or
 `window-management.getPointerPosition={…}`, each a whole value; on the web
 the first read raises the permission's ticket. `--bind window-management`
-reads the platform instead (macOS and Linux).
+reads the platform instead (macOS, Linux and Windows).

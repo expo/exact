@@ -133,6 +133,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force |= self.p.page_execution(hidden, eligible);
     }
 
+    /// Whether the data module is active (`Native.dataActive`): 1, 0 while
+    /// its image loads, -1 when it failed to activate. With `unshown`, a
+    /// host no reader takes a frame from activates it now (LLP 1133.017 D7).
+    pub fn data_active(&mut self, unshown: bool) -> i32 {
+        if unshown {
+            self.p.activate_unshown();
+            self.force = true;
+        }
+        self.p.data_state()
+    }
+
     /// The reader drew a frame (`Native.drew`): whether it should say so
     /// again after its next one ([`crate::presenter::Presenter::reader_drew`]).
     pub fn drew(&mut self) -> bool {

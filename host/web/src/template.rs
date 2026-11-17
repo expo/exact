@@ -10,7 +10,7 @@ use super::{browser_kernel, font_names, host_css, in_button, props_for, svg_prop
 use exact_kernel::{Kernel, SortedMap, ViewId};
 use exact_plan::Plan;
 
-pub use super::element::attribute_rows;
+pub use super::element::{attribute_rows, attributes_by_data, tags_by_data};
 // A node's state looks as page rules (LLP 1121 D8), for the JS target's sheet.
 use super::mode::looks;
 pub use super::mode::looks::{

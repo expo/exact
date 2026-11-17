@@ -4,7 +4,8 @@
 //! system popover. Only the compiler sees which rows the author wrote, so
 //! it decides, and marks the node (`defaultSurface`); a host that paints the
 //! popover itself draws the platform's surface under it (iOS's glass, from
-//! the metrics' `popover-` rows), and inspect can say why.
+//! the metrics' `popover-` rows; AppKit's menu panel under a menu the Mac
+//! paints), and inspect can say why.
 
 use crate::{err, LowerError};
 use contract_syntax::{Attr, Expr, Span};
@@ -27,16 +28,15 @@ fn authored(attrs: &[Attr]) -> bool {
 /// The mark on a popover whose author wrote no surface on it or its active
 /// class arm (a sheet's implied row is no author's). Read classes before
 /// expansion: an absent row and an authored `none` must stay distinct.
-/// A menu (`role="menu"`) is the platform's menu, never painted.
+/// A menu (`role="menu"`) is marked as any popover is: a host that presents
+/// the platform's menu ignores the mark, and one that paints the menu's own
+/// rows reads it.
 pub(crate) fn implied<'s>(
     attrs: &[Attr],
     span: Span,
     style: &dyn Fn(&str) -> Option<&'s [Attr]>,
 ) -> Option<Attr> {
-    let menu = attrs
-        .iter()
-        .any(|a| a.name == "role" && matches!(&a.value, Expr::Str(r, _) if r == "menu"));
-    let popover = attrs.iter().any(|a| a.name == "popover") && !menu;
+    let popover = attrs.iter().any(|a| a.name == "popover");
     if !popover || authored(attrs) {
         return None;
     }

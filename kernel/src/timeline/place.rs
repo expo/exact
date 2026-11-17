@@ -193,6 +193,7 @@ fn scrolls(arena: &NodeArena, slot: u32) -> bool {
     let s = arena.style(slot);
     !matches!(s.overflow_x, Overflow::Visible | Overflow::Clip)
         || !matches!(s.overflow_y, Overflow::Visible | Overflow::Clip)
+        || (!s.mask.has(crate::StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default())
 }
 
 /// `slot`'s nearest ancestor scroll container, else its root.

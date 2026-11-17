@@ -8,6 +8,11 @@ function group(family, protocol, lifetime, kind, evidence, sites, durableWhen) {
 }
 
 export const classifications = [
+  group("background transfers", ["durable operation"], "registration generation and cancellable attempt handle", "durable",
+    "The import-selected bridge runs file I/O without a session. Closing its handle aborts live I/O; the package owns durable records and admits publication against the current registration generation.", [
+    ["painted:host/painted/src/transfer.rs", "dispatch"],
+    ["painted:host/painted/src/transfer_jni.rs", "call Java_exact_backgroundtransfer_NativeTransfer_call"],
+  ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "issued request and its existing pending, mapper, background, tool or module-work record", "UI-owned",
     "runner/src/runner/completion.rs binds authority at take_requests. Replies and mapper/held turns consume it once; streams and long polls keep their ordered binding. Background/tool rounds, reports and retained effectful module work use process-local durable authority. UI retirement and timer-race adoption transfer the shared binding even after host extraction. deliver preserves the existing handler; carry refuses no identity.", [
     ["runner:runner/src/runner/completion.rs", "Runner::deliver CompletionReply::take CompletionReply::subscription"],
@@ -217,9 +222,12 @@ export const classifications = [
     ["apple:host/apple/src/abi/exports.rs", "exact_delivery_api exact_delivery_sync"],
     ["painted:host/painted/src/host.rs", "Host::set_delivery Host::set_delivery_from_compat"],
     ["painted:host/painted/src/presenter.rs", "Presenter::set_delivery_from_compat"],
+    ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_dataActive"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::data_active"],
     ["painted:host/painted/src/presenter/checks.rs", "Checks::activation_allowed"],
     ["painted:host/painted/src/presenter/delivery.rs",
-      "Presenter::activate_update Presenter::activation_error Presenter::check_update Presenter::data_activating Presenter::delivery_pending Presenter::first_pixel " +
+      "Presenter::activate_unshown Presenter::activate_update Presenter::activation_error Presenter::check_update Presenter::data_activating Presenter::data_state " +
+      "Presenter::delivery_pending Presenter::first_pixel " +
       "Presenter::first_pixel_told Presenter::first_pixel_unshown Presenter::module_pending Presenter::poll_development Presenter::poll_update Presenter::prepare_logic " +
       "Presenter::said_at_boot Presenter::set_development Presenter::set_module Presenter::set_updates Presenter::sync_delivery Presenter::tick_development " +
       "Presenter::turn_due_ms Presenter::update_fd Presenter::update_ready"],
@@ -243,9 +251,10 @@ export const classifications = [
     ["runner:runner/src/instance/collection/index.rs", "SizeIndex::invalidate_row#generation:1 SizeIndex::invalidate_row#next_generation:1 SizeIndex::replace_keys_indexed#next_generation:1 SizeIndex::splice_keys#next_generation:1"],
     ["runner:runner/src/instance/collection/into_view.rs", "Collection::begin_into_view#request:1"],
     ["runner:runner/src/instance/collection/mod.rs", "Collection::feedback#scroll_sequence:1 Collection::update_data#data_generation:1 Collection::update_data#scroll_sequence:1"],
+    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection_travel#scroll_sequence:1 Tree::update_collection#scroll_sequence:1"],
     ["runner:runner/src/instance/collection/nest.rs", "PinEpoch::bump#PIN_EPOCH.fetch_add:1"],
     ["runner:runner/src/runner/collection.rs",
-      "Runner::collection Runner::collection_data Runner::collection_feedback Runner::collection_feedback_bytes Runner::collection_feedback_filled " +
+      "Runner::collection_travel Runner::collection Runner::collection_data Runner::collection_feedback Runner::collection_feedback_bytes Runner::collection_feedback_filled " +
       "Runner::collection_mounted Runner::collection_shown Runner::collections Runner::collections_bounded Runner::collections_json Runner::collections_shallow " +
       "Runner::kept_positions_json"],
     ["runner:runner/src/runner/gates.rs", "Runner::collection_reply_key"],
@@ -325,7 +334,7 @@ export const classifications = [
     ["apple:host/apple/src/abi/exports.rs",
       "exact_activities exact_agent exact_baked_compat exact_color_references exact_colors exact_command exact_confirmation_is_alert exact_design_digest " +
       "exact_design_rows exact_entry_timeline exact_evaluates_from_draw exact_field_decorations exact_gesture_constant exact_grouped_list exact_header_shape " +
-      "exact_host_covers exact_intrinsic exact_intrinsics exact_layout_stamp exact_link_activities exact_list_covered exact_log exact_measure_block exact_measure_work " +
+      "exact_host_covers exact_intrinsics exact_layout_stamp exact_link_activities exact_list_covered exact_log exact_measure_block exact_measure_work " +
       "exact_measure_work_later exact_placement_box exact_plan_covers_viewport exact_plan_digest exact_preloads_begin exact_preloads_count exact_preloads_launched " +
       "exact_preloads_mark exact_preloads_name exact_preloads_opened exact_press_face exact_protocol_location_of exact_radio_group exact_reads_on_line " +
       "exact_refresh_entry exact_region_request exact_regions exact_role_keys exact_root_tabs exact_row_reuse exact_scheme exact_screen exact_select_options " +
@@ -348,7 +357,8 @@ export const classifications = [
       "Java_dev_exact_canvas_Native_surface Java_dev_exact_canvas_Native_forma Java_dev_exact_canvas_Native_under"],
     ["painted:host/painted/src/canvas/jni_extensions.rs",
       "Java_dev_exact_canvas_Native_appFile Java_dev_exact_canvas_Native_appRoot Java_dev_exact_canvas_Native_hidden Java_dev_exact_canvas_Native_now " +
-      "Java_dev_exact_canvas_Native_sensorInput Java_dev_exact_canvas_Native_surfaceHas Java_dev_exact_canvas_Native_underAgent"],
+      "Java_dev_exact_canvas_Native_scratchStorage Java_dev_exact_canvas_Native_sensorInput Java_dev_exact_canvas_Native_surfaceHas " +
+      "Java_dev_exact_canvas_Native_underAgent"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameRates Java_dev_exact_canvas_Native_frameWindow"],
     ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_backProgress"],
     ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_flingEnded Java_dev_exact_canvas_Native_refresh Java_dev_exact_canvas_Native_snapsAround"],
@@ -507,12 +517,14 @@ export const classifications = [
       "exact_build_tabs exact_host_back exact_host_back_to exact_host_forward exact_host_go exact_location_ahead exact_location_behind exact_location_beneath " +
       "exact_location_of exact_route_bar exact_route_matches exact_route_one_location exact_set_launch_location exact_set_launch_place exact_set_launch_time " +
       "exact_visit_location"],
-    ["painted:host/painted/src/back.rs", "Host::host_back Host::host_forward"],
-    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_back Java_dev_exact_canvas_Native_open"],
+    ["painted:host/painted/src/back.rs", "Host::host_back Host::host_forward Host::host_launch"],
+    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_back Java_dev_exact_canvas_Native_launch Java_dev_exact_canvas_Native_open"],
+    ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::launch"],
     ["painted:host/painted/src/host.rs", "Host::route_hidden_but Host::route_visibility Host::route_visibility_to"],
     ["painted:host/painted/src/presenter/back.rs", "Presenter::back Presenter::navigation_root Presenter::system_forward"],
+    ["painted:host/painted/src/presenter/links.rs", "Presenter::launch_at Presenter::launch_location"],
     ["runner:runner/src/runner/router.rs",
-      "Runner::host_back Runner::host_back_to Runner::host_forward Runner::host_go Runner::location_ahead Runner::location_behind Runner::location_beneath " +
+      "Runner::host_back Runner::host_back_to Runner::host_forward Runner::host_go Runner::host_launch Runner::location_ahead Runner::location_behind Runner::location_beneath " +
       "Runner::resource_args Runner::resource_is_placeholder Runner::route_matches Runner::route_one_location Runner::take_router_change Runner::visit_location"],
     ["runner:runner/src/runner/split.rs", "Runner::press_writes_router Runner::show_split_placeholder Runner::stack_split"],
     ["runner:runner/src/runner/tabs.rs", "Runner::build_every_tab Runner::build_tabs Runner::panels_need_navigation Runner::unopened_tabs"],
@@ -637,7 +649,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/boot.rs", "CanvasHost::boot"],
     ["painted:host/painted/src/canvas/jni.rs",
       "Java_dev_exact_canvas_Native_attachBuffers Java_dev_exact_canvas_Native_attachSurface Java_dev_exact_canvas_Native_configure " +
-      "Java_dev_exact_canvas_Native_detachSurface Java_dev_exact_canvas_Native_window"],
+      "Java_dev_exact_canvas_Native_detachSurface Java_dev_exact_canvas_Native_environment Java_dev_exact_canvas_Native_window"],
     ["painted:host/painted/src/canvas/reader.rs", "CanvasHost::adopt CanvasHost::attach_window CanvasHost::detach_window"],
     ["painted:host/painted/src/content_region/presenter.rs", "Presenter::boot_with_content_region"],
     ["painted:host/painted/src/host.rs", "Host::boot Host::boot_at Host::boot_at_with_region Host::boot_with Host::runner_mut"],
@@ -679,13 +691,14 @@ export const classifications = [
     ["runner:runner/src/runner/sockets.rs", "Runner::publish_sockets Runner::retrying Runner::set_retry_reader Runner::set_socket_reader Runner::socket_buffered Runner::socket_published Runner::take_socket_sends"],
   ]),
   group("storage", ["durable operation"], "app store contents; inspection/adoption is synchronous", "durable",
-    "runner/src/runner/kept.rs adopts stored values and retries store readers; runner/src/runner.rs take_store_writes drains committed writes. Stored effects are distinct from UI settlement (reply.rs:309).", [
-    ["apple:host/apple/src/abi/exports.rs", "exact_store_changed"],
+    "runner/src/runner/kept.rs adopts stored values and retries store readers; runner/src/runner.rs take_store_writes drains committed writes. Stored effects are distinct from UI settlement (reply.rs:309). watch_sync.rs copies explicitly selected values through a private callback, validates imports and commits durable revision metadata; read_only prevents watch-side writes.", [
+    ["apple:host/apple/src/abi/exports.rs", "exact_store_changed exact_watch_store"],
     ["painted:host/painted/src/activation.rs", "Host::configure_storage"],
     ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_storeDrain"],
     ["runner:runner/src/runner.rs", "Runner::resource_reads_store Runner::store Runner::store_names Runner::take_store_writes"],
     ["runner:runner/src/runner/kept.rs", "Runner::adopt_store Runner::data_ready Runner::data_ready_after_store Runner::forget_unread_kept Runner::store_changed"],
-    ["runner:runner/src/runner/persist.rs", "Runner::persisted"],
+    ["runner:runner/src/runner/persist.rs", "Runner::persisted Runner::read_only_store"],
+    ["runner:runner/src/store.rs", "Store::read_only"],
     ["web:host/web/src/abi.rs", "exact_store"],
   ]),
   group("timer fires", ["subscription"], "session timer generation/deadline or one frame task", "UI-owned",
@@ -801,6 +814,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/codec.rs", "attach"],
     ["painted:host/painted/src/canvas/legacy.rs", "attach decode glyph"],
     ["painted:host/painted/src/canvas/presence.rs", "attach"],
+    ["painted:host/painted/src/canvas/secrets.rs", "attach"],
     ["painted:host/painted/src/canvas/time.rs", "attach format"],
     ["painted:host/painted/src/com.rs", "ensure_mta ensure_sta"],
     ["painted:host/painted/src/desktop.rs", "activate displays FullScreen::headless install install_displays services"],
@@ -972,11 +986,12 @@ export const classifications = [
   ]),
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
-    ["painted:host/painted/src/picker.rs", "agent cold_share copy_in dimensions file know_roots open place resolve roots set_roots xdg_base"],
+    ["painted:host/painted/src/picker.rs", "agent cold_share copy_in dimensions file know_roots open place resolve roots scripted set_roots xdg_base"],
   ]),
   group("presence storage", ["durable operation"], "app-scoped secret vault/backend and secret generation", "durable",
     "host/painted/src/presence_secrets.rs backend/on_keystore select the app vault; system_support.rs SecretSession seeds and remembers secret records. Stored secret state is separate from a session-owned presence check.", [
     ["painted:host/painted/src/presence_secrets.rs", "backend on_keystore"],
+    ["painted:host/painted/src/secret_files.rs", "EncryptedFiles::new"],
     ["painted:host/painted/src/system_support.rs", "SecretSession::new SecretSession::remember SecretSession::seed"],
   ]),
   group("identity bookkeeping", ["one-shot"], "local cursor, metric, cache generation or diagnostic count; not a request ticket", "UI-owned",
@@ -1221,7 +1236,9 @@ export const classifications = [
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/picker/shared.rs:596-630 updates only a token accepted by router.share. Copied files can survive, but this completion targets the current router token.", [
-    ["painted:host/painted/src/presenter/picker/share.rs", "Presenter::land Presenter::land_cold_share Presenter::receive"],
+    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_launchShare"],
+    ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::launch_share"],
+    ["painted:host/painted/src/presenter/picker/share.rs", "Presenter::land Presenter::land_cold_share Presenter::land_launch_share Presenter::launch_share Presenter::receive"],
   ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "pending ticket and source turn; UI target by default", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/reply.rs:27-88 checks pending, background, tool and module-work tickets; reply.rs:309 preserves effectful reply writes. Ordinary resource/then ownership is inferred from PendingReq.target in commit.rs:960.", [

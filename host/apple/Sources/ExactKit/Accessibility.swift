@@ -298,24 +298,35 @@ extension NodeView {
     /// the author's key handler does (`stepRange`).
     var adjustsRange: Bool { rangeRole == "slider" || rangeRole == "spinbutton" }
     /// An assistive app's increment (`up`) or decrement of a drawn `slider` or
-    /// `spinbutton`: a keydown and a keyup at this node for the author's `key`
-    /// and `keyup` handlers to answer, as WebKit adjusts an ARIA range
-    /// (`AccessibilityNodeObject::postKeyboardKeysForValueChange`): ArrowUp or
-    /// ArrowDown for a spin button (ARIA's keys for one) or an
-    /// `aria-orientation="vertical"` slider, else ArrowRight or ArrowLeft,
-    /// swapped where the node's computed `direction` is `rtl`. No default
-    /// action follows. False where there is nothing to step.
+    /// `spinbutton`, which only its author's keys move (`adjustKeys`): ArrowUp
+    /// or ArrowDown for a spin button (ARIA's keys for one) or an
+    /// `aria-orientation="vertical"` slider. False where there is nothing to step.
     @discardableResult
     func stepRange(up: Bool) -> Bool {
-        guard adjustsRange, !inert, let presenter, presenter.views[id] === self else { return false }
-        let key = if rangeRole == "spinbutton" || props["accessibilityOrientation"] == "vertical" {
+        guard adjustsRange, !inert, presenter?.views[id] === self else { return false }
+        adjustKeys(up: up, vertical: rangeRole == "spinbutton" || props["accessibilityOrientation"] == "vertical")
+        return true
+    }
+    /// An assistive app's increment (`up`) or decrement as the range's arrow
+    /// key: a keydown and a keyup at this node for the author's `key` and
+    /// `keyup` handlers, as WebKit adjusts an ARIA range
+    /// (`AccessibilityNodeObject::postKeyboardKeysForValueChange`): ArrowUp or
+    /// ArrowDown for a `vertical` one, else ArrowRight or ArrowLeft, swapped
+    /// where the node's computed `direction` is `rtl`. `step` is the key's
+    /// default action, a native range's own move: it runs between the two, as
+    /// a keyboard's does, unless a handler called `preventDefault()` on the
+    /// keydown (LLP 1069.001, amended 2026-11-16). The agent's held key sends
+    /// one half at a time: `phase` "down" is the keydown and its `step`, a
+    /// repeated one where `repeats`, and "up" the keyup.
+    func adjustKeys(up: Bool, vertical: Bool = false, phase: String? = nil, repeats: Bool = false, step: () -> Void = {}) {
+        guard let presenter else { return }
+        let key = if vertical {
             up ? "ArrowUp" : "ArrowDown"
         } else {
             up == ((style["direction"]?.string ?? presenter.documentDirection) != "rtl") ? "ArrowRight" : "ArrowLeft"
         }
-        _ = presenter.keyDown(at: self, key, code: key)
-        presenter.keyUp(at: self, key, code: key)
-        return true
+        if phase != "up", !presenter.keyDown(at: self, key, code: key, repeats: repeats) { step() }
+        if phase != "down" { presenter.keyUp(at: self, key, code: key) }
     }
     var accessibilityVisible: Bool {
         guard paragraphOwner.window != nil, !inert, accessibilityExposed else { return false }

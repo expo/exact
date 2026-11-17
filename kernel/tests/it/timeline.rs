@@ -301,3 +301,92 @@ fn a_consumer_whose_scoped_source_is_destroyed_has_no_effect() {
         "and the clock moves nothing"
     );
 }
+
+#[test]
+fn default_scroll_containers_drive_descendant_timelines() {
+    exact_kernel::timeline::link();
+    for kind in [NodeType::ScrollView, NodeType::List] {
+        for timeline in ["--scroll", "scroll()"] {
+            let mut k = Kernel::with_monospace();
+            let mut consumer_style = fade();
+            for (id, css) in [
+                (StyleId::Width, "100px"),
+                (StyleId::Height, "100px"),
+                (StyleId::AnimationTimeline, timeline),
+                (StyleId::AnimationRange, "0px 200px"),
+            ] {
+                consumer_style
+                    .set_dynamic(id, &StyleValue::Text(css.into()))
+                    .unwrap();
+            }
+            let receipt = k
+                .apply(
+                    0,
+                    1,
+                    &[
+                        Op::CreateView {
+                            id: 1,
+                            node_type: NodeType::View,
+                        },
+                        Op::CreateView {
+                            id: 2,
+                            node_type: kind,
+                        },
+                        Op::CreateView {
+                            id: 3,
+                            node_type: NodeType::View,
+                        },
+                        Op::CreateView {
+                            id: 4,
+                            node_type: NodeType::View,
+                        },
+                        Op::SetStyle {
+                            id: 2,
+                            patch: rows(&[
+                                (StyleId::Width, "300px"),
+                                (StyleId::Height, "500px"),
+                                (StyleId::ScrollTimelineName, "--scroll"),
+                            ]),
+                        },
+                        Op::SetStyle {
+                            id: 3,
+                            patch: rows(&[(StyleId::Height, "1400px")]),
+                        },
+                        Op::SetStyle {
+                            id: 4,
+                            patch: consumer_style,
+                        },
+                        Op::SetChildren {
+                            id: 1,
+                            children: vec![2],
+                        },
+                        Op::SetChildren {
+                            id: 2,
+                            children: vec![4, 3],
+                        },
+                        Op::AttachRoot { id: 1 },
+                    ],
+                )
+                .unwrap();
+            k.compute_layout(1, exact_kernel::Offer::definite(300., 778.))
+                .unwrap();
+            let mut engine = Engine::new();
+            k.motion_sync(&receipt).apply(&mut engine).unwrap();
+            for (node, binding) in k.place_timelines() {
+                engine.set_animation_timeline(node, binding);
+            }
+            let source = motion_node(k.node(2).unwrap().key);
+            let consumer = motion_node(k.node(4).unwrap().key);
+            engine.set_scroll_offset(source, 0., 100.);
+            assert_eq!(
+                opacity(&mut engine, consumer),
+                Some(0.5),
+                "{kind:?} {timeline}"
+            );
+            let scrollers = k.timeline_scrollers();
+            assert_eq!(scrollers.len(), 1);
+            assert_eq!(scrollers[0].view, 2);
+            assert!(!scrollers[0].page);
+        }
+    }
+}

@@ -211,13 +211,21 @@ pub fn android_entry(
 
 /// What the APK's build reads beside an Android plan, from an app's
 /// Android crate or a game's bake: `uses.txt`, [`android_uses`] one a line,
-/// and `permissions.txt`, the Android permissions its grant lines and
-/// module names derive beyond the compatibility id's reach.
+/// `permissions.txt`, the Android permissions its grant lines and module
+/// names derive, and `transfers.rs`, the imported transfer package's JNI entry.
 pub fn android_reach(
     app_root: &Path,
     plan: &exact_plan::Plan,
     out_dir: &Path,
 ) -> Result<(), String> {
+    let transfer = if plan.package_extensions().get("background-transfer")
+        == Some(&"@exact/background-transfer")
+    {
+        "exact_painted::android_transfer_jni!();\n"
+    } else {
+        ""
+    };
+    std::fs::write(out_dir.join("transfers.rs"), transfer).map_err(|e| e.to_string())?;
     let uses = android_uses(plan);
     std::fs::write(out_dir.join("uses.txt"), uses.join("\n")).map_err(|e| e.to_string())?;
     // The grant ceiling of the compatibility id the build script wrote

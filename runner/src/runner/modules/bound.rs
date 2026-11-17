@@ -23,6 +23,12 @@ use crate::request::{Reply, Request};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) fn with_authority(body: &[u8], scope: &str) -> Vec<u8> {
+    let mut body: Json = serde_json::from_slice(body).expect("forwarded module call");
+    body["authority"] = json!(scope);
+    body.to_string().into_bytes()
+}
+
 impl<D: DataSource> Runner<D> {
     /// The host's implementations answer `real` as in production, and
     /// `agent`, told they run under the agent, answer an interface that is
@@ -241,6 +247,11 @@ impl<D: DataSource> Runner<D> {
                     "denied": sub["permission"]["denied"],
                 });
             }
+        }
+        // A person's input stands (`admit.rs`): the implementation may take
+        // the call as their act.
+        if self.user_activation(origin) {
+            body["userActivation"] = json!(true);
         }
         // A send's number, which `cancel` names if it is let go (LLP 1133.016 D15 item 2).
         if row.send {

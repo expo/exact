@@ -1,5 +1,9 @@
 // RangeAdjustIOSTests: drawn sliders and a spin button, each stepped by its own key handler;
-// under a right-to-left column, one slider inherits `rtl` and one says `ltr`.
+// under a right-to-left column, one slider inherits `rtl` and one says `ltr`. A native range
+// whose key handler takes the arrows (10 a key) while its drag is free, one that takes none,
+// one whose key handler disables it, one whose key handler puts it at its maximum, one whose
+// handlers count its repeated keydowns and its keyups, one `appearance="none"`, and one under
+// the right-to-left column whose key handler records the key.
 component RangeAdjust
   state level = 50
   state floor = 3
@@ -25,10 +29,66 @@ component RangeAdjust
       ahead = ahead + 10
     if k == "ArrowLeft"
       ahead = ahead - 10
+  state at = 40
+  state plain = 40
+  action seekKey(k: string)
+    if k == "ArrowRight" || k == "ArrowUp"
+      preventDefault()
+      at = min(at + 10, 240)
+    if k == "ArrowLeft" || k == "ArrowDown"
+      preventDefault()
+      at = max(at - 10, 0)
+  action seek(v: number)
+    at = v
+  action setPlain(v: number)
+    plain = v
+  state late = 40
+  state shut = false
+  action shutKey(k: string)
+    shut = true
+  action setLate(v: number)
+    late = v
+  state mirrored = 40
+  state mirroredKey = ""
+  action hearMirrored(k: string)
+    mirroredKey = k
+  action setMirrored(v: number)
+    mirrored = v
+  state edge = 230
+  action edgeKey(k: string)
+    edge = 240
+  action setEdge(v: number)
+    edge = v
+  state held = 40
+  state heldRepeats = 0
+  state heldUps = 0
+  state heldAtUp = 0
+  action heldKey(k: string, e: KeyboardEvent)
+    if e.repeat
+      heldRepeats = heldRepeats + 1
+  action heldUp(k: string)
+    heldUps = heldUps + 1
+    heldAtUp = held
+  action setHeld(v: number)
+    held = v
+  state bare = 40
+  action setBare(v: number)
+    bare = v
   view
     column width="100%" height="100%"
+      input type="range" min=0 max=240 step="any" value=at key=seekKey input=seek aria-label="Seek" testId="seek"
+      input type="range" min=0 max=240 step="any" value=plain input=setPlain aria-label="Plain" testId="plain"
+      input type="range" min=0 max=240 step="any" value=late disabled=shut key=shutKey input=setLate aria-label="Late" testId="late"
+      input type="range" min=0 max=240 step="any" value=edge key=edgeKey input=setEdge aria-label="Edge" testId="edge"
+      input type="range" min=0 max=240 step=5 value=held key=heldKey keyup=heldUp input=setHeld aria-label="Held" testId="held"
+      text `${held} ${heldRepeats} ${heldUps} ${heldAtUp}` testId="held-heard"
+      input type="range" appearance="none" min=0 max=240 value=bare input=setBare aria-label="Bare" testId="bare" width=200 height=20
+      text `${bare}` testId="bare-at"
+      text `${at}` testId="at"
       box role="slider" tabindex=0 aria-label="Level" aria-valuenow=level aria-valuetext=`${level} percent` key=stepLevel testId="level" width=200 height=44
       box role="spinbutton" tabindex=0 aria-label="Floor" aria-valuenow=floor key=stepFloor testId="floor" width=100 height=44
       column direction="rtl"
         box role="slider" tabindex=0 aria-label="Back" aria-valuenow=back key=stepBack testId="back" width=200 height=44
         box role="slider" tabindex=0 aria-label="Ahead" aria-valuenow=ahead key=stepAhead direction="ltr" testId="ahead" width=200 height=44
+        input type="range" min=0 max=240 step="any" value=mirrored key=hearMirrored input=setMirrored aria-label="Mirrored" testId="mirrored"
+        text mirroredKey testId="mirrored-key"

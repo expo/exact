@@ -16,6 +16,7 @@
 //! - [`json`] — the values as the batch carries them.
 //! - [`shaders`] — the WGSL by name, registered at run time (LLP 1030 D8).
 //! - [`module!`] — the exports for one app's registry.
+//! - [`android_init!`] — an artifact's Android initialization entry.
 //! - `fixture` (native) — a surface rendered and read back, for fixtures.
 
 #![deny(missing_docs)]
@@ -1388,6 +1389,7 @@ pub use device::{
     load_gpu, requested_features, requested_limits, DeviceFailure, DeviceFailureKind,
 };
 
+pub mod android;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fixture;
 #[cfg(not(target_arch = "wasm32"))]

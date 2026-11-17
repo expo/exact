@@ -1,4 +1,5 @@
-//! Neutral top-layer defaults; the host admits and opens the retained subtree.
+//! Neutral top-layer defaults, and the Mac's menu inset; the host admits and
+//! opens the retained subtree.
 use super::*;
 use crate::{generated::metric, style::metrics, Dimension, StyleValue};
 use std::sync::LazyLock;
@@ -141,6 +142,25 @@ static RAISED: LazyLock<StyleProps> = LazyLock::new(|| {
         metric::RAISED_SHADOW_BLUR,
         metric::RAISED_SHADOW_ALPHA,
     );
+    s
+});
+/// A menu's content inset on the Mac (`menu-padding`'s Mac value): an
+/// `NSMenu` keeps its items and their highlight that far inside its panel on
+/// every side. The Mac paints a menu's own rows under the driver and where
+/// its shape is no `NSMenu`'s (LLP 1021 D4); a menu AppKit presents is laid
+/// out by AppKit, where this box is not seen.
+static MAC_MENU: LazyLock<StyleProps> = LazyLock::new(|| {
+    let inset = metrics::length_in(metric::MENU_PADDING, metrics::Column::Mac, 16., 16.).unwrap();
+    let mut s = StyleProps::default();
+    for id in [
+        StyleId::PaddingTop,
+        StyleId::PaddingRight,
+        StyleId::PaddingBottom,
+        StyleId::PaddingLeft,
+    ] {
+        s.set_dynamic(id, &StyleValue::Number(inset as f64))
+            .expect("menu inset");
+    }
     s
 });
 static DIALOG: LazyLock<StyleProps> = LazyLock::new(|| {
@@ -325,6 +345,12 @@ impl NodeArena {
             && self.parent(slot).is_some_and(|p| self.neutral_alert(p))
     }
     pub(crate) fn alert_context(&self, slot: u32) -> u8 {
+        if metrics::column() == metrics::Column::Mac {
+            let props = self.props(slot);
+            let menu = props.str(PropId::Popover).is_some()
+                && props.str(PropId::AccessibilityRole) == Some("menu");
+            return if menu { 18 } else { 0 };
+        }
         if metrics::column() == metrics::Column::Neutral {
             let props = self.props(slot);
             if props.str(PropId::Popover).is_some()
@@ -412,6 +438,7 @@ impl NodeArena {
             13 => Some(&DIALOG),
             14 | 16 => Some(&POPOVER),
             15 | 17 => Some(&RAISED),
+            18 => Some(&MAC_MENU),
             _ => None,
         }
     }

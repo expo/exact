@@ -37,6 +37,20 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Android initialization
+
+`dlopen` runs no `JNI_OnLoad`, so a module that calls into Java exports the
+optional `uint32_t gpu_android_init(JavaVM *vm, JNIEnv *env, jobject context)`,
+which `exact_gpu::android_init!` defines
+(`docs/recipes/gpu-module-android.md`). The Android host calls it once for each loaded
+image in a process, on the thread that opens the module, after verifying the
+module's baked identity and before any other export. `context` is the
+application `Context`, a global reference the host keeps for the process. It
+returns 0, or nonzero with its reason in `gpu_error` on the same thread; a
+failure or a pending Java exception refuses the module, then and at every later
+open. The host keeps an image whose entry ran loaded for the life of the
+process. A module without the export is opened as before. See LLP 1009 D11.
+
 ## Target color space
 
 `Surface::color_space()` requests `ColorSpace::Srgb` (the default) or
@@ -223,7 +237,7 @@ the web, Android, Linux and Windows report unknown.
 |---|---|---|---|
 | web | yes | `gpu_due` in the `requestAnimationFrame` loop | callback times; thermal unknown |
 | iOS, tvOS, macOS | yes | capped `CADisplayLink` range and `gpu_due` per canvas | callback times, fastest period, thermal state |
-| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
+| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one drawn from its buffers in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
 | Linux (display) | no: a rendered canvas repaints every display frame | no | `gpu_period`: the DRM mode's pixel clock over its total pixels |
 | Linux headless, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
 
@@ -233,6 +247,20 @@ Android canvas caps use an interactive-content vote: AOSP suppresses global touc
 The request is a hint, so competing layers and device policy can still choose another rate; even
 presentation needs a device measurement. See [Surface.setFrameRate](https://developer.android.com/reference/android/view/Surface#setFrameRate(float,%20int))
 and [AOSP's refresh-rate selector](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/Scheduler/RefreshRateSelector.cpp).
+
+A canvas composed into the reader's window has no layer of its own, so its cap is a view's vote
+([View.setRequestedFrameRate](https://developer.android.com/reference/android/view/View#setRequestedFrameRate(float))),
+cast with each new canvas frame and sent by the window as a `FIXED_SOURCE` rate for its whole
+layer. The window has one rate, so capped canvases beside each other vote the highest cap of
+those still drawing: one that rests leaves the vote an interval of its cap and 100 ms after its
+last frame. The window keeps the rate between those frames, and drops it at a frame it draws
+with no such vote more than 100 ms after the last, so a cap under 10 fps holds only while nothing
+else in the window is drawn. Whatever else the window draws (a scroll, a playing layer, an uncapped
+canvas, a repaint of the page) casts a category as any view's does, beside which a panel of fixed
+modes ignores the rate, and a touch boosts the window's rate as it does any app's. So this cap
+can hold the panel only while the capped canvases are all that draws and nothing is touched. A
+full-window canvas that must hold its cap through touches returns `true` from `Surface::opaque`
+and gets a layer of its own (below).
 
 ## Performance
 

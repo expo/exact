@@ -236,6 +236,74 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
     assert!(p.top_sheet().is_none());
 }
 
+/// A spot picker (expo/exact#736): a sheet its route keeps open, most of
+/// it a module view (a map that pans), over a strip that hears `pan`.
+const PICKER: &str = r##"routes nav
+  home "/"
+    pick "/pick"
+component App
+  state n = 0
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  action drag(dx: number, dy: number)
+    n = n + 1
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" viewport-fit="cover" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` testId="route-home" position="absolute" inset=0 background-color="#ffffff"
+            button press=open("/pick") testId="open-pick" height=40
+              text "Pick a spot"
+        if e.name == "pick"
+          column navigationKey=`${e.id}` navigationPresentation="modal" closedby="none" testId="route-pick" position="absolute" inset=0
+            native-menu width="100%" height=400 testId="map"
+            box pan=drag touch-action="none" width="100%" height=40 testId="strip"
+"##;
+
+/// The sheet takes a drag as a parent intercepts one, so the reader is
+/// told when the claim on up and down is the sheet's alone: it leaves that
+/// drag with a module view that asked to keep its touch, cancelling the
+/// presenter's contact, and takes it from one that did not (`Contacts.kt`).
+/// A gesture's claim is not told so.
+#[test]
+fn a_sheets_claim_on_a_drag_is_told_apart_from_a_gestures() {
+    let mut p = phone_source(PICKER);
+    tap(&mut p, "open-pick");
+    after(&mut p, 1000.0);
+    let (_, rest) = p.top_sheet().unwrap();
+    let map = rect(&mut p, "map");
+    let (x, y) = (map.0 + map.2 / 2., map.1 + map.3 / 2.);
+    let under = p.scrollers_at(x, y);
+    assert_eq!((under.claims, under.sheet), ((false, true), true));
+    assert_eq!(p.reader_under(x, y, 1.0)[0], 0b110);
+    assert_ne!(p.reader_module(x, y, 1.0)[0], 0, "the map is offered it");
+    // The map kept the drag: with the contact cancelled, the sheet is not
+    // dragged by what the finger does next.
+    let t = p.host().now();
+    p.pointer_down(x, y, t).unwrap();
+    p.pointer_cancel(t + 16.).unwrap();
+    p.pointer_move(x, y + 120., t + 32.).unwrap();
+    assert!(!p.stage_follows_finger(), "the map has the drag");
+    p.pointer_up(x, y + 120., t + 48.).unwrap();
+    after(&mut p, 1000.0);
+    let (_, frame) = p.top_sheet().unwrap();
+    assert!(near(frame.1, rest.1), "{frame:?} {rest:?}");
+    // A view that asked nothing loses it: the moves reach the sheet.
+    let t = p.host().now();
+    p.pointer_down(x, y, t).unwrap();
+    p.pointer_move(x, y + 30., t + 16.).unwrap();
+    assert!(p.stage_follows_finger(), "the sheet has the drag");
+    p.pointer_up(x, y + 30., t + 32.).unwrap();
+    after(&mut p, 1000.0);
+    let strip = rect(&mut p, "strip");
+    let (x, y) = (strip.0 + strip.2 / 2., strip.1 + strip.3 / 2.);
+    let under = p.scrollers_at(x, y);
+    assert_eq!((under.claims, under.sheet), ((true, true), false));
+    assert_eq!(p.reader_under(x, y, 1.0)[0], 0b011);
+}
+
 /// Android moves the last paint instead of painting while
 /// `Presenter::still` is unchanged (`canvas.rs`'s `shift`); a finger moving
 /// the stage leaves it `None`, so each move paints. Without that a dragged

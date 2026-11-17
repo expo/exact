@@ -14,6 +14,82 @@ pub struct WatchEntry {
     pub source: String,
     /// Root component of the watch plan: the first component of `source`.
     pub component: String,
+    /// Names replicated from the companion phone.
+    pub sync: WatchSync,
+}
+
+/// Explicit phone-owned replicas; an empty selection has no transport.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WatchSync {
+    /// Root persisted states, with matching types on both entries.
+    pub state: Vec<String>,
+    /// Ordinary secret.keep names; presence policies are never exported.
+    pub secrets: Vec<String>,
+}
+
+impl WatchSync {
+    /// Whether the binary needs WatchConnectivity.
+    pub fn selected(&self) -> bool {
+        !self.state.is_empty() || !self.secrets.is_empty()
+    }
+
+    /// Binary identity and transport allowlist.
+    pub fn json(&self) -> Value {
+        let mut state = self.state.clone();
+        let mut secrets = self.secrets.clone();
+        state.sort();
+        secrets.sort();
+        serde_json::json!({"state": state, "secrets": secrets})
+    }
+
+    fn read(value: Option<&Value>) -> Result<Self, String> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+        let object = value.as_object().ok_or("watch.sync must be an object")?;
+        if object
+            .keys()
+            .any(|k| !["state", "secrets"].contains(&k.as_str()))
+        {
+            return Err("watch.sync contains an unknown key".into());
+        }
+        let list = |key| -> Result<Vec<String>, String> {
+            let Some(v) = object.get(key) else {
+                return Ok(Vec::new());
+            };
+            v.as_array()
+                .ok_or_else(|| "watch.sync needs arrays of names".to_owned())?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| "watch.sync needs string names".into())
+                })
+                .collect()
+        };
+        let sync = Self {
+            state: list("state")?,
+            secrets: list("secrets")?,
+        };
+        for (kind, names) in [("state", &sync.state), ("secrets", &sync.secrets)] {
+            let mut seen = std::collections::HashSet::new();
+            for name in names {
+                if name.is_empty()
+                    || name.len() > 64
+                    || name.starts_with("exact.")
+                    || !name
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+                    || !seen.insert(name)
+                {
+                    return Err(format!(
+                        "watch.sync.{kind} needs unique explicit names, without internal prefixes"
+                    ));
+                }
+            }
+        }
+        Ok(sync)
+    }
 }
 
 impl Manifest {
@@ -25,7 +101,7 @@ impl Manifest {
         let object = value.as_object().ok_or("watch must be an object")?;
         if let Some(key) = object
             .keys()
-            .find(|k| !["source", "component"].contains(&k.as_str()))
+            .find(|k| !["source", "component", "sync"].contains(&k.as_str()))
         {
             return Err(format!("watch.{key} is unknown; remove it"));
         }
@@ -54,7 +130,11 @@ impl Manifest {
         if taken {
             return Err(format!("a widget or activity has the kind `{WATCH_KIND}`, which names the watch entry's plan; rename it"));
         }
-        Ok(Some(WatchEntry { source, component }))
+        Ok(Some(WatchEntry {
+            source,
+            component,
+            sync: WatchSync::read(object.get("sync"))?,
+        }))
     }
 }
 
@@ -73,6 +153,17 @@ mod tests {
     }
 
     #[test]
+    fn sync_identity_normalizes_order_and_an_absent_selection() {
+        let left = WatchSync::read(Some(&json!({"secrets":["b","a"]}))).unwrap();
+        let right = WatchSync::read(Some(&json!({"state":[],"secrets":["a","b"]}))).unwrap();
+        assert_eq!(left.json(), right.json());
+        assert_eq!(
+            WatchSync::read(None).unwrap().json(),
+            json!({"state":[],"secrets":[]})
+        );
+    }
+
+    #[test]
     fn reads_the_entry() {
         let entry =
             manifest(json!({"watch": {"source": "watch.contract", "component": "AppWatch"}}))
@@ -81,7 +172,8 @@ mod tests {
             entry,
             Ok(Some(WatchEntry {
                 source: "watch.contract".into(),
-                component: "AppWatch".into()
+                component: "AppWatch".into(),
+                sync: WatchSync::default()
             }))
         );
         assert_eq!(manifest(json!({})).watch(), Ok(None));

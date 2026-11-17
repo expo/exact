@@ -159,6 +159,10 @@ section binds (`rules/RULES.md`, "Agents").
   Contract semantics checks (`semantics/README.md`). Non-default crates and hosts
   run their affected tests there too; a local full-workspace build is not a gate.
 - Verify by running, never by grepping. Fix loops get three rounds, then stop and say so.
+- The code to push has been simplified, its tests follow the [test optimization
+  guidelines](docs/testing.md), and its prose and commit message follow the [writing
+  guidelines](#writing). Do this before testing; prose edited after testing needs no rerun
+  unless it changes behavior, like a prompt or agent context.
 - Land it (LLP 1176; Charlie, 2026-11-14: "just land stuff, we can fix it later if it breaks
   something"). When your change passes the gate on your own tree, merge it yourself, at
   once, as a squash, and fix forward what it breaks. Do not hold it for a main that moved

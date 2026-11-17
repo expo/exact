@@ -1058,7 +1058,10 @@ impl<D: DataSource> Runner<D> {
                 return self.as_origin(origin, |r| r.arrived(|r| r.dispatch_event(view, event)));
             }
         }
-        self.arrived(|r| r.dispatch_event(view, event))
+        self.arrived(|r| {
+            r.note_input(&event);
+            r.dispatch_event(view, event)
+        })
     }
 
     fn dispatch_event(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {

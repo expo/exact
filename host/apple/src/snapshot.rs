@@ -2,6 +2,11 @@
 //! (`exact_runner::entry::slots`).
 pub(crate) use exact_runner::entry::slots;
 
+/// How long a refresh waits for a watch import that overlaps its store read:
+/// `IMPORT_WAITS` reads, `IMPORT_WAIT` apart.
+const IMPORT_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
+const IMPORT_WAITS: u32 = 5;
+
 impl<D: exact_runner::DataSource> crate::Host<D> {
     pub(crate) fn entry_timeline(
         &mut self,
@@ -58,9 +63,21 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
             if let Some(error) = endowed.unbound {
                 return Err(format!("{error}; every request is refused"));
             }
-            let snapshot = io
-                .map(|io| (io.snapshot)(endowed.bindings.as_ref(), &app))
-                .unwrap_or_default();
+            // The watch app's import of a phone snapshot can overlap this read. It
+            // takes milliseconds, so wait for it briefly; a refresh refused here
+            // shows no account, and the import's end reloads the timeline.
+            let mut waits = 0;
+            let snapshot = loop {
+                let read = io.map(|io| (io.snapshot)(endowed.bindings.as_ref(), &app));
+                match read.unwrap_or_else(|| Ok(Vec::new())) {
+                    Ok(snapshot) => break snapshot,
+                    Err(_) if waits < IMPORT_WAITS && Instant::now() + IMPORT_WAIT < deadline => {
+                        waits += 1;
+                        std::thread::sleep(IMPORT_WAIT);
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
             let wake = Box::new(std::thread::current());
             #[allow(unsafe_code)]
             extern "C" fn notify(ctx: *mut std::ffi::c_void) {

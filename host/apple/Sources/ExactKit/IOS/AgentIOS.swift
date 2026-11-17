@@ -1048,6 +1048,17 @@ extension Agent {
             return ["typed":v.id, "key":key, "delivery":"recognized"]
         }
         if req["key"] == nil, let reply = presenter.controls.type(v, req["text"] as? String ?? "") { return reply }
+        #if os(iOS)
+        if let key = req["key"] as? String, let reply = presenter.controls.rangeKey(v, key, phase: req["phase"] as? String, repeats: req["repeat"] as? Bool == true) {
+            if req["phase"] as? String == "down", let token = req["releaseKey"] as? String {
+                keyReleases[token] = { [weak presenter, weak v] in
+                    if let v { _ = presenter?.controls.rangeKey(v, key, phase: "up") }
+                    return ["phase": "up", "delivery": "host-activation"]
+                }
+            }
+            return reply
+        }
+        #endif
         if v.props["editable"] == "false", req["key"] == nil || ["Enter", "Backspace"].contains(req["key"] as? String ?? "") { return ["error": "view \(v.id) is readonly"] }
         // @ref LLP 1038 D11 — type on the root delivers a location.
         if v.props["navigationBack"] != nil, req["key"] == nil {

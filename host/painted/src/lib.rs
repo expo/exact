@@ -98,6 +98,8 @@ mod surface_haptics;
 mod surfaces;
 pub mod teardown;
 pub mod text;
+#[cfg(any(target_os = "android", all(test, unix)))]
+pub mod transfer;
 #[cfg(any(target_os = "android", test))]
 #[path = "canvas/travel.rs"]
 mod travel;

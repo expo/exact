@@ -108,13 +108,32 @@ pub struct Var {
     pub fallback: Option<Box<Node>>,
 }
 
+/// An observation of the safe area (LLP 1123 D9, D10's leaf) on `edge`:
+/// the reading box's own, as the solve gives it, or a native target's raw
+/// insets ([`Env::observation`]); else `fallback`, guaranteed-invalid
+/// without one. Its family is the safe area. Only the kernel builds one
+/// until D10's lowering reads `var(--exact-safe-area-inset-*)` and the
+/// target names as it, which the wire's round trip through the text
+/// refuses until then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Observe {
+    /// Whose safe area: the box's own, or a native target's.
+    pub target: super::targets::Target,
+    /// The edge observed.
+    pub edge: Edge,
+    /// What stands in where the observation is unavailable.
+    pub fallback: Option<Box<Node>>,
+}
+
 /// `node` with every local inset (`EnvTerm::Local`) replaced by its points
 /// under `env`, and every custom property by its value there (LLP 1123 D5);
 /// `None` where a property has neither a value nor a fallback.
 fn localize(node: &Node, env: &Env) -> Option<Node> {
-    substitute(node, &|edge| env.local_inset(edge), &mut |name| {
-        env.property(name).cloned()
-    })
+    let leaves = Leaves {
+        local: &|edge| env.local_inset(edge),
+        observed: &|leaf| env.observation(leaf),
+    };
+    substitute(node, &leaves, &mut |name| env.property(name).cloned())
 }
 
 /// A calculation tree as §10.10 builds one and §10.10.1 leaves it: numeric
@@ -130,6 +149,8 @@ pub enum Node {
     Env(EnvTerm),
     /// `var()` of an author's custom property, resolved per node.
     Var(Var),
+    /// An observation of the box that reads it (LLP 1123 D9, D10's leaf).
+    Observe(Observe),
     /// Its children added.
     Sum(Vec<Node>),
     /// Its children multiplied.
@@ -154,6 +175,7 @@ impl PartialEq for Node {
             (Value(a, u), Value(b, v)) => a.to_bits() == b.to_bits() && u == v,
             (Env(a), Env(b)) => a == b,
             (Var(a), Var(b)) => a == b,
+            (Observe(a), Observe(b)) => a == b,
             (Sum(a), Sum(b)) | (Product(a), Product(b)) | (Min(a), Min(b)) | (Max(a), Max(b)) => {
                 a == b
             }
@@ -171,6 +193,10 @@ impl Node {
             Node::Value(..) | Node::Env(..) => (&[], &[]),
             Node::Var(v) => (
                 v.fallback.as_deref().map_or(&[][..], std::slice::from_ref),
+                &[],
+            ),
+            Node::Observe(o) => (
+                o.fallback.as_deref().map_or(&[][..], std::slice::from_ref),
                 &[],
             ),
             Node::Sum(c) | Node::Product(c) | Node::Min(c) | Node::Max(c) => (c, &[]),
@@ -210,6 +236,10 @@ impl Node {
             Node::Var(v) => match env.property(&v.name) {
                 Some(value) => value.value(env, basis)?,
                 None => v.fallback.as_ref()?.value(env, basis)?,
+            },
+            Node::Observe(o) => match env.observation(o) {
+                Some(points) => f64::from(points),
+                None => o.fallback.as_ref()?.value(env, basis)?,
             },
             Node::Sum(c) => {
                 let mut total = 0.0;
@@ -373,6 +403,11 @@ pub(crate) fn undefined_in(node: &Node, env: &Env) -> bool {
             (None, Some(fallback)) => undefined_in(fallback, env),
             (None, None) => true,
         },
+        Node::Observe(o) => match (env.observation(o), &o.fallback) {
+            (Some(_), _) => false,
+            (None, Some(fallback)) => undefined_in(fallback, env),
+            (None, None) => true,
+        },
         n => n.children().any(|c| undefined_in(c, env)),
     }
 }
@@ -402,37 +437,48 @@ pub(crate) fn length_css(d: &Dimension, out: &mut String) {
     }
 }
 
-/// `node` with each local inset as `local` gives it and each custom
-/// property as `property` resolves it (LLP 1123 D5); `None` where a
-/// property has neither a value nor a fallback.
+/// What a substitution reads at a node: its local insets, and its
+/// observations, `None` where one is unavailable (LLP 1123 D9).
+pub(crate) struct Leaves<'a> {
+    pub(crate) local: &'a dyn Fn(Edge) -> f32,
+    pub(crate) observed: &'a dyn Fn(&Observe) -> Option<f32>,
+}
+
+/// `node` with each local inset and observation as `leaves` gives it and
+/// each custom property as `property` resolves it (LLP 1123 D5); `None`
+/// where a property or an observation has neither a value nor a fallback.
 pub(crate) fn substitute(
     node: &Node,
-    local: &dyn Fn(Edge) -> f32,
+    leaves: &Leaves<'_>,
     property: &mut dyn FnMut(&Arc<str>) -> Option<Node>,
 ) -> Option<Node> {
     let all = |c: &[Node], property: &mut dyn FnMut(&Arc<str>) -> Option<Node>| {
         c.iter()
-            .map(|n| substitute(n, local, property))
+            .map(|n| substitute(n, leaves, property))
             .collect::<Option<Vec<_>>>()
     };
     Some(match node {
-        Node::Env(EnvTerm::Local(edge)) => Node::Value(f64::from(local(*edge)), Unit::Px),
+        Node::Env(EnvTerm::Local(edge)) => Node::Value(f64::from((leaves.local)(*edge)), Unit::Px),
         Node::Var(v) => match property(&v.name) {
             Some(value) => value,
-            None => substitute(v.fallback.as_ref()?, local, property)?,
+            None => substitute(v.fallback.as_ref()?, leaves, property)?,
+        },
+        Node::Observe(o) => match (leaves.observed)(o) {
+            Some(points) => Node::Value(f64::from(points), Unit::Px),
+            None => substitute(o.fallback.as_ref()?, leaves, property)?,
         },
         Node::Value(..) | Node::Env(..) => node.clone(),
         Node::Sum(c) => Node::Sum(all(c, property)?),
         Node::Product(c) => Node::Product(all(c, property)?),
         Node::Min(c) => Node::Min(all(c, property)?),
         Node::Max(c) => Node::Max(all(c, property)?),
-        Node::Negate(c) => Node::Negate(Box::new(substitute(c, local, property)?)),
-        Node::Invert(c) => Node::Invert(Box::new(substitute(c, local, property)?)),
+        Node::Negate(c) => Node::Negate(Box::new(substitute(c, leaves, property)?)),
+        Node::Invert(c) => Node::Invert(Box::new(substitute(c, leaves, property)?)),
         Node::Clamp(c) => {
             let [lo, v, hi] = c.as_ref();
             // `none` stays `none`; an argument that substitutes to nothing is invalid
             let mut one = |n: &Option<Node>| match n {
-                Some(n) => substitute(n, local, property).map(Some),
+                Some(n) => substitute(n, leaves, property).map(Some),
                 None => Some(None),
             };
             Node::Clamp(Box::new([one(lo)?, one(v)?, one(hi)?]))
@@ -671,6 +717,49 @@ impl Comparison {
         })
     }
 
+    /// Whether it reads an observation of the safe area, its box's own or a
+    /// native target's (LLP 1123 D9).
+    pub(crate) fn reads_observed(&self) -> bool {
+        self.tree(|t| t.any(&|n| matches!(n, Node::Observe(_))))
+            .unwrap_or(false)
+    }
+
+    /// The edges of its box's own safe area it reads, fallbacks included: a
+    /// bit per edge, as [`Edge`] numbers them.
+    pub(crate) fn observed_edges(&self) -> u8 {
+        let edges = std::cell::Cell::new(0u8);
+        self.tree(|t| {
+            t.any(&|n| {
+                if let Node::Observe(o) = n {
+                    if o.target == super::targets::Target::Box {
+                        edges.set(edges.get() | 1 << o.edge as u8);
+                    }
+                }
+                false
+            })
+        });
+        edges.get()
+    }
+
+    /// The native targets it reads raw insets from, fallbacks included, each
+    /// with the edge it reads as a bit, as [`Edge`] numbers them, once per
+    /// leaf (LLP 1123 D9, "The native chain").
+    pub(crate) fn targets_read(&self) -> Vec<(super::targets::Target, u8)> {
+        let targets = std::cell::RefCell::new(Vec::new());
+        self.tree(|t| {
+            t.any(&|n| {
+                if let Node::Observe(o) = n {
+                    if o.target != super::targets::Target::Box {
+                        let edge = 1 << o.edge as u8;
+                        targets.borrow_mut().push((o.target.clone(), edge));
+                    }
+                }
+                false
+            })
+        });
+        targets.into_inner()
+    }
+
     /// Whether it reads an author's custom property (LLP 1123 D5), which
     /// resolves per node: in a tree, at a leaf; a text whose `env()` has a
     /// fallback, wherever it names one.
@@ -712,12 +801,17 @@ impl Comparison {
     /// is localized first (LLP 1123 D5).
     pub(crate) fn localized(&self, env: &Env) -> Option<Dimension> {
         self.tree(|t| {
-            t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(_)) | Node::Var(_)))
-                .then(|| {
-                    let t = localize(t, env).map(simplify::simplify);
-                    t.filter(within_expansion)
-                        .map_or(Dimension::Auto, dimension)
-                })
+            t.any(&|n| {
+                matches!(
+                    n,
+                    Node::Env(EnvTerm::Local(_)) | Node::Var(_) | Node::Observe(_)
+                )
+            })
+            .then(|| {
+                let t = localize(t, env).map(simplify::simplify);
+                t.filter(within_expansion)
+                    .map_or(Dimension::Auto, dimension)
+            })
         })
         .flatten()
     }

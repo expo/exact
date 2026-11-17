@@ -513,9 +513,22 @@ pub(crate) fn eligibility(
             .0
             .iter()
             .any(|a| a.duration <= 0.0 || a.iterations <= 0.0);
+        // A circle whose radius is nonpositive at every viewport size has
+        // no layer to animate. Eligibility runs before layout, so a positive
+        // percentage must not be resolved against an unlaid-out viewport.
+        let empty_circle = n.node_type == NodeType::SvgCircle
+            && props.contains(&Property::R)
+            && match n.style.r {
+                exact_kernel::Dimension::Points(r)
+                | exact_kernel::Dimension::Percent(r)
+                | exact_kernel::Dimension::Viewport(_, r) => r <= 0.0,
+                exact_kernel::Dimension::Calc(percent, points) => percent <= 0.0 && points <= 0.0,
+                _ => false,
+            };
         let sampled = if paired
             || (props.contains(&Property::Rotate) && exact_kernel::motion::rotation_needs_sampling(n.style))
             || instant
+            || empty_circle
             // An inline run has no layer to play a spec on: its paragraph
             // paints the engine's sample.
             || n.is_inline_run()

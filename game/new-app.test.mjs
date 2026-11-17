@@ -392,6 +392,7 @@ test('app.json\'s before_build runs before each command that builds, and its fai
     writeFileSync(resolve(sdk, 'host/web/build.mjs'), step('`build ${existsSync(process.env.EXACT_APP_DIR + "/assets/photo.jpg")}`'));
     writeFileSync(resolve(sdk, 'scripts/agent.mjs'), `${step("'drive'")} console.log('{"drove":true}');`);
     writeFileSync(resolve(sdk, 'scripts/share.mjs'), step("'share'"));
+    for (const verb of ['deploy', 'push']) writeFileSync(resolve(sdk, `scripts/${verb}.mjs`), step(JSON.stringify(verb)));
     writeFileSync(resolve(sdk, 'host/web/serve.mjs'), step("'serve'"));
     writeFileSync(resolve(sdk, 'scripts/exact.mjs'), step('`exact ${process.argv.slice(2, 4).join(" ")}`'));
     writeFileSync(resolve(sdk, 'game/app/shells.mjs'), step('`shells ${process.argv.slice(3).join(" ")}`'));
@@ -434,6 +435,10 @@ test('app.json\'s before_build runs before each command that builds, and its fai
     // share builds the iPhone app it publishes.
     assert.equal(exact(['share']).status, 0);
     assert.deepEqual(runs(), ['fetch --small in app', 'share']);
+    for (const verb of ['deploy', 'push']) {
+      assert.equal(exact([verb]).status, 0);
+      assert.deepEqual(runs(), ['fetch --small in app', verb]);
+    }
     // Under `contract build --json` its output is dropped, so stdout is the compiler's array alone and stderr is
     // empty; a failure is one diagnostic there.
     const quiet = exact(['contract', 'build', 'app.contract', '--json']);
@@ -469,11 +474,12 @@ test('app.json\'s before_build runs before each command that builds, and its fai
     assert.deepEqual(runs(), ['lint']);
     declare(['bun', 'fetch.mjs', '--small']);
     // A flag the command's script refuses is refused before anything runs, a drive's included.
-    for (const args of [['web-build'], ['serve'], ['share'], ['agent', 'web']]) {
+    const guarded = [['web-build'], ['serve'], ['share'], ['deploy'], ['push'], ['agent', 'web']];
+    const refusals = guarded.map(args => {
       const flagged = exact([...args, '--bogus']);
-      assert.equal(flagged.status, 2, args.join(' '));
-      assert.match(flagged.stderr, /unknown flag --bogus/);
-    }
+      return [args, flagged.status, /unknown flag --bogus/.test(flagged.stderr)];
+    });
+    assert.deepEqual(refusals, guarded.map(args => [args, 2, true]));
     assert.deepEqual(runs(), []);
     // exact.mjs run by the preparation prepares nothing again.
     declare(['bun', 'exact.mjs', 'web-build']);

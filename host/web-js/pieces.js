@@ -496,9 +496,7 @@ export let Input = null,
 export function input() {
   if (Inputs || typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return Inputs;
   inflight.n++;
-  // Its link handler asks the wasm's route table; this runtime routes its own.
   const x = (globalThis.exact ??= {});
-  (x.wasm ??= {}).exact_route_match ??= () => 0;
   const to = (id, p, k) => Views.get(id)?.[k]?.(...p.split(',').map(Number));
   // after paint, or a second on where frames are held (a frame scrolled out of view)
   return (Inputs = new Promise(r => {

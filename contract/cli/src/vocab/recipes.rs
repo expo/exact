@@ -51,6 +51,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("foldables"),
     recipe!("functions"),
     recipe!("gpu-module"),
+    recipe!("gpu-module-android"),
     recipe!("grouped-form"),
     recipe!("in-app-browser"),
     recipe!("ios-driving"),

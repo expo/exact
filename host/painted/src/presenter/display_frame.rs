@@ -321,6 +321,8 @@ impl<D: DataSource> Presenter<D> {
         {
             return false;
         }
+        // Something shows the session from here on.
+        self.unshown = false;
         // Consume once, even after reload. A retained pixel handle never pins
         // an old native paragraph/picture after this acknowledgement.
         let picture = frame.picture.borrow_mut().take();
@@ -402,6 +404,7 @@ impl<D: DataSource> Presenter<D> {
             self.queue_collections();
         }
         self.land_cold_share();
+        self.land_launch_share();
         if !self.reader_blesses {
             if let Some(u) = self.updates.as_mut() {
                 u.boot_succeeded();
