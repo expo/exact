@@ -70,7 +70,7 @@ impl Observations {
         self.inputs.get(&slot).copied().unwrap_or([Some(0.0); 4])
     }
 
-    fn band(&self, owner: u32) -> Option<[f32; 4]> {
+    pub(crate) fn band(&self, owner: u32) -> Option<[f32; 4]> {
         self.bands.get(&owner).copied().flatten()
     }
 
@@ -124,10 +124,12 @@ impl Kernel {
     /// contributions to it, which its boxes do not observe (D11,
     /// "Provenance"); `None` while it is unavailable, which makes its
     /// readers' observations guaranteed-invalid, so their fallbacks apply.
-    /// Returns whether a layout is owed: the band less the contributions
-    /// changed and some box reads an observation. The update is refused
-    /// whole, keeping the last, for nonfinite or negative insets, a
-    /// nonfinite effect, or a contribution's identity twice.
+    /// The band less the contributions is what the owner's host clears for
+    /// its content root (D3). Returns whether a layout is owed: that band
+    /// changed, and it moved the content root or some box reads an
+    /// observation. The update is refused whole, keeping the last, for
+    /// nonfinite or negative insets, a nonfinite effect, or a
+    /// contribution's identity twice.
     pub fn set_owner_band(
         &mut self,
         view: ViewId,
@@ -142,13 +144,15 @@ impl Kernel {
             return Err(LayoutError::InvalidEnv.into());
         }
         provenance::check(contributions)?;
+        let cleared = super::block::clearance(&self.arena, slot);
         let observations = &mut self.arena.observations;
         let band = band.map(|raw| provenance::incoming(raw, contributions));
         if observations.bands.insert(slot, band) == Some(band) {
             return Ok(false);
         }
         observations.invalidate_band(Some(slot));
-        Ok(!self.arena.readers.observers.is_empty())
+        let moved = super::block::clearance(&self.arena, slot) != cleared;
+        Ok(moved || !self.arena.readers.observers.is_empty())
     }
 
     /// Set the session view's band, top right bottom left in the document's

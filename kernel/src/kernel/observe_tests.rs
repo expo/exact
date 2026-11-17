@@ -108,16 +108,23 @@ fn centring() -> Op {
 }
 
 /// A document (1) holding an owner (2) with a block of `width` by
-/// `height`, and `ops` for what it holds.
+/// `height`, whose root takes the container region so that its boxes lie
+/// under its band (LLP 1123 D3, D4), and `ops` for what it holds.
 fn owner(width: f32, height: f32, mut ops: Vec<Op>) -> Kernel {
     let mut k = Kernel::with_monospace();
-    ops.splice(0..0, create(1..=2));
+    ops.splice(0..0, create(1..=2).into_iter().chain([takes_container(2)]));
     ops.push(style(1, vec![], &[(StyleId::Height, "844")]));
     ops.push(Op::AttachRoot { id: 1 });
     k.apply(0, 1, &ops).unwrap();
     let block = block(BlockAxis::Is(width), BlockAxis::Is(height));
     k.set_host_block(2, Some(block)).unwrap();
     k
+}
+
+/// `id` taking the container region on every edge, as a content owner's
+/// root that lies under its band (LLP 1123 D4).
+fn takes_container(id: ViewId) -> Op {
+    style(id, vec![], &[(StyleId::SafeAreaIgnore, "container")])
 }
 
 fn lay_out(k: &mut Kernel) {
@@ -542,6 +549,7 @@ fn an_owner_root_under_a_scroller_observes_its_own_band() {
         &[],
     ));
     ops.extend([
+        takes_container(2),
         children(1, &[3]),
         children(3, &[2]),
         Op::AttachRoot { id: 1 },
@@ -802,7 +810,7 @@ fn a_band_change_measures_only_its_owners_readers() {
         ops.push(style(reader, pad, &[(StyleId::Height, "10")]));
         ops.push(children(id, &[reader]));
     }
-    ops.push(children(1, &[2, 5]));
+    ops.extend([takes_container(5), children(1, &[2, 5])]);
     let mut k = owner(390.0, 400.0, ops);
     let block = block(BlockAxis::Is(390.0), BlockAxis::Is(400.0));
     k.set_host_block(5, Some(block)).unwrap();
@@ -1183,3 +1191,6 @@ mod targets;
 
 #[path = "provenance_tests.rs"]
 mod provenance;
+
+#[path = "content_root_tests.rs"]
+mod content_root;

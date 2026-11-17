@@ -166,6 +166,7 @@ fn observation_cost_of_many_owners() {
         let roots: Vec<u32> = (0..owners).map(|o| 10_000 + o * 100).collect();
         for &root in &roots {
             ops.extend(create(root..=root + 10));
+            ops.push(takes_container(root));
             let rows: Vec<u32> = (root + 1..=root + 10).collect();
             for &row in &rows {
                 let pad = vec![(StyleId::PaddingTop, leaf())];
