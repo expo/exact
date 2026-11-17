@@ -526,6 +526,7 @@ nothing yet.
 | Sky, fog, tint and sprite colours | `Environment.background`, `Fog.color`, `Tint.color` and `Sprite.color` are a `Color`: `Some(Color::hex("#bad6d1"))`; `[r, g, b].into()` keeps linear values |
 | Ring, torus, cone and halo | `Mesh::ring(inner, outer)`, `Mesh::torus(radius, tube)`, `Mesh::cone(radius, height)`, `Material::alpha(a)`; [halo recipe](recipes/halo.md). |
 | Grid and fog | `Material::grid(Color::hex("#6f8486"), spacing)` and the saved `Environment`/`Fog` resource |
+| No haze | `Environment { fog: None, ..Environment::default() }`. An `Environment` fogs toward the horizon colour unless it says otherwise, so one that sets only `background` still pales distant surfaces |
 | An underwater scene | `w.insert_resource(Environment::underwater())`, a sun from above and no opaque surface over the floor; [underwater recipe](recipes/underwater.md) |
 | A water surface, caustics and light shafts | `w.insert_resource(Water::at(8.))`: the surface at that height, seen from below through Snell's window, caustics on lit surfaces under it and shafts in the water (`caustics: None`, `shafts: None` to leave either out); [underwater recipe](recipes/underwater.md) |
 | Fade a glowing mesh | Attach `Glow` to `Material::glow`; call `beacon.glow_to(1.0, 0.5)` once. The renderer samples at frame time. |
