@@ -4641,9 +4641,9 @@ accessible label or text titles it, and `disabled` disables it. An item in the
 app menu or Help is the app's, so it stays enabled while no window is key and
 under a sheet or a Contract modal dialog. Keep the button reachable: the agent taps it,
 and other hosts show that ordinary button, with no application menu.
-On the root, `-exact-menu-remove="show-tab-bar autofill close-all"` removes
+On the root, `-exact-menu-remove="show-tab-bar close-all"` removes
 selected standard items. Its whitespace-separated list must be literal; unknown
-ids and non-root use are refused. The fixed ids are `close-all`, `autofill`, `show-tab-bar`, `show-all-tabs`, `enter-full-screen`,
+ids and non-root use are refused. The fixed ids are `close-all`, `show-tab-bar`, `show-all-tabs`, `enter-full-screen`,
 `minimize`, `zoom`, `bring-all-to-front`, `show-previous-tab`, `show-next-tab`,
 `move-tab-to-new-window`, `merge-all-windows`, `back` (Go ▸ Back), `forward` (Go ▸ Forward), `develop` (the
 Develop menu; its chords stay), `paste-and-match-style`, `find`,

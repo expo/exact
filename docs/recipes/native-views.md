@@ -4,8 +4,8 @@ Use `exact-camera` from `@exact/camera` for a viewfinder;
 [camera calibration](camera-calibration.md) is a package read.
 
 For another native view, declare a hyphenated tag in `app.json` `modules` and make
-it in `modules/apple/*.swift`.
-Contract places a native view:
+it in `modules/apple/*.swift` with public API alone.
+Contract places it:
 
 ```text
 component Clip

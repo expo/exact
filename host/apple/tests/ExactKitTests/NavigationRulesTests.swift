@@ -372,7 +372,7 @@ final class MacShortcutTests: XCTestCase {
             NSApp.helpMenu = previous.2; NSApp.servicesMenu = previous.3; w.close()
         }
         let root = NodeView(id: 900, kind: "view", presenter: p)
-        root.props = ["menuRemove": "close-all autofill show-tab-bar show-all-tabs enter-full-screen minimize zoom bring-all-to-front show-previous-tab show-next-tab move-tab-to-new-window merge-all-windows"]
+        root.props = ["menuRemove": "close-all show-tab-bar show-all-tabs enter-full-screen minimize zoom bring-all-to-front show-previous-tab show-next-tab move-tab-to-new-window merge-all-windows"]
         p.views[root.id] = root; p.root.addSubview(root)
         let bar = DevMenu.makeMenu(shortcuts: p.shortcuts, documents: false, develop: true)
         NSApp.mainMenu = bar
@@ -384,8 +384,7 @@ final class MacShortcutTests: XCTestCase {
         // AppKit's own inserted items, not facsimiles, retain their identifiers.
         file.update(); edit.update()
         let closeAll = try XCTUnwrap(file.items.first { $0.action == Selector(("closeAll:")) })
-        let autofill = try XCTUnwrap(edit.items.first { $0.identifier?.rawValue == "_NSMenuItemAutoFillIdentifier" })
-        XCTAssertTrue(closeAll.isHidden); XCTAssertTrue(autofill.isHidden)
+        XCTAssertTrue(closeAll.isHidden)
         XCTAssertFalse(closeAll.allowsKeyEquivalentWhenHidden)
         // A later AppKit insertion is filtered too, without an app batch or English title.
         view.title = "Présentation"; windows.title = "Fenêtre"
@@ -418,7 +417,7 @@ final class MacShortcutTests: XCTestCase {
         // Root replacement restores the same objects; no commands accumulate.
         root.removeFromSuperview(); p.shortcuts.sync()
         file.update(); edit.update(); view.update(); windows.update()
-        XCTAssertFalse(closeAll.isHidden); XCTAssertFalse(autofill.isHidden)
+        XCTAssertFalse(closeAll.isHidden)
         XCTAssertFalse(tab.isHidden); XCTAssertFalse(next.isHidden)
         p.root.addSubview(root); p.shortcuts.sync(); view.update()
         XCTAssertTrue(tab.isHidden)

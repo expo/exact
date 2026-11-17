@@ -22,6 +22,10 @@ private final class PictureInPictureArm: NSObject, AVPictureInPictureSampleBuffe
     private var controller: AVPictureInPictureController?
     private var panel: NSWindow?
     private var resized: NSObjectProtocol?
+    /// The app's windows when the arm asked to start, which the panel is not (`findPanel`): held
+    /// until AVKit reports the start or its failure, so that none is freed meanwhile and its
+    /// address taken by the panel. Nil before the arm asks and after.
+    private var windowsBefore: [NSWindow]?
     private var started = false
     private var invalid = false
     /// One decode at a time; a path that arrives meanwhile waits, replacing any before it.
@@ -160,7 +164,7 @@ private final class PictureInPictureArm: NSObject, AVPictureInPictureSampleBuffe
 
     private func start(tries: Int) {
         guard !invalid, let controller else { return }
-        if controller.isPictureInPicturePossible { log("start after \(20 - tries) waits " + snapshot()); controller.startPictureInPicture(); return }
+        if controller.isPictureInPicturePossible { log("start after \(20 - tries) waits " + snapshot()); windowsBefore = NSApp.windows; controller.startPictureInPicture(); return }
         if tries == 0 { log("never possible " + snapshot()); say("error picture in picture is not possible"); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.start(tries: tries - 1) }
     }
@@ -173,14 +177,27 @@ private final class PictureInPictureArm: NSObject, AVPictureInPictureSampleBuffe
         CATransaction.commit()
     }
 
-    /// The layer follows the panel's content size, which the person may drag.
+    /// The panel AppKit opens for the picture, found once as AVKit reports the start, and not by
+    /// its class (LLP 1035.003): the one `NSPanel` the app did not have when the arm asked to
+    /// start. AVKit opened a new panel for each new controller and had it among the app's windows
+    /// by then (measured on macOS 27.2). With none or several new panels the arm follows none,
+    /// and the layer keeps its size; were AVKit to keep an older panel while another opened, the
+    /// arm would follow the other.
+    private func findPanel() {
+        guard panel == nil, let before = windowsBefore else { return }
+        windowsBefore = nil
+        let opened = NSApp.windows.filter { window in window is NSPanel && window !== holder && !before.contains { $0 === window } }
+        guard opened.count == 1, let found = opened.first else { log("\(opened.count) panels opened, none followed " + snapshot()); return }
+        panel = found
+        panelFound = CACurrentMediaTime() - born
+        log("panel found " + snapshot())
+        resized = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: found, queue: .main) { [weak self] _ in self?.follow() }
+    }
+
+    /// The layer follows the panel's content size, which the person may drag. AVKit's render
+    /// size does not follow the panel (measured on macOS 27.2: one report, at the start, of the
+    /// layer's own size, and none as the panel settles or is resized).
     private func follow() {
-        if panel == nil, let found = NSApp.windows.first(where: { String(describing: type(of: $0)).contains("PIPPanel") }) {
-            panel = found
-            panelFound = CACurrentMediaTime() - born
-            log("panel found " + snapshot())
-            resized = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: found, queue: .main) { [weak self] _ in self?.follow() }
-        }
         if let size = panel?.contentView?.bounds.size { fit(size) }
     }
 
@@ -188,6 +205,7 @@ private final class PictureInPictureArm: NSObject, AVPictureInPictureSampleBuffe
         log("invalidate " + snapshot())
         traceTimer?.invalidate()
         invalid = true
+        windowsBefore = nil
         if let resized { NotificationCenter.default.removeObserver(resized) }
         if controller?.isPictureInPictureActive == true { controller?.stopPictureInPicture() }
         controller = nil
@@ -206,6 +224,7 @@ private final class PictureInPictureArm: NSObject, AVPictureInPictureSampleBuffe
 
     func pictureInPictureControllerDidStartPictureInPicture(_ c: AVPictureInPictureController) {
         log("did start " + snapshot())
+        findPanel()
         follow()
         // The panel settles its size after its opening animation.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.follow() }
@@ -213,6 +232,7 @@ private final class PictureInPictureArm: NSObject, AVPictureInPictureSampleBuffe
     }
     func pictureInPictureController(_ c: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         log("failed to start \(error)")
+        windowsBefore = nil
         say("error \(error.localizedDescription)")
     }
     /// The panel's button that returns to the app: the app comes forward, as a browser's tab does.

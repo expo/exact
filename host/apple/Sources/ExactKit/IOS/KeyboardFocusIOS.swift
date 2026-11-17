@@ -14,7 +14,7 @@ extension ExactView {
         guard !isFirstResponder, let window, window.isKeyWindow, !p.menus.focus.suspended,
               !p.navigation.defersFocus, !p.modals.defersFocus, p.pendingFocusNode == nil else { return }
         if let responder = FirstResponder.current, responder !== self,
-           !(afterMenu && String(describing: type(of: responder)).hasPrefix("_UITypeSelect")) { return }
+           !(afterMenu && FirstResponder.standsInForAMenu(responder)) { return }
         func occupied(_ view: UIView) -> Bool {
             if view !== self, view.isFirstResponder { return true }
             if ViewPresentation.controllers(for: view, layout: true).contains(where: { $0.isFirstResponder }) { return true }

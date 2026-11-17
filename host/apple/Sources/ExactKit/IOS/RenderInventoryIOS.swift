@@ -75,11 +75,17 @@ extension FrameSampler {
 
     /// What `layer` itself costs the render server beyond drawing its contents.
     static func renderCosts(_ layer: CALayer) -> [String] {
-        let name = NSStringFromClass(type(of: layer))
         var kinds: [String] = []
+        // Core Animation's backdrop and portal layers are private classes, told
+        // by name in a development build only (LLP 1035.003)
+        #if EXACT_INSPECT
+        let name = NSStringFromClass(type(of: layer))
         let backdrop = name.contains("Backdrop")
         if backdrop { kinds.append("backdrop") }
         if name.contains("Portal") { kinds.append("portal") }
+        #else
+        let backdrop = false
+        #endif
         if layer is CAMetalLayer { kinds.append("metal") }
         if !backdrop, layer.filters?.isEmpty == false { kinds.append("filter") }
         if let blend = layer.compositingFilter, "\(blend)" != "normalBlendMode" { kinds.append("blend") }

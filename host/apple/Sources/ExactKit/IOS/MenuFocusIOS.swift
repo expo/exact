@@ -104,7 +104,7 @@ final class MenuFocus {
         held = nil
         guard let view = responder as? UIView, view.window != nil, responder.canBecomeFirstResponder else { return }
         if let node = view as? NodeView, node.incarnation != incarnation || presenter?.views[node.id] !== node { return }
-        if let now = FirstResponder.current, !String(describing: type(of: now)).hasPrefix("_UITypeSelect") { return }
+        if let now = FirstResponder.current, !FirstResponder.standsInForAMenu(now) { return }
         quiet = true
         defer { quiet = false }
         _ = responder.becomeFirstResponder()

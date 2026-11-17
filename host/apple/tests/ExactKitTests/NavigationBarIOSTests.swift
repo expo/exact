@@ -1081,6 +1081,7 @@ final class NavigationBarIOSTests: XCTestCase {
     }
 
     func testARIAUnavailableHeaderTabCarriesStateToTitleSegment() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit makes a segment's element only for an assistive client") }
         let session = try fixture("aria-header-segment", module: false)
         let tab = try node(session, "segment-missed")
         session.presenter.apply(wireBatch([["op": "props", "id": Int(tab.id), "set": ["accessibilityDisabled": "true"]]]))
@@ -1088,7 +1089,7 @@ final class NavigationBarIOSTests: XCTestCase {
         let control = try XCTUnwrap(top.navigationItem.titleView as? LabelledSegmentedControl)
         control.layoutIfNeeded()
         XCTAssertTrue(control.isEnabledForSegment(at: 1))
-        XCTAssertTrue(try XCTUnwrap(control.segmentViews.last).accessibilityTraits.contains(.notEnabled))
+        XCTAssertTrue(try XCTUnwrap(control.accessibilitySegments.last).accessibilityTraits.contains(.notEnabled))
     }
 
     func testAPushedRouteShowsBackAsTheAuthoredControlAndAPopPressesItOnce() throws {
@@ -1186,6 +1187,7 @@ final class NavigationBarIOSTests: XCTestCase {
     /// a tab bar item's `accessibilityIdentifier` is its authored `testId`,
     /// so XCUITest and Maestro address them as any other node.
     func testBarItemsTheSearchFieldSegmentsAndTabsCarryTheirTestIds() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit makes a segment's element only for an assistive client") }
         let session = try fixture("bar-test-ids", module: false)
         let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
         let top = try XCTUnwrap(nav.topViewController)
@@ -1195,8 +1197,8 @@ final class NavigationBarIOSTests: XCTestCase {
         let control = try XCTUnwrap(top.navigationItem.titleView as? LabelledSegmentedControl)
         XCTAssertEqual(control.accessibilityIdentifier, "header-segments")
         control.layoutIfNeeded()
-        XCTAssertEqual(control.segmentViews.map(\.accessibilityIdentifier), ["segment-all", "segment-missed"])
-        XCTAssertEqual(control.segmentViews.map(\.accessibilityLabel), [nil, nil], "no name of their own: UIKit's, their words")
+        XCTAssertEqual(control.accessibilitySegments.map(\.readIdentifier), ["segment-all", "segment-missed"])
+        XCTAssertEqual(control.accessibilitySegments.map(\.accessibilityLabel), (0..<control.numberOfSegments).map(control.titleForSegment(at:)), "no name of their own: UIKit's, their words")
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
         XCTAssertEqual(tabs.tabControllers?.map(\.tabBarItem.accessibilityIdentifier), ["tab-home", "tab-second"])
     }
