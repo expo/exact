@@ -193,10 +193,10 @@ impl Kernel {
             .collect()
     }
 
-    /// Solve the readers in the layout of the root `slot` (D9), adding each
-    /// round's frames to its `receipt`: each unsettled reader advances by
-    /// [`Samples::step`] from the input it has, as UIKit lays a view out
-    /// again from where it is, and `relayout` lays the root out again, until
+    /// Solve the readers under `slot` (D9), a root or a block's root, adding
+    /// each round's frames to its `receipt`: each unsettled reader advances
+    /// by [`Samples::step`] from the input it has, as UIKit lays a view out
+    /// again from where it is, and `relayout` lays `slot` out again, until
     /// all settle or [`MAX_ROUNDS`] pass, the last only measuring. A reader
     /// still off keeps the input its frames were laid out with and is
     /// unsettled. The readers in `skip` are left out.
@@ -227,7 +227,7 @@ impl Kernel {
         self.check_spaces(receipt);
         let unsettled = std::mem::take(&mut self.arena.observations.unsettled);
         let (mine, others): (Vec<u32>, _) =
-            (unsettled.into_iter()).partition(|&s| root_of(&self.arena, s) == slot);
+            (unsettled.into_iter()).partition(|&s| within(&self.arena, s, slot));
         self.arena.observations.unsettled = others;
         let mut candidates = self.readers_due(slot, receipt, mine, skip);
         let mut solving: IdMap<u32, Samples> = IdMap::default();
@@ -276,10 +276,10 @@ impl Kernel {
         Ok(())
     }
 
-    /// The readers in the root `slot`'s layout to measure after `receipt`'s
-    /// layout, in order: those whose frames it moved, those with no readout,
-    /// those in a top-layer box, whose place in the viewport can move
-    /// without their frames, and `also`; none of `skip`.
+    /// The readers under `slot` to measure after `receipt`'s layout, in
+    /// order: those whose frames it moved, those with no readout, those in a
+    /// top-layer box, whose place in the viewport can move without their
+    /// frames, and `also`; none of `skip`.
     fn readers_due(
         &mut self,
         slot: u32,
@@ -298,7 +298,7 @@ impl Kernel {
             .map(|k| k.index)
             .filter(|&s| observers.contains(s))
             .collect();
-        let mine = |s: &u32| root_of(arena, *s) == slot;
+        let mine = |s: &u32| within(arena, *s, slot);
         out.extend(observations.top_layer.iter().filter(|s| mine(s)));
         // Skip the walk over every reader while each has a readout
         if observations.readouts.len() < observers.len() {
@@ -386,6 +386,18 @@ impl Kernel {
         Ok(())
     }
 
+    /// Whether the last layout measured each reader under `slot`: a band set
+    /// since leaves the readers it edges to the next.
+    pub(super) fn readers_measured(&self, slot: u32) -> bool {
+        let (observers, readouts) = (
+            &self.arena.readers.observers,
+            &self.arena.observations.readouts,
+        );
+        readouts.len() >= observers.len()
+            || (observers.iter())
+                .all(|s| readouts.contains_key(&s) || !within(&self.arena, s, slot))
+    }
+
     /// Measure again the readers of each owner whose size changed, since its
     /// band edges it: one whose root `receipt`'s layout moved or updated, as
     /// a block whose used size changed is, or whose size is not known.
@@ -407,13 +419,8 @@ impl Kernel {
     }
 }
 
-/// The root of the layout `slot` is in, its topmost ancestor.
-fn root_of(arena: &NodeArena, slot: u32) -> u32 {
-    let mut at = slot;
-    while let Some(parent) = arena.parent(at) {
-        at = parent;
-    }
-    at
+fn within(arena: &NodeArena, slot: u32, root: u32) -> bool {
+    slot == root || arena.is_ancestor(root, slot)
 }
 
 /// Whether `input` is within `tolerance` of `measured` on each of the

@@ -123,9 +123,14 @@ fn a_band_change_owes_a_layout_where_it_moves_the_content_root() {
     );
     let band = |k: &mut Kernel, band| k.set_owner_band(2, Some(band), &[]).unwrap();
     assert!(!band(&mut k, [47.0, 0.0, 0.0, 0.0]), "a taken edge");
+    lay_out(&mut k);
     assert!(band(&mut k, [47.0, 0.0, 34.0, 0.0]), "a cleared edge");
+    // A measure waits for that layout, which restyles the block
+    let whole = block(BlockAxis::Is(390.0), BlockAxis::Is(844.0));
+    assert!(k.measure_block(2, whole).is_err());
     lay_out(&mut k);
     assert_eq!(frame(&k, 2), (0.0, 0.0, 390.0, 810.0));
+    assert_eq!(k.measure_block(2, whole).unwrap().used, (390.0, 844.0));
     // A band that moves the root without resizing it, where no reader's
     // layout changes, still places it anew
     band(&mut k, [47.0, 10.0, 34.0, 20.0]);

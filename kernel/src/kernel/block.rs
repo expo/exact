@@ -852,8 +852,9 @@ impl Kernel {
     ///
     /// The subtree is laid out as its block's root is, by the same path
     /// (`layout::compute`: the engine, flow and fragment settling, fitting,
-    /// publication), in a copy of the arena and engine tree that is dropped
-    /// after: no block, frame or engine record the kernel holds changes,
+    /// publication, then the solve of the observations read under it), in a
+    /// copy of the arena and engine tree that is dropped after: no block,
+    /// frame, observation or engine record the kernel holds changes,
     /// and the next layout does what it would have done. Only the text
     /// measurer, whose answers are a pure function of their inputs, may
     /// remember what it was asked. `view` must hold a block (its host's, or
@@ -882,27 +883,76 @@ impl Kernel {
             return Err(LayoutError::HostBlock("not laid out yet").into());
         };
         // What only the kernel's next layout prepares, before it lays out,
-        // is not a trial's to do: a block to imply or restyle, a symbol to
-        // size; nor is a change under the root since the last layout (a
-        // text edit), which a measurer holding what that layout showed
-        // would take as the text it shows. Until that layout the host
-        // places by the last one.
+        // is not a trial's to do: a block to imply or restyle (one whose
+        // band moved its content root), a reader to measure (one whose band
+        // changed), a symbol to size; nor is a change under the root since
+        // the last layout (a text edit), which a measurer holding what that
+        // layout showed would take as the text it shows. Until that layout
+        // the host places by the last one.
         let (wants, moved) = self.implied_changes();
-        if !wants.is_empty() || !moved.is_empty() || self.symbols_pending() || tree.is_dirty(node) {
+        let clear = clearance(&self.arena, slot);
+        let restyle = (self.arena.blocks.held(slot)).is_some_and(|b| b.cleared != clear);
+        if restyle
+            || !self.readers_measured(slot)
+            || !wants.is_empty()
+            || !moved.is_empty()
+            || self.symbols_pending()
+            || tree.is_dirty(node)
+        {
             return Err(LayoutError::HostBlock("a layout is due first").into());
         }
         let (mut arena, mut trial) = (self.arena.trial_copy(), tree.clone());
         arena.blocks.set(slot, Some(block));
         trial.restyle(&arena, slot, node);
         trial.mark_dirty(node);
-        let clear = clearance(&arena, slot);
+        // Lay the copies out in place of the kernel's own, so that the
+        // readers under the root solve as a layout solves them (LLP 1123
+        // D9), and with no content region, whose accepted content a
+        // reader's restyle would invalidate
+        let kept = (
+            std::mem::replace(&mut self.arena, arena),
+            self.layout.replace(Box::new(trial)),
+            self.region.take(),
+        );
+        let measured = self.measure_trial(slot, node, block, clear);
+        let trial = std::mem::replace(&mut self.arena, kept.0);
+        (self.layout, self.region) = (kept.1, kept.2);
+        // A measurer may hold what the trial measured under the text
+        // revisions it gave, so no later revision may give one again
+        self.arena.spend_text_revisions(&trial);
+        measured
+    }
+
+    /// `measure_block`'s trial, on the copies in place of the kernel's own:
+    /// the root `slot` laid out in `block` as a layout lays out each block,
+    /// with its readers solved.
+    fn measure_trial(
+        &mut self,
+        slot: u32,
+        node: taffy::NodeId,
+        block: HostBlock,
+        clear: [f32; 4],
+    ) -> Result<BlockMeasure, KernelError> {
         let inner = block.less(clear);
         let offer = Offer::definite(inner.width.length(), inner.height.length());
-        layout::compute(&mut arena, &mut trial, self.measurer.as_mut(), slot, offer)?;
-        if arena.flags(slot).has(NodeFlags::HIDDEN) {
+        let key = self.arena.key(slot);
+        let relayout = &mut |k: &mut Kernel| -> Result<LayoutReceipt, KernelError> {
+            let tree = engine(&mut k.layout);
+            let mut receipt =
+                layout::compute(&mut k.arena, tree, k.measurer.as_mut(), slot, offer)?;
+            // Measure the readers again where the block's used size moved
+            // while its root's frame is unchanged
+            if !receipt.updated.contains(&key) {
+                receipt.updated.push(key);
+            }
+            Ok(receipt)
+        };
+        let mut receipt = relayout(self)?;
+        self.solve_observations(slot, relayout, &[], &mut receipt)?;
+        if self.arena.flags(slot).has(NodeFlags::HIDDEN) {
             return Ok(BlockMeasure::default());
         }
-        let l = trial.layout(node);
+        let l = engine(&mut self.layout).layout(node);
         Ok(BlockMeasure {
             used: used_in(block, clear, &l),
             border: (l.size.width, l.size.height),
