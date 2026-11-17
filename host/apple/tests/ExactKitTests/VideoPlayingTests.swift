@@ -369,7 +369,7 @@ final class VideoPlayingTests: XCTestCase {
             let test = Unmanaged<VideoPlayingTests>.fromOpaque(context!).takeUnretainedValue()
             let message = try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any]
             test.events.append(message["event"] as! String)
-        }))
+        }, nil, nil))
         let source = Bundle.module.url(forResource: "ColorFixtures", withExtension: nil)!.appendingPathComponent("sdr.mp4").absoluteString
         let props = Props(["src": source, "paused": "false", "muted": "true", "playsinline": "true", "loop": "true",
                            "automaticallyWaitsToMinimizeStalling": "false",
