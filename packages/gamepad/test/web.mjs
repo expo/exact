@@ -13,7 +13,7 @@
 // browser's own; that is the device checklist's (`test/device-checklist.md`).
 //
 // usage: bun packages/gamepad/test/web.mjs [chromium] [firefox] [webkit]
-//   (every engine by default; `bunx playwright@1.64.1 install firefox webkit` first)
+//   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { rmSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { checker, makeFixture, root, run } from './fixture.mjs';
