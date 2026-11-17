@@ -82,7 +82,7 @@ extension NodeView {
             host.mask = s.authoredMask
         }
         #if os(iOS) || os(tvOS)
-        sizeMaterial(box)
+        sizeMaterial()
         #endif
         if started { surfaceChanged() }
     }
@@ -102,21 +102,34 @@ extension NodeView {
         s.removeFromSuperlayer()
         CATransaction.commit()
         #if os(iOS) || os(tvOS)
-        sizeMaterial(nil)
+        sizeMaterial()
         #endif
         surfaceChanged()
     }
 
     #if os(iOS) || os(tvOS)
-    /// A material (glass or a blur) is a view the node holds, not paint, so the
-    /// surface's size is set on it too, from the same corner: a glass in a glass
-    /// group then morphs with its neighbours as the box resizes. `nil` gives it
-    /// the laid-out bounds back.
-    private func sizeMaterial(_ box: CGRect?) {
-        guard let material = glassSlot ?? materialView else { return }
-        let shown = box ?? bounds
-        guard material.frame != shown else { return }
-        UIView.performWithoutAnimation { material.frame = shown }
+    /// The box a material (glass or a blur) fills: the surface's shown box
+    /// while a layout transition resizes it, else `bounds`. Its corners and
+    /// clip are resolved at this size (`applyMaterialRadius`).
+    var materialBox: CGRect { surface.map { CGRect(origin: .zero, size: $0.frame.size) } ?? bounds }
+
+    /// The material's frame in what holds it: its glass slot's content view,
+    /// or the node.
+    var materialFrame: CGRect { glassSlot.map { CGRect(origin: .zero, size: $0.bounds.size) } ?? materialBox }
+
+    /// A material is a view the node holds, not paint, so it takes the
+    /// surface's size too, from the same corner: a glass in a glass group then
+    /// morphs with its neighbours as the box resizes. A glass slot takes the
+    /// box and the material fills the slot; with no surface both fill
+    /// `bounds` again.
+    func sizeMaterial() {
+        guard glassSlot != nil || materialView != nil else { return }
+        let box = materialBox
+        UIView.performWithoutAnimation {
+            if let slot = glassSlot, slot.frame != box { slot.frame = box }
+            if let material = materialView, material.frame != materialFrame { material.frame = materialFrame }
+        }
+        applyMaterialRadius()
     }
     #endif
 

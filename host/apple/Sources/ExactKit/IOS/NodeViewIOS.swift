@@ -1031,7 +1031,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if supported {
                 let effect = kind == "backdrop" ? BackdropEffectView() : UIVisualEffectView()
                 effect.isUserInteractionEnabled = Materials.glass(kind)
-                effect.frame = bounds
+                effect.frame = materialFrame
                 effect.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 (glassSlot?.contentView ?? self).insertSubview(effect, at: 0)
                 materialView = effect
@@ -1058,7 +1058,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     func applyMaterialRadius() {
         guard let materialView else { return }
-        let radius = BorderPaint.clip(materialView.layer, in: bounds, radii: effectiveCornerSizes(in: bounds))
+        let radius = BorderPaint.clip(materialView.layer, in: materialBox, radii: effectiveCornerSizes(in: materialBox))
         if #available(iOS 26.0, tvOS 26.0, *) {
             materialView.cornerConfiguration = .corners(radius: .fixed(Double(radius)))
         } else {

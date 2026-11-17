@@ -273,6 +273,28 @@ final class BoxLayerIOSTests: XCTestCase {
         }
     }
 
+    /// A material's corners resolve at the shown size: a `50%` radius on a
+    /// box that is not square is an elliptical mask, which follows the box a
+    /// layout transition resizes and returns to `bounds` when it ends.
+    func testLayoutResizeReshapesTheMaterialsCorners() throws {
+        var style: NodeStyle = [:]
+        for corner in ["top_left", "top_right", "bottom_right", "bottom_left"] { style["border_radius_" + corner] = ["pct": 50] }
+        for kind in ["glass", "ultra-thin"] {
+            let n = node(style, size: CGSize(width: 300, height: 48))
+            n.props["backgroundMaterial"] = kind
+            n.updateMaterial()
+            let material = try XCTUnwrap(n.materialView, kind)
+            let outline = { (material.layer.mask as? CAShapeLayer)?.path?.boundingBoxOfPath }
+            XCTAssertEqual(outline(), n.bounds, kind)
+            n.layoutResize = CGSize(width: 120, height: -8)
+            n.applySurface()
+            XCTAssertEqual(outline(), CGRect(x: 0, y: 0, width: 420, height: 40), "\(kind) is clipped to the shown box")
+            n.layoutResize = .zero
+            n.applySurface()
+            XCTAssertEqual(outline(), n.bounds, "\(kind) is clipped to its bounds again")
+        }
+    }
+
     private func node(_ style: NodeStyle, size: CGSize = CGSize(width: 300, height: 120)) -> NodeView {
         let p = Presenter()
         let n = NodeView(id: 1, kind: "view", presenter: p)
