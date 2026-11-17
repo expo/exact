@@ -201,8 +201,9 @@ impl NativeTargets {
         (self.chain.iter().map(|e| &e.target)).chain(self.relations.iter().map(|(_, t)| t))
     }
 
-    /// Why the report is refused, if it is, `seen` the highest generation
-    /// each target's earlier reports gave, whether or not they still hold it.
+    /// Why the report is refused, if it is; `seen` holds the highest
+    /// generation earlier reports gave each target, whether or not they
+    /// still hold it.
     pub(crate) fn refusal(&self, seen: &crate::id::IdMap<u64, u64>) -> Option<&'static str> {
         if self.chain.len() > usize::from(u8::MAX) {
             return Some("a native chain longer than 255 entries; numbered names reach 255");
@@ -259,19 +260,19 @@ fn insets_refusal(target: &NativeTarget) -> Option<&'static str> {
         .then_some("nonfinite or negative insets; report a target without insets as unavailable")
 }
 
-/// Why `target` cannot be registered over `held`, the name's last
-/// registration, removed ones included, if it cannot: a report older than
-/// it, or another view at its generation.
+/// Why `target` cannot be registered over `last`, the name's last
+/// registration, a removed one included, if it cannot: a generation older
+/// than its, or another view at its generation.
 pub(crate) fn registration_refusal(
     target: &NativeTarget,
-    held: Option<&NativeTarget>,
+    last: Option<&NativeTarget>,
 ) -> Option<&'static str> {
     insets_refusal(target).or_else(|| {
-        let held = held?;
-        if target.generation < held.generation {
+        let last = last?;
+        if target.generation < last.generation {
             return Some(STALE);
         }
-        (target.id != held.id && target.generation == held.generation).then_some(
+        (target.id != last.id && target.generation == last.generation).then_some(
             "another view at the registration's generation; a replacement takes a newer one",
         )
     })

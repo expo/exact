@@ -31,9 +31,9 @@ pub(crate) struct Targets {
     pub(crate) moved: Vec<u32>,
 }
 
-/// An owner's or the session's last report, and the highest generation
-/// each target any report gave, which a stale report must not go below
-/// after its target left a report.
+/// An owner's or the session's last report, and the highest generation any
+/// report gave each target, which refuses a stale report even after its
+/// target left the reports.
 #[derive(Debug, Clone, Default)]
 struct Reports {
     last: Option<Arc<NativeTargets>>,
@@ -77,9 +77,10 @@ impl Kernel {
     /// its identity, generation and raw insets, `None` while unavailable.
     /// Its readers of a target whose insets changed are derived again;
     /// returns whether any was (a layout is owed then). A report is refused
-    /// whole: nonfinite or negative insets, a generation older than the one
-    /// held for the same target, a chain entry of kind `owner` or `parent`
-    /// (entries 1 and 2 by position), a relation twice, or a chain past 255.
+    /// whole: nonfinite or negative insets, a target at a generation older
+    /// than an earlier report gave it, a chain entry of kind `owner` or
+    /// `parent` (entries 1 and 2 by position), a relation twice, or a chain
+    /// past 255.
     pub fn set_owner_targets(
         &mut self,
         view: ViewId,
@@ -101,7 +102,10 @@ impl Kernel {
     /// owner reads (LLP 1123 D9), as [`Kernel::set_owner_targets`] does an
     /// owner's.
     pub fn set_session_targets(&mut self, targets: NativeTargets) -> Result<bool, KernelError> {
-        let outside = self.held(|h| matches!(h, Holder::TopLayer(_) | Holder::Session));
+        let arena = &self.arena;
+        let outside = (arena.readers.targets.keys().copied())
+            .filter(|&s| matches!(holder(arena, s), Holder::TopLayer(_) | Holder::Session))
+            .collect();
         let reports = Some(&self.arena.observations.targets.session);
         let readers = self.report(&targets, reports, outside)?;
         self.arena.observations.targets.session.take(targets);
@@ -128,38 +132,32 @@ impl Kernel {
             )
             .into());
         }
-        let held = self
-            .arena
-            .observations
-            .targets
-            .registered
-            .get(name)
-            .copied();
-        let refusal = target.and_then(|t| targets::registration_refusal(&t, held.as_ref()));
+        let registered = &self.arena.observations.targets.registered;
+        let last = registered.get(name).copied();
+        let refusal = target.and_then(|t| targets::registration_refusal(&t, last.as_ref()));
         if let Some(why) = refusal {
             return Err(LayoutError::NativeTarget(why).into());
         }
-        // A removal keeps the registration, unavailable, for its generation
-        let Some(next) = target.or(held.map(|h| NativeTarget { insets: None, ..h })) else {
+        // Keep a removed registration, unavailable, for its generation
+        let Some(next) = target.or(last.map(|l| NativeTarget { insets: None, ..l })) else {
             return Ok(false);
         };
-        if held == Some(next) {
+        if last == Some(next) {
             return Ok(false);
         }
         let key: Arc<str> = name.into();
         let read = Target::Registered(key.clone());
-        let (old, new) = (held.and_then(|h| h.insets), next.insets);
+        let (old, new) = (last.and_then(|l| l.insets), next.insets);
         let raw = self.arena.readers.targets.keys().copied().collect();
-        let readers = self.reading(raw, |t, edges| *t == read && moved(old, new, edges));
+        let readers = self.reading(raw, |t, edges| *t == read && changes_read(old, new, edges));
         let registered = Arc::make_mut(&mut self.arena.observations.targets.registered);
         registered.insert(key, next);
         self.restyle_readers(&readers);
         Ok(!readers.is_empty())
     }
 
-    /// The readers among `held`, the raw readers the report holds, for
-    /// which `new` in place of the last of `reports` changes the insets they
-    /// read, or why it is refused.
+    /// Of `held`, the raw readers a report holds, those whose read insets
+    /// `new` changes from the last of `reports`; or why `new` is refused.
     fn report(
         &self,
         new: &NativeTargets,
@@ -173,7 +171,9 @@ impl Kernel {
         }
         let empty = NativeTargets::default();
         let old = reports.last.as_deref().unwrap_or(&empty);
-        Ok(self.reading(held, |t, edges| moved(old.insets(t), new.insets(t), edges)))
+        Ok(self.reading(held, |t, edges| {
+            changes_read(old.insets(t), new.insets(t), edges)
+        }))
     }
 
     /// Those of `readers` for which `changed` takes a target they read and
@@ -223,16 +223,9 @@ impl Kernel {
         out
     }
 
-    /// The raw readers whose holder `holds` takes.
-    fn held(&self, holds: impl Fn(Holder) -> bool) -> Vec<u32> {
-        let arena = &self.arena;
-        (arena.readers.targets.keys().copied())
-            .filter(|&s| holds(holder(arena, s)))
-            .collect()
-    }
-
-    /// Derive again the raw readers in `slot`'s subtree, which a block
-    /// gained or given back, or a top-layer change, gave another holder.
+    /// Derive again the raw readers whose holder is `slot`'s or `slot`
+    /// ([`Kernel::held_through`]), after a block gained or given back, or a
+    /// top-layer change, that may give them another.
     pub(super) fn targets_moved(&mut self, slot: u32) {
         if !self.arena.observations.targets.placed_any() {
             return;
@@ -270,7 +263,7 @@ fn through(arena: &NodeArena, reader: u32, top: u32) -> bool {
 
 /// Whether a target's insets `old` to `new` change what a reader of
 /// `edges` (a bit per edge) reads: its availability, or a value on one.
-fn moved(old: Option<[f32; 4]>, new: Option<[f32; 4]>, edges: u8) -> bool {
+fn changes_read(old: Option<[f32; 4]>, new: Option<[f32; 4]>, edges: u8) -> bool {
     match (old, new) {
         (Some(old), Some(new)) => (0..4).any(|e| edges & 1 << e != 0 && old[e] != new[e]),
         (old, new) => old.is_some() != new.is_some(),

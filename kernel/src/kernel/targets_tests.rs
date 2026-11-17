@@ -50,13 +50,20 @@ fn a_reader_reads_its_owners_targets_by_number_kind_and_relation() {
         // The nearest of two navigation controllers
         (12, Target::Kind(Kind::Navigation), 20.0),
     ];
-    let mut ops = create(3..=12);
+    let mut ops = create(3..=13);
     ops.extend(
         readers
             .iter()
             .map(|(id, target, _)| reads(*id, target.clone())),
     );
-    let held: Vec<ViewId> = (3..=12).collect();
+    // 13 reads the controller in `var(--gap, var(--exact-native-1-…))`'s fallback
+    let gap = Node::Var(calc::Var {
+        name: "--gap".into(),
+        fallback: Some(Box::new(observe(Target::Chain(1), Edge::Top, None))),
+    });
+    let pad = vec![(StyleId::PaddingTop, gap)];
+    ops.push(style(13, pad, &[(StyleId::Height, "10")]));
+    let held: Vec<ViewId> = (3..=13).collect();
     ops.extend([children(1, &[2]), children(2, &held)]);
     let mut k = owner(390.0, 844.0, ops);
     let column = ChainEntry {
@@ -84,6 +91,7 @@ fn a_reader_reads_its_owners_targets_by_number_kind_and_relation() {
     for (id, target, want) in readers {
         assert_eq!(top(&k, id), want, "{target:?}");
     }
+    assert_eq!(top(&k, 13), 10.0, "a custom property's fallback");
     assert_eq!(
         k.arena.observations.rounds, 0,
         "a raw reader needs no solve"
@@ -114,27 +122,10 @@ fn a_box_outside_every_owner_reads_the_session_views_targets() {
 }
 
 #[test]
-fn a_box_that_joins_the_top_layer_with_its_block_gives_its_readers_the_session_views() {
-    // The owner 2, which keeps its block, becomes a popover: its reader 3
-    // reads the session view's controller (50), not 2's (10)
-    let mut ops = create(3..=3);
-    ops.push(reads(3, Target::Kind(Kind::Owner)));
-    ops.extend([children(1, &[2]), children(2, &[3])]);
-    let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_targets(2, controller(1, 10.0)).unwrap();
-    k.set_session_targets(controller(2, 50.0)).unwrap();
-    lay_out(&mut k);
-    assert_eq!(top(&k, 3), 10.0);
-    k.apply(0, 2, &[popover(2)]).unwrap();
-    lay_out(&mut k);
-    assert!(k.is_top_layer(2));
-    assert_eq!(top(&k, 3), 50.0);
-}
-
-#[test]
 fn a_holder_change_derives_only_the_readers_whose_holder_it_changes() {
     // The owner 2 holds the reader 5 and the owner 3, which holds the
-    // reader 4; when 2 joins the top layer, only 5's holder changes
+    // reader 4; when 2 joins the top layer, keeping its block, only 5's
+    // holder changes, to the session
     let mut ops = create(3..=5);
     ops.push(style(3, vec![], &[(StyleId::Height, "100")]));
     let owner_entry = Target::Kind(Kind::Owner);
@@ -147,6 +138,7 @@ fn a_holder_change_derives_only_the_readers_whose_holder_it_changes() {
     k.set_owner_targets(3, controller(2, 30.0)).unwrap();
     k.set_session_targets(controller(3, 50.0)).unwrap();
     lay_out(&mut k);
+    assert_eq!((top(&k, 4), top(&k, 5)), (30.0, 10.0));
     assert_eq!(k.held_through(slot(&k, 2)), vec![slot(&k, 5)]);
     k.apply(0, 2, &[popover(2)]).unwrap();
     lay_out(&mut k);
@@ -327,31 +319,6 @@ fn a_report_finds_its_readers_in_an_owner_of_many_boxes() {
 }
 
 #[test]
-fn a_stale_report_stays_refused_after_its_target_leaves() {
-    // The chain's first entry reports at generation 2, then leaves; a
-    // report of it from generation 1 comes late
-    let mut ops = create(3..=3);
-    ops.push(reads(3, Target::Chain(1)));
-    ops.extend([children(1, &[2]), children(2, &[3])]);
-    let mut k = owner(390.0, 844.0, ops);
-    let at = |generation, top| NativeTargets {
-        chain: vec![ChainEntry {
-            target: NativeTarget {
-                generation,
-                ..native(1, top)
-            },
-            kind: None,
-        }],
-        relations: Vec::new(),
-    };
-    k.set_owner_targets(2, at(2, 24.0)).unwrap();
-    k.set_owner_targets(2, NativeTargets::default()).unwrap();
-    assert!(k.set_owner_targets(2, at(1, 12.0)).is_err());
-    lay_out(&mut k);
-    assert_eq!(top(&k, 3), 7.0, "the fallback, the entry gone");
-}
-
-#[test]
 fn a_reader_with_no_fallback_follows_its_targets_availability() {
     // 3 reads the chain's first entry with no fallback: invalid at computed
     // value time while it is unavailable, so its padding is the initial 0
@@ -382,31 +349,6 @@ fn a_reader_with_no_fallback_follows_its_targets_availability() {
     assert!(k.set_owner_targets(2, report).unwrap());
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 0.0);
-}
-
-#[test]
-fn a_target_read_in_a_custom_propertys_fallback_follows_its_report() {
-    // 3 pads by `var(--gap, var(--exact-native-1-safe-area-inset-top))`,
-    // `--gap` declared nowhere
-    let fallback = observe(Target::Chain(1), Edge::Top, None);
-    let gap = Node::Var(calc::Var {
-        name: "--gap".into(),
-        fallback: Some(Box::new(fallback)),
-    });
-    let mut ops = create(3..=3);
-    ops.push(style(
-        3,
-        vec![(StyleId::PaddingTop, gap)],
-        &[(StyleId::Height, "10")],
-    ));
-    ops.extend([children(1, &[2]), children(2, &[3])]);
-    let mut k = owner(390.0, 844.0, ops);
-    k.set_owner_targets(2, controller(1, 10.0)).unwrap();
-    lay_out(&mut k);
-    assert_eq!(top(&k, 3), 10.0);
-    assert!(k.set_owner_targets(2, controller(1, 15.0)).unwrap());
-    lay_out(&mut k);
-    assert_eq!(top(&k, 3), 15.0);
 }
 
 #[test]
@@ -459,6 +401,15 @@ fn a_report_is_refused_whole() {
     }
     lay_out(&mut k);
     assert_eq!(top(&k, 3), 10.0, "the report it holds");
+    // The entry leaves, and its older report, coming late, is still stale
+    k.set_owner_targets(2, NativeTargets::default()).unwrap();
+    let late = NativeTargets {
+        chain: vec![older],
+        relations: Vec::new(),
+    };
+    assert!(k.set_owner_targets(2, late).is_err());
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 7.0, "the fallback, the entry gone");
 }
 
 #[test]

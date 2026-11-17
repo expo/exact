@@ -23,6 +23,7 @@ use crate::generated::{StyleCodec, StyleId, StyleProps};
 use crate::id::IdHasher;
 use crate::sorted::SlotSet;
 use crate::style::calc::{self, EnvTerm, Node};
+use crate::style::targets::Target;
 use crate::style::{Dimension, Edge, RowValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -44,7 +45,7 @@ pub(crate) struct Readers {
     /// Nodes with a length that reads a native target's raw insets, and
     /// the targets each reads, each with the edges it reads as bits (LLP
     /// 1123 D9, "The native chain").
-    pub(crate) targets: crate::id::IdMap<u32, Vec<(crate::style::targets::Target, u8)>>,
+    pub(crate) targets: crate::id::IdMap<u32, Vec<(Target, u8)>>,
     /// Nodes that declare a custom property.
     declaring: SlotSet,
     /// Nodes that declare one whose value reads a local inset: captures.
@@ -176,11 +177,9 @@ fn reads_local(value: &Dimension) -> bool {
 }
 
 /// `read`, each target once, its edges merged.
-fn merged(
-    mut read: Vec<(crate::style::targets::Target, u8)>,
-) -> Vec<(crate::style::targets::Target, u8)> {
+fn merged(mut read: Vec<(Target, u8)>) -> Vec<(Target, u8)> {
     read.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    let mut out: Vec<(crate::style::targets::Target, u8)> = Vec::with_capacity(read.len());
+    let mut out: Vec<(Target, u8)> = Vec::with_capacity(read.len());
     for (target, edges) in read {
         match out.last_mut() {
             Some((last, merged)) if *last == target => *merged |= edges,
