@@ -13,6 +13,12 @@ struct LocalInsetsReport {
     var wanted: [UInt32?: [CGFloat]] = [:]
     private var delivered: [UInt32?: [CGFloat]] = [:]
 
+    /// Whether `take` would deliver anything.
+    func changed(live: (UInt32) -> Bool) -> Bool {
+        wanted.contains { delivered[$0.key] != $0.value && $0.key.map(live) != false }
+            || delivered.keys.contains { wanted[$0] == nil && $0.map(live) != false }
+    }
+
     /// What changed since the last delivery, owners whose view is gone left
     /// out (their node took its insets with it); marked delivered.
     mutating func take(live: (UInt32) -> Bool) -> [(UInt32?, [CGFloat]?)] {

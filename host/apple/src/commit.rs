@@ -133,17 +133,22 @@ impl<D: DataSource> Host<D> {
                 &mut self.engine,
                 &sync,
                 self.svg.box_motion,
+                self.svg.live_filters,
                 &|v| !runner.handlers_of(v).is_empty(),
             );
-            svg_lower::hand_over_paths(runner.kernel(), &mut self.engine, self.svg.box_motion);
+            svg_lower::hand_over_paths(runner.kernel(), &mut self.engine, self.svg.live_filters);
             // A reveal changes a held play without changing its style row.
             for (key, _) in &sync.animations {
                 if let Some(view) = self.keys.get(&node_key(*key)).copied() {
                     self.svg.element(runner.kernel(), view);
                 }
             }
-            for view in svg_lower::resample(runner.kernel(), &mut self.engine, self.svg.box_motion)
-            {
+            for view in svg_lower::resample(
+                runner.kernel(),
+                &mut self.engine,
+                self.svg.live_filters,
+                &|v| !runner.handlers_of(v).is_empty(),
+            ) {
                 self.svg.element(self.runner.kernel(), view);
             }
             self.play_exits(&mut batch);

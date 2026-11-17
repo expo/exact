@@ -251,6 +251,14 @@ pub(crate) fn derive(
             }
             _ => {}
         }
+        if matches!(platform, "ios" | "macos") {
+            if let Some(container) = grant.container {
+                values.insert(
+                    "com.apple.developer.icloud-container-identifiers".into(),
+                    json!([container]),
+                );
+            }
+        }
     }
     // A key a granted row needs beside its own, written with that row's text
     // when no granted row writes it (D1: one HealthKit direction still

@@ -892,7 +892,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Tell the implementation of `extension` that its wake `id` ended.
     fn tell_woke(&self, extension: &str, id: &str, outcome: &str) {
-        if let Some(handler) = self.native_slot().handler() {
+        if let Some(handler) = self.native_slot().extension_handler() {
             let body = json!({ "extension": extension, "woke": id, "outcome": outcome });
             handler(body.to_string().into_bytes(), Reply::new(|_| {}));
         }

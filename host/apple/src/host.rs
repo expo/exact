@@ -601,7 +601,7 @@ impl<D: DataSource> Host<D> {
             keys: IdMap::default(),
             inline_runs: IdMap::default(),
             // LLP 1126 D10: watchOS has no Core Animation presenter for box motion or path morphs.
-            svg: svg::SvgState::new(cfg!(any(target_os = "ios", target_os = "tvos"))),
+            svg: svg::SvgState::new(svg::render_server()),
             canvas_held: IdSet::default(),
             canvas_kept: Default::default(),
             canvas_deferred: false,
@@ -625,10 +625,7 @@ impl<D: DataSource> Host<D> {
                 let mut engine = Engine::linked(links.engine);
                 let _ = engine.set_start_on_frame(start_on_frame, 0.0);
                 // LLP 1126 D10: watchOS keeps box motion sampled for its SwiftUI driver.
-                engine.set_lowered_properties(&svg::lowered(cfg!(any(
-                    target_os = "ios",
-                    target_os = "tvos"
-                ))));
+                engine.set_lowered_properties(&svg::lowered(svg::render_server()));
                 engine
             },
             paint: paint::Paint::default(),
@@ -731,10 +728,16 @@ impl<D: DataSource> Host<D> {
             &mut host.engine,
             &sync,
             host.svg.box_motion,
+            host.svg.live_filters,
             &|v| !runner.handlers_of(v).is_empty(),
         );
-        svg_lower::hand_over_paths(runner.kernel(), &mut host.engine, host.svg.box_motion);
-        for view in svg_lower::resample(runner.kernel(), &mut host.engine, host.svg.box_motion) {
+        svg_lower::hand_over_paths(runner.kernel(), &mut host.engine, host.svg.live_filters);
+        for view in svg_lower::resample(
+            runner.kernel(),
+            &mut host.engine,
+            host.svg.live_filters,
+            &|v| !runner.handlers_of(v).is_empty(),
+        ) {
             host.svg.element(host.runner.kernel(), view);
         }
         host.boot_paint(&order);

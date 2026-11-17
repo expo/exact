@@ -32,9 +32,8 @@ const page = '<meta name="viewport" content="width=device-width, initial-scale=1
   <div navigationKey="6" id="top" navigationPresentation="modal" style="${abs}"><header><h2>Top</h2></header></div>
 </main></div>
 <script type="module">
-  import { navigation, useSheets, sheetFrame } from './navigation.js';
+  import { navigation } from './navigation.js';
   const root = document.getElementById('exact-root');
-  useSheets(sheetFrame); // as both web hosts do for a plan that can present a sheet
   navigation.connect(root, () => false, () => {}, () => {}, null, () => false, false);
   window.select = key => { document.getElementById('nav').setAttribute('navigationKey', key); navigation.project(root, () => {}); };
   // A route's detents as a host writes them, and the sheet laid out where it stands once it has slid up.

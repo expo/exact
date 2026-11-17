@@ -245,7 +245,7 @@ class BackgroundTransferTest {
     private fun run(key: Key, id: Int) { transfers.feed(JobStarted(key, Run(id, Job.Work), transfers.conditions)); main.idle() }
     /** The runner tells the wake's end. */
     private fun end(wake: JSONObject, outcome: String) { host(JSONObject().put("woke", wake.getString("id")).put("outcome", outcome)) }
-    private fun shown(api: Int, visible: Boolean = true) { platform.conditions = Conditions(api, visible, notifications = true) }
+    private fun shown(api: Int, visible: Boolean = true) { platform.conditions = Conditions(api, visible) }
 
     @Test fun aStartCapturesItsAuthorityAndKeepsCredentialsOffDisk() {
         open()

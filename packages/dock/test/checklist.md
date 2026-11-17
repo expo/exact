@@ -98,5 +98,19 @@ development build of an app that depends on the three packages.
    "refused the icon's GUID". Restart
    Explorer (`taskkill /f /im explorer.exe`, then `explorer`): the icon
    comes back. Switch Settings › Personalization › Colors between dark and
-   light: the star follows. With Narrator on, note what it reads in the
-   menu (its window has no UI Automation tree yet).
+   light: the star follows. With Narrator on, open the menu with Win+B and
+   Enter or Shift+F10; verify its name and each row are read, arrows move
+   the announced focus, Start at Login says checked or unchecked, and a
+   submenu expands with Enter or Right, selects its first enabled item, and
+   returns with Left or Escape. Enter invokes the selected command.
+   In Accessibility Insights, inspect the popup's Menu
+   and MenuItem nodes, their names, Toggle state on the checkbox, Invoke on
+   commands and ExpandCollapse on submenu items; observe MenuOpened,
+   MenuClosed and focus events. The root Menu keeps its name and identity
+   during submenu navigation, and closes only when the popup hides.
+   Repeat with the app window hidden.
+   Replace the status button's image with an `img` whose `src` is an asset
+   PNG distinct from the app icon. On the two displays, check the authored
+   image at 125% and 100%, change scale while the app runs, and check it
+   reloads sharply at the system's small-icon size. Remove the image and
+   check the app icon returns. Repeat from a hidden login launch.

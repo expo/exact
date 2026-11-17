@@ -186,3 +186,92 @@ fn dynamic_svg_lengths_are_unset_and_diagnosed_then_recover() {
         .journal()
         .any(|line| line.contains("runtime-svg-length") && line.contains("2em")));
 }
+
+#[test]
+fn the_agent_tree_reports_svg_geometry() {
+    let source = r#"component App
+  state radius = 8
+  action grow
+    radius = 12
+  view
+    svg width=100 height=100 viewBox="0 0 100 100"
+      circle testId="circle" cx=20 cy=30 r=radius
+      circle testId="percent" cx="25%" cy="40%" r="10%"
+      circle testId="relative" font-size=16 cx="2em" cy="10vh" r="2em"
+      circle testId="viewport" cx="calc(10% + 2px)" cy="env(safe-area-inset-left)" r="10vh"
+      ellipse testId="ellipse" cx=40 cy=50 rx=10 ry=5
+      rect testId="rect" x=2 y=3 width=40 height=20 rx=4 ry=2
+      line testId="line" x1=1 y1=2 x2=3 y2=4
+"#;
+    let mut runner = Runner::boot(
+        contract::compile(source).unwrap(),
+        NoData,
+        Kernel::with_monospace(),
+        exact_runner::Viewport::sized(200.0, 400.0),
+        "/",
+    )
+    .unwrap();
+    for radius in [8, 12] {
+        for root in runner.roots() {
+            runner
+                .kernel_mut()
+                .compute_layout(root, exact_kernel::Offer::definite(200.0, 400.0))
+                .unwrap();
+        }
+        let tree: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::tree(&runner)).unwrap();
+        let props = |id: &str| {
+            tree["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["props"]["testId"] == id)
+                .unwrap()["props"]
+                .clone()
+        };
+        for (id, expected) in [
+            ("circle", serde_json::json!({"cx":20, "cy":30, "r":radius})),
+            (
+                "percent",
+                serde_json::json!({"cx":"25%", "cy":"40%", "r":"10%"}),
+            ),
+            (
+                "relative",
+                serde_json::json!({"cx":32, "cy":"10vh", "r":32}),
+            ),
+            (
+                "viewport",
+                serde_json::json!({"cx":"calc(10% + 2px)", "cy":"env(safe-area-inset-left)", "r":"10vh"}),
+            ),
+            (
+                "ellipse",
+                serde_json::json!({"cx":40, "cy":50, "rx":10, "ry":5}),
+            ),
+            (
+                "rect",
+                serde_json::json!({"x":2, "y":3, "width":40, "height":20, "rx":4, "ry":2}),
+            ),
+            (
+                "line",
+                serde_json::json!({"x1":"1", "y1":"2", "x2":"3", "y2":"4"}),
+            ),
+        ] {
+            for (key, value) in expected.as_object().unwrap() {
+                assert_eq!(&props(id)[key], value, "{id}.{key}: {}", props(id));
+            }
+        }
+        let circle = tree["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["props"]["testId"] == "circle")
+            .unwrap();
+        let detail: serde_json::Value = serde_json::from_str(&exact_runner::agent::node(
+            &runner,
+            circle["id"].as_u64().unwrap() as u32,
+        ))
+        .unwrap();
+        assert_eq!(detail["props"], circle["props"]);
+        runner.act("grow", vec![]).unwrap();
+    }
+}

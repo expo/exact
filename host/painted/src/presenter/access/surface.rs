@@ -14,6 +14,20 @@ impl<D: DataSource> Presenter<D> {
         let select = self.select_surface().is_some();
         let whole = [0.0, 0.0, shown.size.0, shown.size.1];
         let scroll = shown.scroll.or(select.then_some((0., 0.)));
+        // A detached submenu replaces the painted menu, but its expanded
+        // ancestors keep their identities so a service can collapse them.
+        let mut ancestor = 0;
+        for row in self.status_menu_ancestors() {
+            ancestor = self.access_bar_node(
+                b,
+                row.node,
+                ancestor,
+                role::BUTTON,
+                flag::CLICK | flag::EXPANDABLE | flag::EXPANDED,
+                row.title,
+                ((0., 0., 0., 0.), whole),
+            );
+        }
         let parent = if let Some((offset, max)) = scroll {
             let id = b.unique(identity(self.host.kernel(), shown.node));
             let flags = if offset > 0. { flag::BACKWARD } else { 0 }
@@ -26,7 +40,7 @@ impl<D: DataSource> Presenter<D> {
                 .unwrap_or_default();
             b.out.push(Node {
                 id,
-                parent: 0,
+                parent: ancestor,
                 view: shown.node,
                 role: if select {
                     role::LIST_BOX
@@ -44,7 +58,7 @@ impl<D: DataSource> Presenter<D> {
             });
             id
         } else {
-            0
+            ancestor
         };
         if let Plan::Alert { title, message, .. } = shown.plan {
             let words = [
@@ -137,6 +151,22 @@ impl<D: DataSource> Presenter<D> {
                 (true, true) => flags |= flag::SELECTED,
                 (false, true) => flags |= flag::CHECKABLE | flag::CHECKED,
                 _ => {}
+            }
+            if !select {
+                if self.host.kernel().node(row.node).is_some_and(|n| {
+                    n.props.str(PropId::AccessibilityRole) == Some("menuitemcheckbox")
+                }) {
+                    flags |= flag::CHECKABLE;
+                }
+                if row
+                    .opens
+                    .and_then(|key| self.host.kernel().node_by_key(key))
+                    .is_some_and(|target| {
+                        matches!(self.surface_plan(target.id, false), Some(Plan::Menu(_)))
+                    })
+                {
+                    flags |= flag::EXPANDABLE;
+                }
             }
             let role = if select { role::OPTION } else { role::BUTTON };
             let place = (rect, whole);

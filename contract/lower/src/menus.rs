@@ -49,10 +49,11 @@ pub(crate) fn check_menu_placement(tag: &str, attr: &Attr) -> Result<(), LowerEr
 }
 
 /// LLP 1021 §5.3: a root's bounded opt-out from the Mac's standard items.
+/// AppKit's Edit ▸ AutoFill is not one: nothing public identifies it, and the
+/// host names no private identifier (LLP 1035.003).
 pub(crate) fn check_menu_remove(attrs: &[Attr], root: bool) -> Result<(), LowerError> {
     const IDS: &[&str] = &[
         "close-all",
-        "autofill",
         "show-tab-bar",
         "show-all-tabs",
         "enter-full-screen",

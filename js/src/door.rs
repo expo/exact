@@ -148,7 +148,19 @@ pub(crate) unsafe extern "C" fn host_door(
                 if let Some(store) = state.store {
                     (*store).observe_external_read();
                 }
+                // A package's synchronous form is the host's app module's,
+                // beside a native module too.
+                let extension = state.native.is_some()
+                    && state.hosted_call.is_some()
+                    && serde_json::from_str::<serde_json::Value>(&b)
+                        .ok()
+                        .is_some_and(|v| exact_runner::Native::sync_form(&v).is_some());
                 match (&mut state.native, state.store) {
+                    (Some(_), Some(_)) if extension => {
+                        let call = state.hosted_call.as_ref().expect("checked above");
+                        call(b.as_bytes())
+                            .map(|reply| Some(String::from_utf8_lossy(&reply).into_owned()))
+                    }
                     (Some(module), Some(_)) => exact_js_value::json::parse(b.as_bytes())
                         .map(serde_json::Value::from)
                         .map_err(|error| error.to_string())

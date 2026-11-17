@@ -706,12 +706,16 @@ fn a_local_inset_is_the_browsers_custom_property() {
     style.set_dynamic(StyleId::LocalInsetBottom, &own).unwrap();
     let off = StyleValue::Text("top bottom".into());
     style.set_dynamic(StyleId::SafeArea, &off).unwrap();
+    let ignore = StyleValue::Text("container top".into());
+    style.set_dynamic(StyleId::SafeAreaIgnore, &ignore).unwrap();
     let (out, skipped) = crate::css::css_text(&style, &[]);
-    assert_eq!(
-        out,
-        "--exact-safe-area-inset-bottom:calc(8px + var(--exact-safe-area-inset-top));"
-    );
+    let own = "--exact-safe-area-inset-bottom:calc(8px + var(--exact-safe-area-inset-top));";
+    assert_eq!(out, own);
     assert!(skipped.is_empty(), "{skipped:?}");
+    // A clear of the ignore, row 256, past a `u8` style id, writes nothing too
+    style.mask.clear(StyleId::SafeAreaIgnore);
+    style.written.set(StyleId::SafeAreaIgnore);
+    assert_eq!(crate::css::css_text(&style, &[]).0, own);
 }
 
 /// LLP 1116.018 D3: a live region's `aria-atomic` reaches the page.

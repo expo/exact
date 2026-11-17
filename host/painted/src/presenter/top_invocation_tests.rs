@@ -117,6 +117,44 @@ fn invoke(p: &mut Presenter<()>, name: &str) {
     p.run_commands(|| ());
 }
 
+#[test]
+fn only_submenu_rows_expose_expansion_while_dialog_commands_remain_invocable() {
+    use crate::presenter::access::{act, flag};
+    for detached in [false, true] {
+        let source = APP.replace(
+            r#"testId="native-cmd""#,
+            r#"-exact-menu="status" popovertarget="menu" testId="native-cmd""#,
+        );
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(&source),
+            (),
+            (400., 800.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.serve_overlays();
+        p.frame();
+        if detached {
+            let invoker = id(&p, "native-cmd");
+            assert!(p.open_status_menu(invoker, (800., 600.), true, true, 0.));
+        } else {
+            invoke(&mut p, "native-cmd");
+        }
+        p.reader_access(1., true);
+        let row = |name| p.access_told().iter().find(|n| n.name == name).unwrap();
+        assert_ne!(row("More").flags & flag::EXPANDABLE, 0);
+        let dialog = row("Ask first");
+        assert_eq!(dialog.flags & flag::EXPANDABLE, 0);
+        assert_ne!(dialog.flags & flag::CLICK, 0);
+        let dialog = dialog.id;
+        assert!(p.access_act(dialog, act::CLICK, 0., 0.));
+        assert_eq!(open(&p).as_deref(), Some("dpm"));
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_system_menu_chord_does_not_choose_a_dialog_button() {

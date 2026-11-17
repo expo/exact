@@ -417,7 +417,10 @@ fn a_screenshot_is_the_viewport_as_a_png() {
         let mut p = boot(choice);
         let path = std::env::temp_dir().join(format!("exact-paint-{}.png", std::process::id()));
         let reply = p.screenshot(path.to_str().unwrap()).unwrap();
-        assert!(reply.ends_with(",\"w\":390,\"h\":844}"), "{reply}");
+        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(reply["w"], 390);
+        assert_eq!(reply["h"], 844);
+        assert_eq!(reply["rotation"], 0);
         let png = Pixmap::load_png(&path).unwrap();
         assert_eq!((png.width(), png.height()), (390, 844));
         assert_eq!(

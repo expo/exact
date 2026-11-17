@@ -768,7 +768,7 @@ impl Device for Metal {
         self.completed().map(|_| ())
     }
     fn trim(&mut self) -> Result<()> {
-        self.completed()?;
+        self.wait(self.submitted)?;
         for buffer in &mut self.atlas_buffers {
             if let Some(buffer) = buffer.take() {
                 self.retired_buffers.push(buffer);
@@ -781,6 +781,7 @@ impl Device for Metal {
                     .push(std::mem::replace(&mut self.buffers[i], new));
             }
         }
+        self.completed()?;
         Ok(())
     }
 }

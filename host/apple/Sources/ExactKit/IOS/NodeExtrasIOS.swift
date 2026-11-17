@@ -183,6 +183,9 @@ final class NodeExtras {
     var hiddenBeforePlacement = false
     var placementHidden = false
     var materialView: UIVisualEffectView?
+    /// While a pull-down's menu has this invoker (`MenuButton`), its fill is
+    /// painted here, which UIKit's stand-in draws, instead of on its layer.
+    var lentFill: CAShapeLayer?
     /// `glassGroup`'s view and a grouped glass's slot (`GlassGroup.swift`).
     var glassGroupView: GlassGroupView?
     var glassSlot: GlassSlot?

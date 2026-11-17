@@ -18,6 +18,7 @@ mod atlas;
 mod cache;
 #[cfg(target_os = "macos")]
 mod present;
+mod programs;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 
@@ -91,6 +92,9 @@ pub struct Wgpu {
     queue: ::wgpu::Queue,
     pipeline: ::wgpu::RenderPipeline,
     replace_pipeline: ::wgpu::RenderPipeline,
+    programs: Vec<::wgpu::RenderPipeline>,
+    #[cfg(test)]
+    pub(super) general_only: bool,
     layout: ::wgpu::BindGroupLayout,
     sampler: ::wgpu::Sampler,
     repeat_sampler: ::wgpu::Sampler,
@@ -249,7 +253,7 @@ impl Wgpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let make_pipeline = |blend| {
+        let make_pipeline = |blend, constants: &[(&str, f64)]| {
             device.create_render_pipeline(&::wgpu::RenderPipelineDescriptor {
                 label: Some("ink"),
                 layout: Some(&pipeline_layout),
@@ -272,7 +276,10 @@ impl Wgpu {
                 fragment: Some(::wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
+                    compilation_options: ::wgpu::PipelineCompilationOptions {
+                        constants,
+                        ..Default::default()
+                    },
                     targets: &[Some(::wgpu::ColorTargetState {
                         format: ::wgpu::TextureFormat::Rgba8Unorm,
                         blend,
@@ -283,8 +290,17 @@ impl Wgpu {
                 cache: cache.as_ref(),
             })
         };
-        let pipeline = make_pipeline(Some(::wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
-        let replace_pipeline = make_pipeline(None);
+        let pipeline = make_pipeline(Some(::wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING), &[]);
+        let replace_pipeline = make_pipeline(None, &[]);
+        let programs = programs::CLASSES
+            .iter()
+            .map(|class| {
+                make_pipeline(
+                    Some(::wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    &class.constants(),
+                )
+            })
+            .collect();
         if let Some(e) = errors.pop().await {
             return Err(Error::Device(e.to_string()));
         }
@@ -351,6 +367,9 @@ impl Wgpu {
             queue,
             pipeline,
             replace_pipeline,
+            programs,
+            #[cfg(test)]
+            general_only: false,
             layout,
             sampler,
             repeat_sampler,
@@ -491,11 +510,13 @@ impl Wgpu {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn encode_pass(
         &self,
         encoder: &mut ::wgpu::CommandEncoder,
         target: &::wgpu::TextureView,
         buffer: &::wgpu::Buffer,
+        instances: &[Instance],
         batches: &[Batch],
         groups: &[::wgpu::BindGroup],
         clear: Option<[f64; 4]>,
@@ -532,7 +553,32 @@ impl Wgpu {
             });
             pass.set_scissor_rect(s.x, s.y, s.width, s.height);
             pass.set_bind_group(0, bindings, &[]);
-            pass.draw(0..4, batch.instances.clone());
+            let class = |i: &Instance| {
+                #[cfg(test)]
+                if self.general_only {
+                    return None;
+                }
+                (!batch.replace).then(|| programs::class(i)).flatten()
+            };
+            let mut start = batch.instances.start;
+            for run in instances[start as usize..batch.instances.end as usize]
+                .chunk_by(|a, b| class(a) == class(b))
+            {
+                let pipeline = class(&run[0]).map_or_else(
+                    || {
+                        if batch.replace {
+                            &self.replace_pipeline
+                        } else {
+                            &self.pipeline
+                        }
+                    },
+                    |index| &self.programs[index],
+                );
+                pass.set_pipeline(pipeline);
+                let end = start + run.len() as u32;
+                pass.draw(0..4, start..end);
+                start = end;
+            }
         }
     }
 
@@ -791,6 +837,7 @@ impl Device for Wgpu {
                 &mut encoder,
                 &target,
                 &buffer,
+                &[instance],
                 &[batch],
                 &[group],
                 Some([0.; 4]),
@@ -923,6 +970,7 @@ impl Device for Wgpu {
             &mut encoder,
             &self.texture(target)?.view,
             &self.buffers[slot].buffer.raw,
+            &frame.instances,
             &frame.batches,
             &groups,
             clear,
@@ -1010,6 +1058,8 @@ impl Device for Wgpu {
     }
 
     fn trim(&mut self) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wait(self.submitted)?;
         self.completed()?;
         for slot in &mut self.buffers {
             if slot.capacity > 192 {
@@ -1025,6 +1075,7 @@ impl Device for Wgpu {
                     .push((Submission(old.last.load(Ordering::Acquire)), old.raw));
             }
         }
+        self.completed()?;
         Ok(())
     }
 }

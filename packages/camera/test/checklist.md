@@ -3,11 +3,47 @@
 What no tool can do here: grant the camera on a Mac, open a phone's camera,
 and look. Each step says what to run and what you should see.
 
+For calibration, use the [package recipe](../../../docs/recipes/camera-calibration.md).
+On a physical iPhone and Android phone, open a track with a viewfinder, read its
+calibration, and check the reported matrix and reference dimensions against the
+delivered image. A device that reports none must return a reason; the viewfinder
+must keep running after the read. Repeat after changing cameras.
+
 Android's `takePhoto(android.shutterSound=false)` suppresses the sound only on
 API 33 or later when [`MediaActionSound.mustPlayShutterSound()`](https://developer.android.com/reference/android/media/MediaActionSound#mustPlayShutterSound())
 returns false. Earlier Android versions cannot report the regional requirement,
 so the shutter sound stays on. `ShutterSoundTest` checks the capture path on
 API 31, 32 and 33; a phone run must still check the audible cue.
+
+## Agent pictures and clips
+
+`prefer extension camera.picture={"path":"assets/test/card.jpg"}` supplies a
+still. `prefer extension camera.clip={"path":"assets/test/walk.mp4"}` supplies
+video frames on Android, iOS, macOS and web. These paths name app assets.
+Use H.264 MP4 for a fixture shared with the web; its browser must support
+WebCodecs decoding of H.264. Native hosts use their platform decoder.
+
+The clip decodes once when selected. At session time `clock`, its frame is
+selected at `(clock - track start) % duration`, using the clip's presentation
+timestamps. `clock +100` advances it by exactly 100 ms. The viewfinder,
+track picture observers and `takePhoto` use the same upright frame; only a
+front camera's preview is mirrored. The journal identifies the clip by SHA-256,
+without recording its frames. Photos retain their usual hashes.
+
+Setting both `camera.picture` and `camera.clip` is refused in the journal and
+keeps the previous source. Clear the old preference first with
+`prefer extension camera.picture=clear` or `prefer extension camera.clip=clear`.
+An unreadable clip likewise keeps the previous source and names the failure.
+
+`bun packages/camera/test/drives.mjs web --clip` builds the camera fixture
+and checks that advancing the agent clock changes its photo and then loops.
+It also refreshes a package's frame reader every 100 ms within a single
+`clock +300`. Use `macos` or `ios` in place of `web` for the Apple hosts.
+`fixture/frames.mp4` contains three 16×16 red, green and blue frames at 0,
+100 and 200 ms, with a duration of 300 ms. `fixture/rotated.mp4` has red and
+green halves and a 90° display transform. `fixture/trimmed.mp4` uses an edit
+list to omit the red frame and play green then blue for 200 ms. The web tests
+compare the transformed and trimmed frames and photos with the browser's video pixels.
 
 ## macOS, the conformance suite with a grant
 

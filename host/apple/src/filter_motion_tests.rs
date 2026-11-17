@@ -91,6 +91,7 @@ fn what_is_under_a_filter_running_to_none_is_sampled() {
         let mut host = boot();
         if ios {
             host.svg.box_motion = true;
+            host.svg.live_filters = true;
             host.engine.set_lowered_properties(&svg::lowered(true));
         }
         let square = id(&host, "square");

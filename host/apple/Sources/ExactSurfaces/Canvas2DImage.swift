@@ -150,7 +150,7 @@ final class Canvas2DHost: Canvas2DEnv {
     /// draw of it asks for it again.
     var onRelease: ((String) -> Void)?
     private var images: [String: CGImage] = [:]
-    private var loading: Set<String> = []
+    private var loading: [String: UUID] = [:]
     /// When each decoded handle was last drawn, or decoded if it has not been since.
     private var drawnAt: [String: CFTimeInterval] = [:]
     private var imageBytes = 0
@@ -172,8 +172,9 @@ final class Canvas2DHost: Canvas2DEnv {
     /// file and stopped past its byte limit, and an image over its pixel
     /// limit is refused before it is decoded.
     func load(_ srcs: [String]) {
-        for src in srcs where images[src] == nil && !loading.contains(src) {
-            loading.insert(src)
+        for src in srcs where images[src] == nil && loading[src] == nil {
+            let ticket = UUID()
+            loading[src] = ticket
             let remote = URL(string: src).flatMap { $0.scheme == "http" || $0.scheme == "https" ? $0 : nil }
             let local = remote == nil ? assetBytes?(src.hasPrefix("/") ? String(src.dropFirst()) : src) : nil
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -203,8 +204,8 @@ final class Canvas2DHost: Canvas2DEnv {
                         ] as CFDictionary)
                     }
                 DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.loading.remove(src)
+                    guard let self, self.loading[src] == ticket else { return }
+                    self.loading.removeValue(forKey: src)
                     if let image {
                         if let old = self.images.updateValue(image, forKey: src) { self.imageBytes -= old.bytesPerRow * old.height }
                         self.imageBytes += image.bytesPerRow * image.height
@@ -215,6 +216,17 @@ final class Canvas2DHost: Canvas2DEnv {
                 }
             }
         }
+    }
+
+    /// Replace a loaded handle and discard replies for its previous bytes.
+    func pictureChanged(_ src: String) {
+        let old = images.removeValue(forKey: src)
+        let pending = loading.removeValue(forKey: src) != nil
+        guard old != nil || pending else { return }
+        if let old { imageBytes -= old.bytesPerRow * old.height }
+        drawnAt.removeValue(forKey: src)
+        onRelease?(src)
+        load([src])
     }
 
     /// A replay drew `drawn`. `missed` were let go while a draw that used

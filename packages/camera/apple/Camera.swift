@@ -20,7 +20,8 @@
 //   picture and `takePhoto` copies its file unchanged (§9). The picture is
 //   the package's test card, read from this checkout (a drive runs on this
 //   Mac or its simulators), or the app asset `prefer extension
-//   camera.picture={"path":…}` names.
+//   camera.picture={"path":…}` names. `camera.clip={"path":…}` instead selects
+//   decoded frames on the session clock; takePhoto encodes the current frame.
 // - `takePhotoWithCameraApp` on iOS is the system camera UI
 //   (`UIImagePickerController` with `.camera`), with its shutter, flash and
 //   review; the kept photo is written as JPEG with the camera's metadata. It
@@ -60,6 +61,10 @@ public final class CameraModule: ExactPackage {
     let context: ExactPackageContext
     private var views: [String: ViewState] = [:]
     private var picture: String?
+    private var agentClip: AgentClip?
+    private var clipPath: String?
+    private var starts: [String: Double] = [:]
+    private var cancelFrame: (() -> Void)?
     private var taken = 0
     private var photos: [[String: Any]] = []
     private var videos: [[String: Any]] = []
@@ -79,7 +84,7 @@ public final class CameraModule: ExactPackage {
     /// A viewfinder's place among its track's consumers.
     final class Sub: ExactTrackConsumer {
         let track: String, origin: String
-        var live = false
+        var live = false, isMuted = false
         var subscription: ExactSubscription?
         var onLive: (ExactVideoSource?) -> Void = { _ in }
         var onBlank: () -> Void = {}
@@ -87,8 +92,8 @@ public final class CameraModule: ExactPackage {
         var onUnmuted: () -> Void = {}
         init(track: String, origin: String) { self.track = track; self.origin = origin }
         func live(video source: ExactVideoSource?) { live = true; onLive(source) }
-        func muted(_ reason: String) { onMuted() }
-        func unmuted() { onUnmuted() }
+        func muted(_ reason: String) { isMuted = true; onMuted() }
+        func unmuted() { isMuted = false; onUnmuted() }
         func ended() { live = false; onBlank() }
         func leave() { subscription?.cancel(); subscription = nil }
     }
@@ -110,19 +115,57 @@ public final class CameraModule: ExactPackage {
         }
     }
 
-    /// Under the agent: the picture `prefer extension camera.picture` names (D8 item 9).
+    /// A preference changes the source, never the tracks' playback phase.
     public func preferred(_ values: [String: Any]) {
+        guard context.agent else { return }
         let named = (values["picture"] as? [String: Any])?["path"] as? String
         let next = named?.isEmpty == false ? named : nil
-        guard next != picture else { return }
-        picture = next
+        let video = (values["clip"] as? [String: Any])?["path"] as? String
+        let path = video?.isEmpty == false ? video : nil
+        if next != nil && path != nil {
+            say("refused: camera.picture and camera.clip cannot both be set; clear one first")
+            return
+        }
+        guard next != picture || path != clipPath else { return }
+        var decoded: AgentClip?
+        if let path {
+            guard let url = assetURL(path) else { say("refused camera.clip: no app asset \(path)"); return }
+            do { decoded = try AgentClip(url: url) }
+            catch { say("refused camera.clip: \(error)"); return }
+        }
+        picture = next; clipPath = path; agentClip = decoded
+        if let decoded { say("clip \(path!) (\(decoded.duration) ms, sha256 \(decoded.sha256))") }
+        cancelFrame?(); cancelFrame = nil
         for (id, v) in views where v.sub?.live == true {
-            context.tracks.lookup(v.sub?.track ?? "")?.picture = agentPicture()
             v.sub?.leave(); v.sub = nil; reconcile(id)
         }
     }
 
+    private func elapsed(_ track: String) -> Double {
+        if starts[track] == nil { starts[track] = context.tracks.lookup(track)?.startedAt ?? context.now() }
+        return context.now() - starts[track]!
+    }
+
+    private func refreshClip() {
+        cancelFrame?(); cancelFrame = nil
+        guard let clip = agentClip else { return }
+        var next = Double.infinity
+        for v in views.values {
+            guard let sub = v.sub, sub.live, !sub.isMuted, let view = v.view else { continue }
+            let elapsed = elapsed(sub.track), frame = clip.frames[clip.index(elapsed)]
+            let entry = context.tracks.lookup(sub.track)
+            entry?.picture = frame.image
+            let facing = (entry?.state?()["settings"] as? [String: Any])?["facingMode"] as? String
+            view.show(picture: frame.image, mirrored: facing == "user")
+            next = min(next, clip.next(elapsed))
+        }
+        if next.isFinite {
+            cancelFrame = context.after(max(0.001, next), coalescing: true) { [weak self] in self?.refreshClip() }
+        }
+    }
+
     public func destroy(_ done: @escaping () -> Void) {
+        cancelFrame?(); cancelFrame = nil; agentClip = nil
         for v in views.values { v.sub?.leave() }
         views = [:]
         if cameraAppUp { endCameraApp("the session ended") }
@@ -193,10 +236,11 @@ public final class CameraModule: ExactPackage {
             guard let self, let v, let sub, v.sub === sub, sub.live else { return }
             let facing = (self.context.tracks.lookup(sub.track)?.state?()["settings"] as? [String: Any])?["facingMode"] as? String
             if self.context.agent {
-                let picture = self.agentPicture()
+                let picture = self.agentPicture(sub.track)
                 v.view?.show(picture: picture, mirrored: facing == "user")
                 // The track's frame is the picture drawn, unmirrored, as a sensor's is (LLP 1133.027 D17 item 2).
                 self.context.tracks.lookup(sub.track)?.picture = picture
+                self.refreshClip()
             } else if let source { v.view?.show(source: source) }
         }
         sub.onLive = { s in source = s; show() }
@@ -228,7 +272,7 @@ public final class CameraModule: ExactPackage {
         let took = { [self] (path: String, data: Data) in took(path, data, track: id, origin: origin) }
         let written = { [self] (ext: String) in place(args, ext) }
         if context.agent {
-            guard let data = agentPictureData(), let (path, url) = written("jpg") else { return reply(["error": "UnknownError"]) }
+            guard let data = agentPictureData(id), let (path, url) = written("jpg") else { return reply(["error": "UnknownError"]) }
             do { try data.write(to: url) } catch { return reply(["error": "UnknownError"]) }
             took(path, data)
             return reply(Self.photo(path: path, data: data))
@@ -557,16 +601,25 @@ public final class CameraModule: ExactPackage {
 
     private func agentPictureURL() -> URL? {
         guard let picture else { return Self.card }
+        return assetURL(picture)
+    }
+
+    private func assetURL(_ path: String) -> URL? {
+        guard !path.hasPrefix("/"), !path.contains(":"), !path.split(separator: "/").contains("..") else { return nil }
         var roots: [String] = []
         if let assets = ProcessInfo.processInfo.environment["EXACT_ASSETS"] { roots.append(assets) }
         if let resources = Bundle.main.resourcePath { roots.append(resources) }
         roots.append(Bundle.main.bundlePath)
-        return roots.map { URL(fileURLWithPath: $0).appendingPathComponent(picture) }.first { FileManager.default.fileExists(atPath: $0.path) }
+        return roots.map { URL(fileURLWithPath: $0).appendingPathComponent(path) }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    func agentPictureData() -> Data? { agentPictureURL().flatMap { try? Data(contentsOf: $0) } }
+    func agentPictureData(_ track: String? = nil) -> Data? {
+        if let clip = agentClip, let track { return clip.frames[clip.index(elapsed(track))].jpeg }
+        return agentPictureURL().flatMap { try? Data(contentsOf: $0) }
+    }
 
-    func agentPicture() -> CGImage? {
+    func agentPicture(_ track: String? = nil) -> CGImage? {
+        if let clip = agentClip, let track { return clip.frames[clip.index(elapsed(track))].image }
         guard let url = agentPictureURL(), let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                                         kCGImageSourceThumbnailMaxPixelSize: 2048]

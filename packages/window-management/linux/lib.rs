@@ -19,24 +19,7 @@ const TOPIC: &str = "window-management.getScreenDetails";
 
 /// A `ScreenDetailed`, and with `client` its `clientRect`.
 fn screen(s: &Screen, client: bool) -> Json {
-    let [left, top, width, height] = s.rect;
-    let [avail_left, avail_top, avail_width, avail_height] = s.avail;
-    let mut out = json!({
-        "left": left, "top": top, "width": width, "height": height,
-        "availLeft": avail_left, "availTop": avail_top,
-        "availWidth": avail_width, "availHeight": avail_height,
-        "devicePixelRatio": s.scale, "isPrimary": s.primary,
-        "isInternal": s.internal, "label": s.label,
-    });
-    if client {
-        out["clientRect"] = s
-            .client
-            .map(
-                |[x, y, width, height]| json!({ "x": x, "y": y, "width": width, "height": height }),
-            )
-            .unwrap_or(Json::Null);
-    }
-    out
+    s.json(client)
 }
 
 /// `ScreenDetails`.

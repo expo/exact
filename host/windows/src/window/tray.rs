@@ -8,7 +8,7 @@ use crate::tray::{self, Does, Flyout, Heard, Icon, Input, Op, Shell, Shown};
 use exact_painted::presenter::top::StatusItem;
 
 /// What an icon shows: its tooltip and its pixels.
-type Picture = ([u16; 128], Vec<u8>);
+type Picture = ([u16; 128], Vec<u8>, u32);
 
 pub(super) struct Tray {
     shell: Option<Shell>,
@@ -17,8 +17,9 @@ pub(super) struct Tray {
     placed: Vec<(Icon, Picture)>,
     /// Each item as of the last sync, by its icon's id.
     items: Vec<(u16, StatusItem)>,
-    /// The kernel epoch the icons were drawn at; `None` draws them again.
-    epoch: Option<u64>,
+    /// The kernel epoch and accepted pictures last drawn; `None` draws them again.
+    epoch: Option<(u64, Vec<(u32, usize)>)>,
+    sizes: Vec<u32>,
     dark: bool,
     /// The app's icon at a side, for an item with no image it can draw.
     app_icon: Option<(u32, Option<Vec<u8>>)>,
@@ -26,7 +27,6 @@ pub(super) struct Tray {
     /// revision last painted.
     anchor: (Placement, f32),
     painted: Option<(u32, u32)>,
-    said_image: bool,
     /// The app's `id`, which names the icons' GUIDs in a production build.
     guid_owner: Option<String>,
     said_guid: bool,
@@ -39,7 +39,7 @@ impl Tray {
         proxy: &EventLoopProxy<crate::accessibility::Event>,
     ) -> Tray {
         let shell = Shell::new(name);
-        let flyout = Flyout::new();
+        let flyout = Flyout::new(proxy.clone());
         let wake = |proxy: EventLoopProxy<_>| {
             move || drop(proxy.send_event(crate::accessibility::Event::Wake))
         };
@@ -55,11 +55,11 @@ impl Tray {
             placed: Vec::new(),
             items: Vec::new(),
             epoch: None,
+            sizes: Vec::new(),
             dark: tray::shell::taskbar_dark(),
             app_icon: None,
             anchor: (Placement::default(), 1.),
             painted: None,
-            said_image: false,
             guid_owner,
             said_guid: false,
         }
@@ -112,6 +112,7 @@ impl<D: DataSource + Default + 'static> App<D> {
                     tray.placed.clear();
                     tray.epoch = None;
                 }
+                Heard::Dpi => tray.epoch = None,
                 Heard::Theme => {
                     tray.dark = tray::shell::taskbar_dark();
                     tray.epoch = None;
@@ -156,18 +157,65 @@ impl<D: DataSource + Default + 'static> App<D> {
         }
     }
 
+    pub(super) fn tray_access(
+        &mut self,
+        events: &ActiveEventLoop,
+        request: accesskit::ActionRequest,
+    ) {
+        if let (Some(tray), Some(p)) = (&mut self.tray, &mut self.presenter) {
+            p.advance(self.started.elapsed().as_secs_f64() * 1000.);
+            if let Some(flyout) = &mut tray.flyout {
+                flyout.access_action(p, request);
+            }
+        }
+        if self
+            .presenter
+            .as_mut()
+            .is_some_and(|p| p.take_status_exit())
+        {
+            self.exit_by_person(events);
+        }
+        self.about_to_wait(events);
+    }
+
     /// The icons and the menu's window as the tree now stands.
     pub(super) fn tray_sync(&mut self) {
         let (Some(tray), Some(p)) = (&mut self.tray, &mut self.presenter) else {
             return;
         };
-        let epoch = p.host().kernel().epoch();
-        if tray.epoch != Some(epoch) {
+        // A hidden main window never draws, but an image worker still wakes this loop.
+        if self.hidden {
+            p.poll_images();
+        }
+        let status = p.status_items();
+        let metrics: Vec<_> = status
+            .iter()
+            .map(|item| {
+                let name = item.name.clone().unwrap_or_else(|| item.node.to_string());
+                let existing = tray
+                    .items
+                    .iter()
+                    .find(|(_, old)| old.node == item.node)
+                    .map(|(id, _)| *id);
+                let id = existing.unwrap_or_else(|| tray::id(&name, &[]));
+                tray::shell::icon_side(tray.shell.as_ref().and_then(|shell| shell.rect(id)))
+            })
+            .collect();
+        let images = status
+            .iter()
+            .zip(&metrics)
+            .filter_map(|(item, (side, _))| item.image.map(|id| (id, *side)))
+            .collect::<Vec<_>>();
+        let revision = p.sync_status_images(&images);
+        let epoch = (p.host().kernel().epoch(), revision);
+        let sizes = metrics.iter().map(|(side, _)| *side).collect::<Vec<_>>();
+        if tray.epoch.as_ref() != Some(&epoch) || tray.sizes != sizes {
             tray.epoch = Some(epoch);
-            let (side, scale) = tray::shell::icon_side();
+            tray.sizes = sizes;
+
             let mut items: Vec<(u16, StatusItem)> = Vec::new();
             let mut wanted = Vec::new();
-            for item in p.status_items() {
+            for (item, (side, scale)) in status.into_iter().zip(metrics) {
                 let taken: Vec<u16> = items.iter().map(|(id, _)| *id).collect();
                 let name = item.name.clone().unwrap_or_else(|| item.node.to_string());
                 let id = tray::id(&name, &taken);
@@ -190,12 +238,7 @@ impl<D: DataSource + Default + 'static> App<D> {
                             .log(format!("status item: its image did not draw: {error}"));
                         None
                     }
-                    None => {
-                        if item.image.is_some() && !std::mem::replace(&mut tray.said_image, true) {
-                            p.host_mut().log("status item: Windows draws a symbol or an svg as its icon, not an img's file; the app's icon shows (LLP 1133.025 D4)");
-                        }
-                        None
-                    }
+                    None => None,
                 };
                 let pixels = drawn.or_else(|| tray.app_icon(side)).unwrap_or_default();
                 wanted.push((
@@ -203,6 +246,7 @@ impl<D: DataSource + Default + 'static> App<D> {
                     (
                         tray::tip(&item.label),
                         tray::icon_bgra(&pixels, item.disabled),
+                        side,
                     ),
                 ));
                 items.push((id, item));
@@ -216,11 +260,17 @@ impl<D: DataSource + Default + 'static> App<D> {
                 match op {
                     Op::Delete(icon) => shell.remove(icon),
                     Op::Add(icon) | Op::Modify(icon) => {
-                        let (_, (tip, pixels)) = wanted.iter().find(|(w, _)| *w == icon).unwrap();
-                        let shown = tray::shell::icon(pixels, side)
+                        let (_, (tip, pixels, side)) =
+                            wanted.iter().find(|(w, _)| *w == icon).unwrap();
+                        let shown = tray::shell::icon(pixels, *side)
                             .map_or(Shown::Refused, |hicon| shell.show(icon, *tip, hicon));
                         match shown {
-                            Shown::AsAsked => {}
+                            Shown::AsAsked => {
+                                if matches!(op, Op::Add(_)) {
+                                    let _ =
+                                        self.proxy.send_event(crate::accessibility::Event::Wake);
+                                }
+                            }
                             Shown::WithoutGuid => {
                                 if !std::mem::replace(&mut tray.said_guid, true) {
                                     p.host_mut().log("status item: the notification area refused the icon's GUID, which Windows binds to the executable's path; it is known by its number, and the person's choice to show it may not carry over (LLP 1133.025 §14)");
@@ -247,10 +297,12 @@ impl<D: DataSource + Default + 'static> App<D> {
         };
         let Some(menu) = p.status_menu() else {
             flyout.hide();
+            flyout.sync_access(p, f64::from(tray.anchor.1));
             tray.painted = None;
             return;
         };
         if tray.painted == Some((menu.serial, menu.revision)) {
+            flyout.sync_access(p, f64::from(tray.anchor.1));
             return;
         }
         let (at, scale) = tray.anchor;
@@ -267,6 +319,7 @@ impl<D: DataSource + Default + 'static> App<D> {
             Some(Err(error)) => p.host_mut().log(format!("status menu: {error}")),
             None => {}
         }
+        flyout.sync_access(p, f64::from(scale));
     }
 
     /// The status menu's Exit: `beforeunload` is asked, as for a window's

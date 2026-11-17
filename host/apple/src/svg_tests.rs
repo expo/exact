@@ -197,6 +197,7 @@ component App
     )
     .unwrap();
     host.svg.box_motion = true;
+    host.svg.live_filters = true;
     host.engine.set_lowered_properties(&svg::lowered(true));
     let k = host.runner.kernel();
     let start = k.node_by_key(k.find_by_test_id("start")[0]).unwrap().id;

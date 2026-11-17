@@ -15,7 +15,7 @@ import { memoryEntitlements, alarmKeys } from './plist.mjs';
 import { listAssets } from '../web/serve.mjs';
 import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, iconFiles, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks, plistFile } from './assets.mjs';
 import { allows, profile, identity, embeddedProfile, installedProfiles } from './devices.mjs';
-import { grantEntitlements, macHostIdentity } from './presence.mjs';
+import { grantEntitlements, grantEntitlementValues, macHostIdentity } from './presence.mjs';
 import { stripForDistribution, stripProductionExecutable } from './link.mjs';
 import { assertLibraryNames, placeLibrary } from '../../scripts/package-libraries.mjs';
 import { embedWatch, watchProfiles, watchSyncKeys, watchSyncSelected } from './watch.mjs';
@@ -299,11 +299,12 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
   // A grant's signing entitlement needs a profile that allows it, which a
   // team wildcard never does for HealthKit (LLP 1069.008.000 D4).
   const required = appleReach?.entitlements ?? [], appRequired = [...required, ...browserEntitlements({ ...app, widgetTV: tv }, distribution), ...memoryEntitlements({ ...app, widgetTV: tv })];
+  const values = grantEntitlementValues(app, appleReach);
   // With entries, the app's and the extension's profiles together, each granting the shared groups (LLP 1126.001 WP13).
-  const provisioned = shared && device && !unsigned ? entryProfiles({ app, udid: ph?.udid, required: appRequired }) : null;
-  const appProfile = device && !unsigned ? provisioned?.app ?? (allows(prof, appRequired) ? prof : profile(ph?.udid, app.id, appRequired)) : null;
+  const provisioned = shared && device && !unsigned ? entryProfiles({ app, udid: ph?.udid, required: appRequired, values }) : null;
+  const appProfile = device && !unsigned ? provisioned?.app ?? (allows(prof, appRequired, values) ? prof : profile(ph?.udid, app.id, appRequired, { values })) : null;
   // The clip's profile is for its own App ID, of the app's profile's team, prefix and method, as the extension's is.
-  const profiles = { host: () => profile(ph?.udid, `${app.id}.host`, required), clip: () => embeddedProfile(ph?.udid, clip.id, appProfile, [...grantEntitlements({ ...app, clipParent: app.id }, required), 'com.apple.developer.parent-application-identifiers']) };
+  const profiles = { host: () => profile(ph?.udid, `${app.id}.host`, required, { values: grantEntitlementValues({ id: `${app.id}.host` }, appleReach) }), clip: () => embeddedProfile(ph?.udid, clip.id, appProfile, [...grantEntitlements({ ...app, clipParent: app.id }, required), 'com.apple.developer.parent-application-identifiers']) };
   const packageManifests = (buildReceipt.binary.privacyManifests ?? []).slice(1);
   // `watch`: a device build embeds the watch app, signed with profiles of the app's team, prefix and method.
   const companion = watch && appProfile ? watchProfiles({ app, udid: ph?.udid, like: appProfile }) : [];

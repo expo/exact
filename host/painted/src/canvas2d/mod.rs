@@ -12,7 +12,7 @@
 //! operators, patterns, images and conic gradients; text is glyph outlines
 //! (`text.rs`).
 
-mod capture;
+pub(crate) mod capture;
 mod draw;
 pub(crate) mod text;
 

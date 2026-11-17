@@ -462,6 +462,47 @@ fn under_the_agent_the_drives_place_stands_over_the_phones() {
     assert_eq!(size(&p), iso);
 }
 
+#[test]
+fn desktop_settings_refresh_the_app_and_preserve_its_launch_seed() {
+    let source = r#"shape Time
+  locale: string
+  formatLocale: string
+  timeZone: string
+  seed: number
+component App
+  resource time = exactTime() as shape Time
+  view
+    text `${time.locale} ${time.formatLocale} ${time.timeZone} ${time.seed}` testId="facts"
+"#;
+    let mut p = boot(source);
+    p.agent = false;
+    assert!(p
+        .set_place(&exact_runner::time::Place {
+            seed: 42.0,
+            ..Default::default()
+        })
+        .is_none());
+    for format in ["en-GB-u-hc-h12", "en-GB"] {
+        assert!(p
+            .refresh_place(|seed| exact_runner::time::Place {
+                locale: "fr-CA".into(),
+                format_locale: format.into(),
+                time_zone: "America/Toronto".into(),
+                seed,
+            })
+            .is_none());
+        assert_eq!(facts(&p), format!("fr-CA {format} America/Toronto 42"));
+    }
+    let current = p.host().runner().place().clone();
+    assert!(p.refresh_place(|_| current.clone()).is_none());
+    assert_eq!(p.host().runner().place(), &current);
+    p.agent = true;
+    assert!(p
+        .refresh_place(|_| panic!("the agent read Windows settings"))
+        .is_none());
+    assert_eq!(p.host().runner().place(), &current);
+}
+
 /// A page symbol is drawn in its `color`, inherited here from a custom button
 /// or a box, as Apple and the web draw one (LLP 1081 §4), not in the accent.
 #[test]

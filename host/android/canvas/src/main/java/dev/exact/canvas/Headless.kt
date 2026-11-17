@@ -21,14 +21,19 @@ internal object Headless {
      * launch extras a development build reads, and no launch URL or share, which the first activity made over the
      * host gives it from its own intent ([ExactActivity.onCreate], [Exact.launch]).
      */
-    fun session(context: Context, ready: (Boolean) -> Unit) {
+    fun session(context: Context, active: () -> Boolean = { true }, ready: (Boolean) -> Unit) {
         main.post {
+            if (!active()) return@post ready(false)
             if (!Exact.live) start(context.applicationContext)
             val owner = Exact.owner
             // owner=0: the host is an activity's, on the main thread.
             if (owner == null) ready(false)
             // Behind the boot, this one's or an activity's, and the data module's activation.
-            else owner.active { ok -> if (ok) Extensions.firstFrame(); ready(ok) }
+            else owner.active { ok ->
+                val available = ok && active()
+                if (available) Extensions.firstFrame()
+                ready(available)
+            }
         }
     }
 

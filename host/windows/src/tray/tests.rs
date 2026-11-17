@@ -316,3 +316,11 @@ fn a_wheel_notch_scrolls_the_persons_lines() {
     assert_eq!(wheel(-120, 3), 48.);
     assert_eq!(wheel(240, 1), -32.);
 }
+
+#[test]
+fn status_icon_metrics_follow_the_current_displays_small_icon() {
+    assert_eq!(super::icon_metrics(16, 96), (16, 1.));
+    assert_eq!(super::icon_metrics(20, 120), (20, 1.25));
+    assert_eq!(super::icon_metrics(24, 144), (24, 1.5));
+    assert_eq!(super::icon_metrics(0, 0), (16, 1.));
+}

@@ -83,6 +83,9 @@ final class PointerRecognizer: UIGestureRecognizer {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
+        // A held touch that ended unseen goes first, so the new one resolves
+        // its own paragraph or listener, not the old touch's.
+        releaseEnded()
         let source = touches.first.flatMap(Self.source)
         // A pointer callback can retire a hit before the view receives this touch.
         let layoutHit = touches.first.flatMap { touch in
@@ -203,7 +206,26 @@ final class PointerRecognizer: UIGestureRecognizer {
         lift(touches)
     }
     private func lift(_ touches: Set<UITouch>) {
-        guard let held = touch, touches.contains(held) else { return }
+        releaseEnded()
+        guard let held = touch, touches.contains(held) else {
+            // A touch it never took (another was held, or none listened)
+            // ends: holding none, it is done. Left possible, it keeps UIKit
+            // from resetting the touch's other recognizers, and a scroll
+            // view's pan never begins again.
+            if touch == nil { state = .failed }
+            return
+        }
+        release(held)
+        state = .failed
+    }
+    /// The held touch, if it has ended or been cancelled without its end
+    /// reaching this recognizer (a menu that took the tap that opened it),
+    /// lifted as its end would have lifted it.
+    private func releaseEnded() {
+        guard let held = touch, held.phase == .ended || held.phase == .cancelled else { return }
+        release(held)
+    }
+    private func release(_ held: UITouch) {
         touch = nil
         // A turn later, once UIKit's own tap (a field's focus) has had the lift.
         if presenter?.preventedTouches.contains(held) == true { DispatchQueue.main.async { [weak presenter] in presenter?.preventedTouches.remove(held) } }
@@ -212,7 +234,6 @@ final class PointerRecognizer: UIGestureRecognizer {
         path = []
         dispatch(nodes) { n in n.presenter?.pointer(n.id, .up, sample(held, lifted: true, button: Self.domButton(buttons), at: n)) }
         if relay != nil { node = nil }
-        state = .failed
     }
     override func reset() {
         super.reset()

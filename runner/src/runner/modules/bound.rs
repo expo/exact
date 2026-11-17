@@ -225,6 +225,15 @@ impl<D: DataSource> Runner<D> {
         if self.route(implementation) == Route::Agent {
             if let Some(preferred) = self.extensions.preferred.get(&self.key(implementation)) {
                 body["preferred"] = preferred.clone();
+            } else if let Some(from) = self.substitute(implementation)["from"]
+                .as_str()
+                .and_then(|key| self.plan.modules.iter().find(|row| self.key(row) == key))
+            {
+                // A substitute may consume another package's fixture, as
+                // still capture consumes window management's display list.
+                if let Some(value) = self.value_of(from) {
+                    body["preferred"] = value;
+                }
             }
         }
         let origin = match reader {
@@ -324,7 +333,7 @@ impl<D: DataSource> Runner<D> {
             })
             .map(|(t, _)| *t)
             .collect();
-        let handler = self.native_slot().handler();
+        let handler = self.native_slot().extension_handler();
         for ticket in gone {
             let Some((key, n)) = self.extensions.sent.remove(&ticket) else {
                 continue;
@@ -344,7 +353,7 @@ impl<D: DataSource> Runner<D> {
     /// whenever one changes, whether or not anything reads the name (LLP
     /// 1133.008 D8 item 9), as `{"extension", "preferred": {name: value}}`.
     pub(in crate::runner) fn tell_preferred(&self, extension: &str) {
-        let Some(handler) = self.native_slot().handler() else {
+        let Some(handler) = self.native_slot().extension_handler() else {
             return;
         };
         let prefix = format!("{extension}.");
@@ -414,7 +423,7 @@ impl<D: DataSource> Runner<D> {
     /// fact admission reads (LLP 1133.009 D10 item 3). An implementation
     /// begins in the foreground.
     pub(in crate::runner) fn tell_foreground(&self) {
-        let Some(handler) = self.native_slot().handler() else {
+        let Some(handler) = self.native_slot().extension_handler() else {
             return;
         };
         let told: std::collections::BTreeSet<&str> = (self.plan.modules.iter())
@@ -509,7 +518,7 @@ impl<D: DataSource> Runner<D> {
                 released.push(json!({ "extension": extension, "release": name, "args": args }));
             }
         }
-        let handler = self.native_slot().handler();
+        let handler = self.native_slot().extension_handler();
         for mut body in released {
             let key = format!(
                 "{}.{}",

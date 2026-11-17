@@ -716,7 +716,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         followingEndAnimated = false; authoredScrollAnimating = false; pageIfPager(scrollView)
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
-        retainedScrollTop = nil
+        retainedScrollTop = nil; dropCarriedScroll()
         if handlers.contains("scrolldragstart") { presenter?.scrollDrag(id, nil) }
         #if os(iOS)
         if #available(iOS 27.1, *) { presenter?.arrangements.cancelScrollHandoff(id) }
@@ -727,6 +727,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// A scroll under a canvas repaints it (LLP 1014 D4 c).
     package func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard scrollView === self.scrollView, let presenter else { return }
+        if scrollView.scrollsItself { dropCarriedScroll() }
         let post = Presenter.signpostLog.signpostsEnabled ? Presenter.beginScrollSignpost() : nil
         #if DEBUG
         if post != nil { presenter.scrollSignpostIntervals += 1 }
@@ -1030,7 +1031,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if supported {
                 let effect = kind == "backdrop" ? BackdropEffectView() : UIVisualEffectView()
                 effect.isUserInteractionEnabled = Materials.glass(kind)
-                effect.frame = bounds
+                effect.frame = materialFrame
                 effect.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 (glassSlot?.contentView ?? self).insertSubview(effect, at: 0)
                 materialView = effect
@@ -1057,7 +1058,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     func applyMaterialRadius() {
         guard let materialView else { return }
-        let radius = BorderPaint.clip(materialView.layer, in: bounds, radii: effectiveCornerSizes(in: bounds))
+        let radius = BorderPaint.clip(materialView.layer, in: materialBox, radii: effectiveCornerSizes(in: materialBox))
         if #available(iOS 26.0, tvOS 26.0, *) {
             materialView.cornerConfiguration = .corners(radius: .fixed(Double(radius)))
         } else {

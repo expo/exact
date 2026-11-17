@@ -198,7 +198,7 @@ impl<D: DataSource> Runner<D> {
             let request = self.as_origin(origin, |r| r.bound_request(row, args, None));
             let lines = self.extensions.declared.lines.clone();
             let slot = self.native_slot();
-            let Some(handler) = slot.handler() else {
+            let Some(handler) = slot.extension_handler() else {
                 return Effect::Now(json!({ "error": "NotSupportedError" }));
             };
             // A background action owns a native statement until its reply;

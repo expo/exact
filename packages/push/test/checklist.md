@@ -87,3 +87,34 @@ means the token belongs to the other environment (the other `HOST`).
     distribution-signed before its app, its embedded profile names
     `<app id>.notifications`, and the archive passes the distribution service's
     validation.
+
+## Android through Expo
+
+Use the reporter's POCO X6 Pro (Android 14, HyperOS), the Firebase client for
+its package id and the EAS project holding that Firebase project's FCM v1
+credentials. Build and install the app from the [push recipe](../../../docs/recipes/push.md),
+open it once, allow notifications, and register its Expo token with the backend.
+Confirm the live subscription has both `android.installationId` and
+`android.token`; the latter must be the FCM registration token. Its
+`android.appId` must match the installed package, including any variant suffix.
+
+1. Send the recipe's panic alert with the app in front, using the backend or
+   [Expo's push tool](https://expo.dev/notifications). Set priority `high`,
+   channel `urgencies`, and data `{ "id": "urgency-42", "navigate": "/urgencies" }`.
+   Check Expo's ticket and receipt. The app's `push` handler runs once, posts
+   on `urgencies` with the app sound and refreshes its list if configured.
+2. Press Home and send again with a different id. The notification appears
+   without bringing the activity forward. Tap it: `/urgencies` opens.
+3. Press Home, then `adb shell am kill <package>`; confirm
+   `adb shell pidof <package>` prints nothing. Send again. A headless session
+   handles it and posts without opening the activity. Tap: `/urgencies` opens.
+   A force-stop is a different platform state and is not this check.
+4. Repeat with the screen locked, hear the custom sound, and inspect the
+   channel in Settings. Check OEM battery/autostart restrictions separately.
+5. Clear the app's Firebase registration through the project's test tooling,
+   reopen, and check that a changed FCM token updates the live subscription,
+   is exchanged with Expo again and receives the next send.
+
+Without this project's configuration, JVM tests cover routing, expiry and
+registration callbacks, and mocked fetch covers the exchange. They establish
+neither Firebase registration nor delivery through Expo or HyperOS.

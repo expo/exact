@@ -414,8 +414,13 @@ export function appleCargo(command, arguments_, options = {}) {
  * before r28 align to 4 KB. */
 export const ANDROID_PAGE_SIZE = '-Clink-arg=-Wl,-z,max-page-size=16384';
 
-/** A Cargo run for an Android target with ANDROID_PAGE_SIZE added to every rustflags source it may use, and none
- * made: CARGO_ENCODED_RUSTFLAGS or RUSTFLAGS when set, the target's own variable when set, and `build.rustflags`
+/** C++ exception support for C++ that a build script compiles (`CXXSTDLIB_aarch64_linux_android`, `androidToolchainEnv`):
+ * the NDK's libc++_static.a leaves `__cxa_throw` and the `std` exceptions' typeinfo to libc++abi.a, and a shared library
+ * links with them undefined, so the device refuses to load it. An archive, so a library without C++ takes nothing. */
+const ANDROID_CXXABI = '-Clink-arg=-lc++abi';
+
+/** A Cargo run for an Android target with ANDROID_PAGE_SIZE and ANDROID_CXXABI added to every rustflags source
+ * it may use, and none made: CARGO_ENCODED_RUSTFLAGS or RUSTFLAGS when set, the target's own variable when set, and `build.rustflags`
  * through `--config`, which Cargo joins with the configuration's array and CARGO_BUILD_RUSTFLAGS. A new target source
  * would displace `build.rustflags` (a game's `-fp-contract=off`), and a variable would reach the host Cargo runs that
  * build scripts start, whose linker refuses the argument. Other runs pass through. */
@@ -423,11 +428,11 @@ export function androidCargo(command, arguments_, options = {}) {
   const target = arguments_.find((value, index) => value.startsWith('--target=') || arguments_[index - 1] === '--target')?.replace(/^--target=/, '');
   if (command !== 'cargo' || !target?.endsWith('-linux-android')) return [command, arguments_, options];
   const environment = { ...(options.env ?? process.env) };
-  const add = (value, separator) => value.split(separator).includes(ANDROID_PAGE_SIZE) ? value : [value, ANDROID_PAGE_SIZE].filter(Boolean).join(separator);
+  const add = (value, separator) => [value, ...[ANDROID_PAGE_SIZE, ANDROID_CXXABI].filter((flag) => !value.split(separator).includes(flag))].filter(Boolean).join(separator);
   if (environment.CARGO_ENCODED_RUSTFLAGS !== undefined) environment.CARGO_ENCODED_RUSTFLAGS = add(environment.CARGO_ENCODED_RUSTFLAGS, '\x1f');
   else if (environment.RUSTFLAGS !== undefined) environment.RUSTFLAGS = add(environment.RUSTFLAGS.trim(), ' ');
   const own = `CARGO_TARGET_${target.toUpperCase().replaceAll('-', '_')}_RUSTFLAGS`;
   if (environment[own] !== undefined) environment[own] = add(environment[own].trim(), ' ');
   const separator = arguments_.indexOf('--'), at = separator < 0 ? arguments_.length : separator;
-  return [command, [...arguments_.slice(0, at), '--config', `build.rustflags=${JSON.stringify([ANDROID_PAGE_SIZE])}`, ...arguments_.slice(at)], { ...options, env: environment }];
+  return [command, [...arguments_.slice(0, at), '--config', `build.rustflags=${JSON.stringify([ANDROID_PAGE_SIZE, ANDROID_CXXABI])}`, ...arguments_.slice(at)], { ...options, env: environment }];
 }

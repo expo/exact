@@ -111,6 +111,7 @@ fn selected_config(dir: &Path, baked: &[u8], client: Client) -> Config {
 
 fn selected_config_as(compat: &str, dir: &Path, baked: &[u8], client: Client) -> Config {
     let mut config = Config {
+        output_rotation: Default::default(),
         content_region: None,
         launch: "/".into(),
         plan: baked.to_vec().into(),
@@ -183,6 +184,7 @@ fn a_fetched_plan_refused_at_boot_falls_back_to_baked() {
     foreign.app_id = "com.exact.foreign".into();
     let baked = contract::compile(source).unwrap().encode();
     let mut config = Config {
+        output_rotation: Default::default(),
         content_region: None,
         launch: "/".into(),
         plan: foreign.encode().into(),
@@ -259,6 +261,7 @@ fn a_partial_initial_dev_plan_falls_back_without_counting_the_store() {
     let record = client.dir().join("record.json");
     let updates = Updates::from_client(client).unwrap();
     let mut config = Config {
+        output_rotation: Default::default(),
         content_region: None,
         launch: "/".into(),
         plan: b"EXPL".to_vec().into(), // the compiler was interrupted mid-write

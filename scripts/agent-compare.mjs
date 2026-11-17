@@ -220,14 +220,20 @@ const overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(
 const r0 = (v) => Math.round(v);
 const boxText = (b) => `[${r0(b.x)},${r0(b.y)} ${r0(b.w)}×${r0(b.h)}]`;
 
-/** The view nodes in capture points: `layout`'s boxes moved by `origin` (where the viewport sits in the capture), with
+/** The view nodes in capture points: `layout`'s boxes moved by `origin`, then rotated onto the capture's axes, with
  *  `tree`'s type, testId, text, depth and `inactive` (a covered screen's or an unselected tab's), and the source line. */
-export function viewNodes(layout, tree, origin = [0, 0]) {
+export function viewNodes(layout, tree, origin = [0, 0], capture = {}) {
   const by = new Map((tree?.nodes ?? []).map((n) => [n.id, n]));
   return (layout?.nodes ?? []).filter((n) => Number.isFinite(n.x) && n.w > 0 && n.h > 0).map((n) => {
     const t = by.get(n.id), text = t?.props?.text ?? t?.props?.accessibilityLabel ?? t?.props?.label, map = n.sourceMap;
+    let x = n.x + origin[0], y = n.y + origin[1], w = n.w, h = n.h;
+    switch (capture.rotation) {
+      case 90: [x, y, w, h] = [capture.w - y - h, x, h, w]; break;
+      case 180: [x, y] = [capture.w - x - w, capture.h - y - h]; break;
+      case 270: [x, y, w, h] = [y, capture.h - x - w, h, w]; break;
+    }
     return { id: n.id, type: t?.type ?? n.type, testId: t?.props?.testId ?? n.testId, text: typeof text === 'string' && text.trim() ? text : undefined, depth: t?.depth ?? 0, inactive: !!t?.inactive,
-      at: map?.status === 'compatible' && map.file ? `${basename(map.file)}:${map.line}` : undefined, x: n.x + origin[0], y: n.y + origin[1], w: n.w, h: n.h };
+      at: map?.status === 'compatible' && map.file ? `${basename(map.file)}:${map.line}` : undefined, x, y, w, h };
   });
 }
 /** A node as an agent names it: its testId, else its type and text; then its box and source line. */
@@ -489,7 +495,7 @@ export function referenceScale(ref, w, h) {
 
 /** The CLI's `screenshot <png> compare <reference.png>` (`args` after `screenshot`). On an iOS simulator the capture is
  *  the window with its status bar, as a device screenshot is (`window` and `window status` may be said); elsewhere the
- *  viewport, the only capture whose points the layout's boxes are in. */
+ *  viewport, rotated onto the panel's axes on Linux. */
 export function compareScreenshot(s, args) {
   const at = args.indexOf('compare'), [path, ...form] = args.slice(0, at), reference = args[at + 1];
   const ios = ['ios', 'host-ios'].includes(s.host);
@@ -543,7 +549,7 @@ export async function compareOp(s, referencePath, take) {
     if (space?.window && space?.viewport) origin = [space.window.x - space.viewport.x, space.window.y - space.viewport.y];
     else { placed = false; notes.push('no node is named: the host gave no node\'s place in the window'); }
   }
-  const nodes = placed ? viewNodes(layout, tree, origin) : [];
+  const nodes = placed ? viewNodes(layout, tree, origin, shot) : [];
   // The rows other processes draw on a device (its status bar and home indicator), never scored: the window's safe area.
   const top = shot.window ? Math.ceil(Math.max(shot.safeArea?.top ?? 0, typeof shot.statusBar === 'number' ? shot.statusBar : 0)) : 0;
   const bottom = shot.window ? Math.ceil(shot.safeArea?.bottom ?? 0) : 0;

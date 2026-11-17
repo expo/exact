@@ -1453,7 +1453,7 @@ test('naming Windows for a new game leaves the painter to the host', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'game-windows-painter-'));
   try {
     const path = resolve(dir, 'app.json');
-    writeFileSync(path, JSON.stringify({ game: { crate: 'world-logic', type: 'World' } }));
+    writeFileSync(path, JSON.stringify({ name: 'World', app: { id: 'test.world', name: 'World' }, game: { crate: 'world-logic', type: 'World' } }));
     namePlatform(dir, 'windows');
     const manifest = JSON.parse(readFileSync(path, 'utf8'));
     assert.equal(manifest.host.windows.painter, undefined);

@@ -1,8 +1,8 @@
 # Recipe: a native module in Swift
 
 Put an `ExactModule` in `modules/apple/*.swift`; `let exactModule` names its class.
-No app.json entry. A native module is for what only the platform knows; this one reads the
-device's thermal state (`ProcessInfo.thermalState`), which TypeScript cannot.
+No app.json entry. A native module is for what only the platform knows, through public API
+alone; this one reads `ProcessInfo.thermalState`, which TypeScript cannot.
 
 A value a launch gives the app (an origin a test sets) is not a native module's: mark it
 `{ "name": "API_BASE_URL", "launch": true }` in app.json's `env` and read it in app.ts as

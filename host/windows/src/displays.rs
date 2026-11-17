@@ -29,7 +29,7 @@ use exact_painted::desktop::{Pointer, Screen, Screens};
 #[cfg(windows)]
 mod os;
 #[cfg(windows)]
-pub(crate) use os::install;
+pub(crate) use os::{capture_snapshot, install};
 
 /// One monitor as Windows reports it to a per-monitor-aware process.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -321,8 +321,7 @@ fn arrange<const N: usize>(
     client: Option<Client>,
     picks: [usize; N],
 ) -> (Vec<Screen>, [usize; N]) {
-    let mut order: Vec<usize> = (0..monitors.len()).collect();
-    order.sort_by_key(|&i| (placed[i].0[0], placed[i].0[1]));
+    let order = order(placed);
     let screens = (order.iter())
         .map(|&i| {
             let (m, (rect, work)) = (&monitors[i], placed[i]);
@@ -349,6 +348,26 @@ fn arrange<const N: usize>(
         .collect();
     let ordered = |pick: usize| order.iter().position(|&i| i == pick).unwrap_or(0);
     (screens, picks.map(ordered))
+}
+
+fn order(placed: &[(Css, Css)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..placed.len()).collect();
+    order.sort_by_key(|&i| (placed[i].0[0], placed[i].0[1]));
+    order
+}
+
+/// Capture rectangles paired with exactly the screen geometry the display
+/// list and pointer report, retaining physical sizes at fractional DPI.
+pub(crate) fn capture_rects(
+    monitors: &[Monitor],
+    client: Option<Client>,
+) -> Vec<(Screen, [i32; 4])> {
+    let placed = layout(monitors);
+    let (screens, _) = arrange(monitors, &placed, client, []);
+    screens
+        .into_iter()
+        .zip(order(&placed).into_iter().map(|i| monitors[i].rect))
+        .collect()
 }
 
 /// The monitor `currentScreen` names: the window's, else the primary.

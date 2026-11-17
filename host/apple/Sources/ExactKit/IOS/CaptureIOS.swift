@@ -34,7 +34,8 @@ package enum Capture {
     package static func bitmap(of view: UIView, scale: CGFloat) -> Bitmap? {
         let w = Int((view.bounds.width * scale).rounded()), h = Int((view.bounds.height * scale).rounded())
         guard let bitmap = Bitmap.blank(width: w, height: h) else { return nil }
-        // The GPU, where there is one (`Shadow`); Core Graphics otherwise.
+        // The GPU, where there is one and its tree can be committed
+        // (`Shadow`); Core Graphics otherwise.
         if !cpu, let shadow = Shadow.shared {
             capturing = true
             let ok = shadow.render(view, scale: scale, into: bitmap)

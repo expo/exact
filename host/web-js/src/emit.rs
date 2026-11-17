@@ -36,6 +36,10 @@ mod motion;
 mod mutations;
 #[path = "named_records.rs"]
 mod named_records;
+#[path = "navigation.rs"]
+mod navigation;
+#[cfg(test)]
+pub(crate) use navigation::ALL as NAVIGATION;
 #[path = "pages.rs"]
 mod pages;
 #[path = "regions.rs"]
@@ -70,6 +74,8 @@ pub struct Output {
     /// Whether a node is a dialog, an alertdialog, a menu or a popover (the
     /// page adds prompt-glue.js, alert-message.js and menu-rows.js).
     pub dialogs: bool,
+    /// The navigation behaviours the plan cannot use (`navigation::unused`).
+    pub navigation: Vec<&'static str>,
     pub paint: String,
     pub names: String,
     /// Build routes as JSON: locations (including the not-found page), or
@@ -549,29 +555,6 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
                 .map(|b| plan.binding(b))
                 .any(|b| b.kind == BindingKind::Prop && b.id == PropId::NavigationBack as u16)
         });
-    // Whether a node's `prop` is, or may be, `word`.
-    let may_say = |prop: PropId, word: &str| {
-        plan.nodes.iter().any(|n| {
-            n.bindings.iter().map(|b| plan.binding(b)).any(|b| {
-                b.kind == BindingKind::Prop
-                    && b.id == prop as u16
-                    && style::literal(plan, plan.code(b.expr))
-                        .is_none_or(|v| v.as_str() == Some(word))
-            })
-        })
-    };
-    // A root that can present a sheet (a route whose `navigationPresentation` may be `modal`) hands
-    // the projection the sheet's frame (navigation/routes.js `sheetFrame`), and one whose route may
-    // say `navigationBar="transparent"` the clear bar (`clearBar`), which a plan without one never
-    // links (LLP 1047.002 D1).
-    let sheets = roots && may_say(PropId::NavigationPresentation, "modal");
-    let clear_bars = roots && may_say(PropId::NavigationBar, "transparent");
-    if sheets {
-        body.push_str("$useSheets($sheetFrame);");
-    }
-    if clear_bars {
-        body.push_str("$useClearBars($clearBar);");
-    }
     // @ref LLP 1013.001 D2 — a route's own entrance or exit plays through
     // shared.js, which loads after first paint when a node asks for it: a
     // plan with one asks at boot, since the route that declares it is
@@ -768,15 +751,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         } else {
             format!("import{{{}}}from\"./budget.js\";", budget.join(","))
         },
-        if roots {
-            format!(
-                "import{{navigation as $navigation{}{}}}from\"./navigation.js\";",
-                if sheets { ",useSheets as $useSheets,sheetFrame as $sheetFrame" } else { "" },
-                if clear_bars { ",useClearBars as $useClearBars,clearBar as $clearBar" } else { "" },
-            )
-        } else {
-            String::new()
-        },
+        if roots { "import{navigation as $navigation}from\"./navigation.js\";" } else { "" },
         if dev_reload { "import{devResource as $devRes,devSignal as $devSig}from\"./checkpoint.js\";" } else { "" },
         // Loaded pieces, imported only where the plan uses them.
         [
@@ -869,6 +844,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         pages: pages::build_pages(plan),
         markdown: em.markdown,
         dialogs: em.dialogs,
+        navigation: navigation::unused(&em, roots),
         canvas2d: em.canvas2d,
         motion: em.motion,
         editor: em.editor,

@@ -6,9 +6,9 @@
 //! `Permissions-Policy`)
 //!
 //! A device grant is an exact2 grant, like `surface.read`: [`io_grants`]
-//! strips it before `ibex2` parses the rest. Its target is a strings key
-//! (LLP 1060), never prose, so the line stays one line and the text is
-//! translatable; the bake refuses a key the base table lacks.
+//! strips it before `ibex2` parses the rest. A purpose is a strings key
+//! (LLP 1060), never prose; CloudKit instead names an optional container
+//! (LLP 1133.001.000 D3).
 //!
 //! `auth.*` lines (LLP 1069.006) are stripped the same way and checked by
 //! `crate::auth`; the bake derives their associated domains (`reach.auth`).
@@ -621,6 +621,26 @@ pub const DEVICES: &[Device] = &[
         macos_profile: &["com.apple.developer.ubiquity-kvstore-identifier"],
         ..ROW
     },
+    // LLP 1133.001.000 D3; expo/exact#531: one CloudKit container, with
+    // values derived by the bake and Apple signing, without silent pushes.
+    Device {
+        name: "cloudkit",
+        sandbox: Some(Sandbox::Profile),
+        purpose: false,
+        ios_entitlements: &[
+            "com.apple.developer.icloud-services",
+            "com.apple.developer.icloud-container-identifiers",
+            "com.apple.developer.icloud-container-environment",
+        ],
+        macos_profile: &[
+            "com.apple.developer.icloud-services",
+            "com.apple.developer.icloud-container-identifiers",
+            "com.apple.developer.icloud-container-environment",
+        ],
+        entitlement_values: &[("com.apple.developer.icloud-services", &["CloudKit"])],
+        tvos: false,
+        ..ROW
+    },
     // Sensitive Content Analysis, for an app's own module that calls
     // `SCSensitivityAnalyzer` (expo/exact#708): nothing is asked and the
     // framework has no usage key. The analyzer works only in an app signed
@@ -719,7 +739,7 @@ pub const DEVICES: &[Device] = &[
     },
 ];
 
-/// One `device.<name> <key>` line.
+/// One device line, with its purpose key or CloudKit container.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DeviceGrant<'a> {
     /// The table's row.
@@ -727,6 +747,8 @@ pub struct DeviceGrant<'a> {
     /// The strings key whose text is the purpose; empty for a row that
     /// names none.
     pub purpose: &'a str,
+    /// CloudKit's explicit container, or none to derive `iCloud.<bundle id>`.
+    pub container: Option<&'a str>,
 }
 
 /// Whether a grant line is a device grant (the runner's own family).
@@ -751,6 +773,41 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
             ));
             continue;
         };
+        if name == "cloudkit" {
+            let container = words.next();
+            let valid = container.is_none_or(|c| {
+                c.strip_prefix("iCloud.").is_some_and(|id| {
+                    id.split('.').all(|label| {
+                        !label.is_empty()
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                            && label
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    })
+                })
+            });
+            if !valid || words.next().is_some() {
+                errors.push(format!(
+                    "`{line}`: write `device.cloudkit` or `device.cloudkit iCloud.<name>`; the container is one identifier, with no purpose string"
+                ));
+            } else if let Some(have) = grants.iter().find(|g| g.device.name == name) {
+                if have.container != container {
+                    errors.push(format!(
+                        "`device.cloudkit` names two containers, `{}` and `{}`; only one container is supported",
+                        have.container.unwrap_or("iCloud.<bundle id>"),
+                        container.unwrap_or("iCloud.<bundle id>")
+                    ));
+                }
+            } else {
+                grants.push(DeviceGrant {
+                    device,
+                    purpose: "",
+                    container,
+                });
+            }
+            continue;
+        }
         if line.contains(['"', '\'']) {
             errors.push(format!(
                 "`{line}`: the purpose is a strings key (LLP 1060), not a literal: `device.{name} purpose.{name}`, with `\"purpose.{name}\": \"…\"` in strings/en.json"
@@ -766,6 +823,7 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
                 None => grants.push(DeviceGrant {
                     device,
                     purpose: "",
+                    container: None,
                 }),
             }
             continue;
@@ -782,7 +840,11 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
                 have.purpose
             )),
             Some(_) => {}
-            None => grants.push(DeviceGrant { device, purpose }),
+            None => grants.push(DeviceGrant {
+                device,
+                purpose,
+                container: None,
+            }),
         }
     }
     for g in &grants {
@@ -1027,6 +1089,43 @@ mod tests {
         assert!(row.tvos && row.ios.is_empty() && row.android.is_empty() && row.web.is_none());
         let errors = device_grants("device.icloud-kv purpose.sync").unwrap_err();
         assert!(errors[0].contains("names no purpose"), "{errors:?}");
+    }
+
+    #[test]
+    fn cloudkit_signs_one_container_without_requesting_push_or_a_purpose() {
+        let keys = [
+            "com.apple.developer.icloud-services",
+            "com.apple.developer.icloud-container-identifiers",
+            "com.apple.developer.icloud-container-environment",
+        ];
+        for line in [
+            "device.cloudkit",
+            "device.cloudkit iCloud.com.example.boards",
+        ] {
+            let rows = device_grants(line).unwrap();
+            let row = rows[0].device;
+            assert!(rows[0].purpose.is_empty());
+            assert_eq!(rows[0].container, line.split_whitespace().nth(1));
+            assert_eq!(row.ios_entitlements, keys);
+            assert_eq!(row.macos_profile, keys);
+            assert!(!row.tvos && row.ios.is_empty() && row.macos.is_empty());
+            assert!(row.ios_modes.is_empty() && row.needs.is_none());
+            assert_eq!(device_grants(&format!("{line}\n{line}")).unwrap().len(), 1);
+        }
+        let errors = device_grants(
+            "device.cloudkit iCloud.com.example.one\ndevice.cloudkit iCloud.com.example.two",
+        )
+        .unwrap_err();
+        assert!(errors[0].contains("iCloud.com.example.one"), "{errors:?}");
+        assert!(errors[0].contains("iCloud.com.example.two"), "{errors:?}");
+        for invalid in [
+            "device.cloudkit purpose.sync",
+            "device.cloudkit iCloud.",
+            "device.cloudkit iCloud.com..example",
+            "device.cloudkit iCloud.com.example other",
+        ] {
+            assert!(device_grants(invalid).is_err(), "{invalid}");
+        }
     }
 
     /// expo/exact#708: Sensitive Content Analysis names no purpose and signs

@@ -190,6 +190,19 @@ iPhone simulator that is already booted, or boot the newest iPhone Pro. To choos
 set `EXACT_SIM` to its name or UDID (or pass `--sim` to `build.mjs`), and keep the same
 setting for `agent.mjs ios`.
 
+On Linux KMS, `EXACT_ROTATE=0|90|180|270` turns the completed image clockwise.
+Without it, the connector's `panel orientation` property chooses the angle; an
+absent property means 0. At 90 or 270 degrees layout uses the swapped mode size.
+The GPU rotates the image before display. Absolute evdev and VNC coordinates use
+the inverse transform; relative mouse movement and scrolling keep the user's axes.
+Agent screenshots show the rotated framebuffer, at the panel mode's size. Their
+replies give that image's point dimensions and clockwise `rotation` in degrees;
+comparison maps layout boxes onto those axes. Agent layout and target coordinates
+remain logical. In a headless Linux host, `EXACT_SIZE` supplies the unrotated panel
+size in points. Ink blits its retained target before readback; other painters
+upload their completed pixels for the GPU blit. KMS still reads back into dumb
+buffers.
+
 On Linux, a development build can serve its screen over VNC: set `EXACT_VNC=1` and
 `EXACT_VNC_PASSWORD` to 1–8 bytes. It listens on `127.0.0.1:5900`; `EXACT_VNC=host:port`
 selects another address. Production bakes ignore both variables.
@@ -728,8 +741,9 @@ else here was admitted because a real app needed it.
   native controls over Contract and the kernel with an app-local Win32 presenter; general
   Windows control parity and delivery remain unfinished. A `-exact-menu="status"` button
   becomes a notification-area icon with a painted menu (LLP 1133.025 D4). On Windows 11 a
-  hidden launch, pointer input, checkbox state and Exit work; the menu's placement beside
-  a taskbar that hides automatically has not yet been run on Windows.
+  hidden launch, pointer input, checkbox state, Exit and placement clear of a taskbar that
+  hides automatically work; its UI Automation menu tree and file-backed status images at
+  changing display scales have not yet been run on Windows.
 
 ### Not yet, or not at all
 

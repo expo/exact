@@ -754,23 +754,31 @@ export function developmentLaunchEnvironment(args, environment = process.env) {
   return { ...environment, EXACT_DEV_PLAN: url.href };
 }
 
-/** The environment a build signs under a profile that is (`debuggable`) or is not a development one: App Attest's
- * and push's (LLP 1133.028 D15 item 1; LLP 1133.004 §9 P2). */
-export const signedEnvironment = (debuggable) => debuggable ? 'development' : 'production';
+/** The environment under a development or distribution signature, in the spelling the entitlement requires. */
+export const signedEnvironment = (debuggable, name = 'aps-environment') => name === 'com.apple.developer.icloud-container-environment'
+  ? (debuggable ? 'Development' : 'Production') : (debuggable ? 'development' : 'production');
 
-/** Whether profile `p` allows entitlement `name` as the build signs it under `p`: the key, and for push's environment,
- * which a profile carries as a value, the value the build writes there. The Live Activity path and the grant path
- * both ask this. */
-export const allowsEntitlement = (p, name) => name === 'aps-environment' ? p.aps === signedEnvironment(p.dev) : p.entitlements.includes(name);
+/** Whether profile `p` allows entitlement `name` as the build signs it under `p`: a supplied value must fit its
+ * allowed values, including wildcard prefixes. CloudKit and push environments follow the signature. */
+export function allowsEntitlement(p, name, values = {}) {
+  if (name === 'aps-environment') return p.aps === signedEnvironment(p.dev);
+  if (!p.entitlements.includes(name)) return false;
+  const expected = name === 'com.apple.developer.icloud-container-environment' ? signedEnvironment(p.dev, name) : values[name];
+  if (expected === undefined) return !name.startsWith('com.apple.developer.icloud-');
+  const allowed = p.entitlementValues?.[name];
+  const candidates = Array.isArray(allowed) ? allowed : [allowed];
+  return (Array.isArray(expected) ? expected : [expected]).every(value => candidates.some(candidate =>
+    candidate === value || (typeof candidate === 'string' && candidate.endsWith('*') && value.startsWith(candidate.slice(0, -1)))));
+}
 
 /** What `p` lacks of `required`, each as a refusal names it. */
-export const lacks = (p, required = []) => required.filter((name) => !allowsEntitlement(p, name)).map((name) => name === 'aps-environment' && p.aps
+export const lacks = (p, required = [], values = {}) => required.filter((name) => !allowsEntitlement(p, name, values)).map((name) => name === 'aps-environment' && p.aps
   ? `aps-environment ${signedEnvironment(p.dev)} (it allows ${p.aps ?? 'no value'}, and this build signs ${signedEnvironment(p.dev)} under a ${p.dev ? 'development' : 'distribution'} profile)`
   : name);
 
 /** Whether a profile allows every entitlement in `required` (a grant's
  * signing entitlements, LLP 1069.008.000 D4). */
-export const allows = (p, required = []) => !!p && lacks(p, required).length === 0;
+export const allows = (p, required = [], values = {}) => !!p && lacks(p, required, values).length === 0;
 
 /** What a profile that lacks a required entitlement needs, said once. */
 const missing = (bundle, required, why) => new Error(required.includes('com.apple.developer.web-browser')
@@ -781,15 +789,15 @@ const missing = (bundle, required, why) => new Error(required.includes('com.appl
 
 /** A development profile on this Mac covering the phone and the bundle id (the team's wildcard or the id itself, under the profile's App ID prefix, which an older team's App IDs keep apart from its team id), unexpired; DEVELOPMENT_TEAM restricts the team, and EXACT_PROFILE overrides that choice.
  * With `required` (a grant's signing entitlements), only one that allows them all, which is one for the id itself. */
-export function profile(udid, bundle, required = [], { installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, team = process.env.DEVELOPMENT_TEAM?.trim(), phoneName = udid } = {}) {
+export function profile(udid, bundle, required = [], { installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, team = process.env.DEVELOPMENT_TEAM?.trim(), phoneName = udid, values = {} } = {}) {
   if (named) {
     if (!iosProfile(named)) throw new Error(`EXACT_PROFILE (${named.name}) is not an iOS profile; its platform is ${named.platforms.join(', ')}`);
-    if (!allows(named, required)) throw missing(bundle, required, `EXACT_PROFILE (${named.name}) does not allow ${required.length > 1 ? 'them' : 'it'}`);
+    if (!allows(named, required, values)) throw missing(bundle, required, `EXACT_PROFILE (${named.name}) does not allow ${required.length > 1 ? 'them' : 'it'}`);
     return named;
   }
   const covering = coveringProfiles(udid, bundle, installed, team);
   if (!covering.length) throw missingDevelopmentProfile(udid, bundle, team, phoneName);
-  const found = covering.filter((p) => allows(p, required));
+  const found = covering.filter((p) => allows(p, required, values));
   if (!found.length) throw missing(bundle, required, `no development profile on this Mac for ${bundle} on this phone allows ${required.length > 1 ? 'them' : 'it'}`);
   return found[0];
 }
@@ -859,6 +867,8 @@ export function decodeProfile(path, os = process.platform, { read: readProfile =
   // The keys of its Entitlements whose value is not `false`: what it allows.
   const allowed = /<key>Entitlements<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(xml)?.[1] ?? '';
   const entitlements = [...allowed.matchAll(/<key>([^<]+)<\/key>\s*(<false\/>)?/g)].filter((m) => !m[2]).map((m) => m[1]);
+  const entitlementValues = Object.fromEntries([...allowed.matchAll(/<key>([^<]+)<\/key>\s*<(string|array)>([\s\S]*?)<\/\2>/g)]
+    .map(([, key, type, value]) => [key, type === 'string' ? value : [...value.matchAll(/<string>([^<]*)<\/string>/g)].map(m => m[1])]));
   const appId = str('application-identifier') ?? str('com.apple.application-identifier');
   // What an app with widgets or Live Activities needs of it (LLP 1126.001 WP13): the App Groups it grants, the
   // Keychain groups (the team's `<prefix>.*`, usually) and the push environment.
@@ -871,7 +881,7 @@ export function decodeProfile(path, os = process.platform, { read: readProfile =
     : str('aps-environment') ?? str('com.apple.developer.aps-environment');
   const certificates = [...(/<key>DeveloperCertificates<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)?.[1] ?? '').matchAll(/<data>([\s\S]*?)<\/data>/g)]
     .map(m => createHash('sha1').update(Buffer.from(m[1].replace(/\s/g, ''), 'base64')).digest('hex').toUpperCase());
-  return { path, certificates, name: str('Name'), team, appId, prefix: appId?.split('.')[0], devices, dev, expires: new Date(expires ?? 0), entitlements, platforms,
+  return { path, certificates, name: str('Name'), team, appId, prefix: appId?.split('.')[0], devices, dev, expires: new Date(expires ?? 0), entitlements, entitlementValues, platforms,
     method: dev ? 'development' : devices.length ? 'adhoc' : allDevices ? (mac ? 'developerid' : 'enterprise') : 'appstore',
     groups: strings('com.apple.security.application-groups'), keychain: strings('keychain-access-groups'), aps: aps ?? null };
 }

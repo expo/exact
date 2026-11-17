@@ -47,6 +47,20 @@ platform's: a `color` a bar button only inherits from the page leaves UIKit's ti
 writing apps should therefore say less — structure (a header's heading and buttons, a
 `tablist`, an `alertdialog`) and leave colours, fonts and metrics to the platform.
 
+## Apple platforms: public API only
+
+Exact's Apple hosts use only Apple's public API: the classes, methods, properties, keys and
+notifications that Apple's SDK headers declare and its documentation describes. App Store
+review rejects an app that uses anything else ([App Review Guideline
+2.5.1](https://developer.apple.com/app-store/review/guidelines/#software-requirements)). So
+shipped code calls no private method, reads no undocumented key, and names no private class:
+it looks none up by name, compares no class's name and holds no literal of one. Find a platform
+view through public API, such as its accessibility elements, a delegate or a notification.
+Where public API cannot reach it, do without, and name the known difference in the LLP that
+owns the feature and in the code. Private API is for development builds only, inside an `#if`
+on `EXACT_INSPECT` or `EXACT_AGENT`; LLP 1035.003 names the only exceptions.
+`host/apple/inspect-gate.test.mjs` checks the sources for private class names.
+
 ## Numeric typography
 
 On graphical hosts, use tabular digits for numeric columns and values that change

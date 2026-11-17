@@ -22,13 +22,23 @@ export const HOST_WEB_GLUE = [
   'fragment.js',
 ];
 
+/** `code`, the source of `file`, with each constant in `names` that it declares true written false, so the bundler
+ * drops what the constant gates; one it no longer declares fails the build by name. */
+function writeFalse(code, file, names) {
+  for (const name of names) {
+    const said = new RegExp(`(?<=\\bconst |, )${name} = true\\b`);
+    if (!said.test(code)) throw new Error(`${file}: glue.mjs replaces a line it no longer has: ${name} = true`);
+    code = code.replace(said, `${name} = false`);
+  }
+  return code;
+}
+
 /** Copy the host/web glue from the repository at `root` into `dir`, the input piece without the wasm host's paths
  * (input-glue.js `WASM_HOST`, LLP 1047.002 D4.1): this runtime hears its own pointers and routes its own links. */
 export function stageHostGlue(root, dir) {
   for (const f of HOST_WEB_GLUE) cpSync(resolve(root, 'host/web', f), resolve(dir, f));
-  const piece = resolve(dir, 'input-glue.js'), code = readFileSync(piece, 'utf8'), line = 'const WASM_HOST = true;';
-  if (!code.includes(line)) throw new Error(`host/web/input-glue.js: glue.mjs replaces a line it no longer has: ${line}`);
-  writeFileSync(piece, code.replace(line, 'const WASM_HOST = false;'));
+  const piece = resolve(dir, 'input-glue.js');
+  writeFileSync(piece, writeFalse(readFileSync(piece, 'utf8'), 'host/web/input-glue.js', ['WASM_HOST']));
 }
 
 /**
@@ -114,8 +124,9 @@ export function gateAgent(code, name) {
   return code.replace(declaration, text => text.replace('= true', '= false'));
 }
 
-/** Bundle one host entry; the wasm glue keeps navigation as its other shipped module. */
-export async function bundleHostModule(root, name, { grants = false, production = false } = {}) {
+/** Bundle one host entry; the wasm glue keeps navigation as its other shipped module. `unused`: the navigation
+ * behaviours the page leaves out (navigation.flag; LLP 1047.002 D2.1). */
+export async function bundleHostModule(root, name, { grants = false, production = false, unused = [] } = {}) {
   const web = resolve(root, 'host/web');
   const external = name === 'glue.js' ? 'navigation.js' : grants ? 'grant-admission.js' : null;
   const { rolldown } = await import('rolldown');
@@ -126,7 +137,8 @@ export async function bundleHostModule(root, name, { grants = false, production 
     plugins: [{
       name: 'host-module-boundary',
       transform(code, id) {
-        if (production) return gateAgent(code, id);
+        if (id.endsWith('/host/web/navigation/routes.js')) code = writeFalse(code, 'host/web/navigation/routes.js', unused);
+        return production ? gateAgent(code, id) : code;
       },
       resolveId(source, importer) {
         if (external && importer && resolve(dirname(importer), source) === resolve(web, external)) {

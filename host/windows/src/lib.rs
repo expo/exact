@@ -5,6 +5,9 @@
 
 #[cfg(windows)]
 mod accessibility;
+#[cfg(all(test, not(windows)))]
+#[path = "accessibility/model.rs"]
+mod accessibility_model;
 #[cfg(windows)]
 mod appearance;
 #[cfg(windows)]
@@ -18,6 +21,8 @@ mod desktop;
 mod displays;
 #[cfg(windows)]
 mod edit_menu;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod file_dialog;
 #[cfg(windows)]
 mod icon;
 #[cfg(windows)]
@@ -40,6 +45,7 @@ mod pads;
 mod placement;
 #[cfg(windows)]
 mod probe;
+pub mod screen_capture;
 #[cfg(windows)]
 mod timers;
 #[cfg(windows)]

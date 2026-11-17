@@ -1419,8 +1419,8 @@ test('Android compilers and GPU bakes use the requested x86_64 ABI', async () =>
   const { ANDROID_PAGE_SIZE: page, androidCargo } = await import('./cargo-check.mjs');
   const [, intelArgs, intelOptions] = androidCargo('cargo', ['build', '--target=x86_64-linux-android'],
     { env: { CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS: '-llog' } });
-  expect(intelArgs).toContain(`build.rustflags=["${page}"]`);
-  expect(intelOptions.env.CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS).toBe(`-llog ${page}`);
+  expect(intelArgs).toContain(`build.rustflags=["${page}","-Clink-arg=-lc++abi"]`);
+  expect(intelOptions.env.CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS).toBe(`-llog ${page} -Clink-arg=-lc++abi`);
   const { androidAbis, androidHermesDir } = await import('./android-abi.mjs');
   expect(androidAbis()).toEqual(['arm64-v8a']);
   expect(androidAbis('arm64-v8a,x86_64,x86_64')).toEqual(['arm64-v8a', 'x86_64']);

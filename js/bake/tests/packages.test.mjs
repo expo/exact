@@ -471,3 +471,29 @@ test('a type-only nested manifest still identifies the enclosing named package',
     fixture.close();
   }
 });
+
+test('Expo push exchanges a typed subscription using the imported app.json on every executor', async () => {
+  const fixture = linkedApp();
+  const { app, stage, put } = fixture;
+  try {
+    mkdirSync(join(app, 'node_modules/@exact'), { recursive: true });
+    symlinkSync(fileURLToPath(new URL('../../../packages/push', import.meta.url)), join(app, 'node_modules/@exact/push'), process.platform === 'win32' ? 'junction' : 'dir');
+    const manifest = { app: { id: 'dev.guard' }, extra: { eas: { projectId: 'project-fixture' } } };
+    const entry = `import manifest from './app.json';
+import { getExpoPushTokenAsync } from '@exact/push/expo';
+import type { PushSubscription } from '@exact/push';
+export const exchange = (subscription: PushSubscription) => getExpoPushTokenAsync(subscription, manifest);
+`;
+    put(join(app, 'app.ts'), entry);
+    put(join(stage, 'app.ts'), entry);
+    put(join(app, 'app.json'), JSON.stringify(manifest));
+    put(join(stage, 'app.json'), JSON.stringify(manifest));
+    configure(stage, false, parseSync);
+    await check(stage, join(libraries, 'tsc'), libraries);
+    const code = await bundle(stage);
+    expect(code).toContain('project-fixture');
+    expect(code).toContain('https://exp.host/--/api/v2/push/getExpoPushToken');
+  } finally {
+    fixture.close();
+  }
+});

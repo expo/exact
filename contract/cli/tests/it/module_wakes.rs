@@ -194,6 +194,53 @@ fn a_wake_event_carries_its_budget_and_the_bake_holds_its_bounds() {
 }
 
 #[test]
+fn an_android_push_runs_its_handler_with_the_ten_second_wake_budget() {
+    let app = App::new("push");
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/push");
+    std::fs::create_dir_all(app.0.join("node_modules/@exact")).unwrap();
+    std::os::unix::fs::symlink(
+        package.canonicalize().unwrap(),
+        app.0.join("node_modules/@exact/push"),
+    )
+    .unwrap();
+    app.write(
+        "app.contract",
+        r#"use push, PushEvent from "@exact/push"
+component App
+  state received = ""
+  mutation pulled as shape number
+  action arrived(e: PushEvent)
+    received = e.data
+    send pulled = pull()
+  view
+    main push=arrived
+      text received
+"#,
+    );
+    let mut r = boot(&app);
+    let event = &r.plan().module_events[0];
+    assert_eq!(event.budget, 10_000);
+    r.raise_wake(
+        "push",
+        "push",
+        r#"[{"data":"{\"panic\":\"42\"}"}]"#,
+        WakeHow {
+            id: 42,
+            cold: true,
+            hidden: true,
+        },
+    )
+    .unwrap();
+    by(&mut r, 0.0);
+    assert_eq!(state(&r)["wake"]["origin"], "wake");
+    assert_eq!(r.take_requests().len(), 1);
+    let received = agent::handle(&r, r#"{"op":"tree"}"#);
+    assert!(received.contains("panic"), "{received}");
+    by(&mut r, 10_000.0);
+    assert_eq!(state(&r)["wake"]["outcome"], "expired");
+}
+
+#[test]
 fn a_module_option_refuses_reversed_bounds() {
     let app = App::new("reversed-bounds");
     app.edit_interface(r#""min": 60000"#, r#""min": 60000, "max": 1000"#);

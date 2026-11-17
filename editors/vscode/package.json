@@ -1,8 +1,8 @@
 {
   "name": "exact-contract",
   "displayName": "Exact Contract",
-  "description": "Syntax highlighting for Exact Contract files, a problem matcher for the Contract compiler's diagnostics, and `.contract` registered with TypeScript 7 for the content mapper.",
-  "version": "0.4.0",
+  "description": "Syntax highlighting for Exact Contract files, a problem matcher for the Contract compiler's diagnostics, `.contract` registered with TypeScript 7 for the content mapper, and formatting by the Contract compiler.",
+  "version": "0.5.0",
   "private": true,
   "publisher": "exact",
   "engines": {
@@ -36,6 +36,16 @@
         "path": "./syntaxes/exact-contract.tmLanguage.json"
       }
     ],
+    "configuration": {
+      "title": "Exact Contract",
+      "properties": {
+        "exactContract.compiler": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "markdownDescription": "The Contract compiler, `contract`, by its path. When set, **Format Document** on a `.contract` file runs `contract fmt --stdin` on the editor's text, and each open contract's warnings show as problems, compiled again as it changes. Unset, no formatter is registered and nothing is run."
+        }
+      }
+    },
     "problemMatchers": [
       {
         "name": "exact-contract",

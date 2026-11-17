@@ -19,6 +19,14 @@ fn main() {
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
 
+    let (module, info) = naga::back::pipeline_constants::process_overrides(
+        &module,
+        &info,
+        None,
+        &Default::default(),
+    )
+    .expect("general shader constants");
+
     let mut metal = msl::Options {
         lang_version: (2, 0),
         fake_missing_bindings: false,

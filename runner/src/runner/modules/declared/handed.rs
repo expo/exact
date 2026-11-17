@@ -61,7 +61,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Tell the bound implementation that owns list `state` its entries.
     pub(super) fn hand_over(&self, state: &str) {
-        let Some(handler) = self.native_slot().handler() else {
+        let Some(handler) = self.native_slot().extension_handler() else {
             return;
         };
         for (extension, _) in self.handed_lists().into_iter().filter(|(_, s)| s == state) {

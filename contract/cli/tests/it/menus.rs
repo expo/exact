@@ -616,7 +616,7 @@ fn a_status_item_stands_alone_and_a_dock_item_joins_one_menu() {
 
 #[test]
 fn menu_bar_removal_accepts_only_root_literal_standard_ids() {
-    let ids = "close-all autofill show-tab-bar show-all-tabs enter-full-screen minimize zoom bring-all-to-front show-previous-tab show-next-tab move-tab-to-new-window merge-all-windows back forward develop paste-and-match-style find spelling-and-grammar substitutions transformations app-help actual-size zoom-in zoom-out";
+    let ids = "close-all show-tab-bar show-all-tabs enter-full-screen minimize zoom bring-all-to-front show-previous-tab show-next-tab move-tab-to-new-window merge-all-windows back forward develop paste-and-match-style find spelling-and-grammar substitutions transformations app-help actual-size zoom-in zoom-out";
     for value in [ids, "", "show-tab-bar show-tab-bar"] {
         let source = format!(
             "component App\n  view\n    column -exact-menu-remove=\"{value}\" testId=\"root\"\n"
@@ -629,7 +629,8 @@ fn menu_bar_removal_accepts_only_root_literal_standard_ids() {
         "component App\n  view\n    column -exact-menu-remove=\"format\"\n".to_owned(),
         "component App\n  state removal = \"show-tab-bar\"\n  view\n    column -exact-menu-remove=removal\n".to_owned(),
         app("column -exact-menu-remove=\"show-tab-bar\""),
-        app("if busy\n  column -exact-menu-remove=\"autofill\""),
+        app("if busy\n  column -exact-menu-remove=\"close-all\""),
+        "component App\n  view\n    column -exact-menu-remove=\"autofill\"\n".to_owned(),
     ] {
         let e = contract::compile(&source).unwrap_err();
         assert_eq!(e.id, "lower-menu-remove", "{source}: {e}");

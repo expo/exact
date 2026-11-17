@@ -85,7 +85,7 @@ fn boot(app: &App, target: &str) -> Runner<Grants> {
     r
 }
 
-fn settle(r: &mut Runner<Grants>) {
+fn settle<D: exact_runner::DataSource>(r: &mut Runner<D>) {
     for _ in 0..8 {
         let at = r.now_ms();
         r.advance(at).unwrap();
@@ -155,7 +155,7 @@ fn a_windows_build_watches_the_manifest_that_selects_its_shared_rust_source() {
 
 /// Hand the runner's module calls to the bound implementation, and its
 /// answers back.
-fn pump(r: &mut Runner<Grants>) {
+fn pump<D: exact_runner::DataSource>(r: &mut Runner<D>) {
     for _ in 0..8 {
         let outs = r.take_requests();
         if outs.is_empty() && r.apply_announced().0.is_empty() {
@@ -281,6 +281,107 @@ fn the_substitute_answers_only_where_an_implementation_exists() {
             logs.contains("getScreenDetails: NotSupportedError")
                 && logs.contains("getPointerPosition: NotSupportedError"),
             "{target}: {logs}"
+        );
+    }
+}
+
+#[test]
+fn a_still_capture_is_a_granted_send_with_desktop_implementations() {
+    let app = App::new("capture");
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/screen-capture");
+    copy_tree(&package, &app.0.join("node_modules/@exact/screen-capture"));
+    std::fs::write(app.0.join("app.contract"), r#"use captureScreens, screenRecordingStatus, requestScreenRecording, ScreenCaptures, ScreenRecordingStatus from "@exact/screen-capture"
+component App
+  resource status = screenRecordingStatus() as shape ScreenRecordingStatus
+  mutation shot as shape ScreenCaptures
+  action capture
+    send shot = captureScreens(directory="app:/tmp/freeze")
+  view
+    button "Capture" press=capture
+"#).unwrap();
+    let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(plan
+        .modules
+        .iter()
+        .any(|m| plan.str(m.declared) == "captureScreens" && m.send));
+    assert_eq!(
+        contract::native::bound(&app.0, &["screen-capture"], "windows")
+            .unwrap()
+            .len(),
+        1
+    );
+    struct CaptureGrants(&'static str);
+    impl exact_runner::DataSource for CaptureGrants {
+        fn query(
+            &mut self,
+            name: &str,
+            _: &[exact_runner::Value],
+        ) -> Result<exact_runner::Value, exact_runner::DataError> {
+            Err(exact_runner::DataError::UnknownSource(name.into()))
+        }
+        fn grants(&self) -> &str {
+            self.0
+        }
+    }
+    for (grants, origin, allowed) in [
+        (
+            "device.screen-recording shot.purpose\nfs.write app:/tmp",
+            exact_runner::CallOrigin::App,
+            true,
+        ),
+        (
+            "device.screen-recording shot.purpose",
+            exact_runner::CallOrigin::App,
+            false,
+        ),
+        ("fs.write app:/tmp", exact_runner::CallOrigin::App, false),
+        (
+            "device.screen-recording shot.purpose\nfs.write app:/tmp",
+            exact_runner::CallOrigin::Tool,
+            false,
+        ),
+        (
+            "device.screen-recording shot.purpose\nfs.write app:/tmp",
+            exact_runner::CallOrigin::Wake,
+            false,
+        ),
+    ] {
+        let mut runner = Runner::boot(
+            plan.clone(),
+            CaptureGrants(grants),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        runner.set_module_target("windows");
+        let calls = Arc::new(Mutex::new(0));
+        let called = calls.clone();
+        runner
+            .native_slot()
+            .host(Some(Arc::new(move |body: Vec<u8>, reply: Reply| {
+                let body: Json = serde_json::from_slice(&body).unwrap();
+                let answer = if body["send"] == "captureScreens" {
+                    *called.lock().unwrap() += 1;
+                    json!({"captures":[]})
+                } else {
+                    json!({"available":true,"state":"granted"})
+                };
+                reply.send(Outcome::Response(Response {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: answer.to_string().into_bytes(),
+                }));
+            })));
+        runner.bind_extensions(&["screen-capture"], &[]);
+        pump(&mut runner);
+        runner.act_from(origin, "capture", Vec::new()).unwrap();
+        pump(&mut runner);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            usize::from(allowed),
+            "{grants}: {origin:?}"
         );
     }
 }

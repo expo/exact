@@ -347,6 +347,13 @@ change the native state inside that pair, then wait for the runner to apply it
   file drives (`engineTests(['chromium', 'webkit'])`). A test that drives
   several engines in one setup loops over `await drivable([…])`, which leaves
   a missing one out the same way and runs the rest.
+- **On macOS 27, Playwright's Firefox needs Mozilla's.** macOS lets only
+  Mozilla's signed Firefox create `~/Library/Application Support/Firefox`, and
+  Playwright's Firefox exits with "Could not find profile folder" while it is
+  missing, so install Firefox from mozilla.org and open it once. The folder
+  stays unreadable to other programs; Firefox 158 and later start without
+  reading it ([bug 2069536](https://bugzilla.mozilla.org/show_bug.cgi?id=2069536)),
+  after a wait of about 7 s per launch on an M5 Pro (2026-11-17).
 - **Wait for the event, not for its first sign.** The shell is faster than the
   full build, so a test that reads a state while the browser still changes it
   fails there first. `document.fullscreenElement` is set before the

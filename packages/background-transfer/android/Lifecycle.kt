@@ -38,9 +38,9 @@ internal object Lifecycle {
     data class Key(val namespace: Namespace, val id: String, val generation: String)
 
     /**
-     * Who started the transfer, written once. [Person] is a person's foreground act made while a
-     * shown form was open to it (API 31 or later, notifications allowed); it has no execution
-     * deadline. Everything else is [Ordinary].
+     * Who started the transfer, written once. [Person] is a call inside a person's activation
+     * window while the app is visible (API 31 or later); it has no execution deadline.
+     * Everything else is [Ordinary].
      */
     enum class Intent { Person, Ordinary }
 
@@ -76,7 +76,7 @@ internal object Lifecycle {
      */
     data class Limits(val stops: Int = 3, val networkRetries: Int = 5, val wakes: Int = 3,
                       val completedWakes: Int = COMPLETED_WAKES)
-    data class Conditions(val api: Int, val visible: Boolean, val notifications: Boolean)
+    data class Conditions(val api: Int, val visible: Boolean)
 
     /**
      * @property job the platform job held for this registration.
@@ -207,12 +207,12 @@ internal object Lifecycle {
                     val accepted: Boolean)
 
     fun intent(person: Boolean, conditions: Conditions): Intent =
-        if (person && conditions.visible && conditions.notifications && conditions.api >= 31) Intent.Person
+        if (person && conditions.visible && conditions.api >= 31) Intent.Person
         else Intent.Ordinary
 
     /** The job a registration may hold now. A person's transfer holds work only as a bridge. */
     fun entitled(intent: Intent, conditions: Conditions): Job =
-        if (intent == Intent.Person && conditions.visible && conditions.notifications && conditions.api >= 34) Job.UserJob
+        if (intent == Intent.Person && conditions.visible && conditions.api >= 34) Job.UserJob
         else Job.Work
 
     /**
@@ -221,7 +221,7 @@ internal object Lifecycle {
      * run is asked when it starts under a view, or at the next launch with one.
      */
     fun promotes(intent: Intent, conditions: Conditions): Boolean =
-        intent == Intent.Person && conditions.notifications && conditions.api in 31..34
+        intent == Intent.Person && conditions.api in 31..34
 
     /**
      * Whether an operation or a schedule may start now. One that may not touches nothing; an

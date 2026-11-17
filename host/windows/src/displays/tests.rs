@@ -22,6 +22,52 @@ fn whole(rect: [i32; 4], scale: f32) -> Monitor {
     monitor(rect, rect, scale)
 }
 
+#[test]
+fn capture_pairs_physical_rectangles_with_the_display_lists_geometry() {
+    for monitors in [
+        vec![
+            whole([0, 0, 2560, 1440], 1.25),
+            whole([2560, 0, 3440, 1440], 1.25),
+        ],
+        vec![
+            whole([0, 0, 1920, 1080], 1.),
+            whole([-2560, -360, 2560, 1440], 2.),
+        ],
+        vec![
+            whole([0, -2560, 1440, 2560], 1.5),
+            whole([0, 0, 1920, 1080], 1.),
+        ],
+    ] {
+        for client in [
+            None,
+            Some(Client {
+                origin: [-2560, -360],
+                dpi: 120,
+            }),
+        ] {
+            let captures = capture_rects(&monitors, client);
+            assert_eq!(
+                captures.iter().map(|(s, _)| s.clone()).collect::<Vec<_>>(),
+                screens(&monitors, None, client).screens
+            );
+            for (screen, physical) in captures {
+                let monitor = monitors.iter().find(|m| m.rect == physical).unwrap();
+                assert_eq!(screen.scale, f64::from(monitor.scale));
+                if let Some(client) = client {
+                    let rect = screen.client.unwrap();
+                    assert_eq!(
+                        rect[2] * f64::from(client.dpi) / 96.,
+                        f64::from(physical[2] - physical[0])
+                    );
+                    assert_eq!(rect[0], f64::from(physical[0] - client.origin[0]) / 1.25);
+                } else {
+                    assert!(screen.client.is_none());
+                }
+            }
+        }
+    }
+}
+
 /// The expectations of `ui/display/win/screen_win_unittest.cc`'s
 /// `GetDisplays` tests, by fixture.
 #[test]

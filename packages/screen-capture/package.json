@@ -1,0 +1,13 @@
+{
+  "name": "@exact/screen-capture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A still of every display without a picker (LLP 1178).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json",
+    "./windows": "./windows/exact.json",
+    "./linux": "./linux/exact.json",
+    "./web": "./web/exact.json"
+  }
+}

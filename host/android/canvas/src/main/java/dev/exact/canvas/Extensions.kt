@@ -37,6 +37,9 @@ abstract class ExactExtension(val context: ExtensionContext) {
      */
     open fun preferred(values: JSONObject) {}
 
+    /** Refresh a substitute at the session clock before a drive reads its frames. */
+    open fun clock() {}
+
     /** Handles a reply carried that the runner dropped, never the app's (LLP 1133.009 D10 item 10). */
     open fun dispose(ids: List<String>) {}
 
@@ -442,9 +445,11 @@ class ExtensionContext internal constructor(val application: Context, private va
          * the host boots here with no view, hidden as a stopped activity's is, and an activity made later adopts
          * it; with no first pixel to wait for, its data module activates at once. A wake raised in it
          * ([wake]) ends `completed` only once the store's writes are on disk, so the caller may give its job back at
-         * the wake's outcome.
+         * the wake's outcome. [active] is checked before boot and before extensions load: an expired
+         * platform callback may cancel its pending launch.
          */
-        @JvmStatic fun session(context: Context, ready: (Boolean) -> Unit) = Headless.session(context, ready)
+        @JvmStatic fun session(context: Context, active: () -> Boolean = { true }, ready: (Boolean) -> Unit) =
+            Headless.session(context, active, ready)
     }
 
     /** [requestPermissions] for [name], keeping the history [permission] reads. */
@@ -580,7 +585,10 @@ internal object Extensions {
      * pixels ([Exact.picture]), `{"extension", "cancel"}` (a send let go, LLP 1133.016 D15 item 2), or `{"extension",
      * "woke", "outcome"}` (a wake [ExtensionContext.wake] raised ended, LLP 1133.017 D8).
      */
+    fun clock() { for (extension in made.values.toList()) extension.clock() }
+
     fun call(id: Int, body: String) {
+        clock()
         var answered = false
         // A list answer comes as `{"exact:answer": [...]}`, since a reply is an object (as on Apple).
         val reply = { answer: JSONObject ->

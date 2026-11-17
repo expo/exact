@@ -14,6 +14,7 @@
 //   item 6, recorded as a tell).
 // - Under the agent no capture exists: the viewfinder shows a drawn test card, mirrored for a `user` camera, and
 //   `takePhoto` writes it as JPEG, or the app asset `prefer extension camera.picture={"path":…}` names, unchanged.
+//   `camera.clip={"path":…}` selects decoded frames on the session clock, also used by takePhoto.
 //   The drawn card is Android's own (the package's card.jpg is not in the APK), so its bytes differ from the other
 //   hosts'.
 // - Tier 3 (D5): `useCasesHatch` sees the use cases before each bind, `imageCaptureHatch` each `ImageCapture.Builder`
@@ -114,6 +115,9 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
 
     private val views = HashMap<String, ViewState>()
     private var picture: String? = null
+    private var clipPath: String? = null
+    private var clip: AgentClip? = null
+    private val starts = HashMap<String, Double>()
     private var taken = 0
     private val photos = JSONArray()
     private val videos = JSONArray()
@@ -149,10 +153,34 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     override fun preferred(values: JSONObject) {
+        if (!context.agent) return
         val next = values.optJSONObject("picture")?.optString("path")?.ifEmpty { null }
-        if (next == picture) return
-        picture = next
+        val video = values.optJSONObject("clip")?.optString("path")?.ifEmpty { null }
+        if (next != null && video != null) {
+            say("refused: camera.picture and camera.clip cannot both be set; clear one first")
+            return
+        }
+        if (next == picture && video == clipPath) return
+        val decoded = try { video?.let { AgentClip.read(context.application, it) } }
+            catch (e: Exception) { say("refused camera.clip: ${e.message}"); return }
+        picture = next; clipPath = video; clip = decoded
+        if (decoded != null) say("clip $video (${decoded.duration} ms, sha256 ${decoded.sha256})")
         for (v in views.values) if (v.picture != null) v.sub?.let { show(v, it, null) }
+    }
+
+    override fun clock() {
+        if (!context.agent || clip == null) return
+        for (v in views.values) if (v.picture != null) v.sub?.let { show(v, it, null) }
+    }
+
+    private fun clipFrame(track: String): Bitmap? = clip?.frame(context.now() - starts.getOrPut(track) {
+        context.tracks.lookup(track)?.startedAt ?: context.now()
+    })
+
+    override fun destroy(done: () -> Unit) {
+        for (v in views.values) { blank(v); v.sub?.leave?.invoke() }
+        views.clear(); starts.clear(); clip = null
+        done()
     }
 
     // Viewfinders (D3, D8 items 1 and 2)
@@ -238,7 +266,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val facing = context.tracks.lookup(sub.track)?.state?.invoke()?.optJSONObject("settings")?.optString("facingMode")
         when (val view = v.view) {
             is ImageView -> {
-                val bitmap = agentBitmap()
+                val bitmap = clipFrame(sub.track) ?: agentBitmap()
                 view.setImageBitmap(bitmap)
                 v.picture = bitmap
                 context.tracks.lookup(sub.track)?.picture = bitmap
@@ -297,7 +325,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val file = context.file(path) ?: return reply(error("UnknownError"))
         file.parentFile?.mkdirs()
         if (context.agent) {
-            val bytes = agentBytes() ?: return reply(error("UnknownError"))
+            val bytes = agentBytes(entry.id) ?: return reply(error("UnknownError"))
             try { dev.exact.canvas.Files.write(file, bytes) } catch (e: java.io.IOException) { return reply(error("UnknownError")) }
             say("took $path (${bytes.size} bytes, the agent's picture)")
             disclose(path, entry.id, bytes)
@@ -543,7 +571,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     /** The package's one-second clip (`fixture/clip.mp4`), the same bytes on every host. */
     private fun agentVideo(): ByteArray? = runCatching { java.util.Base64.getDecoder().decode(AGENT_VIDEO) }.getOrNull()
 
-    private fun agentBytes(): ByteArray? {
+    private fun agentBytes(track: String? = null): ByteArray? {
+        if (track != null) clipFrame(track)?.let { frame ->
+            val out = ByteArrayOutputStream()
+            frame.compress(Bitmap.CompressFormat.JPEG, 92, out)
+            return out.toByteArray()
+        }
         picture?.let { p -> return runCatching { context.application.assets.open("app/$p").use { it.readBytes() } }.getOrNull() }
         val out = ByteArrayOutputStream()
         agentBitmap().compress(Bitmap.CompressFormat.JPEG, 85, out)

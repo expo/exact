@@ -226,6 +226,8 @@ pub(super) struct Direct {
 
 impl Recorder {
     pub(super) fn finish_stream(&mut self) -> Result<Pixmap, String> {
+        self.ops
+            .extend(self.freed_rows.drain(..).flat_map(|id| [ROW_FREE, id]));
         self.layers_finish();
         if self.direct.surfaces == 1
             && !self.direct.backdrop
@@ -262,6 +264,114 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_trim_frees_canvas_rows_without_freeing_their_replacements() {
+        trimmed_rows("memory");
+    }
+
+    #[test]
+    fn hidden_trim_frees_canvas_rows_without_freeing_their_replacements() {
+        trimmed_rows("hidden");
+    }
+
+    fn trimmed_rows(trim: &str) {
+        use crate::presenter::{PainterChoice, Presenter};
+        use std::collections::HashSet;
+
+        for trim in ["none", trim] {
+            for remove in [true, false] {
+                let (mut p, error) = Presenter::boot_with_fixture_fonts(
+                    &crate::test_plan(
+                        r##"component App
+  state visible = true
+  action remove
+    visible = false
+  view
+    column
+      box testId="remove" press=remove width=40 height=20
+      if visible
+        scroll width=200 height=200
+          column
+            box width=200 height=50 background-color="#123456"
+            box width=200 height=50 background-color="#abcdef"
+"##,
+                    ),
+                    (),
+                    (240., 240.),
+                    1.,
+                    std::path::PathBuf::new(),
+                    PainterChoice::Canvas,
+                )
+                .unwrap();
+                assert!(error.is_none(), "{error:?}");
+                let mut rows = HashSet::new();
+                let mut freeing = Vec::new();
+                let mut frame = |p: &mut Presenter<()>| {
+                    p.frame();
+                    let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+                    // ExactView applies ROW_FREE when the following stream arrives.
+                    for id in freeing.drain(..) {
+                        assert!(
+                            rows.remove(&id),
+                            "{trim}, remove={remove}: unknown row {id}"
+                        );
+                    }
+                    let mut at = 0;
+                    while at < ops.len() {
+                        match ops[at] {
+                            ROW_BEGIN => {
+                                assert!(rows.insert(ops[at + 1]), "a live row ID was reused");
+                            }
+                            ROW_FREE => freeing.push(ops[at + 1]),
+                            ROW_DRAW => assert!(
+                                rows.contains(&ops[at + 1]),
+                                "{trim}, remove={remove}: drawing a freed row"
+                            ),
+                            _ => (),
+                        }
+                        at = end(&ops, at).expect("valid Canvas stream");
+                    }
+                    (rows.len(), freeing.len())
+                };
+                assert_eq!(frame(&mut p), (2, 0));
+                match trim {
+                    "memory" => p.memory_warning(),
+                    "hidden" => {
+                        let page = p.host().runner().page();
+                        assert!(p
+                            .set_page(exact_runner::Page {
+                                hidden: true,
+                                ..page
+                            })
+                            .is_none());
+                        assert!(p.set_page(page).is_none());
+                    }
+                    _ => (),
+                }
+                if remove {
+                    let k = p.host().kernel();
+                    let id = k.node_by_key(k.find_by_test_id("remove")[0]).unwrap().id;
+                    assert!(p
+                        .host_mut()
+                        .dispatch_at(id, exact_runner::Event::Press, 0.)
+                        .is_none());
+                    assert!(p.after_commit().is_none());
+                }
+                let trimmed = trim != "none";
+                assert_eq!(
+                    frame(&mut p),
+                    (
+                        if trimmed && !remove { 4 } else { 2 },
+                        if trimmed || remove { 2 } else { 0 }
+                    ),
+                    "{trim}, remove={remove}: row frees must reach the reader"
+                );
+                assert_eq!(frame(&mut p), (if remove { 0 } else { 2 }, 0));
+                assert_eq!(frame(&mut p), (if remove { 0 } else { 2 }, 0));
+            }
+        }
+    }
 
     #[test]
     fn entering_shared_state_after_an_ordinary_frame_preserves_both_boundaries() {

@@ -360,6 +360,8 @@ pub enum LayoutError {
     HostBlock(&'static str),
     /// A host's report of native targets refused (LLP 1123 D9).
     NativeTarget(&'static str),
+    /// A host's report of Exact's contributions refused (LLP 1123 D11).
+    Contribution(&'static str),
     /// A definite available-space offer is infinite or NaN.
     InvalidOffer,
     /// The id is not live.

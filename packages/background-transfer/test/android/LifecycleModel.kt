@@ -103,7 +103,7 @@ internal object LifecycleModel {
     data class Config(
         val api: Int = 35, val limits: Limits = Limits(), val namespaces: List<Namespace> = listOf(app),
         val persons: List<Boolean> = listOf(true), val requests: Int = 1, val generations: Int = 1,
-        val notifications: Boolean = true, val denied: Boolean = false, val starved: Boolean = false,
+        val denied: Boolean = false, val starved: Boolean = false,
         val reboots: List<Reboot> = listOf(Reboot.Drops), val lag: Int = 8, val late: Boolean = true,
         val responses: List<Response> = listOf(Response.Ok, Response.BadStatus),
         val failures: List<Failure> = Failure.values().toList(), val stops: List<Stop> = Stop.values().toList(),
@@ -213,7 +213,7 @@ internal object LifecycleModel {
         var starve = false
         /** The effects performed, in order. */
         val effects = ArrayList<Effect>()
-        val conditions get() = Conditions(c.api, w.visible, c.notifications)
+        val conditions get() = Conditions(c.api, w.visible)
 
         fun record(key: Key) = w.durable.records[key]
 
@@ -617,7 +617,7 @@ internal object LifecycleModel {
         val p = w.process ?: return
         for (namespace in c.namespaces) if (namespace in p.crossed) {
             val events = listOf(SessionEnded(namespace, LIVE + 1), ViewDetached(namespace, LIVE + 1),
-                ViewAttached(namespace, LIVE + 1, Conditions(c.api, w.visible, c.notifications))) +
+                ViewAttached(namespace, LIVE + 1, Conditions(c.api, w.visible))) +
                 if (p.session != null) listOf(SessionStarted(namespace, LIVE + 1)) else emptyList()
             for (event in events) {
                 val step = Lifecycle.step(w.durable, p, event, c.limits)
@@ -632,7 +632,7 @@ internal object LifecycleModel {
         val p = w.process ?: return
         val session = p.session ?: return
         for (r in w.durable.records.values) if (r.key.namespace == session.namespace) {
-            val event = Start(r.key.copy(generation = "another"), Intent.Ordinary, c.requests, Conditions(c.api, w.visible, c.notifications))
+            val event = Start(r.key.copy(generation = "another"), Intent.Ordinary, c.requests, Conditions(c.api, w.visible))
             val step = Lifecycle.step(w.durable, p, event, c.limits)
             if (step.accepted || step.process != p || step.writes.isNotEmpty() || step.effects.isNotEmpty())
                 throw Violation("$event was taken beside $r")

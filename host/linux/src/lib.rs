@@ -27,6 +27,10 @@ mod display_flip;
 mod event_loop;
 #[cfg(target_os = "linux")]
 pub mod input;
+#[cfg(all(test, not(target_os = "linux")))]
+#[path = "input/event.rs"]
+mod input;
+mod rotation;
 #[cfg(target_os = "linux")]
 pub mod vnc;
 #[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
@@ -124,8 +128,18 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
         eprintln!("exact: {why}");
         return 1;
     }
+    let rotation = match rotation::requested() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("exact: {error}");
+            return 1;
+        }
+    };
     exact_painted::app::show_neutral_look();
     if config.headless() {
+        config.output_rotation = rotation.unwrap_or_default();
+        let [w, h] = config.output_rotation.size([config.size.0, config.size.1]);
+        config.size = (w, h);
         // @ref LLP 1178 D6 — the one display is the headless buffer.
         let screen = exact_painted::desktop::FullScreen::headless();
         exact_painted::desktop::install_displays(std::rc::Rc::new(screen));

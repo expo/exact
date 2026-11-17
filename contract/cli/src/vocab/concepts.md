@@ -1162,8 +1162,8 @@ On a button, `-exact-menu` is a literal `about` (directly under About), `app`,
 `file`, `edit`, `view`, `go`, `window`, `help` or `none` (no item; the chord
 stays a shortcut). `dock` beside one of them, or alone, also files the button
 in the app's Dock menu (`-exact-menu="file dock"`). `status` alone presents the
-button as the app's status item, a menu bar item on macOS (Windows'
-notification-area icon is not built); it takes the button's place, its
+button as the app's status item, a menu bar item on macOS or a
+notification-area icon on Windows; it takes the button's place, its
 `popovertarget` menu is the item's menu, and with another id it fails
 `lower-menu-status` (LLP 1133.025).
 It adds an item even without a chord and overrides
@@ -1172,14 +1172,15 @@ label or text; `disabled` disables it. An item in the app menu or Help is the
 app's: enabled with no key window, under a sheet and under a Contract modal dialog.
 Hidden/removed buttons leave the menu. Other hosts keep the ordinary button
 and ignore the hint. The agent taps the button. A root
-`-exact-menu-remove="show-tab-bar autofill close-all"` removes selected
-standard items and their menu equivalents. The fixed ids are `close-all`, `autofill`, `show-tab-bar`, `show-all-tabs`, `enter-full-screen`,
+`-exact-menu-remove="show-tab-bar close-all"` removes selected
+standard items and their menu equivalents. The fixed ids are `close-all`, `show-tab-bar`, `show-all-tabs`, `enter-full-screen`,
 `minimize`, `zoom`, `bring-all-to-front`, `show-previous-tab`, `show-next-tab`,
 `move-tab-to-new-window`, `merge-all-windows`, `back` (Go ▸ Back), `forward` (Go ▸ Forward), `develop` (the
 Develop menu; its chords stay), `paste-and-match-style`, `find`,
 `spelling-and-grammar`, `substitutions`, `transformations`, `app-help` (Help ▸
 *App* Help), `actual-size`, `zoom-in`, `zoom-out`, and `status-quit` (the
-host's Quit ending a status item's menu).
+host's Quit ending a status item's menu). AppKit's AutoFill submenu is not
+one: nothing public identifies it.
 The whitespace-separated list must be literal; unknown ids and nested use fail
 with `lower-menu-remove`, naming the set. Empty removes nothing; duplicates
 are harmless. The view’s root is a node, not a conditional. Root replacement and
@@ -1201,7 +1202,7 @@ component App
   action checkUpdates
     message = "Checking…"
   view
-    column -exact-menu-remove="show-tab-bar autofill close-all"
+    column -exact-menu-remove="show-tab-bar close-all"
       button "Check for Updates…" -exact-menu="app" press=checkUpdates testId="updates"
       text message
 ```

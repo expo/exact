@@ -1247,6 +1247,45 @@ test('a crate beside app.json joins the generated workspace by naming it, and on
   }
 }, 120_000);
 
+test('host data and GPU lock refreshes preserve compatible captured versions', async () => {
+  const { GPU_LOCK, lockShells, staleLock } = await import('./app-shells.mjs');
+  const dir = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/lock-refresh-'))));
+  try {
+    for (const [kind, file] of [['data', 'Cargo.lock'], ['gpu', GPU_LOCK]]) {
+      const workspace = resolve(dir, kind), member = resolve(workspace, 'member'), captured = resolve(dir, file);
+      mkdirSync(resolve(member, 'src'), { recursive: true });
+      writeFileSync(resolve(member, 'src/lib.rs'), '');
+      writeFileSync(resolve(workspace, 'Cargo.toml'), '[workspace]\nmembers = ["member"]\nresolver = "2"\n');
+      const manifest = (json, width) => writeFileSync(resolve(member, 'Cargo.toml'), `[package]\nname = "fixture-${kind}"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde_json = "${json}"\nunicode-width = "${width}"\n`);
+      manifest('=1.0.154', '=0.2.2');
+      lockShells(dir, workspace, captured);
+      // Keep a captured lock even when the SDK eventually holds these versions too.
+      writeFileSync(captured, readFileSync(resolve(workspace, 'Cargo.lock')));
+      const before = readFileSync(captured, 'utf8');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      // Both the SDK's serde_json 1.0.151 and unicode-width 0.1.14 fit these ranges.
+      manifest('1', '>=0.1.14, <=0.2.2');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      assert.equal(readFileSync(captured, 'utf8'), before);
+      assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8'), before);
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      // A changed requirement still lets Cargo update a captured version.
+      manifest('=1.0.151', '=0.1.14');
+      assert.match(lockShells(dir, workspace, captured), /resolved\n/);
+      const packages = Bun.TOML.parse(readFileSync(captured, 'utf8')).package;
+      for (const [name, version] of [['serde_json', '1.0.151'], ['unicode-width', '0.1.14']])
+        assert.deepEqual(packages.filter(p => p.name === name).map(p => p.version), [version]);
+      const older = readFileSync(captured, 'utf8');
+      manifest('1', '>=0.1.14, <=0.2.2');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      assert.equal(readFileSync(captured, 'utf8'), older);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.ok(staleLock('error: cannot update the lock file /app/Cargo.lock because --locked was passed to prevent this'));
+  assert.ok(staleLock('error: the lock file /app/Cargo.lock needs to be updated but --locked was passed to prevent this'));
+  assert.ok(!staleLock('error: failed to download `rustix v1.1.5`\n\nCaused by:\n  attempting to make an HTTP request, but --offline was specified'));
+}, 120_000);
+
 // LLP 1153.003 D1.4, a game's rule (LLP 1046.011 D2): an app captures a lock only when its crates leave exact2's.
 test('a generated workspace captures no lock until a dependency leaves exact2\'s, and keeps a captured one across a rewrite', async () => {
   const { createApp } = await import('../game/new.mjs');

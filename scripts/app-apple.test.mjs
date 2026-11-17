@@ -688,6 +688,17 @@ test('`userInterfaceStyle` writes UIUserInterfaceStyle on iOS and tvOS and Exact
   }
 });
 
+test('host.macos.layoutDirection writes ExactLayoutDirection only for a Mac rtl request', () => {
+  const app = (manifest) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', manifest });
+  const rtl = app({ host: { macos: { layoutDirection: 'rtl' } } });
+  assert.match(macInfoPlist(rtl), /<key>ExactLayoutDirection<\/key><string>rtl<\/string>/);
+  for (const plist of [infoPlist(rtl, false), infoPlist(rtl, false, { tv: true })])
+    assert.doesNotMatch(plist, /ExactLayoutDirection/);
+  for (const manifest of [{}, { host: {} }, { host: { macos: {} } }, { host: { macos: { layoutDirection: 'auto' } } }, { dir: 'rtl' }]) {
+    assert.doesNotMatch(macInfoPlist(app(manifest)), /ExactLayoutDirection/);
+  }
+});
+
 test('the launch handler bakes `ExactLaunchMode` with or without documents (LLP 1069.010 D4)', async () => {
   const { readManifest } = await import('./app.mjs');
   const app = (manifest) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', manifest: { host: {}, ...manifest } });

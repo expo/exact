@@ -38,11 +38,29 @@ pub(super) struct Keeping {
     pub(super) of_launch: Vec<usize>,
     /// The kept answers a settlement refused, set waiting or showed once
     /// their identity matched, by resource, with the line that says so:
-    /// journaled when its commit stands, so a refusal is never silent.
-    pub(super) refused: Vec<(usize, String)>,
+    /// journaled when its commit stands, so a refusal is never silent. A
+    /// line that one shows carries the identity it was kept for, and is
+    /// journaled only if the resource still shows that kept answer then.
+    pub(super) refused: Vec<(usize, String, Option<Vec<Value>>)>,
     /// Whether a module source declared `kept` keeps its answers (LLP
     /// 1133.015 D4): always, but in a private session.
     pub(super) modules: bool,
+}
+
+/// Whether a reload keeps resource `resource`'s kept entry: a resource of
+/// that name and source read the store, or waited for its identity, which
+/// a kept module waiting before it asks has done without reading it.
+pub(super) fn compatible_on_reload(
+    plan: &exact_plan::Plan,
+    carried: &super::Carried,
+    resource: &str,
+) -> bool {
+    plan.resources.iter().any(|r| {
+        let same = |n: &String, s: &String| n == resource && s == plan.str(r.source);
+        plan.str(r.name) == resource
+            && (carried.store_readers.iter().any(|(n, s)| same(n, s))
+                || carried.waiting.iter().any(|(n, s, ..)| same(n, s)))
+    })
 }
 
 /// Whether resource `i` reads a module's live source declared `"kept":
@@ -295,8 +313,12 @@ impl<D: DataSource> Runner<D> {
     /// Journal the kept answers refused by a settlement that stood: at
     /// boot, and at a later commit before readiness (an identity changed).
     pub(super) fn journal_refused(&mut self) {
-        for (_, line) in std::mem::take(&mut self.keeping.refused) {
-            self.log(line);
+        for (i, line, shown) in std::mem::take(&mut self.keeping.refused) {
+            let stands =
+                |s: &ResourceState| Some(&s.args) == shown.as_ref() && self.holds_kept(i, s);
+            if shown.is_none() || self.resources[i].state.as_ref().is_some_and(stands) {
+                self.log(line);
+            }
         }
     }
 
@@ -326,7 +348,7 @@ impl<D: DataSource> Runner<D> {
         });
         if seed.is_none() {
             let line = super::lines::kept_refused(name, "it no longer decodes or fits");
-            self.keeping.refused.push((i, line));
+            self.keeping.refused.push((i, line, None));
             if row.keep {
                 self.store.forget_kept(&kept_name(name));
             }

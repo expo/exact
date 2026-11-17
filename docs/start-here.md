@@ -211,6 +211,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |another wide layout, a chart|`web-look`, `responsive-columns`, `content-design`|
 |a video, a looping hero clip, a song (the `video` and `audio` elements, with a `poster`)|["Sound, MIDI and media"](contract-for-agents.md#sound-midi-and-media)|
 |a map, the camera (drawing is boxes and SVG, not Swift)|`native-views`|
+|calibration for an open camera track, from a package|[`camera-calibration`](recipes/camera-calibration.md)|
 |opening a web page over the app (a checkout, a help page)|`in-app-browser`|
 |a shared server (Snapback): wiring, tests, sign-in|`snapback`, `snapback-tests`, `snapback-auth`|
 |sign in with Google, Microsoft, Auth0, Okta or another OAuth provider|`oauth`|

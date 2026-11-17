@@ -32,6 +32,7 @@ use history::RetainedReceipt;
 mod intrinsic;
 pub(crate) mod observe;
 pub(crate) mod owner;
+mod provenance;
 pub(crate) mod readers;
 pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
@@ -49,6 +50,7 @@ pub(crate) use cover::{
     style_changed as cover_style_changed,
 };
 pub use cover::{credited_edges, HostCover};
+pub use provenance::{Contribution, Operation};
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
 

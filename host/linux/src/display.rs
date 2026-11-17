@@ -64,6 +64,7 @@ pub struct Display {
     label: String,
     /// Whether the connector is a built-in panel: `isInternal`.
     internal: bool,
+    rotation: crate::rotation::Rotation,
 }
 
 impl Display {
@@ -109,6 +110,8 @@ impl Display {
                 | connector::Interface::LVDS
                 | connector::Interface::DSI
         );
+        let rotation = crate::rotation::requested()?
+            .map_or_else(|| crate::rotation::panel(&card, con.handle()), Ok)?;
         let label = con.to_string();
         let mut buffers = Vec::new();
         for _ in 0..2 {
@@ -131,6 +134,7 @@ impl Display {
             height,
             label,
             internal,
+            rotation,
         })
     }
 
@@ -258,7 +262,9 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
         }
     };
     let (pw, ph) = display.size();
-    let viewport = (pw as f32 / config.scale, ph as f32 / config.scale);
+    config.output_rotation = display.rotation;
+    let [lw, lh] = display.rotation.size([pw, ph]);
+    let viewport = (lw as f32 / config.scale, lh as f32 / config.scale);
     exact_painted::desktop::install_displays(std::rc::Rc::new(
         exact_painted::desktop::FullScreen {
             label: display.label.clone(),
@@ -332,6 +338,7 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
         pointer,
         viewport,
         scale: config.scale,
+        rotation: display.rotation,
     };
     event_loop::run(
         config,
@@ -364,6 +371,7 @@ struct Events {
     pointer: (f32, f32),
     viewport: (f32, f32),
     scale: f32,
+    rotation: crate::rotation::Rotation,
 }
 
 impl<D: DataSource> event_loop::Events<D> for Events {
@@ -396,7 +404,7 @@ impl<D: DataSource> event_loop::Events<D> for Events {
                 &mut self.pointer,
                 self.viewport,
                 self.scale,
-                event,
+                crate::rotation::input(self.rotation, event),
                 wall(),
             ) {
                 eprintln!("exact: {error}");

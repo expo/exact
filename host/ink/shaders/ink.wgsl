@@ -1,5 +1,10 @@
 // @ref LLP 1149 D1.1, D2, D6.1. All branch selectors are flat per primitive.
 
+// Fixed programs share this source; the defaults retain the general program.
+override SPECIALIZED: bool = false;
+override KIND_BRUSH: u32 = 0u;
+override FLAGS_MASK: u32 = 4294967295u;
+
 struct Viewport { size: vec2<f32>, pad: vec2<f32> }
 @group(0) @binding(0) var<uniform> viewport: Viewport;
 @group(0) @binding(1) var glyph_atlas: texture_2d<f32>;
@@ -197,10 +202,15 @@ fn stop_ramp(t: f32, row: i32) -> vec4<f32> {
     return vec4<f32>(c.rgb * c.a, c.a);
 }
 
-fn brush(v: Vertex, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
-    let kind = v.data.x & 65535u;
-    let flags = v.data.y;
-    switch v.data.x >> 16u {
+fn selectors(v: Vertex) -> vec2<u32> {
+    if SPECIALIZED { return vec2<u32>(KIND_BRUSH, v.data.y & FLAGS_MASK); }
+    return v.data;
+}
+
+fn brush(v: Vertex, data: vec2<u32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    let kind = data.x & 65535u;
+    let flags = data.y;
+    switch data.x >> 16u {
         case 1u: {
             var t = 0.0;
             switch (flags >> 9u) & 3u {
@@ -244,14 +254,14 @@ fn brush(v: Vertex, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
             var uv = mapped(v.local, v.rect, v.uv);
             // Coverage uses uv for its path mask; its image occupies the full slot.
             if kind == 4u { uv = (v.local - v.rect.xy) / v.rect.zw; }
-            if (v.data.x >> 16u) == 3u {
+            if (data.x >> 16u) == 3u {
                 uv = (v.local - v.param.xy) / max(v.param.zw, vec2<f32>(0.00001));
             }
             if (flags & 1073741824u) != 0u {
                 uv = (v.position.xy - v.param.zw) / vec2<f32>(textureDimensions(picture));
             }
             var c = textureSample(picture, filtering, uv);
-            if (v.data.x >> 16u) == 3u {
+            if (data.x >> 16u) == 3u {
                 c = textureSampleGrad(picture, filtering, uv, dx / v.param.zw, dy / v.param.zw);
             }
             if (flags & 67108864u) != 0u {
@@ -267,11 +277,11 @@ fn brush(v: Vertex, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
             if (flags & 16u) != 0u {
                 let size = vec2<i32>(textureDimensions(picture));
                 var at = clamp(vec2<i32>(uv * vec2<f32>(size)), vec2<i32>(0), size - vec2<i32>(1));
-                if (v.data.x >> 16u) == 3u { at = vec2<i32>(floor(fract(uv) * vec2<f32>(size))); }
+                if (data.x >> 16u) == 3u { at = vec2<i32>(floor(fract(uv) * vec2<f32>(size))); }
                 c = textureLoad(picture, at, 0);
             }
             if (flags & 1u) != 0u { c = v.color * c.a; }
-            if (v.data.x >> 16u) == 3u { c *= v.color.a; }
+            if (data.x >> 16u) == 3u { c *= v.color.a; }
             return c;
         }
         default: { return v.color; }
@@ -390,10 +400,11 @@ fn fs_main(v: Vertex) -> @location(0) vec4<f32> {
     let pixel = fwidth(v.local);
     let dx = dpdx(v.local);
     let dy = dpdy(v.local);
-    let kind = v.data.x & 65535u;
-    let flags = v.data.y;
+    let data = selectors(v);
+    let kind = data.x & 65535u;
+    let flags = data.y;
     var alpha = 1.0;
-    var color = brush(v, dx, dy);
+    var color = brush(v, data, dx, dy);
     var clip1 = 1.0;
     if (flags & 128u) != 0u {
         clip1 = shape_coverage(v.position.xy, v.clip1, unpack_radii(v.clip_radii.zw), vec2<f32>(1.0));

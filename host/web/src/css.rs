@@ -570,7 +570,7 @@ fn css_text_in(
             (StyleId::Mode, _) => {}
             // @ref LLP 1123 D4 — no host chrome covers a page the browser
             // lays out: nothing is cleared, so there is nothing to turn off.
-            (StyleId::SafeArea, _) => {}
+            (StyleId::SafeArea | StyleId::SafeAreaIgnore, _) => {}
             // Where a grouped row's separator starts (index.html), and which
             // way a leading symbol moves it, inherited as the direction is.
             (StyleId::Direction, RowValue::Enum(dir)) => {
@@ -876,7 +876,8 @@ fn unsaid_side(style: &StyleProps, id: StyleId) -> Option<&'static str> {
 }
 
 fn property(out: &mut String, id: StyleId) {
-    static NAMES: [std::sync::OnceLock<String>; 256] = [const { std::sync::OnceLock::new() }; 256];
+    static NAMES: [std::sync::OnceLock<String>; StyleId::COUNT] =
+        [const { std::sync::OnceLock::new() }; StyleId::COUNT];
     out.push_str(NAMES[id as usize].get_or_init(|| {
         let mut name = String::new();
         spell_property(&mut name, id);

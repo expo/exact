@@ -168,7 +168,7 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
       if (types) console.log(types);
       // What it said: its last 12 lines, or from the compiler's first error when those leave it out.
       const said = log.split('\n').filter((l) => l.trim() && !/^\s*(Compiling|Finished|Running|warning)/.test(l) && !compilerWarnings(l).length), first = said.findIndex(compilerError);
-      if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: said.slice(first >= 0 ? Math.min(first, said.length - 12) : -12).join('\n') || `build exited ${code}` }); }
+      if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: said.slice(first >= 0 ? Math.min(first, Math.max(0, said.length - 12)) : -12).join('\n') || `build exited ${code}` }); }
       let cargo;
       try { cargo = cargoContractReads(webSourceRoots(app, true), began); }
       catch (error) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: error.message }); }

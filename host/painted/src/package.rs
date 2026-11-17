@@ -121,6 +121,7 @@ pub struct Notifier {
     native: Slot,
     extension: &'static str,
     seq: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    picture: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
 }
 
 /// The session's current runner's native slot. A reload or an activated
@@ -129,6 +130,12 @@ pub struct Notifier {
 pub(crate) type Slot = std::sync::Arc<std::sync::Mutex<exact_runner::Native>>;
 
 impl Notifier {
+    /// A published image file changed: ask the presentation thread to
+    /// reload its image and canvas handles.
+    pub fn picture_changed(&self, source: &str) {
+        (self.picture)(source);
+    }
+
     /// The readers of `topic` (`extension.name`) are asked again (LLP 1016.002).
     pub fn changed(&self, topic: &str) {
         let native = self
@@ -172,11 +179,13 @@ impl Context {
         native: Slot,
         now: Rc<Cell<f64>>,
         lines: Rc<RefCell<Vec<String>>>,
+        picture: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
     ) -> Context {
         let notifier = Notifier {
             native,
             extension,
             seq: Default::default(),
+            picture,
         };
         Context(Rc::new(Shared {
             extension,

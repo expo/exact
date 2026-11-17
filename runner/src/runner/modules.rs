@@ -1039,7 +1039,7 @@ impl<D: DataSource> Runner<D> {
 
     /// `body` for the bound implementation, through the native slot.
     fn to_implementation(&self, body: Vec<u8>) -> Dispatch {
-        let handler = self.native_slot().handler();
+        let handler = self.native_slot().extension_handler();
         Dispatch::Run(Work::Later(Box::new(move |reply| match handler {
             Some(handler) => handler(body, reply),
             None => reply.send(response(&json!({ "error": "NotSupportedError" }))),

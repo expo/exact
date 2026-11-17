@@ -4,7 +4,7 @@
 // `navigator.mediaSession`'s calls recorded. The owner rule, what is
 // published and never thrown, a retired owner, the artwork, and the remote
 // play's latch over `playbackVisibilityThreshold`. Every engine comes from
-// Playwright (`bunx playwright@1.64.1 install chromium-headless-shell firefox
+// Playwright (`bunx playwright@1.65.1 install chromium-headless-shell firefox
 // webkit`); an engine that is missing is skipped.
 import { afterAll, test, expect } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';

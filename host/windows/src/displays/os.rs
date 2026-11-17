@@ -2,7 +2,7 @@
 #![allow(unsafe_code)]
 use super::{Client, Monitor};
 use exact_painted::desktop::{Pointer, Screens};
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use windows::{Foundation::TypedEventHandler, UI::ViewManagement::UISettings};
@@ -79,12 +79,36 @@ struct Displays {
 /// Report the displays to every session on this thread, measured against
 /// the session window `hwnd`.
 pub(crate) fn install(hwnd: isize) {
-    exact_painted::desktop::install_displays(Rc::new(Displays {
+    let displays = Rc::new(Displays {
         hwnd,
         watch: Rc::default(),
         hears: Cell::new(false),
         settings: OnceCell::new(),
-    }));
+    });
+    CURRENT.with(|current| *current.borrow_mut() = Some(displays.clone()));
+    exact_painted::desktop::install_displays(displays);
+}
+
+thread_local! {
+    static CURRENT: RefCell<Option<Rc<Displays>>> = const { RefCell::new(None) };
+}
+
+/// No HWND is needed to enumerate the real desktop. A hidden window keeps
+/// its client geometry; a session without one reports null clientRect.
+pub(crate) fn capture_snapshot() -> Vec<(exact_painted::desktop::Screen, [i32; 4])> {
+    let _dpi = crate::screen_capture::os::Dpi::new();
+    CURRENT.with(|current| {
+        let current = current.borrow();
+        let fallback = Displays {
+            hwnd: 0,
+            watch: Rc::default(),
+            hears: Cell::new(false),
+            settings: OnceCell::new(),
+        };
+        let display = current.as_deref().unwrap_or(&fallback);
+        let monitors = split(monitors(display.text_size()));
+        super::capture_rects(&monitors, display.client())
+    })
 }
 
 unsafe extern "system" fn each(monitor: HMONITOR, _: HDC, _: *mut RECT, list: LPARAM) -> i32 {

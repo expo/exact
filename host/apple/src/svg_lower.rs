@@ -445,18 +445,20 @@ fn track_json(
 /// in the track, its underlying one included, has one alpha (then Core
 /// Animation's unpremultiplied interpolation is CSS's premultiplied one).
 ///
-/// A box's transform (`box_motion`, iOS) lowers when it turns about its
+/// A box's transform (`box_motion`) lowers when it turns about its
 /// centre, no layout transition moves it, and nothing in it takes input:
-/// Core Animation moves only the presentation, and UIKit hit-tests the
+/// Core Animation moves only the presentation, and the view hit-tests the
 /// model, where a browser hit-tests what it shows. Its background colour
 /// lowers when the layer paints it: no border and no `background-image`
 /// (else the view draws its box), every colour of one alpha. An SVG
-/// element's transform is its scene's, which samples it.
+/// element's transform lowers onto its outer layer when [`svg_turns`]
+/// permits it; otherwise its scene samples it.
 pub(crate) fn eligibility(
     kernel: &Kernel,
     engine: &mut Engine,
     sync: &MotionSync,
     box_motion: bool,
+    live_filters: bool,
     interactive: &dyn Fn(exact_kernel::ViewId) -> bool,
 ) {
     for (node, animations) in &sync.animations {
@@ -543,7 +545,7 @@ pub(crate) fn eligibility(
             || props.iter().any(|p| crate::looks::paints_over(&n, *p))
             // Drawn into an island's pixels, which Core Animation does not
             // animate (except a live filter picture on iOS).
-            || (svg && in_picture(kernel, engine, &n, box_motion))
+            || (svg && in_picture(kernel, engine, &n, live_filters))
             || (boxed && svg && !svg_turns(&n, &props))
             || (moves && !circle_moves(&n, &props))
         {
@@ -678,7 +680,7 @@ const BOX_PLAYED: [Property; 5] = [
     Property::Rotate,
 ];
 
-/// LLP 1055.001 §3 — on iOS each running opacity transition of a box, and
+/// LLP 1055.001 §3 — each running opacity transition of a box, and
 /// each eligible transform or background-colour one, goes to Core Animation
 /// ([`Engine::play_transition`]) as LLP 1055.001 lowers a box's keyframes:
 /// the engine presents the target, the box's specs carry the transition
@@ -777,13 +779,22 @@ fn playable(
 }
 
 /// Whether the background colour a box's layer would paint is the box's
-/// fill as UIKit shows it (`BoxLayerIOS.applyBoxLayer`'s `bg`): a fixed or
+/// fill as the presenter shows it (`BoxLayerIOS` and `BoxLayerMac`): a fixed or
 /// light-dark colour (a platform or role colour may draw as vibrancy, a wide
 /// one in its own space), over the border box, with one circular radius, a
 /// round or continuous corner, no material, no layout transition that moves
-/// it to a surface, and shown. Anything UIKit rasterizes stays sampled.
+/// it to a surface, and shown. Anything the view rasterizes stays sampled.
 fn background_on_layer(kernel: &Kernel, n: &exact_kernel::NodeRef<'_>) -> bool {
     use exact_kernel::{ColorValue, Dimension};
+    // BoxLayerMac.layerBoxEligible excludes backgrounds painted into content.
+    if cfg!(target_os = "macos")
+        && matches!(
+            n.node_type,
+            NodeType::Text | NodeType::Canvas | NodeType::WebView
+        )
+    {
+        return false;
+    }
     let s = n.style;
     let radii: Vec<Option<f32>> = [
         s.border_radius_top_left.clone(),
@@ -804,6 +815,11 @@ fn background_on_layer(kernel: &Kernel, n: &exact_kernel::NodeRef<'_>) -> bool {
         .copied()
         .filter(|r| *r > 0.0)
         .collect();
+    // AppKit can put a rounded fill on boxFill or draw it with an image;
+    // backgroundColor on the backing layer does not reach those paints.
+    if cfg!(target_os = "macos") && !set.is_empty() {
+        return false;
+    }
     let one_radius = radii.iter().all(Option::is_some)
         && set.windows(2).all(|w| (w[0] - w[1]).abs() < 0.01)
         && set
@@ -986,7 +1002,7 @@ fn marked(kernel: &Kernel, n: &exact_kernel::NodeRef<'_>) -> bool {
 }
 
 /// Whether an SVG element's `translate`, `rotate` and `scale` animations
-/// play on its transform pair's outer layer (iOS; LLP 1055.001 as a box's):
+/// play on its transform pair's outer layer (LLP 1055.001 as a box's):
 /// an element, not the `svg` (a box), with nothing drawn for one scale: no
 /// non-scaling stroke, filter or mask.
 fn svg_turns(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
@@ -1038,19 +1054,16 @@ fn in_glass_group(kernel: &Kernel, n: &exact_kernel::NodeRef<'_>) -> bool {
     false
 }
 
-/// Every lowered animation that Core Animation can no longer play as CSS
-/// does because of an ancestor is switched to sampling, not only the ones a
-/// commit touched ([`eligibility`]): an opacity animation in a glass group
-/// (LLP 1053.000.000 D4), anything under a filtered box, and an SVG element
-/// drawn into a picture (`live` as for [`in_picture`]). An ancestor that
-/// gains a group or a filter touches none of its descendants. Returns the
-/// views whose Core Animation specs must be withdrawn. A node that leaves
-/// the group or the filter stays sampled: its pixels are right, at a little
-/// more work.
+/// Recheck running animations even when their own rows did not change:
+/// ancestors can gain filters or glass groups (LLP 1053.000.000 D4), and
+/// boxes can gain interactive descendants or a different paint destination.
+/// Return the views whose Core Animation specs must be withdrawn. They stay
+/// sampled until eligibility is checked again for a changed animation row.
 pub(crate) fn resample(
     kernel: &Kernel,
     engine: &mut Engine,
     live: bool,
+    interactive: &dyn Fn(exact_kernel::ViewId) -> bool,
 ) -> Vec<exact_kernel::ViewId> {
     let lowered: Vec<u64> = engine
         .animated_nodes()
@@ -1062,17 +1075,15 @@ pub(crate) fn resample(
             continue;
         };
         let svg = n.node_type.is_svg_element() || n.node_type == NodeType::Svg;
-        let opacity = || {
-            engine.animation_plays(node).iter().any(|play| {
-                play.animation
-                    .keyframes
-                    .properties()
-                    .contains(&Property::Opacity)
-            })
-        };
+        let props: Vec<Property> = engine
+            .animation_plays(node)
+            .iter()
+            .flat_map(|play| play.animation.keyframes.properties())
+            .collect();
         if under_box_filter(kernel, engine, &n)
             || (svg && in_picture(kernel, engine, &n, live))
-            || (opacity() && in_glass_group(kernel, &n))
+            || (props.contains(&Property::Opacity) && in_glass_group(kernel, &n))
+            || (!svg && !box_eligible(kernel, &n, &props, interactive))
         {
             engine.set_node_sampled(node, true);
             switched.push(n.id);
@@ -1162,6 +1173,10 @@ fn box_eligible(
     let turns = props
         .iter()
         .any(|p| matches!(p, Property::Translate | Property::Scale | Property::Rotate));
+    // AppKit's backdrop filter region follows the model transform (Backdrop.swift).
+    if turns && cfg!(target_os = "macos") && !s.backdrop_filter.is_none() {
+        return false;
+    }
     if turns
         && (exact_kernel::motion::rotation_needs_sampling(s)
             || n.layout_position() == exact_kernel::PositionType::Sticky

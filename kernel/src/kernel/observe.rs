@@ -16,6 +16,7 @@
 //! comes within half a device pixel of its measurement, or the reader is
 //! left unsettled after a bounded number of rounds.
 
+use super::provenance::{self, Contribution};
 use super::Kernel;
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
@@ -34,8 +35,9 @@ pub(crate) type Observed = [Option<f32>; 4];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Observations {
-    /// Each owner root's band, top right bottom left in its block's space;
-    /// `None` while it is unavailable.
+    /// Each owner root's incoming band, top right bottom left in its
+    /// block's space: its raw band less Exact's contributions (D11); `None`
+    /// while it is unavailable.
     bands: IdMap<u32, Option<[f32; 4]>>,
     /// The session view's band, in the document's space.
     session: [f32; 4],
@@ -68,7 +70,7 @@ impl Observations {
         self.inputs.get(&slot).copied().unwrap_or([Some(0.0); 4])
     }
 
-    fn band(&self, owner: u32) -> Option<[f32; 4]> {
+    pub(crate) fn band(&self, owner: u32) -> Option<[f32; 4]> {
         self.bands.get(&owner).copied().flatten()
     }
 
@@ -118,15 +120,21 @@ impl Observations {
 impl Kernel {
     /// Set the band of the content owner whose root is `view`, top right
     /// bottom left in its block's space: its controller view's raw
-    /// `safeAreaInsets` (LLP 1123 D2's owner update, D9); `None` while it
-    /// is unavailable, which makes its readers' observations
-    /// guaranteed-invalid, so their fallbacks apply. Returns whether a
-    /// layout is owed: the band changed and some box reads an observation.
-    /// Nonfinite or negative insets are refused.
+    /// `safeAreaInsets` (LLP 1123 D2's owner update, D9), with Exact's
+    /// contributions to it, which its boxes do not observe (D11,
+    /// "Provenance"); `None` while it is unavailable, which makes its
+    /// readers' observations guaranteed-invalid, so their fallbacks apply.
+    /// The band less the contributions is what the owner's host clears for
+    /// its content root (D3). Returns whether a layout is owed: that band
+    /// changed, and it moved the content root or some box reads an
+    /// observation. The update is refused whole, keeping the last, for
+    /// nonfinite or negative insets, a nonfinite effect, or a
+    /// contribution's identity twice.
     pub fn set_owner_band(
         &mut self,
         view: ViewId,
         band: Option<[f32; 4]>,
+        contributions: &[Contribution],
     ) -> Result<bool, KernelError> {
         let slot = self
             .arena
@@ -135,12 +143,16 @@ impl Kernel {
         if band.is_some_and(|b| !b.iter().all(|v| v.is_finite() && *v >= 0.0)) {
             return Err(LayoutError::InvalidEnv.into());
         }
+        provenance::check(contributions)?;
+        let cleared = super::block::clearance(&self.arena, slot);
         let observations = &mut self.arena.observations;
+        let band = band.map(|raw| provenance::incoming(raw, contributions));
         if observations.bands.insert(slot, band) == Some(band) {
             return Ok(false);
         }
         observations.invalidate_band(Some(slot));
-        Ok(!self.arena.readers.observers.is_empty())
+        let moved = super::block::clearance(&self.arena, slot) != cleared;
+        Ok(moved || !self.arena.readers.observers.is_empty())
     }
 
     /// Set the session view's band, top right bottom left in the document's

@@ -77,8 +77,8 @@ public final class ExactWatchSync: NSObject, WCSessionDelegate, @unchecked Senda
         },
         schedule: { [unowned self] in self.after($0, $1) }))
 
-    /// Ask for the store's readers. `ready` succeeds once, after the retained context is
-    /// reconciled; each failure before that says the store is not readable yet.
+    /// Ask for readers of the last applied store, without waiting for activation.
+    /// `ready` succeeds once; each failure before that says the store is not readable yet.
     public static func prepareWatch(ready: @escaping (Result<Void, Error>) -> Void) {
         shared.queue.async { shared.ready = ready; shared.receiver.feed(.launch) }
     }

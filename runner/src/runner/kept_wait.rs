@@ -45,7 +45,8 @@ pub(super) struct Admission {
     /// It shows a kept seed, which its ask may reuse before readiness.
     pub(super) kept_seed: bool,
     /// What stands is not to be reused: a seed now waiting, or one admitted
-    /// after readiness, whose ask must still go out.
+    /// after readiness, whose ask must still go out. Admitted at a ready
+    /// boot, it stands over the bake's answer while it is asked.
     pub(super) hold: bool,
     /// A waiting entry was admitted before readiness: it shows as a boot
     /// seed does, neither pending nor awaiting.
@@ -102,15 +103,23 @@ impl<D: DataSource> Runner<D> {
                     }
                     Match::Mismatch => self.refuse_kept(i, &kept, now, valid, states),
                 }
-            } else if states[i].as_ref().is_some_and(|s| s.slept) {
-                // Idle through readiness, so never compared until its gate
-                // opened (LLP 1161.002 §7). Admitted, it stands while its
-                // ask is pending; otherwise the fallback shows.
+            } else if let Some(slept) = (states[i].as_ref())
+                .map(|s| s.slept)
+                .filter(|&slept| slept || !self.resources[i].kept_admitted)
+            {
+                // Never compared before readiness: a kept module's seed at a
+                // boot whose source is ready (D5), or a seed idle through
+                // readiness until its gate opened (LLP 1161.002 §7), which
+                // may have been. Admitted, it stands while its ask is
+                // pending; otherwise the fallback shows.
                 out.hold = true;
                 match matched {
-                    Match::Admit => self.resources[i].kept_admitted = true,
+                    Match::Admit => {
+                        self.resources[i].kept_admitted = true;
+                        self.journal_shown(i, &kept);
+                    }
                     Match::Wait => {
-                        self.start_waiting(i, kept, true);
+                        self.start_waiting(i, kept, slept);
                         states[i] = None;
                     }
                     Match::Mismatch => {
@@ -145,9 +154,7 @@ impl<D: DataSource> Runner<D> {
                         out.kept_seed = !ready;
                         out.hold = ready;
                         out.admitted_early = !ready;
-                        let name = self.plan.str(self.resource_row(i).name);
-                        let line = super::lines::kept_shown(name);
-                        self.keeping.refused.push((i, line));
+                        self.journal_shown(i, &waiting.args);
                     }
                 }
                 Match::Wait => {}
@@ -161,6 +168,15 @@ impl<D: DataSource> Runner<D> {
             state.kept_seed = out.kept_seed;
         }
         out
+    }
+
+    /// Journal that resource `i` shows its kept answer, kept for `args`, at
+    /// a commit after boot's (`journal_kept_seeds` names boot's seeds). The
+    /// line names no identifying value.
+    fn journal_shown(&mut self, i: usize, args: &[Value]) {
+        let name = self.plan.str(self.resource_row(i).name);
+        let line = super::lines::kept_shown(name);
+        self.keeping.refused.push((i, line, Some(args.to_vec())));
     }
 
     /// How the kept identity `kept` compares with this pass's `now`.
@@ -212,14 +228,34 @@ impl<D: DataSource> Runner<D> {
             |j| j == k,
             |input| match input {
                 Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r) => {
-                    self.resources[r].store_reader
-                        && states[r].as_ref().is_some_and(|s| {
-                            s.placeholder || s.value.is_compiled() && self.resources[r].stale
-                        })
+                    self.on_fallback(r, states)
                 }
                 _ => false,
             },
         )
+    }
+
+    /// Whether resource `r` is a store reader with no admitted device
+    /// answer: on its placeholder, or on its compiled answer while it waits
+    /// for its source (`stale`) or for its first answer (`origin` 0; a fresh
+    /// answer equal to the compiled one keeps the compiled object with its
+    /// request's origin).
+    fn on_fallback(&self, r: usize, states: &[Option<ResourceState>]) -> bool {
+        self.resources[r].store_reader
+            && states[r].as_ref().is_some_and(|s| {
+                s.placeholder || s.value.is_compiled() && (self.resources[r].stale || s.origin == 0)
+            })
+    }
+
+    /// Whether resource `r` shows a kept answer no fresh one has replaced:
+    /// its boot seed, or one admitted since (`origin` 0, neither compiled
+    /// nor a placeholder). It is provisional (D4), so not an answer to carry.
+    pub(super) fn holds_kept(&self, r: usize, state: &ResourceState) -> bool {
+        state.kept_seed
+            || self.resources[r].kept_admitted
+                && state.origin == 0
+                && !state.placeholder
+                && !state.value.is_compiled()
     }
 
     /// Resource `i`'s boot seed, kept for `kept`, waits for its identity;
@@ -231,7 +267,7 @@ impl<D: DataSource> Runner<D> {
         };
         let digest = digest(entry);
         let line = super::lines::kept_waiting(name);
-        self.keeping.refused.push((i, line));
+        self.keeping.refused.push((i, line, None));
         self.resources[i].waiting = Some(Waiting {
             args: kept,
             digest,
@@ -265,17 +301,30 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// The declared resources' waiting entries, for a reload to carry.
-    pub(super) fn carry_waiting(&self) -> Vec<(String, String, Vec<Value>, u64)> {
+    /// The declared resources' waiting entries, for a reload to carry, and
+    /// as one each admitted kept answer that slept and no fresh answer has
+    /// replaced: the replacement admits it again at once, keeping that
+    /// history (LLP 1161.001 D1), where it would otherwise seed it afresh.
+    pub(super) fn carry_waiting(&self) -> Vec<(String, String, Vec<Value>, u64, bool)> {
         (0..self.declared_resources().len())
             .filter_map(|i| {
-                let w = self.resources[i].waiting.as_ref()?;
                 let row = self.resource_row(i);
+                let name = self.plan.str(row.name);
+                let (args, digest, slept) = match &self.resources[i].waiting {
+                    Some(w) => (w.args.clone(), w.digest, w.slept),
+                    None => {
+                        let s = (self.resources[i].state.as_ref())
+                            .filter(|s| s.slept && self.holds_kept(i, s))?;
+                        let stored = self.store.kept(&super::kept::kept_name(name))?;
+                        (s.args.clone(), digest(stored), true)
+                    }
+                };
                 Some((
-                    self.plan.str(row.name).to_string(),
+                    name.to_string(),
                     self.plan.str(row.source).to_string(),
-                    w.args.clone(),
-                    w.digest,
+                    args,
+                    digest,
+                    slept,
                 ))
             })
             .collect()
@@ -295,23 +344,30 @@ impl<D: DataSource> Runner<D> {
             let eligible = row.reader
                 && super::kept::waits_for_module(&self.plan, self.plan.str(row.source))
                 || super::kept::kept_module(&self.plan, i);
-            if !eligible
-                || row.transient
-                || self.resources[i]
-                    .state
-                    .as_ref()
-                    .is_some_and(|s| s.kept_seed)
-            {
+            if !eligible || row.transient {
                 continue;
             }
             let (name, source) = (self.plan.str(row.name), self.plan.str(row.source));
-            if let Some((_, _, args, digest)) =
-                (carried.waiting.iter()).find(|(n, s, _, _)| n == name && s == source)
-            {
+            let Some((_, _, args, digest, slept)) =
+                (carried.waiting.iter()).find(|(n, s, ..)| n == name && s == source)
+            else {
+                continue;
+            };
+            let stored = self
+                .store
+                .kept(&super::kept::kept_name(name))
+                .map(self::digest);
+            if let Some(seed) = self.resources[i].state.as_mut().filter(|s| s.kept_seed) {
+                // This boot planted the same entry as a seed: it is compared
+                // again, and keeps the sleep history it waited with.
+                if seed.args == *args && stored == Some(*digest) {
+                    seed.slept |= *slept;
+                }
+            } else {
                 self.resources[i].waiting = Some(Waiting {
                     args: args.clone(),
                     digest: *digest,
-                    slept: false,
+                    slept: *slept,
                 });
             }
         }
@@ -328,7 +384,7 @@ impl<D: DataSource> Runner<D> {
         valid: bool,
         states: &[Option<ResourceState>],
     ) {
-        if self.keeping.refused.iter().any(|(r, _)| *r == i) {
+        if self.keeping.refused.iter().any(|(r, ..)| *r == i) {
             return;
         }
         let differing: Vec<String> = (0..now.len())
@@ -359,13 +415,13 @@ impl<D: DataSource> Runner<D> {
         };
         let name = self.plan.str(self.resource_row(i).name);
         let line = super::lines::kept_refused(name, &why);
-        self.keeping.refused.push((i, line));
+        self.keeping.refused.push((i, line, None));
     }
 
     /// The root states and resources resource `i`'s identifying argument
-    /// `k` reads, directly or through derives. A
-    /// resource says whether it holds an admitted kept answer or is a store
-    /// reader without one.
+    /// `k` reads, directly or through derives. A store reader says whether
+    /// it holds an admitted kept answer, a fresh one, or no admitted device
+    /// answer (the build's or its placeholder).
     fn arg_inputs(&self, i: usize, k: usize, states: &[Option<ResourceState>]) -> Vec<String> {
         use crate::instance::Input;
         let mut named = Vec::new();
@@ -380,10 +436,12 @@ impl<D: DataSource> Runner<D> {
                     Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r) => {
                         states.get(r).and_then(Option::as_ref).map(|s| {
                             let name = self.plan.str(self.resource_row(r).name);
-                            let what = if s.kept_seed {
+                            let what = if self.holds_kept(r, s) {
                                 " (holding an admitted kept answer)"
-                            } else if self.resources[r].store_reader {
+                            } else if self.on_fallback(r, states) {
                                 " (a store reader with no admitted device answer)"
+                            } else if self.resources[r].store_reader {
+                                " (holding a fresh answer)"
                             } else {
                                 ""
                             };

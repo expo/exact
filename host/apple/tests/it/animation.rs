@@ -1,7 +1,7 @@
-//! Keyframe animations on Apple (LLP 1055 D5/D7): what Core Animation can
-//! say (a box's opacity) is lowered to it; the rest the host's engine
-//! samples under its clock and the presenter paints, as it does a
-//! transition. An endless one keeps frames coming; settling never waits.
+//! Keyframe animations on Apple (LLP 1055 D5/D7): eligible box transforms
+//! and opacity run in Core Animation; the engine samples other motion.
+//! Endless sampled motion keeps frames coming, but settlement waits only
+//! for finite motion.
 
 use exact_apple::Host;
 use exact_kernel::MonospaceMeasurer;
@@ -39,6 +39,22 @@ fn lowered(batch: &str, id: u32) -> bool {
         .is_some_and(|at| !batch[at + marker.len()..].starts_with("[]"))
 }
 
+fn track(batch: &str, id: u32, key: &str) -> serde_json::Value {
+    let batch: serde_json::Value = serde_json::from_str(batch).unwrap();
+    batch["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "animations" && op["id"] == id)
+        .unwrap()["specs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|spec| spec["k"] == key)
+        .unwrap()
+        .clone()
+}
+
 fn close(actual: Option<f64>, expected: f64) {
     let actual = actual.expect("presented");
     assert!((actual - expected).abs() < 1e-5, "{actual} vs {expected}");
@@ -65,24 +81,28 @@ fn an_animation_is_presented_from_boot_and_stops_when_its_row_does() {
         view(&host, "added"),
         view(&host, "toggle"),
     );
-    assert!(first.contains("\"motion\":true"), "{first}");
-    // Opacity is Core Animation's; scale and translate are sampled.
+    assert!(first.contains("\"motion\":false"), "{first}");
     assert!(lowered(&first, mark), "{first}");
     assert!(presented(&first, mark, "opacity").is_none(), "{first}");
-    close(presented(&first, mark, "scale"), 0.9);
-    close(presented(&first, added, "translate"), 0.0);
+    assert!(presented(&first, mark, "scale").is_none(), "{first}");
+    assert!(presented(&first, added, "translate").is_none(), "{first}");
+    let scale = track(&first, mark, "transform.scale");
+    assert_eq!(scale["v"], serde_json::json!([0.9, 1]));
+    assert_eq!(scale["d"], 1.6);
+    assert_eq!(scale["n"], -1);
+    let translate = track(&first, added, "transform.translation.y");
+    assert_eq!(translate["v"], serde_json::json!([8, 0]));
+    assert_eq!(translate["d"], 0.3);
+    assert_eq!(translate["n"], 1);
     // The finite one settles at 300 ms; the endless one is not waited for.
     assert_eq!(host.agent("{\"op\":\"settle\"}"), "{\"settle\":300}");
 
-    // 400 ms into 1.6 s: a quarter through scale's one interval (0.9 to
-    // the row's own 1), where ease-in-out is about 0.129.
     let tick = host.tick(400.0);
-    let scale = presented(&tick, mark, "scale").expect("presented");
-    assert!((scale - 0.9129).abs() < 1e-3, "{scale}");
+    assert!(presented(&tick, mark, "scale").is_none(), "{tick}");
     assert_eq!(host.agent("{\"op\":\"settle\"}"), "{\"settle\":null}");
-    assert!(tick.contains("\"motion\":true"));
+    assert!(tick.contains("\"motion\":false"), "{tick}");
 
-    // `none`: the row's own opacity again, and the frames stop.
+    // `none`: the row's own values again, and the frames stop.
     let off = host.dispatch_at(toggle, Event::Press, 500.0);
     assert!(!lowered(&off, mark), "{off}");
     close(presented(&off, mark, "scale"), 1.0);
@@ -90,7 +110,11 @@ fn an_animation_is_presented_from_boot_and_stops_when_its_row_does() {
     // Named again, it starts again from its first keyframe.
     let on = host.dispatch_at(toggle, Event::Press, 600.0);
     assert!(lowered(&on, mark), "{on}");
-    close(presented(&on, mark, "scale"), 0.9);
+    close(presented(&on, mark, "scale"), 1.0);
+    let restarted = track(&on, mark, "transform.scale");
+    assert_eq!(restarted["v"], scale["v"]);
+    assert_eq!(restarted["s"], 0.6);
+    assert!(on.contains("\"motion\":false"), "{on}");
     assert!(
         presented(&on, added, "translate").is_none(),
         "untouched: {on}"

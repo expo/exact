@@ -103,6 +103,28 @@ pub struct Screen {
     pub client: Option<[f64; 4]>,
 }
 
+impl Screen {
+    /// The package answer, with viewport geometry only on a send.
+    pub fn json(&self, client: bool) -> serde_json::Value {
+        use serde_json::{json, Value};
+        let [left, top, width, height] = self.rect;
+        let [avail_left, avail_top, avail_width, avail_height] = self.avail;
+        let mut out = json!({
+            "left": left, "top": top, "width": width, "height": height,
+            "availLeft": avail_left, "availTop": avail_top,
+            "availWidth": avail_width, "availHeight": avail_height,
+            "devicePixelRatio": self.scale, "isPrimary": self.primary,
+            "isInternal": self.internal, "label": self.label,
+        });
+        if client {
+            out["clientRect"] = self.client.map(|[x, y, width, height]| {
+                json!({"x": x, "y": y, "width": width, "height": height})
+            }).unwrap_or(Value::Null);
+        }
+        out
+    }
+}
+
 /// The displays, in the specification's order (by `left`, then `top`), and
 /// the index of `currentScreen`: the one holding most of the session's
 /// window, else the primary.

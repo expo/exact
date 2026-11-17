@@ -31,6 +31,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("app-json"),
     recipe!("background-transfers"),
     recipe!("background-work"),
+    recipe!("camera-calibration"),
     recipe!("chat-header"),
     recipe!("chat-thread"),
     recipe!("combobox"),

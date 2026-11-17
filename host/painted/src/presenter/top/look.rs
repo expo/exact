@@ -10,7 +10,7 @@
 //! Lengths are dp, which are this host's points. Type is sp, a point times
 //! the person's font scale, taken linearly: Android's own scaling is
 //! non-linear above 100%, and comes with the reported type ramp (D4, S2).
-//! The face is the page's default family.
+//! An alert uses the platform face unless its own family is written (LLP 1104 D4).
 use super::shape::{Entry, Plan, Row};
 use crate::paint::{rgba, Backend, Ink, Rect4, Shape, SvgPaint};
 use crate::text::{Paragraph, RunPaint, TextEngine};
@@ -219,7 +219,28 @@ pub(in crate::presenter) fn directed_paragraph(
     width: Option<f32>,
     direction: Direction,
 ) -> Rc<Paragraph> {
+    family_paragraph(
+        engine,
+        text,
+        Type(size, line, weight, tracking),
+        scale,
+        width,
+        direction,
+        None,
+    )
+}
+
+fn family_paragraph(
+    engine: &mut TextEngine,
+    text: &str,
+    Type(size, line, weight, tracking): Type,
+    scale: f32,
+    width: Option<f32>,
+    direction: Direction,
+    font_family: Option<u16>,
+) -> Rc<Paragraph> {
     let style = StyleProps::default().with_rows(|rows| {
+        rows.font_family = font_family.unwrap_or_default();
         rows.font_size = size * scale;
         rows.font_weight = weight;
         rows.line_height = exact_kernel::LineHeight::Length(line * scale);
@@ -231,18 +252,33 @@ pub(in crate::presenter) fn directed_paragraph(
         rows.direction = direction;
         rows.text_align = TextAlign::Start;
     });
-    engine.paragraph(&crate::paint::text_spec(&style, text), width)
+    let mut spec = crate::paint::text_spec(&style, text);
+    if font_family.is_some() {
+        let height = Some((line * scale).max(engine.normal_line_height(&spec.strut)));
+        spec.strut.line_height = height;
+        for run in &mut spec.runs {
+            run.line_height = height;
+        }
+    }
+    engine.paragraph(&spec, width)
 }
 
 /// One line, cut with an ellipsis where it is wider than `max`.
-fn label(engine: &mut TextEngine, row: &Row, inputs: &Inputs, max: f32) -> Rc<Paragraph> {
-    let line = directed_paragraph(
+fn label(
+    engine: &mut TextEngine,
+    row: &Row,
+    inputs: &Inputs,
+    max: f32,
+    font_family: Option<u16>,
+) -> Rc<Paragraph> {
+    let line = family_paragraph(
         engine,
         &row.title,
         LABEL_LARGE.emboldened(inputs.bold_text),
         inputs.font_scale,
         None,
         row.direction,
+        font_family,
     );
     line.ellipsized(max).unwrap_or(line)
 }
@@ -284,6 +320,7 @@ impl Layout {
     pub fn of(engine: &mut TextEngine, plan: &Plan, pop: ViewId, inputs: &Inputs) -> Layout {
         match plan {
             Plan::Alert {
+                font_family,
                 title,
                 title_direction,
                 message,
@@ -294,6 +331,7 @@ impl Layout {
                 engine,
                 (title.as_deref(), message.as_deref()),
                 (*title_direction, message_directions),
+                *font_family,
                 rows,
                 pop,
                 inputs,
@@ -307,6 +345,7 @@ impl Layout {
         match plan {
             Plan::Menu(entries) => menu(engine, entries, inputs, true),
             Plan::Alert {
+                font_family,
                 title,
                 message,
                 rows,
@@ -314,6 +353,7 @@ impl Layout {
             } => windows::alert(
                 engine,
                 (title.as_deref(), message.as_deref()),
+                *font_family,
                 rows,
                 pop,
                 inputs,
@@ -533,6 +573,7 @@ fn alert(
     engine: &mut TextEngine,
     (title, message): (Option<&str>, Option<&str>),
     (title_direction, message_directions): (Direction, &[Direction]),
+    font_family: Option<u16>,
     rows: &[Row],
     pop: ViewId,
     inputs: &Inputs,
@@ -573,13 +614,14 @@ fn alert(
             )
         });
     for (text, direction, style, role, gap) in title.chain(message) {
-        let p = directed_paragraph(
+        let p = family_paragraph(
             engine,
             &text,
             style.emboldened(inputs.bold_text),
             scale,
             Some(inner),
             direction,
+            font_family,
         );
         let height = p.height;
         items.push(Item::Text(p, (DIALOG_PADDING, y), role.color(dark), pop));
@@ -588,7 +630,13 @@ fn alert(
     // Each button's label and its box's size, then lines of them.
     let buttons: Vec<(Rc<Paragraph>, f32, f32)> = (rows.iter())
         .map(|row| {
-            let p = label(engine, row, inputs, inner - 2.0 * BUTTON_PADDING);
+            let p = label(
+                engine,
+                row,
+                inputs,
+                inner - 2.0 * BUTTON_PADDING,
+                font_family,
+            );
             let w = (p.width + 2.0 * BUTTON_PADDING).max(BUTTON_MIN.0);
             let h = (p.height + 20.0).max(BUTTON_MIN.1);
             (p, w.min(inner), h)
@@ -714,7 +762,7 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
                     let p = paragraph(engine, &row.title, Type(14., 20., 400, 0.), scale, None);
                     p.ellipsized(room(indent(row))).unwrap_or(p)
                 }
-                Entry::Item(row) => label(engine, row, inputs, room(indent(row))),
+                Entry::Item(row) => label(engine, row, inputs, room(indent(row)), None),
                 Entry::Header(title, _, direction) => {
                     let p = directed_paragraph(
                         engine,
@@ -960,6 +1008,7 @@ mod tests {
                 &mut engine,
                 (Some("Title"), Some(message)),
                 (Direction::Ltr, &directions),
+                None,
                 &[],
                 1,
                 &inputs,
@@ -1155,6 +1204,7 @@ mod tests {
                 &mut engine,
                 (None, None),
                 (Direction::Rtl, &[]),
+                None,
                 std::slice::from_ref(&row),
                 0,
                 &inputs,
@@ -1262,6 +1312,7 @@ mod tests {
             &mut engine,
             (Some("عنوان"), Some("نعم\nلا")),
             (Direction::Rtl, &[Direction::Rtl, Direction::Rtl]),
+            None,
             &[],
             1,
             &inputs,
@@ -1296,6 +1347,7 @@ mod tests {
             opens: None,
         };
         let alert = Plan::Alert {
+            font_family: None,
             title: Some("Headline".into()),
             title_direction: Direction::Ltr,
             message: Some("Supporting text".into()),

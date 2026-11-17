@@ -38,6 +38,7 @@
   "sources": {
     "swift": [
       "Camera.swift",
+      "AgentClip.swift",
       "Viewfinder.swift"
     ]
   },

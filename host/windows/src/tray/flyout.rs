@@ -40,9 +40,9 @@ use windows_sys::Win32::{
             LoadCursorW, RegisterClassExW, SetForegroundWindow, SetWindowPos, ShowWindow,
             SystemParametersInfoW, CS_DROPSHADOW, HWND_TOPMOST, IDC_ARROW, SM_MENUDROPALIGNMENT,
             SPI_GETWHEELSCROLLLINES, SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WA_INACTIVE, WM_ACTIVATE,
-            WM_CANCELMODE, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
-            WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            WM_CANCELMODE, WM_CHAR, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -72,6 +72,7 @@ struct State {
     /// hiding, is no one's.
     shown: Cell<bool>,
     tracking: Cell<bool>,
+    high_surrogate: Cell<Option<u16>>,
 }
 
 impl State {
@@ -89,6 +90,7 @@ pub(crate) struct Flyout {
     state: Rc<State>,
     /// The opening shown.
     shown: Option<u32>,
+    access: crate::accessibility::MenuAccess,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -139,7 +141,9 @@ fn taskbar(monitor: RECT) -> Option<(Edge, Rect)> {
 }
 
 impl Flyout {
-    pub(crate) fn new() -> Option<Flyout> {
+    pub(crate) fn new(
+        proxy: winit::event_loop::EventLoopProxy<crate::accessibility::Event>,
+    ) -> Option<Flyout> {
         let class = wide("ExactStatusMenu");
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
         let registration = WNDCLASSEXW {
@@ -197,11 +201,31 @@ impl Flyout {
                 4,
             )
         };
+        let access = crate::accessibility::MenuAccess::new(accesskit_windows::HWND(window), proxy);
         Some(Flyout {
+            access,
             window,
             state,
             shown: None,
         })
+    }
+
+    pub(crate) fn sync_access<D: exact_runner::DataSource>(
+        &mut self,
+        p: &mut exact_painted::Presenter<D>,
+        scale: f64,
+    ) {
+        if self.shown.is_some() {
+            self.access.sync(p, scale);
+        }
+    }
+
+    pub(crate) fn access_action<D: exact_runner::DataSource>(
+        &mut self,
+        p: &mut exact_painted::Presenter<D>,
+        request: accesskit::ActionRequest,
+    ) {
+        self.access.action(p, request);
     }
 
     pub(crate) fn set_wake(&self, wake: impl Fn() + 'static) {
@@ -291,6 +315,7 @@ impl Flyout {
             return;
         }
         self.state.shown.set(false);
+        self.access.hide();
         unsafe {
             ReleaseCapture();
             ShowWindow(self.window, SW_HIDE);
@@ -400,8 +425,29 @@ unsafe extern "system" fn receive(
                 return 0;
             }
             WM_KEYDOWN if shown => {
-                if let Some(key) = super::key(wparam as u32) {
+                if let Some(key) =
+                    super::key(wparam as u32).filter(|key| key.len() > 1 || key == " ")
+                {
                     state.hear(Input::Key(key));
+                }
+                return 0;
+            }
+            WM_CHAR if shown => {
+                let unit = wparam as u16;
+                if (0xD800..=0xDBFF).contains(&unit) {
+                    state.high_surrogate.set(Some(unit));
+                } else {
+                    let units: Vec<_> = state
+                        .high_surrogate
+                        .take()
+                        .into_iter()
+                        .chain(Some(unit))
+                        .collect();
+                    if let Some(Ok(ch)) = char::decode_utf16(units).next() {
+                        if !ch.is_control() && ch != ' ' {
+                            state.hear(Input::Key(ch.to_string()));
+                        }
+                    }
                 }
                 return 0;
             }

@@ -10,6 +10,61 @@ use exact_plan::{asm::Asm, builder::PlanBuilder, EventKind, Opcode, Plan, TypeKi
 
 struct Source;
 
+#[test]
+fn an_implementation_substitute_reads_another_packages_display_fixture() {
+    use serde_json::{json, Value as Json};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    for (extension, name, send, sub) in [
+        (
+            "window-management",
+            "getScreenDetails",
+            false,
+            json!({"default":{"screens":[{"width":80}]}}),
+        ),
+        (
+            "screen-capture",
+            "captureScreens",
+            true,
+            json!({"implementation":true,"from":"window-management.getScreenDetails"}),
+        ),
+    ] {
+        let source = b.source(name, &[], string);
+        b.module(
+            source,
+            (extension, extension),
+            name,
+            send,
+            false,
+            "never",
+            "",
+            &sub.to_string(),
+        );
+    }
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut runner = boot(b.finish().unwrap());
+    runner.extensions.agent.insert("screen-capture".into());
+    let capture = runner.plan.modules[1].clone();
+    let body: Json =
+        serde_json::from_slice(&runner.forward_body(&capture, json!({}), None)).unwrap();
+    assert_eq!(body["preferred"]["screens"][0]["width"], 80);
+    let screens = json!({"screens":[{"left":-100,"width":100},{"left":0,"width":160}]});
+    runner
+        .extensions
+        .preferred
+        .insert("window-management.getScreenDetails".into(), screens.clone());
+    let body: Json =
+        serde_json::from_slice(&runner.forward_body(&capture, json!({}), None)).unwrap();
+    assert_eq!(body["preferred"], screens);
+    runner.extensions.bound.insert("screen-capture".into());
+    let body: Json =
+        serde_json::from_slice(&runner.forward_body(&capture, json!({}), None)).unwrap();
+    assert!(
+        body.get("preferred").is_none(),
+        "a bound capture sees only the real displays"
+    );
+}
+
 impl DataSource for Source {
     fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
         unreachable!("the fixture answers nothing")

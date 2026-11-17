@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
-import { lockBlocks, lockChanges, lockSeed, memberRefusal, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
+import { lockBlocks, lockChanges, memberRefusal, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
 
 // Resolve authored keys in memory; only the bake writes the resolved manifest.
 const merge = (base, overrides) => {
@@ -529,11 +529,10 @@ export function prepareGame(dir, game, source = gameRoot, {updateLock = false, f
   const metadata = locked => (locked ? lockedMetadata : cargoMetadata)(root, ['--offline', ...(locked ? ['--locked'] : []), ...(target ? ['--filter-platform', target] : [])], env);
   const refused = result => new Error(`game Cargo graph: ${result.stderr || result.error?.message || ''}${result.status === null ? ` (cargo metadata ended by ${result.signal})` : ''}\nCrates missing from Cargo's cache, the lock unchanged: cargo fetch --manifest-path ${JSON.stringify(resolve(root, 'Cargo.toml'))}\nA dependency change (or both): ${lockCommand(dir)} fetches, resolves again and captures this game's lock`);
   if (fetch) {
-    // `lock` (LLP 1046.011 D2): the SDK lock's versions seed the resolution (a game
-    // with its own lock keeps its own packages; one without starts from the SDK
-    // lock, as its build does), and the network brings only what they lack.
+    // A captured lock is already copied into the shell. Seed from the SDK only
+    // without one, so Cargo keeps compatible versions when refreshing a lock.
     const lockFile = sdkLockFile(source), sdk = lockFile && withRootPins(readFileSync(lockFile, 'utf8'));
-    if (sdk) writeFileSync(shell, updateLock && existsSync(shell) ? lockSeed(sdk, readFileSync(shell, 'utf8')) : sdk);
+    if (sdk && !(updateLock && existsSync(shell))) writeFileSync(shell, sdk);
     const fetched = spawnSync('cargo', ['fetch'], {cwd:root, env, stdio:['ignore', 'inherit', 'inherit']});
     if (fetched.error || fetched.status !== 0) throw new Error(`cargo fetch in ${root} failed${fetched.error ? `: ${fetched.error.message}` : ''}; it needs the network`);
   }
@@ -580,7 +579,7 @@ A partial offline Cargo cache: cargo fetch --manifest-path ${JSON.stringify(reso
 }
 
 /** `bun exact.mjs lock` (LLP 1046.011 D2): fetch what the game's graph needs,
- * resolve it again with the SDK lock's versions first, and say what moved. A
+ * keep captured versions unless the manifests require a change, and say what moved. A
  * game that adds no packages keeps resolving against the SDK lock: it gains
  * no lock of its own. Never run by a build. */
 export function refreshLock(dir, {source = gameRoot, env = process.env} = {}) {

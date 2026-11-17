@@ -70,7 +70,7 @@ impl<D: DataSource> Presenter<D> {
     /// The shell's answer to picture request `id`: its pixels, RGBA
     /// premultiplied, or the implementation's error. Whether it waited.
     pub fn picture_answered(&mut self, id: u32, answer: Result<tiny_skia::Pixmap, String>) -> bool {
-        let Some(Waiting::Picture(ticket)) = self.requests.waiting.get(&id).copied() else {
+        let Some(Waiting::Picture(ticket)) = self.requests.waiting.get(&id).cloned() else {
             return false;
         };
         self.requests.waiting.remove(&id);
@@ -83,6 +83,10 @@ impl<D: DataSource> Presenter<D> {
     /// or revoked it (every box showing it emptied), as
     /// `ExtensionContext.revokePicture` and `changedPicture` say.
     pub fn picture_changed(&mut self, source: &str, revoked: bool) {
+        if !revoked {
+            self.images.file_changed(source);
+            self.host.canvas_picture_changed(source, &self.assets);
+        }
         let reports = self.images.package_changed(source, revoked);
         self.apply_reports(reports);
         self.resync_pictures();

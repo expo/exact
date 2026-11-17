@@ -176,7 +176,7 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         let body = json!({ "extension": extension, "surface": name, "displayed": shown, "origin": origin.word() });
-        if let Some(handler) = self.native_slot().handler() {
+        if let Some(handler) = self.native_slot().extension_handler() {
             handler(
                 body.to_string().into_bytes(),
                 crate::request::Reply::new(|_| {}),

@@ -271,6 +271,58 @@ fn fmt_check_keeps_distant_edits_local_without_rewriting_source() {
 }
 
 #[test]
+fn fmt_stdin_formats_the_text_it_is_given_and_leaves_the_file_alone() {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!("exact-fmt-stdin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.contract");
+    let saved = "component Saved\n  view\n    text   \"saved\"\n";
+    std::fs::write(&file, saved).unwrap();
+    let fmt = |unsaved: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_contract"))
+            .args(["fmt", "--stdin"])
+            .arg(&file)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(unsaved.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    // The editor's text, not the file's: an unsaved buffer is formatted as it stands.
+    let out = fmt("component A\n  view\n    text   \"a\"   font-size=12\n");
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "component A\n  view\n    text \"a\" font-size=12\n"
+    );
+    // Text that does not parse is refused at its place in the named file, with nothing printed to apply.
+    let out = fmt("component A\n  view\n    text \"a");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let refusal = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        refusal.starts_with(&format!("{}:3:", file.display())),
+        "{refusal}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+    // It is a mode of its own, as `--check` and `--stdout` are.
+    let out = Command::new(env!("CARGO_BIN_EXE_contract"))
+        .args(["fmt", "--stdin", "--check"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn formatter_refuses_unknown_flags_extra_paths_and_invalid_source_without_writing() {
     let dir = Scratch::new(format!("exact-fmt-refusal-{}", std::process::id()));
     let file = dir.join("a.contract");

@@ -39,8 +39,9 @@ above with `bun scripts/agent-android.mjs build <app> --apk` and
 `EXACT_APP_DIR` set to its directory, against a server the phone can reach.
 Record the Android version beside each step.
 
-A start within five seconds of a press or of a tap on one of the app's
-notifications, while the app shows, is a person's transfer: a user-initiated job on Android 14 and later, foreground work on
+A start within five seconds of a press, key or tap on one of the app's
+notifications, while the app shows, is a person's transfer: a user-initiated
+job on Android 14 and later, foreground work on
 Android 12 and 13. Steps 1 to 5 below start theirs from a press unless they
 say a timer does; run each both ways. For a person's transfer also check its
 notification, its progress, the tap that raises `backgroundfetchclick`, that
@@ -48,6 +49,24 @@ it outlasts ten minutes, that a start a timer makes six seconds after a
 press runs as plain work with no notification, and that a start made from a
 `backgroundfetchclick` or `notificationclick` handler, more than five seconds
 after the last touch in the app, is a person's.
+
+Repeat the tap-started upload on API 33, 34 and 35 with `POST_NOTIFICATIONS`
+denied (`adb shell pm revoke <bundle-id> android.permission.POST_NOTIFICATIONS`),
+and in an app that does not import `@exact/notifications` or declare that
+permission. It must still use a user-initiated job on API 34 and later, or a
+foreground worker on API 33, and finish. Record the scheduler's result,
+where Android shows the transfer notice (notification drawer or Task Manager),
+and that a timer's start outside the activation window remains ordinary work.
+
+2026-11-17, AOSP ARM64 emulators, Android 13, 14 and 15 (API 33, 34 and 35):
+a standalone platform probe completed a 16 MiB upload with HTTP 201, both
+with permission denied and with it absent from the manifest. On API 34 and
+35, `JobScheduler.schedule` returned `RESULT_SUCCESS`, the job reported
+`isUserInitiatedJob` true and `setNotification` succeeded. On API 33,
+WorkManager's worker promoted to a `dataSync` foreground service and
+completed. All six runs showed the app in Active apps / Task Manager, with
+no notification drawer entry. These runs checked the platform APIs, without
+Exact's host or JNI; they do not cover the fixture drives below.
 
 1. **In front.** Upload, download, a refused origin, a directory as `saveTo`
    and an abort. The upload sent is the file as it was at the start, though

@@ -23,6 +23,8 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         // A clear is unsaid, as `auto` is (selection.rs): no declaration, so the
         // page's sheet decides.
         UserSelect => {}
+        // Its value writes nothing (css.rs, LLP 1123 D4), so neither does a clear.
+        SafeAreaIgnore => {}
         // The absent part uses the shell's platform placeholder fallback.
         PlaceholderColor => out.push_str("--exact-placeholder-color:initial;"),
         // And the platform's dim beneath a dialog.
@@ -50,6 +52,15 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use exact_kernel::{StyleId, StyleProps};
+
+    /// Every row's name has a place in the cache, the rows past a `u8`
+    /// style id included.
+    #[test]
+    fn every_rows_name_is_cached() {
+        for id in StyleId::ALL {
+            super::super::property(&mut String::new(), id);
+        }
+    }
 
     /// A cleared row unsets every property its value writes, so neither
     /// spelling of an authored class's font smoothing paints.

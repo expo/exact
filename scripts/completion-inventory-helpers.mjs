@@ -149,7 +149,7 @@ export function helperClassifications(group) {
     "The named public runner-crate source is the module lifecycle API or its value/admission helper. runner/src/runner/modules/bound.rs binds live module instances; runner/src/runner/kept.rs data_ready reconciles the current source/store before settlement.", [
     ["runner:runner/src/runner/retirement.rs", "ModuleIdentity::instance ModuleIdentity::retire ModuleInstance::failure"],
     ["runner:runner/src/runner/source.rs",
-      "Interrupt::new Native::handler Native::host Native::host_call Native::hosted Native::hosted_call Native::set Native::sync Native::synced PreloadWake::ask " +
+      "Interrupt::new Native::extension_handler Native::handler Native::host Native::host_call Native::hosted Native::hosted_call Native::set Native::sync Native::sync_form Native::synced PreloadWake::ask " +
       "PreloadWake::set Target::mutation Target::text"],
   ]),
   group("navigation", ["one-shot"], "current router, visit, tab or navigation operation", "UI-owned",
@@ -255,7 +255,7 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/presenter/tabs.rs", "Presenter::type_ahead_key"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::surface_type_ahead"],
     ["painted:host/painted/src/presenter/top/invoke.rs", "Presenter::context_menu_at"],
-    ["painted:host/painted/src/presenter/top/status.rs", "Presenter::dismiss_status_menu Presenter::open_status_menu Presenter::status_menu_key Presenter::status_menu_left Presenter::status_menu_pointer Presenter::status_menu_wheel Presenter::status_press Presenter::take_status_exit"],
+    ["painted:host/painted/src/presenter/top/status.rs", "Presenter::collapse_status_menu Presenter::dismiss_status_menu Presenter::open_status_menu Presenter::status_menu_key Presenter::status_menu_left Presenter::status_menu_pointer Presenter::status_menu_wheel Presenter::status_press Presenter::take_status_exit"],
   ]),
   group("presentation helpers", ["one-shot"], "current painted frame, geometry, menu or paint resource", "UI-owned",
     "paint/shared.rs retains the host's current flight frames; top/status.rs projects and paints the live menu. These helpers create no runner request.", [
@@ -265,7 +265,7 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/paint/shared.rs", "SharedState::update"],
     ["painted:host/painted/src/presenter/alert.rs", "Presenter::alert_anchor_scroll Presenter::backdrop"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::surface_clock"],
-    ["painted:host/painted/src/presenter/top/status.rs", "Presenter::place_status_items Presenter::status_icon Presenter::status_items Presenter::status_menu Presenter::status_menu_pixels Presenter::status_popover Presenter::status_quit_removed Presenter::with_exit"],
+    ["painted:host/painted/src/presenter/top/status.rs", "Presenter::place_status_items Presenter::status_icon Presenter::status_items Presenter::status_menu Presenter::status_menu_ancestors Presenter::status_menu_pixels Presenter::status_popover Presenter::status_quit_removed Presenter::with_exit"],
   ]),
   ];
 }

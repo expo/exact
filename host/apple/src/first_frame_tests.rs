@@ -42,6 +42,7 @@ fn boot() -> Host<NoData> {
     )
     .unwrap();
     host.svg.box_motion = true;
+    host.svg.play_transitions = false;
     host.engine.set_lowered_properties(&svg::lowered(true));
     host.start_on_frame(true, 0.0);
     host
@@ -104,7 +105,7 @@ fn a_transition_shows_its_start_at_the_first_frame_then_one_interval() {
     assert!((opacity(&host) - 0.984).abs() < 1e-9, "then one interval");
 }
 
-/// LLP 1055.001 §3: iOS hands a box's opacity transition to Core Animation
+/// LLP 1055.001 §3: Apple hands a box's opacity transition to Core Animation
 /// at the frame that starts it, and takes it back when it is retargeted.
 #[test]
 fn core_animation_plays_a_started_transition_until_it_is_retargeted() {
@@ -920,9 +921,6 @@ fn box_transform_transitions_play_without_sampling_and_reclaim_for_the_agent() {
         844.0,
     )
     .unwrap();
-    host.svg.box_motion = true;
-    host.svg.play_transitions = true;
-    host.engine.set_lowered_properties(&svg::lowered(true));
     host.start_on_frame(true, 0.0);
     host.dispatch_at(id(&host, "go"), Event::Press, 100.0);
     let batch = host.tick_at(112.0, 116.0);
@@ -934,18 +932,24 @@ fn box_transform_transitions_play_without_sampling_and_reclaim_for_the_agent() {
         ("turn", Property::Rotate, "transform.rotation.z"),
         ("grow", Property::Scale, "transform.scale"),
     ] {
-        assert!(
+        // LLP 1126 D10: watchOS has no render server, so they stay sampled.
+        assert_eq!(
             host.engine.is_played(key(&host, name), property),
+            svg::render_server(),
             "{name}: {batch}"
         );
-        assert_eq!(spec(&batch, id(&host, name))["k"], path);
+        if svg::render_server() {
+            assert_eq!(spec(&batch, id(&host, name))["k"], path);
+        }
     }
-    assert_eq!(
-        spec(&batch, id(&host, "move"))["v"],
-        serde_json::json!([0, 50])
-    );
-    let radians = spec(&batch, id(&host, "turn"))["v"][1].as_f64().unwrap();
-    assert!((radians - std::f64::consts::PI).abs() < 1e-5);
+    if svg::render_server() {
+        assert_eq!(
+            spec(&batch, id(&host, "move"))["v"],
+            serde_json::json!([0, 50])
+        );
+        let radians = spec(&batch, id(&host, "turn"))["v"][1].as_f64().unwrap();
+        assert!((radians - std::f64::consts::PI).abs() < 1e-5);
+    }
     for (name, property) in [
         ("hit", Property::Translate),
         ("invoker-parent", Property::Translate),
