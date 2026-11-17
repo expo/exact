@@ -201,7 +201,8 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     }
   }
   // After a reload, the visits Back returns to come first, one a line, so the runner launches with them beneath (#527).
-  const launch = encoder.encode([...launchVisits(), launchLocation()].join("\n"));
+  // A rendered document's checkpoint is matched against the location alone (`page_launch`), so it launches without them.
+  const launch = encoder.encode([...(host.page?.checkpoint ? [] : launchVisits()), launchLocation()].join("\n"));
   if (host.wasm.exact_set_launch) {
     const [epoch, offset] = reportTime(now());
     host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()));
