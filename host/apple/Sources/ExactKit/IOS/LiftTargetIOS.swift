@@ -46,7 +46,7 @@ enum LiftTarget {
         guard let parent = view.superview, let root = container(of: view) else { return nil }
         for ancestor in sequence(first: parent, next: { $0.superview }) {
             if ancestor === root { break }
-            let clips = ancestor.layer.masksToBounds || ancestor.layer.mask != nil || (ancestor as? NodeView)?.overflowClips == true
+            let clips = ancestor.layer.masksToBounds || ancestor.layer.mask != nil
             if clips, !ancestor.bounds.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.bounds, to: ancestor)) { return root }
         }
         return parent

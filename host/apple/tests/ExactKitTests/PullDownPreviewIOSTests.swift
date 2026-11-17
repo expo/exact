@@ -81,6 +81,28 @@ final class PullDownPreviewIOSTests: XCTestCase {
         XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === strip, "whole inside the strip: its parent")
     }
 
+    /// The same for an `overflow: hidden` box: it clips as its layer, or its
+    /// clip box, masks to bounds.
+    func testAnInvokerAnOverflowHiddenBoxCutsPreviewsAboveTheClip() throws {
+        let p = presenter()
+        defer { p.menus.reset() }
+        let controller = UIViewController()
+        window.rootViewController = controller
+        controller.view.addSubview(p.viewport)
+        p.apply(wireBatch([
+            ["op": "create", "id": 5, "kind": "view"],
+            ["op": "style", "id": 5, "style": ["overflow_x": "hidden", "overflow_y": "hidden"]],
+            ["op": "children", "id": 5, "ids": [2]],
+            ["op": "children", "id": 1, "ids": [5, 3]],
+            ["op": "frame", "id": 5, "x": 100.0, "y": 60.0, "w": 60.0, "h": 44.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0],
+        ]))
+        let invoker = try XCTUnwrap(p.views[2])
+        XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === controller.view, "cut by the box: above it")
+        p.apply(wireBatch([["op": "frame", "id": 5, "x": 100.0, "y": 60.0, "w": 200.0, "h": 44.0]]))
+        XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === invoker.superview, "whole inside the box: its parent")
+    }
+
     /// A page-drawn pill (`appearance: none`) filled 8 % white, its menu
     /// opened and then ended; `restyle` runs while the menu has it.
     private func lendAndEnd(_ restyle: (Presenter, NodeView) throws -> Void) throws -> (invoker: NodeView, lent: CAShapeLayer, during: CGColor?) {
