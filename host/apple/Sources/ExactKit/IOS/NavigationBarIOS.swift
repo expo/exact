@@ -1414,10 +1414,10 @@ extension NavigationHost {
         }
         if #available(iOS 26.0, tvOS 26.0, *) {
             item.style = i.prominent ? .prominent : .plain
-            // A drawn face is its own shape: no glass capsule around it.
+            // A drawn face is its own shape: no glass capsule around it, unless its button asks for glass.
             #if !os(tvOS)
-            item.hidesSharedBackground = i.badge != nil
-            item.sharesBackground = i.badge != nil || !i.ownGlass
+            item.hidesSharedBackground = i.badge != nil && !i.ownGlass
+            item.sharesBackground = !i.ownGlass
             #endif
         }
         return item
