@@ -591,22 +591,25 @@ final class ElementScrollTests: XCTestCase {
         host.view.addSubview(view)
         view.frame = host.view.bounds
         defer { window.isHidden = true }
+        // Boot a fixture before the first layout, which otherwise boots the test host's own app; the strip's ids are
+        // past the fixture's, so its ops make new views rather than reach the fixture's
+        XCTAssertNil(session.boot(plan: try fixturePlan("HEADLESS"), size: window.bounds.size).error)
         // The view finishes mounting (its navigation's `mounted`) at layout.
         view.layoutIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         let p = session.presenter
         p.apply(wireBatch([
-            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
-            ["op": "create", "id": 2, "kind": "view", "props": ["id": "chip-a"]],
-            ["op": "create", "id": 4, "kind": "view", "props": ["id": "chip-c"]],
-            ["op": "children", "id": 1, "ids": [2, 4]],
-            ["op": "roots", "ids": [1]],
-            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 200.0, "h": 60.0],
-            ["op": "frame", "id": 2, "x": 300.0, "y": 0.0, "w": 56.0, "h": 56.0],
+            ["op": "create", "id": 9_001, "kind": "view", "style": ["overflow_x": "scroll", "overflow_y": "hidden"]],
+            ["op": "create", "id": 9_002, "kind": "view", "props": ["id": "chip-a"]],
+            ["op": "create", "id": 9_004, "kind": "view", "props": ["id": "chip-c"]],
+            ["op": "children", "id": 9_001, "ids": [9_002, 9_004]],
+            ["op": "roots", "ids": [9_001]],
+            ["op": "frame", "id": 9_001, "x": 0.0, "y": 0.0, "w": 200.0, "h": 60.0],
+            ["op": "frame", "id": 9_002, "x": 300.0, "y": 0.0, "w": 56.0, "h": 56.0],
         ]))
-        let sv = try XCTUnwrap(p.views[1]?.scrollView)
+        let sv = try XCTUnwrap(p.views[9_001]?.scrollView)
         sv.contentSize = CGSize(width: 1000, height: 60)
-        let chip = try XCTUnwrap(p.views[4])
+        let chip = try XCTUnwrap(p.views[9_004])
         XCTAssertNotNil(chip.window, "the strip is in the window")
         p.scrollElementIntoView(["chip-c", "nearest", "start", "instant"])
         XCTAssertEqual(p.elementScrolls.names, ["chip-c"], "no size yet: held")
