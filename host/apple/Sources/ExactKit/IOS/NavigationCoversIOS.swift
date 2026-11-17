@@ -460,26 +460,25 @@ extension NavigationHost {
         func say(_ what: String, _ now: AnyObject?, _ effect: String) {
             presenter.session?.log("\(what): delegate changed outside Exact, which owns it (now \(now.map { "\(type(of: $0))" } ?? "nil")); \(effect)")
         }
-        // `stacks` holds a record for each slot Exact keeps: `registerStack` writes the slot, `retireStack` drops it
+        // `stacks` holds a record for each slot Exact keeps: `registerStack` fills the slot, `retireStack` retires it
         for stack in stacks.values.sorted(by: { $0.order < $1.order }) {
             guard let nav = stack.controller else { continue }
-            let written = nav.delegate !== stack.proxy
-            if written, !stack.slotNamed {
+            let written = !stack.proxy.fillsSlot
+            if written, !stack.proxy.slotNamed {
                 if nav === adoptedMore {
                     say("navigation More", nav.delegate, "Exact hears none of More's calls, and More has no forwarded delegate")
                 } else {
                     say("navigation \(stack.label)", nav.delegate, "Exact hears none of this stack's calls: set ExactNavigation.delegate, which Exact forwards to")
                 }
             }
-            stack.slotNamed = written
+            stack.proxy.slotNamed = written
         }
-        guard let tabs = tabController else { return }
-        if tabs.delegate === tabProxy {
-            tabSlotNamed = nil
-        } else if tabSlotNamed !== tabs {
-            tabSlotNamed = tabs
+        guard let tabs = tabController, let proxy = tabProxy else { return }
+        let written = !proxy.fillsSlot
+        if written, !proxy.slotNamed {
             say("tabs", tabs.delegate, "Exact hears none of the tab container's calls: set ExactTabs.delegate, which Exact forwards to")
         }
+        proxy.slotNamed = written
     }
 
     /// Before each batch: compare what Exact owns on each hatched object with

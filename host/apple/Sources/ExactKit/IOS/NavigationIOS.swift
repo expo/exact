@@ -50,13 +50,15 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Exact's tab container and its stacks by panel id; the tablist whose
     /// place its bar takes; the tab delegate Exact keeps and forwards.
     var tabController: UITabBarController? {
-        // Release the app's tab delegate with the container it was given for, once that container's slot is empty:
-        // UIKit keeps calling the methods the proxy answered while the proxy is in the slot
+        // Give each container a proxy of its own, which holds the app's delegate for that container only
         didSet {
             guard tabController !== oldValue else { return }
-            withExtendedLifetime(tabProxy.app) {
-                if oldValue?.delegate === tabProxy { oldValue?.delegate = nil }
-                tabProxy.app = nil
+            tabProxy?.retire()
+            tabProxy = tabController.map { tabs in
+                let proxy = TabDelegateProxy()
+                proxy.host = self
+                proxy.fill(tabs) { [weak self] in self?.presenter.session?.log("hatch tabs: \($0)") }
+                return proxy
             }
         }
     }
@@ -100,10 +102,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// The bar's tint as last written as a value: the selected tab's own tint, light and dark; nil
     /// where the bar takes an accent as its tint.
     var tabTint: [[Double]]?
-    let tabProxy = TabDelegateProxy()
-    /// The tab container whose delegate slot the development check has named
-    /// as written outside Exact since the slot was last Exact's.
-    weak var tabSlotNamed: UITabBarController?
+    /// The delegate Exact keeps in `tabController`'s slot, while there is one.
+    private(set) var tabProxy: TabDelegateProxy?
     /// Each tab's `UITab`, in tab order, when Exact's container is built
     /// from them (TabsIOS.swift); empty for one built from `viewControllers`.
     var builtTabs: [AnyObject] = []
@@ -730,7 +730,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // batch syncs, whatever it holds, so a route still declared returns.
         nativeMove = .ownerRemoved
         retireStack(nav)
-        nav.delegate = nil
         if !preserving {
             nav.willMove(toParent: nil)
             nav.view.removeFromSuperview()
@@ -1105,9 +1104,12 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         goBack()
     }
 
-    /// A stack Exact retired: its handle goes.
+    /// A stack Exact retired: its delegate slot leaves Exact, and its handle
+    /// goes.
     func retireStack(_ nav: UINavigationController) {
-        guard let stack = stacks.removeValue(forKey: ObjectIdentifier(nav)), stack.hatched else { return }
+        guard let stack = stacks.removeValue(forKey: ObjectIdentifier(nav)) else { return }
+        stack.proxy.retire()
+        guard stack.hatched else { return }
         _ = presenter.session?.natives.navigationHatch(nav, built: false, showsBar: stack.showsBar, label: stack.label)
     }
 
@@ -1127,7 +1129,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             covers = [:]; localInsets.wanted = [:]
             presenter.afterBatch { [weak self] in self?.deliverCovers() }
         }
-        primaryNavigation?.delegate = nil
         primaryNavigation?.willMove(toParent: nil)
         primaryNavigation?.view.removeFromSuperview()
         primaryNavigation?.removeFromParent()

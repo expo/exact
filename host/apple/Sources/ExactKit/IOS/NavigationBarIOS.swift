@@ -86,17 +86,17 @@ final class RouteNavigationBar: UINavigationBar {
 /// The delegate Exact gives each navigation controller it builds: Exact's
 /// own handling first, then the app's delegate, which is asked first for a
 /// transition's animator and receives straight anything Exact does not
-/// implement (LLP 1075.003 §3.5). A pop UIKit commits reaches the router at
-/// Exact's `willShow`, before the app's; a swipe, in its coordinator's
-/// completion, after both have heard `didShow` (LLP 1035.001 D1, D2).
-final class NavigationDelegateProxy: NSObject, UINavigationControllerDelegate {
+/// implement (LLP 1075.003 §3.5). Each call goes to the app's delegate it
+/// came to, even when Exact's handling retires the stack. A pop UIKit
+/// commits reaches the router at Exact's `willShow`, before the app's; a
+/// swipe, in its coordinator's completion, after both have heard `didShow`
+/// (LLP 1035.001 D1, D2).
+final class NavigationDelegateProxy: ForwardingDelegate, UINavigationControllerDelegate {
     weak var host: NavigationHost?
-    /// The app's delegate, held strongly until the app gives another or nil,
-    /// or the stack's record goes: UIKit calls the methods the proxy answered
-    /// when it was set (LLP 1075.003 §9.16), and the proxy forwards them here.
-    var app: UINavigationControllerDelegate?
+    var app: UINavigationControllerDelegate? { appDelegate as? UINavigationControllerDelegate }
 
     func navigationController(_ nav: UINavigationController, willShow controller: UIViewController, animated: Bool) {
+        let app = self.app
         // The bar as the route coming into view wants it, alongside UIKit's
         // transition: a cancelled pop calls this again for the source (§9.10).
         host?.showBar(nav, for: controller as? RouteController, animated: animated)
@@ -106,6 +106,7 @@ final class NavigationDelegateProxy: NSObject, UINavigationControllerDelegate {
     }
 
     func navigationController(_ nav: UINavigationController, didShow controller: UIViewController, animated: Bool) {
+        let app = self.app
         // Restoring a hidden bar changes the route's safe area. Lay out its
         // container before reporting that cover to the kernel.
         nav.view.setNeedsLayout()
@@ -135,14 +136,6 @@ final class NavigationDelegateProxy: NSObject, UINavigationControllerDelegate {
         app?.navigationController?(nav, animationControllerFor: operation, from: from, to: to)
             ?? host?.routeTransition(nav, operation: operation, from: from, to: to)
     }
-
-    override func responds(to selector: Selector!) -> Bool {
-        super.responds(to: selector) || (app?.responds(to: selector) ?? false)
-    }
-
-    // Send the app's delegate each call Exact does not implement, whatever the delegate answers now: UIKit calls the
-    // methods the proxy answered when it was set, as it calls its own delegate's (LLP 1075.003 §9.16)
-    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 /// A header's search field as UIKit's search controller (LLP 1075.003
@@ -266,7 +259,10 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         if let field { host?.presenter.fieldSelections.changed(field) }
         field?.applyFieldDirection() // a `direction` that came while it composed (LLP 1001 §1)
     }
-    // UISearchBar remains the recipient of UIKit's focus, return and private callbacks.
+    // UISearchBar remains the recipient of UIKit's focus, return and private callbacks. It is the field's own
+    // delegate in the search controller this object holds, so it lives as long as this object, and UIKit's own
+    // class answers the same at each call: unlike an app's delegate (`ForwardingDelegate`), it needs no strong hold
+    // and no unconditional forwarding.
     override func responds(to selector: Selector!) -> Bool {
         super.responds(to: selector) || (textDelegate?.responds(to: selector) ?? false)
     }
@@ -417,9 +413,6 @@ final class NavigationStack {
     let order: Int
     let label: String
     var hatched = false
-    /// Whether the development check has named the stack's delegate slot as
-    /// written outside Exact since the slot was last Exact's.
-    var slotNamed = false
     var barTint: UIColor?, hatchTintsBar = false
     init(showsBar: Bool, order: Int) { (self.showsBar, self.order, label) = (showsBar, order, "#\(order)") }
 }
@@ -461,7 +454,7 @@ extension NavigationHost {
                 if reselect { (controller as? UINavigationController)?.popToRootViewController(animated: !ExactEnv.agentFreezes) }
                 else { tabsController.selectedViewController = controller }
                 // A container built from `UITab`s sends `didSelectTab` for the selection itself, not for a reselect
-                if reselect { sendReselect(tabsController, controller) } else if builtTabs.isEmpty { tabProxy.tabBarController(tabsController, didSelect: controller) }
+                if reselect { sendReselect(tabsController, controller) } else if builtTabs.isEmpty { tabProxy?.tabBarController(tabsController, didSelect: controller) }
                 return reply
             }
             // Pick the router's own tab, which More does not show (its list is on top), as a person picks its row:
@@ -585,7 +578,7 @@ extension NavigationHost {
         stack.controller = nav
         stack.proxy.host = self
         stacks[ObjectIdentifier(nav)] = stack
-        nav.delegate = stack.proxy
+        stack.proxy.fill(nav) { [weak self, label = stack.label] in self?.presenter.session?.log("hatch navigation \(label): \($0)") }
         stack.faceTint.changed = { [weak self, weak nav] in
             if let nav { self?.retintBarFaces(in: nav) }
         }
@@ -598,7 +591,6 @@ extension NavigationHost {
     /// remount, new tabs); More keeps its list.
     func release(_ nav: UINavigationController) {
         retireStack(nav)
-        nav.delegate = nil
         nav.setViewControllers(nav.stackFront.filter { !($0 is PlainTab) }, animated: false)
     }
 
@@ -1468,29 +1460,15 @@ extension NavigationHost {
         return true
     }
 
-    /// The app's delegate for a controller whose own slot Exact keeps.
-    /// UIKit reads which methods a delegate answers once, when it is set
-    /// (LLP 1075.003 §9.16), and the proxy answers for the app's delegate's
-    /// methods too, so the proxy is set again and UIKit reads its answers
-    /// anew. The old delegate goes only after that, so UIKit asks nothing of
-    /// it as it goes, and what its `deinit` does runs outside the swap.
+    /// The app's delegate for a controller whose own slot Exact keeps
+    /// (`ForwardingDelegate.give`).
     func setAppDelegate(_ controller: AnyObject, _ delegate: AnyObject?) {
         if let tabs = controller as? UITabBarController, tabs === tabController {
-            withExtendedLifetime(tabProxy.app) {
-                tabs.delegate = nil
-                tabProxy.app = delegate as? UITabBarControllerDelegate
-                tabs.delegate = tabProxy
-                presenter.session?.log("hatch tabs: delegate \(delegate.map { "\(type(of: $0))" } ?? "cleared")")
-            }
+            tabProxy?.give(delegate as? UITabBarControllerDelegate)
             return
         }
         guard let nav = controller as? UINavigationController, let stack = stacks[ObjectIdentifier(nav)] else { return }
-        withExtendedLifetime(stack.proxy.app) {
-            nav.delegate = nil
-            stack.proxy.app = delegate as? UINavigationControllerDelegate
-            nav.delegate = stack.proxy
-            presenter.session?.log("hatch navigation \(stack.label): delegate \(delegate.map { "\(type(of: $0))" } ?? "cleared")")
-        }
+        stack.proxy.give(delegate as? UINavigationControllerDelegate)
     }
 }
 #endif

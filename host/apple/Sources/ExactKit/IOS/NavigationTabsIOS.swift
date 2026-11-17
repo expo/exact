@@ -22,13 +22,11 @@ import UIKit
 /// The tab delegate Exact keeps (LLP 1075.003 §3.7): UIKit selects unless the
 /// app's delegate or the router declines (`mayShow`), and the router follows
 /// what UIKit selected (`followUIKit`); what Exact does not implement goes
-/// straight to the app's delegate.
-final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
+/// straight to the app's delegate. Each call goes to the app's delegate it
+/// came to, even when Exact's handling retires the container.
+final class TabDelegateProxy: ForwardingDelegate, UITabBarControllerDelegate {
     weak var host: NavigationHost?
-    /// The app's delegate, held strongly until the app gives another or nil,
-    /// or the container leaves Exact (`NavigationHost.tabController`), as
-    /// `NavigationDelegateProxy.app` is.
-    var app: UITabBarControllerDelegate?
+    var app: UITabBarControllerDelegate? { appDelegate as? UITabBarControllerDelegate }
 
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         if app?.tabBarController?(tabs, shouldSelect: controller) == false { return false }
@@ -38,6 +36,7 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
     }
 
     func tabBarController(_ tabs: UITabBarController, didSelect controller: UIViewController) {
+        let app = self.app
         if host?.builtTabs.isEmpty != false { host?.followUIKit(tabs) }
         app?.tabBarController?(tabs, didSelect: controller)
     }
@@ -46,17 +45,11 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
     /// More's Edit moved tabs between the bar and More, and UIKit their
     /// routes with them (`syncNextTurn`).
     func tabBarController(_ tabs: UITabBarController, didEndCustomizing controllers: [UIViewController], changed: Bool) {
+        let app = self.app
         if changed { host?.syncNextTurn() }
         app?.tabBarController?(tabs, didEndCustomizing: controllers, changed: changed)
     }
     #endif
-
-    override func responds(to selector: Selector!) -> Bool {
-        super.responds(to: selector) || (app?.responds(to: selector) ?? false)
-    }
-
-    // Send the app's delegate each call Exact does not implement, as `NavigationDelegateProxy` does
-    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 extension NavigationHost {
@@ -101,17 +94,15 @@ extension NavigationHost {
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
         let holder: UIViewController = owned ?? {
             let container = TabController()
-            tabProxy.host = self
             if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
                 buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
             } else {
                 container.setViewControllers(navs, animated: false)
                 container.selectedIndex = p.at
             }
-            container.delegate = tabProxy
+            tabController = container
             tablistAppearanceNone = tabs.tablist.wrote("appearance") && tabs.tablist.style["appearance"]?.string == "none"
             if ExactEnv.authoredChrome || tablistAppearanceNone { hideTabBar(container) }
-            tabController = container
             // A path's glyph is sized by the idiom and the size class: the items again as either changes (and
             // once the bar is in its window, whose traits it then has).
             container.tabBar.registerForTraitChanges([UITraitUserInterfaceIdiom.self, UITraitHorizontalSizeClass.self]) { [weak self] (_: UITabBar, _: UITraitCollection) in
@@ -205,7 +196,6 @@ extension NavigationHost {
         }
         if let more, primaryNavigation === more { primaryNavigation = tabStack(routerTab) as? UINavigationController }
         releaseMore()
-        container.delegate = nil
         tablistRoot = nil
         tablistHidBar = false
         container.willMove(toParent: nil)

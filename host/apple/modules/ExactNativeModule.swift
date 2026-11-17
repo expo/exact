@@ -1013,7 +1013,14 @@ public final class ExactToolbar {
     public let toolbar: NSToolbar
     public private(set) weak var window: NSWindow?
     /// The app's toolbar delegate. Exact keeps the toolbar's own slot, where
-    /// it supplies its command items, and forwards what it does not answer.
+    /// it supplies its command items, and forwards what it does not
+    /// implement. Exact keeps it until you give another or nil, or the
+    /// toolbar goes, as it does when the session ends (closing one of
+    /// Exact's windows ends its session) or the session's view leaves the
+    /// window. A delegate that holds the window or the session's view keeps
+    /// them until then: in a window of your own whose closing ends no
+    /// session, give nil as it closes. This property holds it weakly, as
+    /// AppKit's does, so a delegate that keeps this handle makes no cycle.
     public weak var delegate: NSToolbarDelegate? {
         didSet {
             guard let hatches else { return }
