@@ -38,6 +38,9 @@ test('a Windows compiler is found by its .exe beside the dep-info Cargo names wi
   expect(crateDir('C:\\w\\contract\\src\\lib.rs')).toBe('C:\\w\\contract');
   expect(crateDir('/w/contract/src/lib.rs')).toBe('/w/contract');
   expect(crateDir('C:\\w\\Cargo.lock')).toBe(null);
+  // A build script's output is no crate's source, even under a checkout or app folder named `src`.
+  expect(crateDir('/a/exact/src/target/release/build/data-0a1b/out/shapes.rs')).toBe(null);
+  expect(crateDir('C:\\a\\exact\\src\\target\\release\\build\\data-0a1b\\out\\shapes.rs')).toBe(null);
   expect(buildScriptDir('C:\\t\\debug\\build\\kernel-0a1b\\out\\tables.rs')).toBe('C:\\t\\debug\\build\\kernel-0a1b');
   expect(buildScriptDir('/t/debug/build/kernel-0a1b/out/tables.rs')).toBe('/t/debug/build/kernel-0a1b');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-compiler-exe-'));
