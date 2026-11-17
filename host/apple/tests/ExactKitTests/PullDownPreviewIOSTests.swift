@@ -125,6 +125,21 @@ final class PullDownPreviewIOSTests: XCTestCase {
         XCTAssertNil(invoker.layer.backgroundColor, "the menu's end restores no background the page cleared")
     }
 
+    func testABoxLayerAddedWhileTheFillIsLentPaintsAboveIt() throws {
+        _ = try lendAndEnd { p, invoker in
+            p.apply(wireBatch([["op": "style", "id": 2, "style": ["appearance": "none", "border_radius": 22, "background_color": [255, 255, 255, 20],
+                                                                   "border_width": 2, "border_color_top": [0, 0, 255, 255], "border_color_bottom": [255, 0, 0, 255]]]]))
+            invoker.layer.setNeedsDisplay()
+            invoker.layer.displayIfNeeded()
+            let layers = invoker.layer.sublayers ?? []
+            guard let lent = invoker.extras?.lentFill, let border = invoker.boxBorder,
+                  let below = layers.firstIndex(of: lent), let above = layers.firstIndex(of: border) else {
+                return XCTFail("a lent fill and a drawn border")
+            }
+            XCTAssertLessThan(below, above, "the border paints over the lent fill, as over the layer's own")
+        }
+    }
+
     func testAnInvokerOutOfTheWindowHasNoPreview() throws {
         let p = presenter()
         defer { p.menus.reset() }
