@@ -15,6 +15,9 @@ import { withEpoch } from './agent-launch.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
 import { sitePages } from '../host/web-js/render.mjs';
 import { fileURLToPath } from 'node:url';
+import { engineTests } from './coverage.mjs';
+
+const engineTest = await engineTests();
 // A fixture's build can fail before the `try` that removes its directory.
 const scratches = [];
 const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
@@ -313,7 +316,7 @@ export function answer() { return Promise.resolve().then(() => fetch('${url}')).
   } finally { await new Promise(resolve => server.close(resolve)); }
 }, 180_000);
 
-test.each([['rust', 0, 'chrome'], ['rust', 20 * 1024, 'chrome'], ['rust', 20 * 1024, 'firefox'], ['rust', 20 * 1024, 'webkit'], ['js', 0, 'chrome'], ['rust', 60 * 1024, 'chrome', 'cached'], ['js', 60 * 1024, 'chrome', 'cached']])('%s request rendering keeps %i-byte fixtures local on %s through launch and reload', async (how, padding, browser, policy = 'request') => {
+for (const [how, padding, browser, policy = 'request'] of [['rust', 0, 'chrome'], ['rust', 20 * 1024, 'chrome'], ['rust', 20 * 1024, 'firefox'], ['rust', 20 * 1024, 'webkit'], ['js', 0, 'chrome'], ['rust', 60 * 1024, 'chrome', 'cached'], ['js', 60 * 1024, 'chrome', 'cached']]) engineTest[browser](`${how} request rendering keeps ${padding}-byte fixtures local on ${browser} through launch and reload`, async () => {
   const root = fileURLToPath(new URL('..', import.meta.url)), dir = scratch('exact-rust-fixture-');
   const dist = join(dir, 'dist'), file = join(dir, 'app.test.contract');
   let requests = 0, configs = 0, renderer, lines, server;

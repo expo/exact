@@ -4,6 +4,9 @@ import { focusController } from '../navigation/focus.js';
 import {createInputHandlers} from '../input-glue.js';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 test('Chrome keeps pointer modality beyond a field or empty hit and preserves an unchanged focus ring', async () => {
   const browser = await suiteBrowser();
@@ -452,7 +455,7 @@ test('bare fields restore keyboard focus and a disabled native field is the look
   } finally { await browser.close(); }
 }, 20000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: native buttons keep the UA focus ring and bare buttons restore it`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: native buttons keep the UA focus ring and bare buttons restore it`, async () => {
   const {withLook} = await import('../look.mjs');
   const browser = await suiteBrowser(engine);
   try {

@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
 import { analyze } from './page-style.mjs';
 import { open } from '../../scripts/agent.mjs';
+import { drivable } from '../../scripts/coverage.mjs';
 import { appDigest, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { renderedPages, warmRustRenderer } from './rendered-pages.mjs';
 import { builtFile } from './content-names.mjs';
@@ -741,7 +742,7 @@ component Tabs
     // Whether the tab's scroller has scrolled, the document's offset, and the tab bar's box.
     const scroll = tab => [document.querySelector(`[data-testid="content-${tab}"]`).scrollTop > 0, document.scrollingElement.scrollTop,
       Object.values(document.querySelector('[role=tablist]').getBoundingClientRect().toJSON()).slice(0, 4)];
-    for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
       const suite = await suiteBrowser(engine, { timeout: 10000 });
       try {
         for (const how of ['js', 'rust']) for (const [path, tab] of [['', 'first'], ['/second', 'second']]) {
@@ -798,7 +799,7 @@ component Sheets
     });
     const expected = [['old', 'hidden', true], ['base', 'visible', true], ['lower', 'visible', true], ['top', 'visible', false]];
     try {
-      for (const engine of ['chromium', 'firefox', 'webkit']) {
+      for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
         const suite = await suiteBrowser(engine);
         try {
           const before = await suite.newPage({ javaScriptEnabled: false });
@@ -835,7 +836,7 @@ component Page
       }
       const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(Bun.file(resolve(dist, 'index.html'))) });
       try {
-        for (const engine of ['chromium', 'firefox', 'webkit']) {
+        for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
           const browser = await suiteBrowser(engine);
           try {
             const page = await browser.newPage({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });

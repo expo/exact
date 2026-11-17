@@ -10,7 +10,7 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // no Back, and so does a control whose author wrote `appearance: none`, which stays where it is (iOS's `authoredBack`). The Back is
 // a web app's: an arrow at the bar's font and "Back", or the control's words, in the bar's ink. The page is the shell, the neutral look and the navigation glue, which both runtimes run, over nodes as
 // either writes them: an author's rows inline (the wasm runtime) or in a class (the JS target).
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -18,9 +18,11 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { open } from '../../../scripts/agent.mjs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { drivable, engineTests, need } from '../../../scripts/coverage.mjs';
 import { withLook } from '../look.mjs';
 import { serveBuildTree } from '../serve.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../../..');
 // A stack of two routes whose pushed one holds `control` in its header or its content (`place`), its header holding
@@ -70,7 +72,7 @@ const content = `<style>#exact-root#exact-root { & .sized { width: 44px; height:
   ${stack('sheet', symbol(), 'header', 'navigationPresentation="modal"')}
   <main navigationKey="1" navigationBack="back" style="display:block"><div navigationKey="1" id="root"><header>${symbol()}${heading('Settings')}</header></div></main>`;
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a pushed route's bar draws the system Back for its Back control`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a pushed route's bar draws the system Back for its Back control`, async () => {
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
     .replace('<div id="exact-root"></div>', () => `<style>#symbol > header::part(back) { color: rgb(255, 0, 0); }</style><div id="exact-root">${content}</div>`)
     .replace('<script type="module" src="./glue.js"></script>', () => `<script type="module">${readFileSync(resolve(ROOT, 'host/web/navigation.js'), 'utf8')}
@@ -235,7 +237,7 @@ async function withBackPage(engine, run) {
 }
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`${engine}: Back under inert ancestry leaves scrolling unchanged`, () => withBackPage(engine, async page => {
+  engineTest[engine](`${engine}: Back under inert ancestry leaves scrolling unchanged`, () => withBackPage(engine, async page => {
     const results = await page.evaluate(() => {
       const wrapper = document.getElementById('wrapper'), control = document.querySelector('#detail #back');
       wrapper.style.marginTop = '2000px';
@@ -257,7 +259,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
     });
     expect(results).toEqual([[true, true, false, 0], [true, true, false, 0], [false, true, false, 0], [false, true, false, 0]]);
   }), 30000);
-  test(`${engine}: Back on a covered route retains its visible box`, () => withBackPage(engine, async page => {
+  engineTest[engine](`${engine}: Back on a covered route retains its visible box`, () => withBackPage(engine, async page => {
     const results = await page.evaluate(() => {
       const route = document.getElementById('detail'), nav = route.parentElement, control = route.querySelector('#back');
       nav.insertAdjacentHTML('beforeend', '<div navigationKey="3" navigationPresentation="modal"><header><h2>Sheet</h2></header></div>');
@@ -278,7 +280,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
     expect(results).toEqual([[true, true, true, true, true, true], [false, true, false, true, true, true]]);
   }), 30000);
 
-  test(`${engine}: a retained modal skips the covered route Back shortcut`, () => withBackPage(engine, async page => {
+  engineTest[engine](`${engine}: a retained modal skips the covered route Back shortcut`, () => withBackPage(engine, async page => {
     const facts = await page.evaluate(async () => {
       const { createInputHandlers, backButton } = await import('/input-glue.js');
       const root = document.getElementById('exact-root'), route = document.getElementById('detail'), nav = route.parentElement;
@@ -461,7 +463,7 @@ for (const [runtime, webDist] of Object.entries({ wasm: process.env.EXACT_WEB_DI
         await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
         options = { url: `http://127.0.0.1:${server.address().port}/` };
       }
-      for (const browser of ['chrome', 'firefox', 'webkit']) {
+      for (const browser of await drivable(['chrome', 'firefox', 'webkit'])) {
         const s = await open({ host: 'web', browser, ...options });
         try {
           await s.tap('open');

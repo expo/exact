@@ -10,9 +10,11 @@ import { resolve } from 'node:path';
 import { decodePng } from '../../../scripts/png.mjs';
 import { cdpBrowser, chromium, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { engineTests, need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
 import { fileURLToPath } from 'node:url';
+
+const engineTest = await engineTests();
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const { unavailable } = chromium();
@@ -620,7 +622,7 @@ check('a pressable that declares no feedback dims while pressed; a row, a native
 // and nothing else about the button eases: a filled button enabled again takes its fill at once, and an authored
 // transition running in it is its own. A release on the agent's clock lands at once, and a pressable that is no native
 // button is never marked.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a native button eases out of its press as the press ends`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a native button eases out of its press as the press ends`, async () => {
   const browser = await suiteBrowser(engine);
   const load = async (path, hasTouch = false) => {
     const page = await browser.newPage({ viewport: { width: 600, height: 900 }, hasTouch });
@@ -990,7 +992,7 @@ check('the pressed paint shows by the press rule, eased, and replaces the platfo
 // legacy rgb() form, oklch() and lab() (the neutral look's accents); its paint shows once they have ended, mixed as
 // CSS mixes (premultiplied); released, the node's own look. (An earlier paint had Chrome and WebKit start them
 // toward opacity 1 and transparent, and Firefox drop them.)
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a press leaves the node's authored transitions as authored`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a press leaves the node's authored transitions as authored`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {
@@ -1056,7 +1058,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a press
 // Every engine: a node that declares transitions on the properties the paint writes (opacity, text colour; the
 // pattern `transition: all` gives) sees none started by the press, its turn or its release: the paint eases in and
 // out on its own progress, and the node's text colour is painted exactly from its rgb() look.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a press, held or released, starts none of the node's declared transitions`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a press, held or released, starts none of the node's declared transitions`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {
@@ -1102,7 +1104,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a press
 // transition of it (the layer isn't painted), and a luminance mask of the node's doesn't turn the paint's mask
 // (Chromium without computedStyleMap: the mask path) into one that hides it; a delayed colour transition
 // (`0s 1s`) counts as declared, so a colour that can't be written exactly isn't painted.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the paint's layer keeps the node's own layer lists`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: the paint's layer keeps the node's own layer lists`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage({ viewport: { width: 300, height: 200 } });
   try {
@@ -1152,7 +1154,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the pai
 // (under a declared background colour transition over an oklch() look) takes the node's own background-clip and
 // -origin, so a content-box background stays content-box; (3) a transition on a position axis
 // (background-position-x) leaves the layer out, as one on the position does.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a held press follows the node's own changes; the layer keeps its clip and axis`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a held press follows the node's own changes; the layer keeps its clip and axis`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {
@@ -1216,7 +1218,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a held 
 // animation) is judged against the look beneath its kept declaration was written from, never the painted look a
 // later re-read saw. During the release, (a) a class turn that changes no look leaves no colour transition, and
 // (b) the node's own colour changed to the pressed one is the node's base change, its transition left running.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a release's re-read keeps the look its declaration was written from`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a release's re-read keeps the look its declaration was written from`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {
@@ -1250,7 +1252,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a relea
 // mask over what it draws elsewhere (the node's own mask kept, intersected) — Chromium runs both, the mask by taking
 // computedStyleMap away (WebKit's mask would clip the shadow away, which is why it takes the number). The box's
 // rounded corners clip the layer, and the node's shadow fades with it, as opacity does.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the pressed colour stays under the node's own images and keeps to its box`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: the pressed colour stays under the node's own images and keeps to its box`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     for (const path of engine === 'chromium' ? ['number', 'mask'] : [engine === 'firefox' ? 'mask' : 'number']) {
@@ -1300,7 +1302,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the pre
 // A dialog a tap opens takes the focus with no ring, as a route does after a pointer's press (WebKit marks that focus
 // `:focus-visible` after a touch); one a key opens shows its ring, after a tap too when a
 // key other than Enter or Space opens it (a shortcut's).
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a dialog a tap opens has no focus ring; a key's has one`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a dialog a tap opens has no focus ring; a key's has one`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage({ viewport: { width: 400, height: 600 }, hasTouch: true });
   try {
@@ -1332,7 +1334,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a dialo
   }
 }, 30000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: press feedback respects buttons and the scroller that moves the target`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: press feedback respects buttons and the scroller that moves the target`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {

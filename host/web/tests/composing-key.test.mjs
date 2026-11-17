@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 import { standIns } from './stand-ins.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 // A keydown an input method processed is composing (UI Events, legacy `keyCode` 229): WebKit sends the Enter that
 // commits a composition after `compositionend`, `isComposing` false and `keyCode` 229, and web code skips it with
@@ -31,7 +34,7 @@ beforeAll(() => {
 });
 afterAll(() => server?.stop(true));
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a keyCode-229 keydown is composing`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a keyCode-229 keydown is composing`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();
@@ -64,7 +67,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a keyCo
   } finally { await browser.close(); }
 }, 30000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a keyCode-229 keydown fires no shortcut, key press or prompt Return`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a keyCode-229 keydown fires no shortcut, key press or prompt Return`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();

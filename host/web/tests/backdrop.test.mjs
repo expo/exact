@@ -2,15 +2,18 @@
 // author's colour (`--exact-backdrop-color`, which css.rs writes on the dialog) when said, `transparent` laying
 // nothing; it fades in as the dialog opens and out as it leaves with its exit (`data-exiting`, presence-glue.js).
 // Read in pixels: WebKit reports neither the pseudo-element's computed colour nor its transition's `pseudoElement`.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { withLook } from '../look.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const sheet = withLook(readFileSync(new URL('../index.html', import.meta.url), 'utf8')).match(/<style>([\s\S]*?)<\/style>/)[1];
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a dialog's backdrop is its author's colour, else the scrim, and fades`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a dialog's backdrop is its author's colour, else the scrim, and fades`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage({ viewport: { width: 400, height: 300 } });
   try {

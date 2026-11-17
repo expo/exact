@@ -8,14 +8,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentPage, faultSpec, backLayer, builtSettingLines, chromium, launchFacts, listenOn, netOptions, refuseStale, staleError, warnStale, webChanges, withEpoch, withFaults } from './agent-launch.mjs';
+import { agentPage, faultSpec, backLayer, builtSettingLines, chromium, launchFacts, listenOn, netOptions, refuseStale, staleError, suiteBrowser, warnStale, webChanges, withEpoch, withFaults } from './agent-launch.mjs';
 import { deliverClipboard, pasteChord } from './agent-keys.mjs';
 import { pageAim, pagePoint, pageOutside } from './agent-aim.mjs';
 import { builtAppMatches, jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs'; import { buildBase, bootedGeneration, leaseGeneration } from '../host/web/generations.mjs';
 import { resolveApp, webBuildCommand, webDist as defaultWebDist } from './app.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const INSTALL = `bunx playwright@${JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).devDependencies['playwright-core']} install firefox webkit`;
+const PLAYWRIGHT = `bunx playwright@${JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).devDependencies['playwright-core']}`;
+const INSTALL = `${PLAYWRIGHT} install firefox webkit`;
 const WORLD_LIMIT = 256 * 1024 * 1024;
 
 const FIREFOX_PREFS = {
@@ -28,20 +29,32 @@ const FIREFOX_PREFS = {
   'ui.prefersReducedTransparency': 0,
 };
 
+const systemLibraries = message => [...new Set([...message.matchAll(/\b(lib[\w.+-]+\.so(?:\.\d+)*)/g)].map(m => m[1]))];
+
 function unavailable(name, error) {
-  const message = String(error?.message ?? error);
-  const libraries = [...new Set([...message.matchAll(/\b(lib[\w.+-]+\.so(?:\.\d+)*)/g)].map(m => m[1]))];
+  const message = String(error?.message ?? error), libraries = systemLibraries(message);
   if (libraries.length) return new Error(`web carrier unavailable: ${name} missing system libraries: ${libraries.join(', ')}`);
   if (/Executable doesn't exist|download new browsers/i.test(message)) return new Error(`web carrier unavailable: ${name} not installed: ${INSTALL}`);
   return new Error(`web carrier unavailable: ${name}: ${message.replace(/\s+/g, ' ').trim()}`);
 }
 
 /** Why the engine `name` (chromium, firefox, webkit) cannot be driven here, or null: Chromium as agent-launch.mjs
- * `chromium` finds it, Firefox and WebKit as Playwright installs them. For tests to choose themselves (scripts/coverage.mjs). */
+ * `chromium` finds it; Firefox and WebKit as Playwright installs them and as they launch. That launch is the process's
+ * `suiteBrowser`, which the test then shares, and one that fails is tried again by the next call. For tests to choose
+ * themselves (scripts/coverage.mjs). */
 export async function browserMissing(name) {
   if (name === 'chromium') return chromium().unavailable;
-  const playwright = await import('playwright-core');
-  return existsSync(playwright[name].executablePath()) ? null : `${name} not installed: ${INSTALL}`;
+  const label = name === 'firefox' ? 'Firefox' : 'WebKit', executable = (await import('playwright-core'))[name].executablePath();
+  if (!existsSync(executable)) return `${label} is missing at ${executable}; install it with ${PLAYWRIGHT} install ${name}`;
+  try { await suiteBrowser(name, { timeout: 30_000 }); return null; }
+  catch (error) {
+    // Without the terminal colours of Playwright's call log
+    const message = String(error?.message ?? error).replace(/\x1b\[[\d;]*m/g, ''), libraries = systemLibraries(message);
+    if (libraries.length) return `${label} at ${executable} lacks system libraries ${libraries.join(', ')}; ${PLAYWRIGHT} install-deps ${name} installs them`;
+    // The browser's own error lines, its headless notice aside, else Playwright's first line
+    const said = new Set([...message.matchAll(/\[err\] (.+)/g)].map(m => m[1].trim().replace(/\.$/, '')).filter(line => !/running in headless mode/.test(line)));
+    return `${label} at ${executable} does not launch: ${[...said].join(' ') || message.split('\n')[0]}; ${PLAYWRIGHT} install --force ${name} reinstalls it`;
+  }
 }
 
 /** Launch once without an app so a conformance run reports an engine-level

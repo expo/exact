@@ -1,7 +1,7 @@
 // How a test that cannot run says so (scripts/coverage.mjs), and the async
 // lane's side of it: required coverage, this commit's fixtures, no test run.
-import { expect, test } from 'bun:test';
-import { need, notApplicable, required } from './coverage.mjs';
+import { expect, spyOn, test } from 'bun:test';
+import { drivable, engineTests, need, notApplicable, required } from './coverage.mjs';
 import { checks, failures, laneEnv } from './async.mjs';
 
 /** A stand-in for bun's `test` that records what was registered. */
@@ -20,10 +20,32 @@ test('nothing missing is the test itself', () => {
   expect(notApplicable(null, { test: t })).toBe(t);
 });
 
-test('a missing prerequisite skips, naming its kind and why', () => {
+test('a missing prerequisite skips, naming the test, its kind and why', () => {
   const { t, seen } = recorder();
-  need('chrome', 'Chromium is missing', { test: t, env: {} })('presses');
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  let said;
+  try { need('chrome', 'Chromium is missing', { test: t, env: {} })('presses'); said = warn.mock.calls.map(c => c[0]); }
+  finally { warn.mockRestore(); }
   expect(seen).toEqual([{ name: 'presses — missing chrome: Chromium is missing', fn: undefined, how: 'skip' }]);
+  expect(said).toEqual(['SKIP: presses — missing chrome: Chromium is missing']);
+});
+
+test('a missing browser engine skips its own tests, and in a test of several engines only its part', async () => {
+  const { t, seen } = recorder();
+  const missing = async engine => engine === 'firefox' ? 'Firefox is missing' : null;
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  let said;
+  try {
+    const tests = await engineTests(['chromium', 'firefox', 'webkit'], { test: t, env: {}, missing });
+    expect([tests.chromium, tests.chrome, tests.webkit]).toEqual([t, t, t]);
+    tests.firefox('scrolls');
+    expect(await drivable(['chrome', 'firefox', 'webkit'], { env: {}, missing })).toEqual(['chrome', 'webkit']);
+    said = warn.mock.calls.map(c => c[0]);
+  } finally { warn.mockRestore(); }
+  expect(seen).toEqual([{ name: 'scrolls — missing firefox: Firefox is missing', fn: undefined, how: 'skip' }]);
+  expect(said).toEqual(['SKIP: scrolls — missing firefox: Firefox is missing',
+    expect.stringMatching(/^SKIP: firefox in the test at \S+coverage\.test\.mjs:\d+, whose other parts run — missing firefox: Firefox is missing$/)]);
+  await expect(drivable(['webkit', 'firefox'], { env: { EXACT_REQUIRED: '1' }, missing })).rejects.toThrow('missing firefox: Firefox is missing (EXACT_REQUIRED=1)');
 });
 
 test('under EXACT_REQUIRED a missing prerequisite fails rather than skips', () => {

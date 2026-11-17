@@ -1,8 +1,11 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium', 'webkit']);
 
 const WEB = resolve(import.meta.dir, '..');
 const style = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<style>([\s\S]*?)<\/style>/)[1];
@@ -21,7 +24,7 @@ beforeAll(() => {
 });
 afterAll(() => server?.stop(true));
 
-for (const engine of ['chromium', 'webkit']) test(`${engine}: native active properties add no implicit animation`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: native active properties add no implicit animation`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();
@@ -50,7 +53,7 @@ for (const engine of ['chromium', 'webkit']) test(`${engine}: native active prop
   } finally { await browser.close(); }
 }, 60_000);
 
-for (const engine of ['chromium', 'webkit']) test(`${engine}: stationary physical and held presses follow computed scale targets`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: stationary physical and held presses follow computed scale targets`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();
@@ -102,7 +105,7 @@ for (const engine of ['chromium', 'webkit']) test(`${engine}: stationary physica
   }
 }, 60_000);
 
-for (const engine of ['chromium', 'webkit']) test(`${engine}: a composed motion sample clears static z and keeps the press offset`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: a composed motion sample clears static z and keeps the press offset`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();
@@ -134,7 +137,7 @@ for (const engine of ['chromium', 'webkit']) test(`${engine}: a composed motion 
   } finally { await browser.close(); }
 }, 30_000);
 
-for (const engine of ['chromium', 'webkit']) test(`${engine}: ordinary touch release refreshes the control's box`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: ordinary touch release refreshes the control's box`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();
@@ -153,7 +156,7 @@ for (const engine of ['chromium', 'webkit']) test(`${engine}: ordinary touch rel
   } finally { await browser.close(); }
 }, 30_000);
 
-for (const engine of ['chromium', 'webkit']) test(`${engine}: active translation shares the press curve, quick-tap hold and immediate agent clock`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: active translation shares the press curve, quick-tap hold and immediate agent clock`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();

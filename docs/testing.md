@@ -337,6 +337,16 @@ change the native state inside that pair, then wait for the runner to apply it
   exit outside Bun's test runner. A test about the browser process (it kills
   the browser, or needs a kept profile, a headed window or flags of its own)
   launches its own.
+- **Register a test per engine through `engineTests()`.** With `const
+  engineTest = await engineTests()` (`scripts/coverage.mjs`),
+  `engineTest[engine](name, fn)` runs the test or, when that browser is not
+  installed or does not launch, skips it with a `SKIP:` line naming the test,
+  what is wrong and the command that fixes it. Under `EXACT_REQUIRED=1`, as
+  the hourly lane runs, it fails instead. Finding out launches Firefox and
+  WebKit once, as the file's `suiteBrowser()`, so name only the engines the
+  file drives (`engineTests(['chromium', 'webkit'])`). A test that drives
+  several engines in one setup loops over `await drivable([…])`, which leaves
+  a missing one out the same way and runs the rest.
 - **Wait for the event, not for its first sign.** The shell is faster than the
   full build, so a test that reads a state while the browser still changes it
   fails there first. `document.fullscreenElement` is set before the

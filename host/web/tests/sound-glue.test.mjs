@@ -12,8 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { chromium as installed, suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { browserMissing } from '../../../scripts/agent-playwright.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
 import { hostFixtureFile } from './glue-fixture.mjs';
 import { webAudioSession } from '../../../scripts/web-head.mjs';
@@ -71,7 +70,7 @@ ${webAudioSession({ audio_session: session })}
 </script>`;
 
 const engines = ['chromium', 'firefox', 'webkit'];
-const engineTest = Object.fromEntries(await Promise.all(engines.map(async e => [e, need(e === 'chromium' ? 'chrome' : e, await browserMissing(e))])));
+const engineTest = await engineTests();
 
 async function launch(name) {
   const playwright = await import('playwright-core');

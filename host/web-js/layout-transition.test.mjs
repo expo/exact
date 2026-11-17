@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium', 'webkit']);
 
 const SOURCE = `component App
   state calm = false
@@ -347,7 +350,7 @@ test('removed motion views leave the registry after their exit and keep identity
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
 
-test.each(['chromium', 'webkit'])('computed exit animations follow reduced motion beside fixed and computed press scales on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`computed exit animations follow reduced motion beside fixed and computed press scales on ${engine}`, async () => {
   const app = await exitApp(engine, `shape Media
   prefersReducedMotion: bool
 
@@ -385,7 +388,7 @@ component App
 }, 60000);
 
 // The runner ends an arm without updating its bindings, so a removed node plays the exit it had when the commit began
-test.each(['chromium', 'webkit'])('a removal plays the exit its commit began with, whichever write comes first, on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`a removal plays the exit its commit began with, whichever write comes first, on ${engine}`, async () => {
   const app = await exitApp(engine, `keyframes leave
   to opacity=0
 
