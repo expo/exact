@@ -211,7 +211,8 @@ fn native_calls_receive_the_modules_numbers_exactly() {
 
 /// A package's synchronous call (`{"extension", "sync", "args"}`) reaches the
 /// host's app module, where packages live, even when the app links a native
-/// module of its own; the module's own `native.call` stays with the module.
+/// module of its own; the module's own `native.call` stays with the module,
+/// one with an `extension` field included.
 #[test]
 fn a_packages_call_reaches_the_host_beside_a_native_module() {
     struct Native;
@@ -238,6 +239,7 @@ fn a_packages_call_reaches_the_host_beside_a_native_module() {
     for (op, expected) in [
         ("native-extension", "host:hi"),
         ("native-direct", "module:\"hi\""),
+        ("native-extension-field", "module:\"hi\""),
     ] {
         let a = args(op, "hi");
         let answer = m.answer(&mut s, "work", &a).unwrap();

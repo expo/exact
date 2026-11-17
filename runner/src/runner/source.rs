@@ -163,10 +163,9 @@ impl Native {
             let named = serde_json::from_slice::<serde_json::Value>(body)
                 .ok()
                 .and_then(|v| {
+                    let (extension, sync) = Native::sync_form(&v)?;
                     Some(format!(
-                        "{}.{}{}",
-                        v.get("extension")?.as_str()?,
-                        v.get("sync")?.as_str()?,
+                        "{extension}.{sync}{}",
                         v["owner"]
                             .as_str()
                             .map(|s| format!("#{s}"))
@@ -184,6 +183,18 @@ impl Native {
                 None => Ok(br#"{"error":"NotSupportedError"}"#.to_vec()),
             }
         }))
+    }
+
+    /// A module's (package's) synchronous form, `{"extension", "sync",
+    /// "args"}`: its extension and sync names, or `None` for any other
+    /// request, such as an app's own `native.call` that carries an
+    /// `extension` field. [`Native::hosted_call`] answers by it and a source
+    /// with a native module of its own sends the host only what it accepts.
+    pub fn sync_form(request: &serde_json::Value) -> Option<(&str, &str)> {
+        Some((
+            request.get("extension")?.as_str()?,
+            request.get("sync")?.as_str()?,
+        ))
     }
 
     /// The modules' synchronous answers now (the runner's).
@@ -1090,7 +1101,7 @@ impl std::fmt::Display for DataError {
 }
 
 #[cfg(test)]
-mod target_tests {
+mod native_tests {
     #[test]
     fn a_module_call_reaches_the_host_module_beside_a_source_native_module() {
         let slot = super::Native::default();
@@ -1130,7 +1141,10 @@ mod target_tests {
             "the source's own native.later stays its own"
         );
     }
+}
 
+#[cfg(test)]
+mod target_tests {
     use super::Target;
 
     #[test]
