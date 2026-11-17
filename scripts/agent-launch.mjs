@@ -470,7 +470,9 @@ const sharedBrowsers = new Map();
  * Closing it is what removes the profile and artifacts directories Playwright made for it. */
 export async function suiteBrowser(engine = 'chromium', { needs = [], timeout, ...launch } = {}) {
   const playwright = await import('playwright-core');
-  const options = { headless: true, ...(engine === 'chromium' ? { executablePath: chromium({ needs }).executable } : {}), ...launch };
+  const { executable, unavailable } = engine === 'chromium' && !launch.executablePath ? chromium({ needs }) : {};
+  if (unavailable) throw new Error(`missing chrome: ${unavailable}`); // not Playwright's advice, to run npx playwright install
+  const options = { headless: true, ...(executable ? { executablePath: executable } : {}), ...launch };
   // A launch timeout is not part of the key: it launches the same browser.
   const key = JSON.stringify([engine, options]);
   if (!sharedBrowsers.has(key)) {
@@ -748,7 +750,6 @@ export function withEpoch(href, epoch) {
   url.searchParams.set('epoch', String(epoch));
   return url.href;
 }
-
 
 export function launchFacts({seed, locale, formatLocale, timeZone, epoch, failFetch, env = {}}) {
   seed = Number(seed ?? env.EXACT_AGENT_SEED ?? 1);

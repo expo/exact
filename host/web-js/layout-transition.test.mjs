@@ -2,16 +2,17 @@
 // and a curve otherwise. A row holding the curve slides when a row above it goes; one whose value is `none` jumps; one
 // that gains the curve in the commit that moves it slides from where it was, as presence-glue.js plays a style op that
 // gains the row. Build exact-web-js once before running this test (docs/testing.md).
-import { test, expect } from 'bun:test';
+import { test as bunTest, expect } from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
-import { engineTests } from '../../scripts/coverage.mjs';
+import { engineTests, need } from '../../scripts/coverage.mjs';
 
 const engineTest = await engineTests(['chromium', 'webkit']);
+const test = need('chrome', chromium().unavailable, { test: bunTest });
 
 const SOURCE = `component App
   state calm = false

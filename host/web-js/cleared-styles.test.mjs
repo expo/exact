@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect } from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -229,7 +229,7 @@ const bound = (runtime, mapped) => runtime === 'JS' ? [mapped[1], mapped[3]] : [
 const held = runtime => runtime === 'JS' ? ['running', '--local'] : ['paused'];
 
 for (const runtime of ['JS', 'wasm']) {
-  const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest.chromium;
   check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');

@@ -299,7 +299,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
 });
 // Under forced colours (a contrast theme) the mark keeps the system's colour for its row: ButtonText, and a disabled
 // row's GrayText.
-test('chromium: a checked menu row keeps its mark under forced colours', async () => {
+engineTest.chromium('chromium: a checked menu row keeps its mark under forced colours', async () => {
   const browser = await launch('chromium');
   try {
     const page = await (await browser.newContext({ viewport: { width: 700, height: 500 }, forcedColors: 'active' })).newPage();
@@ -838,7 +838,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
 
 // A sheet in a narrow window (D4.8) is iOS's: from 12 px below the window's top to its bottom, over the tab bar, its top
 // corners a surface's. One that opens slides up from the window's bottom edge, unless the person asks for less motion.
-test('chromium: authored popovers pad unsaid edges by the root font', async () => {
+engineTest.chromium('chromium: authored popovers pad unsaid edges by the root font', async () => {
   const browser = await launch('chromium');
   const page = await browser.newPage({ viewport: { width: 480, height: 640 } });
   try {
@@ -1247,7 +1247,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
   } finally { await browser.close(); }
 }, 90000);
 
-test('chromium: painted route titles match the web at several root sizes', async () => {
+engineTest.chromium('chromium: painted route titles match the web at several root sizes', async () => {
   // Build outside the test: cargo test -p exact-painted --test route_titles --no-run.
   const deps = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../../target', import.meta.url)), 'debug/deps');
   const binary = readdirSync(deps).filter(name => /^route_titles-[0-9a-f]+(?:\.exe)?$/.test(name))

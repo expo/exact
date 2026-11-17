@@ -9,7 +9,7 @@ import { symbolSheet } from './glue-fixture.mjs';
 // runtime's symbol painter (glue.js `refreshSymbols`, symbols.js `refresh`)
 // under the shell and the neutral sheet, in each engine, measured from the
 // screen.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
@@ -215,7 +215,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
 }, 30000);
 
 // This guards source-before-geometry ordering, not the number of layouts in a refresh.
-for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`chromium: scale-down measures a cached placeholder after assigning its source (${file})`, async () => {
+for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest.chromium(`chromium: scale-down measures a cached placeholder after assigning its source (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const suite = await suiteBrowser('chromium', { timeout: 10000 });
   try {
@@ -248,7 +248,7 @@ for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`chromi
   } finally { await suite.close(); }
 }, 10000);
 
-for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`chromium: scale-down uses percentage padding after symbol sources resize the containing block (${file})`, async () => {
+for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest.chromium(`chromium: scale-down uses percentage padding after symbol sources resize the containing block (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8'), suite = await suiteBrowser('chromium', { timeout: 10000 });
   try {
     const page = await suite.newPage();
@@ -279,7 +279,7 @@ for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`chromi
   } finally { await suite.close(); }
 }, 10000);
 
-test('chromium: loaded raster scale-down follows symbol source and title resizing in either sibling order', async () => {
+engineTest.chromium('chromium: loaded raster scale-down follows symbol source and title resizing in either sibling order', async () => {
   const file = 'host/web/glue.js', [stand, names, run] = RUNTIMES[file];
   const source = readFileSync(resolve(ROOT, file), 'utf8'), suite = await suiteBrowser('chromium', { timeout: 10000 });
   const cases = ['source-before', 'source-after', 'title-before', 'title-after'];

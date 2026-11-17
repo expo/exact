@@ -5,7 +5,7 @@
 // piece is needed; the recording itself is of the fixture whole, where the motion piece hands each name that finds a
 // scroll or view timeline to the browser (motion-glue.js `followTimelines`). A browser with no scroll-driven animations
 // (Firefox's) shows each consumer's own values. Build exact-web-js once before running this test (docs/testing.md).
-import { afterAll, test, expect } from 'bun:test';
+import { afterAll, expect } from 'bun:test';
 import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
 import { engineTests } from '../../scripts/coverage.mjs';
 
-const engineTest = await engineTests(['firefox']);
+const engineTest = await engineTests(['chromium', 'firefox']);
 
 const root = resolve(import.meta.dir, '../..'), fixtures = resolve(root, 'host/web/tests/fixtures');
 const target = resolve(root, 'target');
@@ -58,7 +58,7 @@ const sample = (page, scroller, axis, at, read) => page.evaluate(async ({ scroll
   return Object.fromEntries(read.map((id) => [id, +getComputedStyle(document.querySelector(`[data-testid="${id}"]`)).opacity]));
 }, { scroller, axis, at, read });
 
-test('scroll and view timelines in a plan with no drag timeline show what the browser recorded', async () => {
+engineTest.chromium('scroll and view timelines in a plan with no drag timeline show what the browser recorded', async () => {
   expect(noDrag).not.toContain('-exact-drag-timeline');
   const { page, close } = await open(noDrag, 'chromium', 'vsub');
   try {
@@ -98,7 +98,7 @@ component App
         view testId="c" width=10 height=4 opacity=0.25 animation=(on ? (slow ? "fade 2s linear both" : "fade 1s linear both") : "none") animation-timeline="--t" animation-range="0px 300px"
 `;
 
-test('a bound animation under a literal timeline and range follows its scroller once the page writes it', async () => {
+engineTest.chromium('a bound animation under a literal timeline and range follows its scroller once the page writes it', async () => {
   const { page, close } = await open(DYNAMIC, 'chromium', 'c');
   try {
     expect(await sample(page, 's', 'x', 150, ['c'])).toEqual({ c: 0.25 });
