@@ -1209,12 +1209,14 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** Row [id]'s node (op 15 at [i], its body already walked by [ingest]): recorded here when it is in view this
      * frame, else on the worker. */
     private fun makeRow(b: IntBuffer, i: Int, shown: Boolean) {
-        val id = b.get(i + 1); val previous = b.get(i + 2) and 0x7fffffff; val len = b.get(i + 5)
+        val id = b.get(i + 1); val previous = b.get(i + 2) and 0x3fffffff; val len = b.get(i + 5)
         val body = i + 6; val end = body + len - 1
         val node = android.graphics.RenderNode("exact row")
         node.setPosition(0, 0, Math.ceil(f(b, i + 3).toDouble()).toInt(), Math.ceil(f(b, i + 4).toDouble()).toInt())
-        // Clipped to its bounds (exact2 pads them): HWUI then skips a row out of view.
-        node.setClipToBounds(true)
+        // Clipped to its bounds (exact2 pads them): HWUI then skips a row out of view. Not when a filter in it
+        // reaches past them to the left or above (bit 30).
+        val clip = b.get(i + 2) and (1 shl 30) == 0
+        node.setClipToBounds(clip)
         // In view this frame: made now, never a blank row for a frame. Otherwise on the worker.
         if (async && !shown) { tokens[id] = nextToken++; record(id, previous, node, b, body, end) } else {
             // Again into the node of the row it replaces (owned, shown, and nothing else drawing that node):
@@ -1224,6 +1226,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             val into = again ?: node
             if (again != null) {
                 into.setPosition(0, 0, Math.ceil(f(b, i + 3).toDouble()).toInt(), Math.ceil(f(b, i + 4).toDouble()).toInt())
+                into.setClipToBounds(clip)
                 tokens[id] = tokens.remove(previous) ?: nextToken++
             } else tokens[id] = nextToken++
             val c = into.beginRecording()

@@ -101,6 +101,8 @@ pub(super) struct Paused(Option<Capture>, bool);
 #[derive(Default)]
 struct Capture {
     refused: bool,
+    /// What its boxes' filters paint, in the walk's coordinates (`box_filter.rs`).
+    reach: Option<Rect4>,
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     slots: Vec<Slot>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
@@ -557,6 +559,13 @@ impl Painter {
         }
     }
 
+    /// What a box's filter paints in a recording row, past the box.
+    pub(super) fn row_reach(&mut self, r: Rect4) {
+        if let Some(c) = &mut self.rows.recording {
+            c.reach = Some(union(c.reach, r));
+        }
+    }
+
     /// Whether a kept row draws what it would record now; `pictures`: its
     /// pictures included.
     fn row_valid(
@@ -772,6 +781,12 @@ impl Painter {
             covered.2 + 2.0 * MARGIN,
             covered.3 + 2.0 * MARGIN,
         );
+        // And what its filters paint, which can pass the margin.
+        let shift = if local { (0.0, 0.0) } else { origin };
+        let bounds = match capture.reach {
+            Some(r) => union(Some(bounds), (r.0 - shift.0, r.1 - shift.1, r.2, r.3)),
+            None => bounds,
+        };
         // The backend keeps the previous recording when this one is the same.
         let rid = self.backend.row_end(bounds);
         if let Some(old) = previous.filter(|old| *old != rid) {

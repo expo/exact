@@ -59,8 +59,9 @@ impl Painter {
             left + w + right + rw,
             top + h + bottom + rh,
         );
-        // Damage never looks past a box.
+        // Damage never looks past a box; a row's bounds hold what it paints.
         self.damage.unsupported = true;
+        self.row_reach(bbox(ts, region));
         // A backend that filters on the GPU draws the box's ops through the
         // chain, so its row stays kept (LLP 1172.023.001 D1).
         if self.backend.push_filter(&chain.primitives, region, ts) {

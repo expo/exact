@@ -25,10 +25,14 @@ pub(super) const FILTER_END: u32 = 54;
 static FILTERS: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| !std::env::var("EXACT_FILTERS").is_ok_and(|v| v == "0"));
 
-/// HWUI draws an effect's input into a texture the size of its node; a box
-/// larger than this on a side (device pixels) stays on the CPU, which only
-/// filters what the window shows.
+/// HWUI draws an effect's input into a texture the size of its node and keeps
+/// it while the node is drawn. A box larger than this on a side (device
+/// pixels), larger than `FILTER_WINDOWS` windows, or one that would take what
+/// kept rows and the page hold past `HELD_WINDOWS` windows stays on the CPU,
+/// which only filters what the window shows (LLP 1172.023 E6).
 const MAX_SIDE: f32 = 8192.0;
+const FILTER_WINDOWS: f32 = 2.0;
+const HELD_WINDOWS: f32 = 4.0;
 
 impl Recorder {
     /// Open a filter over `region` in `ts`'s space; whether its chain is one
@@ -39,6 +43,10 @@ impl Recorder {
         region: Rect4,
         ts: Transform,
     ) -> bool {
+        // On either path, a row's bounds hold the filter's reach (`row_end`).
+        if let Some(row) = &mut self.row {
+            row.filtered = true;
+        }
         if !*FILTERS || !self.planes.is_empty() {
             return false;
         }
@@ -46,12 +54,29 @@ impl Recorder {
         let Some(page) = self.on_page(region, ts) else {
             return false;
         };
-        if page.2 * self.scale > MAX_SIDE || page.3 * self.scale > MAX_SIDE {
+        let s = self.scale;
+        if page.2 * s > MAX_SIDE || page.3 * s > MAX_SIDE {
             return false;
         }
-        let Some((count, words)) = encode(primitives) else {
+        let window = self.direct.size.0 * self.direct.size.1 * s * s;
+        let area = page.2 * page.3 * s * s;
+        // The row this one replaces is let go once it is recorded.
+        let replaced = self.row.as_ref().and_then(|r| r.previous);
+        let kept: f32 = (self.filter_areas.iter())
+            .filter(|(id, _)| Some(**id) != replaced)
+            .map(|(_, a)| a)
+            .sum();
+        let held = kept + self.page_area + self.row.as_ref().map_or(0.0, |r| r.area);
+        if area > FILTER_WINDOWS * window || held + area > HELD_WINDOWS * window {
+            return false;
+        }
+        let Some((count, words)) = encode(primitives, (ts.sx * s, ts.sy * s)) else {
             return false;
         };
+        match &mut self.row {
+            Some(row) => row.area += area,
+            None => self.page_area += area,
+        }
         // CSS clips the filtered result: every pending clip goes before it.
         self.need(None);
         self.transform(ts);
@@ -75,8 +100,10 @@ impl Recorder {
 
 /// The chain's functions as the stream writes them, and how many; `None`
 /// when one is not a CSS filter function a `RenderEffect` runs as the
-/// painter would.
-fn encode(primitives: &[Primitive]) -> Option<(u32, Vec<u32>)> {
+/// painter would. `k`: device pixels per local unit.
+fn encode(primitives: &[Primitive], k: (f32, f32)) -> Option<(u32, Vec<u32>)> {
+    // HWUI blurs nothing up to half a device pixel, where the CPU chain does.
+    let faint = |sx: f32, sy: f32| sx > 0.0 && sx * k.0 <= 0.5 || sy > 0.0 && sy * k.1 <= 0.5;
     let mut words = Vec::new();
     for (i, p) in primitives.iter().enumerate() {
         let input = match i {
@@ -87,7 +114,7 @@ fn encode(primitives: &[Primitive]) -> Option<(u32, Vec<u32>)> {
             return None;
         }
         match &p.op {
-            Op::Blur(sx, sy) => words.extend([0, sx.to_bits(), sy.to_bits()]),
+            Op::Blur(sx, sy) if !faint(*sx, *sy) => words.extend([0, sx.to_bits(), sy.to_bits()]),
             Op::ColorMatrix(m) => {
                 words.push(1);
                 words.extend(android_matrix(*m).map(f32::to_bits));
@@ -108,7 +135,7 @@ fn encode(primitives: &[Primitive]) -> Option<(u32, Vec<u32>)> {
                 words.push(1);
                 words.extend(android_matrix(m).map(f32::to_bits));
             }
-            Op::DropShadow(sx, sy, dx, dy, color) if sx == sy => {
+            Op::DropShadow(sx, sy, dx, dy, color) if sx == sy && !faint(*sx, *sy) => {
                 let c = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
                 words.extend([
                     2,
@@ -134,9 +161,51 @@ fn android_matrix(mut m: [f32; 20]) -> [f32; 20] {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{stream, FINISHED, IMAGE_DEF, ROW_BEGIN, ROW_DRAW, ROW_END};
+    use super::super::{
+        stream, FINISHED, IMAGE_DEF, ROW_BEGIN, ROW_DRAW, ROW_END, ROW_PAD, UNCLIPPED,
+    };
     use super::*;
+    use crate::paint::Backend;
     use crate::presenter::{PainterChoice, Presenter};
+
+    #[test]
+    fn the_reader_runs_filters_the_window_bounds_and_blurs_it_can_see() {
+        let blur = |s: f32| {
+            [Primitive {
+                op: Op::Blur(s, s),
+                inputs: [Input::SourceGraphic, Input::None],
+                subregion: (0.0, 0.0, 0.0, 0.0),
+                linear: false,
+            }]
+        };
+        let ts = Transform::identity();
+        let mut r = Recorder::new();
+        // A window of 200 × 200 device pixels.
+        r.begin(100.0, 100.0, 2.0);
+        // HWUI does not blur half a device pixel or less; the CPU chain does.
+        assert!(!r.filter_open(&blur(0.25), (0.0, 0.0, 10.0, 10.0), ts));
+        assert!(r.filter_open(&blur(0.3), (0.0, 0.0, 10.0, 10.0), ts));
+        r.filter_close();
+        // Over two windows.
+        assert!(!r.filter_open(&blur(4.0), (0.0, 0.0, 100.0, 201.0), ts));
+        // 1.5 windows a row: the third would hold more than four.
+        for id in 1..=3 {
+            r.row_begin(id, (0.0, 0.0), None);
+            assert_eq!(
+                r.filter_open(&blur(4.0), (0.0, 0.0, 100.0, 150.0), ts),
+                id < 3,
+                "row {id}"
+            );
+            r.filter_close();
+            r.row_end((0.0, 0.0, 100.0, 150.0));
+        }
+        r.row_free(1);
+        r.row_begin(4, (0.0, 0.0), None);
+        assert!(
+            r.filter_open(&blur(4.0), (0.0, 0.0, 100.0, 150.0), ts),
+            "row 1 let go"
+        );
+    }
 
     #[test]
     fn a_filtered_row_records_its_chain_and_stays_kept() {
@@ -148,6 +217,7 @@ mod tests {
       column
         box height=100 width=300 background-color="#2468ac" filter="blur(4px) brightness(0.5)"
         box height=100 width=300 background-color="#2468ac"
+        box height=100 width=300 background-color="#2468ac" filter="blur(20px)"
 "##,
             ),
             (),
@@ -161,13 +231,14 @@ mod tests {
         p.brush.replace_backend(Box::new(Recorder::new()));
         p.frame();
         let ops = FINISHED.with(|f| f.borrow_mut().take()).expect("a frame");
-        let (mut row, mut filter, mut recorded) = (false, None, Vec::new());
+        let (mut row, mut filter, mut recorded, mut heads) = (false, None, Vec::new(), Vec::new());
         let mut at = 0;
         while at < ops.len() {
             match ops[at] {
                 ROW_BEGIN => {
                     row = true;
                     recorded.push(ops[at + 1]);
+                    heads.push((ops[at + 2] & UNCLIPPED != 0, f32::from_bits(ops[at + 4])));
                     // Into the row's ops, past its header.
                     at += 6;
                     continue;
@@ -175,7 +246,7 @@ mod tests {
                 ROW_END => row = false,
                 FILTER => {
                     assert!(row, "the filter is drawn in its row");
-                    filter = Some(at);
+                    filter.get_or_insert(at);
                 }
                 IMAGE_DEF => panic!("no picture: the reader filters the box"),
                 _ => {}
@@ -194,6 +265,11 @@ mod tests {
             "brightness"
         );
         assert!(ops[at + 31..].contains(&FILTER_END));
+        // blur(20px) reaches 3σ = 60 pt past its box, past the row's 48 pt of
+        // room: the row's node grows to hold it and is drawn unclipped.
+        let unclipped: Vec<bool> = heads.iter().map(|h| h.0).collect();
+        assert_eq!(unclipped, [false, false, true]);
+        assert!(heads[2].1 >= 100.0 + 60.0 + ROW_PAD, "{:?}", heads[2]);
 
         p.repaint();
         p.frame();

@@ -3,6 +3,7 @@ package dev.exact.canvas
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.HardwareRenderer
 import android.graphics.RenderNode
 import java.nio.IntBuffer
 import org.junit.Assert.*
@@ -142,5 +143,34 @@ class PlayerTest {
         val node = drawn.single()
         assertEquals(listOf(10, 10, 50, 40), listOf(node.left, node.top, node.right, node.bottom))
         assertTrue(node.hasDisplayList())
+    }
+
+    /** A blue 20 × 20 square at (30, 30) on white, through [count] functions [fn] over the region (10, 10, 60, 60). */
+    private fun filtered(count: Int, fn: IntArray): Bitmap {
+        val ops = identity + intArrayOf(53, 5 + fn.size, f(10), f(10), f(60), f(60), count) + fn +
+            intArrayOf(2, Color.BLUE, f(30), f(30), f(20), f(20)) + IntArray(8) + intArrayOf(54)
+        val page = RenderNode("page").apply { setPosition(0, 0, 80, 80) }
+        val canvas = page.beginRecording()
+        canvas.drawColor(Color.WHITE)
+        Player(emptyMap()).apply { width = 80; height = 80 }.replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
+        page.endRecording()
+        return HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
+            RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            .invoke(null, page, 80, 80) as Bitmap
+    }
+
+    /** The chain draws as the painter's: a blur spreads the box past its edge, a colour matrix scales its channels,
+     * and a drop shadow goes under it, moved. */
+    @Test fun aFilterDrawsItsChain() {
+        val blurred = filtered(1, intArrayOf(0, f(4), f(4)))
+        assertTrue("blurred past the edge", Color.red(blurred.getPixel(27, 40)) in 1..254)
+        assertTrue("blue within", Color.red(blurred.getPixel(40, 40)) < 64)
+        val half = IntArray(20).also { for (k in 0 until 3) it[k * 6] = 0.5f.toRawBits(); it[18] = f(1) }
+        val dim = filtered(1, intArrayOf(1) + half)
+        assertEquals("brightness(0.5)", 128f, Color.blue(dim.getPixel(40, 40)).toFloat(), 2f)
+        assertEquals("white outside the box", Color.WHITE, dim.getPixel(20, 40))
+        val shadow = filtered(1, intArrayOf(2, f(1), f(10), 0, Color.BLACK))
+        assertTrue("the box above its shadow", Color.blue(shadow.getPixel(45, 40)) > 200)
+        assertTrue("the shadow beside it", Color.blue(shadow.getPixel(55, 40)) < 80)
     }
 }
