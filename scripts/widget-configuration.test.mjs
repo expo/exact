@@ -51,7 +51,8 @@ struct ExactTimelineProvider: TimelineProvider {
     let kind: String
     func placeholder(in context: Context) -> ExactWidgetEntry { ExactWidgetEntry(date: Date()) }
     func getSnapshot(in context: Context, completion: @escaping (ExactWidgetEntry) -> Void) { completion(placeholder(in: context)) }
-    func getTimeline(in context: Context, completion: @escaping (Timeline<ExactWidgetEntry>) -> Void) { completion(Timeline(entries: [placeholder(in: context)], policy: .never)) }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<ExactWidgetEntry>) -> Void) { getTimeline(in: context, configuration: nil, completion: completion) }
+    func getTimeline(in context: Context, configuration: Data?, completion: @escaping (Timeline<ExactWidgetEntry>) -> Void) { completion(Timeline(entries: [placeholder(in: context)], policy: .never)) }
 }
 extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } set {} } }
 `);

@@ -321,8 +321,8 @@ export function widgetReload({ directory, triple, sdk, device, platform = 'ios',
   return binary;
 }
 /** The extension's generated Swift: one `Widget` per entry, static or, with a `configuration`, an
- * `AppIntentConfiguration` whose intent has one `AppEnum` parameter per row (`widget/Timeline.swift`'s
- * `ExactIntentTimelineProvider` stamps its values on each entry). Labels and values are Swift string literals:
+ * `AppIntentConfiguration` whose intent has one `AppEnum` parameter per row (`widget/Configuration.swift`'s
+ * `ExactIntentTimelineProvider` gives its values to the refresh and each entry). Labels and values are Swift string literals:
  * the manifest admits no control characters in them, and JSON's escapes are Swift's for the rest. */
 export function widgetBundleSource(entries, { platform = 'ios', activities = false, alarmMember = '' } = {}) {
   const mac = platform === 'macos', literal = JSON.stringify;

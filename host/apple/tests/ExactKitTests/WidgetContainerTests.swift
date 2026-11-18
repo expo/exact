@@ -158,14 +158,24 @@ final class WidgetContainerTests: XCTestCase {
         XCTAssertThrowsError(try next.resolve { throw RefreshFailure.offline })
     }
 
+    /// The answers a kind keeps in a generation, one file for each configuration.
+    private func kept(_ root: URL, _ generation: String, _ kind: String) -> [URL] {
+        let directory = root.appendingPathComponent("Library/Caches/widget-timelines/\(generation)/\(kind)")
+        return (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+    }
+
     func testAnUnknownCounterOrUnversionedCacheIsNeverReusedAndALiveRefreshStillAnswers() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let file = root.appendingPathComponent("Library/Caches/widget-timelines/one/question.json")
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"[{"date":1,"props":{"question":"Account A"}}]"#.utf8).write(to: file)
         let cache = try WidgetTimelineCache(root: root, kind: "question", generation: "one")
+        _ = try cache.resolve { Data("account A".utf8) }
+        let file = try XCTUnwrap(kept(root, "one", "question").first)
+        try Data(#"[{"date":1,"props":{"question":"Account A"}}]"#.utf8).write(to: file)
         XCTAssertThrowsError(try cache.resolve { throw RefreshFailure.offline }, "an old cache has no proof of its store revision")
+        // A build that kept one file for a kind, whatever its configuration, wrote it here: it is not read.
+        try FileManager.default.removeItem(at: file)
+        try Data(#"{"counter":0,"bytes":"YWNjb3VudCBB"}"#.utf8).write(to: root.appendingPathComponent("Library/Caches/widget-timelines/one/question.json"))
+        XCTAssertThrowsError(try cache.resolve { throw RefreshFailure.offline })
         _ = try cache.resolve { Data("account A".utf8) }
         try Data("corrupt".utf8).write(to: root.appendingPathComponent("widget-store-generation"), options: .atomic)
         XCTAssertFalse(cache.isCurrent)
@@ -176,7 +186,7 @@ final class WidgetContainerTests: XCTestCase {
         XCTAssertThrowsError(try unknown.resolve { throw RefreshFailure.offline })
         try FileManager.default.removeItem(at: file)
         XCTAssertEqual(try unknown.resolve { Data("account B".utf8) }, Data("account B".utf8))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(kept(root, "one", "question"), [])
         // A write that makes the counter readable mid-refresh refuses delivery.
         XCTAssertThrowsError(try unknown.resolve {
             try Data("2".utf8).write(to: root.appendingPathComponent("widget-store-generation"), options: .atomic)
@@ -194,13 +204,43 @@ final class WidgetContainerTests: XCTestCase {
         let blocked = try WidgetTimelineCache(root: root, kind: "question", generation: "one")
         XCTAssertEqual(try blocked.resolve { Data("account A".utf8) }, Data("account A".utf8))
         try FileManager.default.removeItem(at: caches.appendingPathComponent("one"))
-        let file = caches.appendingPathComponent("two/question.json")
         _ = try WidgetTimelineCache(root: root, kind: "question", generation: "two").resolve { Data("account A".utf8) }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(kept(root, "two", "question").count, 1)
         try Data("1".utf8).write(to: root.appendingPathComponent("widget-store-generation"), options: .atomic)
         let switched = try WidgetTimelineCache(root: root, kind: "question", generation: "two")
         XCTAssertThrowsError(try switched.resolve { throw RefreshFailure.offline })
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "account A's answer is not kept past the switch")
+        XCTAssertEqual(kept(root, "two", "question"), [], "account A's answer is not kept past the switch")
+    }
+
+    /// Each configuration has its own in-flight share and last good timeline. A kind keeps
+    /// `WidgetTimelineCache.kept` of them: a write past that removes the answer written longest ago.
+    func testEachConfigurationKeepsItsOwnTimelineAndAKindKeepsABoundedNumber() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        func cache(_ rows: Int?) throws -> WidgetTimelineCache {
+            try WidgetTimelineCache(root: root, kind: "trains", generation: "one", configuration: rows.map { Data(#"{"rows":"\#($0)"}"#.utf8) })
+        }
+        func offline() throws -> Data { throw RefreshFailure.offline }
+        func answer(_ rows: Int) -> Data { Data("rows \(rows)".utf8) }
+        XCTAssertEqual(try cache(0), try cache(0))
+        XCTAssertNotEqual(try cache(0), try cache(1), "another configuration must not join this one's in-flight refresh")
+        XCTAssertNotEqual(try cache(0), try cache(nil))
+        var dated = Set<URL>()
+        for rows in 0...WidgetTimelineCache.kept {
+            XCTAssertThrowsError(try cache(rows).resolve(offline), "no other configuration's answer is this one's last good")
+            XCTAssertEqual(try cache(rows).resolve { answer(rows) }, answer(rows))
+            // Date each answer as it is written, so their order does not rest on the file system's clock.
+            let files = Set(kept(root, "one", "trains"))
+            for file in files.subtracting(dated) {
+                try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(rows))], ofItemAtPath: file.path)
+            }
+            dated = files
+        }
+        XCTAssertEqual(dated.count, WidgetTimelineCache.kept)
+        XCTAssertThrowsError(try cache(0).resolve(offline), "the answer written longest ago is removed")
+        for rows in 1...WidgetTimelineCache.kept { XCTAssertEqual(try cache(rows).resolve(offline), answer(rows)) }
+        XCTAssertThrowsError(try cache(nil).resolve(offline), "an unconfigured placement has no configured one's answer")
     }
 
 

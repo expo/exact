@@ -1,9 +1,14 @@
 // @ref LLP 1126.000 WP5, LLP 1126 D8 — account data expires on a store change.
+import CommonCrypto
 import Foundation
 
 /// A refresh captures the app's store counter before reading any account data.
-/// The same identity scopes in-flight sharing and the extension's persisted answer.
+/// The same identity scopes in-flight sharing and the extension's persisted answer:
+/// a generation, a kind, a placement's configuration and the store revision.
 public struct WidgetTimelineCache: Hashable {
+    /// How many configurations' answers a kind keeps in a generation. A person can edit a
+    /// widget any number of times, so a write past this removes the answers written longest ago.
+    package static let kept = 8
     private let file: URL
     private let counterFile: URL
     /// Nil when the counter file is unreadable: the refresh still answers from
@@ -15,8 +20,13 @@ public struct WidgetTimelineCache: Hashable {
         let bytes: Data
     }
 
-    public init(root: URL, kind: String, generation: String) throws {
-        file = root.appendingPathComponent("Library/Caches/widget-timelines/\(generation)/\(kind).json")
+    /// `configuration` is a configured placement's chosen values, the bytes its refresh receives.
+    public init(root: URL, kind: String, generation: String, configuration: Data? = nil) throws {
+        let chosen = configuration ?? Data()
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        _ = chosen.withUnsafeBytes { CC_SHA256($0.baseAddress, CC_LONG(chosen.count), &hash) }
+        let name = hash.map { String(format: "%02x", $0) }.joined()
+        file = root.appendingPathComponent("Library/Caches/widget-timelines/\(generation)/\(kind)/\(name).json")
         counterFile = root.appendingPathComponent("widget-store-generation")
         counter = try? Self.readCounter(counterFile)
     }
@@ -61,8 +71,20 @@ public struct WidgetTimelineCache: Hashable {
         if let saved = try? JSONEncoder().encode(Saved(counter: counter, bytes: bytes)) {
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? saved.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            removeOldest()
         }
         guard isCurrent else { throw Failure.storeChanged }
         return bytes
+    }
+
+    /// Keep this answer and the `kept - 1` other configurations' written most recently.
+    private func removeOldest() {
+        let date = URLResourceKey.contentModificationDateKey
+        guard let files = try? FileManager.default.contentsOfDirectory(at: file.deletingLastPathComponent(), includingPropertiesForKeys: [date]),
+              files.count > Self.kept else { return }
+        let others = files.filter { $0.lastPathComponent != file.lastPathComponent }
+            .map { ($0, (try? $0.resourceValues(forKeys: [date]))?.contentModificationDate ?? .distantPast) }
+            .sorted { $0.1 < $1.1 }
+        for (old, _) in others.prefix(files.count - Self.kept) { try? FileManager.default.removeItem(at: old) }
     }
 }

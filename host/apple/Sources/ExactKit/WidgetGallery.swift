@@ -77,7 +77,7 @@ final class WidgetPreview: ObservableObject {
     let session: HeadlessSession
     let environment: SnapshotEnvironment
     let props: [String: Any]
-    /// The configuration rendered: the variant's choices over the defaults.
+    /// The configuration refreshed and rendered: the variant's choices over the defaults.
     let configuration: [String: String]
     let refresh: String
     let refreshReason: String?
@@ -101,11 +101,13 @@ final class WidgetPreview: ObservableObject {
             rootFontSize: Double(SnapshotDriver.bodySize(for: variant.typeSize)),
             date: date, clock: clock,
             timeZone: TimeZone(identifier: place.timeZone) ?? TimeZone(secondsFromGMT: 0)!, locale: place.locale, formatLocale: place.formatLocale, seed: place.seed)
+        configuration = try entry.configuration(variant.configuration)
+        let chosen = entry.parameters.isEmpty ? nil : try JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys])
         var result: [String: Any] = [:]
         if suppliedProps == nil {
             let initial = try HeadlessSession(plan: plan, entry: entry.kind, size: variant.contentSize, facts: facts, assets: entry.assets)
             defer { initial.close() }
-            result = try initial.previewTimeline(at: date)
+            result = try initial.previewTimeline(at: date, configuration: chosen)
         }
         let first = (result["timeline"] as? [[String: Any]])?.first
         var given: [String: Any]?
@@ -119,8 +121,6 @@ final class WidgetPreview: ObservableObject {
         refresh = suppliedProps != nil ? "props" : first != nil ? "timeline" : result["entryRefresh"] as? String == "timeline" ? "empty" : result["entryRefresh"] as? String ?? "preview"
         refreshReason = result["reason"] as? String
         let bytes = try JSONSerialization.data(withJSONObject: props, options: [.sortedKeys])
-        configuration = try entry.configuration(variant.configuration)
-        let chosen = entry.parameters.isEmpty ? nil : try JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys])
         let rendered = try HeadlessSession(plan: plan, entry: entry.kind, props: bytes, configuration: chosen, size: variant.contentSize, facts: facts, assets: entry.assets)
         do { try rendered.advance(to: clock) } catch { rendered.close(); throw error }
         session = rendered

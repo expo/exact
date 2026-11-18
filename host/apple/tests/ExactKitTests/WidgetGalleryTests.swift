@@ -372,6 +372,7 @@ final class WidgetGalleryTests: XCTestCase {
         let trains = try XCTUnwrap(props["departures"] as? [[String: Any]])
         XCTAssertEqual(trains.first?["train"] as? Int, 121)
         XCTAssertEqual(trains.first?["at"] as? Double, epoch + 180_000)
+        XCTAssertEqual(trains.count, 2, "the refresh received the default rows")
         let preview = try XCTUnwrap(agent.widgetPreview)
         XCTAssertEqual(preview.environment.rootFontSize, SnapshotDriver.bodySize(for: .xxxLarge))
         XCTAssertEqual(preview.environment.rootFontSize, 23)
@@ -400,6 +401,10 @@ final class WidgetGalleryTests: XCTestCase {
         let given = WidgetGallery.answer("state", request: ["widget":address.merging(["props":"{\"station\":\"Palo Alto\",\"departures\":[]}"]) { $1 }], agent: agent)
         XCTAssertNil(given["error"]); XCTAssertEqual(given["refresh"] as? String, "props")
         XCTAssertNil(given["storage"])
+        // The refresh receives the address's configuration: Caltrain's returns one departure for one row.
+        let one = WidgetGallery.answer("state", request: ["widget":address.merging(["configuration":"{\"rows\":\"one\"}"]) { $1 }], agent: agent)
+        XCTAssertNil(one["error"]); XCTAssertEqual(one["refresh"] as? String, "timeline")
+        XCTAssertEqual(((one["props"] as? [String: Any])?["departures"] as? [[String: Any]])?.count, 1)
         // A complete resolver can add entries without consulting the embedded directory.
         let registry = try JSONSerialization.data(withJSONObject: [["kind":"added", "families":["systemSmall"], "preview":[:]]])
         let assets = AssetResolver(root: directory, names: ["plans/widgets.json"], generation: "reload") { _ in registry }
