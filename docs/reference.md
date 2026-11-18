@@ -1192,6 +1192,8 @@ catalogs. Missing paths and paths that are not `.icon` directories fail by name.
 The project and its layers compile in the same `actool` pass as the app's
 catalogs; changing them requires a new native build. `icons` still supplies the
 web and the native raster fallback when the platform has no `icon` selection.
+A variant selects its own project with the same two keys under `variants.<name>`
+([variants](#install-a-development-build-beside-the-release-one-variants)).
 
 An app may ship icons the person chooses for the Home Screen instead
 (LLP 1163.000). `alternate_icons` in `app.json` lists them in the order a
@@ -1985,6 +1987,7 @@ build instead of replacing it and its data (LLP 1030.008). Declare it in `app.js
     "idSuffix": ".dev",
     "name": "Shelf Dev",
     "icons": [{ "src": "assets/icon-dev.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }],
+    "host": { "ios": { "icon": "art/ShelfDev.icon" } },
     "env": { "API_BASE_URL": "https://staging.example" }
   }
 }
@@ -1999,8 +2002,11 @@ and select it with `--variant dev` (or `EXACT_VARIANT=dev`; the flag wins): `bun
   and the compatibility id. An App Clip id under `app.id` moves with it.
 - `name` (required) is the launcher label, the home-screen and menu-bar name, and the executable's name. Two
   variants may not share a suffix, and no variant's name may install under the app's or a sibling's.
-- `icons` replace every icon source, `color_scheme_dark.icons` and Icon Composer's `host.ios.icon` and
-  `host.macos.icon` included. Without them the variant keeps the app's icons.
+- `icons` replace every icon source of the app, `color_scheme_dark.icons` and Icon Composer's `host.ios.icon`
+  and `host.macos.icon` included. Without them the variant keeps the app's icons.
+- `host.ios.icon` and `host.macos.icon` name the variant's own Icon Composer project. It replaces the app's on
+  that platform and wins there over `icons`, as the app's does; the other hosts take `icons`. A variant has no
+  other member of `host`.
 - `env` gives values to settings the manifest's `env` declares. The order is the environment, the variant's
   `env`, `.env.local`, then `.env`.
 

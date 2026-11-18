@@ -70,9 +70,12 @@ export function appIconProblems(manifest, dir) {
   return [...iconListProblems(manifest, dir), ...alternateProblems(manifest, dir)];
 }
 
-/** The names Apple gives the primary icon, lower-cased: `AppIcon`, and the stem of a selected
- * Icon Composer project. */
-const primaryNames = (manifest) => ['appicon', ...(manifest.host?.ios?.icon ? [manifest.host.ios.icon.split('/').filter(Boolean).at(-1).replace(/\.icon$/, '').toLowerCase()] : [])];
+/** The name Apple gives an Icon Composer project: its directory's stem. */
+export const projectName = (path) => path.split('/').filter(Boolean).at(-1).replace(/\.icon$/, '');
+
+/** The names Apple gives the primary icon, lower-cased: `AppIcon`, and a selected Icon Composer
+ * project's. */
+const primaryNames = (manifest) => ['appicon', ...(manifest.host?.ios?.icon ? [projectName(manifest.host.ios.icon).toLowerCase()] : [])];
 
 /** Each alternate's problems (LLP 1163.000 D1): a name used once regardless of case and not the
  * primary's, and its icons checked as the app's are, with at least one square `any` or

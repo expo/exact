@@ -49,7 +49,8 @@ pub(super) fn base_of(id: &str) -> Option<String> {
 
 /// `json` as the variant `name` has it: `app.id` and `host.android.id` with
 /// its `idSuffix`, `app.name` its `name`, an App Clip id under the new id,
-/// its `icons` in place of every icon source, and `variant: {name, base}`.
+/// its `icons` in place of every icon source, its own Icon Composer project
+/// on each platform it names one for, and `variant: {name, base}`.
 pub(super) fn resolve(json: &mut Value, name: &str) -> Result<(), String> {
     if json.get("variant").is_some() {
         return Ok(()); // resolved already, and never twice
@@ -105,6 +106,11 @@ pub(super) fn resolve(json: &mut Value, name: &str) -> Result<(), String> {
                     "icon"
                 });
             }
+        }
+    }
+    for platform in ["ios", "macos"] {
+        if let Some(icon) = variant.pointer(&format!("/host/{platform}/icon")) {
+            json["host"][platform]["icon"] = icon.clone();
         }
     }
     json["variant"] = json!({ "name": name, "base": base });
