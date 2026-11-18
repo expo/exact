@@ -62,7 +62,9 @@ file(xctestrun, {
     TestingEnvironmentVariables: env, EnvironmentVariables: env, ...(only.length ? { OnlyTestIdentifiers: only.map(t => `${name}/${t}`) } : {}) },
   __xctestrun_metadata__: { FormatVersion: 1 },
 });
-const r = spawnSync('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', `platform=iOS Simulator,id=${udid}`, '-collect-test-diagnostics', 'never', '-parallel-testing-enabled', 'NO', '-resultBundlePath', resolve(out, `results-${Date.now()}.xcresult`)],
+// Keep xcodebuild's derived data in `work`, which each run replaces: without `-derivedDataPath`,
+// xcodebuild starts a folder of its own in `~/Library/Developer/Xcode/DerivedData` for every call
+const r = spawnSync('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-derivedDataPath', resolve(work, 'derived'), '-destination', `platform=iOS Simulator,id=${udid}`, '-collect-test-diagnostics', 'never', '-parallel-testing-enabled', 'NO', '-resultBundlePath', resolve(out, `results-${Date.now()}.xcresult`)],
   { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 180000 });
 writeFileSync(resolve(out, 'xcodebuild.log'), r.stdout + r.stderr);
 console.log(r.stdout.split('\n').filter(l => /Test Case|error:|\*\* TEST/.test(l)).join('\n'));

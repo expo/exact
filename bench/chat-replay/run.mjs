@@ -71,6 +71,10 @@ must('xcrun', ['simctl', 'install', a.sim, runner]);
 const out = resolve(a.out), log = out.replace(/\.json$/, '') + '.xcodebuild.log';
 mkdirSync(dirname(out), { recursive: true });
 rmSync(out, { force: true });
+// Remove the device's derived data, where xcodebuild adds a result bundle for every run and nothing here
+// reads one. It goes before the app launches, so the disk work stays out of the measured run.
+const derived = resolve(BUILD, 'derived', a.sim);
+rmSync(derived, { recursive: true, force: true });
 let code = null, ok = false;
 const t0 = Date.now();
 try {
@@ -89,7 +93,7 @@ try {
 <key>TestBundlePath</key><string>__TESTHOST__/PlugIns/ChatReplay.xctest</string><key>UITargetAppPath</key><string>${xml(runner)}</string>
 <key>TestingEnvironmentVariables</key><dict>${Object.entries(vars).map(([k, v]) => `<key>${k}</key><string>${xml(v)}</string>`).join('')}</dict></dict>
 <key>__xctestrun_metadata__</key><dict><key>FormatVersion</key><integer>1</integer></dict></dict></plist>\n`);
-  const x = spawn('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-derivedDataPath', resolve(BUILD, 'derived', a.sim), '-destination', `id=${a.sim}`,
+  const x = spawn('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-derivedDataPath', derived, '-destination', `id=${a.sim}`, '-collect-test-diagnostics', 'never',
     '-only-testing:ChatReplay/ChatReplay/testReplay'], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   const chunks = []; x.stdout.on('data', (d) => chunks.push(d)); x.stderr.on('data', (d) => chunks.push(d));
   // The replay's own bound is 150 s up and about 20 s of flings; past 300 s the test is hung.
