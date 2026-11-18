@@ -53,28 +53,55 @@ impl Configuration {
         serde_json::json!({
             "title": self.title,
             "description": self.description,
-            "parameters": self.parameters.iter().map(|p| serde_json::json!({
-                "name": p.name,
-                "type": "enum",
-                "title": p.title,
-                "values": p.values.iter().map(|(value, title)| serde_json::json!({"value": value, "title": title})).collect::<Vec<_>>(),
-                "default": p.default,
-            })).collect::<Vec<_>>(),
+            "parameters": self.parameters.iter().map(|p| match &p.choices {
+                Choices::Fixed { values, default } => serde_json::json!({
+                    "name": p.name,
+                    "type": "enum",
+                    "title": p.title,
+                    "values": values.iter().map(|(value, title)| serde_json::json!({"value": value, "title": title})).collect::<Vec<_>>(),
+                    "default": default,
+                }),
+                Choices::Entity { kind, title } => serde_json::json!({
+                    "name": p.name,
+                    "type": "entity",
+                    "title": p.title,
+                    "entity": kind,
+                    "entityTitle": title,
+                }),
+            }).collect::<Vec<_>>(),
         })
     }
 }
 
-/// One choice in the Edit Widget sheet: an enum of fixed values.
+/// One row of the Edit Widget sheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
     /// The field of the configuration shape that carries the chosen value.
     pub name: String,
     /// The row's label in the sheet.
     pub title: String,
-    /// `(value, title)` pairs: the value the render reads and the label the sheet shows.
-    pub values: Vec<(String, String)>,
-    /// The value before the person chooses, and in the gallery's default preview.
-    pub default: String,
+    /// What the row offers, and with it the type of the field.
+    pub choices: Choices,
+}
+
+/// What a parameter offers the person.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Choices {
+    /// `type: "enum"`: the values `app.json` lists.
+    Fixed {
+        /// `(value, title)` pairs: the value the render reads and the label the sheet shows.
+        values: Vec<(String, String)>,
+        /// The value before the person chooses, and in the gallery's default preview.
+        default: String,
+    },
+    /// `type: "entity"`: the content-index entries of one kind that the app
+    /// last published (LLP 1133.023 D2). Nothing is chosen until the person chooses.
+    Entity {
+        /// A key of `intents.entities`.
+        kind: String,
+        /// That kind's title: the generated entity type's name in the sheet.
+        title: String,
+    },
 }
 
 use exact_plan::entry_identifier;
@@ -86,6 +113,9 @@ impl Manifest {
             return Ok(Vec::new());
         };
         let rows = value.as_array().ok_or("widgets must be an array")?;
+        let entities = (self.json.get("intents"))
+            .and_then(|intents| intents.get("entities"))
+            .and_then(Value::as_object);
         let mut kinds = HashSet::new();
         rows.iter()
             .enumerate()
@@ -189,10 +219,14 @@ impl Manifest {
                     .clone();
                 let configuration = object
                     .get("configuration")
-                    .map(|value| configuration(value, &format!("{at}.configuration")))
+                    .map(|value| configuration(value, &format!("{at}.configuration"), entities))
                     .transpose()?;
+                // The watch offers no entity choices, so only fixed values multiply.
                 if !watch_families.is_empty() && configuration.as_ref().is_some_and(|c| {
-                    c.parameters.iter().fold(1usize, |count, p| count.saturating_mul(p.values.len())) > 64
+                    c.parameters.iter().fold(1usize, |count, p| match &p.choices {
+                        Choices::Fixed { values, .. } => count.saturating_mul(values.len()),
+                        Choices::Entity { .. } => count,
+                    }) > 64
                 }) {
                     return Err(format!("{at}.configuration allows at most 64 watch recommendations (the product of parameter value counts); reduce the values or parameters"));
                 }
@@ -230,7 +264,11 @@ fn swift_label(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn configuration(value: &Value, at: &str) -> Result<Configuration, String> {
+fn configuration(
+    value: &Value,
+    at: &str,
+    entities: Option<&serde_json::Map<String, Value>>,
+) -> Result<Configuration, String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("{at} must be an object with `title` and `parameters`"))?;
@@ -264,13 +302,15 @@ fn configuration(value: &Value, at: &str) -> Result<Configuration, String> {
                 .as_object()
                 .ok_or_else(|| format!("{at} must be an object"))?;
             for key in row.keys() {
-                if !["name", "title", "type", "values", "default"].contains(&key.as_str()) {
+                if !["name", "title", "type", "values", "default", "entity"].contains(&key.as_str()) {
                     return Err(format!("{at}.{key} is unknown; remove it"));
                 }
             }
-            if row.get("type").and_then(Value::as_str) != Some("enum") {
-                return Err(format!("{at}.type must be `enum`: a fixed list of values"));
-            }
+            let entity = match row.get("type").and_then(Value::as_str) {
+                Some("enum") => false,
+                Some("entity") => true,
+                _ => return Err(format!("{at}.type must be `enum` (a fixed list of values) or `entity` (the entries of a content-index kind)")),
+            };
             let name = row
                 .get("name")
                 .and_then(Value::as_str)
@@ -290,6 +330,13 @@ fn configuration(value: &Value, at: &str) -> Result<Configuration, String> {
             }
             let title = label("title", row, &at)
                 .ok_or_else(|| format!("{at}.title is required: the row's label in the sheet"))??;
+            if entity {
+                let choices = entity_choices(row, &at, entities)?;
+                return Ok(Parameter { name, title, choices });
+            }
+            if row.contains_key("entity") {
+                return Err(format!("{at}.entity belongs to `type: \"entity\"`; remove it"));
+            }
             let values = row
                 .get("values")
                 .and_then(Value::as_array)
@@ -330,8 +377,7 @@ fn configuration(value: &Value, at: &str) -> Result<Configuration, String> {
             Ok(Parameter {
                 name,
                 title,
-                values,
-                default,
+                choices: Choices::Fixed { values, default },
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -339,5 +385,32 @@ fn configuration(value: &Value, at: &str) -> Result<Configuration, String> {
         title,
         description,
         parameters,
+    })
+}
+
+/// An entity parameter's kind, which `intents.entities` declares with the title
+/// the generated Swift names the type by.
+fn entity_choices(
+    row: &serde_json::Map<String, Value>,
+    at: &str,
+    entities: Option<&serde_json::Map<String, Value>>,
+) -> Result<Choices, String> {
+    for key in ["values", "default"] {
+        if row.contains_key(key) {
+            return Err(format!("{at}.{key} belongs to `type: \"enum\"`; remove it: an entity parameter offers the entries the app published with `setContentIndex`, and nothing is chosen until the person chooses"));
+        }
+    }
+    let kind = row.get("entity").and_then(Value::as_str).ok_or_else(|| {
+        format!("{at}.entity is required: a kind that `intents.entities` declares")
+    })?;
+    let Some(declared) = entities.and_then(|kinds| kinds.get(kind)) else {
+        return Err(format!("{at}.entity names `{kind}`, which `intents.entities` does not declare; add it there with its title, as \"{kind}\": {{\"title\": …}}"));
+    };
+    let title = declared.get("title").and_then(swift_label).ok_or_else(|| {
+        format!("intents.entities.{kind}.title must be a non-empty string without control characters: {at} shows it in the Edit Widget sheet")
+    })?;
+    Ok(Choices::Entity {
+        kind: kind.to_owned(),
+        title,
     })
 }

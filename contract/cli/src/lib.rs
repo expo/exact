@@ -82,7 +82,7 @@ pub use logic::{
     apple_linked, linux_entry, native_storage_constructor, rust_entry, rust_entry_composed,
     rust_entry_naming, web_linked, web_rust_mode,
 };
-pub use manifest::{Activity, Configuration, Manifest, Parameter, RustData, Widget};
+pub use manifest::{Activity, Choices, Configuration, Manifest, Parameter, RustData, Widget};
 pub use map::{plan_digest, SourceMap};
 pub use module_rust::module_rust;
 pub use preload::preload_expression;

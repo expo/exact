@@ -74,7 +74,10 @@ pub fn refresh_args(
 
 /// A configuration record of type `ty` from a placement's JSON. LLP 1126:
 /// ignore removed parameters and default missing or removed values. The
-/// compiler puts each parameter's default first in its enum.
+/// compiler puts each parameter's default first in its enum. An entity
+/// parameter's field is the chosen entry's id, or `none` for a missing or
+/// empty one. No list of entries is consulted: the refresh decides what an
+/// id it does not know shows.
 fn chosen(plan: &Plan, ty: TypesId, configuration: Option<&[u8]>) -> Result<Value, String> {
     let json = match configuration {
         Some(bytes) => {
@@ -83,34 +86,34 @@ fn chosen(plan: &Plan, ty: TypesId, configuration: Option<&[u8]>) -> Result<Valu
         None => serde_json::Value::Null,
     };
     let shape = plan.type_(ty);
-    if shape.kind != TypeKind::Record
-        || shape.fields.iter().any(|id| {
-            let field = plan.type_(plan.field(id).ty);
-            field.kind != TypeKind::String || field.fields.len == 0
-        })
-    {
-        return Err("entry configuration has no fixed choices".into());
+    if shape.kind != TypeKind::Record {
+        return Err("entry configuration is not a record of choices".into());
     }
-    Ok(Value::record(
-        shape
-            .fields
-            .iter()
-            .map(|id| {
-                let field = plan.field(id);
-                json.get(plan.str(field.name))
-                    .and_then(|v| decode(plan, field.ty, v))
-                    .unwrap_or_else(|| {
-                        let first = plan
-                            .type_(field.ty)
-                            .fields
-                            .iter()
-                            .next()
-                            .expect("configuration enum");
-                        Value::str(plan.str(plan.field(first).name))
-                    })
-            })
-            .collect(),
-    ))
+    let fields = shape.fields.iter().map(|id| {
+        let field = plan.field(id);
+        let (name, row) = (plan.str(field.name), plan.type_(field.ty));
+        let given = json.get(name);
+        match row.kind {
+            TypeKind::String if row.fields.len != 0 => Ok(given
+                .and_then(|v| decode(plan, field.ty, v))
+                .unwrap_or_else(|| {
+                    let first = row.fields.iter().next().expect("configuration enum");
+                    Value::str(plan.str(plan.field(first).name))
+                })),
+            TypeKind::Option
+                if row.elem.map(|id| plan.type_(id).kind) == Some(TypeKind::String) =>
+            {
+                let id = given.and_then(|v| v.as_str()).filter(|id| !id.is_empty());
+                Ok(Value::Option(id.map(|id| std::rc::Rc::new(Value::str(id)))))
+            }
+            _ => Err(format!(
+                "entry configuration: `{name}` is neither fixed choices nor an entry's id"
+            )),
+        }
+    });
+    fields
+        .collect::<Result<Vec<_>, String>>()
+        .map(Value::record)
 }
 fn decode(plan: &Plan, ty: TypesId, json: &serde_json::Value) -> Option<Value> {
     let row = plan.type_(ty);
@@ -192,5 +195,56 @@ mod tests {
             [Value::Number(7.0)],
             "an unconfigured widget's refresh takes the date alone"
         );
+    }
+
+    #[test]
+    fn an_entity_choice_is_its_id_and_none_when_missing_or_empty() {
+        let mut b = PlanBuilder::new(0, 0);
+        let number = b.primitive(TypeKind::Number);
+        let string = b.primitive(TypeKind::String);
+        let book = b.option(string);
+        let rows = b.string_enum(&["two".into(), "one".into()]);
+        let record = b.record("", &[("rows", rows), ("book", book)]);
+        let init = b.code(exact_plan::asm::Asm::new());
+        b.slot("snapshot_configuration", record, init);
+        let refresh = b.source("refresh", &[number, record], number);
+        let unreadable = b.record("", &[("count", number)]);
+        let counted = b.source("counted", &[number, unreadable], number);
+        let mut plan = b.finish().unwrap();
+        plan.snapshot_refresh = Some(refresh);
+        let id = |id: &str| Value::Option(Some(std::rc::Rc::new(Value::str(id))));
+        for (chosen, book) in [
+            (None, Value::Option(None)),
+            (Some("{}"), Value::Option(None)),
+            // No list of entries is read here, so any id is kept.
+            (Some(r#"{"book":"b1"}"#), id("b1")),
+            (Some(r#"{"book":"b1","rows":"one"}"#), id("b1")),
+            (Some(r#"{"book":""}"#), Value::Option(None)),
+            (Some(r#"{"book":null}"#), Value::Option(None)),
+            (Some(r#"{"book":7}"#), Value::Option(None)),
+        ] {
+            let rows = if chosen.is_some_and(|c| c.contains("rows")) {
+                "one"
+            } else {
+                "two"
+            };
+            let record = Value::record(vec![Value::str(rows), book]);
+            let bytes = chosen.map(str::as_bytes);
+            assert_eq!(
+                refresh_args(&plan, 7.0, bytes).unwrap(),
+                [Value::Number(7.0), record.clone()],
+                "{chosen:?}"
+            );
+            if bytes.is_some() {
+                assert_eq!(
+                    slots(&plan, None, bytes).unwrap().slots,
+                    [("snapshot_configuration".into(), record)],
+                    "{chosen:?}"
+                );
+            }
+        }
+        plan.snapshot_refresh = Some(counted);
+        let error = refresh_args(&plan, 7.0, None).unwrap_err();
+        assert!(error.contains("`count` is neither"), "{error}");
     }
 }

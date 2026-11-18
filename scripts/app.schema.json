@@ -535,7 +535,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["title", "parameters"],
-            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string`, or an enum of exactly its values), at render as it reads the family's size. The refresh receives them as its second argument, a record of the same fields; on Android it receives the defaults. Generated Swift, so a change needs a new binary.",
+            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string` or an enum of exactly its values; `option<string>` for an entity parameter), at render as it reads the family's size. The refresh receives them as its second argument, a record of the same fields; on Android it receives the defaults and no entity choice. Generated Swift, so a change needs a new binary.",
             "properties": {
               "title": { "type": "string", "description": "The intent's title (the Edit Widget sheet is headed by the widget's own title and description)." },
               "description": { "type": "string", "description": "The intent's description; defaults to the title." },
@@ -544,29 +544,44 @@
                 "minItems": 1,
                 "description": "The sheet's rows, in order.",
                 "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["name", "title", "type", "values"],
-                  "properties": {
-                    "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "description": "The configuration shape's field that carries the chosen value." },
-                    "title": { "type": "string", "description": "The row's label." },
-                    "type": { "type": "string", "enum": ["enum"], "description": "A fixed list of choices; data-backed options are not supported." },
-                    "values": {
-                      "type": "array",
-                      "minItems": 1,
-                      "description": "The choices, in the menu's order.",
-                      "items": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["value", "title"],
-                        "properties": {
-                          "value": { "type": "string", "description": "What the render reads." },
-                          "title": { "type": "string", "description": "What the menu shows." }
-                        }
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "title", "type", "values"],
+                      "properties": {
+                        "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "description": "The configuration shape's field that carries the chosen value." },
+                        "title": { "type": "string", "description": "The row's label." },
+                        "type": { "type": "string", "enum": ["enum"], "description": "A fixed list of choices." },
+                        "values": {
+                          "type": "array",
+                          "minItems": 1,
+                          "description": "The choices, in the menu's order.",
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["value", "title"],
+                            "properties": {
+                              "value": { "type": "string", "description": "What the render reads." },
+                              "title": { "type": "string", "description": "What the menu shows." }
+                            }
+                          }
+                        },
+                        "default": { "type": "string", "description": "One of the values: before the person chooses, and in previews. Defaults to the first." }
                       }
                     },
-                    "default": { "type": "string", "description": "One of the values: before the person chooses, and in previews. Defaults to the first." }
-                  }
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "title", "type", "entity"],
+                      "properties": {
+                        "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "description": "The configuration shape's `option<string>` field: the chosen entry's id, and none until the person chooses." },
+                        "title": { "type": "string", "description": "The row's label." },
+                        "type": { "type": "string", "enum": ["entity"], "description": "The entries of one content-index kind, as the app last published them with `setContentIndex` (`@exact/search-index`). Edit Widget on iOS and macOS lists them with no app code running. watchOS and Android offer no choice, so the field is none there." },
+                        "entity": { "type": "string", "description": "The kind: a key of `intents.entities`, whose title names the type in the sheet." }
+                      }
+                    }
+                  ]
                 }
               }
             }

@@ -3,7 +3,7 @@ use crate::{Manifest, Widget};
 use exact_plan::Plan;
 use serde_json::json;
 
-fn widget() -> Widget {
+pub(super) fn widget() -> Widget {
     Widget {
         requires_secrets: false,
         kind: "next-trains".into(),
@@ -19,7 +19,7 @@ fn widget() -> Widget {
     }
 }
 
-fn source(view: &str, declarations: &str, members: &str) -> String {
+pub(super) fn source(view: &str, declarations: &str, members: &str) -> String {
     format!("shape Props\n  title: string\n{declarations}\ncomponent App\n  state nowMs = 0\n  action tick\n    nowMs = performanceNow()\n  task ticker mount\n    every(1000, tick)\n  view\n    scroll height=100\n      text nowMs.toString()\ncomponent Card\n  props\n    title: string\n{members}  view\n{view}\n")
 }
 
@@ -1288,14 +1288,9 @@ fn a_configuration_is_read_fills_its_defaults_and_refuses_with_an_edit() {
     let widget = configured();
     let configuration = widget.configuration.clone().unwrap();
     assert_eq!(configuration.description, None);
-    assert_eq!(
-        configuration.parameters[0].default, "automatic",
-        "the first value"
-    );
-    assert_eq!(
-        configuration.json()["parameters"][0]["values"][1],
-        json!({"value":"one","title":"1"})
-    );
+    let written = &configuration.json()["parameters"][0];
+    assert_eq!(written["default"], "automatic", "the first value");
+    assert_eq!(written["values"][1], json!({"value":"one","title":"1"}));
     let manifest = |configuration: serde_json::Value| Manifest {
         json: json!({"widgets":[{"kind":"card","families":["systemSmall"],"component":"Card","props":"Props",
             "refresh":"refreshCard","preview":{"title":"Preview"},"configuration":configuration}]}),
@@ -1347,9 +1342,9 @@ fn a_configuration_is_read_fills_its_defaults_and_refuses_with_an_edit() {
         ),
         (
             row(
-                json!({"name":"rows","type":"entity","title":"Rows","values":[{"value":"a","title":"A"}]}),
+                json!({"name":"rows","type":"list","title":"Rows","values":[{"value":"a","title":"A"}]}),
             ),
-            "parameters[0].type must be `enum`",
+            "parameters[0].type must be `enum` (a fixed list of values) or `entity`",
         ),
         (
             row(

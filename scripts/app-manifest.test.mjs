@@ -127,20 +127,24 @@ test('Apple metadata dictionaries refuse every key together with grant or generi
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a widget declares fixed enum configuration choices', async () => {
+test('a widget declares fixed enum choices and content-index entity choices', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'widget-configuration-'));
-  const parameter = { name: 'rows', title: 'Rows', type: 'enum', values: [{ value: 'one', title: '1' }], default: 'one' };
-  const manifest = { name: 'Choices', app: { id: 'dev.exact.choices', name: 'Choices' }, widgets: [{
-    kind: 'card', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'refresh', preview: {},
-    configuration: { title: 'Card', parameters: [parameter] },
-  }] };
+  const fixed = { name: 'rows', title: 'Rows', type: 'enum', values: [{ value: 'one', title: '1' }], default: 'one' };
+  const entity = { name: 'book', title: 'Book', type: 'entity', entity: 'book' };
+  const read = parameters => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Choices', app: { id: 'dev.exact.choices', name: 'Choices' },
+      intents: { entities: { book: { title: 'Book' } } }, widgets: [{
+        kind: 'card', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'refresh', preview: {},
+        configuration: { title: 'Card', parameters },
+      }] }));
+    return readManifest(dir, 'choices').widgets[0].configuration.parameters;
+  };
   try {
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
-    assert.deepEqual(readManifest(dir, 'choices').widgets[0].configuration.parameters[0], parameter);
-    parameter.type = 'entity';
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
-    assert.throws(() => readManifest(dir, 'choices'), /type/);
+    assert.deepEqual(read([fixed, entity]), [fixed, entity]);
+    for (const mixed of [{ ...entity, values: fixed.values }, { ...entity, default: 'one' }, { ...fixed, entity: 'book' }, { ...fixed, type: 'entity' }, { ...entity, type: 'list' }]) {
+      assert.throws(() => read([mixed]), /parameters\[0\]: .* matches 0 of the allowed forms/, JSON.stringify(mixed));
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

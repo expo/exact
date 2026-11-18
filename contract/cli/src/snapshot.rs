@@ -17,6 +17,8 @@ pub use activities::{compile_activity, payload_bytes, shape_digest, state_schema
 #[cfg(test)]
 mod activity_tests;
 #[cfg(test)]
+mod entity_tests;
+#[cfg(test)]
 mod tests;
 
 /// The reserved inject a component reads the family's size from

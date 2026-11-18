@@ -6,7 +6,7 @@
 use std::path::Path;
 
 mod widgets;
-pub use widgets::{Configuration, Parameter, Widget};
+pub use widgets::{Choices, Configuration, Parameter, Widget};
 mod activities;
 pub use activities::Activity;
 mod watch;
