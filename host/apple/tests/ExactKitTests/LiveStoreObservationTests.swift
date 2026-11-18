@@ -3,6 +3,11 @@ import XCTest
 @testable import ExactKit
 
 private func checkLiveFiles(scratch: String?) throws {
+    // The storage observation, without the GPU surfaces the bundle installs
+    // (`TestsInstall.swift`): with them a live `state` gave this read no reply.
+    let surfaces = SurfacesLink.installed
+    SurfacesLink.installed = nil
+    defer { SurfacesLink.installed = surfaces }
     let session = ExactApp.shared.makeSession()
     defer { session.destroy() }
     XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)

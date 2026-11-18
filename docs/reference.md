@@ -1441,14 +1441,19 @@ The generated `--embed` composition lists the capabilities to link.
 | Product | Capability | Installation |
 | --- | --- | --- |
 | `ExactMarkdown` | Markdown text and editing | `ExactMarkdown.install()` |
+| `ExactCollections` | Windowed lists, swipe rows, reorder groups and iOS list row cells | `ExactCollections.install()` |
 | `ExactDrag` | Reorder, height and transform drags | `ExactDrag.install()` |
 | `ExactGroupedLists` | Native grouped lists | `ExactGroupedLists.install()` |
-| `ExactSurfaces` | GPU and Canvas surfaces | `ExactSurfaces.install()` |
+| `ExactSurfaces` | GPU and Canvas surfaces | `ExactSurfaces.install()`; links `ExactImages`, which Canvas 2D images read through |
+| `ExactImages` | Image files, animated images and package pictures; icons in text | `ExactImages.install()` |
 | `ExactMediaPicker` | Native media picking | `ExactMediaPicker.install()` |
 | `ExactAuthSession` | Authentication sessions | `ExactAuthSession.install()` |
 | `ExactNumerals` | Numeric content transitions | `ExactNumerals.install()` |
 | `ExactTips` | Platform tips | `ExactTips.install()` |
 | `ExactPresence` | Native presence checks | `ExactPresence.install()` |
+| `ExactEffects` | CSS `filter` on a box | `ExactEffects.install()` |
+| `ExactSvg` | SVG elements, SVG images and icons (links `ExactEffects` too) | `ExactSvg.install()` |
+| `ExactNativeViews` | The app's native module, native views and hatches | `ExactNativeViews.install()` |
 
 Development builds log a missing Markdown or drag installation once per session,
 with the product and installation call. Without it, Markdown remains literal
@@ -2803,9 +2808,10 @@ interrupted drive, the next drive refuses before resetting or opening its profil
 names the profile and PID; close that browser or use another store name. A drive also refuses when the profile's
 owner cannot be verified. A data module's `secret.keep` rides that same
 store: files under the named tree on Apple and Linux, `localStorage` in the named
-web profile. Apple native modules receive the same named data, cache and temporary
-roots across launches. A fresh drive clears them; the picker's temporary documents
-alone are cleared on each launch. A web drive with no `--storage` refuses app storage (`storage is unavailable
+web profile ([web sessions](recipes/web-sessions.md)). Apple native modules receive
+the same named data, cache and temporary roots across launches. A fresh drive clears
+them; the picker's temporary documents alone are cleared on each launch. A web drive
+with no `--storage` refuses app storage (`storage is unavailable
 in agent mode unless the drive names a scratch store (--storage <name>)`; a file
 read rejects `ENOENT` instead, as an empty store's) and keeps
 no secrets. The driver's `state.storage` says
@@ -5426,18 +5432,49 @@ cargo run -q -p exact-js-bake -- path/to/app --out path/to/new-generation
 
 The app exports `grants` and an `Answer`-typed `answer`, and may export `appId`,
 which must then be `app.json`'s `app.id` (the build supplies that id when it does
-not); `appId` and `grants` are constants the build reads from the source without
-running it (a
-string, a template or `+` of constants, an array of them `.join('\n')`, or a
-top-level `const` holding one). Numbers keep their type: `1 + 2` is `3`, while
-`'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
+not); `appId` and `grants` are constants the build reads from syntax without
+running the module: a string, a template or `+` of constants, an array of them
+`.join('\n')`, or a top-level `const` holding one. Numbers keep their type:
+`1 + 2` is `3`, while `'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
+
+Plain `grants` may also use constants imported from app-local modules, including
+local re-exports, arrays and spreads of those arrays:
+
+```ts
+import { SECRET_GRANTS } from './src/session';
+export const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\n');
+```
+
+The imported bindings follow the same literal grammar. Calls other than the
+array's `.join`, computed arrays, package bindings (including re-exports
+from packages), and dependencies on launch-marked settings are refused with a
+source location. Imports resolve through Rolldown, to the file the bundle runs.
+Re-exports follow ECMAScript export resolution: a loop through star exports
+keeps searching, ambiguous bindings are refused, and a star never exports
+`default`. A cycle through constant initializers is refused. `app.ts` declares
+the grants explicitly; importing a module adds no grants. The captured export
+becomes the resolved string, so mutating an imported array at run time cannot
+change it. The rewrite preserves initialization of imported and re-exported
+modules. The bake receipt's `grants` is the
+complete resolved list; `grantSources` lists each nonempty line with its `grant`,
+`file`, `line` and `column`. Locations name the source expression that starts the
+line; generated `env.launch` lines name their setting in `app.json`.
+
+When no setting is launch-marked, `app.ts` may also re-export literal grants
+from an app-local module, by name or through `export *`. The captured export
+becomes the same fixed string. Launch-marked settings require a grants
+declaration in `app.ts`, where the bake adds their `env.launch` lines.
 
 A backend override (`--backend`, `EXACT_BACKEND_ORIGIN` or `.exact/backend-origin`)
 needs one top-level `const origin`, set to a literal http(s) string or a setting
 such as `import.meta.env.API_BASE_URL ?? 'https://api.example'`, and used in
-`net.fetch ${origin}`. Settings are inlined before the override. An unannotated
-setting without an authored type assertion has type `string`, so comparisons
-such as `MODE === 'live'` type-check whatever value the build supplies. Binding
+`net.fetch ${origin}`. Settings are inlined before the override.
+Plain fetch and WebSocket grant lines at the original origin move with it,
+including imported constants; matching normalizes host case and default ports.
+Their receipt entries keep the authored source locations.
+
+An unannotated setting without an authored type assertion has type `string`, so
+comparisons such as `MODE === 'live'` type-check whatever value the build supplies. Binding
 annotations and surrounding assertions are preserved for inlined values. Native launch reads
 retain `as` and angle-bracket assertions, parenthesized around the whole read;
 `satisfies` and const assertions are removed because a launch can supply any
@@ -5455,8 +5492,11 @@ top-level literal `const origin`, after `EXACT_BACKEND_ORIGIN` or
 `.exact/backend-origin` overrides it, and refuses a missing entry, listing the
 origin and keys. Before type-checking, it replaces only the captured initializer
 with a string of the selected lines joined by `\n`, so web and native read the
-same grants. Authored source stays unchanged. Keyed grants move to another
-origin in a development build (`EXACT_UPDATE_TRUST` unset or `development`): an
+same grants. Aliased exports select the initializer exported as `grants`;
+private bindings of that name do not contribute grants or receipt locations.
+Receipt locations name each selected literal. Authored source
+stays unchanged. Keyed grants move to another origin in a development build
+(`EXACT_UPDATE_TRUST` unset or `development`): an
 unlisted loopback or private-network origin (RFC 1918 or link-local IPv4,
 `fc00::/7` or `fe80::/10` IPv6) takes a loopback entry (`127.0.0.1`, `localhost`
 or `[::1]`) of the same scheme. A matching port wins; otherwise exactly one
@@ -5871,10 +5911,19 @@ the shape declares them. `bun exact.mjs contract rust app.contract -o
 /tmp/shapes.rs` writes each shape as a struct with its fields in that order.
 It includes native-module call records only when an authored shape or a data
 source's parameter or result type reaches them; `contract::module_rust`
-generates the module bindings. For a build script,
+generates the module bindings. A data crate's build script calls
+`contract::build_rust(Path::new("../app.contract"))` to write `OUT_DIR/shapes.rs`.
+Exact refreshes the generated Rust before each Cargo build, writing it only
+when its contents change. The first build creates the file; Cargo establishes
+its watch on the following build. Once warm, a view edit leaves the data crate
+fresh when its shapes stay the same. Compiler flags, features and other Cargo
+inputs still trigger builds. The dev watcher follows the generator's Contract
+source graph even when the generated Rust stays unchanged. Existing build scripts
+keep working. Replace their shape-generation calls with `contract::build_rust`
+to get this reuse. Direct Cargo builds watch the Contract source graph. For custom generation,
 `contract::compile_path_for_rust` returns the plan and call-record names to
 pass to `contract::rust`; the names are compiler metadata, outside the binary
-plan. Both map scoped names such as `Point__exact` to `PointExact`.
+plan. Scoped names such as `Point__exact` become `PointExact`.
 `Value::Number`, `Value::str`, `Value::Bool` and `Value::list` are the rest.
 
 ### GPU device requirements
@@ -6092,8 +6141,15 @@ impl DataSource for Scores {
 **secrets**: a session token, a key. Apple keeps them in the Keychain, Linux
 in a file per secret only the user can read (`0600`, under
 `$XDG_DATA_HOME/exact/<app id>/secrets`; not encrypted), Android in AES-GCM
-files with Android Keystore-wrapped keys, and the web in `localStorage`; Windows
-keeps them in memory for now. Opening Android's secret store deletes legacy
+files with Android Keystore-wrapped keys, and the web in origin-readable
+`localStorage`; Windows keeps them in memory for now.
+**For web refresh and session tokens, use a server-set HttpOnly, Secure cookie:**
+[web sign-in tokens and sessions](recipes/web-sessions.md) covers the shared
+native/web flow, selected at run time by `exactHost()` inside an answer
+(`'web'` or `'native'`, no grant; also on web workers). It refuses at module
+initialization and outside an answer; the bake leaves its answers for the host.
+Web `secret.keep` does not protect against injected scripts.
+Opening Android's secret store deletes legacy
 plaintext files without reading them; only encrypted entries are restored.
 The host reads secrets into a snapshot before boot, so a read is synchronous,
 and a scripted drive never keeps them. A best time is not

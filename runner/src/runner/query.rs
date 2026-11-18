@@ -294,7 +294,9 @@ mod tests {
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
             match self.0.clone() {
                 Some(error) => Err(error),
-                None => Ok(Answer::Later(crate::Request::continuation(1))),
+                None => Ok(Answer::Later(crate::Request::continuation::<
+                    crate::host_work::TestWork,
+                >(1))),
             }
         }
     }

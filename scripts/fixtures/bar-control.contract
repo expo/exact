@@ -1,0 +1,21 @@
+// LLP 1123 D3 (LocalInsetsIOSTests): a route under a large title holds a box
+// above its scroller, as a control bar under the title. The route clears the
+// bar, and the scroller below the box overlaps none of the safe area, so
+// UIKit gives it no inset and its first row starts at its top: the box is
+// content, not padding the scroller's inset makes up.
+routes nav
+  home "/"
+
+component BarControl
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+          header
+            text "Inbox" role="heading" aria-level=1
+          column height=56 flex-shrink=0 padding-left=16 padding-right=16 testId="control"
+            text "Filter"
+          scroll id="list" flex=1 min-height=0 testId="list"
+            text "First" padding=12 testId="first"
+            for i in range(30) key=i
+              text `Row ${i}` padding=12

@@ -333,10 +333,10 @@ impl<D: DataSource> Presenter<D> {
         self.scroll_into(route, true, true, at_start);
     }
 
-    /// @ref LLP 1153 D5.1 — a page that arrived with no fragment: each
-    /// scroller in the route where it opens, the offsets its `scrollTop` and
-    /// `scrollLeft` give, the end of a list that opens there, else its start;
-    /// one under `scroll-restoration="manual"` stays where it is.
+    /// @ref LLP 1153 D5.1 — no fragment: each scroller in the route starts
+    /// over, at the offsets its `scrollTop` and `scrollLeft` give, the end of
+    /// a list that opens there, else its start; one under
+    /// `scroll-restoration="manual"` stays where it is.
     fn open_arrived(&mut self, route: ViewId) {
         let limits = self.collection_scroll_limits();
         let kernel = self.host.kernel();

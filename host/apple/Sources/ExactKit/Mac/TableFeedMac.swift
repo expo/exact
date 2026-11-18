@@ -375,7 +375,7 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         table.doubleAction = #selector(doubleClicked)
         table.feed = self
         // A list the runner does not window: its children are in its document, in order.
-        if presenter.collections.entries[id] == nil {
+        if !presenter.collections.owns(id) {
             children = list.container.subviews.compactMap { view in (view as? NodeView).flatMap { presenter.views[$0.id] === $0 ? $0 : nil } }
         }
         sync()
@@ -474,8 +474,8 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// feed's to mount: one of the rows the runner windows, as it has them
     /// in the batch being applied; any child of a list it does not window.
     func expects(_ node: NodeView) -> Bool {
-        guard let entry = presenter?.collections.entries[id] else { return children != nil }
-        return entry.snapshot.rows.contains { $0.view == node.id }
+        guard let snapshot = presenter?.collections.snapshot(id) else { return children != nil }
+        return snapshot.rows.contains { $0.view == node.id }
     }
     private func kernel(_ node: NodeView) -> NSRect { (node.superview as? TableRowCell)?.kernel ?? node.frame }
 
@@ -484,7 +484,7 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     /// a box in the flow is a row, and all of them are mounted).
     private func read(_ presenter: Presenter) -> (count: Int, rows: [Row], stamp: [UInt64]) {
         var next: [Row] = []
-        if let snapshot = presenter.collections.entries[id]?.snapshot {
+        if let snapshot = presenter.collections.snapshot(id) {
             // A table made before the runner said it windows the list.
             if children != nil { children = nil }
             next.reserveCapacity(snapshot.rows.count)
@@ -572,7 +572,7 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         if recount {
             // The items changed: every row is asked again.
             count = items
-            let extent = CGFloat(presenter.collections.entries[id]?.snapshot.extent ?? 0)
+            let extent = CGFloat(presenter.collections.snapshot(id)?.extent ?? 0)
             estimate = common()?.height ?? max(Self.least, (extent / CGFloat(max(1, items)) / pixel).rounded() * pixel)
         } else if differed >= 16, differed > agreed {
             // Most rows that came were not the estimate. Where most mounted
@@ -747,7 +747,7 @@ final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     private func span(ofRow row: Int) -> ClosedRange<CGFloat> {
         if let mounted = self.row(at: row) { return mounted.top...(mounted.top + mounted.height) }
         let content = list?.contentBox().minY ?? 0
-        let extent = content + CGFloat(presenter?.collections.entries[id]?.snapshot.extent ?? 0)
+        let extent = content + CGFloat(presenter?.collections.snapshot(id)?.extent ?? 0)
         var before: Row?, after: Row?
         for mounted in rows { if mounted.index < row { before = mounted } else { after = mounted; break } }
         let from = before.map { $0.top + $0.height } ?? content, first = (before?.index ?? -1) + 1
@@ -994,5 +994,13 @@ extension NodeView {
         }
         return find(self)
     }
+}
+
+extension Presenter {
+    /// What is under `point`, in the viewport's superview, asked as the hover
+    /// path asks (`TableRowCell.whatIsThere`).
+    package func viewUnder(_ point: NSPoint) -> NSView? { TableRowCell.whatIsThere { viewport.hitTest(point) } }
+    /// A press a native table holds ends unanswered: its window resigned key.
+    package func cancelTablePress() { tables.cancelPress() }
 }
 #endif

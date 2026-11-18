@@ -35,7 +35,7 @@ mod arrange_tests;
 #[path = "canvas2d.rs"]
 pub(crate) mod canvas2d;
 #[path = "canvas_capture.rs"]
-mod canvas_capture;
+pub(crate) mod canvas_capture;
 #[path = "canvas_performance.rs"]
 mod canvas_performance;
 #[path = "colors.rs"]
@@ -196,6 +196,9 @@ pub(crate) struct Mirror {
 pub struct Host<D: DataSource> {
     pub(crate) preloads: Option<Box<dyn crate::launch_preloads::LaunchWork>>,
     pub(crate) launch_store: Option<std::sync::Arc<crate::launch_preloads::StoreWatch>>,
+    /// Tell the app's widgets its store changed: the I/O link's, which keeps
+    /// the store they read; none without I/O.
+    widget_changed: Option<fn(&str)>,
     boot_requests: Vec<RequestOut>,
     preload_content: Vec<String>,
     preload_accepted: bool,
@@ -308,6 +311,8 @@ pub struct Host<D: DataSource> {
     /// The session's wake (`listen`), which a pending activation leaves with the data source.
     preload_wake: exact_runner::PreloadWake,
     doc_watch: Option<crate::doc_watch::DocWatch>,
+    /// A turn's family work after its commits, in its written order.
+    turn: crate::link::TurnLinks<D>,
     /// Deadline at the last successful finish with no pending resize notifications;
     /// only a receipt-free collection report can reuse its settled passes.
     finished_deadline: Option<Option<f64>>,
@@ -534,6 +539,7 @@ impl<D: DataSource> Host<D> {
         let was = exact_runner::page::set_awaits_present(start_on_frame);
         let runner = Runner::boot_with_delivery_linked(
             links.runner,
+            links.modules,
             plan,
             data,
             kernel,
@@ -590,6 +596,7 @@ impl<D: DataSource> Host<D> {
             .unwrap_or_default();
         let mut host = Host {
             launch_store: None,
+            widget_changed: links.io.map(|io| io.widget_changed),
             preloads,
             boot_requests,
             preload_content,
@@ -670,6 +677,7 @@ impl<D: DataSource> Host<D> {
             store_retry_names: Vec::new(),
             preload_wake: Default::default(),
             doc_watch: None,
+            turn: links.turn,
             finished_deadline: None,
             quiet_collection: None,
             resize_pending: false,
@@ -730,23 +738,8 @@ impl<D: DataSource> Host<D> {
         }
         let applied = sync.apply(&mut host.engine);
         debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
-        let runner = &host.runner;
-        svg_lower::eligibility(
-            runner.kernel(),
-            &mut host.engine,
-            &sync,
-            host.svg.box_motion,
-            host.svg.live_filters,
-            &|v| !runner.handlers_of(v).is_empty(),
-        );
-        svg_lower::hand_over_paths(runner.kernel(), &mut host.engine, host.svg.live_filters);
-        for view in svg_lower::resample(
-            runner.kernel(),
-            &mut host.engine,
-            host.svg.live_filters,
-            &|v| !runner.handlers_of(v).is_empty(),
-        ) {
-            host.svg.element(host.runner.kernel(), view);
+        if let Some(motion) = host.turn.motion {
+            (motion.boot)(&mut host, &sync);
         }
         host.boot_paint(&order);
         host.reconcile_height_handles(&mut batch, true);
@@ -763,6 +756,29 @@ impl<D: DataSource> Host<D> {
         let batch = host.write(batch, None);
         Ok((host, batch))
     }
+    /// [`crate::link::MotionLowering`]'s boot: what Core Animation can play of
+    /// the motion the engine's first sync started, and the rest resampled.
+    pub(crate) fn lower_motion(&mut self, sync: &MotionSync) {
+        let runner = &self.runner;
+        svg_lower::eligibility(
+            runner.kernel(),
+            &mut self.engine,
+            sync,
+            self.svg.box_motion,
+            self.svg.live_filters,
+            &|v| !runner.handlers_of(v).is_empty(),
+        );
+        svg_lower::hand_over_paths(runner.kernel(), &mut self.engine, self.svg.live_filters);
+        for view in svg_lower::resample(
+            runner.kernel(),
+            &mut self.engine,
+            self.svg.live_filters,
+            &|v| !runner.handlers_of(v).is_empty(),
+        ) {
+            self.svg.element(self.runner.kernel(), view);
+        }
+    }
+
     /// Release effects only after the containing app accepted every candidate.
     pub(crate) fn commit_boot(&mut self) {
         if let Some(note) = self.delivery.and_then(|hooks| (hooks.take_note)()) {
@@ -793,9 +809,14 @@ impl<D: DataSource> Host<D> {
     /// Swift host resolves an image's `app:/` source against (LLP 1069.002
     /// D7); `shareFile` a share's confined copy (LLP 1125 D12). `None` else.
     pub fn answer_hold(&mut self, request: &str) -> Option<String> {
-        let op = exact_runner::agent::field_str(request, "op");
+        let op = exact_runner::json::field_str(request, "op");
         if op.as_deref() == Some("shareFile") {
-            return Some(crate::picker::share_file(request, self.runner.data_ref()));
+            let copy = Some(crate::picker::share_copy as crate::link::ShareCopy);
+            return Some(crate::picker::share_file(
+                request,
+                self.runner.data_ref(),
+                copy,
+            ));
         }
         if op.as_deref() == Some("appRoots") {
             return Some(crate::picker::app_roots_reply(self.runner.data_ref()));
@@ -890,7 +911,14 @@ impl<D: DataSource> Host<D> {
     /// [`Host::listen`] to `io`, and read sockets' buffered bytes (D7) and
     /// long polls' backoff waits (D8) from it; watch the documents the answers watch, as `owner`'s (LLP 1069.010.000 D1).
     pub fn listen_io(&mut self, io: &dyn crate::executor::Io, owner: u64) {
-        self.doc_watch = Some(crate::doc_watch::DocWatch::new(owner, &mut self.runner));
+        self.doc_watch = Some(crate::doc_watch::DocWatch::new(
+            owner,
+            self.runner.native_slot(),
+        ));
+        // Its first watches, read under the grants by the turn's documents work.
+        if let Some(documents) = self.turn.documents {
+            documents(self);
+        }
         self.listen(io.waker());
         self.runner.set_socket_reader(io.socket_reader());
         self.runner.set_retry_reader(io.retry_reader());

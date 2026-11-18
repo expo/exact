@@ -329,7 +329,7 @@ impl Faults {
                 out.push(',');
             }
             out.push_str("{\"prefix\":");
-            crate::agent::quote(&f.prefix, &mut out);
+            crate::json::quote(&f.prefix, &mut out);
             out.push_str(&format!(
                 ",\"times\":{},\"left\":{},\"hits\":{},\"armed\":{}",
                 n(f.times),
@@ -404,9 +404,9 @@ impl<D: DataSource> Runner<D> {
             return None;
         }
         // A fixture must not turn an ungranted request into a successful one.
-        let answers =
-            crate::grants::admitting(&self.grants(), request.grants.as_deref(), &request.url)
-                .is_some();
+        let answers = self.links.grants.is_some_and(|link| {
+            (link.admitting)(&self.grants(), request.grants.as_deref(), &request.url).is_some()
+        });
         let (prefix, response) = self
             .faults
             .table()

@@ -47,7 +47,7 @@ extension KeyCodes {
 /// or `keyup` (43), or a capture keydown (44): its chord (`Shift+Meta+b`, `Event::key`), its
 /// `KeyboardEvent.code` ("" when the host cannot tell), `repeat` and
 /// `isComposing`. It prints as its chord, which the hosts' tests read.
-struct KeyPress: ExpressibleByStringLiteral, CustomStringConvertible {
+package struct KeyPress: ExpressibleByStringLiteral, CustomStringConvertible {
     var chord: String
     var code = ""
     var repeats = false
@@ -57,15 +57,15 @@ struct KeyPress: ExpressibleByStringLiteral, CustomStringConvertible {
     /// (`passesComposition`), which only a modifier's own press and release
     /// do with the text still marked.
     var composing = false
-    init(_ chord: String, code: String = "", repeats: Bool = false, up: Bool = false, composing: Bool = false) {
+    package init(_ chord: String, code: String = "", repeats: Bool = false, up: Bool = false, composing: Bool = false) {
         self.chord = chord
         self.code = code == "Unidentified" || !code.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) ? "" : code
         self.repeats = repeats && !up
         self.up = up
         self.composing = composing
     }
-    init(stringLiteral chord: String) { self.init(chord) }
-    var description: String { chord }
+    package init(stringLiteral chord: String) { self.init(chord) }
+    package var description: String { chord }
     /// The payload `KeyboardEvent::parse` reads.
     var payload: String {
         composing ? "\(chord)\n\(code)\n\(repeats)\ntrue" : code.isEmpty && !repeats ? chord : "\(chord)\n\(code)\n\(repeats)"
@@ -327,7 +327,7 @@ extension Presenter {
     /// (and the field editor editing it), textarea, native button or date/select control. Any other view a node
     /// holds (a web view, a native module's) keeps its keys, as an iframe's
     /// never reach the page.
-    func keyTarget(_ responder: NSResponder?) -> NodeView? {
+    package func keyTarget(_ responder: NSResponder?) -> NodeView? {
         if let run = responder as? InlineKeyView { return run.owner }
         guard let view = responder as? NSView else { return nil }
         var next: NSView? = view

@@ -24,7 +24,7 @@
 // call nested past 8 only counts (`overflow`).
 import Foundation
 
-final class HatchBreadcrumb {
+final package class HatchBreadcrumb {
     static let slots = 8, slotBytes = 512, depthMax = 8, headerBytes = 32, recordBytes = 60, nameBytes = 46, labelBytes = 16
     static let moments = ["built", "changed", "ended", "called"]
     static let prefix = "hatch-breadcrumb-"
@@ -45,13 +45,13 @@ final class HatchBreadcrumb {
 
     /// What earlier runs of this app left: one line for each session that
     /// ended inside a hatch call. Read once, when `shared` is first asked for.
-    private(set) static var lastEnds: [String] = []
+    private(set) static package var lastEnds: [String] = []
     /// Whether a session's journal has said them yet: the first to connect does.
-    static var reported = false
+    static package var reported = false
     /// This process's file, made when the first session's hatches connect
     /// (after first pixel); nil when it cannot be made. Earlier runs' files
     /// are read and deleted first.
-    static let shared: HatchBreadcrumb? = {
+    static package let shared: HatchBreadcrumb? = {
         let directory = HatchBreadcrumb.directory
         lastEnds = read(directory: directory)
         guard let crumbs = HatchBreadcrumb(directory: directory) else { return nil }
@@ -87,7 +87,7 @@ final class HatchBreadcrumb {
 
     /// A free slot for a session, cleared, or nil when all 8 are taken: that
     /// session runs without a breadcrumb.
-    func take(label: String) -> Int? {
+    package func take(label: String) -> Int? {
         guard let index = taken.firstIndex(of: false) else { return nil }
         taken[index] = true
         let s = slot(index)
@@ -99,7 +99,7 @@ final class HatchBreadcrumb {
     }
 
     /// A session's end clears and frees its own slot, and no other's.
-    func free(_ index: Int) {
+    package func free(_ index: Int) {
         guard taken.indices.contains(index), taken[index] else { return }
         slot(index).initializeMemory(as: UInt8.self, repeating: 0, count: Self.slotBytes)
         taken[index] = false
@@ -117,7 +117,7 @@ final class HatchBreadcrumb {
     }
 
     /// A hatch call begins.
-    func push(_ index: Int, name: String, moment: String, incarnation: UInt32) {
+    package func push(_ index: Int, name: String, moment: String, incarnation: UInt32) {
         let s = slot(index)
         let call = s.load(fromByteOffset: 12, as: UInt32.self) &+ 1
         s.storeBytes(of: call, toByteOffset: 12, as: UInt32.self)
@@ -140,7 +140,7 @@ final class HatchBreadcrumb {
     }
 
     /// The call returned.
-    func pop(_ index: Int) {
+    package func pop(_ index: Int) {
         let s = slot(index)
         let overflow = s.load(fromByteOffset: 8, as: UInt32.self)
         if overflow > 0 { s.storeBytes(of: overflow - 1, toByteOffset: 8, as: UInt32.self); return }

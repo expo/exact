@@ -797,6 +797,8 @@ impl Surfaces {
                 self.error = abi.error();
                 continue;
             }
+            #[cfg(target_os = "android")]
+            android::bound(abi, update.view, c.id);
             if !self.restore_read {
                 self.restore_read = true;
                 self.restore = std::env::var_os("EXACT_WORLD").map(|path| {

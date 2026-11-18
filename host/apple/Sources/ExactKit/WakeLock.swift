@@ -45,10 +45,3 @@ package enum WakeLock {
         #endif
     }
 }
-
-extension Presenter {
-    /// The batch's word on the wake lock, when it says one.
-    func applyWakeLock(_ batch: Batch) {
-        if let held = batch.wakelock { WakeLock.hold(self, held) }
-    }
-}

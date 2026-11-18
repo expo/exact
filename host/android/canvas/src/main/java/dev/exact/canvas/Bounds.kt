@@ -11,9 +11,10 @@ import java.nio.IntBuffer
  * [measure] says false for what it cannot bound (a slot, a layer or a scroller's rows drawn by reference).
  */
 internal class Bounds {
-    /** A kept row's node by id ([measure] places it where op 17 draws it). */
+    /** A kept row's node by id ([measure] places it where op 17 or 55 draws it). */
     var row: (Int) -> android.graphics.RenderNode? = { null }
     private val m = Matrix()
+    private val through = Matrix()
     private val values = FloatArray(9)
     private val r = RectF()
     private val clips = ArrayList<RectF?>()
@@ -111,6 +112,16 @@ internal class Bounds {
                     val x = f(b, i + 2); val y = f(b, i + 3)
                     add(out, x, y, x + node.width, y + node.height, absolute = true)
                     i += 4
+                }
+                55 -> {
+                    val node = row(b.get(i + 1)) ?: return false
+                    values[0] = f(b, i + 2); values[3] = f(b, i + 3); values[1] = f(b, i + 4); values[4] = f(b, i + 5)
+                    values[2] = f(b, i + 6); values[5] = f(b, i + 7); values[6] = 0f; values[7] = 0f; values[8] = 1f
+                    through.setValues(values)
+                    local.set(0f, 0f, node.width.toFloat(), node.height.toFloat())
+                    through.mapRect(local)
+                    add(out, local.left, local.top, local.right, local.bottom, absolute = true)
+                    i += 8
                 }
                 18 -> i += 2
                 19 -> { add(out, f(b, i + 2), f(b, i + 3), f(b, i + 2) + f(b, i + 4), f(b, i + 3) + f(b, i + 5)); i += 26 }

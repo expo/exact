@@ -120,6 +120,12 @@ pub type Reply = extern "C" fn(*const u8, usize, usize);
 /// CryptoKit's synchronous sealer; only its ciphertext reply leaves the transport call.
 pub type Seal = extern "C" fn(*const u8, usize, Reply, usize);
 
+/// The answer to every request in an archive that links no I/O.
+pub fn refuse(reply: Reply, context: usize) {
+    let bytes = serde_json::to_vec(&Refusal::Invalid.reply()).expect("watch reply");
+    reply(bytes.as_ptr(), bytes.len(), context);
+}
+
 /// Private transport entry. The optional Swift target calls it on Exact's owner,
 /// which serializes snapshots with all sessions' committed writes.
 ///

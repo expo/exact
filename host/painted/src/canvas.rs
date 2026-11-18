@@ -117,6 +117,9 @@ const UNCLIPPED: u32 = 1 << 30;
 const ROW_END: u32 = 16;
 /// Draw a kept row: id, x, y (device pixels).
 const ROW_DRAW: u32 = 17;
+/// Draw a kept row through a matrix: id, then a b c d e f as `MATRIX`'s,
+/// mapping the row's node into the device. A kept drawing scaled or turned.
+const ROW_DRAW_THROUGH: u32 = 55;
 /// A kept row no longer drawn: freed once the next stream arrives.
 const ROW_FREE: u32 = 18;
 /// A filled ring: color, outer x y w h and radii, inner x y w h and radii.
@@ -261,6 +264,8 @@ mod forma;
 mod surface;
 #[path = "canvas/svg.rs"]
 mod svg;
+#[cfg(test)]
+pub(crate) use filter::filtered_row_draws;
 pub use picture::Picture;
 use picture::WeakPicture;
 #[cfg(target_os = "android")]
@@ -827,6 +832,9 @@ impl Backend for Recorder {
     fn rows(&self) -> bool {
         self.planes.is_empty()
     }
+    fn rows_through(&self) -> bool {
+        self.rows()
+    }
 
     fn row_begin(&mut self, id: u32, origin: (f32, f32), previous: Option<u32>) {
         self.shared_row_begin();
@@ -993,26 +1001,28 @@ impl Backend for Recorder {
     }
 
     fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
-        // Just recorded and in view: the reader makes it before this frame.
-        if let Some((_, at)) = self.recorded.take().filter(|(r, _)| *r == id) {
-            if !self.culled(Some(bounds)) {
-                self.ops[at + 2] |= 1 << 31;
-            }
-        }
-        // Its pictures are drawn too: the reader keeps them.
-        if let Some((_, images)) = self.kept.get(&id) {
-            for key in images {
-                if let Some(image) = self.images.get_mut(key) {
-                    image.2 = self.frames;
-                }
-            }
-        }
-        self.need(Some(bounds));
-        self.layers.row_drawn(id);
+        self.row_shown(id, bounds);
         let s = self.scale;
         self.ops.extend([ROW_DRAW, id]);
         self.f((origin.0 - ROW_PAD) * s);
         self.f((origin.1 - ROW_PAD) * s);
+    }
+
+    fn row_draw_through(&mut self, id: u32, ts: Transform, bounds: Rect4) {
+        self.row_shown(id, crate::paint::bbox(ts, bounds));
+        // The reader's node is in device pixels, its origin `ROW_PAD` above
+        // and left of the row's.
+        let s = self.scale;
+        let pad = (
+            ts.sx * ROW_PAD + ts.kx * ROW_PAD,
+            ts.ky * ROW_PAD + ts.sy * ROW_PAD,
+        );
+        self.ops.extend([ROW_DRAW_THROUGH, id]);
+        for v in [ts.sx, ts.ky, ts.kx, ts.sy] {
+            self.f(v);
+        }
+        self.f((ts.tx - pad.0) * s);
+        self.f((ts.ty - pad.1) * s);
     }
 
     fn row_free(&mut self, id: u32) {
@@ -1113,6 +1123,7 @@ pub struct CanvasHost<D: DataSource> {
     shell: device::Shell,
     /// Pictures the reader will report presented (LLP 1003.001 D9), by token.
     presents: present::Pictures,
+    launch: crate::launch_marks::LaunchMarks,
 }
 
 #[cfg(target_os = "android")]
@@ -1240,8 +1251,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
             p.display_frame()
         }?;
         p.display_complete(&frame);
-        let wanted = p.present_wanted();
-        self.presents.painted(frame.carried(), wanted);
+        let wanted = p.present_wanted() || !self.launch.done();
+        if !self.launch.done() {
+            self.launch.recorded();
+        }
+        self.presents.painted(
+            frame.carried(),
+            wanted,
+            !self.launch.done()
+                && !p.module_pending()
+                && crate::launch_marks::items(&p.host().runner().outstanding()).is_empty(),
+        );
         if p.module_pending() {
             p.first_pixel();
         }
@@ -1439,7 +1459,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if (self.painted_once && !self.lead) || self.owed_surfaces {
             return Some(0.0);
         }
-        self.settle_due(self.p.turn_due_ms(self.now()))
+        let due = self.settle_due(self.p.turn_due_ms(self.now()));
+        match (due, self.launch.timeout_ms()) {
+            (Some(due), Some(launch)) => Some(due.min(f64::from(launch))),
+            (None, Some(launch)) => Some(f64::from(launch)),
+            (due, None) => due,
+        }
     }
 
     /// The descriptors that wake the presenter (executor replies, decoded images).
@@ -1469,7 +1494,7 @@ pub fn pending_pictures() -> Vec<[u32; 3]> {
 }
 
 /// A picture announced by `IMAGE_DEF`, once (premultiplied RGBA rows).
-#[cfg(target_os = "android")]
-fn image(id: u32) -> Option<Picture> {
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn image(id: u32) -> Option<Picture> {
     with_pending(|p| p.remove(&id))
 }

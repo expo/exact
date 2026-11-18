@@ -100,7 +100,8 @@ const router = {
     const parts = [...hosts.values()].map(host => host.clock(settle));
     const world = parts.flatMap(part => part.reply.world ?? []);
     const at = parts.map(part => part.settleAt).filter(Number.isFinite);
-    return { pending: parts.some(part => part.pending), settleAt: at.length ? Math.max(...at) : undefined, reply: world.length ? { world } : {} };
+    const ticks = parts.map(part => part.nextTickAt).filter(Number.isFinite);
+    return { pending: parts.some(part => part.pending), settleAt: at.length ? Math.max(...at) : undefined, nextTickAt: ticks.length ? Math.min(...ticks) : undefined, reply: world.length ? { world } : {} };
   },
   async prepareShaders(assets) {
     await Promise.all(loading.values());

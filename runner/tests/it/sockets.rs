@@ -7,6 +7,10 @@
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::failure::FailureCode;
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     Answer, DataError, DataSource, Message, Outcome, Request, Response, Runner, SocketOp,
     SocketOrigin, SocketSend, Store, Target,
@@ -97,7 +101,7 @@ impl DataSource for Echo {
                 let what = args[0].as_str().unwrap_or("");
                 store.stage_answer_socket(0, SocketOp::Text(format!("late {what}")));
                 self.token += 1;
-                Ok(Answer::Later(Request::continuation(self.token)))
+                Ok(Answer::Later(Request::continuation::<TestWork>(self.token)))
             }
             ("ask", Target::Resource(_)) => {
                 self.seen.push(store.socket_buffered().to_vec());
@@ -116,7 +120,7 @@ impl DataSource for Echo {
                     "refuse" | "stray" => Ok(Answer::Now(Value::str(&q))),
                     _ => {
                         self.token += 1;
-                        Ok(Answer::Later(Request::continuation(self.token)))
+                        Ok(Answer::Later(Request::continuation::<TestWork>(self.token)))
                     }
                 }
             }

@@ -3,6 +3,8 @@ import IOSurface
 import Metal
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// A live filter picture's Metal chain (LLP 1055.000 D14) against the Core
 /// Image chain, which the SVG smoke holds to Chrome: F3's CSS chain over a

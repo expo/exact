@@ -299,7 +299,7 @@ impl<D: DataSource> Runner<D> {
         // 1133.015 D7), whether Contract or data code reads it.
         let live = (self.plan.module_named(&p.source))
             .filter(|row| row.live && !row.send)
-            .map(|row| self.key(row))
+            .map(|row| self.module_key(row))
             .or_else(|| (p.keepable.as_ref()).and_then(|r| self.module_topic(&r.body)));
         let outcome = match (live, outcome) {
             (Some(key), Outcome::Response(mut response)) => {
@@ -579,4 +579,30 @@ impl<D: DataSource> Runner<D> {
             next.replay_unsafe |= previous.replay_unsafe;
         }
     }
+}
+
+/// A held data-code call's two halves, whichever comes first: the host's
+/// reply, or the answer to send through it.
+#[derive(Default)]
+pub(in crate::runner) struct Pending {
+    pub(in crate::runner) reply: Option<crate::Reply>,
+    pub(in crate::runner) outcome: Option<Outcome>,
+}
+
+impl Pending {
+    pub(in crate::runner) fn complete(slot: &std::sync::Mutex<Pending>, outcome: Outcome) {
+        let mut s = slot.lock().unwrap_or_else(|e| e.into_inner());
+        match s.reply.take() {
+            Some(reply) => reply.send(outcome),
+            None => s.outcome = Some(outcome),
+        }
+    }
+}
+
+pub(in crate::runner) fn response(answer: &serde_json::Value) -> Outcome {
+    Outcome::Response(crate::request::Response {
+        status: 200,
+        headers: Vec::new(),
+        body: answer.to_string().into_bytes(),
+    })
 }

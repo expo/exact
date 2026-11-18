@@ -143,6 +143,19 @@ fn a_storage_texture_carries_its_access_and_format() {
 }
 
 #[test]
+fn a_core_cube_array_texture_is_accepted() {
+    let g = reflect(
+        "cube",
+        &format!("@group(0) @binding(0) var sky: texture_cube_array<f32>;\n{FS}"),
+    )
+    .unwrap();
+    assert!(
+        g.contains("view_dimension: wgpu::TextureViewDimension::CubeArray"),
+        "{g}"
+    );
+}
+
+#[test]
 fn a_trailing_runtime_sized_array_is_an_offset_and_a_stride_beside_the_fixed_members() {
     let g = reflect(
         "ps",

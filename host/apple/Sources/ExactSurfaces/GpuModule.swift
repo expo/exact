@@ -169,6 +169,7 @@ final class GpuModule {
     /// Whether a canvas's next frame is due at a frame time under its cap (`Module::due`), and its cap.
     var due: DueFn?
     var maxFps: WantsFn?
+    var presentationFlags: WantsFn?
 
     let wantsInput: WantsFn?
     /// Whether a canvas's world reads gamepads; absent from an older module,
@@ -388,6 +389,7 @@ final class GpuModule {
         module.hostFrame = sym("gpu_host_frame", HostFrameFn.self)
         module.due = sym("gpu_due", DueFn.self)
         module.maxFps = sym("gpu_max_fps", WantsFn.self)
+        module.presentationFlags = sym("gpu_presentation_flags", WantsFn.self)
         module.bindAt = sym("gpu_bind_at", BindAtFn.self)
         module.canvasSize = sym("gpu_size", SizeFn.self)
         module.wantsPads = sym("gpu_wants_pads", WantsFn.self)

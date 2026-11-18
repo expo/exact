@@ -213,7 +213,7 @@ function mirror(r) {
   const removed = before.map(e => e[0]).filter(id => !ids.has(id)), was = before.find(e => e[0] === top[0]);
   Shown = r;
   // A navigation to a fragment, a new visit with one, a fragment that changed, or the visit at another path (a new
-  // page, D5.1) scrolls (LLP 1153 D5); a visit returned to, or given only a new query, keeps its place. The history
+  // page) scrolls (LLP 1153 D5, D5.1); a visit returned to, or given only a new query, keeps its place. The history
   // mirrors the visit's url with its fragment.
   const n = assigned(), activated = !!n && n[1] === top[0] && n[2] === top[5], path = url => url.split("?")[0];
   const op = changeOf(r, top, activated || (was ? was[5] !== top[5] || path(was[2]) !== path(top[2]) : !!top[5]), removed);

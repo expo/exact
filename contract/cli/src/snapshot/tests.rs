@@ -3,6 +3,10 @@ use crate::{Manifest, Widget};
 use exact_plan::Plan;
 use serde_json::json;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 fn widget() -> Widget {
     Widget {
         requires_secrets: false,
@@ -802,7 +806,10 @@ fn refresh_checks_distinguish_pending_sources_and_result_mismatches() {
             plan,
         },
     )]);
-    let mut pending = Data(Ok(Answer::Later(Request::continuation(7))), false);
+    let mut pending = Data(
+        Ok(Answer::Later(Request::continuation::<TestWork>(7))),
+        false,
+    );
     check_refreshes(&entries, &mut pending).unwrap();
     assert!(pending.1);
     check_refreshes(

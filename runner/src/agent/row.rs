@@ -7,7 +7,7 @@
 //! colour. An enum is its CSS name, a vector is `[x, y]`, and a clip path is
 //! its canonical text. The engine's and the grid's rows are named, not spelled.
 
-use super::{num, quote};
+use crate::json::{num, quote};
 use exact_kernel::{Color, ColorValue, Dimension, Edge, RowValue, StyleId};
 use std::fmt::Write as _;
 

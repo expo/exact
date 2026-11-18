@@ -1,0 +1,34 @@
+use ShaderState from "@exact/shader"
+
+component App
+  state shown = false
+  state speed = 1
+  state tint = "#0a84ff"
+  state broken = false
+  resource fx = exactSurface("shader") as shape ShaderState
+  derive file = shown ? (broken ? "assets/broken.wgsl" : "assets/motion.wgsl") : ""
+  action show
+    shown = not shown
+  action faster
+    speed = speed + 1
+    tint = "#ff3366"
+  action replace
+    broken = not broken
+  view
+    column padding=16 gap=8
+      row gap=8
+        button press=show testId="show"
+          text "Show shaders"
+        button press=faster testId="faster"
+          text "Faster"
+        button press=replace testId="replace"
+          text "Replace shader"
+      canvas surface=shader(src=file, speed=speed) width=128 height=48 background-color="#126634" testId="animated" aria-hidden=true
+      if shown
+        canvas surface=shader(src="assets/still.wgsl", tint=tint) width=128 height=48 background-color="#126634" testId="resting" aria-hidden=true
+        canvas surface=shader(src="assets/types.wgsl", f=0.25, i=2, n=true, v2=[0.25, 0.5], v3=[0.25, 0.5, 0.75], v4=[0.25, 0.5, 0.75, 0]) width=128 height=48 background-color="#126634" testId="types" aria-hidden=true
+        canvas surface=shader(src="assets/still.wgsl", tint="#aabbcc") width=128 height=48 background-color="#126634" testId="shared" aria-hidden=true
+      if fx.presented
+        text "Presented" testId="presented"
+      if fx.error != ""
+        text fx.error role="alert" testId="error"

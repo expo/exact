@@ -5,6 +5,10 @@ use crate::batch::Batch;
 use exact_plan::Value;
 use exact_runner::{HttpScheduling, Request, RequestOut, SurfaceRequest};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 fn one(op: impl FnOnce(&mut Batch)) -> String {
     let mut batch = Batch::new();
     op(&mut batch);
@@ -249,7 +253,7 @@ fn cases() -> Vec<(&'static str, String)> {
             one(|b| {
                 b.request(&request(
                     43,
-                    Request::continuation(9_007_199_254_740_993),
+                    Request::continuation::<TestWork>(9_007_199_254_740_993),
                     false,
                 ))
             }),
@@ -504,7 +508,7 @@ fn every_op_writes_the_json_it_always_wrote() {
 #[test]
 fn a_long_poll_on_other_work_is_refused_before_dispatch() {
     for request in [
-        Request::continuation(7).long_poll("since", "seq"),
+        Request::continuation::<TestWork>(7).long_poll("since", "seq"),
         Request::storage(b"{}".to_vec()).long_poll("since", "seq"),
         Request::native(b"x".to_vec()).long_poll("since", "seq"),
     ] {
@@ -666,7 +670,7 @@ fn prefetch_is_ignored_for_web_reads_and_refused_for_sends_and_other_work() {
     assert!(batch["ops"][0].get("prefetch").is_none());
     for invalid in [
         request(2, Request::get("https://example.test").prefetch(), false),
-        request(3, Request::continuation(7).prefetch(), false),
+        request(3, Request::continuation::<TestWork>(7).prefetch(), false),
         request(
             4,
             Request::get("https://example.test")

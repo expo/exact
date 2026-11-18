@@ -126,6 +126,6 @@ three next steps above) was not merged: it made the `<dialog>` case worse.
 | Opens a page-drawn `aria-modal` box | 0 of 18 | 0 of 18 |
 | Opens that box with its field focused | 6 of 6 | 6 of 6 |
 
-The alert case is issues/20261018-macos-menu-pick-alert-voiceover-old-field.md. The box
+The alert case is issues/closed/20261018-macos-menu-pick-alert-voiceover-old-field.md. The box
 whose field takes the focus is not the menu's timing (it re-reads on both builds) and is
-issues/20261018-macos-menu-pick-page-modal-field-voiceover.md.
+issues/closed/20261018-macos-menu-pick-page-modal-field-voiceover.md.

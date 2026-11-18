@@ -22,6 +22,7 @@ pub(super) struct Resolved {
     /// the target (resolving into it at 4x), and no tone pass follows.
     pub direct: bool,
     pub bilinear: bool,
+    pub measure: bool,
     /// CPU stage times: prepare, compute, opaque, background, surface, post.
     pub times: [Option<f64>; 6],
     /// Engine draws beyond the retained per-batch count.
@@ -61,6 +62,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             None,
             crate::HookTime::default(),
             &Default::default(),
+            None,
         )
         .expect("empty hooks cannot refuse")
     }
@@ -87,9 +89,6 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         }
     }
 
-    // Order: skinning → hook compute → culling → shadows → forward (opaque, hook
-    // opaque, sky, background[, translucent]) → [surface + translucent] → post →
-    // bloom → tone. @ref llp/1046.006.000-render-hooks.rfc.md#d3-optional-services-the-scene-copy
     #[allow(clippy::too_many_arguments)]
     /// Encode the frame into `encoder` (the GPU module's, LLP 1009 D7); the
     /// caller submits it and then calls [`Self::submitted`].
@@ -103,6 +102,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         world: Option<&exact_game::World>,
         time: crate::HookTime,
         poses: &crate::hooks::Poses,
+        cpu: Option<(&mut crate::perf::Perf, bool)>,
     ) -> Result<Stats, RenderError> {
         if self.probe.is_none() {
             self.end_look();
@@ -111,13 +111,53 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         if H::ENABLED && self.hook_metrics.is_none() {
             self.hook_metrics = Some(Box::default());
         }
+        let mut ran_hook_stage = false;
+        let result = self.encode_frame(
+            encoder,
+            target,
+            size_px,
+            frame,
+            hooks,
+            world,
+            time,
+            poses,
+            cpu,
+            &mut ran_hook_stage,
+        );
+        if H::ENABLED {
+            self.hook_metrics.as_mut().unwrap().record_frame(
+                hooks,
+                ran_hook_stage,
+                self.probe.is_none(),
+            );
+        }
+        result
+    }
+
+    // Order: skinning → hook compute → culling → shadows → forward (opaque, hook
+    // opaque, sky, background[, translucent]) → [surface + translucent] → post →
+    // bloom → tone. @ref llp/1046.006.000-render-hooks.rfc.md#d3-optional-services-the-scene-copy
+    #[allow(clippy::too_many_arguments)]
+    fn encode_frame<H: crate::Hooks>(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        size_px: (u32, u32),
+        frame: &FrameInput<'_>,
+        hooks: &mut H,
+        world: Option<&exact_game::World>,
+        time: crate::HookTime,
+        poses: &crate::hooks::Poses,
+        cpu: Option<(&mut crate::perf::Perf, bool)>,
+        ran_hook_stage: &mut bool,
+    ) -> Result<Stats, RenderError> {
         self.upload_overrides(frame);
         let size = (size_px.0.max(1), size_px.1.max(1));
         let capacity = (
             size.0.div_ceil(64).max(self.targets.size.0 / 64) * 64,
             size.1.div_ceil(64).max(self.targets.size.1 / 64) * 64,
         );
-        let view = crate::FrameView {
+        let mut view = crate::FrameView {
             frame,
             time,
             pixels: size,
@@ -128,8 +168,10 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             poses,
         };
         let mut times = [None; 6];
+        let measure = cpu.is_some();
         let needs = if H::ENABLED {
-            self.prepare_hooks(hooks, world, &view, &mut times)?;
+            *ran_hook_stage = world.is_some();
+            self.prepare_hooks(hooks, world, &mut view, &mut times, measure)?;
             hooks.needs()
         } else {
             crate::Needs::NONE
@@ -138,7 +180,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             self.hook_metrics
                 .as_mut()
                 .unwrap()
-                .record(times, hooks.work(), false);
+                .record_stages(times, hooks, false, cpu);
             return Ok(self.encode_assets(encoder, target, size_px, frame));
         }
         if H::ENABLED && ASSETS {
@@ -312,6 +354,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             .and_then(|s| s.shadows)
             .is_some_and(|s| matches!(s.filter, crate::ShadowFilter::Bilinear { .. }));
         let mut state = Resolved {
+            measure,
             bilinear,
             size,
             needs,
@@ -370,7 +413,8 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             }
         }
         if H::ENABLED {
-            let start = (!time.seekable).then(crate::perf::Stamp::now);
+            *ran_hook_stage = true;
+            let start = measure.then(crate::perf::Stamp::now);
             timing::encoder_stamp(&self.device, encoder, frame.timestamps, 17, false);
             hooks
                 .compute(encoder, &view)
@@ -448,7 +492,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             self.encode_post(encoder, target, &mut state, frame, hooks, &view)?;
         }
         self.cull.copy_counts(&self.device, encoder);
-        Ok(self.finish_stats(hooks, &state))
+        Ok(self.finish_stats(hooks, &state, cpu))
     }
 
     /// Whether this frame draws straight into the target, with no HDR image (README
@@ -550,8 +594,9 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         &mut self,
         hooks: &mut H,
         world: Option<&exact_game::World>,
-        view: &crate::FrameView<'_>,
+        view: &mut crate::FrameView<'_>,
         times: &mut [Option<f64>; 6],
+        measure: bool,
     ) -> Result<(), RenderError> {
         let device = &self.device;
         let binding = self
@@ -581,12 +626,28 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             frame_binding: &binding.bind,
             frame_layout: &binding.layout,
         };
-        let start = (!view.time.seekable).then(crate::perf::Stamp::now);
-        hooks
-            .prepare(&gpu, view, &crate::RenderWorld(world))
-            .map_err(|e| hook_error("prepare", e))?;
-        times[0] = start.map(|s| s.elapsed());
-        Ok(())
+        let deadline = view.time.deadline;
+        let start = (measure || deadline.is_some()).then(crate::perf::Stamp::now);
+        if let Some((deadline, start)) = deadline.zip(start) {
+            view.time.allowance = crate::hooks::budget::entry_allowance(
+                view.time.allowance,
+                deadline.remaining_at(start),
+            );
+        }
+        let result = hooks.prepare(&gpu, view, &crate::RenderWorld(world));
+        if let Some((deadline, start)) = deadline.zip(start) {
+            let end = crate::perf::Stamp::now();
+            let duration_ms = start.elapsed_at(end);
+            self.hook_metrics.as_mut().unwrap().prepare_budget =
+                Some(crate::hooks::budget::PrepareSample {
+                    remaining_ms: deadline.remaining_at(end),
+                    end,
+                });
+            times[0] = Some(duration_ms);
+        } else if result.is_ok() {
+            times[0] = start.map(|start| start.elapsed());
+        }
+        result.map_err(|e| hook_error("prepare", e))
     }
 
     fn check_custom_materials(
@@ -827,7 +888,12 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         }
     }
 
-    fn finish_stats<H: crate::Hooks>(&mut self, hooks: &H, state: &Resolved) -> Stats {
+    fn finish_stats<H: crate::Hooks>(
+        &mut self,
+        hooks: &H,
+        state: &Resolved,
+        cpu: Option<(&mut crate::perf::Perf, bool)>,
+    ) -> Stats {
         let mut stats = self.counts;
         stats.draws += state.draws;
         stats.instances += self.quads.instances() + state.hull_instances;
@@ -859,10 +925,11 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             metrics.attachment_bytes = u64::from(self.targets.size.0)
                 * u64::from(self.targets.size.1)
                 * (if self.pipelines.samples == 1 { 12 } else { 56 } + extra);
-            metrics.record(
+            metrics.record_stages(
                 state.times,
-                hooks.work(),
+                hooks,
                 !needs.contains(crate::Needs::PENDING) && hooks.error().is_none(),
+                cpu,
             );
         }
         stats
@@ -1005,6 +1072,7 @@ mod tests {
                 Some(&world),
                 crate::HookTime::default(),
                 &Default::default(),
+                None,
             );
             assert!(failed.unwrap_err().to_string().contains("look failed"));
             drop(encoder);

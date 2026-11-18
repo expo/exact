@@ -132,7 +132,7 @@ impl<D: DataSource> Runner<D> {
         // An idle gated frame task keeps no frame source running (LLP 1092 D10).
         self.timers.iter().enumerate().any(|(i, s)| self.timer_row(i).frame && s.armed)
             // A font axis moving (LLP 1019 §13 D10).
-            || self.text_axes.running()
+            || self.text_axes_running()
     }
 
     /// Soonest timer deadline in this runner's clock domain; no host polling.
@@ -257,7 +257,7 @@ impl<D: DataSource> Runner<D> {
             // A module send the substitute answers after its span.
             self.span_due(),
             self.live_times.due(),
-            (self.text_axes.running() && !self.clock.presenting)
+            (self.text_axes_running() && !self.clock.presenting)
                 .then(|| super::virtual_frame(self.now_ms, 1)),
             self.queues
                 .next_due

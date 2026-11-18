@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
+@testable import ExactNativeViews
 
 final class PopoverSheetIOSTests: XCTestCase {
     private final class Touch: UITouch {
@@ -687,7 +689,7 @@ final class PopoverSheetIOSTests: XCTestCase {
                 XCTAssertFalse(chain.contains { $0.hasSuffix("Controller") && $0 != "UIApplication" }, "UIKit's chain from the layer reaches no controller: \(chain)")
             }
             XCTAssertTrue(ViewPresentation.controller(for: button) === sheet)
-            XCTAssertTrue(p.rowCells.screen(of: button) === sheet)
+            XCTAssertTrue(p.rowCellsHost.screen(of: button) === sheet)
             var pressed: [UInt32] = []
             p.onPress = { pressed.append($0) }
             activate(button)
@@ -1112,9 +1114,9 @@ final class PopoverSheetIOSTests: XCTestCase {
         guard hasScene else { throw missing("scene", "a share sheet must be presented from the lifted control") }
         let p = try page(), sheet = try show(in: p)
         p.menus.action("showPopover", ["choices", "opener"])
-        let button = try XCTUnwrap(p.views[7]), anchor = p.shareAnchor(button.id)
+        let button = try XCTUnwrap(p.views[7]), anchor = p.presentationAnchor(button.id)
         XCTAssertTrue(anchor.0 === button)
-        let fallback = p.shareAnchor(nil)
+        let fallback = p.presentationAnchor(nil)
         XCTAssertTrue(fallback.0 === sheet.view)
         XCTAssertEqual(fallback.1.midX, sheet.view.bounds.midX, accuracy: 0.5)
         XCTAssertEqual(fallback.1.midY, sheet.view.bounds.midY, accuracy: 0.5)

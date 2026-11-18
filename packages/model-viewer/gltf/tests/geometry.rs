@@ -323,3 +323,44 @@ fn default_scene_hierarchy_composes_matrix_and_trs_in_file_order() {
         assert!(parse(&glb(&json, &bin)).unwrap_err().contains("node"));
     }
 }
+
+#[test]
+fn world_reflections_keep_triangle_fronts_with_or_without_normals() {
+    use exact_model_gltf::math::cross;
+    for with_normals in [false, true] {
+        for mode in [4, 5, 6] {
+            for child_reflected in [false, true] {
+                let (mut json, mut bin) = triangle();
+                if with_normals {
+                    bin.extend(
+                        [0f32, 0., 1.]
+                            .repeat(3)
+                            .into_iter()
+                            .flat_map(f32::to_le_bytes),
+                    );
+                    json["bufferViews"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"buffer":0,"byteOffset":36,"byteLength":36}));
+                    json["accessors"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}));
+                    json["meshes"][0]["primitives"][0]["attributes"]["NORMAL"] = json!(1);
+                }
+                json["buffers"][0]["byteLength"] = json!(bin.len());
+                json["meshes"][0]["primitives"][0]["mode"] = json!(mode);
+                json["nodes"] = json!([
+                    {"children":[1],"scale":[-1,1,1]},
+                    {"mesh":0,"matrix":[if child_reflected {-1} else {1},0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}
+                ]);
+                let scene = parse(&glb(&json, &bin)).unwrap();
+                let [a, b, c] = std::array::from_fn(|k| scene.vertices[scene.indices[k] as usize]);
+                assert!(
+                    dot(cross(sub(b.p, a.p), sub(c.p, a.p)), a.n) > 0.99,
+                    "normals={with_normals}, mode={mode}, child reflection={child_reflected}"
+                );
+            }
+        }
+    }
+}

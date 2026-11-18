@@ -11,7 +11,7 @@ impl<D: DataSource> Host<D> {
     /// is coming) or `refused`.
     pub fn apply_live(&mut self, frame: &str) -> String {
         let Some(edit) = Edit::parse(frame) else {
-            return exact_runner::agent::error("live: not a forma batch or snapshot");
+            return exact_runner::json::error("live: not a forma batch or snapshot");
         };
         let (mut batch, live, unsupported) = match self.runner.apply_live(&edit) {
             Ok(applied) => {
@@ -43,9 +43,9 @@ impl<D: DataSource> Host<D> {
         };
         batch.pop();
         batch.push_str(",\"live\":");
-        exact_runner::agent::quote(&live, &mut batch);
+        exact_runner::json::quote(&live, &mut batch);
         batch.push_str(&format!(",\"unsupported\":{unsupported},\"design\":"));
-        exact_runner::agent::quote(&self.runner.design(), &mut batch);
+        exact_runner::json::quote(&self.runner.design(), &mut batch);
         batch.push('}');
         batch
     }

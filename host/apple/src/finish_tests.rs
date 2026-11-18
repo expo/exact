@@ -7,6 +7,10 @@ use exact_kernel::MonospaceMeasurer;
 use exact_plan::Value;
 use exact_runner::{Answer, DataError, Event, Outcome, Request, Response, Store};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const APP: &str = r##"shape Row
   n: number
 component A
@@ -70,7 +74,7 @@ impl DataSource for PostsThenStores {
             return None;
         }
         self.out = true;
-        Some(Request::continuation(exact_runner::BACKGROUND))
+        Some(Request::continuation::<TestWork>(exact_runner::BACKGROUND))
     }
     fn background_landed(&mut self, _: &Store, _: Outcome) -> Result<Option<Request>, DataError> {
         self.out = false;

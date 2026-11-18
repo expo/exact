@@ -120,7 +120,7 @@ impl PartialEq for ScopeReader {
         match (self, other) {
             (ScopeReader::Module, ScopeReader::Module) => true,
             (ScopeReader::Strict(a), ScopeReader::Strict(b)) => match (a, b) {
-                (Some(a), Some(b)) => std::ptr::fn_addr_eq(*a, *b),
+                (Some(a), Some(b)) => std::ptr::fn_addr_eq(a.validate, b.validate),
                 (None, None) => true,
                 _ => false,
             },
@@ -224,7 +224,7 @@ impl Store {
         Store::from_snapshot(
             grants,
             snapshot.into_iter().collect(),
-            Some(crate::grants::validate),
+            Some(&crate::grants::LINKED),
         )
     }
 

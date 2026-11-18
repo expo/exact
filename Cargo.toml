@@ -23,7 +23,7 @@ default-members = [
 # Vendored path dependencies are built, not linted or tested here. The Snapback client (snapback4/)
 # and Harmony (apps/harmony/app), which links it, are not in this repository; a checkout that has
 # them builds them in workspaces of their own.
-exclude = ["vendor", "snapback4", "apps/harmony/app"]
+exclude = ["vendor", "snapback4", "apps/harmony/app", "packages/shader/uniforms"]
 resolver = "2"
 
 [workspace.package]

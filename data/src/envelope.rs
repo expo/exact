@@ -409,6 +409,9 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The host work these tests hand out (LLP 1047.001 D12).
+    struct TestWork;
+    impl exact_runner::HostWork for TestWork {}
 
     #[test]
     fn preload_and_prefetch_types_are_checked_at_the_envelope() {
@@ -653,7 +656,7 @@ mod tests {
     #[test]
     fn a_long_poll_no_host_may_run_is_refused_before_it_crosses() {
         // The envelope carries no surface: a long poll on one (here a continuation) is refused on this side.
-        let request = Request::continuation(3).long_poll("since", "seq");
+        let request = Request::continuation::<TestWork>(3).long_poll("since", "seq");
         let outcome = encode(Ok(Answer::Later(request)), &mut Store::default(), vec![]);
         let refused = apply(outcome, &mut Store::default(), &mut Vec::new()).unwrap_err();
         assert!(

@@ -125,12 +125,13 @@ mod perf;
 pub mod persist;
 mod query;
 mod queue;
+mod render;
 mod resource_inspection;
 mod world_origin;
 pub use queue::QUEUE_BOUND;
 mod history;
 pub mod router;
-pub use lists::{ListTextPolicy, ListTextPosition};
+pub use crate::list_api::{ListTextPolicy, ListTextPosition};
 mod settlement;
 pub(crate) use settlement::zero;
 mod sockets;
@@ -140,10 +141,19 @@ mod apply;
 mod live_time;
 pub mod midi;
 mod modules;
-pub use modules::{AppState, CallHow, PresenceAnswer, PresenceAsk};
+pub use modules::AppState;
+mod calls;
+pub use calls::CallHow;
+mod module_seam;
+pub use module_seam::Modules;
+mod presence_secrets;
+pub use presence_secrets::{PresenceAnswer, PresenceAsk};
 mod processes;
 mod provenance;
+mod seams;
+pub(crate) use processes::refusal as process_refusal;
 pub use provenance::CallOrigin;
+pub use seams::{ModuleLinks, PresenceSecrets, TextAxes, Tools};
 mod wakes;
 pub use wakes::WakeHow;
 #[cfg(test)]
@@ -399,7 +409,7 @@ pub struct Runner<D: DataSource> {
     batch: u64,
     commands: Vec<Command>,
     /// `scrollIntoView` commands an action stated, run after its update.
-    into_view: Vec<crate::instance::collection::IntoView>,
+    into_view: Vec<crate::list_api::IntoView>,
     /// Where the host last showed each scroller (`frame`, LLP 1051.000 D1).
     scrolled: crate::geometry::Scrolled,
     /// Each `resize` handler's node and the content box last delivered.
@@ -411,7 +421,7 @@ pub struct Runner<D: DataSource> {
     /// Views the next applied batch renews (LLP 1078): rebound list rows.
     renewed: Vec<ViewId>,
     /// Rows the next batch mounts out of their port, and those that showed (LLP 1055 D13).
-    shown: crate::instance::collection::shown::RowsShown,
+    shown: crate::list_api::RowsShown,
     /// Retiring list rows are rebound to new items ([`Runner::set_row_reuse`]).
     reuse: bool,
     /// The 2D canvases (LLP 1056 D4), when Canvas 2D is linked.
@@ -532,7 +542,7 @@ pub struct Runner<D: DataSource> {
     /// Resources asked again and again with new arguments (a development build's warning).
     churn: query::Churn,
     /// The agent's preferred answers of native modules' sources (LLP 1124 D7).
-    extensions: modules::Extensions,
+    extensions: module_seam::ModuleState,
     /// Who each commit, request and armed `then` comes from, and the
     /// invocation each is part of (`provenance.rs`).
     origins: provenance::Origins,
@@ -540,6 +550,14 @@ pub struct Runner<D: DataSource> {
     processes: processes::Processes,
     /// Wakes and background actions, running and to come (LLP 1133.017 D5).
     wakes: wakes::Wakes,
+    /// Tool calls, running and to come (LLP 1133.023 D7).
+    calls: calls::Calls,
+    /// Locked secrets: the host's backend and the calls on it.
+    presence: seams::PresenceState,
+    /// The host's target, once it said ([`Runner::set_module_target`]).
+    module_target: Option<String>,
+    /// The optional parts this runner links, for its plan.
+    seams: ModuleLinks<D>,
     poisoned: bool,
     /// Evaluate every site on every update (the incremental update's reference; `set_full_evaluation`).
     full: bool,
@@ -570,7 +588,7 @@ pub struct Runner<D: DataSource> {
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
-    text_axes: text_axes::TextAxes,
+    text_axes: seams::TextAxesState,
     place: crate::time::Place,
     host_direction: Option<exact_kernel::Direction>, // the platform's, told at launch ([`Runner::direction`])
     surface_records: exact_kernel::SortedMap<String, String>,
@@ -630,12 +648,6 @@ pub const TIMER_FIRE_LIMIT: usize = 4096;
 pub const VIRTUAL_FRAME_MS: f64 = 1000.0 / 60.0;
 
 impl<D: DataSource> Runner<D> {
-    /// This runner, linking every device capability: the plain boots'.
-    pub(crate) fn linking_every_device(mut self) -> Self {
-        self.device_links = DeviceLinks::ALL;
-        self
-    }
-
     /// Boot: refuse a plan built against another kernel schema, evaluate
     /// initial state, settle resources (compiled data first, the source
     /// otherwise), realize the tree, and apply the first frame's ops.
@@ -648,6 +660,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Runner<D>, RunnerError> {
         Runner::boot_inner(
             RunnerLinks::ALL,
+            ModuleLinks::ALL,
             plan,
             data,
             kernel,
@@ -663,6 +676,7 @@ impl<D: DataSource> Runner<D> {
     #[allow(clippy::too_many_arguments)] // the host boot facts
     fn boot_inner(
         links: RunnerLinks,
+        seams: ModuleLinks<D>,
         plan: impl Into<crate::Program>,
         mut data: D,
         mut kernel: Kernel,
@@ -827,6 +841,7 @@ impl<D: DataSource> Runner<D> {
         let booting = exact_kernel::style::roles::bind(&roles);
         root_font::bold_text_facts(&mut kernel, &plan, viewport.preferences.bold_text); // LLP 1115.000 D12.3
         let viewport_geometry = crate::viewport::Geometry::of(&kernel);
+        let seams = seams.for_plan(&plan, !store.presence_names().is_empty());
         let mut runner = Runner {
             sites,
             strings,
@@ -930,10 +945,14 @@ impl<D: DataSource> Runner<D> {
             keeping: Default::default(),
             churn: Default::default(),
             activities: activities::Activities::default(),
-            extensions: Default::default(),
+            extensions: module_seam::ModuleState(seams.modules.state()),
             origins: Default::default(),
             processes: Default::default(),
             wakes: Default::default(),
+            calls: Default::default(),
+            presence: seams::PresenceState(seams.presence.state()),
+            module_target: None,
+            seams,
             delivery,
             viewport,
             viewport_geometry,
@@ -941,7 +960,7 @@ impl<D: DataSource> Runner<D> {
             presented: crate::page::Presented::at_boot(),
             time: crate::time::launch_time(),
             live_times: Default::default(),
-            text_axes: Default::default(),
+            text_axes: seams::TextAxesState(seams.text_axes.state()),
             place: launched_place.clone().unwrap_or_default(),
             window_name: crate::time::launch_window_name(),
             host_direction: crate::time::launch_direction(),
@@ -1361,48 +1380,6 @@ impl<D: DataSource> Runner<D> {
     pub fn take_store_writes(&mut self) -> Vec<StoreWrite> {
         let writes = self.store.take_writes();
         self.presence_writes(writes)
-    }
-
-    /// The names the store holds a value for — never the values (LLP 1018
-    /// D5: a token is not the agent's to see).
-    /// A presence name is listed with its occupancy, `token: locked,
-    /// user-presence`, `pending`, `plain` or `absent` (LLP 1133.010 §7).
-    pub fn store_names(&self) -> Vec<String> {
-        let presence = self.presence_list();
-        let mut names: Vec<String> = (self.store.names().into_iter())
-            .filter(|n| !n.starts_with(Store::PRESENCE) && !presence.iter().any(|(p, _)| p == n))
-            .map(str::to_string)
-            .collect();
-        names.extend(
-            presence
-                .into_iter()
-                .map(|(name, said)| format!("{name}: {said}")),
-        );
-        names.sort();
-        names
-    }
-
-    /// The store, for a test that reads what an action kept.
-    pub fn store(&self) -> &Store {
-        &self.store
-    }
-
-    /// Whether resource `name` observed device state (secrets, filesystem,
-    /// or SQLite). Bake marks its compiled value as a placeholder, refreshed
-    /// when the data source becomes ready (LLP 1018 D4 / LLP 1027 D4).
-    pub fn resource_reads_store(&self, name: &str) -> bool {
-        self.resource_rows()
-            .position(|r| self.plan.str(r.name) == name)
-            .is_some_and(|i| self.resources[i].store_reader)
-    }
-
-    /// Whether resource `name` drew secure randomness (LLP 1069.005 D2):
-    /// a device read whose value bake leaves out of the plan, so no random
-    /// value is shared by every install; the device asks it.
-    pub fn resource_draws_entropy(&self, name: &str) -> bool {
-        self.resource_rows()
-            .position(|r| self.plan.str(r.name) == name)
-            .is_some_and(|i| self.resources[i].entropy_reader)
     }
 
     /// Deterministic instance work counters, separate from layout and host costs.

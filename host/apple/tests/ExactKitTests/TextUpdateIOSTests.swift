@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 final class TextUpdateIOSTests: XCTestCase {
     /// Profile changes reuse coverage in the same UIKit view; complex paint switches to a pixel layer

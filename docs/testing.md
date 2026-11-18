@@ -138,8 +138,11 @@ test or drive to investigate; it does not add another blocking check.
   thread of their own.
 - **Each test sets up what it uses.** macOS XCTest classes run one per process
   (`host/apple/xctest.mjs`) and iOS classes one per simulator clone, so a class
-  cannot rely on an earlier class. Install what it uses in `class func setUp`
-  (`ExactSurfaces.install()` for a canvas) and create what it reads
+  cannot rely on an earlier class. The bundle installs the development
+  composition as it loads (`TestsInstall.swift`), so the capabilities a
+  development app links are installed before any test; a class that uses one
+  development links only by use (media picker, sign-in sheet, numerals, tips)
+  installs it in `class func setUp`, and creates what it reads
   (`NSApplication.shared` before `NSApp`). `UserDefaults.standard` is one
   domain for every macOS XCTest process (`com.apple.dt.xctest.tool`): a
   test that sets a key the host also writes gives the host a suite of its

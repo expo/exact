@@ -11,6 +11,10 @@ reading; keep its session with `auth: {store, key, now}` and grant `secret.keep`
 for that key. `authConfig()` is public `GET /auth/config`; it reports `guests`,
 `password` and `development`. `use identity password` removes guests.
 
+On the web that store is origin-readable. [Web sessions](web-sessions.md)
+describes server-set HttpOnly cookies; this bearer-session example does not
+implement them.
+
 During development the schema may also declare `use personas alice, bob`.
 Start with `state persona = ""`, signed out, and offer an explicit persona choice.
 A persona uses development headers. Password and guest sessions use stored bearer

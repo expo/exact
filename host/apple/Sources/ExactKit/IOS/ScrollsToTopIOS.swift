@@ -58,7 +58,7 @@ extension NodeView {
         presenter?.elementScrolls.userScrolled(scrollView)
         guard scrollView === self.scrollView else { return true }
         dropCarriedScroll()
-        guard let collections = presenter?.collections, let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
+        guard let collections = presenter?.collections, let snapshot = collections.snapshot(id), !snapshot.horizontal else { return true }
         collections.readerMoves(id)
         let top = -scrollView.adjustedContentInset.top, glide = scrollView.bounds.height * 2
         guard scrollView.contentOffset.y - top > glide * 1.5 else { return true }

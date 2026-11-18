@@ -58,7 +58,7 @@ struct StickyConstraint: Equatable {
 }
 
 /// The session's sticky boxes, by scroller.
-final class StickyHost {
+final class StickyHost: StickyHosting {
     private unowned let presenter: Presenter
     private var boxes: [UInt32: StickyConstraint] = [:]
     private var byScroller: [UInt32: Set<UInt32>] = [:]

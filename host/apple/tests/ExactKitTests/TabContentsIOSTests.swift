@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1075.003 §3.6: a tab container the app owns sends Exact its intents
 /// (`ExactTabContents.back`, `open`), which Exact applies as the platform and
@@ -219,7 +220,7 @@ final class TabContentsIOSTests: XCTestCase {
         XCTAssertNil(session.boot(plan: plan, size: frame.size).error)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
-        session.natives.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"], "build.mjs --test --ios builds the fixture's module"))
+        session.nativeViews!.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"], "build.mjs --test --ios builds the fixture's module"))
         waitFor("the app's container holds the tabs") {
             let navigation = session.presenter.navigation
             return navigation.tabController == nil && navigation.tabOwner?.viewIfLoaded?.window != nil

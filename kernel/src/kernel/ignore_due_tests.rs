@@ -277,3 +277,44 @@ fn a_row_aligned_by_baselines_reads_no_baseline_from_a_cached_box() {
     lay_out(&mut fresh);
     assert_eq!(frame(&k, 3), frame(&fresh, 3));
 }
+
+#[test]
+fn a_box_in_a_popover_that_moves_takes_anew() {
+    // 4 ignores the top inside the popover 3, which sits 20 below the
+    // viewport's top under the session's 47-point band; moved to 30, the
+    // popover keeps the frames inside its block, and 4 takes 30, as in a
+    // fresh layout
+    let tree = |top| {
+        let mut k = Kernel::with_monospace();
+        let mut ops = create(1..=4);
+        ops.push(style(1, vec![], &[(StyleId::Height, "844")]));
+        ops.push(popover(3));
+        ops.push(style(
+            3,
+            vec![],
+            &[(StyleId::Top, top), (StyleId::Height, "100")],
+        ));
+        let taking = [
+            (StyleId::SafeAreaIgnore, "container top"),
+            (StyleId::Height, "10"),
+        ];
+        ops.push(style(4, vec![], &taking));
+        ops.extend([
+            children(1, &[3]),
+            children(3, &[4]),
+            Op::AttachRoot { id: 1 },
+        ]);
+        k.apply(0, 1, &ops).unwrap();
+        k.set_session_band([47.0, 0.0, 0.0, 0.0]).unwrap();
+        lay_out(&mut k);
+        k
+    };
+    let mut k = tree("20");
+    let first = frame(&k, 4);
+    assert_eq!(first.3, 30.0);
+    k.apply(0, 2, &[style(3, vec![], &[(StyleId::Top, "30")])])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(frame(&k, 4), frame(&tree("30"), 4));
+    assert_eq!(frame(&k, 4).3, 40.0);
+}

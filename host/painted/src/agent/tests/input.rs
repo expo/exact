@@ -2,6 +2,10 @@
 //! mouse contacts, driven through `handle`.
 use super::*;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[test]
 fn the_clipboard_events_reach_the_nearest_handler() {
     let plan = contract::compile("component App\n  state log = \"\"\n  action pasted(at: string, e: ClipboardEvent)\n    log = `${log}${at}:${e.text};`\n  action copied\n    log = `${log}copy;`\n  action seen\n    log = log\n  view\n    column width=300 paste=pasted(\"grid\") copy=copied testId=\"grid\"\n      box testId=\"cell\" width=50 height=20 focus=seen\n      text log testId=\"log\" height=20\n").unwrap();
@@ -426,7 +430,7 @@ impl DataSource for Stalled {
         _: &[Value],
     ) -> Result<exact_runner::Answer, DataError> {
         Ok(exact_runner::Answer::Later(
-            exact_runner::Request::continuation(1),
+            exact_runner::Request::continuation::<TestWork>(1),
         ))
     }
     fn dispatch(&mut self, _: u64, _: &exact_runner::Store) -> exact_runner::Dispatch {

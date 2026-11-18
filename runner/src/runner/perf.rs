@@ -176,7 +176,7 @@ impl<D: DataSource> Runner<D> {
         if self.ids.work.sites.is_empty() {
             return;
         }
-        let i = self.member(i).map_or(i, |m| m.family);
+        let i = self.resource_site(i);
         let (n, now) = (self.plan.resources.len(), self.now_ms);
         let failures = &mut self.ids.work.failures;
         if failures.len() < n {
@@ -195,10 +195,7 @@ impl<D: DataSource> Runner<D> {
         if self.ids.work.sites.is_empty() {
             return;
         }
-        let i = match self.owned_row(i) {
-            Some(o) => o.site,
-            None => self.member(i).map_or(i, |m| m.family),
-        };
+        let i = self.resource_site(i);
         let asked = &mut self.ids.work.asked;
         if asked.len() <= i {
             asked.resize(self.plan.resources.len(), 0);
@@ -213,7 +210,7 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .enumerate()
             .filter(|(_, f)| f.count > 0)
-            .map(|(i, f)| (self.plan.str(self.resource_row(i).name), *f))
+            .map(|(i, f)| (self.plan.str(self.plan.resources[i].name), *f))
             .collect()
     }
 

@@ -724,7 +724,7 @@ extension Presenter {
             if let node = current as? NodeView, !node.inert {
                 if leaf == nil { leaf = node }
                 path.append(node)
-            } else if leaf == nil, current is RegionSurfaceMac { region = true }
+            } else if leaf == nil, ContentRegionLink.isSurface?(current) == true { region = true }
             // A subtree in the pane is its authored parent's, out in the page.
             view = pane != nil && current.superview === pane ? authoredSuperview(of: current) : current.superview
         }

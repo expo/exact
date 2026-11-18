@@ -53,6 +53,17 @@ const unspelled = new String("\u0000" + "1");
 Object.defineProperty(unspelled, "toString", { value: () => "ordinary" });
 const boxedHook = Object.freeze(list((i) => (i === 1 ? ({ ...make(i), text: spelled } as unknown as Row) : deep(make(i)))));
 const boxedUnspelled = Object.freeze(list((i) => (i === 1 ? ({ ...make(i), text: unspelled } as unknown as Row) : deep(make(i)))));
+const changed = new String("ordinary");
+Object.setPrototypeOf(changed, null);
+Object.defineProperty(changed, "toString", { value: () => "\u0000" + "1" });
+const boxedChangedPrototype = Object.freeze(list((i) => (i === 1 ? ({ ...make(i), text: changed } as unknown as Row) : deep(make(i)))));
+const descriptorProxy = Proxy.revocable(Object.freeze(make(3)), {
+  getOwnPropertyDescriptor: (target, key) => {
+    if (key === "length") throw new Error("unexpected length descriptor");
+    return Reflect.getOwnPropertyDescriptor(target, key);
+  },
+}).proxy;
+const proxyDescriptor = Object.freeze(list((i) => (i === 3 ? descriptorProxy : deep(make(i)))));
 // A frozen row holding a proxy whose `toJSON` reads the counter: kept, the row would show an old count.
 const nested = new Proxy(Object.freeze({ k: "proxied" }), { get: (t, k, r) => (k === "toJSON" ? () => ({ k: `proxy ${count}` }) : Reflect.get(t, k, r)) });
 const nestedProxy = deep(list((i) => (i === 3 ? { ...make(i), inner: [nested as unknown as Inner] } : make(i))));
@@ -78,7 +89,7 @@ const proxiedList = new Proxy(Object.freeze(list((i) => deep(make(i)))), { get: 
 // A string spelled like a token inside a row that is kept: its text is spliced in after the scan.
 const nulKept = deep(list((i) => make(i, i === 1 ? "\u0000" + "3" : `row ${i}`)));
 const kinds: Record<string, Row[]> = { frozen, mutable, shallow, hooked, getter, large, nul, nulQuote, nulKey, dropped, short, boxed, keyDropped, fnHook, wrapped,
-  nulTail, nulTailKey, boxedHook, boxedUnspelled, nestedProxy, nulKept, proxyHoles, boxedThrows, accessorHook, revocableProxy, proxiedList: proxiedList as Row[] };
+  nulTail, nulTailKey, boxedHook, boxedUnspelled, boxedChangedPrototype, proxyDescriptor, nestedProxy, nulKept, proxyHoles, boxedThrows, accessorHook, revocableProxy, proxiedList: proxiedList as Row[] };
 
 function answer(source: string, args: unknown[]): unknown {
   if (source === "lengths") return String(lengths);

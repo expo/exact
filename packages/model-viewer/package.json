@@ -1,0 +1,6 @@
+{
+  "name": "@exact/model-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "exports": { ".": "./exact.json" }
+}

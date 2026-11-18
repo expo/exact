@@ -262,14 +262,14 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Entry `reference`'s invocation was delivered.
-    pub(in crate::runner) fn wake_entry_running(&mut self, reference: u64) {
+    pub(in crate::runner::modules) fn wake_entry_running_linked(&mut self, reference: u64) {
         if let Some(m) = self.extensions.declared.wake_meta.get_mut(&reference) {
             m.again = false;
         }
     }
 
     /// Entry `reference`'s invocation ended `state` (module doc).
-    pub(in crate::runner) fn wake_entry_ended(
+    pub(in crate::runner::modules) fn wake_entry_ended_linked(
         &mut self,
         reference: u64,
         state: &str,

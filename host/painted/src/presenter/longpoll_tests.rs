@@ -2,6 +2,10 @@
 use super::*;
 use exact_runner::{Answer, DataError, Store, Value};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// LLP 1016.000 D8 through the Linux presenter: a long poll attached to work
 /// that is no HTTP request (a continuation) is refused before its work runs,
 /// and the source parses the refusal.
@@ -16,7 +20,7 @@ impl DataSource for PollsOtherWork {
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
         Ok(Answer::Later(
-            exact_runner::Request::continuation(1).long_poll("since", "seq"),
+            exact_runner::Request::continuation::<TestWork>(1).long_poll("since", "seq"),
         ))
     }
     fn continuation(

@@ -64,7 +64,7 @@ extension ControlHost {
 
     /// Whether radio `id` shows checked: its control's state, else its bound one.
     func radioShows(_ id: UInt32) -> Bool {
-        if let control = controls[id] { return radioOn(control) }
+        if let control = controls[id] { return family.radioOn(control) }
         return presenter.views[id]?.props["checked"] == "true"
     }
 
@@ -75,8 +75,8 @@ extension ControlHost {
     @discardableResult
     func checkRadio(_ id: UInt32) -> Bool {
         guard let node = presenter.views[id], node.isRadio, !node.formDisabled, !node.inert, !radioShows(id) else { return false }
-        for other in radioMembers(id) where other != id { showRadio(other, false) }
-        showRadio(id, true)
+        for other in radioMembers(id) where other != id { family.showRadio(other, false) }
+        family.showRadio(id, true)
         presenter.controlValue(id, node.props["value"] ?? "on", input: true, change: true)
         snapRadios()
         return true
@@ -87,7 +87,7 @@ extension ControlHost {
     /// rechecks the one before. A radio with no `checked` keeps its own.
     func snapRadios() {
         for (id, kind) in kinds where kind == "radio" {
-            if let on = presenter.views[id]?.props["checked"] { showRadio(id, on == "true") }
+            if let on = presenter.views[id]?.props["checked"] { family.showRadio(id, on == "true") }
         }
     }
 
@@ -127,3 +127,33 @@ extension ControlHost {
         return ["typed": Int(node.id), "checked": radioShows(node.id), "delivery": "host-activation", "native": "control"]
     }
 }
+
+extension ControlHost {
+    #if os(macOS)
+    /// The focus moves to the radio an arrow checks, from the radio that
+    /// had it: a native button's own `NSButton`, which owns its focus; a
+    /// node that takes no focus leaves it where it is.
+    func focusRadio(_ node: NodeView, keyboard: Bool = false) {
+        let responder = node.isNativeButton ? presenter.keyView(of: node) : node
+        guard let window = node.window, responder.acceptsFirstResponder, window.firstResponder !== responder else { return }
+        window.makeFirstResponder(responder)
+    }
+    #else
+    /// The arrows move the focus with the check, as on the web; a tap does
+    /// not focus a radio, as Safari iOS does not. The ring shows for a
+    /// keyboard's move (`showFocusRing`).
+    func focusRadio(_ node: NodeView, keyboard: Bool = false) {
+        guard !node.isFirstResponder, node.canBecomeFirstResponder, node.becomeFirstResponder() else { return }
+        if keyboard { node.showFocusRing(true) }
+    }
+    #endif
+}
+
+#if os(iOS) || os(tvOS)
+extension Presenter {
+    /// A grouped list's row checks its radio as a click on the radio does
+    /// (`ControlHost.checkRadio`, LLP 1115.000 D13.2).
+    @discardableResult
+    package func checkRadio(_ id: UInt32) -> Bool { controls.checkRadio(id) }
+}
+#endif

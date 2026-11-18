@@ -395,6 +395,17 @@ try {
     const inputs=await prepare(await payload(fixtures.inputs,inputsIdentity),inputsIdentity);
     const invoke=(realm,source,args=[],store=[],grants=[],outcome)=>checkpoint(call({id:realm.id,op:outcome?'resume':'answer',source,args,store,grants,outcome}));
     const response=(body='',status=200)=>({response:{status,headers:[],body,bodyBase64:btoa(body)}});
+    for (const placement of ['main', 'worker']) {
+      const realm = await prepare(await payload(fixtures.inputs, inputsIdentity), {...inputsIdentity, placement});
+      try {
+        for (const source of ['host', 'hostLater']) {
+          const result = await invoke(realm, source);
+          if (result.value !== 'web' || !result.externalRead) throw new Error(`${placement}: runtime host ${JSON.stringify(result)}`);
+        }
+        const init = await invoke(realm, 'atInit', ['host']);
+        if (!init.value?.includes('during module initialization')) throw new Error(`${placement}: host read during initialization`);
+      } finally { realm.dispose(); }
+    }
     const forms=['now','new','call','call-with-arg','random','alias-now','alias-random','alias-date','prototype-constructor','computed-now','computed-random','bound-now','bound-new','reflect','intl-format','intl-format-undefined','intl-parts','intl-parts-undefined','intl-format-alias','intl-format-alias-undefined','intl-parts-alias','intl-parts-alias-undefined','intl-format-getter','intl-format-computed','intl-parts-prototype'];
     for(const form of forms){
       const initial=await invoke(inputs,'atInit',[form]);

@@ -564,18 +564,14 @@ complication recommendations. Each placement's choices reach only its snapshot
 render; refresh and its cache remain shared.
 The Categories consumer unblocks this first stage. Take: none named; Charlie's
 2026-11-12 decision to the maintainers' agent waives the trade for enum-only
-configuration on Apple. Data-backed options and entity queries stay deferred,
-and configuration-dependent refresh until the entry below.
+configuration on Apple.
 
-**Expanded (pending Charlie's ruling on the pull request; asked by Nathan, 2026-11-18; LLP 1126):**
-on Apple, a configured widget's refresh receives its placement's choices, and
-its timeline is kept and shared for each configuration. Consumer: the Expo
-Services app's Active Users widget (expo/expo-services-app-ios#156), which
-needs a project and a period per placement; one timeline shared by every
-placement cannot hold each project's data. Take: none named; needs Charlie's
-waiver. Until Charlie rules, this entry is a request and not a ruling. Still
-deferred: data-backed options and entity queries, and per-placement refresh on
-Android, whose refresh receives the defaults (LLP 1126.003 D5).
+**Expanded (Charlie, 2026-11-18, #874, “Approve the waiver”; LLP 1126 D3):**
+An Apple widget’s refresh receives the placement’s configuration. Placements
+with the same choices share a timeline. The Expo Services Active Users widget
+can fetch the period the person chose. Android keeps one timeline per kind
+and passes the defaults to refresh (LLP 1126.003 D5). Data-backed options
+and entity queries remain deferred.
 
 **Admitted (Charlie, 2026-10-06: "this is pretty great. commit and push this
 and document that TUI is now an officially supported platform for Exact2";
@@ -695,6 +691,23 @@ about 100 lines of wgpu today. Take: none offered; waived by Charlie. Still
 out: textures, the canvas's children as a texture, several passes, compute, a
 translucent canvas, Display P3 and HDR, matrices and arrays as uniforms, a
 built-in pointer, and inline or downloaded source (LLP 1181 §8).
+
+**Expanded (Charlie, 2026-11-17, expo/exact#724; LLP 1133.039):**
+`@exact/model-viewer`, a GPU package showing a binary glTF from the app's
+assets or files, with meshopt and quantization, an orbit camera, pick,
+per-node styles, the faded-behind style, hotspot labels and a clipping plane,
+on the web, macOS, iOS, tvOS (view only), Android, Linux and Windows; and
+`exact-gpu`'s `placement_opacity`. Unblocks technical-model viewers without
+an app-owned renderer. Take: waived by Charlie, 2026-11-17. Still out
+(LLP 1133.039 §8): animation, skins and morph targets; PBR beyond the
+headlight; AR; direct URLs, multi-file glTF and download progress; USDZ and
+Draco; lines, points, sparse accessors and instancing; several clip planes
+and capped sections; picked points, normals and measurement; zoom by field
+of view; input handed back to a page; adjustable VoiceOver orbit, tvOS remote
+orbit, Mac trackpad scroll panning, Reduce Motion on `Frame` and Linux
+AT-SPI; interaction prompts, posters, lazy loading and auto-rotation; an
+orthographic camera and camera-orbit bounds. Picking and hotspot occlusion
+share a BVH, admitted when the measured ray costs met §8's trigger.
 
 ## Features carried over as "no"
 

@@ -2377,7 +2377,8 @@ old offer; a fresh layout under the new offer gives 45.
 ## Patch 75: native clearance narrows the absolute containing block — Exact only
 
 The kernel supplies a container's `absolute_clearance` separately from its
-padding (LLP 1123 D3). The shared absolute solver sizes and places descendants
+padding: main's clearance of an owner's chrome (expo/exact#36), which LLP 1123
+D3's content root replaces at activation, with `inset_credit`. The shared absolute solver sizes and places descendants
 inside that clearance, including percentage sizes, constraints, insets, padding
 and margins. Grid areas retain their explicit track edges; automatic edges use
 the cleared padding box. An inset marked by `inset_credit` already references

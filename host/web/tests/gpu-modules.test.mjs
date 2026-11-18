@@ -27,7 +27,7 @@ async function fixture(pending = []) {
     destroy(view) { calls.push([stem, 'destroy', view]); },
     settled: async () => [`${stem} pending`],
     decorate(request, reply) { return { ...reply, world: [...(reply.world ?? []), stem] }; },
-    clock: () => ({ pending: stem === 'gpu/world', settleAt: stem === 'gpu' ? 5 : 9, reply: { world: [{ stem }] } }),
+    clock: () => ({ pending: stem === 'gpu/world', settleAt: stem === 'gpu' ? 5 : 9, nextTickAt: stem === 'gpu' ? 3 : 2, reply: { world: [{ stem }] } }),
     deviceLost() { calls.push([stem, 'deviceLost']); },
     retier(tier) { calls.push([stem, 'retier', tier]); },
     syncPerformance() { calls.push([stem, 'syncPerformance']); },
@@ -71,7 +71,7 @@ test('replies join across artifacts and process-wide signals reach every one', a
   await f.paint();
   assert.deepEqual(await f.gpu.settled(), ['gpu pending', 'gpu/world pending']);
   assert.deepEqual(f.gpu.decorate({ op: 'state' }, {}).world, ['gpu', 'gpu/world']);
-  assert.deepEqual(f.gpu.clock(true), { pending: true, settleAt: 9, reply: { world: [{ stem: 'gpu' }, { stem: 'gpu/world' }] } });
+  assert.deepEqual(f.gpu.clock(true), { pending: true, settleAt: 9, nextTickAt: 2, reply: { world: [{ stem: 'gpu' }, { stem: 'gpu/world' }] } });
   f.gpu.deviceLost();
   assert.deepEqual(f.calls.filter(c => c[1] === 'deviceLost').map(c => c[0]), ['gpu', 'gpu/world']);
   f.gpu.retier('low'); // LLP 1139.003 D2: `prefer gpu-tier` reaches every loaded artifact

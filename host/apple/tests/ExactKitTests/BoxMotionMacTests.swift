@@ -110,7 +110,7 @@ final class BoxMotionMacTests: XCTestCase {
 
         session.clock = frame + 500
         session.apply(session.runtime.tick(now: session.now()))
-        session.presenter.svg.seek(clock: session.clock)
+        session.presenter.svg?.seek(clock: session.clock); session.presenter.boxAnimations.seek(clock: session.clock)
         let held = try XCTUnwrap(layer.animation(forKey: "pulse#0#transform.scale"))
         XCTAssertEqual(held.speed, 0)
         XCTAssertEqual(held.timeOffset, 0.5, accuracy: 0.001)

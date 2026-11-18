@@ -1,0 +1,16 @@
+[package]
+name = "exact-model-viewer"
+version = "1.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[dependencies]
+exact-gpu = "0.4"
+exact-model-gltf = { path = "../gltf" }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Performance"] }
+
+[workspace]

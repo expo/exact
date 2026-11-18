@@ -1,8 +1,9 @@
 // What Exact measures of each hatch call, and what hatch code says of itself
 // (@ref LLP 1075.003.000.001 §3.1–3.3). One store a session, owned by the
 // main thread. Development only, as `perf` is (LLP 1079 D1): a production
-// bake hands the module no entry to call and times nothing, and a release
-// build times calls only once something reads them (`measurePerf`).
+// composition does not compile this file (Package.swift), and its sessions
+// have no store (HatchDiagnosticsLink.swift); a release build times calls
+// only once something reads them (`measurePerf`).
 //
 // The module records through one entry of the host's table (NativeHatches.swift):
 //
@@ -20,13 +21,8 @@ import CExact
 import Foundation
 import QuartzCore
 
-final class HatchDiagnostics {
+final class HatchDiagnostics: HatchDiagnosing {
     weak var session: ExactSession?
-    /// Whether this binary keeps diagnostics: not a production bake.
-    static let available = !ExactEnv.productionBake
-    /// Whether hatch calls are timed now (main thread): from boot where
-    /// frames are sampled from boot, else from `measurePerf`.
-    nonisolated(unsafe) static var measuring = available && FrameSampler.atBoot
     private let mediaTime: () -> Double
 
     init(mediaTime: @escaping () -> Double = CACurrentMediaTime) { self.mediaTime = mediaTime }
@@ -71,7 +67,7 @@ final class HatchDiagnostics {
     /// One hatch call, timed. `scope` is `element <word>` or a container's
     /// name; a node's calls are counted by ElementHatches, a container's here.
     func timed<T>(_ scope: String, _ moment: String, site: Int? = nil, counts: Bool = true, _ body: () -> T) -> T {
-        guard Self.measuring else { return body() }
+        guard HatchDiagnosticsLink.measuring else { return body() }
         if counts { scopeCalls[scope, default: [:]][moment, default: 0] += 1 }
         inner.append(0)
         let start = mediaTime()
@@ -131,7 +127,7 @@ final class HatchDiagnostics {
 
     /// The module's call, on any thread. A span's id for `begin`, else 0.
     func record(kind: UInt32, node: UInt32, scope: String, name: String, value: Double, text: Data) -> UInt64 {
-        guard Self.available else { return 0 }
+        guard HatchDiagnosticsLink.available else { return 0 }
         var id: UInt64 = 0
         if kind == 3 { lock.lock(); id = nextSpan; nextSpan += 1; lock.unlock() }
         let record = Record(kind: kind, node: node, scope: scope, name: name, value: kind == 3 ? Double(id) : value, text: text)
@@ -285,7 +281,7 @@ final class HatchDiagnostics {
 
     /// A node ended: its open spans are closed as abandoned, counted, not timed.
     func ended(node: UInt32) {
-        guard Self.available, !spans.isEmpty else { return }
+        guard HatchDiagnosticsLink.available, !spans.isEmpty else { return }
         for (id, span) in spans where span.node == node && node != 0 {
             spans.removeValue(forKey: id)
             abandoned += 1
@@ -314,7 +310,7 @@ final class HatchDiagnostics {
 
     private var refusals: [String: Any] {
         lock.lock(); let d = dropped; lock.unlock()
-        return ["measuring": Self.measuring, "rejected": rejected, "abandoned": abandoned, "limited": limited, "dropped": d]
+        return ["measuring": HatchDiagnosticsLink.measuring, "rejected": rejected, "abandoned": abandoned, "limited": limited, "dropped": d]
     }
 
     /// A reply of at most 64 KB: the longest of `lists` is halved until it fits.
@@ -407,23 +403,48 @@ final class HatchDiagnostics {
         var reply: [String: Any] = tags
         reply["hatches"] = by
         reply["calls"] = calls
-        reply["tickets"] = session?.natives.hatchClock.liveTickets ?? 0
+        reply["tickets"] = session?.natives.liveTickets ?? 0
         reply["counters"] = grouped(counterOrder) { counters[$0] ?? 0 }
         reply["timings"] = timed
         reply.merge(refusals) { a, _ in a }
         return Self.fit(reply, ["calls", "hatches", "counters", "timings"])
     }
-}
-
-extension ExactSession {
-    var hatchDiagnostics: HatchDiagnostics { natives.hatchDiagnostics }
 
     /// `perf hatches` with `perf`'s own tags (`seq`, `plan`, `incarnation`,
     /// `clock`), read from the runner as Save Trace reads them.
-    func hatchPerf() -> [String: Any] {
-        let perf = (try? JSONSerialization.jsonObject(with: Data(agent("{\"op\":\"perf\"}").utf8))) as? [String: Any] ?? [:]
+    func perf(of session: ExactSession) -> [String: Any] {
+        let perf = (try? JSONSerialization.jsonObject(with: Data(session.agent("{\"op\":\"perf\"}").utf8))) as? [String: Any] ?? [:]
         var tags: [String: Any] = [:]
         for key in ["seq", "plan", "incarnation", "clock", "epoch"] { if let v = perf[key] { tags[key] = v } }
-        return hatchDiagnostics.perf(tags: tags)
+        return self.perf(tags: tags)
     }
+
+    /// The diagnostics' call table, which a development build's host table
+    /// names (NativeHatches.swift): `record` at 8.
+    static let table: UnsafeRawPointer = {
+        let t = UnsafeMutableRawPointer.allocate(byteCount: 16, alignment: 8)
+        t.initializeMemory(as: UInt8.self, repeating: 0, count: 16)
+        t.storeBytes(of: UInt32(16), as: UInt32.self)
+        t.storeBytes(of: unsafeBitCast(hatchRecord, to: UnsafeRawPointer.self), toByteOffset: 8, as: UnsafeRawPointer.self)
+        return UnsafeRawPointer(t)
+    }()
+}
+
+private typealias HatchRecordFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UnsafePointer<UInt8>?, UInt32, UnsafePointer<UInt8>?, UInt32, Double, UnsafePointer<UInt8>?, UInt32) -> UInt64
+
+private let hatchRecord: HatchRecordFn = { host, kind, node, scope, scopeLength, name, nameLength, value, text, textLength in
+    guard let store = HatchDiagnostics.store(for: ExactRuntime(UInt(bitPattern: host))) else { return 0 }
+    let string = { (bytes: UnsafePointer<UInt8>?, length: UInt32) in
+        bytes.map { String(decoding: UnsafeBufferPointer(start: $0, count: Int(length)), as: UTF8.self) } ?? ""
+    }
+    return store.record(kind: kind, node: node, scope: string(scope, scopeLength), name: string(name, nameLength), value: value,
+                        text: text.map { Data(bytes: $0, count: Int(textLength)) } ?? Data())
+}
+
+extension ExactSession {
+    /// This session's store, which a development composition makes when it
+    /// links the native module family; none without it.
+    var hatchDiagnostics: HatchDiagnostics? { natives.diagnostics as? HatchDiagnostics }
+
+    func hatchPerf() -> [String: Any] { hatchDiagnostics?.perf(of: self) ?? [:] }
 }

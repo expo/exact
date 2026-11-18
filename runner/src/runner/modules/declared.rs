@@ -115,7 +115,7 @@ enum Effect {
 impl<D: DataSource> Runner<D> {
     /// Share the host's app-wide state with this session (§7: `"scope":
     /// "app"`), before anything sets it.
-    pub fn share_app_state(&mut self, state: AppState) {
+    pub(super) fn share_app_state_linked(&mut self, state: AppState) {
         self.extensions.declared.app = Some(state);
     }
 
@@ -134,7 +134,7 @@ impl<D: DataSource> Runner<D> {
 
     /// The commands of this commit from `first` that are a module's sends
     /// answering nothing: taken off, to run once the commit stands.
-    pub(in crate::runner) fn take_module_effects(
+    pub(super) fn take_module_effects_linked(
         &mut self,
         first: usize,
     ) -> Vec<(ModulesRow, Vec<Value>)> {
@@ -151,7 +151,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Run the effects a commit stated, in order, once it stands.
-    pub(in crate::runner) fn run_module_effects(&mut self, effects: Vec<(ModulesRow, Vec<Value>)>) {
+    pub(super) fn run_module_effects_linked(&mut self, effects: Vec<(ModulesRow, Vec<Value>)>) {
         let origin = self.call_origin();
         for (row, args) in effects {
             let mut args = self.args_json(&row, &args);
@@ -635,11 +635,9 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Each list and value the plan's modules declare, by its state name,
-    /// as the agent's state shows it: `"notifications": [{…, "ref": 7,
-    /// "delivered": true}]`, `"badge": 3`. Empty for a plan that declares
-    /// none.
-    pub fn declared_state(&self) -> Vec<(String, Json)> {
+    /// Each list and value the plan's modules declare, by its state name:
+    /// [`Self::declared_state`]'s module part.
+    pub(super) fn module_declared_state_linked(&self) -> BTreeMap<String, Json> {
         let mut out: BTreeMap<String, Json> = BTreeMap::new();
         let app = self.extensions.declared.app.clone();
         for row in &self.plan.modules {
@@ -672,11 +670,7 @@ impl<D: DataSource> Runner<D> {
                 out.insert(state.to_owned(), value.unwrap_or(Json::Null));
             }
         }
-        // The app's tools and the system's calls of them (LLP 1133.023 §10).
-        if let Some(intents) = self.intents_state() {
-            out.insert("intents".into(), intents);
-        }
-        out.into_iter().collect()
+        out
     }
 
     /// Whether the agent clock has reached an entry's declared `at` time;
@@ -696,19 +690,13 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// [`Self::declared_state`] as the agent's state writes it: `,"name":value` each.
-    pub fn declared_state_json(&self, s: &mut String) {
-        for (name, value) in self.declared_state() {
-            s.push(',');
-            s.push_str(&Json::String(name).to_string());
-            s.push(':');
-            s.push_str(&value.to_string());
-        }
-    }
-
     /// The agent's operations on listed entries (§7): `{"op":"tap","ticket":ref}`
     /// on one, or `{"op":"launchEntry","launch","entry"}`. `None` for any other.
-    pub fn listed_op(&mut self, op: &str, request: &str) -> Option<Result<String, String>> {
+    pub(super) fn listed_op_linked(
+        &mut self,
+        op: &str,
+        request: &str,
+    ) -> Option<Result<String, String>> {
         let v: Json = serde_json::from_str(request).ok()?;
         match op {
             "launchEntry" if v["launch"] == "wake" => {
@@ -749,7 +737,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether `reference` is a listed entry's `ref`.
-    pub fn is_listed(&self, reference: u64) -> bool {
+    pub(super) fn is_listed_linked(&self, reference: u64) -> bool {
         self.listed_at(reference).is_some()
     }
 
@@ -773,13 +761,13 @@ impl<D: DataSource> Runner<D> {
     /// `tap @ref` on a listed entry (§7): what the platform's click would
     /// do. `Ok` is the reply: `{"navigate": location}` for the host to open,
     /// or the event raised; the entry is retired either way.
-    pub fn tap_listed(&mut self, reference: u64) -> Result<String, String> {
+    pub(super) fn tap_listed_linked(&mut self, reference: u64) -> Result<String, String> {
         self.tap_listed_as(reference, None)
     }
 
     /// [`Self::tap_listed`] with the person's choice, for an entry whose
     /// list declares choices (LLP 1133.030 D12 item 2).
-    pub fn tap_listed_as(
+    pub(super) fn tap_listed_as_linked(
         &mut self,
         reference: u64,
         choice: Option<&str>,
@@ -909,7 +897,11 @@ impl<D: DataSource> Runner<D> {
     /// A relaunched app's launch flag (`--notification '<entry>'`): the
     /// entry as the agent's state printed it, delivered as its tap would be
     /// (LLP 1133.004 §7), held until the session can hear it.
-    pub fn launch_listed(&mut self, launch: &str, entry: &str) -> Result<String, String> {
+    pub(super) fn launch_listed_linked(
+        &mut self,
+        launch: &str,
+        entry: &str,
+    ) -> Result<String, String> {
         let entry: Json =
             serde_json::from_str(entry).map_err(|e| format!("--{launch}: not JSON: {e}"))?;
         let Some(row) = (self.plan.modules.iter())

@@ -159,18 +159,22 @@ export function scroll(root, visit, fragment, log, activation) {
   keep(r);
 }
 
-/** A page that arrived with no fragment (D5.1): each scroller where it opens, the offsets its `scrollTop` and
- * `scrollLeft` give (the JS target's `$scrollTop`, tree.js), the end of a list that opens there, else its start; one
- * under `scroll-restoration="manual"` stays where it is, the document's too. */
+/** No fragment (D5.1): each scroller in the route starts over, at the offsets its `scrollTop` and `scrollLeft` give
+ * (`$scrollTop`, which tree.js and the wasm host's views.js keep), the end of a list that opens there, else its start;
+ * one under `scroll-restoration="manual"` stays where it is. A page that scrolls the document starts it over the same
+ * way; any other route is brought into view, as for `#top`. A JS target's list says its options on `$list`, the wasm
+ * host's on its attributes. */
 function arrive(r) {
-  const manual = el => el.$list ? el.$list.manual : el.getAttribute("scrollRestoration") === "manual";
+  const manual = el => (el.$list ? el.$list.manual : el.getAttribute("scrollRestoration") === "manual");
+  const atEnd = el => (el.$list ? el.$list.opensAtEnd : el.getAttribute("scrollStart") === "end");
   for (const el of inside(r)) {
     if (manual(el)) continue;
-    if (el.$list?.opensAtEnd) el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+    if (atEnd(el)) el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
     else el.scrollTo({ top: el.$scrollTop ?? 0, left: el.$scrollLeft ?? 0, behavior: "instant" });
   }
   const page = r.matches("[data-scrolldocument=\"true\"]") ? r : r.querySelector("[data-scrolldocument=\"true\"]");
-  if (!page || !manual(page)) r.scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" });
+  if (!page) r.scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" });
+  else if (!manual(page)) document.scrollingElement?.scrollTo({ top: page.$scrollTop ?? 0, left: page.$scrollLeft ?? 0, behavior: "instant" });
   keep(r);
 }
 

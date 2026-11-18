@@ -90,12 +90,12 @@ impl<D: DataSource> Host<D> {
                 said.push(',');
             }
             first = false;
-            exact_runner::agent::quote(name, said);
+            exact_runner::json::quote(name, said);
             said.push(':');
         };
         if let Some(s) = &asked.scheme {
             field("scheme", &mut said);
-            exact_runner::agent::untyped_json(s, &mut said);
+            exact_runner::json::untyped_json(s, &mut said);
         }
         if !asked.modes.is_empty() {
             field("mode", &mut said);
@@ -104,15 +104,15 @@ impl<D: DataSource> Host<D> {
                 if i > 0 {
                     said.push(',');
                 }
-                exact_runner::agent::quote(a, &mut said);
+                exact_runner::json::quote(a, &mut said);
                 said.push(':');
-                exact_runner::agent::quote(v, &mut said);
+                exact_runner::json::quote(v, &mut said);
             }
             said.push('}');
         }
         if let Some(r) = &asked.root {
             field("rootFontSize", &mut said);
-            exact_runner::agent::untyped_json(r, &mut said);
+            exact_runner::json::untyped_json(r, &mut said);
         }
         said.push_str("},");
         let batch = self.batch_for(&receipts, error.as_deref());
@@ -124,7 +124,7 @@ impl<D: DataSource> Host<D> {
     pub fn check_modes(&mut self, pins: &[(&str, &str)]) -> String {
         match self.runner.check_modes(pins) {
             Ok(()) => format!("{{\"modes\":{}}}", self.runner.modes_json()),
-            Err(e) => exact_runner::agent::error(&format!("mode: {e:?}")),
+            Err(e) => exact_runner::json::error(&format!("mode: {e:?}")),
         }
     }
 }

@@ -11,6 +11,25 @@ import XCTest
 final class AccessibilityTreeIOSTests: XCTestCase {
     private var window: UIWindow!
 
+    func testANamedGroupExposesItsChildrenWithoutCombiningThem() throws {
+        let p = try fixture()
+        p.apply(wireBatch([["op": "props", "id": 4, "set": [
+            "accessibilityRole": "group", "accessibilityLabel": "Pump assembly"]]]))
+        let box = try XCTUnwrap(p.views[4])
+        XCTAssertFalse(box.isAccessibilityElement)
+        XCTAssertEqual(box.accessibilityContainerType, .semanticGroup)
+        let ax = p.axElements(roots: [p.viewport])
+        let group = try XCTUnwrap(element(ax, "box"))
+        XCTAssertEqual(group["role"] as? String, "group")
+        XCTAssertEqual(group["name"] as? String, "Pump assembly")
+        XCTAssertEqual(element(ax, "inside")?["parent"] as? Int, group["i"] as? Int)
+        p.apply(wireBatch([["op": "props", "id": 4, "clear": ["accessibilityRole"]]]))
+        XCTAssertEqual(box.accessibilityContainerType, .none)
+        let ungrouped = p.axElements(roots: [p.viewport])
+        XCTAssertNil(element(ungrouped, "box"))
+        XCTAssertNotNil(element(ungrouped, "inside"))
+    }
+
     func testLabelledImagesExposeTheirTraitAndDecorativeImagesStayHidden() throws {
         let p = try fixture()
         let image = NodeView(id: 20, kind: "image", presenter: p)
@@ -748,6 +767,39 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertEqual((out["coverage"] as? [String: Any])?["complete"] as? Bool, false)
         if #available(iOS 18, *) { XCTAssertTrue((ax["observes"] as? [String])?.contains("expanded") == true) }
         else { XCTAssertFalse((ax["observes"] as? [String])?.contains("expanded") == true) }
+    }
+}
+/// Each input's field has a `UITextField`'s traits: no adjustable trait for
+/// a number input, as the Mac's fields offer a stepper's actions only on one
+/// (`FieldAccessibilityOfferMacTests`).
+final class FieldTraitsIOSTests: XCTestCase {
+    func testEachInputsFieldHasAUITextFieldsTraits() throws {
+        let p = Presenter()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let inputs: [(id: Int, props: [String: String])] = [
+            (11, ["accessibilityLabel": "Plain"]),
+            (12, ["type": "search", "accessibilityLabel": "Search"]),
+            (13, ["accessibilityRole": "combobox", "accessibilityExpanded": "false", "accessibilityLabel": "Combo"]),
+            (14, ["type": "number", "min": "0", "max": "10", "value": "3", "accessibilityLabel": "Number"]),
+        ]
+        var ops: [[String: Any]] = [["op": "create", "id": 1, "kind": "view"], ["op": "roots", "ids": [1]],
+                                    ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0]]
+        for (i, input) in inputs.enumerated() {
+            ops.append(["op": "create", "id": input.id, "kind": "input", "handlers": ["input"], "props": input.props])
+            ops.append(["op": "frame", "id": input.id, "x": 10.0, "y": 10.0 + Double(i) * 40, "w": 280.0, "h": 32.0])
+        }
+        ops.append(["op": "children", "id": 1, "ids": inputs.map(\.id)])
+        p.apply(wireBatch(ops))
+        p.syncAccessibility()
+        let plain = UITextField().accessibilityTraits
+        for input in inputs {
+            let field = try XCTUnwrap(p.views[UInt32(input.id)]?.field, input.props["accessibilityLabel"]!)
+            XCTAssertEqual(field.accessibilityTraits, plain, input.props["accessibilityLabel"]!)
+        }
     }
 }
 #endif

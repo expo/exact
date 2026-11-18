@@ -98,6 +98,7 @@ test steps (app.test.contract; every other form: docs/contract-grammar.md)
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
   back
+  presence allow (cancel, fail, lockout, invalidated)
   fail fetch "<prefix>", pass fetch …
   answer fetch "<prefix>" with 200 {"text":"Hello"}
   request POST "/items" {…} as grace expect 409
@@ -181,7 +182,7 @@ a dated record: The write reads the clock, not a ticked `now`; `performanceNow()
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Tests start with no storage. `clock data` lands replies, `clock settle` ends transitions, `clock held` lands held replies; `reload` keeps storage. `bun exact.mjs verify` tests, checks end screens, relaunches; `verify ios` last; `--shots <dir>` keeps shots. It runs `contract verify`; keep its receipt.
+a test, and verify: Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
   test "a pick survives a relaunch"
     tap "pick"
     clock data

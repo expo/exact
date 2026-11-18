@@ -76,13 +76,18 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let mut resample = false;
         if let Some(sim) = &mut self.sim {
             let generation = sim.generation();
+            let picture = sim.picture_generation();
             let models = sim.world().model_revision();
             // A live bind while at rest: the idle time runs no ticks.
             let woke = at_ms.filter(|_| self.resting && !self.seekable);
             if let Some(at) = woke {
+                self.perf.submitted_live = None;
                 sim.wake(at);
+                self.perf.record_gap(sim.take_live_gap(), picture);
             }
-            sim.bind_with(
+            let start = sim.world().tick();
+            let measure = (self.seekable && self.perf.armed()).then_some(Clock::Seekable);
+            sim.bind_observed(
                 values,
                 at_ms,
                 if self.seekable {
@@ -97,11 +102,21 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                     &mut self.trace,
                     &mut self.error,
                     &mut self.hook_poses,
-                    false,
-                    0,
+                    measure,
+                    None,
                 ),
             )
             .map_err(SurfaceError)?;
+            let gap = self.perf.record_gap(sim.take_live_gap(), picture);
+            if at_ms.is_some() && !self.seekable {
+                let ticks =
+                    u32::try_from(sim.world().tick().saturating_sub(start)).unwrap_or(u32::MAX);
+                crate::perf::warn_catch_up(self.perf.record_overload::<G>(
+                    sim.display_period_ms(),
+                    ticks,
+                    gap,
+                ));
+            }
             // An accepted bind: the next frame advances from it, not from the rest.
             if woke.is_some() {
                 self.idle_tick = None;
@@ -116,8 +131,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 if let Some((_, feed)) = &mut self.render {
                     feed.reset();
                 }
-                self.perf.restart();
-                self.gpu_timing = None;
+                self.restart_perf();
             }
         } else {
             let mut sim = Sim::from_values(values).map_err(SurfaceError)?;

@@ -14,12 +14,11 @@
 // `ExactEnv.agentPaints` false) keeps the hold and presents the real sheet
 // too: a window screenshot shows it, `back` or `tap @t cancel` closes it,
 // and its outcome answers the hold, journalled as the agent's answer is.
+import CExact
 #if canImport(UIKit)
 import UIKit
-typealias ShareAnchorView = UIView
 #else
 import AppKit
-typealias ShareAnchorView = NSView
 #endif
 
 extension ExactSession {
@@ -41,7 +40,7 @@ extension ExactSession {
             guard let ticket else { self.log(line); return }
             ShareSheet.shown[ShareSheet.Key(self, ticket)] = nil
             if line.hasPrefix("share: refused") { self.log(line) }
-            _ = self.agent("{\"op\":\"tap\",\"ticket\":\(ticket),\"choice\":\"\(line == "share: shared" ? "shared" : "cancel")\"}")
+            _ = self.runtime.ask(exact_answer_ticket, "{\"op\":\"tap\",\"ticket\":\(ticket),\"choice\":\"\(line == "share: shared" ? "shared" : "cancel")\"}")
         }
         var items: [Any] = []
         if let text = request["text"] as? String { items.append(text) }
@@ -59,7 +58,7 @@ extension ExactSession {
                 if let path = file["path"] as? String {
                     let url = try ShareSheet.scratchFile(dir, index, (path as NSString).lastPathComponent)
                     let ask = try JSONSerialization.data(withJSONObject: ["op": "shareFile", "path": path, "to": url.path])
-                    let reply = (try? JSONSerialization.jsonObject(with: Data(agent(String(decoding: ask, as: UTF8.self)).utf8))) as? [String: Any]
+                    let reply = (try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_share_file, String(decoding: ask, as: UTF8.self)).utf8))) as? [String: Any]
                     guard reply?["file"] is String else {
                         discard(); outcome("share: refused: \(reply?["error"] as? String ?? "\(path) could not be read")"); return
                     }
@@ -77,7 +76,7 @@ extension ExactSession {
                 discard(); outcome("share: refused: \(error.localizedDescription)"); return
             }
         }
-        let (view, rect) = presenter.shareAnchor(source)
+        let (view, rect) = presenter.presentationAnchor(source)
         #if os(iOS)
         let barItem = source.flatMap { presenter.navigation.shownBarItem($0) }
         #else
@@ -90,33 +89,19 @@ extension ExactSession {
     }
 }
 
-extension Presenter {
-    /// D3: the pressed node's view; a menu row's popover invoker when the
-    /// row itself is not on screen (a menu item); else the window's content,
-    /// centred (a timer, an answer, a menu-bar command).
-    func shareAnchor(_ source: UInt32?) -> (ShareAnchorView?, CGRect) {
-        func shown(_ v: ShareAnchorView) -> Bool {
-            var at: ShareAnchorView? = v
-            while let a = at { if a.isHidden { return false }; at = a.superview }
-            return v.window != nil
-        }
-        if let id = source, let v = views[id] {
-            if shown(v) { return (v, v.bounds) }
-            var at: ShareAnchorView? = v.superview
-            while let a = at, (a as? NodeView)?.props["popover"] == nil { at = a.superview }
-            if let popover = at as? NodeView,
-               let invoker = (carrying("popovertarget") + carrying("commandfor")).first(where: { invocation(of: $0)?.target === popover && shown($0) }) {
-                return (invoker, invoker.bounds)
-            }
-        }
-        #if canImport(UIKit)
-        let content = ViewPresentation.presenter(for: root)?.viewIfLoaded
-        #else
-        let content = views.values.first(where: { $0.window != nil })?.window?.contentView
-        #endif
-        guard let content else { return (nil, .zero) }
-        return (content, CGRect(x: content.bounds.midX, y: content.bounds.midY, width: 0, height: 0))
-    }
+/// The built-in sharing behind `ShareLink`.
+final class BuiltInShare: ShareHosting {
+    func share(_ session: ExactSession, _ args: [Any], source: UInt32?) { session.share(args, source: source) }
+    func claimCold(_ session: ExactSession) { session.claimColdShare() }
+    func land(_ session: ExactSession) { session.landColdShare() }
+    #if EXACT_AGENT
+    func answered(_ session: ExactSession, _ reply: [String: Any]) { ShareSheet.answered(reply, in: session) }
+    func receive(_ session: ExactSession, _ request: [String: Any]) -> [String: Any] { session.receiveShare(request) }
+    #if os(iOS)
+    func agentBack(_ session: ExactSession) -> Bool { ShareSheet.agentBack(in: session) }
+    func arriving(_ session: ExactSession) -> Bool { ShareSheet.arriving(in: session) }
+    #endif
+    #endif
 }
 
 enum ShareSheet {
@@ -209,7 +194,7 @@ enum ShareSheet {
     }
     /// A PNG of `view` and its subviews as they are drawn now, at the
     /// display's scale, and its size in pixels; nil for a view with no area.
-    static func picture(of view: ShareAnchorView) -> (png: Data, width: Int, height: Int)? {
+    static func picture(of view: PresentationAnchorView) -> (png: Data, width: Int, height: Int)? {
         let bounds = view.bounds
         guard bounds.width > 0, bounds.height > 0 else { return nil }
         #if canImport(UIKit)
@@ -238,7 +223,7 @@ enum ShareSheet {
     /// the bar item the pressed control is drawn as; `outcome` gets the
     /// journal line. Returns what was shown, nil when nothing could present it.
     @discardableResult
-    static func present(_ items: [Any], title: String?, from view: ShareAnchorView, at rect: CGRect, barItem: AnyObject? = nil,
+    static func present(_ items: [Any], title: String?, from view: PresentationAnchorView, at rect: CGRect, barItem: AnyObject? = nil,
                         outcome: @escaping (String) -> Void) -> AnyObject? {
         #if os(tvOS)
         // tvOS has no share sheet.

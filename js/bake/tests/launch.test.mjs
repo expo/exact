@@ -71,11 +71,11 @@ export const string = STRING === 'live';
       writeFileSync(resolve(app,'app.ts'),source);
       writeFileSync(resolve(stage,'app.ts'),source);
       writeFileSync(resolve(stage,'__exact_entry.ts'),"export * from './app';\n");
-      // configure is synchronous: restore the shared environment before yielding to the checker.
+      // Restore the shared environment before checking another fixture.
       const saved=Object.fromEntries(['EXACT_BACKEND_ORIGIN','EXACT_BACKEND_PROVENANCE',...names,'ISSUE_502_ORIGIN'].map(name=>[name,process.env[name]]));
       try {
         for (const name of Object.keys(saved)) delete process.env[name];
-        configure(stage,false,parseSync,web);
+        await configure(stage,false,parseSync,web);
       } finally {
         for (const [name,value] of Object.entries(saved)) { if (value===undefined) delete process.env[name]; else process.env[name]=value; }
       }
@@ -319,8 +319,8 @@ test('a backend selection refuses a preload setting whose origin literal it rewr
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({env:['API'], preload:{feed:{url:'{env:API}/feed'}}}));
     writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({app, mounts:[]}));
     writeFileSync(resolve(stage, 'app.ts'), "const origin = import.meta.env.API ?? 'https://built.example';\nexport const grants = `net.fetch ${origin}`;\n");
-    expect(() => configure(stage, false, parseSync)).toThrow('preload.feed.url: setting API');
-    expect(() => configure(stage, false, parseSync)).toThrow('EXACT_BACKEND_ORIGIN selects https://selected.example');
+    await expect(configure(stage, false, parseSync)).rejects.toThrow('preload.feed.url: setting API');
+    await expect(configure(stage, false, parseSync)).rejects.toThrow('EXACT_BACKEND_ORIGIN selects https://selected.example');
   } finally {
     for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
     rmSync(root, {recursive:true, force:true});

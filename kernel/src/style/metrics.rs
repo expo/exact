@@ -108,12 +108,12 @@ pub fn named(text: &str) -> Option<&'static Metric> {
 /// A metric's value in a column.
 pub fn value(metric: &Metric, column: Column) -> MetricValue {
     match column {
-        Column::Web => metric.web,
-        Column::Ios => metric.ios,
-        Column::Mac => metric.macos,
-        Column::Neutral => metric.neutral,
-        Column::Material => metric.material,
-        Column::Terminal => metric.terminal,
+        Column::Web => metric.web(),
+        Column::Ios => metric.ios(),
+        Column::Mac => metric.macos(),
+        Column::Neutral => metric.neutral(),
+        Column::Material => metric.material(),
+        Column::Terminal => metric.terminal(),
     }
 }
 
@@ -290,19 +290,19 @@ mod tests {
             };
             if let Some(weight) = emphasis {
                 assert_eq!(
-                    [m.ios, m.macos, m.material],
+                    [m.ios(), m.macos(), m.material()],
                     [Text("unset"); 3],
                     "{}",
                     m.name
                 );
                 assert_eq!(
-                    [m.web, m.neutral, m.terminal],
+                    [m.web(), m.neutral(), m.terminal()],
                     [Number(weight); 3],
                     "{}",
                     m.name
                 );
             } else {
-                assert_eq!(m.web, m.ios, "{}", m.name);
+                assert_eq!(m.web(), m.ios(), "{}", m.name);
             }
         }
         // The neutral look's grouped list is a web page's (LLP 1115.000 D4
@@ -335,11 +335,16 @@ mod tests {
                 "header-padding-inline" => Number(16.0),
                 "header-position" => Text("sticky"),
                 "header-top" => Number(0.0),
-                _ => m.web,
+                _ => m.web(),
             };
-            assert_eq!(m.neutral, neutral, "{}", m.name);
+            assert_eq!(m.neutral(), neutral, "{}", m.name);
             if m.name.starts_with("header-") {
-                assert_eq!([m.web, m.ios, m.macos], [Text("unset"); 3], "{}", m.name);
+                assert_eq!(
+                    [m.web(), m.ios(), m.macos()],
+                    [Text("unset"); 3],
+                    "{}",
+                    m.name
+                );
             }
         }
     }
@@ -386,7 +391,7 @@ mod tests {
         assert_eq!(length(metric::MARK_SIZE, 16.0, 16.0), Some(13.0));
         assert_eq!(number(metric::CONTROL_LINE_ALPHA), None);
         assert_eq!(
-            METRICS[metric::CONTROL_LINE_ALPHA].neutral,
+            METRICS[metric::CONTROL_LINE_ALPHA].neutral(),
             MetricValue::Number(0.45)
         );
         // No sheet names a row code reads.
@@ -488,10 +493,10 @@ mod tests {
                 m.name
             );
             for (column, cell) in [
-                ("iOS", m.ios),
-                ("the Mac", m.macos),
-                ("the web", m.web),
-                ("the neutral look", m.neutral),
+                ("iOS", m.ios()),
+                ("the Mac", m.macos()),
+                ("the web", m.web()),
+                ("the neutral look", m.neutral()),
             ] {
                 for &row in rows {
                     let Some(written) = as_written(row, cell) else {

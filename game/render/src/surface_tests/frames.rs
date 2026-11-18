@@ -14,6 +14,8 @@ struct DiceArgs {
     /// The game's own cap.
     #[live]
     fps: u32,
+    #[live]
+    paused: bool,
 }
 struct Dice;
 impl Game for Dice {
@@ -27,6 +29,9 @@ impl Game for Dice {
     }
     fn max_fps(_: &World, args: &DiceArgs) -> u32 {
         args.fps
+    }
+    fn paused(args: &DiceArgs) -> bool {
+        args.paused
     }
     fn samples(args: &DiceArgs) -> SceneSamples {
         if args.rough == 1 {
@@ -61,11 +66,12 @@ fn live(now_ms: f64) -> Frame {
     }
 }
 
-fn args(rolling: bool, rough: u32, fps: u32) -> [Value; 3] {
+fn args(rolling: bool, rough: u32, fps: u32) -> [Value; 4] {
     [
         Value::Bool(rolling),
         Value::Number(rough.into()),
         Value::Number(fps.into()),
+        Value::Bool(false),
     ]
 }
 
@@ -84,6 +90,227 @@ fn state(s: &mut WorldSurface<Dice>) -> serde_json::Value {
     serde_json::from_str::<serde_json::Value>(&s.agent(r#"{"op":"state"}"#).unwrap()).unwrap()
         ["world"]
         .clone()
+}
+
+#[test]
+fn catch_up_draw_and_pause_without_timing() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    for now in [0., 300.] {
+        fixture::render(&gpu, &mut s, &live(now)).unwrap();
+    }
+    let before = state(&mut s);
+    let mut paused = args(true, 0, 0);
+    paused[3] = Value::Bool(true);
+    s.bind(&paused, Some(300.)).unwrap();
+    s.bind(&args(true, 0, 0), None).unwrap();
+    fixture::render(&gpu, &mut s, &live(2300.)).unwrap();
+    assert_eq!(
+        [
+            before["perf"]["catchUp"].clone(),
+            state(&mut s)["perf"]["catchUp"].clone()
+        ],
+        [
+            serde_json::json!({"clampFrames":1,"clampMs":50,"idleFrames":0,"idleMs":0,"overloadFrames":1}),
+            serde_json::json!({"clampFrames":1,"clampMs":50,"idleFrames":1,"idleMs":1750,"overloadFrames":1}),
+        ]
+    );
+}
+
+#[test]
+fn catch_up_first_draw_after_stamped_bind() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = WorldSurface::<Dice>::default();
+    s.clock(false);
+    s.bind(&args(true, 0, 0), Some(0.)).unwrap();
+    fixture::render(&gpu, &mut s, &live(2000.)).unwrap();
+    let perf = &state(&mut s)["perf"];
+    assert_eq!(perf["catchUp"]["idleMs"], 1750);
+    assert_eq!(perf["catchUp"]["clampMs"], 0);
+    assert_eq!(perf["ticksOwed"]["max"], 120);
+}
+
+#[test]
+fn catch_up_keeps_submission_across_early_returns() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    fixture::render(&gpu, &mut s, &live(0.)).unwrap();
+    for skipped in [
+        Frame {
+            width: 0.,
+            ..live(100.)
+        },
+        live(f64::NAN),
+    ] {
+        fixture::render(&gpu, &mut s, &skipped).unwrap();
+        assert!(s.perf.submitted_live.is_some());
+    }
+    fixture::render(&gpu, &mut s, &live(300.)).unwrap();
+    let perf = &state(&mut s)["perf"];
+    assert_eq!(perf["catchUp"]["clampMs"], 50);
+    assert_eq!(perf["ticksOwed"]["count"], 2);
+}
+
+#[test]
+fn catch_up_timed_bind_counts_once_without_sampling() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    fixture::render(&gpu, &mut s, &live(0.)).unwrap();
+    s.bind(&args(true, 0, 0), Some(300.)).unwrap();
+    let before = state(&mut s);
+    fixture::render(&gpu, &mut s, &live(300.)).unwrap();
+    let after = state(&mut s);
+    for perf in [&before["perf"], &after["perf"]] {
+        assert_eq!(
+            perf["catchUp"],
+            serde_json::json!({"clampFrames":1,"clampMs":50,"idleFrames":0,"idleMs":0,"overloadFrames":1})
+        );
+    }
+    assert_eq!(before["perf"]["ticksOwed"]["count"], 1);
+    assert_eq!(after["perf"]["ticksOwed"]["count"], 2);
+    assert_eq!(after["perf"]["ticksOwed"]["max"], 0);
+}
+
+#[test]
+fn catch_up_advance_only_counts_once_without_sampling() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    fixture::render(&gpu, &mut s, &live(0.)).unwrap();
+    s.advance(&live(300.), &gpu.device, &gpu.queue);
+    let before = state(&mut s);
+    fixture::render(&gpu, &mut s, &live(300.)).unwrap();
+    let after = state(&mut s);
+    for perf in [&before["perf"], &after["perf"]] {
+        assert_eq!(
+            perf["catchUp"],
+            serde_json::json!({"clampFrames":1,"clampMs":50,"idleFrames":0,"idleMs":0,"overloadFrames":1})
+        );
+    }
+    assert_eq!(before["perf"]["ticksOwed"]["count"], 1);
+    assert_eq!(after["perf"]["ticksOwed"]["count"], 2);
+    assert_eq!(after["perf"]["ticksOwed"]["max"], 0);
+}
+
+#[test]
+fn catch_up_counts_overload_on_short_binds_and_advance_only_frames() {
+    let Some(gpu) = gpu() else { return };
+    // 100 ms of ticks in one advance at a 60 Hz display, under the 250 ms limit.
+    let mut s = live_dice(true);
+    fixture::render(&gpu, &mut s, &live(0.)).unwrap();
+    s.advance(&live(100.), &gpu.device, &gpu.queue);
+    let mut bound = live_dice(true);
+    fixture::render(&gpu, &mut bound, &live(0.)).unwrap();
+    bound.bind(&args(true, 0, 0), Some(100.)).unwrap();
+    for s in [&mut s, &mut bound] {
+        assert_eq!(
+            state(s)["perf"]["catchUp"],
+            serde_json::json!({"clampFrames":0,"clampMs":0,"idleFrames":0,"idleMs":0,"overloadFrames":1})
+        );
+    }
+}
+
+#[test]
+fn catch_up_bind_wakes_a_resting_canvas() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(false);
+    let now = (0..10)
+        .map(|i| f64::from(i) * PERIOD)
+        .find(|&now| !fixture::render(&gpu, &mut s, &live(now)).unwrap().1)
+        .expect("canvas did not rest");
+    s.bind(&args(true, 0, 0), Some(now + 2000.)).unwrap();
+    let perf = &state(&mut s)["perf"];
+    assert_eq!(perf["catchUp"]["idleFrames"], 1);
+    assert_eq!(perf["catchUp"]["idleMs"], 1750);
+    assert_eq!(perf["catchUp"]["clampMs"], 0);
+}
+
+#[test]
+fn catch_up_interrupted_canvas_can_keep_submitting() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    fixture::render(&gpu, &mut s, &live(0.)).unwrap();
+    s.lifecycle(Lifecycle::Interrupted);
+    for now in [300., 600.] {
+        fixture::render(&gpu, &mut s, &live(now)).unwrap();
+    }
+    assert_eq!(
+        state(&mut s)["perf"]["catchUp"],
+        serde_json::json!({"clampFrames":1,"clampMs":50,"idleFrames":1,"idleMs":50,"overloadFrames":2})
+    );
+}
+
+#[test]
+fn catch_up_hidden_resume_owes_the_full_gap() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    fixture::render(&gpu, &mut s, &live(0.)).unwrap();
+    s.lifecycle(Lifecycle::Hidden);
+    s.lifecycle(Lifecycle::Visible);
+    fixture::render(&gpu, &mut s, &live(2000.)).unwrap();
+    let perf = &state(&mut s)["perf"];
+    assert_eq!(perf["catchUp"]["idleMs"], 1750);
+    assert_eq!(perf["catchUp"]["clampMs"], 0);
+    assert_eq!(perf["ticksOwed"]["max"], 120);
+}
+
+#[test]
+fn catch_up_seek_samples_both_rings_without_counting() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    s.clock(true);
+    for now in [0., 2000.] {
+        fixture::render(&gpu, &mut s, &frame(now)).unwrap();
+    }
+    let perf = &state(&mut s)["perf"];
+    assert_eq!(
+        perf["catchUp"],
+        serde_json::json!({"clampFrames":0,"clampMs":0,"idleFrames":0,"idleMs":0,"overloadFrames":0})
+    );
+    assert_eq!(perf["ticksPerFrame"]["max"], 120);
+    assert_eq!(perf["ticksOwed"], perf["ticksPerFrame"]);
+}
+
+#[test]
+fn catch_up_classifies_drawn_hidden_and_resting_frames() {
+    let Some(gpu) = gpu() else { return };
+    let mut s = live_dice(true);
+    let draw = |s: &mut WorldSurface<Dice>, now, interval_ms| {
+        s.timing(&exact_gpu::FrameTiming {
+            interval_ms,
+            display_period_ms: PERIOD,
+            ..Default::default()
+        });
+        fixture::render(&gpu, s, &live(now)).unwrap().1
+    };
+    assert!(draw(&mut s, 0., 0.));
+    assert!(draw(&mut s, 300., 300.));
+    s.lifecycle(Lifecycle::Hidden);
+    s.lifecycle(Lifecycle::Visible);
+    assert!(draw(&mut s, 2300., 2000.));
+    assert_eq!(
+        state(&mut s)["perf"]["catchUp"],
+        serde_json::json!({"clampFrames":1,"clampMs":50,"idleFrames":1,"idleMs":1750,"overloadFrames":2})
+    );
+    let reset = s.agent(r#"{"op":"state","perf_reset":true}"#).unwrap();
+    let reset: serde_json::Value = serde_json::from_str(&reset).unwrap();
+    assert_eq!(reset["world"]["perf"]["ticksOwed"]["count"], 0);
+    assert_eq!(
+        reset["world"]["perf"]["catchUp"],
+        serde_json::json!({"clampFrames":0,"clampMs":0,"idleFrames":0,"idleMs":0,"overloadFrames":0})
+    );
+
+    // A canvas at rest that wakes after 2 s, whatever interval the host names.
+    let mut s = live_dice(false);
+    let mut t = 0.;
+    while draw(&mut s, t, if t == 0. { 0. } else { PERIOD }) {
+        t += PERIOD;
+        assert!(t < 10. * PERIOD, "still drawing");
+    }
+    assert!(draw(&mut s, t + 2000., 2000.));
+    assert_eq!(
+        state(&mut s)["perf"]["catchUp"],
+        serde_json::json!({"clampFrames":0,"clampMs":0,"idleFrames":1,"idleMs":1750,"overloadFrames":0})
+    );
 }
 
 #[test]

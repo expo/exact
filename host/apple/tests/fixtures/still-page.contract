@@ -1,0 +1,5 @@
+// A still page: nothing animates, loads or waits on a timer, so once its first present is heard a session booted
+// with it has no work of its own (`settleViewlessSession`; LaunchServiceTests, NavigationMarksTests).
+component StillPage
+  view
+    text "Still" testId="still"

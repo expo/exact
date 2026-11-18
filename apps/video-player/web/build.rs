@@ -23,8 +23,15 @@ fn main() {
     let platform = "web";
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
     let grants = video_player_data::Player.grants();
-    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(grants))
-        .unwrap_or_else(|e| panic!("compatibility id: {e}"));
+    let compat = exact_bake::compatibility_id(
+        &app_dir,
+        platform,
+        &target,
+        &manifest,
+        Some(grants),
+        exact_bake::hands_out_work!(video_player_data::Player),
+    )
+    .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();
     let entry = contract::rust_entry(
         "video_player_data::Player",

@@ -24,7 +24,7 @@ fn main() {
     };
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
     let source = exact_listbench_data::ListBench::default();
-    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(source.grants()))
+    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(source.grants()), exact_bake::hands_out_work!(source))
         .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     assert_eq!(compat.inputs["store"]["L"], "0", "app.json deploy.store must stay 0 (no update store)");
     let linked = exact_bake::apple_link(&compat, "exact_apple");

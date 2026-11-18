@@ -5,7 +5,7 @@
 //! while a sequence follows a MIDI clock (LLP 1125 D9), what the clock has
 //! said (`follow`). Only for a plan that declares a sequence.
 
-use super::{num, quote};
+use crate::json::{num, quote};
 
 // `state.midi` (LLP 1125 D5–D8), written after the transport's.
 #[path = "midi.rs"]

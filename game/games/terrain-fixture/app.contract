@@ -1,0 +1,85 @@
+shape Hud
+  presented: bool
+
+component TerrainFixture
+  state playing = false
+  state radius = "smoke"
+  state movement = "stand"
+  state light = "0"
+  state edits = "0"
+  state inflight = "discard"
+  state compare = "off"
+  state vertex = "12"
+  state blend = "off"
+  state budget = "deadline"
+  state draw = "on"
+  state pool = "off"
+  resource hud = exactSurface("world") as shape Hud
+  action setRadius(value: string)
+    radius = value
+  action setMovement(value: string)
+    movement = value
+  action setLight(value: string)
+    light = value
+  action setEdits(value: string)
+    edits = value
+  action setInflight(value: string)
+    inflight = value
+  action setCompare(value: string)
+    compare = value
+  action setVertex(value: string)
+    vertex = value
+  action setBlend(value: string)
+    blend = value
+  action setBudget(value: string)
+    budget = value
+  action setDraw(value: string)
+    draw = value
+  action setPool(value: string)
+    pool = value
+  action play
+    playing = true
+  view
+    main width="100%" height="100%"
+      if playing
+        canvas surface=world(radius=radius, move=movement, light=light, edits=edits, inflight=inflight, compare=compare, vertex=vertex, blend=blend, budget=budget, draw=draw, pool=pool) testId="world" width="100%" height="100%" position="relative"
+          if !hud.presented && radius == "smoke" && movement == "stand" && light == "0" && edits == "0" && inflight == "discard" && compare == "off" && vertex == "12" && blend == "off" && budget == "deadline" && draw == "on" && pool == "off"
+            column position="absolute" inset=0 align-items="center" justify-content="center" background-color="-exact-background"
+              text "Preparing terrain…" testId="terrain-pending"
+      else
+        column width="100%" height="100%" align-items="center" justify-content="center" gap=8
+          row gap=8 align-items="center"
+            text "Radius (smoke, 8, 40)"
+            input value=radius input=setRadius testId="radius" aria-label="Radius (smoke, 8, 40)" width=120
+          row gap=8 align-items="center"
+            text "Move (stand, walk, fly)"
+            input value=movement input=setMovement testId="move" aria-label="Move (stand, walk, fly)" width=120
+          row gap=8 align-items="center"
+            text "Light cells"
+            input value=light input=setLight testId="light" aria-label="Light cells" width=120
+          row gap=8 align-items="center"
+            text "Edits per second"
+            input value=edits input=setEdits testId="edits" aria-label="Edits per second" width=120
+          row gap=8 align-items="center"
+            text "Inflight (discard, keep)"
+            input value=inflight input=setInflight testId="inflight" aria-label="Inflight (discard, keep)" width=120
+          row gap=8 align-items="center"
+            text "Compare (on, off)"
+            input value=compare input=setCompare testId="compare" aria-label="Compare (on, off)" width=120
+          row gap=8 align-items="center"
+            text "Vertex bytes (12, 64)"
+            input value=vertex input=setVertex testId="vertex" aria-label="Vertex bytes (12, 64)" width=120
+          row gap=8 align-items="center"
+            text "Blend (off, background, surface)"
+            input value=blend input=setBlend testId="blend" aria-label="Blend (off, background, surface)" width=120
+          row gap=8 align-items="center"
+            text "Budget (count:N, deadline)"
+            input value=budget input=setBudget testId="budget" aria-label="Budget (count:N, deadline)" width=120
+          row gap=8 align-items="center"
+            text "Draw (on, off)"
+            input value=draw input=setDraw testId="draw" aria-label="Draw (on, off)" width=120
+          row gap=8 align-items="center"
+            text "Pool (off, on)"
+            input value=pool input=setPool testId="pool" aria-label="Pool (off, on)" width=120
+          button press=play testId="play"
+            text "Show terrain"

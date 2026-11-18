@@ -87,7 +87,7 @@ impl<D: DataSource> Runner<D> {
 
     /// A bound implementation's choice (module doc), applied as the
     /// person's; journaled when refused.
-    pub(in crate::runner) fn listed_choice(&mut self, body: &str) {
+    pub(in crate::runner::modules) fn listed_choice_linked(&mut self, body: &str) {
         let v: Json = serde_json::from_str(body).unwrap_or_default();
         let (Some(extension), Some(state), Some(choice)) = (
             v["extension"].as_str(),

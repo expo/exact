@@ -15,39 +15,18 @@ impl Collection {
         }
     }
 
+    /// Count each mounted row's subtree as retired, as its list is destroyed.
+    pub(in crate::instance) fn retire_rows(&self, u: &mut Update<'_>) {
+        for row in &self.mounted {
+            self.retire_row(u, row);
+        }
+    }
+
     pub(super) fn retire_row(&self, u: &mut Update<'_>, row: &Mounted) {
         if u.ids.work.sites.is_empty() {
             return;
         }
         self.count_row(u, |w| w.row_retired += 1);
-        retire_children(u, &row.row.roots);
-    }
-}
-
-pub(in crate::instance) fn retire_node(u: &mut Update<'_>, node: &NodeInst) {
-    if u.ids.work.sites.is_empty() {
-        return;
-    }
-    if let Some(c) = node.collection() {
-        for row in &c.mounted {
-            c.retire_row(u, row);
-        }
-    }
-    retire_children(u, &node.children);
-}
-
-fn retire_children(u: &mut Update<'_>, children: &[Child]) {
-    for child in children {
-        match child {
-            Child::Node(n) => retire_node(u, n),
-            Child::Region(r) => match &r.active {
-                Active::Arm { roots, .. } => retire_children(u, roots),
-                Active::Rows { rows } => {
-                    for row in rows {
-                        retire_children(u, &row.roots);
-                    }
-                }
-            },
-        }
+        crate::instance::retire::retire_children(u, &row.row.roots);
     }
 }

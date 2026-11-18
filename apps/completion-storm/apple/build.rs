@@ -34,6 +34,7 @@ fn main() {
         &std::env::var("TARGET").unwrap(),
         &manifest,
         Some(completion_storm_data::Storm::default().grants()),
+        exact_bake::hands_out_work!(completion_storm_data::Storm::default()),
     )
     .expect("compatibility receipt");
     // What the archive links, as its compatibility inputs name it (LLP 1047.001 D2).

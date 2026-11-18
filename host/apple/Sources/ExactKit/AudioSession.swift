@@ -117,7 +117,7 @@ package enum AudioSession {
     }
     nonisolated(unsafe) private static var speeches: [UInt64: Speech] = [:]
     /// The spoken type whose configuration the session has now, if any.
-    nonisolated(unsafe) private(set) static var spoken: String?
+    nonisolated(unsafe) package private(set) static var spoken: String?
     /// Holders that stop when idle: the sound arm's engine with no voice
     /// submitted and not ended. Each answers whether it let its hold go.
     nonisolated(unsafe) private static var idlers: [ObjectIdentifier: () -> Bool] = [:]
@@ -129,7 +129,7 @@ package enum AudioSession {
     nonisolated(unsafe) private static var callMode: AVAudioSession.Mode?
     /// The call owns the session until its last claim ends and the system deactivates it.
     static var inCall: Bool { !calls.isEmpty || callActive }
-    static let spokenTypes = ["transient", "transient-solo", "playback"]
+    package static let spokenTypes = ["transient", "transient-solo", "playback"]
 
     /// Activation alone grants no background execution: an owner must be
     /// running, under a category and mode eligible for background audio.
@@ -640,5 +640,12 @@ package enum AudioSession {
         }
         center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { _ in tell(4) }
     }
+}
+/// The built-in audio session behind `MediaLink.audioSession`.
+final class BuiltInAudioSession: AudioSessionControlling {
+    func beginPresentation() { AudioSession.beginPresentation() }
+    func endPresentation() { AudioSession.endPresentation() }
+    func backgroundExecutionEligible() -> Bool { AudioSession.backgroundExecutionEligible() }
+    func enteredBackground() { AudioSession.enteredBackground() }
 }
 #endif

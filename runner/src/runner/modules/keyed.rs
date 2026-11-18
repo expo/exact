@@ -28,7 +28,7 @@ use serde_json::json;
 
 impl<D: DataSource> Runner<D> {
     /// The declaration's qualified name, as `prefer` and the journal name it.
-    pub(in crate::runner) fn key(&self, row: &ModulesRow) -> String {
+    pub(in crate::runner::modules) fn key(&self, row: &ModulesRow) -> String {
         let owner = self.substitute(row)["owner"]
             .as_str()
             .map(|s| format!("#{s}"))

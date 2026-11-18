@@ -211,7 +211,7 @@ extension Agent {
         }
         guard let node, !node.inert else { return .nothing }
         let local = node.local(p)
-        if let element = presenter.svg.target(node.id, at: local) { return .part(node, "SVG element #\(element)", element) }
+        if let element = presenter.svg?.target(node.id, at: local) { return .part(node, "SVG element #\(element)", element) }
         if node.isParagraph, let run = node.inlineActivationTarget(at: local) { return .part(node, "inline run #\(run.id)", run.id) }
         if node.isParagraph, let href = node.inlineLink(at: local) { return .part(node, "the link \(href)", nil) }
         if session.canvases.wantsInput(node.id), !node.isSurfaceControl { return .canvas(node) }

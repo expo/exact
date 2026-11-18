@@ -3,6 +3,7 @@ fn main() {
         std::path::Path::new(".."),
         "web",
         &update_lab_data::Probe,
+        exact_js_bake::hands_out_work!(update_lab_data::Probe),
         update_lab_data::RUST_SOURCES,
         |javascript| {
             Box::new(update_lab_data::compose(

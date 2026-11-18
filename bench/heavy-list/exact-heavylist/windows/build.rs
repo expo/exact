@@ -34,6 +34,7 @@ fn main() {
         &target,
         &manifest,
         Some(source.grants()),
+        exact_bake::hands_out_work!(source),
     )
     .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();

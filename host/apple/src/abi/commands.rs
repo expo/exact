@@ -293,7 +293,7 @@ impl<D: DataSource> Bridge<D> {
         let request = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]);
         let out = match self.host.as_mut() {
             Some(h) => h.command(&request),
-            None => exact_runner::agent::error("not booted"),
+            None => exact_runner::json::error("not booted"),
         };
         self.emit(out)
     }
@@ -332,8 +332,8 @@ impl<D: DataSource> Bridge<D> {
     /// The executor wakes so the next pump delivers the answer.
     pub fn auth(&mut self, len: usize) -> u32 {
         let json = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
-        let field = |k: &str| exact_runner::agent::field_str(&json, k);
-        let ticket = exact_runner::agent::field_num(&json, "ticket").unwrap_or(0.0) as u64;
+        let field = |k: &str| exact_runner::json::field_str(&json, k);
+        let ticket = exact_runner::json::field_num(&json, "ticket").unwrap_or(0.0) as u64;
         if let Some(h) = self.host.as_mut() {
             let runner = h.runner_mut();
             match field("op").as_deref() {
@@ -342,7 +342,7 @@ impl<D: DataSource> Bridge<D> {
                     Some(url) => auth::complete(runner, ticket, Ok(&url)),
                     None => {
                         let status =
-                            exact_runner::agent::field_num(&json, "status").unwrap_or(502.0) as u16;
+                            exact_runner::json::field_num(&json, "status").unwrap_or(502.0) as u16;
                         let message = field("message").unwrap_or_default();
                         auth::complete(runner, ticket, Err((status, &message)))
                     }
@@ -403,7 +403,7 @@ impl<D: DataSource> Bridge<D> {
     /// buffer: `[{"value","label","disabled"}]` in order, and which one it
     /// shows (`chosen`, an index or null). Not a batch: nothing changes.
     pub fn select_options(&mut self, view: u32) -> u32 {
-        let quote = exact_runner::agent::quote;
+        let quote = exact_runner::json::quote;
         let mut json = String::from("{\"options\":[");
         let mut chosen = None;
         if let Some(h) = self.host.as_ref() {
@@ -614,7 +614,7 @@ impl<D: DataSource> Bridge<D> {
     /// "header","footer","headerLook","footerLook","card","spaceAbove","rows":[{"view","custom","symbol",("symbolPath","symbolViewBox": an
     /// svg-only icon's, `icon_path::push_json`),"title",
     /// "secondary","subtitle","accessory","accessoryView","target","pressable","action",
-    /// "checked","destructive","disabled","authoredEdge","nextAuthoredTop","titleLook","secondaryLook"}]}],"spaceBelow"}`,
+    /// "checked","destructive","disabled","authoredEdge","nextAuthoredTop","titleLook","secondaryLook"}]}],"spaceBelow","animates"}`,
     /// `null` for a node that is not one. A look is `{"lines","ellipsis",
     /// "color","font"}`: a colour row's wire form and `{"size","weight",
     /// "italic","family","numeric"}`, each `null` where the author said nothing.
@@ -623,7 +623,7 @@ impl<D: DataSource> Bridge<D> {
     /// radio, whose bound state is `checked`. Not a batch: nothing changes.
     pub fn grouped_list(&mut self, view: u32) -> u32 {
         use exact_kernel::Accessory;
-        let quote = exact_runner::agent::quote;
+        let quote = exact_runner::json::quote;
         let opt = |v: &Option<String>, json: &mut String| match v {
             Some(t) => quote(t, json),
             None => json.push_str("null"),
@@ -743,8 +743,9 @@ impl<D: DataSource> Bridge<D> {
                     json.push_str("]}");
                 }
                 json.push_str(&format!(
-                    "],\"spaceBelow\":{}}}",
-                    list.space_below.map_or("null".into(), |v| v.to_string())
+                    "],\"spaceBelow\":{},\"animates\":{}}}",
+                    list.space_below.map_or("null".into(), |v| v.to_string()),
+                    list.animates
                 ));
             }
         }

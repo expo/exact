@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactGroupedLists
 
 final class GroupedPaddingIOSTests: GroupedListFixture {
@@ -152,7 +153,7 @@ final class GroupedMarginsIOSTests: XCTestCase {
         // first in line behind it, and a report owed before it (the kernel
         // told nothing yet) runs after. Sampled when it runs, the report
         // tells the margin that shows, not the one when it was owed.
-        p.collections.onFill?(list.owner.id, Data())
+        p.listHost.onFill?(list.owner.id, Data())
         XCTAssertTrue(session.fillInFlight)
         session.whenIdle {
             window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)

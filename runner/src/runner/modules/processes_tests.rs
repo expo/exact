@@ -52,7 +52,9 @@ fn runner() -> Runner<Source> {
     let r = b.resource("r", "r", &[], string, Some(&Value::str("")));
     b.set_resource_reader(r, true);
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
-    let plan: Plan = b.finish().unwrap();
+    let mut plan: Plan = b.finish().unwrap();
+    // A package's handlers are the module seam's: the plan names one.
+    plan.add_view("probe", ("probe", "@fixture/probe"), false, &[], "{}");
     Runner::boot(
         plan,
         Source,

@@ -55,7 +55,7 @@ pub(crate) fn px(index: usize, em: f32) -> f32 {
 
 /// A ratio, a weight or an opacity of the neutral look.
 pub(crate) fn number(index: usize) -> f32 {
-    match exact_kernel::generated::METRICS[index].neutral {
+    match exact_kernel::generated::METRICS[index].neutral() {
         exact_kernel::MetricValue::Number(n) => n as f32,
         _ => 0.0,
     }

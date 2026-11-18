@@ -15,7 +15,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir, loadavg } from 'node:os';
 import { resolve, join, extname } from 'node:path';
-import { build, dist, browserWorld, macWorld, summarize, displayReady, stop, track, focus } from './exact.mjs';
+import { build, dist, browserWorld, macWorld, summarize, holdsRefreshRate, displayReady, stop, track, focus } from './exact.mjs';
 import { chromium } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +43,7 @@ async function sweep([engine, scene = 'cubes', mode, variant]) {
     const line = (r.stdout ?? '').trim().split('\n').pop();
     let out; try { out = JSON.parse(line); } catch { console.error(r.stdout, r.stderr); process.exit(1); }
     if (out.measurement === 'sanity-only') throw new Error('Headless runs cannot be swept');
-    const holds = out.fps_avg >= hz * 0.96 && out.ms_p95 <= budget;
+    const holds = holdsRefreshRate(out, hz, budget);
     console.log(JSON.stringify({ ...out, holds }));
     return holds;
   };

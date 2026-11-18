@@ -14,13 +14,14 @@ import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespac
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
 import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
-import { checkPreloadBackend, envReads, inlineSettings } from './__exact_env.mjs';
+import { checkPreloadBackend, envReads, inlineSettings, launchNames } from './__exact_env.mjs';
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
 import { compilerOptions, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers } from './__exact_portable.mjs';
 
-export { moduleBinding, compilerOptions };
+import { capturedConstants, freezeGrants, grantsInitializer, staticFacts } from './__exact_facts.mjs';
+export { moduleBinding, compilerOptions, capturedConstants, staticFacts };
 
 function httpOrigin(value, label) {
   let url; try { url=new URL(value); } catch { throw new Error(`${label}: expected an http(s) origin`); }
@@ -116,7 +117,7 @@ const socketOrigin = (origin) => origin.replace(/^http/, 'ws');
 // of the server at loopback, its fetch and socket
 // lines moved to that address: a phone reaching the fixture on this Mac's LAN.
 // A production build refuses it as any missing entry.
-function keyedGrants(node, origin, at, development) {
+function keyedGrants(node, origin, at, development, authored = node, sourceAt = at) {
   const entries=new Map();
   const refuse=(node, why)=>{ throw new Error(`app.ts:${at(node.start)}: grants: ${why}`); };
   const line=(node, place)=>{
@@ -125,7 +126,7 @@ function keyedGrants(node, origin, at, development) {
     if (/[\r\n\u2028\u2029]/.test(node.value)) refuse(node,'each string literal must contain one grant line');
     return node.value;
   };
-  for (const property of node.properties) {
+  for (const [index, property] of node.properties.entries()) {
     if (property.type==='SpreadElement') refuse(property,'spread entries are not allowed');
     if (property.computed) refuse(property.key,'computed keys are not allowed');
     if (property.method || property.kind!=='init') refuse(property,'methods and accessors are not allowed');
@@ -136,7 +137,13 @@ function keyedGrants(node, origin, at, development) {
     if (canonical!==key.value) refuse(key,`write the origin key ${JSON.stringify(key.value)} as ${JSON.stringify(canonical)}`);
     if (entries.has(key.value)) refuse(key,`duplicate key ${JSON.stringify(key.value)}`);
     const value=property.value;
-    entries.set(key.value,value.type==='ArrayExpression' ? value.elements.map(n=>line(n,value)).join('\n') : line(value,value));
+    const literals=value.type==='ArrayExpression' ? value.elements : [value];
+    const original=authored.properties[index].value;
+    entries.set(key.value,literals.map((n,i)=>{
+      const grant=line(n,value);
+      const [row,column]=sourceAt((original.type==='ArrayExpression' ? original.elements[i] : original).start).split(':').map(Number);
+      return {grant,file:'app.ts',line:row,column};
+    }));
   }
   const wanted=new URL(origin).origin;
   if (entries.has(wanted)) return entries.get(wanted);
@@ -145,7 +152,7 @@ function keyedGrants(node, origin, at, development) {
   if (!local.length) local.push(...candidates);
   if (local.length>1) refuse(node,`origin ${JSON.stringify(wanted)} is the server of more than one loopback key: ${local.map(k=>JSON.stringify(k)).join(', ')}`);
   if (!local.length) refuse(node,`no entry for origin ${JSON.stringify(wanted)}; keys: ${[...entries.keys()].map(k=>JSON.stringify(k)).join(', ') || '(none)'}`);
-  return movedLines(entries.get(local[0]),local[0],wanted);
+  return entries.get(local[0]).map(s=>({...s,grant:movedLines(s.grant,local[0],wanted)}));
 }
 
 /** A build that is not production (`EXACT_UPDATE_TRUST` unset or `development`, as `bake/src/compat.rs` reads it). */
@@ -196,7 +203,7 @@ function movedLines(lines, from, to) {
 
 /** Select literal keyed grants, or move the plain form's matching fetch and
  * socket grant lines with the origin. Only the captured copy is rewritten. */
-export function injectBackendOrigin(code, origin, parse, env=process.env) {
+export function injectBackendOrigin(code, origin, parse, env=process.env, { source=code, load, onKeyed=()=>{} }={}) {
   const parsed=parse('app.ts',code);
   if (parsed.errors.length) {
     if (origin===null) return code;
@@ -204,7 +211,8 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
   }
   const statements=parsed.program.body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s);
   const declarations=statements.flatMap(s=>s?.declarations ?? []);
-  const grants=declarations.filter(d=>d.id.type==='Identifier' && d.id.name==='grants');
+  const selected=grantsInitializer(code,parse,{source,load});
+  const grants=selected?.file==='app.ts' ? declarations.filter(d=>d.init?.start===selected.node?.start) : [];
   const keyed=grants.filter(d=>bare(d.init)?.type==='ObjectExpression');
   if (origin===null && !keyed.length) return code;
   const targets=declarations.filter(d=>d.id.type==='Identifier' && d.id.name==='origin');
@@ -220,13 +228,15 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
     for (const d of [...targets,...keyed]) if (!statements.some(s=>s?.kind==='const' && s.declarations.includes(d)))
       throw new Error(`app.ts:${at(d.start)}: grants keyed by origin require const ${d.id.name}`);
     httpOrigin(origin ?? literal,`app.ts:${at(init.start)}: grants origin`);
-    for (const d of keyed) edits.push([d.init.start,d.init.end,JSON.stringify(keyedGrants(bare(d.init),origin ?? literal,at,developmentTrust(env)))]);
+    const authored=selected.authored;
+    for (const d of keyed) {
+      const sources=keyedGrants(bare(d.init),origin ?? literal,at,developmentTrust(env),bare(authored) ?? bare(d.init),lineColumn(source));
+      onKeyed(sources.filter(s=>s.grant.trim()).map(s=>({...s,grant:s.grant.trim()})));
+      edits.push([d.init.start,d.init.end,JSON.stringify(sources.map(s=>s.grant).join('\n'))]);
+    }
   }
   const previous=literal.replace(/\/+$/,'');
-  // A development build's only line (`developmentGrants`) keeps its marker and moves too.
-  const moved=line=>line===`net.fetch ${previous}` || line===`net.fetch ${previous}/` ? `net.fetch ${origin}`
-    : line===`net.websocket ${socketOrigin(previous)}` || line===`net.websocket ${socketOrigin(previous)}/` ? `net.websocket ${socketOrigin(origin)}` : line;
-  const replace=value=>value.split('\n').map(line=>{ const [,mark,rest]=line.match(/^([ \t]*development[ \t]+|)(.*)$/s); return mark+moved(rest); }).join('\n');
+  const replace=value=>moveBackendGrants(value,previous,origin);
   const walk=node=>{
     if (!node || typeof node!=='object') return;
     if (node.type==='Literal' && typeof node.value==='string') { const next=replace(node.value); if(next!==node.value) edits.push([node.start,node.end,JSON.stringify(next)]); return; }
@@ -238,6 +248,23 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
   for(const [start,end,value] of edits.sort((a,b)=>b[0]-a[0])) code=code.slice(0,start)+value+code.slice(end);
   return code;
 }
+
+/** Move the plain form's resolved origin lines, including imported literals. */
+function moveBackendGrants(spec, from, to) {
+  const moved=line=>{
+    const match=line.match(/^(net\.fetch|net\.websocket) (\S+)$/);
+    if (!match) return line;
+    const [,kind,target]=match;
+    const [previous,next]=kind==='net.fetch' ? [from,to] : [socketOrigin(from),socketOrigin(to)];
+    try { return new URL(target).href===new URL(previous).href ? `${kind} ${next}` : line; }
+    catch { return line; }
+  };
+  return spec.split('\n').map(line=>{ const [,mark,rest]=line.match(/^([ \t]*development[ \t]+|)(.*)$/s); return mark+moved(rest); }).join('\n');
+}
+
+const DEVELOPMENT_GRANT=/^([ \t]*)development[ \t]+(?=\S)/;
+const developmentLine=(line,env=process.env)=>!DEVELOPMENT_GRANT.test(line) ? [line]
+  : developmentTrust(env) ? [line.replace(DEVELOPMENT_GRANT,'$1')] : [];
 
 /** A grant line that begins with the word `development` is a development
  * build's only: a production bake leaves it out, any other build keeps it
@@ -251,12 +278,10 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
 export function developmentGrants(code, parse, env=process.env) {
   const parsed=parse('app.ts',code);
   if (parsed.errors.length) return code;
-  const marker=/^([ \t]*)development[ \t]+(?=\S)/;
   const grants=staticFacts(code,parse).grants;
-  if (grants===undefined || !grants.split('\n').some(line=>marker.test(line))) return code;
+  if (grants===undefined || !grants.split('\n').some(line=>DEVELOPMENT_GRANT.test(line))) return code;
   const declaration=grantsDeclaration(parsed.program.body);
-  const development=developmentTrust(env);
-  const lines=grants.split('\n').flatMap(line=>!marker.test(line) ? [line] : development ? [line.replace(marker,'$1')] : []);
+  const lines=grants.split('\n').flatMap(line=>developmentLine(line,env));
   return code.slice(0,declaration.init.start)+JSON.stringify(lines.join('\n'))+code.slice(declaration.init.end);
 }
 
@@ -896,76 +921,10 @@ export function snapbackMutationTypes(declarations) {
     "export type Result<S extends Source> = S extends MutationSource ? SnapbackMutationSuccess<SourceMap[S]['result']> : SourceMap[S]['result'];");
 }
 
-/** `appId`, `grants` and the export names of the module `code` (app.ts),
- * read from its syntax: no build runs app or package code to learn them. Each
- * of `appId` and `grants` is a constant: a string, a template, `+` or an
- * array's `.join(…)` of constants, or a top-level `const` holding one; any
- * other is refused by name and place. Keyed grants have already become a
- * string in `injectBackendOrigin`. An absent one is `undefined`. */
-export function staticFacts(code, parse) {
-  const parsed=parse('app.ts',code);
-  if (parsed.errors?.length) return { appId: undefined, grants: undefined, exported: [] };
-  const body=parsed.program.body, at=lineColumn(code), consts=new Map(), exported=new Map();
-  for (const statement of body) {
-    const s=['ExportNamedDeclaration','ExportDefaultDeclaration'].includes(statement.type) ? statement.declaration ?? statement : statement;
-    if (s.type==='VariableDeclaration') for (const d of s.declarations) {
-      if (d.id.type!=='Identifier') continue;
-      if (s.kind==='const') consts.set(d.id.name,d.init);
-      if (statement.type==='ExportNamedDeclaration') exported.set(d.id.name,d.id.name);
-    }
-    if (statement.type==='ExportNamedDeclaration' && s.id?.name) exported.set(s.id.name,s.id.name);
-    if (statement.type==='ExportNamedDeclaration' && !statement.source) for (const x of statement.specifiers ?? []) exported.set(x.exported.name ?? x.exported.value,x.local.name ?? x.local.value);
-    if (statement.type==='ExportDefaultDeclaration') exported.set('default','default');
-  }
-  const value=(name)=>{
-    if (!exported.has(name)) return undefined;
-    const seen=new Set();
-    const constant=(node)=>{
-      node=bare(node);
-      const refuse=()=>{ throw new Error(`app.ts:${at(node?.start ?? 0)}: ${name} must be a constant the build reads without running the module: a string, a template or + of constants, an array of them .join('\\n'), or a top-level const holding one`); };
-      if (!node) refuse();
-      if (node.type==='Literal' && ['string','number'].includes(typeof node.value)) return node.value;
-      if (node.type==='TemplateLiteral') return node.quasis.map((q,i)=>q.value.cooked+(i<node.expressions.length ? constant(node.expressions[i]) : '')).join('');
-      if (node.type==='BinaryExpression' && node.operator==='+') return constant(node.left)+constant(node.right);
-      if (node.type==='Identifier' && consts.has(node.name) && !seen.has(node.name)) { seen.add(node.name); const v=constant(consts.get(node.name)); seen.delete(node.name); return v; }
-      if (node.type==='CallExpression' && node.arguments.length<=1 && propertyName(bare(node.callee))==='join' && bare(bare(node.callee).object)?.type==='ArrayExpression')
-        return bare(bare(node.callee).object).elements.map(constant).join(node.arguments.length ? constant(node.arguments[0]) : ',');
-      return refuse();
-    };
-    // A number is refused: native evaluation reads `grants: string`, and an app id is a string too.
-    const v=constant(consts.get(exported.get(name)) ?? null);
-    if (typeof v!=="string") throw new Error(`app.ts: ${name} must be a string; it is the number ${v}`);
-    return v;
-  };
-  return { appId: value('appId'), grants: value('grants'), exported: [...exported.keys()] };
-}
-
 /** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
  * there (LLP 1153.002 D2). */
-export function configure(stage, incremental=false, parse, web=false) {
+export async function configure(stage, incremental=false, parse, web=false, rolldown) {
   const app=capturedOrigins(stage).at(-1)[1], modulePath=resolve(stage,'app.ts');
-  if (existsSync(modulePath)) {
-    const before=readFileSync(modulePath,'utf8'), original=resolve(stage,'__exact_backend_source.json');
-    const authored=existsSync(original) ? JSON.parse(readFileSync(original,'utf8')) : before;
-    const selection=backendOriginSelection(app,process.env,parse), warning=backendOriginWarning(authored,selection,parse);
-    // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
-    const settings=inlineSettings(authored,app,parse,process.env,{launches:!web});
-    writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
-    let injected;
-    try { injected=injectBackendOrigin(settings.code,selection?.origin ?? null,parse); }
-    catch (error) {
-      if (!selection) throw error;
-      throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
-    }
-    checkPreloadBackend(app,settings.record,literalBackendOrigin(settings.code,parse),selection);
-    const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
-    launchModule(stage,web ? [] : launched);
-    const after=developmentGrants(launchGrants(injected,parse,launched),parse);
-    writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
-    if (before!==after) writeFileSync(modulePath,after);
-    // Every producer refuses alike what the web build cannot read without running it.
-    if (parse) staticFacts(after,parse);
-  }
   const inside = (path) => {
     if (path !== stage && !path.startsWith(stage+sep)) throw new Error('tsconfig: path outside captured app: '+path);
     return path;
@@ -1029,6 +988,51 @@ export function configure(stage, incremental=false, parse, web=false) {
     include:['**/*.d.ts'],exclude:['**/node_modules']};
   const path=resolve(stage,'__exact_tsconfig.json'), bytes=JSON.stringify(config);
   if (!existsSync(path) || readFileSync(path,'utf8')!==bytes) writeFileSync(path,bytes);
+  if (existsSync(modulePath)) {
+    const before=readFileSync(modulePath,'utf8'), original=resolve(stage,'__exact_backend_source.json');
+    const authored=existsSync(original) ? JSON.parse(readFileSync(original,'utf8')) : before;
+    const load=await capturedConstants(stage,rolldown ?? createRequire(import.meta.url)('rolldown').rolldown,dataBundle(stage),parse,authored);
+    const manifest=resolve(app,existsSync(resolve(app,'.shells/app.json')) ? '.shells/app.json' : 'app.json');
+    const manifestCode=existsSync(manifest) ? readFileSync(manifest,'utf8') : '{}', launches=launchNames(JSON.parse(manifestCode).env);
+    const selection=backendOriginSelection(app,process.env,parse), warning=backendOriginWarning(authored,selection,parse);
+    // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
+    const settings=inlineSettings(authored,app,parse,process.env,{launches:!web});
+    if (launches.size) staticFacts(authored,parse,{load,launchNames:launches,checkLaunchOnly:true});
+    writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
+    let injected, keyedSources;
+    try { injected=injectBackendOrigin(settings.code,selection?.origin ?? null,parse,process.env,{source:authored,load,onKeyed:sources=>{keyedSources=sources;}}); }
+    catch (error) {
+      if (!selection) throw error;
+      throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
+    }
+    checkPreloadBackend(app,settings.record,literalBackendOrigin(settings.code,parse),selection);
+    const facts=staticFacts(injected,parse,{load,locations:true,source:authored});
+    const declaration=grantsDeclaration(parse('app.ts',injected).program.body);
+    const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
+    if (launched.length && !declaration) launchGrants(injected,parse,launched);
+    if (keyedSources) facts.grantSources=keyedSources;
+    const previous=literalBackendOrigin(settings.code,parse);
+    if (!keyedSources && previous && selection && facts.grants!==undefined) {
+      facts.grants=moveBackendGrants(facts.grants,previous,selection.origin);
+      const lines=facts.grants.split('\n').map(line=>line.trim()).filter(Boolean);
+      facts.grantSources=facts.grantSources.map((s,i)=>({...s,grant:lines[i]}));
+    }
+    if (facts.grants!==undefined) {
+      injected=freezeGrants(injected,parse,facts.grants);
+    }
+    launchModule(stage,web ? [] : launched);
+    const after=developmentGrants(launchGrants(injected,parse,launched),parse);
+    const grantSources=facts.grantSources.flatMap(source=>developmentLine(source.grant).map(grant=>({...source,grant})));
+    for (const setting of launched) {
+      const [row,column]=lineColumn(manifestCode)(Math.max(0,manifestCode.indexOf(JSON.stringify(setting)))).split(':').map(Number);
+      grantSources.push({grant:`env.launch ${setting}`,file:'app.json',line:row,column,setting});
+    }
+    writeFileSync(resolve(stage,'__exact_grants.json'),JSON.stringify(grantSources));
+    writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
+    if (before!==after) writeFileSync(modulePath,after);
+    // Every producer refuses alike what the web build cannot read without running it.
+    if (parse) staticFacts(after,parse);
+  }
   if(capturedOrigins(stage).slice(0,-1).some(([,from])=>/(?:^|[/\\])snapback4[/\\](?:ts|online)$/.test(from))) {
     const declaration=resolve(stage,'app.contract.d.ts');
     const before=readFileSync(declaration,'utf8'), after=snapbackMutationTypes(before);

@@ -182,7 +182,7 @@ impl<D: DataSource> Runner<D> {
                     if i > 0 {
                         said.push_str(", ");
                     }
-                    crate::agent::untyped_json(a, &mut said);
+                    crate::json::untyped_json(a, &mut said);
                 }
                 self.log(format!(
                     "setMode({said}) refused: an axis of the app's design and one of its values"
@@ -275,7 +275,7 @@ impl<D: DataSource> Runner<D> {
             t @ exact_plan::str_value!() => t.text().to_string(),
             other => {
                 let mut s = String::new();
-                crate::agent::untyped_json(other, &mut s);
+                crate::json::untyped_json(other, &mut s);
                 s
             }
         };
@@ -319,7 +319,7 @@ impl<D: DataSource> Runner<D> {
             t @ exact_plan::str_value!() => t.text().to_string(),
             other => {
                 let mut s = String::new();
-                crate::agent::untyped_json(other, &mut s);
+                crate::json::untyped_json(other, &mut s);
                 s
             }
         };
@@ -351,7 +351,7 @@ impl<D: DataSource> Runner<D> {
     /// in one read.
     pub fn view_sites_json(&self) -> String {
         let mut out = String::from("{\"planDigest\":");
-        crate::agent::quote(self.inspection_digest(), &mut out);
+        crate::json::quote(self.inspection_digest(), &mut out);
         out.push_str(",\"sites\":[");
         for (i, (view, site)) in self.ids.sites().enumerate() {
             if i > 0 {
@@ -371,9 +371,9 @@ impl<D: DataSource> Runner<D> {
             if i > 0 {
                 out.push(',');
             }
-            crate::agent::quote(axis, &mut out);
+            crate::json::quote(axis, &mut out);
             out.push(':');
-            crate::agent::quote(value, &mut out);
+            crate::json::quote(value, &mut out);
         }
         out.push('}');
         Some(out)
@@ -386,9 +386,9 @@ impl<D: DataSource> Runner<D> {
             if i > 0 {
                 out.push(',');
             }
-            crate::agent::quote(&axis, &mut out);
+            crate::json::quote(&axis, &mut out);
             out.push(':');
-            crate::agent::quote(&value, &mut out);
+            crate::json::quote(&value, &mut out);
         }
         out.push('}');
         out

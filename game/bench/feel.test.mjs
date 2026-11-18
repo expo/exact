@@ -5,6 +5,33 @@ import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { analyze, quantile, script, cli, consoleState, exactAdapter, prepareExact, runFeel, table, projectPixels, screenMotion, DISPLACEMENT_CHANGE_PX, reanalyze } from './feel.mjs';
 import { inputRecorder, keys } from './probes/input.mjs';
+import { holdsRefreshRate, summarize } from './exact.mjs';
+
+test('the cubes summary preserves absent percentiles and rounds measured ones', () => {
+  const perf = {
+    frameMs: { p50: null, p95: null, p99: null, max: 16.678, count: 3, mean: 16 },
+    tickMs: { count: 6, mean: 1 },
+    feedMs: { mean: 1 },
+    encodeMs: { mean: 1 },
+    instances: 10,
+  };
+  const input = { perf, pixels: [2560, 1440] };
+  expect(summarize(input, 'exact-web', 10)).toMatchObject({
+    ms_p50: null, ms_p95: null, ms_p99: null, ms_max: 16.68,
+  });
+  Object.assign(perf.frameMs, { p50: 0, p95: 15.123, p99: 16.678 });
+  expect(summarize(input, 'exact-web', 10)).toMatchObject({
+    ms_p50: 0, ms_p95: 15.12, ms_p99: 16.68, ms_max: 16.68,
+  });
+});
+
+test('the cubes sweep requires a measured p95 within budget', () => {
+  expect(holdsRefreshRate({ fps_avg: 120, ms_p95: null }, 120, 12.5)).toBe(false);
+  expect(holdsRefreshRate({ fps_avg: 120, ms_p95: 0 }, 120, 12.5)).toBe(true);
+  expect(holdsRefreshRate({ fps_avg: 120, ms_p95: 12.5 }, 120, 12.5)).toBe(true);
+  expect(holdsRefreshRate({ fps_avg: 120, ms_p95: 13 }, 120, 12.5)).toBe(false);
+  expect(holdsRefreshRate({ fps_avg: 110, ms_p95: 12 }, 120, 12.5)).toBe(false);
+});
 
 // Independent 100 Hz presentation / 50 Hz motion fixture. Sampling is five ms
 // after the frame timestamp, deliberately exposing the rAF/event clock pitfall.

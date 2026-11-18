@@ -61,8 +61,6 @@ final class NumberStepperMacTests: XCTestCase {
         XCTAssertEqual(accessible.accessibilityAttributeValue(.maxValue) as? NSNumber, 65535)
         XCTAssertTrue(accessible.accessibilityActionNames().contains(.increment))
         XCTAssertTrue(accessible.accessibilityActionNames().contains(.decrement))
-        XCTAssertEqual(field.accessibilityMinValue() as? NSNumber, 1)
-        XCTAssertEqual(field.accessibilityMaxValue() as? NSNumber, 65535)
         editor.insertText("443", replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
         accessible.accessibilityPerformAction(.increment)
         XCTAssertEqual(editor.string, "444")

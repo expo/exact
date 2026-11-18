@@ -10,7 +10,12 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 mod boot;
+mod build;
 mod checkpoints;
 mod direct;
 mod each;
@@ -83,7 +88,9 @@ impl DataSource for Blog {
                 let private = (held || kept).then(|| Value::str("private"));
                 Answer::Now(Value::list(private.into_iter().collect()))
             }
-            ("post", Post::Soon | Post::Never) => Answer::Later(Request::continuation(1)),
+            ("post", Post::Soon | Post::Never) => {
+                Answer::Later(Request::continuation::<TestWork>(1))
+            }
             ("post", Post::Overrun) => {
                 return Err(DataError::Overrun(
                     "took 180.0 ms, over the 100 ms budget for one turn".into(),
@@ -758,7 +765,7 @@ fn a_route_lists_its_pages_with_its_source() {
         ) -> Result<Answer, DataError> {
             assert_eq!((source, args), ("posts", &[Value::str("public")][..]));
             Ok(if self.later {
-                Answer::Later(Request::continuation(9))
+                Answer::Later(Request::continuation::<TestWork>(9))
             } else {
                 Answer::Now(Value::list(vec![Value::str("1"), Value::str("two words")]))
             })
@@ -847,7 +854,7 @@ fn a_pages_source_re_asked_without_end_meets_the_deadline() {
             Err(DataError::UnknownSource(source.into()))
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(Request::continuation(1)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(1)))
         }
         fn dispatch(&mut self, _: u64, _: &Store) -> exact_runner::Dispatch {
             exact_runner::Dispatch::Again
@@ -859,7 +866,7 @@ fn a_pages_source_re_asked_without_end_meets_the_deadline() {
             _: &[Value],
             _: Outcome,
         ) -> Result<Answer, DataError> {
-            Ok(Answer::Later(Request::continuation(1)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(1)))
         }
     }
     let plan = contract::compile(

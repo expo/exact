@@ -22,6 +22,42 @@ function realm(harden) {
 const reply = (context) => runInContext('__exact_binary.keptReply({ tag: 0, value: rows }, null)', context);
 const plain = (context) => runInContext('JSON.stringify({ tag: 0, value: rows })', context);
 
+test('native replies do not probe ordinary records or arrays for the String brand', () => {
+  const context = createContext({ __exact_bytes() {} });
+  runInContext(`globalThis.probes = 0;
+    const valueOf = String.prototype.valueOf;
+    String.prototype.valueOf = function () { probes++; return valueOf.call(this); };`, context);
+  runInContext(binary, context);
+  runInContext(`Object.freeze(Object.prototype); Object.freeze(Array.prototype);
+    globalThis.rows = [{ id: 'r1', inner: [{ k: 'plain' }] }, Object.create(null)];`, context);
+  expect(reply(context)).toBe(plain(context));
+  expect(runInContext('probes', context)).toBe(0);
+});
+
+test('native replies preserve boxed primitives and do not inspect Proxy descriptors', () => {
+  const context = createContext({ __exact_bytes() {} });
+  runInContext(binary, context);
+  runInContext(`Object.freeze(Object.prototype); Object.freeze(Array.prototype);
+    const changed = new String('ordinary');
+    Object.setPrototypeOf(changed, null);
+    changed.toString = () => '\\u0000' + '1';
+    const proxy = Proxy.revocable({ text: 'proxy' }, {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === 'length') throw new Error('unexpected length descriptor');
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      }
+    }).proxy;
+    const lookalike = { length: 1, [Symbol.toStringTag]: 'String',
+      toString() { throw new Error('not a String'); } };
+    globalThis.rows = [Object.freeze({ kept: true }), changed, proxy, lookalike,
+      new Number(3), new Boolean(false)];`, context);
+  expect(reply(context)).toBe(plain(context));
+  expect(JSON.parse(reply(context)).value[1]).toBe('\u00001');
+  runInContext('rows.push(Object(1n));', context);
+  expect(() => reply(context)).toThrow(/BigInt/);
+  expect(() => plain(context)).toThrow(/BigInt/);
+});
+
 test('a realm whose prototypes are not frozen keeps no row, so a later prototype change shows', () => {
   const context = realm(false);
   expect(reply(context)).toContain('"holes":[null,1]');

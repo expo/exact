@@ -172,7 +172,11 @@ impl<D: DataSource> Runner<D> {
     /// "handle", "handler", "args"}`: refused unless the call that made
     /// `handle` listed `handler`, else run; `reply` is given `{"text"}`,
     /// the handler's value as JSON, or `{"error", "message"}`, once.
-    pub fn invoke_module(&mut self, body: &str, reply: Box<dyn FnOnce(String) + Send>) {
+    pub(super) fn invoke_module_linked(
+        &mut self,
+        body: &str,
+        reply: Box<dyn FnOnce(String) + Send>,
+    ) {
         let v: Json = serde_json::from_str(body).unwrap_or_default();
         let text = |field: &str| v[field].as_str().unwrap_or_default().to_owned();
         let (extension, handle, handler) = (text("extension"), text("handle"), text("handler"));
@@ -415,7 +419,7 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    pub(in crate::runner) fn failed_tool_tickets(&self) -> Vec<(u64, String)> {
+    pub(super) fn failed_tool_tickets_linked(&self) -> Vec<(u64, String)> {
         self.extensions
             .invocations
             .running
@@ -424,7 +428,7 @@ impl<D: DataSource> Runner<D> {
             .collect()
     }
 
-    pub(in crate::runner) fn discard_failed_tools(&mut self) {
+    pub(super) fn discard_failed_tools_linked(&mut self) {
         let tokens: Vec<_> = self
             .extensions
             .invocations
@@ -438,13 +442,13 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    pub(in crate::runner) fn fail_tool(&mut self, ticket: u64, message: &str) {
+    pub(super) fn fail_tool_linked(&mut self, ticket: u64, message: &str) {
         if let Some(run) = self.extensions.invocations.running.remove(&ticket) {
             self.tool_step(run, Err(DataError::Unavailable(message.into())));
         }
     }
 
-    pub(in crate::runner) fn tool_completion(
+    pub(super) fn tool_completion_linked(
         &mut self,
         ticket: u64,
     ) -> Option<&mut Option<crate::CompletionReply>> {
@@ -459,12 +463,12 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether `ticket` is a handler's request.
-    pub(in crate::runner) fn is_tool(&self, ticket: u64) -> bool {
+    pub(super) fn is_tool_linked(&self, ticket: u64) -> bool {
         self.extensions.invocations.running.contains_key(&ticket)
     }
 
     /// The handlers' requests in flight, for `pending` and `in_flight`.
-    pub(in crate::runner) fn tool_tickets(&self) -> Vec<(String, u64)> {
+    pub(super) fn tool_tickets_linked(&self) -> Vec<(String, u64)> {
         (self.extensions.invocations.running.keys())
             .map(|t| (NAME.to_owned(), *t))
             .collect()
@@ -472,21 +476,21 @@ impl<D: DataSource> Runner<D> {
 
     /// Whether a handler's request with effects is in flight, one the host
     /// refused at admission aside.
-    pub(in crate::runner) fn tool_effects(&self) -> bool {
+    pub(super) fn tool_effects_linked(&self) -> bool {
         let invocations = &self.extensions.invocations;
         (invocations.running.iter())
             .any(|(t, r)| r.effects && !invocations.refused.iter().any(|(x, ..)| x == t))
     }
 
     /// The least privileged origin of a handler running now, if one is.
-    pub(in crate::runner) fn tool_origin(&self) -> Option<CallOrigin> {
+    pub(super) fn tool_origin_linked(&self) -> Option<CallOrigin> {
         (self.extensions.invocations.running.values())
             .map(|r| r.origin)
             .min()
     }
 
     /// A handler's request came back: its turn resumes.
-    pub(in crate::runner) fn tool_landed(&mut self, ticket: u64, outcome: Outcome) {
+    pub(super) fn tool_landed_linked(&mut self, ticket: u64, outcome: Outcome) {
         let Some(run) = self.extensions.invocations.running.remove(&ticket) else {
             return;
         };
@@ -508,12 +512,7 @@ impl<D: DataSource> Runner<D> {
     /// The host refused a handler's request at admission: it settles in
     /// its turn, as a failure, an ordered one only once earlier ordered work
     /// has.
-    pub(in crate::runner) fn refuse_tool(
-        &mut self,
-        ticket: u64,
-        reason: &'static str,
-        ordered: bool,
-    ) {
+    pub(super) fn refuse_tool_linked(&mut self, ticket: u64, reason: &'static str, ordered: bool) {
         self.extensions
             .invocations
             .refused
@@ -521,18 +520,18 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether a handler's refused request may settle now.
-    pub(in crate::runner) fn has_tool_refusal(&self, allow_ordered: bool) -> bool {
+    pub(super) fn has_tool_refusal_linked(&self, allow_ordered: bool) -> bool {
         (self.extensions.invocations.refused.iter())
             .any(|(_, _, ordered)| !ordered || allow_ordered)
     }
 
     /// Whether an ordered handler request's refusal is waiting: it fences ordered work.
-    pub(in crate::runner) fn has_ordered_tool_refusal(&self) -> bool {
+    pub(super) fn has_ordered_tool_refusal_linked(&self) -> bool {
         (self.extensions.invocations.refused.iter()).any(|(_, _, ordered)| *ordered)
     }
 
     /// A handler's refused request that may settle now.
-    pub(in crate::runner) fn tool_refusal(
+    pub(super) fn tool_refusal_linked(
         &mut self,
         allow_ordered: bool,
     ) -> Option<(u64, &'static str)> {
@@ -596,7 +595,9 @@ mod tests {
     fn boot() -> Runner<Source> {
         let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
         b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
-        let plan = b.finish().unwrap();
+        let mut plan = b.finish().unwrap();
+        // A package's handlers are the module seam's: the plan names one.
+        plan.add_view("probe", ("probe", "@fixture/probe"), false, &[], "{}");
         Runner::boot(
             plan,
             Source,

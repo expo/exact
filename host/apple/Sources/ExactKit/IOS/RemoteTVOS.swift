@@ -229,7 +229,7 @@ final class PlayPauseKey: NSObject {
 
     init(presenter: Presenter) { self.presenter = presenter }
 
-    private var video: VideoView? {
+    private var video: (any VideoPlaying)? {
         presenter.views.values.filter { $0.video != nil && $0.window != nil }.min { $0.id < $1.id }?.video
     }
 

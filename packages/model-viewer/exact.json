@@ -1,0 +1,17 @@
+{
+  "kind": "interface",
+  "name": "@exact/model-viewer",
+  "version": "1.0.0",
+  "names": [],
+  "shapes": {
+    "ModelNode": { "name": "string", "color": "string", "opacity": "number", "visibility": "enum<visible|hidden>", "occlusion": "enum<none|occluder|revealed>", "occludedOpacity": "number" },
+    "ModelHotspot": { "child": "string", "node": "string", "position": "string", "normal": "string" },
+    "ModelNodeInfo": { "name": "string", "parent": "string" },
+    "ModelViewerState": { "presented": "bool", "src": "string", "loaded": "bool", "error": "string", "triangles": "number", "nodes": "ModelNodeInfo[]", "cameraOrbit": "string", "cameraTarget": "string", "fieldOfView": "string", "cameraView": "string" }
+  },
+  "gpu": {
+    "crate": "rust",
+    "exactGpu": "0.4",
+    "surfaces": { "modelViewer": { "arity": 13, "factory": "exact_model_viewer::surface" } }
+  }
+}

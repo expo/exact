@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// A paragraph's ink in a test: the object it is, for a "not painted again"
 /// check, and the size of its pixels, or of the store its drawing makes.

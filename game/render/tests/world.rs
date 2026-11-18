@@ -155,7 +155,7 @@ fn fixture_surface_agent_pixels_and_beacon() {
     );
     let state = surface.agent(r#"{"op":"state"}"#).unwrap();
     assert!(state.contains(r#""wallClock":true"#));
-    assert!(state.contains(r#""frameMs":{"p50":0"#));
+    assert!(state.contains(r#""frameMs":{"p50":null"#));
     assert!(surface.published().unwrap().contains(r#""beacons":1"#));
 }
 // Fixture follows the capsule exactly. Freeze ONLY its camera in this fixture so
@@ -285,6 +285,8 @@ fn bind_refusal_pause_messages_and_perf_do_not_need_a_device() {
     let hash = surface.sim().unwrap().world().hash();
     let state = surface.agent(r#"{"op":"state"}"#).unwrap();
     assert!(state.contains("perf"));
+    assert!(state.contains(r#""armed":false"#));
+    assert!(state.contains(r#""frameMs":{"p50":null"#));
     assert_eq!(hash, surface.sim().unwrap().world().hash());
     assert!(!surface
         .agent(r#"{"op":"state","entity":"player"}"#)

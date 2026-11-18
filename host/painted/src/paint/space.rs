@@ -78,10 +78,13 @@ fn shadow_reach(node: &exact_kernel::NodeRef<'_>) -> (f32, f32, f32, f32) {
 /// boxes — each moved by its presented translate, grown to its diagonal
 /// when turned, scaled or in a plane of its own, and by its own shadows —
 /// bounded by `cap`, and whether that cap cut a descendant.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn reach(
+    painter: &Painter,
     walk: &Walk<'_, '_>,
     node: &exact_kernel::NodeRef<'_>,
     (x, y, w, h): Rect4,
+    ts: Transform,
     offset: (f32, f32),
     cap: f32,
 ) -> (Rect4, bool) {
@@ -118,6 +121,12 @@ pub(super) fn reach(
             if cox == Overflow::Visible && coy == Overflow::Visible {
                 stack.extend(child.children());
             }
+        }
+        if let Some((rx, ry, rw, rh)) = painter.kept_bounds(walk, node, ts, offset) {
+            out.0 = out.0.max(x - rx);
+            out.1 = out.1.max(y - ry);
+            out.2 = out.2.max(rx + rw - (x + w));
+            out.3 = out.3.max(ry + rh - (y + h));
         }
     }
     // Bounded: a runaway descendant must not ask for an unbounded island;
@@ -208,14 +217,24 @@ pub(crate) fn mapping(
 ) -> [f32; 9] {
     let f = node.frame;
     let rect = (f.x, f.y, f.width, f.height);
+    let parent = node.parent.and_then(|id| kernel.node(id)).map(|parent| {
+        let frame = parent.frame;
+        (parent, frame)
+    });
+    mapping_at(parent, node, p, rect, (0., 0.))
+}
+
+pub(super) fn mapping_at(
+    parent: Option<(NodeRef<'_>, exact_kernel::Frame)>,
+    node: &NodeRef<'_>,
+    p: &Presented,
+    rect: Rect4,
+    offset: (f32, f32),
+) -> [f32; 9] {
     if p.rotate_axis.is_3d() || node.style.translate_z != 0. {
-        let parent = node.parent.and_then(|id| kernel.node(id)).map(|parent| {
-            let frame = parent.frame;
-            (parent, frame)
-        });
-        plane(&spatial_matrix(parent, node, p, rect, (0., 0.)))
+        plane(&spatial_matrix(parent, node, p, rect, offset))
     } else {
-        let transform = p.transform(rect, node.style.transform_origin.resolve(f.width, f.height));
+        let transform = p.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3));
         crate::placement::compose([1., 0., 0., 0., 1., 0., 0., 0., 1.], transform, 0., 0.)
     }
 }
@@ -309,7 +328,8 @@ impl Painter {
         // The island covers what the box paints past itself: its outer
         // shadows and any overflowing descendant (nothing past a clip).
         let cap = (2.0 * w.max(h).max(64.0)).max(self.viewport.0.max(self.viewport.1));
-        let ((left, top, right, bottom), clamped) = reach(walk, node, (x, y, w, h), offset, cap);
+        let ((left, top, right, bottom), clamped) =
+            reach(self, walk, node, (x, y, w, h), ts, offset, cap);
         let (iw, ih) = (w + left + right, h + top + bottom);
         // The plane z = 0 of the box, from its island (-left..w+right, …).
         let m = mul(&m, &translate(x - left, y - top, 0.0));
@@ -372,6 +392,10 @@ impl Painter {
         painter.placements = self.placements.clone();
         painter.canvases = self.canvases.clone();
         painter.flatten = Some(node.id);
+        // An offscreen subtree includes the same outgoing drawings as the
+        // live walk, under this plane's current placement and compositing.
+        painter.stage = std::mem::take(&mut self.stage);
+        painter.kept = std::mem::take(&mut self.kept);
         painter.viewport = (iw, ih);
         painter.backend.begin(iw, ih, self.scale);
         let mut child_walk = Walk {
@@ -395,6 +419,8 @@ impl Painter {
             (f.x - left, f.y - top),
             None,
         );
+        self.stage = std::mem::take(&mut painter.stage);
+        self.kept = std::mem::take(&mut painter.kept);
         let planes = [[0., 0., 1.]; 2];
         if let Ok(source) = painter.backend.finish() {
             if let Some((pixels, rect)) =
@@ -516,5 +542,42 @@ impl PaintedBox {
         self.rect = self.scroll_bounds(&self.scroll_mapping()?)?;
         self.hit = hit;
         Some(self)
+    }
+}
+
+/// @ref LLP 1083 D4 — a sticky box moves by its constraint's offset at its
+/// scroller's scroll: the scroller's own, the page's for a root that does
+/// not scroll itself, none for a box that only clips. Painted there, it is
+/// hit there too.
+pub(super) fn sticky(scene: &Scene<'_>, id: ViewId, offset: (f32, f32)) -> (f32, f32) {
+    let kernel = scene.kernel;
+    let Some(node) = kernel
+        .node(id)
+        .filter(|n| n.layout_position() == exact_kernel::PositionType::Sticky)
+    else {
+        return offset;
+    };
+    let Some(c) = kernel.sticky_constraint(node.key) else {
+        return offset;
+    };
+    let Some(scroller) = kernel.node(c.scroller) else {
+        return offset;
+    };
+    let scroll = sticky_scroll(scene, &scroller);
+    let (dx, dy) = c.offset(scroll);
+    (offset.0 - dx, offset.1 - dy)
+}
+
+pub(super) fn sticky_scroll(scene: &Scene<'_>, scroller: &NodeRef<'_>) -> (f32, f32) {
+    if effective_overflow(scroller) != (Overflow::Visible, Overflow::Visible) {
+        scene
+            .scroll
+            .get(&scroller.id)
+            .copied()
+            .unwrap_or((0.0, 0.0))
+    } else if scroller.parent.is_none() {
+        scene.page
+    } else {
+        (0.0, 0.0)
     }
 }

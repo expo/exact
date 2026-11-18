@@ -241,7 +241,8 @@ object Native {
     /** A buffered canvas's newest frame (any thread): generation (24 bits), slot (8), serial (32); -1 none yet, -2 no
      * buffers on this device. */
     @JvmStatic external fun canvasFrame(view: Int): Long
-    /** -1 attachment refused, 0 waiting, 1 first window frame submitted to the compositor. Any thread. */
+    /** -1 attachment refused, 0 waiting, 1 handed to the compositor, 2 submitted, 3 explicitly empty.
+     * Any thread; an empty canvas shows its own styles. */
     @JvmStatic external fun canvasReady(view: Int): Int
     /** That frame's buffer, or null. */
     @JvmStatic external fun canvasBuffer(view: Int): android.hardware.HardwareBuffer?

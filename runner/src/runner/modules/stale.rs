@@ -20,7 +20,7 @@ impl<D: DataSource> Runner<D> {
     /// `body`, a reply to live source `key`, without its stale time, which
     /// is noted: a list answer's envelope is unwrapped when nothing else is
     /// left in it. A body that names none is returned as it came.
-    pub(in crate::runner) fn take_stale(&mut self, key: &str, body: Vec<u8>) -> Vec<u8> {
+    pub(super) fn take_stale_linked(&mut self, key: &str, body: Vec<u8>) -> Vec<u8> {
         let Ok(Json::Object(mut map)) = serde_json::from_slice::<Json>(&body) else {
             return body;
         };

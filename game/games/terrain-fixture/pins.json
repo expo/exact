@@ -1,0 +1,25 @@
+{
+  "ticks": {
+    "60": "0x69527b29456e47c8"
+  },
+  "saves": {
+    "continuation": "ea1c8ab4ccec86c9c666cd0d216cd37308d3607ba0ab6ea3f54bd53f036f68ef"
+  },
+  "hosts": [
+    "linux",
+    "web"
+  ],
+  "modes": [
+    "0",
+    "1",
+    "fresh-game"
+  ],
+  "profiles": [
+    "gpu-dev"
+  ],
+  "inputs": "711a3424f026a12fa39a606e2236305573f0189a87bf1f76720ef8e62e1c3f02",
+  "sourceInputs": "283ecd189b8bbafd44dcba3009041ba64d6bf8fc65f946b9017a236fe91610fe",
+  "game": "terrain-fixture-workload",
+  "generated": "bun game/prove.mjs terrain-fixture --repin --hosts 'linux,web'",
+  "at": "5ef91c48cab7ae37ac7b8d407f97cf9da1f7741c"
+}

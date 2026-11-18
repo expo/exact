@@ -79,7 +79,7 @@ test("the hold while pictures load ends at the app's own scroll, a newer navigat
 });
 
 // LLP 1153 D5.1: a page that arrives in the same visit with no fragment (a `replace` to another path).
-test('a page that arrives with no fragment opens each scroller where it opens, and leaves a manual one', () => {
+test('a page that arrives with no fragment starts each scroller over, and leaves a manual one', () => {
   const r = new El({ navigationKey: '9' }, root);
   r.querySelector = () => null;
   const plain = new El({}, r), authored = new El({}, r), kept = new El({ scrollRestoration: 'manual' }, r), list = new El({}, r);

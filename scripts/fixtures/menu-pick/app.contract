@@ -1,0 +1,84 @@
+// What VoiceOver reads after a context-menu pick while a long draft has the
+// focus (issues/closed/20261018-macos-menu-pick-*.md). Compose holds the draft
+// in a text area and a row whose `contextPopover` offers one pick per
+// presentation: a `<dialog>` (a sheet on the Mac) whose field autofocuses, an
+// `alertdialog` (`NSAlert`), a box drawn in the page (`role="dialog"
+// aria-modal`) with the focus left on the draft or moved to its field, and a
+// pick that navigates back, removing the row and the draft. `vo-trial.swift`
+// runs one pick with real input and records what VoiceOver said.
+routes nav
+  projects "/"
+    compose "/compose"
+
+component MenuPick
+  state draft = "Dear team, the quarterly report is attached. It covers revenue, hiring, the two launches and the support backlog, with a page on what we would change next quarter and why. Please read it before Thursday and send me your questions, however small, so that the meeting can be about decisions rather than a walk through the numbers."
+  state title = ""
+  state box = ""
+  action compose
+    nav = push(nav, "/compose")
+  action back
+    nav = back(nav)
+  action edit(value: string)
+    draft = value
+  action rename(value: string)
+    title = value
+  action askRename
+    showModal("rename")
+  action askDelete
+    showModal("delete")
+  action deleteDraft
+    draft = ""
+  action openBox
+    box = "open"
+  action openBoxFocused
+    box = "open"
+    focus("box-field")
+  action closeBox
+    box = ""
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "projects"
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            header display="flex" align-items="center" padding="8px 16px"
+              text "Projects" role="heading" aria-level=1
+            column padding=16
+              button press=compose testId="compose"
+                text "Compose"
+        if e.name == "compose"
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            header display="flex" align-items="center" padding="8px 16px"
+              text "Compose" role="heading" aria-level=2
+            column padding=16 gap=12 flex=1 min-height=0
+              textarea value=draft input=edit aria-label="Compose message" height=160 testId="draft"
+              list appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                section
+                  row contextPopover="draft-menu" testId="row"
+                    text "draft"
+              column id="draft-menu" popover="auto" role="menu"
+                button press=askRename popovertarget="draft-menu" popovertargetaction="hide" testId="pick-dialog"
+                  text "Rename…"
+                button press=back popovertarget="draft-menu" popovertargetaction="hide" testId="pick-discard"
+                  text "Discard Changes"
+                button press=openBox popovertarget="draft-menu" popovertargetaction="hide" testId="pick-box"
+                  text "Open Box"
+                button press=openBoxFocused popovertarget="draft-menu" popovertargetaction="hide" testId="pick-boxfocus"
+                  text "Open Box, Field Focused"
+                button press=askDelete popovertarget="draft-menu" popovertargetaction="hide" testId="pick-alert"
+                  text "Delete Draft…"
+            if box == "open"
+              column role="dialog" aria-modal=true aria-label="Box" position="absolute" top=80 left=40 right=40 padding=16 gap=8
+                background-color="-exact-background" border-radius=12 testId="box"
+                input id="box-field" aria-label="Box field" testId="box-field"
+                button press=closeBox testId="box-close"
+                  text "Close"
+      dialog id="rename" aria-label="Rename"
+        input value=title input=rename autofocus=true aria-label="Title" testId="rename-title"
+        button commandfor="rename" command="close" testId="rename-done"
+          text "Done"
+      dialog id="delete" role="alertdialog" aria-label="Delete Draft?"
+        text "This can't be undone."
+        button press=deleteDraft destructive=true commandfor="delete" command="close" testId="delete-confirm"
+          text "Delete"
+        button commandfor="delete" command="close" testId="delete-cancel"
+          text "Cancel"
