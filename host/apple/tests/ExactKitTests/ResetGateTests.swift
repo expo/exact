@@ -357,7 +357,12 @@ final class ResetGateTests: XCTestCase {
             ExactSession.asyncFills = asynchronous
             let (session, plan) = try boot("RESET_GATE_ADMISSION")
             func count() -> Int? { (try? words(session))?.compactMap { Int($0) }.max() }
-            until("booted, and nothing in flight") { count() == 0 && !session.ownerInFlight && !session.applying && !session.advanceInFlight }
+            // Wait for the display link to stop as well. A still page's link runs until a tick hears its first present
+            // (LLP 1069.000 D2 r7); while it runs, `check` waits for its answer instead of posting it, and a tick that
+            // comes due in the hold is replayed as an advance.
+            until("booted and presented, with nothing in flight") {
+                count() == 0 && !session.ownerInFlight && !session.applying && !session.advanceInFlight && session.frames.link == nil
+            }
             // Past the minute timers' first due: only these checks admit them, not a real update callback, so a slow
             // boot (a loaded full suite's) has a minute's margin before the hold, where 100 ms timers had none.
             let cutoff = session.now() + 60_100
@@ -383,6 +388,28 @@ final class ResetGateTests: XCTestCase {
             #endif
             window = nil
         }
+    }
+
+    /// A timer admission check made while the display link runs, as it does for a still page's first present (LLP
+    /// 1069.000 D2 r7), with posted fills: the check waits for its answer instead of posting it, and a tick held beside
+    /// it, as the link's would be, is replayed as an advance; nothing is left pending.
+    func testAnAdmissionCheckWhileTheLinkRunsWaitsForItsAnswer() throws {
+        let wasAsync = ExactSession.asyncFills
+        defer { ExactSession.asyncFills = wasAsync }
+        ExactSession.asyncFills = true
+        let (session, _) = try boot("RESET_GATE_ADMISSION")
+        until("booted and presented, with nothing in flight") {
+            !session.ownerInFlight && !session.applying && !session.advanceInFlight && session.frames.link == nil
+        }
+        session.frames.run(true)
+        XCTAssertNotNil(session.frames.link, "the link runs")
+        let (held, replays, _) = held(session) {
+            session.timerAdmissions.check(update: true, at: session.now() + 60_100)
+            session.sendTick(now: session.now())
+        }
+        XCTAssertEqual(held, ["timerWaits(kinds:cutoff:mode:)", "tickAsync(now:frame:capture:measureFrame:presentOnly:done:)"])
+        XCTAssertEqual(replays, [.advance])
+        XCTAssertFalse(session.timerAdmissions.hasPendingForTests, "the held check left nothing pending")
     }
 
     /// A resize while a restart holds the runtime (another session's reset, a keyboard it ends): the view's fit is owed,
