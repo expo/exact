@@ -3,6 +3,7 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactDrag
 
 /// UIKit recognizes Arrange: a handle whose touch-action keeps the List's
@@ -72,9 +73,9 @@ final class ReorderIOSTests: XCTestCase {
         let (p, grip) = fixture(calls)
         XCTAssertNotNil(grip.window)
         XCTAssertTrue(SwipeInput.allows(grip))
-        XCTAssertEqual(p.collections.owningCollection(3), 1)
+        XCTAssertEqual(p.listHost.owningCollection(3), 1)
         XCTAssertNotNil(p.views[1]?.scroll)
-        XCTAssertNotNil(p.collections.geometry(1))
+        XCTAssertNotNil(p.listHost.geometry(1))
         let drag = Drag()
         drag.at = CGPoint(x: 20, y: 120)
         drag.state = .began
@@ -87,7 +88,7 @@ final class ReorderIOSTests: XCTestCase {
         XCTAssertEqual(calls.log, ["begin 3 top=0.0", "move 7 dy=50.0", "drop 7 dy=60.0"])
         let hold = try XCTUnwrap(p.reorder as? ReorderHold)
         XCTAssertEqual(hold.phase, .settling)
-        XCTAssertEqual(p.collections.interaction, 3, "the pin stays while the source returns")
+        XCTAssertEqual(p.listHost.interaction, 3, "the pin stays while the source returns")
         hold.observe(ReorderRecorder.finished())
         XCTAssertNil(p.reorder)
         XCTAssertEqual(p.views[2]?.layer.zPosition, 0)

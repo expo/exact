@@ -14,14 +14,15 @@ final class ScrollEnd {
     /// Where the offset was last seen (and its top inset on iOS): a report
     /// that moves nothing (a resize, an inset that leaves the offset) owes
     /// nothing, as a `scroll` would not fire.
-    private var seen: [CGFloat] = [0, 0, 0]
+    private var seen: (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
     /// A live scroll (AppKit's gesture and momentum, or an agent drag) is running.
     var live = false
     var elementAnimation: UUID?
     private var settle: DispatchWorkItem?
 
-    /// The scroller reports `at`; whether that moved it, an end now owed.
-    func moved(to at: [CGFloat]) -> Bool {
+    /// Whether the scroller moved, so an end is now owed.
+    func moved(left: CGFloat, top: CGFloat, inset: CGFloat = 0, scale: CGFloat) -> Bool {
+        let at = (left, top, inset, scale)
         guard at != seen else { return false }
         seen = at
         owed = true
@@ -46,5 +47,5 @@ final class ScrollEnd {
         return owed
     }
     /// Nothing owed or waiting: the view goes to another node or scroller.
-    func reset() { settle?.cancel(); settle = nil; owed = false; live = false; elementAnimation = nil; seen = [0, 0, 0] }
+    func reset() { settle?.cancel(); settle = nil; owed = false; live = false; elementAnimation = nil; seen = (0, 0, 0, 0) }
 }

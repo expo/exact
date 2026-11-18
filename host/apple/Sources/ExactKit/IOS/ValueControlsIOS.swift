@@ -18,6 +18,17 @@ private final class SelectButtonIOS: UIButton {
         get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
         set { super.accessibilityActivationPoint = newValue }
     }
+    /// UIKit's own close target keeps the centre the button had when the
+    /// menu opened; a choice that retitles a select sized to its shown value
+    /// (`field-sizing: content`) resizes it before the menu closes, so the
+    /// closing morph drew the new title around the old centre (over a
+    /// leading label) until it ended. The target is the button where it is now.
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        let preview = super.contextMenuInteraction(interaction, previewForDismissingMenuWithConfiguration: configuration)
+        guard let preview, let container = superview else { return preview }
+        return UITargetedPreview(view: self, parameters: preview.parameters,
+                                 target: UIPreviewTarget(container: container, center: center))
+    }
     var valueAlignment = UIControl.ContentHorizontalAlignment.left {
         didSet { if oldValue != valueAlignment { setNeedsLayout() } }
     }
@@ -163,7 +174,7 @@ extension ControlHost {
         })
     }
 
-    /// HTML sizes a select to its widest option, whichever is shown (D3).
+    /// UIKit fits the shown value; an authored fixed field fits its widest option.
     func naturalSize(_ control: UIControl, _ owner: NodeView) -> CGSize {
         HostPhases.shared.count(.nativeControlMeasurements)
         #if !os(tvOS)
@@ -180,6 +191,10 @@ extension ControlHost {
         #endif
         if let button = control as? NativeButtonIOS { return button.naturalSize }
         guard let button = control as? UIButton, let config = button.configuration else { return control.intrinsicContentSize }
+        if owner.style["field_sizing"]?.string == "content" {
+            let size = button.intrinsicContentSize
+            return CGSize(width: ceil(size.width), height: ceil(size.height))
+        }
         let probe = UIButton(configuration: config)
         var size = CGSize.zero
         for option in menus[owner.id]?.options ?? [] {
@@ -204,6 +219,8 @@ extension ControlHost {
     /// amended 2026-10-04).
     func chose(_ id: UInt32, _ value: String) {
         guard presenter.views[id] != nil else { return }
+        // The shown title can resize even when the action writes no bound value.
+        defer { sync(contents: false, changed: [id]) }
         let before = presenter.selectOptions?(id)
         presenter.controlValue(id, value, input: true, change: true)
         if let before, presenter.selectOptions?(id) == before, let button = controls[id] as? UIButton {

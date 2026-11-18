@@ -14,6 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const APP: &str = r#"use createLanguageModel, prompt, languageModelResponse, LanguageModelTool, LanguageModelInfo, LanguageModelResult, LanguageModelResponse from "@exact/language-model"
 
 shape NoteQuery
@@ -112,7 +116,7 @@ impl exact_runner::DataSource for Tools {
             }
             // A sleep on a timer of its own (LLP 1027.000 D1), due at 500 ms.
             ("tool:findNotes", Some("sleep")) => {
-                Ok(Answer::Later(Request::continuation(9).due(500)))
+                Ok(Answer::Later(Request::continuation::<TestWork>(9).due(500)))
             }
             ("tool:findNotes", _) => Ok(Answer::Now(Value::from(r#"[{"title":"Lifetimes"}]"#))),
             _ => Err(DataError::UnknownSource(format!(

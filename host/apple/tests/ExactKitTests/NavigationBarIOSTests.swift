@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1075.003 Stage 1 over the native fixture's own plan and hatch module,
 /// which `build.mjs --test --ios` compiles for this simulator: Exact's bar on
@@ -1194,6 +1195,7 @@ final class NavigationBarIOSTests: XCTestCase {
         let items = (top.navigationItem.leftBarButtonItems ?? []) + (top.navigationItem.rightBarButtonItems ?? [])
         XCTAssertEqual(Set(items.compactMap(\.accessibilityIdentifier)), ["badge-item", "menu-item", "compose-home"])
         XCTAssertEqual(top.navigationItem.searchController?.searchBar.searchTextField.accessibilityIdentifier, "header-search")
+        XCTAssertEqual(top.navigationItem.searchController?.searchBar.searchTextField.accessibilityLabel, "Search fixture rows", "its aria-label names it")
         let control = try XCTUnwrap(top.navigationItem.titleView as? LabelledSegmentedControl)
         XCTAssertEqual(control.accessibilityIdentifier, "header-segments")
         control.layoutIfNeeded()

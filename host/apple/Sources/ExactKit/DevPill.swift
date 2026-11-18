@@ -76,7 +76,7 @@ extension Presenter {
     }
 }
 
-extension PlanURL.DevStatus {
+extension DevLoopStatus {
     /// As the dev menu's `url:` line says it.
     var said: String {
         switch self {
@@ -91,7 +91,7 @@ extension ExactApp {
     nonisolated(unsafe) static var devStatusText: String?
 
     /// What the dev connection has to say in every window, or nothing.
-    func showDevStatus(_ notice: PlanURL.DevNotice?) {
+    package func showDevStatus(_ notice: DevNotice?) {
         let text: String? = switch notice {
         case .loop(.preparing(let message)): "Dev loop: \(message)…"
         case .loop(.failed(let message)): "Dev loop failed to start: \(message)"

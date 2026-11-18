@@ -21,7 +21,7 @@ test('a viewport-only plan reads the tier the agent prefers', async () => {
   try {
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = [], commits = []; export const commit = (f, why) => { commits.push(why); f(); }; export function R() {} export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {};`);
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = [], commits = []; export const commit = (f, why) => { commits.push(why); f(); }; export function R() {} export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {};`);
     const { viewport } = await import(resolve(dir, 'facts.js'));
     const { data, commits } = await import(resolve(dir, 'rt.js'));
     viewport({ v: [['gpuTier']], ratio: [['devicePixelRatio']], geometry: [['safeAreaTop', 'safeAreaBottom', 'segments'], { safeAreaTop: 'n', safeAreaBottom: 'n', segments: ['[]', { height: 'n', x: 'n', width: 'n', y: 'n' }] }] });
@@ -60,7 +60,7 @@ test('canvas performance keeps unsupported metrics unavailable and refuses bad s
   try {
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = [{name:'hud',source:'exactCanvasPerformance'}], answers = {};
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = [{name:'hud',source:'exactCanvasPerformance'}], answers = {};
 export const Refusal = Error; export const Kept = kind => 'exact.' + kind + '.'; export const say = () => {}; export function R(r) { answers[r.name] = data.reserved[r.source](null,null,r.name); }
 export function commit(f) { try { f(); return true; } catch { return false; } }`);
     const { canvasPerformance } = await import(resolve(dir, 'facts.js'));
@@ -100,7 +100,7 @@ test('kept surface readers seed launch, replace only on live publication and inv
   try {
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data={}, Sounds={}, Resources=[{name:'hud',source:'exactSurface'}]; export const Kept=k=>'exact.'+k+'.', say=()=>{}, Refusal=Error;
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data={}, Sounds={}, Resources=[{name:'hud',source:'exactSurface'}]; export const Kept=k=>'exact.'+k+'.', say=()=>{}, Refusal=Error;
 export function R(r){data.reserved[r.source](null,null,r.name);} export function commit(f){try{f();return true;}catch{return false;}}`);
     const {surfaces} = await import(resolve(dir, 'facts.js')), {data} = await import(resolve(dir, 'rt.js'));
     const boot = (shape={count:'n'}, keep=true) => surfaces({hud:['world',shape,keep ? Buffer.from(JSON.stringify(shape)).toString('hex') : false]});
@@ -144,7 +144,7 @@ test('delivery reads whether the page is a production build, even from a pre-bak
       const source = await Bun.file(resolve(import.meta.dir, 'facts.js')).text();
       writeFileSync(resolve(dir, 'facts.js'), production === undefined ? source : source.replace('globalThis.__exactProduction', JSON.stringify(production)));
       writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-      writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+      writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
       const { delivery, deliveryFacts } = await import(resolve(dir, 'facts.js'));
       const { data } = await import(resolve(dir, 'rt.js'));
       // A plan baked by a development build answers false; the page's own build decides.
@@ -164,7 +164,7 @@ test('delivery reads build-time versions even from a pre-baked plan', async () =
       const source = await Bun.file(resolve(import.meta.dir, 'facts.js')).text();
       writeFileSync(resolve(dir, 'facts.js'), source.replace('globalThis.__exactVersion', JSON.stringify(version ?? '')).replace('globalThis.__exactBuildNumber', JSON.stringify(buildNumber ?? '')));
       writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-      writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+      writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
       const { delivery, deliveryFacts } = await import(resolve(dir, 'facts.js'));
       const { data } = await import(resolve(dir, 'rt.js'));
       delivery({ build: [['buildNumber', 'version']], baked: [['version', 'seq', 'buildNumber'], ['old', 7, 'old']] });
@@ -183,7 +183,7 @@ test('a render answers the bake default for frozen', async () => {
     delete globalThis.document;
     copyFileSync(resolve(import.meta.dir, 'facts.js'), resolve(dir, 'facts.js'));
     writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
-    writeFileSync(resolve(dir, 'rt.js'), `export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
     const {page} = await import(resolve(dir, 'facts.js')), {data} = await import(resolve(dir, 'rt.js'));
     page({page:[['frozen']]});
     expect(data.reserved.exactPage(null, null, 'page')).toEqual([false]);

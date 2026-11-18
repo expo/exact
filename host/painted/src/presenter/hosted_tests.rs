@@ -415,7 +415,7 @@ component App
     let mut reloaded = boot_plan(&first);
     assert_eq!(
         reloaded.reload_module(&second, (), None, false).unwrap(),
-        None
+        ReloadResult::Applied(None)
     );
     settle(&mut reloaded);
     assert_eq!(

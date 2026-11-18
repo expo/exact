@@ -1,0 +1,40 @@
+// SwipeRoutesIOSTests: hand-written swipe rows in a route's page. Each
+// route holds a projected row (UIKit draws its Delete) and a painted one
+// (its Delete keeps its paint), then enough page to scroll; `start`'s
+// header button pushes `detail`. UIKit keeps a revealed row open through a
+// push, while a row on the pushed screen opens, and after the pop, and a
+// vertical drag on a row scrolls the page.
+routes nav
+  start "/"
+    detail "/detail"
+
+component SwipePush
+  state deletes = 0
+  action open
+    nav = push(nav, "/detail")
+  action back
+    nav = back(nav)
+  action remove
+    deletes = deletes + 1
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column"
+          header display="flex" align-items="center" padding="8px 16px"
+            text (e.name == "start" ? "Rows" : "Detail") role="heading" aria-level=2
+            if e.name == "start"
+              button press=open testId="open-detail" aria-label="Open"
+                text "Open"
+          scroll testId=`${e.name}-page` flex=1 min-height=0
+            for kind in ["native", "painted"] key=kind
+              scroll swipeContent=`${e.name}-${kind}-body` swipeTrailing=`${e.name}-${kind}-delete` testId=`${e.name}-${kind}-row` width="100%" height=80 display="flex" overflow-x="scroll" overflow-y="hidden" scrollbar-width="none"
+                row width="100%" height=80
+                  column id=`${e.name}-${kind}-body` width="100%" height=80 flex-shrink=0 justify-content="center" padding-left=16 box-sizing="border-box" background-color="-exact-background"
+                    text `${e.name} ${kind == "native" ? "projected" : "painted"} row`
+                  if kind == "native"
+                    button press=remove id=`${e.name}-native-delete` aria-label="Delete" destructive=true width=90 height=80 flex-shrink=0
+                      text "Delete"
+                  else
+                    button press=remove id=`${e.name}-painted-delete` aria-label="Delete" appearance="none" width=90 height=80 flex-shrink=0 background-color="-exact-system-red" display="flex" align-items="center" justify-content="center"
+                      text "Delete" color="white"
+            column height=1600

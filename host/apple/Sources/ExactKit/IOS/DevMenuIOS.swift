@@ -308,10 +308,12 @@ public enum DevMenu {
     public static func reload() {
         pending += 1
         sheet?.dismiss(animated: false)
+        // The person's own act: it ends a composition and commits now (LLP 1029.000.002 D9).
+        ExactApp.shared.endCompositions()
         if ExactApp.shared.connectionStatus != nil { ExactApp.shared.reloadConnection(); return }
         guard let session else { return }
         if let path = planPath {
-            ExactDevelopmentPlan(path).apply(to: ExactApp.shared)
+            ExactDevelopmentPlan(path).apply(to: ExactApp.shared, now: true)
             return
         }
         let started = CACurrentMediaTime()

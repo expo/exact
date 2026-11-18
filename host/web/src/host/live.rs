@@ -40,9 +40,9 @@ impl<D: DataSource> Host<D> {
         };
         let batch = self.batch_from(batch, &receipts, None);
         let mut out = String::from("{\"live\":");
-        exact_runner::agent::quote(&live, &mut out);
+        exact_runner::json::quote(&live, &mut out);
         out.push_str(&format!(",\"unsupported\":{unsupported},\"design\":"));
-        exact_runner::agent::quote(&self.runner.design(), &mut out);
+        exact_runner::json::quote(&self.runner.design(), &mut out);
         out.push(',');
         out.push_str(&batch[1..]);
         out

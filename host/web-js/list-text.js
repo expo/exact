@@ -57,55 +57,42 @@ function rowText(c, position) {
   end(temporary);
   return out;
 }
+// The fixed lead or trail's paragraphs, counted across its children
+// (LLP 1070 §14). Fixed content is always mounted.
+function fixedText(c, trail) {
+  const out = [];
+  if (!c.fixed) return out;
+  let side = 0;
+  for (const el of c.el.childNodes) {
+    if (el === c.fixed.a) side = -1;
+    else if (el === c.fixed.b) side = 1;
+    else if (el.nodeType === 1 && side === (trail ? 1 : 0)) out.push(...domParagraphs(el));
+  }
+  return out;
+}
+// Endpoints, from list-selection.js, name a keyed row or the fixed lead or
+// trail (`fixed`), as the runner's `ListTextPosition` does: the lead is
+// ordered before row 0 and the trail after the last row. Offsets slice the
+// authored text, as the runner's do.
 export function listText(c, a, b) {
-  let lo = [0, 0, 0], hi = [c.index.len - 1, Infinity, Infinity], loAt = null, hiAt = null;
+  const len = c.index.len, ordinal = p => p.fixed == null ? c.index.pos.get(p.key) : p.fixed ? len : -1;
+  let lo = [-1, 0, 0], hi = [len, Infinity, Infinity];
   if (a) {
-    lo = [c.index.pos.get(a.key), a.paragraph, a.offset];
-    hi = [c.index.pos.get(b.key), b.paragraph, b.offset];
+    lo = [ordinal(a), a.paragraph, a.offset];
+    hi = [ordinal(b), b.paragraph, b.offset];
     if (lo[0] == null || hi[0] == null) return '';
-    [loAt, hiAt] = compare(lo, hi) > 0 ? [b, a] : [a, b];
     if (compare(lo, hi) > 0) [lo, hi] = [hi, lo];
   }
-  const out = [], append = paragraphs => {
-    for (const [text, selectable] of paragraphs) if (selectable && text) out.push(text);
-  };
-  function fixed(trail) {
-    if (!c.fixed) return;
-    let after = false;
-    for (const el of c.el.childNodes) {
-      if (el === c.fixed.a) { if (!trail) break; }
-      if (el === c.fixed.b) { after = true; continue; }
-      if (el.nodeType === 1 && (trail ? after : true)) append(domParagraphs(el));
-    }
-  }
-  if (!a) fixed(false);
+  const out = [];
   for (let row = lo[0]; row <= hi[0]; row++) {
-    for (const [paragraph, [text, selectable]] of rowText(c, row).entries()) {
+    const paragraphs = row < 0 || row === len ? fixedText(c, row === len) : rowText(c, row);
+    for (const [paragraph, [text, selectable]] of paragraphs.entries()) {
       if (!selectable || compare([row, paragraph], lo.slice(0, 2)) < 0 || compare([row, paragraph], hi.slice(0, 2)) > 0) continue;
-      // An endpoint's offset counts the rendered text captured with it: a
-      // paragraph the selection cuts copies what the reader saw, and a whole
-      // one copies its authored source.
       const first = row === lo[0] && paragraph === lo[1], last = row === hi[0] && paragraph === hi[1];
-      const rendered = (first ? loAt : last ? hiAt : null)?.rendered;
-      let part = text;
-      if (rendered) {
-        const start = first ? lo[2] : 0, end = last ? Math.min(hi[2], rendered.text.length) : rendered.text.length;
-        if (start > 0 || end < rendered.text.length) part = clip(rendered, start, end);
-      } else if (first || last) {
-        part = text.slice(first ? lo[2] : 0, last ? hi[2] : text.length);
-      }
+      const part = text.slice(first ? lo[2] : 0, last ? hi[2] : text.length);
       if (part) out.push(part);
     }
   }
-  if (!a) fixed(true);
   return out.join('\n\n');
-}
-function clip({ text, hidden }, start, end) {
-  let out = '', at = start;
-  for (const [a, b] of hidden) {
-    if (b <= at || a >= end) continue;
-    out += text.slice(at, Math.max(at, a)); at = Math.min(end, b);
-  }
-  return out + text.slice(at, end);
 }
 function compare(a, b) { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; }

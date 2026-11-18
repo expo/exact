@@ -52,6 +52,9 @@ struct App<D: DataSource> {
     focused: bool,
     cursor: CursorIcon,
     buttons: u32,
+    /// A button or a finger was down when the window lost the focus, and its
+    /// release may go to another window.
+    unheard: bool,
     clicks: crate::clicks::Clicks,
     touches: crate::touch::Touches,
     scale: f64,
@@ -304,6 +307,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         clicks: Default::default(),
         touches: Default::default(),
         buttons: 0,
+        unheard: false,
         scale: 1.,
         next_frame: started,
         redraw_pending: false,
@@ -1145,6 +1149,26 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
         // sample past the time it was asked for
         let now = p.host().now();
         let (x, y) = self.pointer;
+        // A button or a finger down when the focus went: each event the
+        // person makes here asks Windows whether it is still down.
+        if self.unheard
+            && matches!(
+                event,
+                WindowEvent::Focused(true)
+                    | WindowEvent::CursorEntered { .. }
+                    | WindowEvent::CursorMoved { .. }
+                    | WindowEvent::MouseInput { .. }
+                    | WindowEvent::Touch(_)
+            )
+        {
+            let up = self.buttons & !buttons_down();
+            if up != 0 {
+                self.buttons &= !up;
+                p.buttons_released(up);
+            }
+            self.touches.prune(p, crate::touch::in_contact);
+            self.unheard = self.buttons != 0 || self.touches.any_down();
+        }
         match event {
             WindowEvent::ThemeChanged(theme) => system_theme(p, theme),
             WindowEvent::Moved(_) => self.ime.reposition(),
@@ -1164,9 +1188,12 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 self.focused = focused;
                 p.surface_lifecycle(self.minimized || self.occluded || self.hidden, !focused);
                 if !focused {
-                    self.buttons = 0;
-                    self.touches.forget(p);
-                    let _ = p.pointer_lost(now);
+                    // The contact ends, its release perhaps going to another
+                    // window; each button and finger down holds a replacement
+                    // until its release, or until Windows says it is up
+                    // (`unheard`, LLP 1029.000.002 D9).
+                    self.touches.forget(p, now);
+                    self.unheard = self.buttons != 0 || self.touches.any_down();
                     p.set_window_active(false);
                     // Unfocused, the pads are not read: what they were is no longer known.
                     p.forget_pads();
@@ -1354,3 +1381,30 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// The mouse buttons down now, as `pointer_aux` numbers them (1 the primary).
+/// [GetAsyncKeyState](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getasynckeystate)
+/// reads the physical buttons, so a swapped primary is read as the right one.
+#[allow(unsafe_code)]
+fn buttons_down() -> u32 {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
+    let (primary, secondary) = if swapped {
+        (VK_RBUTTON, VK_LBUTTON)
+    } else {
+        (VK_LBUTTON, VK_RBUTTON)
+    };
+    [
+        (primary, 1),
+        (secondary, 2),
+        (VK_MBUTTON, 4),
+        (VK_XBUTTON1, 8),
+        (VK_XBUTTON2, 16),
+    ]
+    .into_iter()
+    .filter(|(key, _)| unsafe { GetAsyncKeyState(i32::from(*key)) } < 0)
+    .fold(0, |bits, (_, bit)| bits | bit)
+}

@@ -178,14 +178,14 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
             else if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) admit()
             else if (dx > slop || dy > slop) {
                 // Offered its down, the view may yet ask to keep the drag from a sheet.
-                admit(!claimed(dx, dy, true))
+                admit(!claimed(dx, dy, true, e.y - downY))
             } else if (e.actionMasked == MotionEvent.ACTION_UP) admit()
             return true
         }
         if (module.active && engine) {
             val dx = abs(e.x - downX); val dy = abs(e.y - downY)
             if (e.actionMasked == MotionEvent.ACTION_MOVE && (dx > slop || dy > slop)) {
-                if (claimed(dx, dy, view.natives?.keeps == true)) {
+                if (claimed(dx, dy, view.natives?.keeps == true, e.y - downY)) {
                     module.clear(); releaseInterception()
                 } else endEngine()
             } else if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) endEngine()
@@ -211,9 +211,12 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     /** Whether a drag past the slop, longer along [dx] or [dy], is Exact's and not the hosted view's. A gesture's claim
      * on that axis always is (bits 0 and 1 of the hit reply's claims). Bit 2 says the up-and-down claim is a sheet's
      * drag alone: the sheet intercepts as a parent does (Material's `BottomSheetBehavior` takes its drag in its
-     * `CoordinatorLayout`'s `onInterceptTouchEvent`), so not from a view that [kept] its touch. */
-    private fun claimed(dx: Float, dy: Float, kept: Boolean): Boolean =
-        if (dx > dy) claims and 1 != 0 else claims and 2 != 0 && !(kept && claims and 4 != 0)
+     * `CoordinatorLayout`'s `onInterceptTouchEvent`), so not from a view that [kept] its touch. Bits 3 and 4
+     * are the sheet's upward and downward claims over a nested scroller. */
+    private fun claimed(dx: Float, dy: Float, kept: Boolean, vertical: Float): Boolean =
+        if (dx > dy) claims and 1 != 0
+        else (claims and 2 != 0 && !(kept && claims and 4 != 0)) ||
+            (!kept && claims and (if (vertical < 0f) 8 else 16) != 0)
 
     private fun admit(offer: Boolean = true) {
         val v = candidate ?: return

@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// `onLine` loads Network only when something reads it (PageFacts): the app
 /// hatch's facts start no path monitor for a module that asks the host,

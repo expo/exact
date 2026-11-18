@@ -215,10 +215,11 @@ mod tests {
         assert_eq!(hit[6] as u32 as u64, before["generation"].as_u64().unwrap());
         assert_eq!(token(hit), before["session"].as_u64().unwrap());
         assert_eq!(f32::from_bits(hit[3] as u32), 200.);
-        assert!(p
-            .reload(&crate::test_plan(&source.replace("menu\"", "other\"")), ())
-            .unwrap()
-            .is_none());
+        assert!(
+            p.reload(&crate::test_plan(&source.replace("menu\"", "other\"")), ())
+                .unwrap()
+                == crate::presenter::ReloadResult::Applied(None)
+        );
         let after = props(&mut p);
         let next = p.reader_module(20., 20., 2.);
         assert_eq!(hit[..8], next[..8]);

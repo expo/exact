@@ -22,7 +22,7 @@ import { Graph, LANE_DISTS, PARITY, Repo, WEB_APPS, commands, gameAppleLeg, pari
 import { INPUTS, Inputs, Store, checkEnv, decide, outcomeOf } from './async-inputs.mjs';
 import { main as issue } from './issue.mjs';
 import { noteOf, publish, stoppedEarly } from './known.mjs';
-import { bisectAffected, probeOutcomes } from './async-bisect.mjs';
+import { bisectAffected, newFailures, probeOutcomes } from './async-bisect.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -149,7 +149,7 @@ export function laneSelection(changed, { root = WT, full = false, repo, graphs =
   };
 }
 const WEB_AX = ['./host/web/tests/accessibility-tree.test.mjs', './host/web/tests/presence-preload.test.mjs', './host/web/tests/zero-viewport.test.mjs'];
-/** Suites outside the established steps still run: other Bun files, macOS XCTests and authored app tests. */
+/** Suites outside the established steps still run: other Cargo workspaces, Bun files, macOS XCTests and app tests. */
 export function extraChecks(hits, glue, repo) {
   const covered = new Set([...glue, ...WEB_AX, './host/web/tests/document.test.mjs', './game/vocab.test.mjs']);
   const bun = hits.filter(({ suite: s }) => s.kind === 'bun' && !covered.has(`./${s.file}`));
@@ -160,6 +160,10 @@ export function extraChecks(hits, glue, repo) {
     ...(fixture ? [`EXACT_REALWORLD_DIST=${realworld}`] : []), ...cmd]]);
   for (const hit of hits) {
     const s = hit.suite;
+    if (s.kind === 'cargo' && s.manifest !== 'Cargo.toml' && s.manifest !== 'game/Cargo.toml') {
+      const [cmd, ...args] = commands([hit])[0];
+      out.push([s.id, cmd, args]);
+    }
     if (s.kind !== 'app' && !(s.kind === 'xctest' && s.host === 'macos')) continue;
     const named = s.kind === 'app' ? `app:${s.app}:${s.host}` : 'macos';
     const first = out.length;
@@ -405,7 +409,7 @@ export function retainSkippedFailures(previous, result, owners = {}, steps = TIE
   const found = new Set(result.failures);
   for (const f of previous) {
     const name = f.split(': ', 1)[0], check = result.checks[name], owner = owners[f];
-    if (found.has(f) || !(steps.has(name) || name === 'other-glue' || name === 'bundle-fixture' || name === 'macos' || name.startsWith('app:') || name.startsWith('build-app:'))) continue;
+    if (found.has(f) || !(steps.has(name) || name === 'other-glue' || name === 'bundle-fixture' || name === 'macos' || name.startsWith('cargo:') || name.startsWith('app:') || name.startsWith('build-app:'))) continue;
     // What ran it again: its check whole, or the part of it that holds its suites (one it cannot name: any part).
     const ran = check && !check.skipped && check.complete !== false && (!check.covers || (owner?.length && owner.every(o => check.covers.includes(o))));
     if (ran) continue;
@@ -423,6 +427,7 @@ export function owners(name, log, found) {
   const out = {};
   const own = (f, id) => { if (!(out[f] ??= []).includes(id)) out[f].push(id); };
   for (const f of found) {
+    if (name.startsWith('cargo:')) own(f, name);
     const pkg = /^\S+: -p (\S+) /.exec(f)?.[1] ?? /^\S+: (\S+) (?:\([^)]*\) does not compile|build script failed)$/.exec(f)?.[1];
     if (pkg && ['test', 'lane', 'default-test', 'build', 'workspace-build', 'workspace', 'clippy', 'workspace-clippy', 'linux', 'windows', 'windows-arm64'].includes(name)) own(f, `cargo:${pkg}`);
     const app = name.startsWith('conform') && f.slice(name.length + 2).split(' ').slice(0, 2).find(w => WEB_APPS.includes(w));
@@ -460,8 +465,11 @@ export function failures(name, log, status) {
     if (rerun && !failed.length) found.add(`${name}: ${rerun[1]} did not finish`);
     if (rerun) for (const t of failed.splice(0)) found.add(`${name}: ${rerun[1]} ${t}`);
   }
-  // metrics rows: a VIOLATION, or a measurement whose build FAILED.
-  if (name === 'metrics' || name === 'web-bytes') for (const m of log.matchAll(/^[ \t]+(\S[^\n]*?)[ \t]{2,}(?:FAILED\b|[^\n]*\bVIOLATION\b)/gm)) found.add(`${name}: ${m[1]} ${/\bVIOLATION\b/.test(m[0]) ? 'VIOLATION' : 'FAILED'}`);
+  // metrics rows: a VIOLATION, which a byte-budget row names with how far over (async-bisect.mjs `holds`), or a
+  // measurement whose build FAILED.
+  if (name === 'metrics' || name === 'web-bytes') for (const m of log.matchAll(/^[ \t]+(\S[^\n]*?)[ \t]{2,}(?:FAILED\b|[^\n]*\bVIOLATION\b( by \d+(?:\.\d+)? MB\b)?)/gm)) {
+    found.add(`${name}: ${m[1]} ${/\bVIOLATION\b/.test(m[0]) ? `VIOLATION${m[2] ?? ''}` : 'FAILED'}`);
+  }
   for (const m of log.matchAll(/Test Case '-\[(\S+) (\S+)\]' failed/g)) found.add(`${name}: ${m[1]} ${m[2]} failed`);
   // xcodebuild's parallel testing names a failure by class and method only. A test it reports failed in 0.000 s did
   // not run: its test process had crashed, and xcodebuild fails each test that process still held (2026-11-12: 377
@@ -705,8 +713,7 @@ async function once(state) {
   if (!pending.length && !full) return;
   const since = state.last, result = await check(tip, since, { base: since, full });
   retainSkippedFailures(state.failures ?? [], result, state.owners ?? {});
-  const baseline = state.failures === undefined, before = new Set(state.failures ?? []);
-  const fresh = result.failures.filter(f => !before.has(f));
+  const baseline = state.failures === undefined, fresh = newFailures(state.failures ?? [], result.failures);
   console.log(`${tip.slice(0, 8)} ${result.subject}: ${result.failures.length} failure(s), ${baseline ? 'baseline' : `${fresh.length} new`}`);
   if (fresh.length && !baseline) {
     try { result.attribution = await attribute(result, fresh, since, pending); }

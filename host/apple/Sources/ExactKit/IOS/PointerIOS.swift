@@ -115,7 +115,7 @@ final class PointerRecognizer: UIGestureRecognizer {
         let target = source.flatMap { view -> NodeView? in
             guard let start = NodeView.innermost(view) else { return nil }
             let point = first.location(in: nil), local = start.local(point)
-            if presenter?.svg.target(start.id, at: local) != nil
+            if presenter?.svg?.target(start.id, at: local) != nil
                 || start.inlineActivationTarget(at: local) != nil || start.inlineLink(at: local) != nil { return nil }
             return start.activationTarget(at: point)
         }
@@ -451,7 +451,7 @@ extension NodeView {
             if !path.isLive(in: presenter) { cancelPressContact(); return }
         }
         guard !disabled, !(contact.bubbled ? authoredInert : inert) else { cancelPressContact(); return }
-        if !contact.bubbled, let target = presenter?.svg.target(id, at: local(touch.location(in: nil))) {
+        if !contact.bubbled, let target = presenter?.svg?.target(id, at: local(touch.location(in: nil))) {
             svgPressed = target; return
         }
         if !contact.bubbled, let run = inlineActivationTarget(at: local(touch.location(in: nil))) {
@@ -501,7 +501,7 @@ extension NodeView {
         guard !disabled else { pressed = false; inlinePressed = nil; linkPressed = nil; svgPressed = nil; return }
         if let target = svgPressed {
             svgPressed = nil
-            if let touch = touches.first, presenter?.svg.target(id, at: local(touch.location(in: nil))) == target { activateSvg(target) }
+            if let touch = touches.first, presenter?.svg?.target(id, at: local(touch.location(in: nil))) == target { activateSvg(target) }
             return
         }
         if let run = inlinePressed {
@@ -580,7 +580,7 @@ extension NodeView {
     @discardableResult
     func activate(at windowPoint: CGPoint) -> NodeView? {
         // An SVG element under the point takes it (LLP 1055.000 D17).
-        if kind == "svg", let element = presenter?.svg.target(id, at: local(windowPoint)) { activateSvg(element); return self }
+        if kind == "svg", let element = presenter?.svg?.target(id, at: local(windowPoint)) { activateSvg(element); return self }
         let target = activationTarget(at: windowPoint), consumed = controlTakesTouch(at: windowPoint)
         if target == nil, !takesPress, consumed { return nil }
         let bubbled = target.map { (presenter?.pressBox(of: $0, from: self) ?? $0) !== $0 } ?? false

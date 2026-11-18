@@ -114,6 +114,23 @@ pub(crate) fn emit(
     assets.extend(rust_assets);
     assets.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     let mut graph = artifact_graph(&plan, &compat.inputs, &assets, pictures, target)?;
+    let required = crate::link::apple_requirement(
+        app,
+        &plan,
+        entries.values().map(|entry| &entry.plan),
+        &compat.inputs,
+        manifest,
+        compat.host_work,
+    )?;
+    if let Some(required) = required {
+        graph["artifacts"][0]["requires"]["appleUses"] = required;
+    }
+    // What the binary links for its plan and, on Apple, its entries' plans,
+    // as `link::name_into` decides it.
+    let entry_plans = entries.values().map(|entry| &entry.plan);
+    let uses =
+        crate::link::production_uses(app, &plan, entry_plans, &compat.inputs, compat.host_work);
+    graph["uses"] = json!(uses.iter().map(|c| c.name()).collect::<Vec<_>>());
     if matches!(platform, "ios" | "macos") {
         let mut icons = apple_icons(&plan)?;
         for entry in entries.values() {
@@ -593,6 +610,15 @@ pub fn plan_graph(
     requires["formatVersion"] = json!(exact_plan::FORMAT_VERSION);
     requires["formatDigest"] = json!(format!("{:016x}", exact_plan::FORMAT_DIGEST));
     requires["kernelSchema"] = json!(format!("{:016x}", plan.kernel_schema_digest));
+    // What it needs the cohort to link, from the manifest and the grants
+    // `inputs` name as a bake composes it. A plan pushed alone brings no Rust
+    // source (that is native code, a binary change), so no declared host work.
+    let manifest = contract::Manifest::read(app)?;
+    if let Some(required) =
+        crate::link::apple_requirement(app, &plan, std::iter::empty(), &inputs, &manifest, false)?
+    {
+        requires["appleUses"] = required;
+    }
     Ok(graph)
 }
 
@@ -823,7 +849,7 @@ fn artifact_graph(
     });
     // The linked tier the plan uses (LLP 1047 D2), by name: a native build
     // whose plan is fixed links these and no other (LLP 1047.001 D2).
-    let uses: Vec<&str> = exact_runner::uses(plan)
+    let uses: Vec<&str> = crate::link::plan_uses(plan, inputs)
         .with_grants(inputs["grantCeiling"].as_str().unwrap_or(""))
         .iter()
         .map(|c| c.name())

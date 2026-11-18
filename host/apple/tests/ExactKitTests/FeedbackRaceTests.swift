@@ -7,6 +7,7 @@ import AppKit
 import XCTest
 import ExactCore
 @testable import ExactKit
+@testable import ExactCollections
 
 /// A list's report that reaches the runner after the runner has moved its snapshot on (a commit from elsewhere: a
 /// reply, a timer, an action, another report) is turned away by the runner's own revision check, silently (runner
@@ -67,13 +68,13 @@ final class FeedbackRaceTests: XCTestCase {
         self.window = window
         let p = session.presenter
         // Every report the host sends, held: the test delivers each to the real runtime itself, in the race's order.
-        let send = try XCTUnwrap(p.collections.onFeedback)
+        let send = try XCTUnwrap(p.listHost.onFeedback)
         var held: [Data] = []
-        p.collections.onFeedback = { held.append($0) }
+        p.listHost.onFeedback = { held.append($0) }
         XCTAssertNil(session.boot(plan: plan, size: size).error)
         let feed = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "feed" }).id
-        until("the host builds the rows it shows and reports them") { !held.isEmpty && !(p.collections.entries[feed]?.snapshot.rows.isEmpty ?? true) }
-        let entry = try XCTUnwrap(p.collections.entries[feed])
+        until("the host builds the rows it shows and reports them") { !held.isEmpty && !(p.listHost.entries[feed]?.snapshot.rows.isEmpty ?? true) }
+        let entry = try XCTUnwrap(p.listHost.entries[feed])
         let revision = entry.snapshot.revision
         // The rows the host has a view for, which its report measures (`CollectionHost.flush`).
         let measured = Set(entry.snapshot.rows.filter { p.views[$0.view] != nil }.map(\.view))
@@ -91,11 +92,11 @@ final class FeedbackRaceTests: XCTestCase {
         }
         held = []
         // The newer snapshot lands; from here the host's reports go to the runtime as they do in an app.
-        p.collections.onFeedback = send
+        p.listHost.onFeedback = send
         session.apply(elsewhere)
-        XCTAssertGreaterThan(p.collections.entries[feed]?.snapshot.revision ?? 0, revision)
+        XCTAssertGreaterThan(p.listHost.entries[feed]?.snapshot.revision ?? 0, revision)
         until("each row the turned-away report measured, still in the snapshot, is measured in the runner") {
-            let rows = p.collections.entries[feed]?.snapshot.rows ?? []
+            let rows = p.listHost.entries[feed]?.snapshot.rows ?? []
             let kept = rows.filter { measured.contains($0.view) }
             return !kept.isEmpty && kept.allSatisfy(\.measured)
         }

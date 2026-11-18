@@ -8,23 +8,13 @@
 
 use super::super::{DataSource, Runner};
 use super::{CallOrigin, Json, ModulesRow, Route};
-use crate::local_network::{Reach, State};
+use crate::local_network::State;
 use serde_json::json;
 
 /// The permission whose state the hop rule reads.
 pub(super) const PERMISSION: &str = "local-network";
 
 impl<D: DataSource> Runner<D> {
-    /// What a request asked under `origin` carries: under the agent, with the
-    /// app's local-network permission answered by the substitute, that
-    /// permission's state stands for the host's fact.
-    pub(in crate::runner) fn reach_of(&self, origin: CallOrigin) -> Reach {
-        Reach {
-            origin,
-            substitute: self.local_network_substitute(),
-        }
-    }
-
     /// Whether permission `name`'s fact is the host's (`"fact": "host"`), so
     /// `unknown` is a state the agent may prefer.
     pub(super) fn host_keeps(&self, name: &str) -> bool {
@@ -34,7 +24,7 @@ impl<D: DataSource> Runner<D> {
         })
     }
 
-    fn local_network_substitute(&self) -> Option<State> {
+    pub(super) fn local_network_substitute(&self) -> Option<State> {
         let row = (self.plan.modules.iter())
             .find(|m| self.substitute(m)["permission"]["name"] == PERMISSION)?;
         if self.route(row) == Route::Real {

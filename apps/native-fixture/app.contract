@@ -422,7 +422,7 @@ component NativeFixture
                       button popovertarget="bar-menu" aria-label="More" testId="menu-item" padding=6 background-color="#e5e7eb"
                         image "symbol:sf/ellipsis.circle" width=20 height=20
                       // A search field in the header: the item's search controller.
-                      input type="search" value=query input=setQuery submit=submitQuery placeholder="Search the fixture" testId="header-search" width=80
+                      input type="search" value=query input=setQuery submit=submitQuery placeholder="Search the fixture" aria-label="Search fixture rows" testId="header-search" width=80
                       // A text tablist in the header: the item's segmented title view.
                       row role="tablist" testId="header-segments"
                         // The projected segmented control owns the chrome; its
@@ -445,7 +445,7 @@ component NativeFixture
                             row gap=3 align-items="center" testId="subtitle-glyphs" aria-label="Muted, disappearing messages after 1 week"
                               image "symbol:sf/bell.slash" width=12 height=12 object-fit="contain"
                               text "Muted" font-size=12 color="#6b7280"
-                              image "symbol:sf/timer" width=12 height=12 object-fit="contain"
+                              image "symbol:timer" width=12 height=12 object-fit="contain"
                               text "1w" font-size=12 color="#6b7280"
                     if e.name != "chat"
                       text (e.name == "home" ? "Fixture" : e.name == "detail" ? "Detail" : e.name == "rows" ? "Rows" : e.name == "sheet" ? "Sheet" : e.name == "plain" ? "Plain" : e.name == "note" ? "Note" : "Second") role="heading" aria-level=(e.name == "home" or e.name == "second" ? 1 : 2) testId=`title-${e.name}` flex=1

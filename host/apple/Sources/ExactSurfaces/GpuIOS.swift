@@ -61,6 +61,10 @@ final class MetalCanvasView: UIView {
         awaitingFirstFrame = false
         metalLayer.isHidden = false
     }
+    func hidePicture() {
+        awaitingFirstFrame = false
+        metalLayer.isHidden = true
+    }
 }
 
 /// The process's spare canvas layers, their drawables kept (`MetalCanvasView`).
@@ -376,6 +380,9 @@ final class CanvasesHost {
         e.id = bytes.withUnsafeBufferPointer { m.create($0.baseAddress, bytes.count, ptr, w, h) }
         e.presentable = e.id != 0
         if e.id == 0 { FileHandle.standardError.write(Data("exact gpu: \(m.error())\n".utf8)); return }
+        if let session, !m.giveStorage(e.id, session: session) {
+            failed = m.error(); m.destroy(e.id); e.id = 0; e.presentable = false; return
+        }
         e.performance = false
         e.module = m
         updatePerformanceTimer()
@@ -765,7 +772,7 @@ final class CanvasesHost {
         // to submit for it, and its tick's frame is still to draw.
         let drew = m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1)
         if drew { recorded(m); e.drawnTick = tick; drawn += 1 }
-        e.waiting = !drew
+        e.waiting = (m.presentationFlags?(e.id) ?? 0) & 4 == 0 && !drew
         // A module that cannot say when a first frame is shown (`gpu_seen`):
         // the frame just recorded is presented by this tick's flush.
         if drew, metal.awaitingFirstFrame, m.seen == nil, r < 2 { DispatchQueue.main.async { metal.reveal() } }

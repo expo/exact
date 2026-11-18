@@ -55,17 +55,15 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
         let now = self.now();
         let (x, y) = (x / self.scale, y / self.scale);
-        let r = match action {
-            0 => self.p.pointer_down(x, y, now).map(|_| ()),
-            1 => self.p.pointer_up(x, y, now).map(|_| ()),
-            2 => self.p.pointer_move(x, y, now).map(|_| ()),
-            4 => {
-                self.p.long_press(x, y, now);
-                Ok(())
-            }
-            _ => self.p.pointer_cancel(now),
-        };
+        let r = self.p.reader_touch(action, x, y, now);
         self.touched(action, x, y, now, r);
+    }
+
+    /// Whether a touch is down on the reader's view, said where Android
+    /// delivers it and before the reader routes it
+    /// ([`crate::presenter::Presenter::set_touching`]).
+    pub fn touching(&mut self, on: bool) -> bool {
+        self.p.set_touching(on)
     }
 
     /// A finger past the touch's first (0 down, 1 up, 2 move, 3 cancel) at

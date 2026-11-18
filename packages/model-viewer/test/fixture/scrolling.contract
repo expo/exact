@@ -1,0 +1,35 @@
+use ModelViewerState from "@exact/model-viewer"
+
+component ScrollingPage
+  props
+    viewer: ModelViewerState
+    src: string
+  state controls = true
+  state picked = ""
+  action pick(name: string)
+    picked = name
+  action requestPick(e: PointerEvent)
+    postMessage(`pick ${e.offsetX} ${e.offsetY}`, "modelViewer")
+  action interactive
+    controls = true
+  action passive
+    controls = false
+  view
+    scroll width="100%" height="100%" testId="model-scroll"
+      column gap=16 padding=16
+        text "Models in a scrolling page" role="heading" aria-level=1
+        row gap=8
+          button press=interactive testId="interactive-mode"
+            text "Camera controls"
+          button press=passive testId="passive-mode"
+            text "Page scrolling"
+        text "Scroll from the page beside the interactive model." height=180 flex-shrink=0 testId="before-models"
+        if controls
+          canvas surface=modelViewer(src=src, cameraControls=true, cameraOrbit="0deg 90deg 105%") message=pick width=280 height=240 flex-shrink=0 role="group" aria-label="Interactive cached model" testId="controlled-model"
+        else
+          canvas surface=modelViewer(src=src, cameraOrbit="0deg 90deg 105%") pointerup=requestPick message=pick width=280 height=240 flex-shrink=0 role="group" aria-label="Passive cached model" testId="passive-model"
+        text viewer.cameraOrbit testId="scroll-orbit" font-variant-numeric="tabular-nums"
+        text "Page scrolling leaves camera controls unsaid. Drag or wheel over the model to scroll; tap it to pick."
+        text picked testId="scroll-picked"
+        text viewer.error testId="scroll-error"
+        text "Content below the model keeps the page scrollable." height=900 flex-shrink=0 testId="after-models"

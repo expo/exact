@@ -184,6 +184,24 @@ pub(super) fn fixture() -> (Probe, Value) {
 #include <stdio.h>
 #include <string.h>
 void gpu_load_headless(void) {}
+static char storage_paths[8192];
+static uint32_t storage_calls, storage_id, storage_len;
+static bool storage_refused;
+void test_refuse_storage(bool refused) { storage_refused = refused; }
+bool gpu_storage(uint32_t id, const unsigned char *data, size_t dl,
+    const unsigned char *cache, size_t cl, const unsigned char *temporary, size_t tl) {
+  storage_id = id; storage_calls++;
+  if (dl + cl + tl + 2 > sizeof(storage_paths)) return false;
+  memcpy(storage_paths, data, dl); storage_paths[dl] = '|';
+  memcpy(storage_paths + dl + 1, cache, cl); storage_paths[dl + cl + 1] = '|';
+  memcpy(storage_paths + dl + cl + 2, temporary, tl);
+  storage_len = (uint32_t)(dl + cl + tl + 2);
+  return !storage_refused;
+}
+const char *test_storage_paths(void) { return storage_paths; }
+uint32_t test_storage_len(void) { return storage_len; }
+uint32_t test_storage_calls(void) { return storage_calls; }
+uint32_t test_storage_id(void) { return storage_id; }
 static uint32_t motion_calls;
 static bool reduced_motion;
 void gpu_reduced_motion(bool on) { motion_calls++; reduced_motion = on; }
@@ -213,7 +231,10 @@ uint32_t gpu_placement(uint32_t id, uint32_t index, float *h, size_t len) {
 void gpu_unload(void) {}
 uint32_t gpu_create_headless(void) { return 1; }
 static char bound[4096];
+static uint32_t bind_calls;
+uint32_t test_bind_calls(void) { return bind_calls; }
 uint32_t gpu_bind_at(uint32_t id, const unsigned char *text, size_t len, double at) {
+  bind_calls++;
   if (len >= sizeof(bound)) return 1; memcpy(bound, text, len); bound[len] = 0; return 0;
 }
 const char *test_bound(void) { return bound; }
@@ -872,10 +893,10 @@ fn a_reload_that_renumbers_the_tree_gives_the_canvas_its_own_surface() {
         (&"world".into(), true, Some(canvas))
     );
 
-    assert!(p
-        .reload(&plan("      text \"new\"\n"), ())
-        .unwrap()
-        .is_none());
+    assert!(
+        p.reload(&plan("      text \"new\"\n"), ()).unwrap()
+            == crate::presenter::ReloadResult::Applied(None)
+    );
     p.sync_surfaces();
     let after = canvases(&p);
     assert_eq!(after.len(), 1, "{after:?}");

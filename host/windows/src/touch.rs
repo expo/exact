@@ -22,6 +22,8 @@ pub(crate) enum Phase {
 pub(crate) struct Touches {
     held: Option<(u64, PointerKind, (f32, f32))>,
     pinch: Option<Pinch>,
+    /// Every finger and pen down, the contact's or not.
+    down: Vec<u64>,
 }
 
 /// Two fingers on a zoomable scroller: its pinch (LLP 1057.001.000 §5,
@@ -51,6 +53,34 @@ impl Touches {
     /// scroller the two fingers pinch it until either lifts. Answers
     /// whether a contact went down.
     pub(crate) fn contact<D: DataSource>(
+        &mut self,
+        p: &mut Presenter<D>,
+        (id, phase): (u64, Phase),
+        at: (f32, f32),
+        now: f64,
+        pen: impl FnOnce() -> bool,
+    ) -> bool {
+        match phase {
+            Phase::Started => self.down.push(id),
+            Phase::Moved => {}
+            Phase::Ended | Phase::Cancelled => self.down.retain(|down| *down != id),
+        }
+        // Said before the routing below, which follows one contact: a
+        // replacement waits for every finger and pen (LLP 1029.000.002 D9).
+        if phase != Phase::Moved {
+            p.set_touching(!self.down.is_empty());
+        }
+        let went_down = self.route(p, (id, phase), at, now, pen);
+        // A cancelled touch has no up, and after a second finger took the
+        // contact neither lift is routed: the press the presenter heard
+        // ends with the last of them.
+        if phase != Phase::Moved && self.down.is_empty() {
+            p.pointer_released();
+        }
+        went_down
+    }
+
+    fn route<D: DataSource>(
         &mut self,
         p: &mut Presenter<D>,
         (id, phase): (u64, Phase),
@@ -137,11 +167,37 @@ impl Touches {
         true
     }
 
-    /// The window lost the focus, and its contact with it.
-    pub(crate) fn forget<D: DataSource>(&mut self, p: &mut Presenter<D>) {
+    /// The window lost the focus: the contact ends, its lift perhaps going
+    /// to another window. Each finger and pen stays down for a replacement
+    /// (LLP 1029.000.002 D9) until its own lift or cancel, or until
+    /// [`Touches::prune`] finds it up.
+    pub(crate) fn forget<D: DataSource>(&mut self, p: &mut Presenter<D>, now: f64) {
         self.held = None;
         if let Some(pinch) = self.pinch.take() {
             p.zoom_pinch_ended(pinch.container);
+        }
+        let _ = p.pointer_abandoned(now);
+    }
+
+    /// Whether a finger or a pen is down.
+    pub(crate) fn any_down(&self) -> bool {
+        !self.down.is_empty()
+    }
+
+    /// Lets go of each finger or pen that `down` says is no longer in
+    /// contact, for one whose lift another window heard.
+    pub(crate) fn prune<D: DataSource>(
+        &mut self,
+        p: &mut Presenter<D>,
+        down: impl Fn(u64) -> bool,
+    ) {
+        if self.down.is_empty() {
+            return;
+        }
+        self.down.retain(|id| down(*id));
+        if self.down.is_empty() {
+            p.set_touching(false);
+            p.pointer_released();
         }
     }
 
@@ -167,6 +223,21 @@ impl Touches {
         );
         self.contact(p, (touch.id, phase), at, now, || pen(touch.id))
     }
+}
+
+/// Whether pointer `id` is still in contact, as Windows has it now
+/// ([GetPointerInfo](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-getpointerinfo)
+/// fails for a pointer no longer active).
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub(crate) fn in_contact(id: u64) -> bool {
+    use windows_sys::Win32::UI::Input::Pointer::{
+        GetPointerInfo, POINTER_FLAG_INCONTACT, POINTER_INFO,
+    };
+    // SAFETY: POINTER_INFO is plain data, all zeros valid; the call writes it.
+    let mut info: POINTER_INFO = unsafe { std::mem::zeroed() };
+    let active = unsafe { GetPointerInfo(id as u32, &mut info) } != 0;
+    active && info.pointerFlags & POINTER_FLAG_INCONTACT != 0
 }
 
 /// Whether pointer `id` is a pen's: winit's touch id is the message's
@@ -264,15 +335,39 @@ mod tests {
             (60., 120.),
             false
         ));
+        // Both are still down, and hold a replacement until the last lifts.
+        let held = |p: &mut Presenter<()>| {
+            let result = p.reload(&plan, ()).unwrap();
+            result == exact_painted::presenter::ReloadResult::Held("pointer")
+        };
+        assert!(held(&mut p));
+        // A third finger is a contact of its own, and its lift leaves two down.
+        send(&mut p, &mut t, 20, Phase::Started, (200., 250.), false);
+        send(&mut p, &mut t, 20, Phase::Ended, (200., 250.), false);
+        assert!(held(&mut p));
         send(&mut p, &mut t, 11, Phase::Ended, (60., 120.), false);
+        assert!(held(&mut p));
         send(&mut p, &mut t, 10, Phase::Ended, (20., 120.), false);
-        // Nor does a cancelled touch, or one the window's blur let go.
+        assert!(!held(&mut p));
+        // Nor does a cancelled touch.
         send(&mut p, &mut t, 12, Phase::Started, (20., 120.), false);
         send(&mut p, &mut t, 12, Phase::Cancelled, (20., 120.), false);
+        assert!(!held(&mut p));
+        // The window's blur ends the contact, so the lift presses nothing, and
+        // the finger holds a replacement until it lifts.
         send(&mut p, &mut t, 13, Phase::Started, (20., 120.), false);
-        t.forget(&mut p);
-        p.pointer_lost(1000.).unwrap();
+        t.forget(&mut p, 1000.);
+        assert!(held(&mut p), "the finger is still down");
         assert!(!send(&mut p, &mut t, 13, Phase::Ended, (20., 120.), false));
+        assert!(!held(&mut p));
+        assert_eq!(seen(&p), Some(Value::str(" touch pen press")));
+        // One whose lift another window heard is let go when Windows says it is up.
+        send(&mut p, &mut t, 15, Phase::Started, (20., 120.), false);
+        t.forget(&mut p, 1001.);
+        t.prune(&mut p, |_| true);
+        assert!(held(&mut p));
+        t.prune(&mut p, |_| false);
+        assert!(!held(&mut p));
         assert_eq!(seen(&p), Some(Value::str(" touch pen press")));
         // Then a finger presses again.
         send(&mut p, &mut t, 14, Phase::Started, (20., 120.), false);

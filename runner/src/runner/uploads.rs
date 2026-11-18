@@ -196,9 +196,7 @@ impl<D: DataSource> Runner<D> {
     /// Resource `i`'s identifying arguments among `args`: its `with`
     /// context reaches the source but does not identify the upload.
     pub(super) fn upload_identity<'a>(&self, i: usize, args: &'a [Value]) -> &'a [Value] {
-        let row = self.resource_row(i);
-        let n = (row.args.len as usize).saturating_sub(usize::from(row.context));
-        &args[..n.min(args.len())]
+        &args[..self.identity_len(i).min(args.len())]
     }
 
     /// How resource `i`'s upload asked at `args` stands, if it was asked.

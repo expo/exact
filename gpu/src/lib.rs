@@ -34,6 +34,7 @@ use std::rc::Rc as SurfaceRef;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc as SurfaceRef;
 
+pub use exact_color as color;
 pub use exact_plan::{surface_arguments, Value};
 pub use wgpu;
 
@@ -51,6 +52,7 @@ mod frame;
 #[cfg(all(test, target_os = "macos"))]
 mod hdr_tests;
 mod input;
+mod instance;
 mod pace;
 mod performance;
 pub use pace::{lower_cap, FrameTiming, HostTiming, ThermalState};
@@ -67,6 +69,8 @@ mod target;
 pub use target::ColorSpace;
 pub mod tier;
 pub use tier::{set_thread_tier, set_tier, tier, GpuTier};
+#[cfg(not(target_arch = "wasm32"))]
+mod storage;
 mod uniform;
 #[cfg(windows)]
 mod window;
@@ -215,6 +219,17 @@ impl AssetChanges {
 
 /// What an app implements per canvas.
 pub trait Surface {
+    /// This canvas's native session directories, once before its first bind.
+    /// Copy paths you keep; create directories only when needed. The paths map
+    /// to `app:/data`, `app:/cache` and `app:/tmp`, including named agent stores.
+    /// Not called on the web, which has no native filesystem paths.
+    fn storage(
+        &mut self,
+        _data: &std::path::Path,
+        _cache: &std::path::Path,
+        _temporary: &std::path::Path,
+    ) {
+    }
     /// Presented raster size relative to device pixels; layout stays in CSS pixels.
     /// The compositor stretches it to the canvas box. Finite (0, 1]; invalid values
     /// use 1. Explicit readback/fixture sizes are unaffected.
@@ -311,10 +326,20 @@ pub trait Surface {
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) -> bool;
-    /// Whether the last render produced a complete image. On native targets,
-    /// false retains the last image and retries; the browser owns web presentation.
+    /// Whether the last render completed the current picture, qualifying its
+    /// `presented` record. Native presentation follows [`Surface::frame_presentable`].
     fn frame_ready(&self) -> bool {
         true
+    }
+    /// Whether the last render may be shown, including a retained picture while
+    /// its replacement prepares. Only `frame_ready` qualifies the current generation.
+    fn frame_presentable(&self) -> bool {
+        self.frame_ready()
+    }
+    /// The canvas has no picture, including any previously presented image.
+    /// Hosts show its styles and children until a new complete frame is presented.
+    fn is_empty(&self) -> bool {
+        false
     }
     /// The commands the last `render` recorded were submitted: map what it
     /// copied for reading (a map cannot precede the submit of the copy).
@@ -651,32 +676,6 @@ pub(crate) fn view_format(config: &wgpu::SurfaceConfiguration) -> wgpu::TextureF
         .first()
         .copied()
         .unwrap_or(config.format)
-}
-
-impl Instance {
-    #[cfg(not(target_arch = "wasm32"))]
-    fn offscreen_format(&self) -> wgpu::TextureFormat {
-        if self.surface.srgb_target() {
-            wgpu::TextureFormat::Rgba8UnormSrgb
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
-        }
-    }
-
-    fn has_ring(&self) -> bool {
-        #[cfg(target_os = "android")]
-        return self.ring.is_some();
-        #[cfg(not(target_os = "android"))]
-        false
-    }
-
-    fn drain(&mut self) {
-        self.messages.extend(self.surface.messages());
-        if let Some(record) = self.surface.published() {
-            self.published = Some(record);
-        }
-        self.presented.generation(self.surface.generation());
-    }
 }
 
 /// One direct child's texture on the device (LLP 1014 D5).
@@ -1094,6 +1093,10 @@ impl Module {
                 inst.bound = true;
                 inst.inputs = inputs.to_vec();
                 inst.dirty = true;
+                #[cfg(windows)]
+                if inst.surface.is_empty() {
+                    self.discard_window_picture(id);
+                }
                 true
             }
             Err(SurfaceError(e)) => {

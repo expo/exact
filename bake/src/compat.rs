@@ -83,7 +83,10 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// launch module asks the prelude for (`__exact_launch_settings`) before any
 /// other module runs: an older prelude has none, and gives the module the
 /// build's value whatever the launch set.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 14;
+/// 15: `exactIdleTimeout` on an event stream or a byte stream (LLP 1016.000
+/// D11), which a prelude of 9 to 14 refuses, failing the stream. A bundle
+/// names the option alike on a socket, so every use needs 15.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 15;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -95,12 +98,12 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 14;
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
 const RUNTIME_OPTIONS: [(u32, &str); 28] = [
+    (15, "exactIdleTimeout"),
     (14, "__exact_launch_settings"),
     (13, "exactPrefetch"),
     (13, "exactPreload"),
     (12, "exactProtocols"),
     (11, "cache"),
-    (9, "exactIdleTimeout"),
     (8, "Response"),
     (8, "ReadableStream"),
     (8, "TransformStream"),
@@ -124,6 +127,24 @@ const RUNTIME_OPTIONS: [(u32, &str); 28] = [
     (2, "redirect"),
     (1, "exactBodyFrom"),
 ];
+
+/// The names in a TypeScript bundle that can leave an answer pending past its
+/// turn, for the executor to resume (LLP 1047.001 D12): the prelude's timers,
+/// `setTimeout` and `AbortSignal.timeout` (`js/src/time.js`), and
+/// `scheduler.yield()`. A native slot's `native.later()` is the bake's to
+/// report (it knows the slot); every other wait is on a grant's work (fetch,
+/// storage, secrets, listeners), which the grant links.
+const HOST_WORK_NAMES: [&str; 3] = ["setTimeout", "AbortSignal", "scheduler"];
+
+/// Whether a TypeScript `bundle` can hand the executor work no grant names: it
+/// names one of [`HOST_WORK_NAMES`] anywhere. A name in a string or a comment
+/// counts too: such a module links I/O it may not need. A name the module
+/// builds at run time (`globalThis["set" + "Timeout"]`) is not seen; the host
+/// refuses that work by name.
+pub fn typescript_host_work(bundle: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bundle);
+    HOST_WORK_NAMES.iter().any(|name| text.contains(name))
+}
 
 /// The lowest runtime a TypeScript `bundle` needs: the newest whose option
 /// it names anywhere (a property name survives bundling), else none. A push
@@ -186,6 +207,9 @@ pub struct Compat {
     pub painter: Option<&'static str>,
     /// The manifest declares the game engine; outside the compatibility hash (LLP 1149 D12).
     pub game: bool,
+    /// The app's sources hand the executor work no grant names (LLP 1047.001
+    /// D12); outside the hash, which the linked set it selects is in.
+    pub host_work: bool,
 }
 
 impl Compat {
@@ -237,15 +261,18 @@ impl Compat {
 /// The compatibility id of the app at `app_dir` built for `platform`
 /// (`ios`, `macos`, `linux`, `web`) and `target` (the triple), with the
 /// data crate's grants when the caller has a `DataSource` to ask (the bake
-/// does; command-line callers can supply the declarations from its receipt).
+/// does; command-line callers can supply the declarations from its receipt),
+/// and whether that source hands the executor work no grant names
+/// ([`crate::hands_out_work!`], LLP 1047.001 D12).
 pub fn compatibility_id(
     app_dir: &Path,
     platform: &str,
     target: &str,
     manifest: &Manifest,
     grants: Option<&str>,
+    host_work: bool,
 ) -> Result<Compat, String> {
-    compatibility_id_sources(app_dir, platform, target, manifest, grants, None)
+    compatibility_id_sources(app_dir, platform, target, manifest, grants, None, host_work)
 }
 
 /// Compatibility for separately owned language sources. With `rust_grants`,
@@ -259,6 +286,7 @@ pub fn compatibility_id_sources(
     manifest: &Manifest,
     grants: Option<&str>,
     rust_grants: Option<&str>,
+    host_work: bool,
 ) -> Result<Compat, String> {
     compatibility_id_sources_with_entries(
         app_dir,
@@ -268,11 +296,13 @@ pub fn compatibility_id_sources(
         grants,
         rust_grants,
         None,
+        host_work,
     )
 }
 
 /// Reuse entry plans already compiled for source declarations and refresh checks.
 /// With `None`, compatibility generation compiles the manifest's entries itself.
+#[allow(clippy::too_many_arguments)]
 pub fn compatibility_id_sources_with_entries(
     app_dir: &Path,
     platform: &str,
@@ -281,6 +311,7 @@ pub fn compatibility_id_sources_with_entries(
     grants: Option<&str>,
     rust_grants: Option<&str>,
     entries: Option<&std::collections::BTreeMap<String, contract::snapshot::Entry>>,
+    host_work: bool,
 ) -> Result<Compat, String> {
     compatibility_id_pinned(
         app_dir,
@@ -292,6 +323,7 @@ pub fn compatibility_id_sources_with_entries(
         entries,
         None,
         &serde_json::Value::Null,
+        host_work,
     )
 }
 
@@ -318,6 +350,8 @@ pub(crate) fn store_level_of(manifest: &Manifest, platform: &str, appstore: bool
 /// replacement module pairs: delivery checks runtime, identity, grants and
 /// module policy. Android also records `hermesBytecode` in the cohort because
 /// a device discovers a version mismatch only after download (LLP 1030.006 D4).
+/// `host_work` is the Rust source's [`crate::hands_out_work!`]; the module's
+/// is its receipt's `typescriptHostWork` (LLP 1047.001 D12).
 #[allow(clippy::too_many_arguments)]
 pub fn compatibility_id_pinned(
     app_dir: &Path,
@@ -329,7 +363,11 @@ pub fn compatibility_id_pinned(
     entries: Option<&std::collections::BTreeMap<String, contract::snapshot::Entry>>,
     module: Option<&serde_json::Value>,
     settings: &serde_json::Value,
+    host_work: bool,
 ) -> Result<Compat, String> {
+    // A receipt that does not say links the executor: it cannot be shown unneeded.
+    let host_work =
+        host_work || module.is_some_and(|m| m["typescriptHostWork"].as_bool() != Some(false));
     // Cargo must rebake even when only the explicit trust selection changes.
     // External apps call this same entrypoint from their own build scripts.
     if std::env::var_os("OUT_DIR").is_some() {
@@ -372,6 +410,7 @@ pub fn compatibility_id_pinned(
         ceiling.as_deref().or(grants),
         &trust,
     )?;
+    compat.host_work = host_work;
     if preloads
         .as_array()
         .is_some_and(|entries| !entries.is_empty())
@@ -452,7 +491,7 @@ pub fn compatibility_id_pinned(
         // A native artifact's composition is part of its cohort (LLP
         // 1047.001 D2), named before anything binds the id.
         if platform != "web" {
-            crate::link::name_into(&mut compat, manifest, Path::new(&out))?;
+            crate::link::name_into(&mut compat, app_dir, manifest, Path::new(&out), entries)?;
         }
         crate::receipt::emit(
             &mut compat,
@@ -931,6 +970,7 @@ fn compatibility_with_trust(
             .json
             .get("game")
             .is_some_and(serde_json::Value::is_object),
+        host_work: false,
     })
 }
 

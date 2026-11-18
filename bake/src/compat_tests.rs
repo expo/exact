@@ -401,6 +401,7 @@ fn grants_that_do_not_parse_refuse_the_bake_naming_the_line() {
             &manifest,
             Some(grants),
             rust,
+            false,
         )
     };
     // Crew's set (the port report of 2026-09-24, F1).
@@ -1104,7 +1105,7 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     assert_eq!(needs(b"fetch(u, {cache: 'no-store'})"), 11);
     assert_eq!(
         needs(b"fetch(u, {cache: 'default', exactIdleTimeout: n})"),
-        11
+        15
     );
     assert_eq!(needs(b"fetch(u, {exactBodyFrom: p})"), 1);
     assert_eq!(needs(b"fetch(u, {exactBodyTo: p, exactBodyFrom: q})"), 4);
@@ -1132,7 +1133,7 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     // LLP 1016.000 D11's idle timeout.
     assert_eq!(
         needs(b"fetch(u, {exactStream: m, exactIdleTimeout: 6e4})"),
-        9
+        15
     );
     assert_eq!(
         needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
@@ -1188,6 +1189,7 @@ fn a_stored_module_client_pins_its_module_into_the_id() {
             None,
             module.as_ref(),
             &serde_json::Value::Null,
+            false,
         )
     };
     let receipt = |sha: &str| Some(serde_json::json!({"module": {"sha256": sha}}));
@@ -1426,7 +1428,8 @@ fn the_apple_bundles_languages_are_in_the_id() {
     let m = Manifest::read(&dir).unwrap();
     let ids = || {
         let compat = |platform| {
-            super::compatibility_id(&dir, platform, "aarch64-apple-ios", &m, Some("")).unwrap()
+            super::compatibility_id(&dir, platform, "aarch64-apple-ios", &m, Some(""), false)
+                .unwrap()
         };
         let (ios, macos, web) = (compat("ios"), compat("macos"), compat("web"));
         assert_eq!(

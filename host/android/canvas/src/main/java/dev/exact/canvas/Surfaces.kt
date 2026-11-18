@@ -105,8 +105,13 @@ internal class Pane(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        // One press, from the first finger's down ([MotionEvent.ACTION_DOWN]) to the last one's lift
+        // ([MotionEvent.ACTION_UP]): exact2 holds a replacement while it is down (LLP 1029.000.002 D9). A second
+        // finger coming or going is a move of the press, and only the system's cancel is a cancel.
         val action = when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> 0; MotionEvent.ACTION_UP -> 1; MotionEvent.ACTION_MOVE -> 2; else -> 3
+            MotionEvent.ACTION_DOWN -> 0; MotionEvent.ACTION_UP -> 1; MotionEvent.ACTION_CANCEL -> 3
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> 2
+            else -> return true
         }
         if (action == 1) Exact.touched = e.eventTime
         touch(action, e.x, e.y)

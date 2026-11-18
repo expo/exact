@@ -1,6 +1,7 @@
 import { views, ask, shownValue, host, INHERITED_CSS, now, root, iframeLoading, waiting, httpHelpers, loadGpuIfNeeded, heldNamed, loadAfterPaint, stageLoaded, loadStage, agentMode, gpuInPlay, register, seek, postSurface, deferFulfill, documentsGlue, picker, t0, log, readOut, presence, forgettable, writeIn, pageFacts, pageChanged, foldChanged, followOffset, pieces, moduleReady, SETTLE_DEADLINE_MS, mediaAttached, GLIDE_BOUND_MS, collections, settleCandidate } from "../glue.js";
 import { inertAncestor, routeFlags, navigation, environment, preferFold, foldEnv, typedControl, settleValue } from "../navigation.js";
 import { applyBatch, sendBatch } from "./commit.js";
+import { replacements } from "./boot.js";
 function nodeDetail(id, plan = false) {
   const el = views.get(id);
   if (!el || !el.isConnected) {
@@ -334,6 +335,9 @@ function agentReply(request) {
           return st;
         }
         st.presence = presence.live?.observation() ?? [];
+        // The runner's report of the last replacement, with what a waiting one waits for (LLP 1029.000.002 D9).
+        const pending = replacements.pending;
+        st.replacement = st.replacement || pending ? { ...st.replacement, pending } : null;
         for (const [c, t] of forgettable) {
           const s = c.retrying && st.streams?.find((s) => s.ticket === t);
           if (s) {
@@ -780,8 +784,11 @@ async function clock(request) {
     }
     let batch;
     for (let steps = 0, stops = 0;;) {
+      // Deliver each world's record before later timers (LLP 1012, LLP 1046.003).
+      const worlds = globalThis.exact.gpu?.clock?.(false), nextTick = worlds?.nextTickAt;
+      const worldAt = worlds?.reply?.world?.length || nextTick > host.agentClock ? Math.min(to, nextTick > host.agentClock ? nextTick : to, host.flowDue > host.agentClock ? host.flowDue : to) : to;
       // while a view declares a layout transition, each due time is a batch of its own, which presence plays from that time (as the native hosts lay out there), in stops apart from the 4096
-      const layout = host.flowDue != null && host.flowDue < to && stops < 36e3 && presence.live?.tracking(), sensing = host.wasm.exact_sensor_inputs?.() ? host.agentClock + 1e3 / 60 : Infinity, at = Math.min(layout ? Math.max(host.flowDue, host.agentClock) : to, sensing), waited = (host.flowDue != null && host.flowDue <= at || host.flowLanding) && await waitForInflight(deadline) && await mediaAttached(deadline, host.sizes), held = waited && steps < 4096;
+      const layout = host.flowDue != null && host.flowDue < to && stops < 36e3 && presence.live?.tracking(), sensing = host.wasm.exact_sensor_inputs?.() ? host.agentClock + 1e3 / 60 : Infinity, at = Math.min(layout ? Math.max(host.flowDue, host.agentClock) : to, sensing, worldAt), waited = (host.flowDue != null && host.flowDue <= at || host.flowLanding) && await waitForInflight(deadline) && await mediaAttached(deadline, host.sizes), held = waited && steps < 4096;
       // a canvas the substitute feeds a sensor steps a display frame at a time, that frame's samples handed it first (LLP 1133.013 D6)
       if (sensing !== Infinity) {
         globalThis.exact.gpu?.sensors?.(JSON.parse(readOut(host.wasm.exact_sensor_events(at))));

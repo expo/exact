@@ -865,7 +865,7 @@ extension NavigationHost {
             // A picture a face draws (an avatar's photo) loads although its header is hidden.
             c.barPictures = (shape.leading + shape.trailing).compactMap { $0.badge?.pictureNode }
             for id in c.barPictures { presenter.views[id]?.drawnByBar = true }
-            if !c.barPictures.isEmpty { presenter.session?.rasters.visibilityChanged() }
+            if !c.barPictures.isEmpty { presenter.session?.rasters?.visibilityChanged() }
         }
     }
 
@@ -915,7 +915,7 @@ extension NavigationHost {
         if control.selectedSegmentIndex != selected, !pending { control.selectedSegmentIndex = selected }
         if control.selectedSegmentIndex == selected { segments.press.settled = selected }
         control.accessibilityIdentifier = list?.props["testId"]
-        control.segmentLabels = tabs.map(SegmentHost.segmentLabel)
+        control.segmentLabels = tabs.map(LabelledSegmentedControl.segmentLabel)
         control.segmentIDs = tabs.map { $0.props["testId"] }
         control.segmentOwners = tabs.map(\.id)
         control.segmentUnavailable = tabs.map { $0.disabled || $0.ariaUnavailable }
@@ -999,6 +999,8 @@ extension NavigationHost {
         // The field itself, which XCUITest finds as a search field and a
         // person types in, carries the test id (LLP 1116 D2).
         if bar.searchTextField.accessibilityIdentifier != field.props["testId"] { bar.searchTextField.accessibilityIdentifier = field.props["testId"] }
+        // Its name is the field's `aria-label`, as an `input`'s is; with none, UIKit's (the placeholder).
+        if bar.searchTextField.accessibilityLabel != field.props["accessibilityLabel"] { bar.searchTextField.accessibilityLabel = field.props["accessibilityLabel"] }
         #endif
     }
 

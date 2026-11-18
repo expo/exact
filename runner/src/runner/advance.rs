@@ -442,7 +442,7 @@ impl<D: DataSource> Runner<D> {
                 needs_apply: false,
             };
         }
-        let unseen = self.wake_stops_timers();
+        let unseen = self.invocation_stops_timers();
         let deadline = self
             .wake_deadline()
             .filter(|d| now_ms.is_finite() && *d <= now_ms);
@@ -450,7 +450,7 @@ impl<D: DataSource> Runner<D> {
             let mut a = self.advance_steps(now_ms, until_request, timers && !unseen);
             if a.error.is_none() && !a.stopped_on_request && !a.needs_apply {
                 let at_ms = self.now_ms;
-                let (woke, error) = self.step_wakes();
+                let (woke, error) = self.step_invocations();
                 a.receipts
                     .extend(woke.into_iter().map(|receipt| Timed { at_ms, receipt }));
                 a.error = error;
@@ -536,7 +536,9 @@ impl<D: DataSource> Runner<D> {
                 .timers
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| timers || (self.timer_row(*i).change && !self.wake_stops_timers()))
+                .filter(|(i, _)| {
+                    timers || (self.timer_row(*i).change && !self.invocation_stops_timers())
+                })
                 .filter(|(i, _)| frames || !self.timer_row(*i).frame)
                 .map(|(i, _)| (i, self.timer_execution(i)))
                 .filter(|(_, at)| *at <= now_ms)

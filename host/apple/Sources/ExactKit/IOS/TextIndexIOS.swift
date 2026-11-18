@@ -48,6 +48,7 @@ extension PlainView {
         NodeView.textRasterAncestryChanged(self)
         NodeView.textGeometry &+= 1
         ScrollMembership.epoch &+= 1
+        NodeView.scrollLayoutEpoch &+= 1
     }
 }
 

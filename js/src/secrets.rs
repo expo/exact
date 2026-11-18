@@ -258,6 +258,11 @@ impl Shared {
             if write["name"].as_str() != Some(&name) {
                 return Err("secret lease does not cover this name".into());
             }
+            // A request with effects the holder makes (store.js `secretEffect`).
+            if write["effect"] == true {
+                lease.begin_effect()?;
+                return Ok(None);
+            }
             store
                 .check_exclusive(&name)
                 .map_err(super::door::store_error)?;
@@ -266,6 +271,10 @@ impl Shared {
                 serde_json::Value::Null => None,
                 _ => return Err("secret lease: invalid value".into()),
             };
+            // A write that changes nothing is no write, as `Store::set` has it, and arms nothing.
+            if lease.read()?.as_deref() == value {
+                return Ok(None);
+            }
             lease.write(value)?;
             match value {
                 Some(value) => store.set_durable(&name, value),

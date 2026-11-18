@@ -270,8 +270,7 @@ pub fn push(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal
     commit(r, result)
 }
 
-/// Rewrite the top visit while keeping its id and owning tab. A stack's
-/// first visit is replaced as any other, by any route's location.
+/// Rewrite the top visit, at any depth, keeping its id and owning tab.
 pub fn replace(table: &Table, r: Router, location: &str) -> (Router, Option<Refusal>) {
     if r.tabs.is_empty() {
         return open(table, r, location);
@@ -307,7 +306,7 @@ pub fn back(_table: &Table, mut r: Router) -> (Router, Option<Refusal>) {
     (r, None)
 }
 
-/// Show a retained tab; reselecting the current tab pops it to its root position.
+/// Show a retained tab; reselecting the current tab pops it to its first visit.
 /// A declared tab a rooted launch left out is seeded at its root.
 /// An unknown tab leaves the entire value unchanged and reports one refusal.
 pub fn select(table: &Table, r: Router, name: &str) -> (Router, Option<Refusal>) {

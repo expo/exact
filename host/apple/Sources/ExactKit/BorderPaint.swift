@@ -54,7 +54,7 @@ package enum BorderPaint {
     /// reduce again in the content box, as `paint` reduces the padding
     /// edge's in the padding box. So the content meets the border's inner
     /// curve, as in Chrome, which reduces both inner curves.
-    static func contentRadii(_ radii: [CGSize], outer: CGRect, inner: CGRect) -> [CGSize] {
+    static package func contentRadii(_ radii: [CGSize], outer: CGRect, inner: CGRect) -> [CGSize] {
         let r = reduced(radii, in: outer)
         let left = inner.minX - outer.minX, right = outer.maxX - inner.maxX
         let top = inner.minY - outer.minY, bottom = outer.maxY - inner.maxY

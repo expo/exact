@@ -1,6 +1,10 @@
 //! A stream stays pending until its mapper commits the first value (LLP 1016.000 D1).
 use exact_kernel::{Kernel, PropId};
 use exact_plan::Value;
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     Answer, DataError, DataSource, Message, Outcome, Request, Runner, Store, Target,
 };
@@ -52,7 +56,7 @@ impl DataSource for Source {
             _ => panic!("unexpected outcome: {outcome:?}"),
         };
         match data.as_str() {
-            "yield" => Ok(Answer::Later(Request::continuation(17))),
+            "yield" => Ok(Answer::Later(Request::continuation::<TestWork>(17))),
             "reject" => Err(DataError::Unavailable("the mapper rejected".into())),
             _ => Ok(Answer::Now(Value::list(
                 data.split_whitespace().map(Value::str).collect(),

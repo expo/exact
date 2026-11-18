@@ -96,7 +96,7 @@ object Native {
     /** What is under a point of the view (pixels), for the reader to decide what a drag from there is (LLP 1115.001
      * D7.3) and whose a touch there is (D8): the axes exact2's own gestures there claim (bit 0 sideways, bit 1 up
      * and down; bit 2: the latter is a sheet's drag alone, which a hosted view that disallows interception keeps,
-     * [Contacts]), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
+     * [Contacts]; bits 3 and 4: a nested sheet takes an upward or downward finger drag), a count, the hosted text field the touch is for (0: none; [Fields]), and eleven numbers a scroller,
      * innermost first: its id, flags (bit 0 it takes a sideways drag from here, bit 1 one up or down, bit 2 its
      * rows are a node the reader can move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its `refreshing`
      * is true, bits 6 and 7 its `keyboardDismissMode`), its revision, then as float bits its offset (x, y), its farthest offset
@@ -186,6 +186,11 @@ object Native {
      * [id] ([android.view.MotionEvent.getPointerId]). The canvas holding the touch takes it where it lands on that
      * canvas; where no canvas holds the touch, a second finger cancels it. */
     @JvmStatic external fun finger(action: Int, id: Int, x: Float, y: Float)
+    /** Whether a finger, a pen or a mouse button is down on the view: true at the touch's down, before the reader
+     * routes it, and false at its last lift or the system's cancel. A scroll, a field or a hosted view takes a touch
+     * that is still down, and exact2 then hears a cancel and no up ([touch]); a replacement waits for the finger
+     * itself (LLP 1029.000.002 D9). Whether one was waiting for this lift, and so wants a turn. */
+    @JvmStatic external fun touching(on: Boolean): Boolean
     /** What happened in the window the reader made for surface [serial] of the top layer ([Surfaces], LLP 1115.001
      * D10), on the host's thread: a touch ([what] 0 down, 1 up, 2 move, 3 cancel) at ([x], [y]), pixels from the
      * window's own top left; the system dismissed the window (8: a tap outside a menu, Back, Escape); the reader
@@ -236,7 +241,8 @@ object Native {
     /** A buffered canvas's newest frame (any thread): generation (24 bits), slot (8), serial (32); -1 none yet, -2 no
      * buffers on this device. */
     @JvmStatic external fun canvasFrame(view: Int): Long
-    /** -1 attachment refused, 0 waiting, 1 first window frame submitted to the compositor. Any thread. */
+    /** -1 attachment refused, 0 waiting, 1 handed to the compositor, 2 submitted, 3 explicitly empty.
+     * Any thread; an empty canvas shows its own styles. */
     @JvmStatic external fun canvasReady(view: Int): Int
     /** That frame's buffer, or null. */
     @JvmStatic external fun canvasBuffer(view: Int): android.hardware.HardwareBuffer?

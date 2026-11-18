@@ -933,7 +933,7 @@ test('the largest text pass leaves native menu substitutes out of page scrolling
     { id: 11, type: 'Text', props: { testId: 'below-fold' } },
   ];
   const observation = { viewport: { w: 390, h: 844 }, items: [{ id: 1 }], advice: [{ kind: 'menu', id: 9 }] };
-  const s = { host: 'web', resize: async () => {}, prefer: async () => {}, clock: async () => {},
+  const s = { host: 'web', state: async () => ({}), resize: async () => {}, prefer: async () => {}, clock: async () => {},
     op: async req => req.op === 'tree' ? { nodes } : observation,
     carrier: { reveal: async id => { revealed.push(id); return { scrolled: false }; } } };
   const result = await largestText(s, 'menu open');
@@ -1429,20 +1429,25 @@ test('verify retains an earlier tour server crash after a later tour test succee
     const ports=await real('port-lock.mjs');
     mock.module(at('port-lock.mjs'),()=>({...ports,holderOf:async()=>null,takePort:async()=>()=>{}}));
     mock.module('node:net',()=>({createServer:()=>({once(){},listen(o,done){done();},close(done){done();}})}));
-    let child=null, end=null, launches=0, touring=false, tours=0;
+    let child=null, group=null, token=null, launches=0, touring=false, tours=0;
+    // The server's supervisor is substituted: its group holds one server, whose start and exit it reports on stdout, and whose end it records.
+    const supervised=()=>{
+      let say, out, end;
+      const group={alive:true,exit(status){if(!group.alive)return;group.alive=false;say(new TextEncoder().encode(JSON.stringify(status)+'\\n'));}};
+      child={pid:65000,exitCode:null,signalCode:null,stdout:new ReadableStream({start(c){out=c;say=b=>c.enqueue(b);say(new TextEncoder().encode('{"started":true,"group":65000}\\n'));}}),stderr:new ReadableStream({start(c){c.close();}}),
+        exited:new Promise(done=>{end=done;}),kill(){group.exit({exitCode:null,signalCode:'SIGKILL'});writeFileSync(dir+'/.exact/verify/ended-65000',JSON.stringify({group:65000,token}));out.close();child.exitCode=0;end(0);}};
+      return group;
+    };
     const spawnServer=Bun.spawn;
     spyOn(Bun,'spawn').mockImplementation((args,o)=>{
-      if(args[1]!=='server.ts')return spawnServer(args,o);
-      launches++;
-      child={pid:65000,exitCode:null,signalCode:null,stderr:new ReadableStream({start(c){c.close();}}),exited:new Promise(done=>{end=done;})};
-      return child;
+      if(args[2]!=='supervise')return spawnServer(args,o);
+      launches++;token=args[5];group=supervised();return child;
     });
     spyOn(process,'kill').mockImplementation((pid,signal)=>{
-      assert.equal(pid,-65000);child.signalCode=signal;end(143);return true;
+      assert.equal(pid,-65000);
+      if(!signal){if(group.alive)return true;throw Object.assign(new Error('no such group'),{code:'ESRCH'});}
+      group.exit({exitCode:null,signalCode:signal});return true;
     });
-    const cp=await import('node:child_process'), spawn=cp.spawnSync;
-    mock.module('node:child_process',()=>({...cp,spawnSync:(cmd,args,o)=>cmd==='ps'
-      ? {status:0,stdout:child?.exitCode==null && !child?.signalCode && child ? '65000 65000 S original' : ''} : spawn(cmd,args,o)}));
     spyOn(globalThis,'fetch').mockImplementation(async()=>{if(!child)throw new Error('not ready');return new Response('ok');});
     const server=await real('app-server.mjs');
     mock.module(at('app-server.mjs'),()=>({...server,appServer:()=>({entry:'server.ts',args:[],url:'http://127.0.0.1:1',port:1,database:false})}));
@@ -1450,9 +1455,9 @@ test('verify retains an earlier tour server crash after a later tour test succee
     mock.module(at('agent-check.mjs'),()=>({judge:()=>[],checkOp:async()=>({text:'check web · light: no findings (text fits)',check:[{viewport:{w:390,h:844},scheme:'light',findings:[]}]})}));
     mock.module(at('agent.mjs'),()=>({open:async()=>{
       const tour=touring ? ++tours : 0;
-      if(tour===2)writeFileSync(dir+'/later.json',JSON.stringify({launches,alive:child.exitCode==null && !child.signalCode}));
+      if(tour===2)writeFileSync(dir+'/later.json',JSON.stringify({launches,alive:group.alive}));
       return {host:'web',now:0,carrier:{reset:async()=>{}},
-        clock:async()=>{if(tour===1 && child.exitCode==null){child.exitCode=23;end(23);}return{};},
+        clock:async()=>{if(tour===1)group.exit({exitCode:23,signalCode:null});return{};},
         state:async()=>({mutationRequests:0,resources:{},background:{done:0,failed:0}}),tree:async()=>({nodes:[]}),
         op:async()=>({clock:0,nodes:[],lines:[],viewport:{w:390,h:844}}),logs:async()=>({lines:[]}),prefer:async()=>({}),resize:async()=>{},screenshot:async()=>{},close:async()=>{}};
     }}));

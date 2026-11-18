@@ -19,6 +19,7 @@ import { runInNewContext } from 'node:vm';
 import { installLock } from '../../scripts/filesystem.mjs';
 import { appSources } from '../web/serve.mjs';
 import { loopWebDist } from '../../scripts/web-build.mjs';
+import { engagement } from '../web/engagement.js';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -145,6 +146,378 @@ ${second ? '' : '  state removed = 1\n'}  action bump
       expect((await page.evaluate(() => exact.agentSettled({ op: 'logs' }))).generation).toBe(generation);
     }
   } finally { await browser?.close(); await loop?.stop(); rmSync(dir, { recursive: true, force: true }); }
+}, 180000);
+
+test('a document replacement waits for composition and carries the completed text', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-composition-reload-'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Composition', app: { id: 'test.composition', name: 'Composition' } }));
+  const contract = label => `component App
+  state draft = ""
+  action edit(value)
+    draft = value
+  view
+    column
+      input value=draft input=edit testId="draft"
+      text "${label}" testId="label"
+`;
+  writeFileSync(join(dir, 'app.contract'), contract('before'));
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(loop.base);
+    await page.getByTestId('draft').focus();
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.imeSetComposition', { text: 'にほん', selectionStart: 3, selectionEnd: 3 });
+    const built = new Promise(ok => page.on('console', message => {
+      if (message.text().includes('exact dev reload: held')) ok();
+    }));
+    writeFileSync(join(dir, 'app.contract'), contract('after'));
+    await Promise.race([built, page.waitForFunction(() => document.querySelector('[data-testid="label"]')?.textContent === 'after')]);
+    expect(await page.getByTestId('label').textContent()).toBe('before');
+    await cdp.send('Input.insertText', { text: '日本' });
+    await page.waitForFunction(() => document.querySelector('[data-testid="label"]')?.textContent === 'after');
+    expect(await page.getByTestId('draft').inputValue()).toBe('日本');
+  } finally {
+    await browser?.close();
+    await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180000);
+
+/** An expression for each target's boundary over the one `engagement` both ask (host/web/engagement.js). */
+function replacementSource(target) {
+  const source = readFileSync(join(ROOT, target === 'js' ? 'host/web-js/dev.mjs' : 'host/web/wasm/boot.js'), 'utf8');
+  const start = target === 'js' ? source.indexOf('function replacementBoundary(engagement)') : source.indexOf('export const replacements = (() => {');
+  return target === 'js' ? `(${source.slice(start)})(${engagement})`
+    : `(engagement => ${source.slice(start + 'export const replacements = '.length, source.indexOf('})();', start) + 4)})(${engagement})`;
+}
+
+test.each(['js', 'wasm'])('a %s replacement keeps a held pointer across field focus changes', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<input id="a"><input id="b">');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)}` });
+    await page.locator('#a').focus();
+    const box = await page.locator('#b').boundingBox();
+    await page.mouse.move(box.x + 5, box.y + 5);
+    await page.mouse.down();
+    expect(await page.evaluate(async () => {
+      globalThis.cleared = false;
+      boundary.wait().then(() => globalThis.cleared = true);
+      const channel = new MessageChannel();
+      await new Promise(ok => { channel.port1.onmessage = ok; channel.port2.postMessage(null); });
+      channel.port1.close(); channel.port2.close();
+      return { active: document.activeElement.id, pending: boundary.pending, cleared };
+    })).toEqual({ active: 'b', pending: 'pointer', cleared: false });
+    await page.mouse.up();
+    await page.waitForFunction(() => globalThis.cleared);
+  } finally { await browser.close(); }
+});
+
+test.each(['js', 'wasm'])('a %s replacement waits for a scrolling touch to lift', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage({ hasTouch: true, isMobile: true, viewport: { width: 400, height: 600 } });
+    await page.setContent('<meta name="viewport" content="width=device-width"><div style="height:3000px">Scroll</div>');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)};
+      globalThis.cancelled = false;
+      addEventListener('pointercancel', () => cancelled = true);` });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 100, y: 400 }] });
+    await page.evaluate(() => { globalThis.cleared = false; boundary.wait().then(() => cleared = true); });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 100, y: 100 }] });
+    await page.waitForFunction(() => cancelled);
+    expect(await page.evaluate(() => ({ cleared, pending: boundary.pending }))).toEqual({ cleared: false, pending: 'pointer' });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForFunction(() => cleared);
+  } finally { await browser.close(); }
+});
+
+test.each(['js', 'wasm'])('a %s replacement is not held by a drag its handler cancelled', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="grip" draggable="true" style="width:120px;height:120px;background:#888"></div>');
+    // As Exact's transform handler does: the browser then sends no dragend and no drop.
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)};
+      globalThis.cancelled = 0;
+      document.getElementById('grip').addEventListener('dragstart', e => { cancelled++; e.preventDefault(); });` });
+    const box = await page.locator('#grip').boundingBox();
+    await page.mouse.move(box.x + 20, box.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 70, box.y + 70, { steps: 8 });
+    await page.waitForFunction(() => cancelled > 0);
+    await page.evaluate(() => { globalThis.cleared = false; boundary.wait().then(() => cleared = true); });
+    expect(await page.evaluate(() => ({ cleared, pending: boundary.pending }))).toEqual({ cleared: false, pending: 'pointer' });
+    await page.mouse.up();
+    await page.waitForFunction(() => cleared, null, { timeout: 3000 });
+    expect(await page.evaluate(() => boundary.pending)).toBeNull();
+  } finally { await browser.close(); }
+});
+
+// The window's blur ends no hold: the button, the finger or Safari's pinch is still down, and its release, a
+// buttonless move or `pagehide` ends it.
+test.each(['js', 'wasm'])('a %s replacement stays held when the window blurs mid-interaction', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage({ hasTouch: true });
+    await page.setContent('<div id="photo" style="width:200px;height:200px"></div>');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)};
+      globalThis.pinch = type => document.getElementById('photo').dispatchEvent(new Event(type, { bubbles: true }));` });
+    const cdp = await page.context().newCDPSession(page);
+    const blurred = () => page.evaluate(async () => {
+      globalThis.cleared = false;
+      boundary.wait().then(() => cleared = true);
+      dispatchEvent(new FocusEvent('blur'));
+      const channel = new MessageChannel();
+      await new Promise(ok => { channel.port1.onmessage = ok; channel.port2.postMessage(null); });
+      channel.port1.close(); channel.port2.close();
+      return { cleared, pending: boundary.pending };
+    });
+    const ended = () => page.waitForFunction(() => cleared && boundary.pending === null, null, { timeout: 3000 });
+    await page.mouse.move(50, 50);
+    await page.mouse.down();
+    expect(await blurred()).toEqual({ cleared: false, pending: 'pointer' });
+    await page.mouse.up();
+    await ended();
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 50, y: 50 }] });
+    expect(await blurred()).toEqual({ cleared: false, pending: 'pointer' });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await ended();
+    await page.evaluate(() => pinch('gesturestart'));
+    expect(await blurred()).toEqual({ cleared: false, pending: 'gesture' });
+    await page.evaluate(() => pinch('gestureend'));
+    await ended();
+  } finally { await browser.close(); }
+});
+
+// Safari brackets a trackpad pinch with its own events, which both targets' zoom handlers hear (zoom.js,
+// motion-glue.js); no pointer is down. Dispatched here as Safari does, on the element under the gesture.
+test.each(['js', 'wasm'])("a %s replacement waits for Safari's trackpad pinch to end", async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="photo" style="width:200px;height:200px"></div>');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)};
+      globalThis.pinch = type => document.getElementById('photo').dispatchEvent(new Event(type, { bubbles: true }));` });
+    const state = () => page.evaluate(async () => {
+      const channel = new MessageChannel();
+      await new Promise(ok => { channel.port1.onmessage = ok; channel.port2.postMessage(null); });
+      channel.port1.close(); channel.port2.close();
+      return { cleared, pending: boundary.pending };
+    });
+    await page.evaluate(() => { pinch('gesturestart'); globalThis.cleared = false; boundary.wait().then(() => cleared = true); });
+    expect(await state()).toEqual({ cleared: false, pending: 'gesture' });
+    await page.evaluate(() => pinch('gesturechange'));
+    expect(await state()).toEqual({ cleared: false, pending: 'gesture' });
+    await page.evaluate(() => pinch('gestureend'));
+    await page.waitForFunction(() => cleared, null, { timeout: 3000 });
+    expect(await page.evaluate(() => boundary.pending)).toBeNull();
+  } finally { await browser.close(); }
+});
+
+// The event that ends an interaction goes to the element it began on, and to no ancestor once that element has left
+// the document (a touch's, https://w3c.github.io/touch-events/#event-touchend; a drag's, at its source node,
+// https://html.spec.whatwg.org/multipage/dnd.html#dndevents).
+test.each(['js', 'wasm'])('a %s replacement resumes when a touched element is removed before the finger lifts', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage({ hasTouch: true, isMobile: true, viewport: { width: 400, height: 600 } });
+    await page.setContent('<meta name="viewport" content="width=device-width"><div id="row" style="height:120px;background:#888"></div>');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)}` });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 100, y: 60 }] });
+    await page.evaluate(() => { globalThis.cleared = false; boundary.wait().then(() => cleared = true); document.getElementById('row').remove(); });
+    expect(await page.evaluate(() => ({ cleared, pending: boundary.pending }))).toEqual({ cleared: false, pending: 'pointer' });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.waitForFunction(() => cleared, null, { timeout: 3000 });
+    expect(await page.evaluate(() => boundary.pending)).toBeNull();
+  } finally { await browser.close(); }
+});
+
+test.each(['js', 'wasm'])("a %s replacement resumes when a drag's source is removed before the drop", async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="grip" draggable="true" style="width:120px;height:120px;background:#888"></div><div style="height:300px"></div>');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)};
+      globalThis.ended = false;
+      const grip = document.getElementById('grip');
+      grip.addEventListener('dragend', () => ended = true);` });
+    await page.mouse.move(20, 20);
+    await page.mouse.down();
+    await page.mouse.move(80, 200, { steps: 8 });
+    await page.evaluate(() => { globalThis.cleared = false; boundary.wait().then(() => cleared = true); grip.remove(); });
+    expect(await page.evaluate(() => ({ cleared, pending: boundary.pending }))).toEqual({ cleared: false, pending: 'gesture' });
+    await page.mouse.up();
+    await page.waitForFunction(() => ended);
+    await page.waitForFunction(() => cleared, null, { timeout: 3000 });
+    expect(await page.evaluate(() => boundary.pending)).toBeNull();
+  } finally { await browser.close(); }
+});
+
+// As Safari sends a pinch's end: to the element the gesture began on.
+test.each(['js', 'wasm'])('a %s replacement resumes when a pinched element is removed before the pinch ends', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<div id="photo" style="width:200px;height:200px"></div>');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)};
+      globalThis.photo = document.getElementById('photo');` });
+    await page.evaluate(() => {
+      photo.dispatchEvent(new Event('gesturestart', { bubbles: true }));
+      globalThis.cleared = false; boundary.wait().then(() => cleared = true);
+      photo.remove();
+    });
+    expect(await page.evaluate(() => ({ cleared, pending: boundary.pending }))).toEqual({ cleared: false, pending: 'gesture' });
+    await page.evaluate(() => photo.dispatchEvent(new Event('gestureend', { bubbles: true })));
+    await page.waitForFunction(() => cleared, null, { timeout: 3000 });
+    expect(await page.evaluate(() => boundary.pending)).toBeNull();
+  } finally { await browser.close(); }
+});
+
+test.each(['js', 'wasm'])('a %s replacement resumes when its composing field is removed', async target => {
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<input id="draft">');
+    await page.addScriptTag({ content: `globalThis.boundary = ${replacementSource(target)}` });
+    await page.locator('#draft').focus();
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.imeSetComposition', { text: 'にほん', selectionStart: 3, selectionEnd: 3 });
+    await page.evaluate(() => { globalThis.cleared = false; boundary.wait().then(() => cleared = true); });
+    expect(await page.evaluate(() => boundary.pending)).toBe('composition');
+    await page.locator('#draft').evaluate(el => el.remove());
+    await page.waitForFunction(() => cleared, null, { timeout: 2000 });
+    expect(await page.evaluate(() => boundary.pending)).toBeNull();
+  } finally { await browser.close(); }
+});
+
+test.each(['input', 'composition', 'background', 'candidate', 'failure'])('a checkpoint handoff handles late %s', async interaction => {
+  const composing = interaction === 'composition', background = interaction === 'background';
+  const dir = mkdtempSync(join(tmpdir(), 'exact-late-composition-'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Handoff', app: { id: 'test.handoff', name: 'Handoff' } }));
+  const contract = label => `component App
+  state draft = ""
+  state count = 0
+  action edit(value)
+    draft = value
+  action tick
+    count = count + 1
+  task pulse mount
+    every(100000, tick)
+  view
+    column
+      input value=draft input=edit testId="draft"
+      text count.toString() testId="count"
+      text "${label}" testId="label"
+`;
+  writeFileSync(join(dir, 'app.contract'), contract('before'));
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    // Deliver a new generation through the page's stream without depending on file watching.
+    await page.addInitScript(() => {
+      globalThis.documentToken = crypto.randomUUID();
+      const Stream = EventSource;
+      globalThis.EventSource = class extends Stream {
+        constructor(...args) { super(...args); if (args[0] === '/__dev/page') globalThis.devStream = this; }
+      };
+    });
+    await page.goto(loop.base);
+    await page.getByTestId('draft').focus();
+    let reached, release;
+    const intercepted = new Promise(ok => reached = ok), gate = new Promise(ok => release = ok);
+    let posts = 0;
+    await page.route('**/__dev/checkpoint?**', async route => {
+      if (background) {
+        // Fire the app's timer on every POST. Background writes must not
+        // turn a handoff into an endless sequence of newer checkpoints.
+        await page.evaluate(() => globalThis.exact.clock.timers[0].action());
+        if (++posts === 6) { reached(); await gate; }
+        await route.continue();
+        return;
+      }
+      if (++posts === 1) {
+        await page.evaluate(() => globalThis.exact.clock.timers[0].action());
+        reached(); await gate;
+      }
+      if (interaction === 'failure') { await route.fulfill({ status: 500, body: 'handoff refused' }); return; }
+      await route.continue();
+    });
+    const documentToken = await page.evaluate(() => globalThis.documentToken);
+    const retained = interaction === 'failure' ? page.waitForEvent('console', { predicate: m => m.text().includes('checkpoint handoff failed') }) : null;
+    await page.evaluate(() => devStream.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ reload: 2 }) })));
+    if (background) {
+      await Promise.race([intercepted, page.waitForFunction(token => globalThis.documentToken !== token, documentToken)]);
+      release();
+      expect(posts).toBe(1);
+    } else await intercepted;
+    const cdp = await page.context().newCDPSession(page);
+    if (composing) await cdp.send('Input.imeSetComposition', { text: 'にほん', selectionStart: 3, selectionEnd: 3 });
+    else if (interaction === 'input') await page.getByTestId('draft').fill('late input');
+    else if (interaction === 'candidate') await page.evaluate(() => devStream.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ reload: 3 }) })));
+    release();
+    if (retained) {
+      await retained;
+      expect(await page.evaluate(() => globalThis.documentToken)).toBe(documentToken);
+      expect(await page.getByTestId('count').textContent()).toBe('1');
+      expect(posts).toBe(1);
+      return;
+    }
+    if (composing) {
+      await page.waitForFunction(token => globalThis.__exactDevReplacement?.pending === 'composition' || globalThis.documentToken !== token, documentToken);
+      expect(await page.evaluate(() => globalThis.documentToken)).toBe(documentToken);
+      await cdp.send('Input.insertText', { text: '日本' });
+    }
+    await page.waitForFunction(token => globalThis.documentToken !== token, documentToken);
+    await page.waitForFunction(() => globalThis.exact?.ready);
+    await page.evaluate(() => globalThis.exact.ready);
+    expect(await page.getByTestId('draft').inputValue()).toBe(composing ? '日本' : interaction === 'input' ? 'late input' : '');
+    expect(await page.getByTestId('count').textContent()).toBe(background ? '0' : '1');
+    expect(posts).toBe(background ? 1 : 2);
+  } finally {
+    await browser?.close(); await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180000);
+
+test('a held reload abandoned at pagehide runs when the page is shown again', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-pagehide-reload-'));
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Pagehide', app: { id: 'test.pagehide', name: 'Pagehide' } }));
+  writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "label" testId="label"\n');
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.addInitScript(() => {
+      globalThis.documentToken = crypto.randomUUID();
+      const Stream = EventSource;
+      globalThis.EventSource = class extends Stream {
+        constructor(...args) { super(...args); if (args[0] === '/__dev/page') globalThis.devStream = this; }
+      };
+    });
+    await page.goto(loop.base);
+    await page.waitForFunction(() => globalThis.exact?.ready);
+    const documentToken = await page.evaluate(() => globalThis.documentToken);
+    await page.mouse.move(5, 5);
+    await page.mouse.down();
+    await page.evaluate(() => devStream.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ reload: 2 }) })));
+    await page.waitForFunction(() => globalThis.__exactDevReplacement?.pending === 'pointer');
+    // Into the back-forward cache with the reload held, and back: the document is the same one.
+    await page.evaluate(() => { dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })); });
+    await page.evaluate(() => { dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })); });
+    await page.waitForFunction(token => globalThis.documentToken !== token, documentToken, { timeout: 15000 });
+  } finally {
+    await browser?.close(); await loop?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
 }, 180000);
 
 test.each([false, true])('a blurred autofocus field stays blurred after a carried reload (bound: %s)', async bound => {

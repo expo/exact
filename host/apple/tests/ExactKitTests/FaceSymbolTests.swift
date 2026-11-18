@@ -8,6 +8,7 @@ import XCTest
 import ExactCore
 import CExact
 @testable import ExactKit
+@testable import ExactImages
 
 /// Stage 9 A2 (LLP 1121 D10): a native control's face draws an svg-only
 /// icon (no `sf`, a template path) as a template image the control tints as

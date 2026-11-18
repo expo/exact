@@ -23,7 +23,7 @@ impl DataSource for Data {
         if source == "detect" {
             self.detector = Some(self.serial);
         }
-        let mut request = Request::continuation(self.serial);
+        let mut request = Request::continuation::<crate::host_work::TestWork>(self.serial);
         request.fetch = Some(self.serial);
         Ok(Answer::Later(request))
     }

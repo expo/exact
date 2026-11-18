@@ -23,7 +23,7 @@ fn main() {
     };
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
     let source = exact_crypto_svg_data::Crypto::default();
-    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(source.grants()))
+    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(source.grants()), exact_bake::hands_out_work!(source))
         .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();
     assert_eq!(compat.inputs["store"]["L"], "0", "app.json deploy.store must stay 0 (no update store)");

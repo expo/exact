@@ -13,25 +13,6 @@ use crate::vm::Frame;
 use exact_kernel::PropId;
 use exact_plan::{BindingKind, Plan, RegionKind, RegionsId};
 
-/// Rows mounted out of their port and rows that showed, for the commit that
-/// carries the batch ([`exact_kernel::Kernel::await_view`],
-/// [`exact_kernel::CommitReceipt::revealed`]).
-#[derive(Debug, Default, Clone)]
-pub struct RowsShown {
-    /// Wrappers of rows mounted (or bound again) out of the port.
-    pub awaiting: Vec<exact_kernel::ViewId>,
-    /// Wrappers of rows that waited and now show.
-    pub revealed: Vec<exact_kernel::ViewId>,
-}
-
-impl RowsShown {
-    /// Add another update's rows.
-    pub fn extend(&mut self, other: RowsShown) {
-        self.awaiting.extend(other.awaiting);
-        self.revealed.extend(other.revealed);
-    }
-}
-
 impl Collection {
     /// What a glimpse owes ([`super::CollectionFill::glimpse`]): of the
     /// `visible` rows not `mounted`, the `limit` whose middles are nearest

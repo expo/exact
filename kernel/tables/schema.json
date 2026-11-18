@@ -2492,6 +2492,22 @@
       ],
       "default": "none"
     },
+    "SafeAreaIgnoreAlign": {
+      "_comment": "@ref LLP 1123 D4: the alignments of `-exact-safe-area-ignore`'s `align`, SwiftUI's `Alignment` values, with `leading` and `trailing` resolved against the box's `direction`. none is 0, no `align`.",
+      "values": [
+        "none",
+        "center",
+        "top",
+        "bottom",
+        "leading",
+        "trailing",
+        "top-leading",
+        "top-trailing",
+        "bottom-leading",
+        "bottom-trailing"
+      ],
+      "default": "none"
+    },
     "SafeArea": {
       "_comment": "@ref LLP 1123 D4: `-exact-safe-area`, the keywords of the safe_area row, not a wire enum. auto is 0 (every edge cleared); each edge is one bit in this order (top bit 0, left bit 3); none is every edge.",
       "values": [
@@ -5149,7 +5165,7 @@
       "rare": true,
       "layout": true,
       "default": 0,
-      "_comment": "@ref LLP 1123 D4: `-exact-safe-area`, on a content owner's authored root (a route, a tab panel): the edges whose automatic clearance of the owner's chrome is off, as SwiftUI's `ignoresSafeArea(.container, edges:)`, as SafeArea's bits. `auto` (0) clears every edge, `none` none. Authored padding and the owner's allocation are unchanged; `var(--exact-safe-area-inset-*)` still reads the inset. Not inherited."
+      "_comment": "Main's model (expo/exact#36), which LLP 1123 replaces at activation with D4's `-exact-safe-area-ignore` (§\"What it replaces\"): `-exact-safe-area`, on a content owner's authored root (a route, a tab panel): the edges whose automatic clearance of the owner's chrome is off, as SwiftUI's `ignoresSafeArea(.container, edges:)`, as SafeArea's bits. `auto` (0) clears every edge, `none` none. Authored padding and the owner's allocation are unchanged; `var(--exact-safe-area-inset-*)` still reads the inset. Not inherited."
     },
     {
       "bit": 243,
@@ -5159,7 +5175,7 @@
       "inherited": true,
       "layout": true,
       "default": 0,
-      "_comment": "@ref LLP 1123 D9: an author's `--exact-safe-area-inset-top`, a length with no percentage, which this node's subtree reads through `var(--exact-safe-area-inset-top)` in place of the content owner's local inset. Inherited as its computed length (an `em` resolved where it is declared); one invalid at computed-value time (a `var()` cycle) is unset. The host's own value stands on each owner's root, below any authored one."
+      "_comment": "Main's model, which LLP 1123 replaces at activation with D5's captures (§\"What it replaces\"): an author's `--exact-safe-area-inset-top`, a length with no percentage, which this node's subtree reads through `var(--exact-safe-area-inset-top)` in place of the content owner's local inset. Inherited as its computed length (an `em` resolved where it is declared); one invalid at computed-value time (a `var()` cycle) is unset. The host's own value stands on each owner's root, below any authored one."
     },
     {
       "bit": 244,
@@ -5284,7 +5300,7 @@
       "rare": true,
       "layout": true,
       "default": 0,
-      "_comment": "@ref LLP 1123 D4: `-exact-safe-area-ignore: <regions>? <edges>?`, SwiftUI's `ignoresSafeArea(_:edges:)`: the regions whose depth a box takes, on the edges named, as SafeAreaIgnore's bits. Naming no region takes both, and naming no edge takes every edge; `start` and `end` resolve against the box's `direction`. On a content owner's authored root, the host does not clear an edge whose container region the root takes (D3). `none`, the initial value, takes nothing. Not inherited."
+      "_comment": "@ref LLP 1123 D4: `-exact-safe-area-ignore: <regions>? <edges>?`, SwiftUI's `ignoresSafeArea(_:edges:)`: the regions whose depth a box takes, on the edges named, as SafeAreaIgnore's bits. Naming no region takes both, and naming no edge takes every edge; `start` and `end` resolve against the box's `direction`. On a content owner's authored root, the host does not clear an edge whose container region the root takes (D3). Inside the root, a box that ignores the container region is laid out as `display: flow-root` and gives its parent no baseline, and one whose margin box touches the area its parent passes it takes that area to its outer side, the band filling its padding there first, its place otherwise as though it did not touch. `none`, the initial value, takes nothing. Not inherited."
     },
     {
       "bit": 257,
@@ -5363,6 +5379,14 @@
       "admitsAuto": true,
       "layout": true,
       "default": 0
+    },
+    {
+      "bit": 265,
+      "field": "safe_area_ignore_align",
+      "rare": true,
+      "codec": "enum:SafeAreaIgnoreAlign",
+      "layout": true,
+      "_comment": "@ref LLP 1123 D4: `-exact-safe-area-ignore`'s `align <alignment>`, SwiftUI's `ignoresSafeArea(_:edges:alignment:)`: a box that touches the area it ignores keeps the size it is laid out at and is placed by the alignment within what its margin box reaches. `none`, the initial value, extends the box instead. Not inherited."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
@@ -5783,6 +5807,10 @@
         },
         "frames": {
           "member": "frames",
+          "codec": "bool"
+        },
+        "presentOnly": {
+          "member": "presentOnly",
           "codec": "bool"
         },
         "canvasOwed": {
@@ -6509,6 +6537,76 @@
       "radio",
       "radio",
       "M4 9h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM6 9l12-5M10.5 14.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM14 13h4M14 16h4"
+    ],
+    [
+      "running",
+      "figure.run",
+      "M16.6 4.5a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0ZM7 11l2.5-3 4 .5 3 2.5 3-1M13.5 8.5 11 14l3.5 2-.5 5M11 14l-2.5 3.5H4"
+    ],
+    [
+      "walking",
+      "figure.walk",
+      "M14.1 4.5a1.6 1.6 0 1 1-3.2 0 1.6 1.6 0 0 1 3.2 0ZM8.5 13l.5-2.5 3-2 3 2.5 1.5 2M12 8.5 11.5 14l2.5 3.5 1 3.5M11.5 14 10 17.5 8 21"
+    ],
+    [
+      "stopwatch",
+      "stopwatch",
+      "M20 13.5a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM10 2h4M12 2v3.5M12 13.5V9M18.4 7.1l1.2-1.2"
+    ],
+    [
+      "timer",
+      "timer",
+      "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 3v4M12 12 8 8"
+    ],
+    [
+      "history",
+      "clock.arrow.circlepath",
+      "M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5M3.5 4v4.5H8M12 7.5V12l3 2"
+    ],
+    [
+      "ruler",
+      "ruler",
+      "M3 8h18a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1ZM6 8v3M10 8v4M14 8v3M18 8v4"
+    ],
+    [
+      "speed",
+      "gauge.with.dots.needle.67percent",
+      "M4.2 18.5a9 9 0 1 1 15.6 0M12 14l4-5"
+    ],
+    [
+      "location",
+      "location",
+      "M20.5 3.5 3.5 10.5l7 3 3 7Z"
+    ],
+    [
+      "location-fill",
+      "location.fill",
+      "M21.5 2.5 2.5 10.4l8.1 3 3 8.1Z"
+    ],
+    [
+      "location-off",
+      "location.slash",
+      "M3 3l18 18M8.5 8.5l-5 2 7 3 3 7 2-5M11.3 7.3l9.2-3.8-3.8 9.2"
+    ],
+    [
+      "location-off-fill",
+      "location.slash.fill",
+      "M3.6 2.4l18 18-1.2 1.2-18-18ZM6.2 8.8 2.5 10.4l8.1 3 3 8.1 1.6-3.7ZM9.9 7.3 21.5 2.5l-4.8 11.6Z"
+    ],
+    [
+      "skip-next",
+      "forward.end",
+      "M5 5v14l11-7ZM19 5v14"
+    ],
+    [
+      "skip-next-fill",
+      "forward.end.fill",
+      "M4 4.5v15l12-7.5ZM17.5 4.5h3v15h-3Z"
+    ],
+    [
+      "finish",
+      "flag.checkered",
+      "M5 22V3M5 4h15v10H5M10 4v10M15 4v10M5 9h15"
     ]
   ],
   "symbolAliases": [
@@ -6779,6 +6877,38 @@
     [
       "phone-android",
       "smartphone"
+    ],
+    [
+      "directions-run",
+      "running"
+    ],
+    [
+      "directions-walk",
+      "walking"
+    ],
+    [
+      "straighten",
+      "ruler"
+    ],
+    [
+      "speedometer",
+      "speed"
+    ],
+    [
+      "near-me",
+      "location"
+    ],
+    [
+      "near-me-disabled",
+      "location-off"
+    ],
+    [
+      "sports-score",
+      "finish"
+    ],
+    [
+      "checkered-flag",
+      "finish"
     ]
   ],
   "symbolGlyphs": [

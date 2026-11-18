@@ -2,10 +2,8 @@
 import Foundation
 #if os(macOS)
 import AppKit
-typealias MediaPlatformView = NSView
 #else
 import UIKit
-typealias MediaPlatformView = UIView
 #endif
 private typealias MediaCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
 private typealias MediaConfiguring = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
@@ -85,7 +83,7 @@ struct OffscreenAutoplay {
     }
 }
 
-final class VideoView {
+final class VideoView: VideoPlaying, VisibilityRefreshing {
     weak var owner: NodeView?
     #if os(iOS) || os(tvOS)
     // Player creation and the first source update together include AVKit's presentation view.
@@ -396,115 +394,3 @@ final class VideoView {
 }
 
 
-extension Presenter {
-    /// `fastSeek(id, seconds)` and `load(id)` on the video or audio with that
-    /// HTML `id`, as `focus(id)` names one.
-    func mediaCommand(_ name: String, _ args: [Any]) {
-        if name == "requestPictureInPicture" { return pictureInPicture(args) }
-        if name == "exitPictureInPicture" { return PictureInPictureHost.exit(session) }
-        let id = args.first as? String ?? ""
-        let node = views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == id })
-        guard let video = node?.video else {
-            session?.log("\(name) \"\(id)\" refused: \(node == nil ? "no live node with that id" : "not a video or audio")")
-            return
-        }
-        video.command(name, seconds: (args.count > 1 ? args[1] as? Double : nil) ?? .nan)
-    }
-}
-
-/// Optional media policy. Scroll/layout notifications coalesce without app actions
-/// or a frame clock; only a threshold crossing changes the player's paused request.
-final class VideoVisibilityHost {
-    #if os(iOS) || os(tvOS)
-    private let scrolls = ScrollMembership()
-    func changed(in scroll: UIScrollView) {
-        guard !videos.isEmpty, scrolls.contains(scroll, members: videos.values.compactMap { $0.value?.owner }) else {
-            AnimatedRasters.shared.poke()
-            return
-        }
-        changed()
-    }
-    #endif
-    private final class WeakVideo {
-        weak var value: VideoView?
-        init(_ value: VideoView) { self.value = value }
-    }
-    private var videos: [ObjectIdentifier: WeakVideo] = [:]
-    private var queued = false
-    func track(_ video: VideoView) {
-        let key = ObjectIdentifier(video)
-        if videos[key] == nil { videos[key] = WeakVideo(video) }
-        #if os(iOS) || os(tvOS)
-        ScrollMembership.epoch &+= 1
-        #endif
-        changed()
-    }
-    func remove(_ video: VideoView) {
-        videos.removeValue(forKey: ObjectIdentifier(video))
-        #if os(iOS) || os(tvOS)
-        ScrollMembership.epoch &+= 1
-        #endif
-    }
-    func reset() {
-        videos.removeAll()
-        #if os(iOS) || os(tvOS)
-        ScrollMembership.epoch &+= 1
-        #endif
-    }
-    func changed() {
-        AnimatedRasters.shared.poke()
-        guard !videos.isEmpty, !queued else { return }
-        queued = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.queued = false
-            for (key, entry) in self.videos {
-                if let video = entry.value { video.refreshVisibility() }
-                else { self.videos.removeValue(forKey: key) }
-            }
-        }
-    }
-    /// Rectangular intersection, as IntersectionObserver without trackVisibility:
-    /// ancestor clipping and the viewport count; sibling occlusion/opacity do not.
-    static func fraction(_ view: MediaPlatformView) -> CGFloat {
-        guard let window = view.window, view.bounds.width > 0, view.bounds.height > 0 else { return 0 }
-        #if os(macOS)
-        guard let root = window.contentView else { return 0 }
-        let box = view.convert(view.bounds, to: root)
-        var clipped = box.intersection(root.bounds)
-        var ancestor: NSView? = view
-        while let current = ancestor {
-            if current.isHidden { return 0 }
-            if current !== view && (current is NSClipView || current.clipsToBounds || current.layer?.masksToBounds == true) {
-                clipped = clipped.intersection(current.convert(current.bounds, to: root))
-            }
-            ancestor = current.superview
-        }
-        #else
-        let box = view.convert(view.bounds, to: window)
-        var clipped = box.intersection(window.bounds)
-        var ancestor: UIView? = view
-        while let current = ancestor {
-            if current.isHidden { return 0 }
-            if current !== view && current.clipsToBounds {
-                clipped = clipped.intersection(current.convert(current.bounds, to: window))
-            }
-            ancestor = current.superview
-        }
-        #endif
-        guard !clipped.isNull, box.width > 0, box.height > 0 else { return 0 }
-        return min(1, max(0, clipped.width * clipped.height / (box.width * box.height)))
-    }
-}
-
-#if !os(macOS)
-/// An optional module in the app's Frameworks: wrapped as `<Name>.framework`
-/// when the bundle is built for distribution (the App Store refuses loose
-/// dylibs, ITMS-90171), otherwise the loose `lib….dylib` a development build
-/// places there.
-package func embeddedModule(framework: String, dylib: String) -> String {
-    let directory = Bundle.main.privateFrameworksPath ?? Bundle.main.bundlePath
-    let wrapped = directory + "/" + framework + ".framework/" + framework
-    return FileManager.default.fileExists(atPath: wrapped) ? wrapped : directory + "/" + dylib
-}
-#endif

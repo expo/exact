@@ -3,7 +3,7 @@
 //! the grant line that admitted each, a two-way socket's state (D7), and a
 //! local listener's (LLP 1133.005 D12).
 
-use super::quote;
+use crate::json::quote;
 use crate::{DataSource, Runner};
 use std::fmt::Write as _;
 

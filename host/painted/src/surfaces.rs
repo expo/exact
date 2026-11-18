@@ -45,6 +45,7 @@ mod pixels;
 mod placed;
 mod shaders;
 mod size;
+mod storage;
 #[cfg(windows)]
 pub(crate) mod window;
 
@@ -141,6 +142,7 @@ impl Abi {
                 "gpu_placement",
                 "gpu_unload",
                 "gpu_create_headless",
+                "gpu_storage",
                 "gpu_bind_at",
                 "gpu_agent",
                 "gpu_input",
@@ -530,8 +532,8 @@ pub(crate) struct Surfaces {
     pointer: Option<(u32, f32, f32)>,
     /// The device's motion for the next canvas pointer event, when it has one.
     motion: Option<(f32, f32)>,
-    /// The secondary and middle buttons held (`PointerEvent.buttons` bits).
-    aux: u32,
+    /// The secondary, middle, back and forward buttons held (`PointerEvent.buttons` bits).
+    pub(crate) aux: u32,
     /// The canvas their first press went to: it hears their release wherever
     /// the pointer is, as the web's pointer capture.
     aux_canvas: Option<u32>,
@@ -742,6 +744,14 @@ impl Surfaces {
                     self.error = abi.error();
                     continue;
                 }
+                let roots = host.app_roots().unwrap_or_else(crate::picker::roots);
+                if !abi.storage(id, &roots) {
+                    host.log(format!(
+                        "surface {}: storage: {}",
+                        update.name,
+                        abi.error().unwrap_or_else(|| "paths unavailable".into())
+                    ));
+                }
                 self.initial_lifecycle(abi, id);
                 let owner = !self.canvases.values().any(|c| c.name == update.name);
                 let performance = owner && host.runner().wants_canvas_performance(&update.name);
@@ -787,6 +797,8 @@ impl Surfaces {
                 self.error = abi.error();
                 continue;
             }
+            #[cfg(target_os = "android")]
+            android::bound(abi, update.view, c.id);
             if !self.restore_read {
                 self.restore_read = true;
                 self.restore = std::env::var_os("EXACT_WORLD").map(|path| {
@@ -1195,7 +1207,10 @@ impl<D: DataSource> Presenter<D> {
     /// web does — the first button held is a down, the last released an up.
     pub fn pointer_aux(&mut self, bit: u32, down: bool, x: f32, y: f32, at: f64) {
         if down {
+            self.pressed |= bit;
             self.touched();
+        } else {
+            self.pressed &= !bit;
         }
         let before = self.surfaces.aux;
         self.surfaces.aux = if down { before | bit } else { before & !bit };

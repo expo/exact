@@ -66,6 +66,7 @@ export function fixture(agentMode = true) {
     activateData: () => events.push('activate'), setInterval: () => { events.push('ticker'); return 1; },
     requestAnimationFrame: () => events.push('raf'), clearInterval() {},
     ready: Promise.resolve(), moduleReady: Promise.resolve(), inputReady: true, logicInfo: null, activeModule: null,
+    replacements: { pending: null, begin() {}, current: () => true, preparing() {}, end() {}, changed() {}, wait: () => Promise.resolve(true) }, // boot.js's, with nothing holding a replacement
     page: null, // a built document's boot (LLP 1048.000 D6); these pages have none
     loadStage: () => Promise.resolve(), stageLoaded: () => true, // every stage linked (LLP 1047.000 §9)
     preferences: () => '{}', localAssetURL: source => source, pageFacts: {} /* `globalThis.exact` exposes it (LLP 1139.003 D2) */, sizes: new Set(), mediaAttached: (deadline, set = context.mediaAttaching) => Promise.all(set).then(() => true) /* glue.js's, unbounded */,

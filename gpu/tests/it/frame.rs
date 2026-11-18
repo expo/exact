@@ -106,12 +106,43 @@ impl Surface for Pending {
     }
 }
 
+struct Retained(Pending);
+impl Surface for Retained {
+    fn bind(&mut self, values: &[Value], at: Option<f64>) -> Result<(), SurfaceError> {
+        self.0.bind(values, at)
+    }
+    fn render(
+        &mut self,
+        frame: &Frame,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        self.0.render(frame, device, queue, encoder, target, format);
+        true
+    }
+    fn frame_ready(&self) -> bool {
+        self.0.frame_ready()
+    }
+    fn frame_presentable(&self) -> bool {
+        true
+    }
+    fn generation(&self) -> u64 {
+        u64::from(!self.0.frame_ready())
+    }
+}
+
 static REGISTRY: Registry = Registry {
     surfaces: &[
         ("a", 0, || Box::new(Clear("a"))),
         ("b", 0, || Box::new(Clear("b"))),
         ("f", 0, || Box::new(Fails(Clear("f"), false))),
         ("p", 0, || Box::new(Pending(Clear("p"), false))),
+        ("retained", 0, || {
+            Box::new(Retained(Pending(Clear("retained"), false)))
+        }),
         ("v", 0, || Box::<crate::validation::Misfit>::default()),
     ],
     shaders: &[],
@@ -252,6 +283,33 @@ fn counts(m: &Module) -> wgpu::hal::metal::Counts {
     unsafe { m.gpu().unwrap().queue.as_hal::<wgpu::hal::api::Metal>() }
         .expect("a Metal queue")
         .counts()
+}
+
+#[test]
+fn retained_frames_keep_presenting_without_qualifying_a_pending_replacement() {
+    let Some((mut m, [id, _], _layers)) = on_layers(["retained", "a"]) else {
+        return;
+    };
+    let mut presented = false;
+    for current in [true, false, false, true] {
+        assert!(m.bind(id, &[Value::Bool(current)], None));
+        let before = counts(&m);
+        assert_eq!(m.render(id, &frame()), Some(true));
+        assert!(m.flush());
+        assert!(m.sync());
+        let after = counts(&m);
+        assert_eq!(
+            after.presented_with_submit + after.presented_alone
+                - before.presented_with_submit
+                - before.presented_alone,
+            1,
+            "the retained animation presents each frame"
+        );
+        if let Some(record) = m.take_published(id) {
+            presented = record.contains("\"presented\":true");
+        }
+        assert_eq!(presented, current);
+    }
 }
 
 /// wgpu-core wraps each pass in transition encodings Metal has no use for,

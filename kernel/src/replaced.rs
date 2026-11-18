@@ -381,8 +381,8 @@ mod tests {
             (back.1, back.2, "0 0 24 24")
         );
         assert_eq!(symbol_path(&format!("sf/{}", back.0)), Some(role));
-        assert_eq!(symbol_path("sf/flag.checkered"), None);
-        assert_eq!(apple_symbol_name("sf/flag.checkered"), "flag.checkered");
+        assert_eq!(symbol_path("sf/flag.2.crossed"), None);
+        assert_eq!(apple_symbol_name("sf/flag.2.crossed"), "flag.2.crossed");
     }
 
     /// Stage 14 C2: an even-odd icon's path starts `evenodd:`, which

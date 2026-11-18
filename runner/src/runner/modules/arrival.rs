@@ -404,7 +404,7 @@ impl<D: DataSource> Runner<D> {
     /// waiting write fails `AbortError`; a scan behind the system's sheet
     /// (`readerUI` `system`) ends `interrupted`, and one the app draws for
     /// is suspended, and on return reads a tag still in the field.
-    pub(in crate::runner) fn arrival_visibility(&mut self, hidden: bool) {
+    pub(super) fn arrival_visibility_linked(&mut self, hidden: bool) {
         for (extension, arrival) in self.arrivals() {
             let name = |k: &str| arrival[k].as_str().unwrap_or_default().to_owned();
             if hidden {

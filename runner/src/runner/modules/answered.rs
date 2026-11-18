@@ -7,7 +7,7 @@ use serde_json::json;
 
 impl<D: DataSource> Runner<D> {
     /// The agent answered hold `hold`, already spent: §6's transitions.
-    pub(in crate::runner) fn module_answered(&mut self, hold: u64, answer: &HoldAnswer) {
+    pub(super) fn module_answered_linked(&mut self, hold: u64, answer: &HoldAnswer) {
         if self.effect_answered(hold, answer)
             || self.each_answered(hold, answer)
             || self.sheet_answered_hold(hold, answer)

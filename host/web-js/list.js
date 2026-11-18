@@ -305,10 +305,11 @@ class Collection {
   syncFixedAX() {
     if (!this.fixed) return;
     const fixed = this.fixedItems();
-    for (const item of fixed) for (const id of item.roots) {
+    for (const [side, item] of fixed.entries()) for (const id of item.roots) {
       const el = Views.get(id);
+      if (el) el.$collectionFixed = side ? 'trail' : 'lead';
       if (el?.hasAttribute('data-exact-list-item')) {
-        el.$collectionFixed = true; el.setAttribute('role', 'presentation');
+        el.setAttribute('role', 'presentation');
         if (item.hidden) {
           el.setAttribute('aria-hidden', 'true'); el.setAttribute('inert', '');
         } else {

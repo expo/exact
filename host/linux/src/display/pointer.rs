@@ -59,7 +59,8 @@ pub(super) fn dispatch<D: DataSource>(
             at,
         } => p.hardware_pad(index, connected, reading.buttons, reading.axes, at),
         // The same targeted path as VNC and agent keys: text, Escape blur and a
-        // canvas's held keys (`hardware_key`). Escape also ends a pointer hold.
+        // canvas's held keys (`hardware_key`). Escape also abandons the pointer's
+        // contact; the button stays down, and a replacement waits for its release.
         InputEvent::Key {
             code,
             shift,
@@ -70,7 +71,7 @@ pub(super) fn dispatch<D: DataSource>(
                 return Ok(());
             };
             if code == "Escape" && down {
-                p.pointer_lost(now_ms)?;
+                p.pointer_abandoned(now_ms)?;
             }
             p.hardware_key(code, key, down, repeat);
         }
@@ -235,6 +236,29 @@ component App
             .unwrap();
             assert_eq!(count(&p), if cancel.is_some() { "0" } else { "1" });
             assert_eq!(p.collection_interaction(), None);
+        }
+    }
+
+    /// Escape abandons a press with the button still down, and a lost
+    /// device has none down: a replacement waits for the first's release
+    /// (LLP 1029.000.002 D9).
+    #[test]
+    fn escape_leaves_the_button_down_and_a_lost_device_does_not() {
+        use exact_painted::presenter::ReloadResult;
+        let next = contract::compile("component App\n  view\n    text \"next\"\n").unwrap();
+        for (abandon, held) in [(press(1), true), (InputEvent::Cancel, false)] {
+            let mut p = fixture();
+            let mut at = (20., 40.);
+            let mut send = |p: &mut Presenter<()>, event, time| {
+                dispatch(p, &mut at, (400., 500.), 2., event, time).unwrap()
+            };
+            send(&mut p, InputEvent::Button(true), 0.);
+            send(&mut p, abandon, 10.);
+            let result = p.reload(&next.encode(), ()).unwrap();
+            assert_eq!(result == ReloadResult::Held("pointer"), held);
+            send(&mut p, InputEvent::Button(false), 20.);
+            p.run_commands(|| ());
+            assert_eq!(p.replacement_pending(), None);
         }
     }
 

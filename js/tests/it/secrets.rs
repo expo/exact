@@ -729,3 +729,107 @@ fn two_read_only_resources_on_an_absent_secret_settle_without_reasking_each_othe
             .all(|write| write.durable && write.value.is_none()));
     }
 }
+
+/// A module over the data crate's leases on one Keychain value, and its wake.
+fn keychain_module(
+    placement: Placement,
+    value: &str,
+) -> (Placed<Module>, Arc<Keychain>, std::sync::mpsc::Receiver<()>) {
+    let keychain = Arc::new(Keychain(Mutex::new(Some(value.into()))));
+    let leases = exact_data::secrets::Coordinator::new(
+        exact_data::secrets::Namespace::memory(),
+        keychain.clone(),
+    );
+    let mut m = module_over(placement, Arc::new(leases));
+    let (wake, woke) = std::sync::mpsc::channel();
+    m.abort_wake(Arc::new(move || {
+        let _ = wake.send(());
+    }));
+    (m, keychain, woke)
+}
+/// `secret(name)` as mutation `id`, its continuations run and its lease acquisitions granted, until it answers or
+/// waits for a request.
+fn leased(
+    m: &mut Placed<Module>,
+    s: &mut Store,
+    id: usize,
+    name: &str,
+    woke: &std::sync::mpsc::Receiver<()>,
+) -> Answer {
+    let args = [Value::str(name)];
+    let mut answer = m
+        .answer_for(Target::Mutation(id), s, "secret", &args)
+        .unwrap();
+    for _ in 0..20 {
+        let Answer::Later(r) = &answer else {
+            return answer;
+        };
+        let Some(token) = r.continuation else {
+            return answer;
+        };
+        let mut dispatch = m.dispatch(token, s);
+        while matches!(dispatch, Dispatch::Held) {
+            woke.recv_timeout(Duration::from_secs(20))
+                .expect("the backend granted the lease");
+            if let Some((_, again)) = m.release(s).into_iter().find(|(t, _)| *t == token) {
+                dispatch = again;
+            }
+        }
+        answer = m
+            .parse_for(Target::Mutation(id), s, "secret", &args, run(dispatch))
+            .unwrap();
+    }
+    panic!("a bounded owner turn")
+}
+
+// One lease at a time in an answer (LLP 1146 D5): a second inside the first is
+// refused, so no answer holds one name while it waits for another.
+#[test]
+fn a_lease_inside_a_lease_is_refused() {
+    for placement in [Placement::Main, Placement::Worker] {
+        let (mut m, keychain, woke) = keychain_module(placement, OLD);
+        let mut s = store();
+        let nested = leased(&mut m, &mut s, 0, "nested", &woke);
+        assert_eq!(text(nested), "refused:nested secret leases are unsupported");
+        assert_eq!(keychain.0.lock().unwrap().as_deref(), Some(OLD));
+    }
+}
+
+// A lease let go at a GET after a tentative write, or whose body throws after a
+// partial write under an outer catch, leaves no value for the next lease.
+#[test]
+fn an_unfinished_lease_leaves_no_tentative_value_for_the_next() {
+    for placement in [Placement::Main, Placement::Worker] {
+        let (mut m, keychain, woke) = keychain_module(placement, OLD);
+        let mut s = store();
+        let get = leased(&mut m, &mut s, 0, "tentative", &woke);
+        assert_eq!(request(&get).method, "GET");
+        m.forgotten(&s, &[]);
+        assert_eq!(text(leased(&mut m, &mut s, 1, "read-a", &woke)), "empty");
+
+        *keychain.0.lock().unwrap() = Some(OLD.into());
+        let caught = leased(&mut m, &mut s, 2, "partial", &woke);
+        assert_eq!(text(caught), "caught:body failed");
+        assert_eq!(text(leased(&mut m, &mut s, 3, "read-b", &woke)), "empty");
+    }
+}
+
+// Recovery arms as a request with effects is made inside the callback, though the callback ends before its answer
+// settles; a write of the value the lease holds is no write and arms nothing (LLP 1146 D5).
+#[test]
+fn a_lease_arms_at_its_requests_call_and_not_at_an_unchanged_write() {
+    for placement in [Placement::Main, Placement::Worker] {
+        let (mut m, keychain, woke) = keychain_module(placement, OLD);
+        let mut s = store();
+        leased(&mut m, &mut s, 0, "unawaited", &woke);
+        assert_eq!(text(leased(&mut m, &mut s, 1, "read-a", &woke)), "empty");
+
+        *keychain.0.lock().unwrap() = Some(OLD.into());
+        let mut s = store();
+        assert_eq!(
+            text(leased(&mut m, &mut s, 2, "unchanged", &woke)),
+            "caught:unchanged"
+        );
+        assert_eq!(text(leased(&mut m, &mut s, 3, "read-b", &woke)), OLD);
+    }
+}

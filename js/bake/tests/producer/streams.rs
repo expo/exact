@@ -11,7 +11,7 @@ component App
   resource timeout_again = timeout(1) as shape string
   resource idle_zero = idle_zero() as shape string
   resource idle_large = idle_large() as shape string
-  resource idle_event = idle_event() as shape string
+  resource idle_upload = idle_upload() as shape string
   resource valid = valid() as shape string
   resource stored = stored() as shape string
   view
@@ -25,7 +25,7 @@ const sources: Sources = {
   timeout: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactTimeout: 1000 }),
   idle_zero: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactIdleTimeout: 0 }),
   idle_large: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactIdleTimeout: 3600001 }),
-  idle_event: async () => await fetch('https://example.test', { exactStream: () => 'live', exactIdleTimeout: 1000 }),
+  idle_upload: async () => await fetch('https://example.test', { method: 'POST', body: 'x', exactUploadProgress: true, exactStream: () => 'live', exactIdleTimeout: 1000 }),
   valid: async () => await fetch('wss://example.test', { exactStream: () => 'live', exactIdleTimeout: 1000 }),
   stored: async (_, store, storage) => { await storage.sqlite.open('app:/data/notes.db'); return 'stored'; },
 };
@@ -46,7 +46,7 @@ fn bake_warns_once_per_resource_for_refused_stream_options_and_launch_still_refu
         ("timeout_again", "exactTimeout: a stream has no timeout"),
         ("idle_zero", "exactIdleTimeout must be an integer"),
         ("idle_large", "exactIdleTimeout must be an integer"),
-        ("idle_event", "exactIdleTimeout"),
+        ("idle_upload", "exactIdleTimeout"),
     ];
     assert_eq!(baked.warnings.len(), rejected.len(), "{:?}", baked.warnings);
     for (name, why) in rejected {
@@ -96,7 +96,7 @@ fn bake_warns_once_per_resource_for_refused_stream_options_and_launch_still_refu
         "timeout_again",
         "idle_zero",
         "idle_large",
-        "idle_event",
+        "idle_upload",
         "valid",
         "stored",
     ] {
@@ -125,7 +125,7 @@ fn bake_warns_once_per_resource_for_refused_stream_options_and_launch_still_refu
             .replace("exactTimeout: 1000", "exactIdleTimeout: 1000")
             .replace("exactIdleTimeout: 0", "exactIdleTimeout: 1000")
             .replace("exactIdleTimeout: 3600001", "exactIdleTimeout: 1000")
-            .replace("fetch('https://", "fetch('wss://"),
+            .replace("exactUploadProgress: true, ", ""),
     );
     assert!(f.bake().warnings.is_empty());
 }

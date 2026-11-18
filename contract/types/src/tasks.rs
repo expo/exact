@@ -13,7 +13,7 @@ pub(crate) fn child_owns(root: &str, child: &Component) -> String {
     let r = child.resources.iter().find(|r| r.each.is_some()).unwrap();
     let example = format!("{}{}", lower_first(name), upper_first(&r.name));
     format!(
-        "only the root, the root file's first component (`{root}`), may declare a resource over a list: `resource {} = {}(…) for …` asks once for each element, a count of requests its list sets. Declare it in `{root}` (`resource {example} = {}(…) for …`) and pass `{name}` its answers as a prop; or, where each element is a row, give the row a component of its own that renders one answer",
+        "only the root, the root file's first component (`{root}`), may declare a resource over a list (`resource {} = {}(…) for …`, one request per element). Declare it in `{root}` (`resource {example} = {}(…) for …`) and pass its answers down to `{name}` as a prop (docs/contract-for-agents.md, \"A feature's requests\")",
         r.name, r.source, r.source
     )
 }

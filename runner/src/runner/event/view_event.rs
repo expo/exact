@@ -90,3 +90,46 @@ impl<D: DataSource> Runner<D> {
         Some(self.run_action(h.action, args, frames))
     }
 }
+
+impl<D: DataSource> Runner<D> {
+    /// One argument as the action's parameter takes it.
+    pub(in crate::runner) fn event_arg(
+        &self,
+        ty: exact_plan::TypesId,
+        json: &Json,
+    ) -> Result<Value, String> {
+        let shape = exact_js_value::Shape::from_plan(&self.plan, ty)?;
+        let mut json = json.clone();
+        absent_is_none(&mut json, &shape);
+        let value = exact_js_value::from_json(&json, &shape)?;
+        if !value.conforms(&self.plan, ty) {
+            return Err(crate::conform::mismatch(&self.plan, &value, ty));
+        }
+        Ok(value)
+    }
+}
+
+/// A module's answer leaves out an option field it has nothing for (a
+/// platform's words where another platform answers, a declared default):
+/// absent is `none`, as an omitted word is (LLP 1133.002 D2).
+pub(in crate::runner) fn absent_is_none(json: &mut Json, shape: &exact_js_value::Shape) {
+    use exact_js_value::Shape;
+    match (json, shape) {
+        (Json::Object(map), Shape::Record(fields)) => {
+            for (name, field) in fields {
+                match map.get_mut(name) {
+                    Some(value) => absent_is_none(value, field),
+                    None if matches!(field, Shape::Option(_)) => {
+                        map.insert(name.clone(), Json::Null);
+                    }
+                    None => {}
+                }
+            }
+        }
+        (Json::Array(items), Shape::List(item)) => {
+            items.iter_mut().for_each(|v| absent_is_none(v, item))
+        }
+        (value, Shape::Option(inner)) if !value.is_null() => absent_is_none(value, inner),
+        _ => {}
+    }
+}

@@ -45,7 +45,7 @@ pub(super) type Arrived = Arc<Mutex<Vec<(u64, String, Vec<String>)>>>;
 impl<D: DataSource> Runner<D> {
     /// Request `ticket` of `source` went out with `body`: a reply to a name
     /// that declares handles is provisional until it lands.
-    pub(in crate::runner) fn note_handles(&mut self, ticket: u64, source: &str, body: &[u8]) {
+    pub(super) fn note_handles_linked(&mut self, ticket: u64, source: &str, body: &[u8]) {
         let (row, data) = match self.plan.module_named(source) {
             Some(row) => (row.clone(), false),
             // Data code's call of a module's name: the body names it.
@@ -102,7 +102,7 @@ impl<D: DataSource> Runner<D> {
     /// oldest such request with this body not yet run: its implementation's
     /// reply is watched, whether or not the request is still in flight (a
     /// host may run one the runner has let go). `None` for any other body.
-    pub(in crate::runner) fn handled_work(&mut self, body: &[u8]) -> Option<Dispatch> {
+    pub(super) fn handled_work_linked(&mut self, body: &[u8]) -> Option<Dispatch> {
         let (&ticket, p) = (self.extensions.provisional.iter_mut())
             .find(|(_, p)| !p.data && !p.dispatched && p.body == body)?;
         p.dispatched = true;
@@ -168,10 +168,7 @@ impl<D: DataSource> Runner<D> {
 
     /// The handles request `ticket`'s reply carried, as it lands: no longer
     /// provisional, the commit's to deliver.
-    pub(in crate::runner) fn landed_handles(
-        &mut self,
-        ticket: u64,
-    ) -> Option<(String, Vec<String>)> {
+    pub(super) fn landed_handles_linked(&mut self, ticket: u64) -> Option<(String, Vec<String>)> {
         self.extensions.provisional.remove(&ticket);
         let mut arrived = (self.extensions.arrived.lock()).unwrap_or_else(|e| e.into_inner());
         let at = arrived.iter().position(|(t, _, _)| *t == ticket)?;
@@ -182,7 +179,7 @@ impl<D: DataSource> Runner<D> {
     /// Replies with handles whose request is no longer in flight: dropped,
     /// their handles disposed of. Requests let go before they were sent are
     /// forgotten.
-    pub(in crate::runner) fn dispose_dropped(&mut self) {
+    pub(super) fn dispose_dropped_linked(&mut self) {
         let pending: Vec<u64> = self.pending.iter().map(|p| p.ticket).collect();
         let dropped: Vec<(u64, String, Vec<String>)> = {
             let mut arrived = (self.extensions.arrived.lock()).unwrap_or_else(|e| e.into_inner());
@@ -209,7 +206,7 @@ impl<D: DataSource> Runner<D> {
 
     /// A reply carrying `handles` was not delivered (`why`): its
     /// implementation disposes of them.
-    pub(in crate::runner) fn dispose(&mut self, handles: (String, Vec<String>), why: &str) {
+    pub(super) fn dispose_linked(&mut self, handles: (String, Vec<String>), why: &str) {
         let (extension, ids) = handles;
         if ids.is_empty() {
             return;

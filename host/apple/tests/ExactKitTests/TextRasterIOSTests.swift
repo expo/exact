@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 import ExactMarkdown
 
 /// Paragraph pixels come from worker jobs the pump admits ahead of the list's

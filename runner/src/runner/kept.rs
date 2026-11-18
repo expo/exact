@@ -47,20 +47,28 @@ pub(super) struct Keeping {
     pub(super) modules: bool,
 }
 
-/// Whether a reload keeps resource `resource`'s kept entry: a resource of
-/// that name and source read the store, or waited for its identity, which
-/// a kept module waiting before it asks has done without reading it.
+/// Whether a reload keeps resource `resource`'s kept entry: the runner it
+/// replaces kept answers for a resource of that name and source
+/// ([`super::Carried::keepers`]).
 pub(super) fn compatible_on_reload(
     plan: &exact_plan::Plan,
     carried: &super::Carried,
     resource: &str,
 ) -> bool {
     plan.resources.iter().any(|r| {
-        let same = |n: &String, s: &String| n == resource && s == plan.str(r.source);
         plan.str(r.name) == resource
-            && (carried.store_readers.iter().any(|(n, s)| same(n, s))
-                || carried.waiting.iter().any(|(n, s, ..)| same(n, s)))
+            && (carried.keepers.iter()).any(|(n, s)| n == resource && s == plan.str(r.source))
     })
+}
+
+/// Whether the plan keeps resource `i`'s answers whatever it reads: a
+/// surface record's, a kept module source's, or a reader's whose source
+/// waits for the data module ([`waits_for_module`]).
+pub(super) fn keeps_answers(plan: &exact_plan::Plan, i: usize) -> bool {
+    let row = &plan.resources[i];
+    kept_surface(plan, i)
+        || kept_module(plan, i)
+        || row.reader && waits_for_module(plan, plan.str(row.source))
 }
 
 /// Whether resource `i` reads a module's live source declared `"kept":
@@ -103,10 +111,7 @@ pub(super) fn obsolete<'n>(
         .filter_map(|name| {
             let resource = name.strip_prefix(Store::KEPT)?;
             (!(0..plan.resources.len()).any(|i| {
-                (kept_surface(plan, i)
-                    || kept_module(plan, i)
-                    || plan.resources[i].reader
-                        && waits_for_module(plan, plan.str(plan.resources[i].source)))
+                keeps_answers(plan, i)
                     && !plan.resources[i].transient
                     && plan.str(plan.resources[i].name) == resource
             }))
@@ -242,7 +247,7 @@ impl<D: DataSource> Runner<D> {
         use crate::instance::Input;
         let deps = self.sites.deps();
         let row = self.resource_row(i).clone();
-        let identity = row.args.len as usize - usize::from(row.context);
+        let identity = self.identity_len(i);
         let mut work: Vec<_> = (row.args.iter().take(identity).enumerate())
             .filter(|&(k, _)| arg(k))
             .map(|(_, a)| deps.reads_of(&self.plan, self.plan.arg(a).expr))
@@ -334,7 +339,7 @@ impl<D: DataSource> Runner<D> {
         }
         let name = self.plan.str(row.name);
         let entry = self.store.kept(&kept_name(name))?;
-        let identity = row.args.len as usize - usize::from(row.context);
+        let identity = self.identity_len(i);
         let seed = decode(entry).and_then(|(mut args, value)| {
             if kept_surface(&self.plan, i) {
                 let surface = crate::surface_record::surface_name(&self.plan, &row)?;
@@ -495,7 +500,7 @@ impl<D: DataSource> Runner<D> {
         // @ref LLP 1027.005 D6 — context reaches the source but does not
         // enter the kept entry or its budget.
         let row = self.resource_row(i).clone();
-        let args = &args[..row.args.len as usize - usize::from(row.context)];
+        let args = &args[..self.identity_len(i)];
         // The record the module published, without the host's own members
         // (`presented`, LLP 1009 D9): those are this launch's.
         let published;

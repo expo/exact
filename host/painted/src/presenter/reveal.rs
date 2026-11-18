@@ -314,6 +314,9 @@ impl<D: DataSource> Presenter<D> {
         if !fragment.is_empty() && !id.is_some_and(|id| id.eq_ignore_ascii_case("top")) {
             self.host.log(format!("fragment #{fragment}: no element in the route of visit {key} has that id; the route goes to its top"));
         }
+        if fragment.is_empty() {
+            return self.open_arrived(route);
+        }
         let scrolled: Vec<_> = (self.scroll.iter())
             .filter(|(id, off)| {
                 **off != (0.0, 0.0) && (**id == route || self.is_inside(**id, route))
@@ -327,6 +330,55 @@ impl<D: DataSource> Presenter<D> {
             self.dirty = true;
         }
         // The scrollers that present the route, the page's among them.
+        self.scroll_into(route, true, true, at_start);
+    }
+
+    /// @ref LLP 1153 D5.1 — no fragment: each scroller in the route starts
+    /// over, at the offsets its `scrollTop` and `scrollLeft` give, the end of
+    /// a list that opens there, else its start; one under
+    /// `scroll-restoration="manual"` stays where it is.
+    fn open_arrived(&mut self, route: ViewId) {
+        let limits = self.collection_scroll_limits();
+        let kernel = self.host.kernel();
+        let scrolls = |o| matches!(o, Overflow::Scroll | Overflow::Auto);
+        let opening: Vec<_> = (kernel.preorder_where(&[route], |_, props| {
+            props.str(PropId::ScrollRestoration) != Some("manual")
+        }))
+        .into_iter()
+        .filter_map(|id| {
+            let node = kernel.node(id)?;
+            let (x, y) = effective_overflow(&node);
+            if !scrolls(x) && !scrolls(y) {
+                return None;
+            }
+            let (rx, ry) = self.scroll_range(id, &limits);
+            let authored = |p| {
+                (node.props.get(p))
+                    .and_then(exact_kernel::PropValue::as_float)
+                    .filter(|n| n.is_finite())
+                    .unwrap_or(0.) as f32
+            };
+            let at = if node.props.str(PropId::ScrollStart) == Some("end") {
+                (self.scroll_of(id).0, ry)
+            } else {
+                (
+                    authored(PropId::ScrollLeft).clamp(0., rx),
+                    authored(PropId::ScrollTop).clamp(0., ry),
+                )
+            };
+            Some((id, at))
+        })
+        .collect();
+        for (id, at) in opening {
+            let before = self.scroll_of(id);
+            if before == at {
+                continue;
+            }
+            self.scroll.insert(id, at);
+            self.scroll_end_input(id, before, Completion::Instant);
+            self.collection_scroll_input(id, before);
+            self.dirty = true;
+        }
         self.scroll_into(route, true, true, at_start);
     }
 

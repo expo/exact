@@ -21,6 +21,18 @@ test('each GPU drawing element waits for a presented frame, including a second c
   // A later generation keeps the picture visible while its replacement prepares.
   f.publish(1, {presented:false}); f.frame();
   expect(hosts[0].canvas.style.visibility).toBe('');
+  let empty = true;
+  f.gpu.gpu_presentation_flags = id => id === 1 && empty ? 4 : 0;
+  f.publish(1, {presented:false}); f.frame();
+  expect(hosts[0].canvas.style.visibility).toBe('hidden');
+  expect(hosts[1].canvas.style.visibility).toBe('');
+  f.publish(1, {presented:true}); f.frame();
+  expect(hosts[0].canvas.style.visibility).toBe('hidden');
+  empty = false;
+  f.publish(1, {presented:false}); f.frame();
+  expect(hosts[0].canvas.style.visibility).toBe('hidden');
+  f.publish(1, {presented:true}); f.frame();
+  expect(hosts[0].canvas.style.visibility).toBe('');
 });
 
 test.each(['render', 'flush'])('a malformed record published during %s leaves other canvases rendering', async stage => {

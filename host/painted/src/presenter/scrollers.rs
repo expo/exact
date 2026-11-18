@@ -74,6 +74,9 @@ pub struct Under {
     /// (Android's `requestDisallowInterceptTouchEvent`), which a gesture's
     /// claim is not subject to.
     pub sheet: bool,
+    /// Finger directions a nested sheet takes: up before its list, down at
+    /// the list's start. The reader retains scrolling and fling physics.
+    pub sheet_directions: (bool, bool),
     /// The text field the shell hosts that a touch there is for, when the
     /// node hit is one (LLP 1115.001 D8): the touch is then that field's,
     /// and the presenter hears of the focus it takes, not of the touch.
@@ -263,21 +266,26 @@ impl<D: DataSource> Presenter<D> {
         }
         let mut claims = self.claims_at(hit);
         let mut sheet = false;
+        let mut sheet_directions = (false, false);
         // A sheet's scrim takes every drag; on the sheet, a drag up or down
-        // that no scroller of its own takes moves it (`stage/touch.rs`).
+        // follows the sheet/list direction rules in `stage/touch.rs`.
         match self.stage_claims(x, y) {
             Some(false) => {
                 return Under {
                     chain: Vec::new(),
                     claims: (true, true),
                     sheet: false,
+                    sheet_directions,
                     field: None,
                 }
             }
             Some(true) => {
                 let route = self.top_sheet().map(|(id, _)| id);
                 chain.retain(|s| s.id != PAGE && route.is_some_and(|r| self.is_inside(s.id, r)));
-                sheet = !claims.1 && !chain.iter().any(|s| s.axes.1);
+                if !claims.1 {
+                    sheet_directions = self.sheet_drag_directions(&chain);
+                }
+                sheet = sheet_directions == (true, true);
                 claims.1 |= sheet;
             }
             None => {}
@@ -286,6 +294,7 @@ impl<D: DataSource> Presenter<D> {
             chain,
             claims,
             sheet,
+            sheet_directions,
             field: self.hosted_at(hit),
         }
     }
@@ -570,7 +579,8 @@ impl<D: DataSource> Presenter<D> {
 
     /// [`Presenter::scrollers_at`] for a reader, in its pixels (`scale` to a
     /// point): the claims (bit 0 sideways, bit 1 up and down, bit 2 the
-    /// latter is a sheet's drag alone: [`Under::sheet`]), a count, the
+    /// latter is a sheet's drag alone: [`Under::sheet`], bits 3 and 4 its
+    /// upward and downward claims over a list), a count, the
     /// hosted text field the touch is for (0: none; LLP 1115.001 D8), and
     /// eleven words a scroller: id, flags (bit 0 it takes a sideways drag
     /// from here, bit 1 one up or down, bit 2 it has rows the reader can
@@ -586,7 +596,9 @@ impl<D: DataSource> Presenter<D> {
         let mut out = vec![
             i32::from(under.claims.0)
                 | i32::from(under.claims.1) << 1
-                | i32::from(under.sheet) << 2,
+                | i32::from(under.sheet) << 2
+                | i32::from(under.sheet_directions.0 && !under.sheet) << 3
+                | i32::from(under.sheet_directions.1 && !under.sheet) << 4,
             under.chain.len() as i32,
             under.field.unwrap_or(0) as i32,
         ];

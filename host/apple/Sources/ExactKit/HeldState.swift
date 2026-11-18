@@ -11,6 +11,7 @@
 // it, the pointer coming over it or leaving it for a hover, the focus coming
 // or going for a focus), its disabling and its going let it go, each said why
 // (`dropped`); letting go leaves what the real state shows.
+import CExact
 #if os(macOS)
 import AppKit
 #else
@@ -192,7 +193,7 @@ enum HeldState {
         // The runner's `node` answer for the node it is held on: its own D7 rows (`:active` lowered to them) or its
         // look's, each with the token it read (stage 9 E), and its site and instance path.
         let node = presenter.session.flatMap { s -> [String: Any]? in
-            guard let data = s.agent("{\"op\":\"node\",\"id\":\(held.id),\"plan\":true}").data(using: .utf8) else { return nil }
+            guard let data = s.runtime.ask(exact_node, "{\"id\":\(held.id),\"plan\":true}").data(using: .utf8) else { return nil }
             return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         }
         let own = state == "active" ? node?["style"] as? [String: Any] : (node?["looks"] as? [String: Any])?[state == "hover" ? "hover" : "focus_visible"] as? [String: Any]
@@ -274,7 +275,7 @@ extension Presenter {
         if let parent = flats.parent(of: id) { return parent }
         #endif
         if let view = views[id] { return logicalAncestry(of: view).dropFirst().first { $0 is NodeView }.map { ($0 as! NodeView).id } }
-        guard let data = session?.agent("{\"op\":\"node\",\"id\":\(id)}").data(using: .utf8),
+        guard let data = session?.runtime.ask(exact_node, "{\"id\":\(id)}").data(using: .utf8),
               let node = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         return (node["parent"] as? NSNumber)?.uint32Value
     }

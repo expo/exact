@@ -10,6 +10,19 @@ use super::*;
 use exact_runner::{DataError, DataSource, Runner};
 
 #[test]
+fn field_sizing_reaches_native_control_measurement() {
+    for sizing in ["content", "fixed"] {
+        let mut style = StyleProps::default();
+        style
+            .set_dynamic(StyleId::FieldSizing, &StyleValue::Text(sizing.into()))
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&style_json(&style, &Env::default()).0).unwrap();
+        assert_eq!(json["field_sizing"], sizing);
+    }
+}
+
+#[test]
 fn only_dialogs_keep_viewport_positioning_rows() {
     use exact_kernel::{Kernel, MonospaceMeasurer, Op, PropId};
     let mut kernel = Kernel::new(Box::new(MonospaceMeasurer::default()));

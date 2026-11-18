@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 #if os(macOS)
 import AppKit
 #else
@@ -47,7 +48,7 @@ final class FragmentTests: XCTestCase {
         session = ExactApp.shared.makeSession(label: "fragment")
         XCTAssertTrue(session.openIncoming("/item/7#moves"))
         // Keep the real loader pending until the assertion releases the decode.
-        session.rasters.testRequest = { _ in (0, 8) }
+        session.loader.testRequest = { _ in (0, 8) }
         let bytes = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_FRAGMENT_PLAN"])))
         let size = CGSize(width: 320, height: 400)
         let view = session.presenter.viewport
@@ -104,14 +105,14 @@ final class FragmentTests: XCTestCase {
     }
 
     private func releasePicture() throws {
-        session.rasters.testRequest = nil
-        session.rasters.reconcile()
+        session.loader.testRequest = nil
+        session.loader.reconcile()
         waitFor("the picture and its layout") {
-            let raster = self.session.rasters.diagnostics
+            let raster = self.session.loader.diagnostics
             return (try? self.node("picture").raster) != nil && (try? self.node("tail").raster) != nil
                 && raster["pending"] as? UInt64 == 0 && raster["sessionRunning"] as? UInt64 == 0
                 && raster["ready"] as? UInt64 == 0
-                && self.session.rasters.loadingOnScreen == 0 && !self.session.ownerInFlight
+                && self.session.loader.loadingOnScreen == 0 && !self.session.ownerInFlight
         }
         var idle = false
         session.whenIdle { idle = true }
@@ -132,7 +133,7 @@ final class FragmentTests: XCTestCase {
         try fixture()
         try node("picture").loadImage("assets/missing.svg")
         try node("tail").loadImage("assets/missing.svg")
-        waitFor("both image failures") { self.session.rasters.testAnnounced.filter { $0.failure != nil }.count == 2 }
+        waitFor("both image failures") { self.session.loader.testAnnounced.filter { $0.failure != nil }.count == 2 }
         waitForMainQueue()
         XCTAssertNil(session.presenter.fragmentHeld, "an error with no authored handler also ends the hold")
     }
@@ -156,6 +157,46 @@ final class FragmentTests: XCTestCase {
         XCTAssertEqual(session.appliedBatches, applied, "an unchanged fill skips the presenter apply pass")
         waitForMainQueue("the fill completion's queued work")
         XCTAssertEqual(gap("moves"), 0, accuracy: 1, "the fill completion resumes the fragment without another batch")
+    }
+
+    /// @ref LLP 1153 D5.1 — a page that arrives with no fragment starts each scroller in it over: at its start, at the
+    /// offset its `scrollTop` gives, or, under `scroll-restoration="manual"`, where it was.
+    func testAPageThatArrivesStartsItsScrollersOver() throws {
+        try fixture()
+        try releasePicture()
+        XCTAssertTrue(session.navigate("/page/1"))
+        waitFor("the page") { (try? self.node("inner")) != nil }
+        let p = session.presenter, inner = try node("inner")
+        let route = try XCTUnwrap(sequence(first: inner as NSObject?, next: { ($0 as? NodeView)?.superview })
+            .compactMap { $0 as? NodeView }.first { $0.props["navigationKey"] != nil && $0.props["navigationBack"] == nil })
+        let visit = try XCTUnwrap(Int(try XCTUnwrap(route.props["navigationKey"])))
+        func at() -> CGFloat {
+            #if os(macOS)
+            return inner.scroll!.contentView.bounds.minY
+            #else
+            return inner.scrollView!.contentOffset.y
+            #endif
+        }
+        func arrive(from y: CGFloat, activation: Int) {
+            #if os(macOS)
+            inner.scroll!.contentView.scroll(to: NSPoint(x: 0, y: y))
+            inner.scroll!.reflectScrolledClipView(inner.scroll!.contentView)
+            #else
+            inner.scrollView!.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            #endif
+            XCTAssertEqual(at(), y, accuracy: 1)
+            p.scrollToFragment([visit, "", activation])
+            waitForMainQueue("the arrival")
+        }
+        arrive(from: 300, activation: 10)
+        XCTAssertEqual(at(), 0, accuracy: 1, "with nothing written, its start")
+        inner.props["scrollTop"] = "120"
+        arrive(from: 300, activation: 11)
+        XCTAssertEqual(at(), 120, accuracy: 1, "the offset its scrollTop gives")
+        inner.props["scrollTop"] = nil
+        inner.props["scrollRestoration"] = "manual"
+        arrive(from: 300, activation: 12)
+        XCTAssertEqual(at(), 300, accuracy: 1, "manual: where it was")
     }
 
     func testPersonCancelsThePictureHold() throws {
@@ -390,7 +431,7 @@ final class FragmentTests: XCTestCase {
         host.view.addSubview(view)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
-        session.rasters.setPaused(true)
+        session.loader.setPaused(true)
         p.apply(wireBatch([
             ["op": "create", "id": 9, "kind": "view", "props": ["navigationKey": "7", "navigationBack": "back"], "style": ["overflow_y": "auto", "overflow_x": "hidden"]],
             ["op": "create", "id": 1, "kind": "view", "props": ["navigationKey": "7"]],
@@ -445,7 +486,7 @@ final class FragmentTests: XCTestCase {
         p.armFragment(2)
         p.scrollToFragment([7, "moves", 2])
         XCTAssertEqual(scroll.contentOffset.y, 700 - clearance, accuracy: 0.5)
-        XCTAssertTrue(session.rasters.loading(inside: route.node))
+        XCTAssertTrue(session.loader.loading(inside: route.node))
         XCTAssertEqual(target.convert(target.bounds, to: scroll).minY, scroll.bounds.minY + clearance, accuracy: 0.5)
         p.apply(wireBatch([
             ["op": "style", "id": 3, "style": ["margin_top": 900]],

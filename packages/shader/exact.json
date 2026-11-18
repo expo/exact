@@ -1,0 +1,12 @@
+{
+  "kind": "interface",
+  "name": "@exact/shader",
+  "version": "1.0.0",
+  "names": [],
+  "shapes": { "ShaderState": { "presented": "bool", "error": "string" } },
+  "gpu": {
+    "crate": "rust",
+    "exactGpu": "0.4",
+    "surfaces": { "shader": { "arity": 3, "factory": "exact_shader::surface", "wgsl": "src" } }
+  }
+}

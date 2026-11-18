@@ -21,7 +21,7 @@ use crate::raster::Raster;
 use crate::text::{Measurer, Shared, TextEngine};
 use exact_kernel::{NodeType, Overflow, PropId, ViewId};
 use exact_plan::{EventKind, Plan};
-use exact_runner::agent::{num, quote};
+use exact_runner::json::{num, quote};
 use exact_runner::{DataSource, Event};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -75,7 +75,10 @@ mod pan_release;
 mod picker;
 mod pointer;
 mod present;
+mod replacement;
 pub use present::Carried;
+use replacement::Waiting;
+pub use replacement::{ReloadResult, ReplacementOutcome};
 mod pump;
 mod radio;
 mod range;
@@ -129,6 +132,11 @@ mod wheel;
 use scroll_end::Completion;
 #[cfg(all(test, not(windows)))]
 mod scroll_end_tests;
+/// The host work `scroll_end_tests` hands out (LLP 1047.001 D12).
+#[cfg(all(test, not(windows)))]
+struct TestWork;
+#[cfg(all(test, not(windows)))]
+impl exact_runner::HostWork for TestWork {}
 mod shortcuts;
 mod status_bar;
 #[cfg(target_os = "android")]
@@ -218,10 +226,19 @@ pub struct Presenter<D: DataSource> {
     /// Why the data module did not activate ([`Presenter::activation_error`]).
     activation_failed: Option<String>,
     dev: Option<crate::fetch::Poller>,
-    pending_dev: Option<crate::fetch::Generation>,
-    pending_update: bool,
-    update_explicit: bool,
-    update_waits_for_requests: bool,
+    /// The newest complete candidate that has to wait, whichever producer
+    /// brought it (LLP 1029.000.002 D9).
+    waiting: Option<replacement::Waiting<D>>,
+    /// What is pressed as the shell delivered it, whatever became of its
+    /// contact, by bit: 1 the primary button or first touch
+    /// ([`Presenter::pointer_down`]); 2, 4, 8 and 16 `pointer_aux`'s; 32 and
+    /// 64 a touch on the shell's top and bottom bar ([`Presenter::bar_event`]).
+    pub(crate) pressed: u32,
+    /// A touch is down on the shell's view, by its own word
+    /// ([`Presenter::set_touching`]).
+    touching: bool,
+    /// The top-layer surface whose window has a press down, by its serial.
+    surface_press: Option<u32>,
     /// When the store checks its stream, with one attached (LLP 1030.006 D5).
     update_checks: Option<checks::Checks>,
     /// The boot is good when a reader drew it ([`Presenter::reader_drew`]),
@@ -672,10 +689,10 @@ impl<D: DataSource> Presenter<D> {
             launch_share: None,
             activation_failed: None,
             dev: None,
-            pending_dev: None,
-            pending_update: false,
-            update_explicit: false,
-            update_waits_for_requests: false,
+            waiting: None,
+            pressed: 0,
+            touching: false,
+            surface_press: None,
             update_checks: None,
             reader_blesses: false,
             blessed: false,
@@ -716,94 +733,6 @@ impl<D: DataSource> Presenter<D> {
         // Past the last refusal: a boot refused writes none of its lines.
         p.host.runner_mut().set_console(console_line);
         Ok((p, error.or(e)))
-    }
-
-    /// The dev loop's restart, state carried; pictures and offsets go, focus stays (LLP 1007 §6).
-    pub fn reload(&mut self, plan: &[u8], data: D) -> Result<Option<String>, HostError> {
-        self.reload_module(plan, data, self.module.clone(), false)
-    }
-
-    /// Replace a local development pair transactionally, carrying compatible state.
-    pub fn reload_module(
-        &mut self,
-        plan: &[u8],
-        data: D,
-        module: Option<crate::delivery::Module>,
-        let_go: bool,
-    ) -> Result<Option<String>, HostError> {
-        if self.content_registration.is_some() {
-            return Err(HostError::Layout(
-                "content-region trial requires session retirement before reload".into(),
-            ));
-        }
-        let module = module.or_else(|| self.module.clone());
-        let decoded = Plan::decode(plan).map_err(HostError::Plan)?;
-        // Preserve live font state until the candidate runner boots successfully.
-        let candidate_text = (self.make_text)(&decoded, &self.assets);
-        if let Some(reason) = self.assets.take_refusal() {
-            return Err(HostError::Asset(reason));
-        }
-        let kept = self.focus_place();
-        let mut carried = self.host.carry();
-        let data = self.prepare_logic(
-            plan,
-            data,
-            module.as_ref(),
-            &candidate_text,
-            &mut carried,
-            self.host.runner().delivery(),
-            let_go,
-        )?;
-        let (mut host, error) = exact_runner::time::launching_with(
-            exact_runner::time::Launch {
-                time: Some(self.host.runner().wall_time()),
-                place: Some(self.host.runner().place().clone()),
-                ..exact_runner::time::Launch::NONE
-            },
-            || {
-                Host::boot_with(
-                    plan,
-                    data,
-                    Box::new(Measurer(candidate_text.clone())),
-                    self.viewport.0,
-                    self.viewport.1,
-                    Some(&carried),
-                    Some(self.host.runner().delivery().clone()),
-                )
-            },
-        )?;
-        if let Some(error) = error {
-            return Err(HostError::Layout(error));
-        }
-        self.restore_time(&mut host)?;
-        let shaders = self
-            .surfaces
-            .prepare_shaders(&self.compat, &self.assets)
-            .map_err(HostError::Asset)?;
-        self.surfaces
-            .commit_shaders(shaders)
-            .map_err(HostError::Asset)?;
-        let faults = self.host.runner().faults().clone();
-        self.host = host;
-        self.host.runner_mut().share_faults(&faults);
-        // The old executor lets go of everything, then says which uploads had
-        // begun to go out; the rest never left (LLP 1016.000 D10).
-        self.executor.forget(|_| false);
-        let started = self.executor.let_go_started(|_| false);
-        self.executor = self.host.executor();
-        self.host.runner_mut().uploads_started(&started);
-        self.replaced();
-        if self.display.new_session() {
-            self.painted = false;
-        }
-        self.activation_failed = None;
-        self.module = module;
-        self.text = candidate_text.clone();
-        self.brush.text = candidate_text;
-        self.images.reset();
-        self.restore_focus(kept);
-        let e = self.after_commit();
-        Ok(e)
     }
 
     /// The host.

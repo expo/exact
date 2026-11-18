@@ -5,7 +5,7 @@ import XCTest
 
 final class CalculatedLengthTests: XCTestCase {
     func testStyleCalculationsDecodeInEitherPropertyOrder() throws {
-        let rows = "\"border_radius_top_left\":{\"calc\":\"min(50%, 10vw)\",\"env\":[0,0,0,0,300,600,1,1,0,0]}"
+        let rows = "\"border_radius_top_left\":{\"calc\":\"min(50%, 10vw)\",\"env\":[0,0,0,0,300,600,1,1,0,0,16]}"
         for op in ["{\"op\":\"style\",\"id\":1,\"style\":{\(rows)}}",
                    "{\"style\":{\(rows)},\"id\":1,\"op\":\"style\"}"] {
             let batch = Batch.decode(Data("{\"ops\":[\(op)]}".utf8))
@@ -19,7 +19,7 @@ final class CalculatedLengthTests: XCTestCase {
     func testSnapshotsSurviveOtherWindowsAndAreReleasedWithTheirValues() throws {
         let decoder = JSONDecoder()
         func decode(_ width: Int) throws -> BatchValue {
-            let json = "{\"radius\":{\"calc\":\"min(50%, 10vw)\",\"env\":[0,0,0,0,\(width),600,1,1,0,0]}}"
+            let json = "{\"radius\":{\"calc\":\"min(50%, 10vw)\",\"env\":[0,0,0,0,\(width),600,1,1,0,0,16]}}"
             return try XCTUnwrap(decoder.decode(NodeStyle.self, from: Data(json.utf8))["radius"])
         }
         var first: BatchValue? = try decode(300)

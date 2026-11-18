@@ -11,6 +11,7 @@ import Foundation
 import ImageIO
 import QuartzCore
 import ExactKit
+import ExactImages
 
 /// No implicit animations: new pixels appear with the batch that drew them.
 private final class Instant: NSObject, CALayerDelegate {

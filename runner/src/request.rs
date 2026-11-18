@@ -775,23 +775,31 @@ impl Request {
     }
 
     /// Why this request's idle timeout is refused, if it is: zero, over
-    /// [`MAX_TIMEOUT_MS`], or on anything but a WebSocket stream (LLP
-    /// 1016.000 D11). Every host asks it with [`Request::timeout_refusal`].
+    /// [`MAX_TIMEOUT_MS`], or on anything but a WebSocket, event or byte
+    /// stream, which an upload, a long poll and a listener are not (LLP
+    /// 1016.000 D11). A URL that names no scheme is the web's same-origin
+    /// HTTP, as an upload's is. Every host asks it with
+    /// [`Request::timeout_refusal`].
     pub fn idle_timeout_refusal(&self) -> Option<&'static str> {
         let ms = self.idle_timeout_ms?;
-        let socket = self.stream
+        let scheme = (self.url.split_once(':').map(|(scheme, _)| scheme)).filter(|s| {
+            s.starts_with(|c: char| c.is_ascii_alphabetic())
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        });
+        let taken = self.stream
             && self.listen.is_none()
             && self.long_poll.is_none()
             && !self.upload_progress
-            && ["ws:", "wss:"].iter().any(|scheme| {
-                self.url
-                    .get(..scheme.len())
-                    .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+            && scheme.is_none_or(|scheme| {
+                ["ws", "wss", "http", "https"]
+                    .iter()
+                    .any(|known| scheme.eq_ignore_ascii_case(known))
             });
         if ms == 0 || ms > MAX_TIMEOUT_MS {
             Some("an idle timeout must be 1 to 3600000 ms")
-        } else if !socket {
-            Some("only a WebSocket stream takes an idle timeout")
+        } else if !taken {
+            Some("only a WebSocket, event or byte stream takes an idle timeout")
         } else {
             None
         }
@@ -845,8 +853,10 @@ impl Request {
         listen.refusal().map(str::to_string)
     }
 
-    /// Yield to a host-owned executor without inventing a network URL or grant.
-    pub fn continuation(token: u64) -> Self {
+    /// Yield to a host-owned executor without inventing a network URL or
+    /// grant, for a source `S` that declares it hands out such work
+    /// ([`crate::HostWork`], LLP 1047.001 D12).
+    pub fn continuation<S: crate::HostWork + ?Sized>(token: u64) -> Self {
         Self {
             continuation: Some(token),
             ..Self::get("")
@@ -1433,7 +1443,7 @@ mod scheduling_tests {
         for request in [
             Request::get("https://example.test"),
             Request::post_json("https://example.test", "{}"),
-            Request::continuation(1),
+            Request::continuation::<crate::host_work::TestWork>(1),
             Request::storage(vec![]),
         ] {
             assert_eq!(request.http, HttpScheduling::Ordered);

@@ -185,8 +185,8 @@ func readControls() {
             }
         case "apply":
             let bytes = FileManager.default.contents(atPath: arg) ?? Data()
-            let ok = exact.apply(bytes, label: String(arg.split(separator: "/").last ?? "plan"))
-            log("host: apply \(arg): \(ok ? "every session took it" : "refused")")
+            let result = exact.apply(bytes, label: String(arg.split(separator: "/").last ?? "plan"))
+            log("host: apply \(arg): \(result)")
         default:
             log("host: unknown control \(line)")
         }

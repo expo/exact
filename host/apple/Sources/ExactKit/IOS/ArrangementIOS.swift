@@ -262,6 +262,7 @@ final class ArrangementHost {
     }
 
     private func layoutChanged() {
+        NodeView.scrollLayoutEpoch &+= 1
         guard !layoutPending else { return }
         layoutPending = true
         // Read UIKit's safe area after its current layout has finished
@@ -338,6 +339,7 @@ final class ArrangementHost {
     }
 
     private func syncInsets() {
+        NodeView.scrollLayoutEpoch &+= 1
         guard !syncingInsets else { return }
         syncingInsets = true
         defer { syncingInsets = false }

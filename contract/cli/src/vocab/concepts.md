@@ -271,8 +271,9 @@ component App
 - A welcome shown at first launch only is not a second route: the main screen is the root
   route and shows the welcome while a `persist` flag is unset (docs/recipes/first-launch.md).
 - `replace(nav, url)` swaps the screen shown for another in place, a stack's first included:
-  the stack keeps its depth and the visit its id, so a route keyed `${e.id}` stays on screen
-  with no push.
+  the stack keeps its depth and the visit its id, so a route keyed `${e.id}` stays mounted,
+  with no transition. At another path its scrollers open at their start, as a browser's new
+  page does, or at their `scrollTop=`; `scroll-restoration="manual"` keeps one where it was.
 - A route's first child, a `header` holding one heading, is iOS's navigation bar: an
   `aria-level=1` heading is its large title, a lower level the inline title. A pushed route
   has the platform's Back button and edge swipe with nothing written; a control whose `id`
@@ -320,7 +321,10 @@ A form you lay out (fields, Save, Cancel) is a route presented as a sheet:
 `navigationBack` names, so the iOS swipe down and the web's Escape press it, and the screen
 under it is inert. A question with buttons only is a `dialog role="alertdialog"`
 (`contract vocab confirm`). A `dialog` you lay out yourself is a smaller thing: the web's and
-macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar. One whose own
+macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar. The dialog
+has `fit-content` width, as in HTML: put `width="100%" box-sizing="border-box"` on the `dialog`
+itself to fill the iOS sheet between its side insets. A percentage width on a child alone
+resolves against the dialog's width. One whose own
 `background-color` or `background-image` you write is your box, not the platform's: on iOS it is
 HTML's top layer, over any sheet, centred, its own `animation` its entrance and, when an `if`
 removes it, its `-exact-exit-animation` its exit.

@@ -7,7 +7,7 @@
 //! checkpoint, inside `fulfill`, so what the turn writes to the store stands,
 //! and the commit after it reaches the host as any reply's does, presented
 //! and persisted.
-use super::modules::{CallOrigin, Causes};
+use super::provenance::{CallOrigin, Causes};
 use super::{
     CommitReceipt, DataSource, InFlight, PendingReq, Reporter, Runner, RunnerError, Target,
 };

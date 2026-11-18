@@ -53,7 +53,7 @@ fn fresh_clock(server: &Server, definitions: Vec<Definition>) -> (Preloads, Arc<
         Preloads::start_clock(
             definitions,
             &format!("net.fetch http://{}", server.address),
-            Arc::new(ibex2::host::Host::new),
+            Lane::new(Arc::new(ibex2::host::Host::new)),
             Arc::new(move || *now.lock().unwrap()),
         ),
         clock,

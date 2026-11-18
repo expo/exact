@@ -933,13 +933,17 @@ dependencies = [
  "contract-lower",
  "contract-syntax",
  "contract-types",
+ "exact-color",
  "exact-data",
  "exact-forma",
+ "exact-gpu-reflect",
  "exact-kernel",
  "exact-motion",
  "exact-plan",
  "exact-runner",
+ "exact-shader-uniforms",
  "libc",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
 ]
@@ -1686,8 +1690,9 @@ dependencies = [
 
 [[package]]
 name = "exact-gpu"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "exact-color",
  "exact-gpu-reflect",
  "exact-plan",
  "objc2 0.6.4",
@@ -2143,6 +2148,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact-shader-uniforms"
+version = "0.1.0"
+
+[[package]]
 name = "exact-svg-file"
 version = "0.1.0"
 dependencies = [
@@ -2214,6 +2223,8 @@ name = "exact-ureq"
 version = "3.4.0"
 dependencies = [
  "base64 0.23.1",
+ "brotli-decompressor",
+ "flate2",
  "log",
  "percent-encoding",
  "rustls",

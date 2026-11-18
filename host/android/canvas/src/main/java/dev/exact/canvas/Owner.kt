@@ -434,6 +434,10 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     /** A finger past the touch's first ([Native.finger]) on the exact thread, waiting as a touch does. */
     fun finger(action: Int, id: Int, x: Float, y: Float, waitMs: Long): Boolean = answer(waitMs) { Native.finger(action, id, x, y) }
 
+    /** [Native.touching] on the exact thread, in order with the touch's own events and waiting for nothing: a
+     * replacement the finger held applies in the frame this then produces. */
+    fun touching(on: Boolean) { handler.post { if (Native.touching(on)) produce() } }
+
     /** ahead=0: off. What the press of the touch that is down would open is laid out ahead of its release (exact2's
      * `ahead`: its text shaped, in a scratch tree; nothing shown or committed), a slice of at most [AHEAD_US] of
      * shaping at a time. Each slice is posted behind whatever this thread has queued, so the touch's own frame and

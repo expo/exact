@@ -836,7 +836,9 @@ fn no_name_prints_the_card_and_all_prints_every_table() {
         "tap <target>",
         "persist",
         "negative `min` gives the pad its ± key",
-        "symbol roles: back close",
+        "symbol roles (\"symbol:<role>\"; * has a <role>-fill",
+        "): back close",
+        "bookmark* document",
         "idioms with code",
     ] {
         assert!(card.contains(want), "{want} missing:\n{card}");

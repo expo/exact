@@ -187,7 +187,7 @@ static FRAMES: std::sync::Mutex<BTreeMap<u32, Option<BufferFrame>>> =
 static PRESENTED: std::sync::Mutex<BTreeMap<u32, i32>> = std::sync::Mutex::new(BTreeMap::new());
 
 /// A window target: -1 refused, 0 preparing, 2 complete frame submitted,
-/// 1 first frame handed to the compositor.
+/// 1 first frame handed to the compositor, 3 explicitly empty.
 pub fn window_ready(view: u32) -> i32 {
     PRESENTED
         .lock()
@@ -199,6 +199,18 @@ pub fn window_ready(view: u32) -> i32 {
 
 fn frames() -> std::sync::MutexGuard<'static, BTreeMap<u32, Option<BufferFrame>>> {
     FRAMES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub(super) fn bound(abi: &Abi, view: u32, id: u32) {
+    if unsafe { abi.symbol::<Read>(b"gpu_presentation_flags")(id) } & 4 != 0 {
+        discard_picture(view);
+    }
+}
+
+fn discard_picture(view: u32) {
+    let mut presented = PRESENTED.lock().unwrap_or_else(|e| e.into_inner());
+    frames().remove(&view);
+    presented.insert(view, 3);
 }
 
 /// What canvas `view` has to draw, from any thread: `Ok` its newest frame's
@@ -288,21 +300,24 @@ impl Surfaces {
             if !w.attached || only.is_some_and(|views| !views.contains(view)) {
                 continue;
             }
-            if w.window != 0 {
-                if let Some(c) = self.canvases.get(view) {
-                    if unsafe { self.abis[&c.artifact].symbol::<Read>(b"gpu_seen")(c.id) } != 0 {
-                        PRESENTED
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(*view, 1);
-                    }
-                }
-                continue;
-            }
             let Some(c) = self.canvases.get(view) else {
                 continue;
             };
             let abi = &self.abis[&c.artifact];
+            let empty = unsafe { abi.symbol::<Read>(b"gpu_presentation_flags")(c.id) } & 4 != 0;
+            if empty {
+                discard_picture(*view);
+                continue;
+            }
+            if w.window != 0 {
+                if unsafe { abi.symbol::<Read>(b"gpu_seen")(c.id) } != 0 {
+                    PRESENTED
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(*view, 1);
+                }
+                continue;
+            }
             let mut words = [0u32; 3];
             let buffer = unsafe {
                 abi.symbol::<unsafe extern "C" fn(u32, *mut u32) -> *mut std::ffi::c_void>(
@@ -313,6 +328,10 @@ impl Surfaces {
             if buffer.is_null() {
                 continue;
             }
+            PRESENTED
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(*view, 0);
             let mut frames = frames();
             if frames
                 .get(view)

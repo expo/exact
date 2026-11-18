@@ -102,6 +102,8 @@ internal class Layers(
          * a node that leaves every tree (its rows freed before another drew it), and exact2 sends a drawing only when
          * it changes. [dashAt] is where its dash phase is in it (-1: none). */
         var ops: IntArray? = null
+        var nativeIds = IntArray(0)
+        var children = IntArray(0)
         var dashAt = -1
         var phase = Float.NaN
         /** The row whose recording draws it (0: none, or not known). */
@@ -189,6 +191,15 @@ internal class Layers(
     /** Layer [id] is drawn by [row]'s recording. */
     fun inRow(id: Int, row: Int) { layers[id]?.row = row }
 
+    fun row(id: Int): Int = layers[id]?.row ?: 0
+
+    /** Native nodes in a kept drawing still belong to each row that draws it, including through nested layers. */
+    fun natives(id: Int, visit: (Int, Int) -> Unit) {
+        val l = layers[id] ?: return
+        for (native in l.nativeIds) visit(id, native)
+        for (child in l.children) natives(child, visit)
+    }
+
     /** Whether a row is near enough the view to show (null: every one is). A dash that plays in a row far out of
      * view is not recorded again each frame: once when the row comes near, and once when it ends. A fling carries
      * rows through the view in a fraction of their draw-in (crypto at 24k dp/s: ~225 rows drawing in at once, 13 of
@@ -241,7 +252,7 @@ internal class Layers(
         val dash = b.get(at + 15)
         val recolored = dash == -2
         l.dashAt = if (dash == -1 || recolored) -1 else dash
-        l.pixelated = pixelated(b, at + 16, at + len)
+        contents(l, b, at + 16, at + len)
         l.recordedScale = 1f
         l.ops = IntArray(len - 16) { b.get(at + 16 + it) }
         l.glyphColors = null; l.backgroundAt = -1; l.runs = null
@@ -250,10 +261,21 @@ internal class Layers(
         l.phase = Float.NaN
     }
 
-    private fun pixelated(b: IntBuffer, from: Int, to: Int): Boolean {
+    private fun contents(l: Layer, b: IntBuffer, from: Int, to: Int) {
+        val natives = ArrayList<Int>()
+        val children = ArrayList<Int>()
+        l.pixelated = false
         var i = from
-        while (i < to) { if (b.get(i) == 49 && b.get(i + 1) == 2) return true; i = structure.end(b, i) }
-        return false
+        while (i < to) {
+            when (b.get(i)) {
+                28 -> natives.add(b.get(i + 1))
+                29 -> children.add(b.get(i + 1))
+                49 -> if (b.get(i + 1) == 2) l.pixelated = true
+            }
+            i = structure.end(b, i)
+        }
+        l.nativeIds = natives.toIntArray()
+        l.children = children.toIntArray()
     }
 
     /** Where a recoloured layer's colours are: every glyph run's (op 9), and the first rounded rect's (op 2, the

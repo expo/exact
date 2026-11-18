@@ -4,7 +4,7 @@
 // `NSMutableDictionary` this marks `taken`, and an app's own native intent
 // calls `ExactTools.call` directly. Either way the call is handed to the
 // session's runner, which runs it as an invocation of origin `tool`
-// (runner/src/runner/modules/calls.rs), and the door polls it by id until it
+// (runner/src/runner/calls.rs), and the door polls it by id until it
 // ends or a reload replaces that runner. The module posts
 // `exact.tools.cancel` with the same dictionary when the system cancels the
 // intent's task: the call's `Cancellation`, which the dictionary carries,
@@ -14,6 +14,7 @@
 //
 // A call that launched the app with no scene boots the session with none,
 // as a wake does (LLP 1133.017 D7): `boot`, which the app's host sets.
+import CExact
 import Foundation
 import os
 #if os(iOS)
@@ -84,7 +85,7 @@ public enum ExactTools {
                 if Date().timeIntervalSince(started) > bootBound { return reply(["error": "The app's file storage did not start in time."]) }
                 return DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: land)
             }
-            reply(json(session.agent(text(["op": "pickedPath", "name": name]))))
+            reply(json(session.runtime.ask(exact_picked_path, text(["name": name]))))
         }
         land()
     }
@@ -138,7 +139,7 @@ public enum ExactTools {
             }
             var request: [String: Any] = ["op": "call", "tool": tool, "args": args, "door": door, "cold": cold, "hidden": hidden(session)]
             if let digest { request["digest"] = digest }
-            let answer = json(session.agent(text(request)))
+            let answer = json(session.runtime.ask(exact_tool, text(request)))
             guard let id = answer["call"] as? Int else {
                 return refuse("unavailable", answer["error"] as? String ?? "The app refused the call.")
             }
@@ -153,7 +154,7 @@ public enum ExactTools {
     /// the next one would read another call's outcome.
     static func runner(_ session: ExactSession) -> (String) -> String? {
         let issued = SessionLease(session)
-        return { issued.session?.agent($0) }
+        return { issued.session?.runtime.ask(exact_tool, $0) }
     }
 
     /// Poll call `id`, which the runner holds, through `agent` until it ends,

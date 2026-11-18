@@ -55,18 +55,6 @@ the distrusted emSign intermediate keys (RUSTSEC-2026-0382). Exact's
 `transport/testdata/distrusted/`, checks both against either kind of store;
 replay it on a refresh unless upstream carries the same check.
 
-## Portable event-stream timeouts
-
-`transport/rustls_http.rs` removes implicit read deadlines after a successful
-`text/event-stream` response identifies an event stream without an explicit
-request timeout. Connection and header limits and explicit timeouts still apply.
-Cancellation interrupts blocked reads; ordinary requests keep their limits.
-The last `Content-Type` controls classification when it is repeated.
-`transport/rustls_timeout_tests.rs` probes both default deadlines and expired
-deadlines, explicit-timeout policy and agent reuse. `transport/stream_tests.rs`
-exercises later events, explicit timeout expiry, cancellation and release
-against loopback peers.
-
 ## Repeated portable HTTP response fields
 
 `transport/rustls_http.rs` combines repeated `Cache-Control` and `Vary` fields
@@ -1151,3 +1139,86 @@ redirection before a Windows app drive claims the cell. Append
 as OpenSSL and curl read the variable. `exact setup` then works behind a
 TLS-intercepting proxy whose CA is private. The pinned SHA-256 still decides
 what is extracted. Replay on a refresh.
+
+## Content codings off Apple
+
+The rustls transport builds ureq with `gzip` and `brotli`: a request names
+`Accept-Encoding: gzip, br`, and a response with that `Content-Encoding` reaches
+`fetch` decoded, as NSURLSession gives it on Apple and Fetch requires
+([HTTP-network fetch](https://fetch.spec.whatwg.org/#http-network-fetch)). A server may
+send a stored coding unasked: Cloud Storage serves a `br` object to a request that
+names only `identity`. Without the features Android, Linux and Windows handed the
+coded bytes to `text()`. Replay on a refresh.
+
+## Local patch 48, an open-ended response
+
+`Request::open_ended` marks a response its caller reads for as long as it
+holds it: exact2's event streams and byte streams (LLP 1016.000). Without an
+explicit `timeout`, no limit of the transport's own ends it, on the whole
+exchange or on a quiet body, whatever its status. An explicit timeout keeps
+its meaning, and ordinary requests keep their limits.
+
+The portable transport (`transport/rustls_http.rs`) keeps its limits on
+connecting (10 s) and on the head (15 s), and lifts every read deadline ureq
+would apply to the body (its 30 s global and 15 s body limits) once the head
+arrives, for an `open_ended` request and for a successful response whose
+last `Content-Type` is `text/event-stream`. Cancellation still interrupts a
+blocked read, and a pooled agent restores its deadlines when it is leased
+again. `transport/rustls_timeout_tests.rs` probes the deadlines passed to the
+wire, default and expired, and agent reuse; `transport/stream_tests.rs`
+exercises later events, explicit timeout expiry, cancellation and release
+against loopback peers.
+
+Darwin (`transport/darwin_http.mm`) sets an open-ended request's
+`timeoutInterval`, which ends a task after that long without data (60 s by
+default), to a limit nothing reaches (`Ibex2Unbounded`). The head goes
+without a limit too: URLSession calls `didReceiveResponse` only with the
+first body bytes or the body's end (content sniffing; measured for
+`text/event-stream`, `application/octet-stream` and `text/plain`), so a
+server that answers and then waits shows no head until it sends. Its
+session's `timeoutIntervalForResource` (seven days by default) is the same
+unreached limit; that limit is a session's, so the pool leases an open-ended
+exchange only a session of its kind and every other request one that keeps
+the seven days, and at its four sessions an idle one of the other kind gives
+up its place.
+
+exact2's `host/executor/src/stream_quiet_tests.rs` holds an event stream and
+a byte stream quiet past each transport's limits against a loopback peer, on
+rustls and on URLSession. Replay on a refresh.
+
+## Local patch 49, one connection pool a transport
+
+exact2 runs its independent lane's six workers, its scoped requests and its
+launch preloads over one transport (LLP 1162 D5), so its reads share their
+connections.
+
+Darwin (`transport/darwin_http.mm`) ran each exchange on one of four
+sessions leased to it alone, because its delegate waits while the exchange's
+reader is behind, which would stall every task of a shared session; each
+session had its own connection pool. `Request::collected` says the caller
+reads the reply to its end as it arrives, into memory (exact2's plain reads
+and preloads, not a reply written to a file). Such an exchange, if not
+open-ended and its limit at most 64 MiB, a plain request's ceiling, now runs
+on one `shared` session per transport, whose delegate waits only while the
+reply is a mebibyte ahead of its reader, which a collecting reader never is
+for long: the session's other exchanges are not held, and what it holds of
+each reply stays bounded. The reader takes the reply from an offset and drops
+what it has taken once that is half the buffer. URLSession task suspension is
+no substitute: suspended in `didReceiveData`, a loopback task kept delivering
+its whole 8 MiB. The shared session's `HTTPMaximumConnectionsPerHost` is 32:
+URLSession's six (macOS) or four (iOS) would queue a read behind replies its
+origin holds, which sessions of their own never did, and 32 is more than
+exact2 runs at once on one transport (six workers, eight launch preloads,
+eight prefetches). HTTP/2 and HTTP/3
+carry an origin's exchanges on one connection. Any other exchange still
+leases a session of its own (local patch 48's kinds), so a stream, an unread
+reply or a slow file write never holds back the shared session.
+`transport/darwin_stream_tests.rs` has eight collected exchanges at once take
+their heads, which the peer sends only once all eight are in, beside four
+open-ended ones, and eight more after them open no connection.
+
+The portable transport (`transport/rustls_http.rs`) leases each exchange an
+idle agent of its own, each agent with its own pool. A lease now takes the
+newest idle agent whose last requests went to the request's origin (the
+eight it remembers), so a request finds a connection another left open to
+it. Replay on a refresh.

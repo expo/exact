@@ -44,6 +44,25 @@ function answer(source: string, args: unknown[], store: any): unknown {
   if (source === "rejected") return { text: String(rejectedFetches) };
   if (source === "throws") { void fetch(`${API}/before-throw`); throw new Error("after sending"); }
   if (source === "secret" && String(args[0]).startsWith("read-")) return store.exclusive("token", () => ({ text: store.get("token") ?? "empty" }));
+  if (source === "secret" && args[0] === "nested") return store.exclusive("token", () =>
+    store.exclusive("token", () => ({ text: "inner" })).catch((e: Error) => ({ text: `refused:${e.message}` })));
+  if (source === "secret" && args[0] === "tentative") return store.exclusive("token", async () => {
+    store.set("token", "tentative");
+    await fetch(`${API}/safe`);
+    return { text: "done" };
+  });
+  if (source === "secret" && args[0] === "unawaited") return store.exclusive("token", () => {
+    void fetch(`${API}/report`, { method: "POST" });
+    throw new Error("after sending");
+  }).catch((e: Error) => ({ text: `caught:${e.message}` }));
+  if (source === "secret" && args[0] === "unchanged") return store.exclusive("token", async () => {
+    store.set("token", store.get("token"));
+    throw new Error("unchanged");
+  }).catch((e: Error) => ({ text: `caught:${e.message}` }));
+  if (source === "secret" && args[0] === "partial") return store.exclusive("token", async () => {
+    store.set("token", "partial");
+    throw new Error("body failed");
+  }).catch((e: Error) => ({ text: `caught:${e.message}` }));
   if (source === "secret") return auth.fetch(store, `${API}/data`).then(r => r.text()).then(text => ({ text }), e => ({ text: `failed:${e.message}` }));
   if (source === "work" && typeof args[0] === "string") return work(args[0]);
   throw { kind: "UnknownSource", message: source };

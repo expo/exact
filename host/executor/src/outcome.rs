@@ -232,9 +232,10 @@ impl Deadline {
     }
 }
 
-/// A WebSocket stream's idle timeout (LLP 1016.000 D11): a thread that
-/// ends the stream when nothing has arrived for `ms`, measured from the
-/// instant of each [`Quiet::heard`] and not from when the thread next runs.
+/// A stream's idle timeout (LLP 1016.000 D11): a thread that ends the
+/// stream when nothing has arrived for `ms`, measured from the instant of
+/// each [`Quiet::heard`] and not from when the thread next runs. Between
+/// [`Quiet::hold`] and the next `heard` nothing is counted.
 ///
 /// The stream ends once, by whichever claims it first: the watch, which
 /// then aborts the read, or its reader, with what it found
@@ -248,8 +249,8 @@ pub(super) struct Quiet {
 }
 
 struct QuietState {
-    /// When something last arrived.
-    heard: std::sync::Mutex<std::time::Instant>,
+    /// When something last arrived, or `None` while the count is held.
+    heard: std::sync::Mutex<Option<std::time::Instant>>,
     /// [`ARMED`], then [`TIMED_OUT`] or [`FINISHED`], once.
     end: std::sync::atomic::AtomicU8,
 }
@@ -263,7 +264,7 @@ impl Quiet {
         use std::sync::atomic::Ordering;
         let (done, wait) = std::sync::mpsc::channel::<()>();
         let shared = std::sync::Arc::new(QuietState {
-            heard: std::sync::Mutex::new(std::time::Instant::now()),
+            heard: std::sync::Mutex::new(Some(std::time::Instant::now())),
             end: std::sync::atomic::AtomicU8::new(ARMED),
         });
         let (state, abort) = (shared.clone(), abort.clone());
@@ -275,7 +276,9 @@ impl Quiet {
                 // arrival takes, so an arrival is either counted or comes
                 // after the timeout, never between the two.
                 let heard = state.heard.lock().unwrap();
-                let left = (*heard + limit).saturating_duration_since(std::time::Instant::now());
+                let left = heard.map_or(limit, |at| {
+                    (at + limit).saturating_duration_since(std::time::Instant::now())
+                });
                 if left.is_zero() {
                     // A stream already let go stays Aborted: the quiet did
                     // not end it. The claim is made before the abort, so the
@@ -306,9 +309,17 @@ impl Quiet {
         })
     }
 
-    /// Something arrived now: the opening, or a complete data message.
+    /// Something arrived now: a socket's opening or one of its complete
+    /// data messages, or bytes of an HTTP stream's body.
     pub(super) fn heard(&self) {
-        *self.shared.heard.lock().unwrap() = std::time::Instant::now();
+        *self.shared.heard.lock().unwrap() = Some(std::time::Instant::now());
+    }
+
+    /// The host stops reading for a while (a byte stream waiting for a
+    /// drain), so it cannot tell a quiet peer: nothing counts until the
+    /// next [`Quiet::heard`].
+    pub(super) fn hold(&self) {
+        *self.shared.heard.lock().unwrap() = None;
     }
 
     /// The stream's end: `end`, which its reader found, unless the watch

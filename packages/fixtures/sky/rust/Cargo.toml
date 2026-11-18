@@ -9,6 +9,6 @@ test = false
 bench = false
 
 [dependencies]
-exact-gpu = "0.3"
+exact-gpu = "0.4"
 
 [workspace]

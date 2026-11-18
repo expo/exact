@@ -221,6 +221,10 @@
       "name": "@exact/media-capture",
       "version": "1.0.0",
     },
+    "packages/model-viewer": {
+      "name": "@exact/model-viewer",
+      "version": "1.0.0",
+    },
     "packages/motion": {
       "name": "@exact/motion",
       "version": "1.0.0",
@@ -289,6 +293,10 @@
     },
     "packages/serial": {
       "name": "@exact/serial",
+      "version": "1.0.0",
+    },
+    "packages/shader": {
+      "name": "@exact/shader",
       "version": "1.0.0",
     },
     "packages/sign-in": {
@@ -416,6 +424,8 @@
 
     "@exact/media-capture": ["@exact/media-capture@workspace:packages/media-capture"],
 
+    "@exact/model-viewer": ["@exact/model-viewer@workspace:packages/model-viewer"],
+
     "@exact/motion": ["@exact/motion@workspace:packages/motion"],
 
     "@exact/nfc": ["@exact/nfc@workspace:packages/nfc"],
@@ -447,6 +457,8 @@
     "@exact/search-index": ["@exact/search-index@workspace:packages/search-index"],
 
     "@exact/serial": ["@exact/serial@workspace:packages/serial"],
+
+    "@exact/shader": ["@exact/shader@workspace:packages/shader"],
 
     "@exact/sign-in": ["@exact/sign-in@workspace:packages/sign-in"],
 

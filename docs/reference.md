@@ -1424,18 +1424,57 @@ The generated `--embed` composition lists the capabilities to link.
 | Product | Capability | Installation |
 | --- | --- | --- |
 | `ExactMarkdown` | Markdown text and editing | `ExactMarkdown.install()` |
+| `ExactCollections` | Windowed lists, swipe rows, reorder groups and iOS list row cells | `ExactCollections.install()` |
 | `ExactDrag` | Reorder, height and transform drags | `ExactDrag.install()` |
 | `ExactGroupedLists` | Native grouped lists | `ExactGroupedLists.install()` |
-| `ExactSurfaces` | GPU and Canvas surfaces | `ExactSurfaces.install()` |
+| `ExactSurfaces` | GPU and Canvas surfaces | `ExactSurfaces.install()`; links `ExactImages`, which Canvas 2D images read through |
+| `ExactImages` | Image files, animated images and package pictures; icons in text | `ExactImages.install()` |
 | `ExactMediaPicker` | Native media picking | `ExactMediaPicker.install()` |
 | `ExactAuthSession` | Authentication sessions | `ExactAuthSession.install()` |
 | `ExactNumerals` | Numeric content transitions | `ExactNumerals.install()` |
 | `ExactTips` | Platform tips | `ExactTips.install()` |
 | `ExactPresence` | Native presence checks | `ExactPresence.install()` |
+| `ExactEffects` | CSS `filter` on a box | `ExactEffects.install()` |
+| `ExactSvg` | SVG elements, SVG images and icons (links `ExactEffects` too) | `ExactSvg.install()` |
+| `ExactNativeViews` | The app's native module, native views and hatches | `ExactNativeViews.install()` |
 
 Development builds log a missing Markdown or drag installation once per session,
 with the product and installation call. Without it, Markdown remains literal
 text and drag gestures are unavailable.
+
+### Replacing an embedded app's plan
+
+`ExactApp.apply` and `applyGeneration` answer `ExactApplyResult`: `.applied`,
+`.held(reason)` or `.refused(error)`. A replacement waits while a field is
+composing text, a pointer is down or a gesture is under way. The host asks
+the platform, not the app's handlers. On macOS that is marked text in a
+window's first responder, a mouse button down in the app, a trackpad
+gesture's fingers, a tracking loop AppKit runs (a menu, a control's press, a
+scroller) and a gesture recognizer that has begun in a session's window. On
+iOS and tvOS it is a touch UIKit has not ended, a press of a remote's or a
+game controller's button (tvOS's Select has no touch) and, in a session's
+window, a first responder with marked text, a scroll view tracking or
+dragging, a gesture recognizer that has begun and a view controller
+transition. An embedder's own recognizers and scroll views in that window
+hold it too. A row the keyboard lifted to reorder holds it until the drop or
+the cancel.
+Loading a candidate's data module and finishing the running module's
+requests also hold it; the reason names which. The app keeps the held candidate as bytes, with its assets,
+modules and commit closure, and prepares it once the hold clears, so it carries the state
+of that moment. A newer candidate supersedes it. Do not poll or submit it
+again.
+
+`ExactAppLifecycle.generationStarted` reports that a candidate applied.
+`replacementEnded` reports, once, with its token and reason, that a held
+candidate was refused when prepared, superseded, or dropped because every
+session it was held for was destroyed or, for a generation from `connect`'s
+URL, because `disconnect` or another `connect` closed that connection.
+`state.replacement.pending` in the
+agent's `state` names the hold. `ExactSession.apply`, which replaces one
+session's plan, refuses instead of holding. The rule covers development saves
+and `immediate` production updates (LLP 1029.000.002 D7, D9). The dev menu's
+Reload is the person's own act: it ends a composition as a click elsewhere
+does, keeping the marked text, and commits at once.
 
 ### Mac development signing
 
@@ -1931,8 +1970,9 @@ a request that never ends, such as a socket that never connects, holds the
 update for as long as the app runs. The next cold launch boots it under
 `next-launch` and `immediate`; under `app-decides` it is still staged and
 waits for `deliveryActivate()` again. An update without a data module applies
-with requests in flight. On Android, applying also waits for a turn with no
-touch held, no text being composed and no Back gesture in progress.
+with requests in flight. Every host also waits while text is being composed,
+a pointer is down or a gesture is under way, including an interactive Back,
+and applies the update when that ends, without a second `deliveryActivate()`.
 
 A check runs when the app comes to the foreground, at most once a minute,
 and every `deploy.check.interval` seconds (900 by default) while it stays
@@ -2113,8 +2153,10 @@ of one kernel; a replacement creates another kernel, so its incarnation can repe
 Use `generation` to wait for a replacement. The terminal's JSON inspection replies
 (`layout`, `plan`, `runner-tree` and `node`) carry these tags too.
 
-`state.replacement` is null before a replacement. Afterwards it reports `at`, the
+`state.replacement` is null before a replacement while none waits. Afterwards it reports `at`, the
 replacement's clock in milliseconds, and `dropped`, the root slots that could not carry.
+`pending` names what a waiting replacement waits for (such as `"composition"`, `"pointer"`,
+`"gesture"`, `"module"` or `"requests"`), or is null.
 Each entry has `what: "state"`, `name`, and `why`: `"no place"` when the slot is gone,
 or `"type changed"` when its value does not fit the new declaration. The replacement's
 first journal line gives the same report. Component state, view identity, scroll,
@@ -2396,6 +2438,11 @@ A mutation's answer hands over one request at a time, in order. Sends of the
 same `parallel` mutation overlap, up to three at a time on the six shared
 workers. They wait for everything before them except the other sends of
 their mutation; later work waits for them. Replies retain the order asked.
+The six workers, a source's scoped requests and the launch's preloads share
+one connection pool natively (LLP 1162 D5), so a read reuses a connection
+another left open to its origin, and on Apple their reads of an HTTP/2 or
+HTTP/3 origin share one connection. The ordered lane keeps a pool of its
+own, and a stream opens its own connection.
 
 Native hosts keep a resource's `GET` reply when it says how long it is fresh
 or carries a validator (LLP 1162 D4): in memory, 16 MiB per runtime, gone with
@@ -2744,9 +2791,10 @@ interrupted drive, the next drive refuses before resetting or opening its profil
 names the profile and PID; close that browser or use another store name. A drive also refuses when the profile's
 owner cannot be verified. A data module's `secret.keep` rides that same
 store: files under the named tree on Apple and Linux, `localStorage` in the named
-web profile. Apple native modules receive the same named data, cache and temporary
-roots across launches. A fresh drive clears them; the picker's temporary documents
-alone are cleared on each launch. A web drive with no `--storage` refuses app storage (`storage is unavailable
+web profile ([web sessions](recipes/web-sessions.md)). Apple native modules receive
+the same named data, cache and temporary roots across launches. A fresh drive clears
+them; the picker's temporary documents alone are cleared on each launch. A web drive
+with no `--storage` refuses app storage (`storage is unavailable
 in agent mode unless the drive names a scratch store (--storage <name>)`; a file
 read rejects `ENOENT` instead, as an empty store's) and keeps
 no secrets. The driver's `state.storage` says
@@ -2845,22 +2893,30 @@ exchange, headers and body: `fetch(url, { exactTimeout: 10000 })`. When it
 passes the request is cancelled and the fetch rejects with a `FetchError`
 whose `kind` is `Timeout` (`the request timed out after 10000 ms`). The same
 holds on Apple, Linux, the web's wasm host and the web build; a stream
-(`exactStream`) takes none, except an upload (below).
+(`exactStream`) takes none, except an upload (below). Any other stream stays
+open as long as the server holds it, however quiet it is, as in a browser: no
+limit of the platform's ends it once it is open. Natively a WebSocket has
+about 10 s to connect and 15 s for its handshake, and so has an HTTP stream
+for its connection and its response's head off Apple.
 
-A WebSocket stream can stay open and carry nothing. Give it
-`exactIdleTimeout`, in milliseconds (1 to 3600000), and the host ends it
-when nothing has arrived for that long: `fetch('wss://…', { exactStream,
-exactIdleTimeout: 60000 })` (LLP 1016.000 D11). The count starts when the
-socket is asked, and starts again at its opening and at each message;
-protocol pings and pongs do not count, and nothing the app sends does. The
+So a stream can stay open and carry nothing. Give it `exactIdleTimeout`, in
+milliseconds (1 to 3600000), and the host ends it when nothing has arrived
+for that long: `fetch('wss://…', { exactStream, exactIdleTimeout: 60000 })`
+(LLP 1016.000 D11). The count starts when the stream is asked. On a
+WebSocket it starts again at the opening and at each message; protocol
+pings and pongs do not count. On an event stream or a byte stream it starts
+again at any bytes of the body, an event stream's comment lines included
+(the `: keep-alive` a server sends every 15 s to hold a quiet stream open),
+but not at the response's head; a byte stream waiting for its mapper to take
+what it holds is not counted as quiet. Nothing the app sends counts. The
 mapper is then called once more, with `{ type: 'error', kind: 'Timeout',
 message: 'nothing arrived for 60000 ms' }`, after what it had already
 received (each message, in order), and the stream is over; the app opens it again by refreshing the
 resource. The time is real time on every host, under the driver too, so
-`clock +60000` ends no socket: test it with a short timeout against a peer
-that stays silent, and wait with `clock until state …`. Only a WebSocket
-stream takes it: on an event stream, a byte stream, a long poll or an upload
-it is a `TypeError`, and the web's wasm host and a Rust module across the
+`clock +60000` ends no stream: test it with a short timeout against a peer
+that stays silent, and wait with `clock until state …`. A long poll and an
+upload do not take it, nor does a URL of another scheme: it is a
+`TypeError` there, and the web's wasm host and a Rust module across the
 logic ABI refuse a request that has it, by name.
 
 A stream's request is never sent at build, so an option the host refuses on one
@@ -5359,18 +5415,49 @@ cargo run -q -p exact-js-bake -- path/to/app --out path/to/new-generation
 
 The app exports `grants` and an `Answer`-typed `answer`, and may export `appId`,
 which must then be `app.json`'s `app.id` (the build supplies that id when it does
-not); `appId` and `grants` are constants the build reads from the source without
-running it (a
-string, a template or `+` of constants, an array of them `.join('\n')`, or a
-top-level `const` holding one). Numbers keep their type: `1 + 2` is `3`, while
-`'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
+not); `appId` and `grants` are constants the build reads from syntax without
+running the module: a string, a template or `+` of constants, an array of them
+`.join('\n')`, or a top-level `const` holding one. Numbers keep their type:
+`1 + 2` is `3`, while `'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
+
+Plain `grants` may also use constants imported from app-local modules, including
+local re-exports, arrays and spreads of those arrays:
+
+```ts
+import { SECRET_GRANTS } from './src/session';
+export const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\n');
+```
+
+The imported bindings follow the same literal grammar. Calls other than the
+array's `.join`, computed arrays, package bindings (including re-exports
+from packages), and dependencies on launch-marked settings are refused with a
+source location. Imports resolve through Rolldown, to the file the bundle runs.
+Re-exports follow ECMAScript export resolution: a loop through star exports
+keeps searching, ambiguous bindings are refused, and a star never exports
+`default`. A cycle through constant initializers is refused. `app.ts` declares
+the grants explicitly; importing a module adds no grants. The captured export
+becomes the resolved string, so mutating an imported array at run time cannot
+change it. The rewrite preserves initialization of imported and re-exported
+modules. The bake receipt's `grants` is the
+complete resolved list; `grantSources` lists each nonempty line with its `grant`,
+`file`, `line` and `column`. Locations name the source expression that starts the
+line; generated `env.launch` lines name their setting in `app.json`.
+
+When no setting is launch-marked, `app.ts` may also re-export literal grants
+from an app-local module, by name or through `export *`. The captured export
+becomes the same fixed string. Launch-marked settings require a grants
+declaration in `app.ts`, where the bake adds their `env.launch` lines.
 
 A backend override (`--backend`, `EXACT_BACKEND_ORIGIN` or `.exact/backend-origin`)
 needs one top-level `const origin`, set to a literal http(s) string or a setting
 such as `import.meta.env.API_BASE_URL ?? 'https://api.example'`, and used in
-`net.fetch ${origin}`. Settings are inlined before the override. An unannotated
-setting without an authored type assertion has type `string`, so comparisons
-such as `MODE === 'live'` type-check whatever value the build supplies. Binding
+`net.fetch ${origin}`. Settings are inlined before the override.
+Plain fetch and WebSocket grant lines at the original origin move with it,
+including imported constants; matching normalizes host case and default ports.
+Their receipt entries keep the authored source locations.
+
+An unannotated setting without an authored type assertion has type `string`, so
+comparisons such as `MODE === 'live'` type-check whatever value the build supplies. Binding
 annotations and surrounding assertions are preserved for inlined values. Native launch reads
 retain `as` and angle-bracket assertions, parenthesized around the whole read;
 `satisfies` and const assertions are removed because a launch can supply any
@@ -5388,8 +5475,11 @@ top-level literal `const origin`, after `EXACT_BACKEND_ORIGIN` or
 `.exact/backend-origin` overrides it, and refuses a missing entry, listing the
 origin and keys. Before type-checking, it replaces only the captured initializer
 with a string of the selected lines joined by `\n`, so web and native read the
-same grants. Authored source stays unchanged. Keyed grants move to another
-origin in a development build (`EXACT_UPDATE_TRUST` unset or `development`): an
+same grants. Aliased exports select the initializer exported as `grants`;
+private bindings of that name do not contribute grants or receipt locations.
+Receipt locations name each selected literal. Authored source
+stays unchanged. Keyed grants move to another origin in a development build
+(`EXACT_UPDATE_TRUST` unset or `development`): an
 unlisted loopback or private-network origin (RFC 1918 or link-local IPv4,
 `fc00::/7` or `fe80::/10` IPv6) takes a loopback entry (`127.0.0.1`, `localhost`
 or `[::1]`) of the same scheme. A matching port wins; otherwise exactly one
@@ -5804,10 +5894,19 @@ the shape declares them. `bun exact.mjs contract rust app.contract -o
 /tmp/shapes.rs` writes each shape as a struct with its fields in that order.
 It includes native-module call records only when an authored shape or a data
 source's parameter or result type reaches them; `contract::module_rust`
-generates the module bindings. For a build script,
+generates the module bindings. A data crate's build script calls
+`contract::build_rust(Path::new("../app.contract"))` to write `OUT_DIR/shapes.rs`.
+Exact refreshes the generated Rust before each Cargo build, writing it only
+when its contents change. The first build creates the file; Cargo establishes
+its watch on the following build. Once warm, a view edit leaves the data crate
+fresh when its shapes stay the same. Compiler flags, features and other Cargo
+inputs still trigger builds. The dev watcher follows the generator's Contract
+source graph even when the generated Rust stays unchanged. Existing build scripts
+keep working. Replace their shape-generation calls with `contract::build_rust`
+to get this reuse. Direct Cargo builds watch the Contract source graph. For custom generation,
 `contract::compile_path_for_rust` returns the plan and call-record names to
 pass to `contract::rust`; the names are compiler metadata, outside the binary
-plan. Both map scoped names such as `Point__exact` to `PointExact`.
+plan. Scoped names such as `Point__exact` become `PointExact`.
 `Value::Number`, `Value::str`, `Value::Bool` and `Value::list` are the rest.
 
 ### GPU device requirements
@@ -5833,8 +5932,43 @@ requests the same grant through `exact_gpu::fixture::device_with_requirements`.
 An authored GPU module passes a static `&[exact_gpu::grants::Requirements]` as the
 second argument to `exact_gpu::module!`. See [the GPU module recipe](recipes/gpu-module.md)
 for a declaration and [package GPU surfaces](contract-for-agents.md#a-packages-gpu-surfaces)
-for packaging. `exact-gpu` 0.3 adds the limits argument; packages declare `exactGpu: "0.3"`
-and depend on `exact-gpu = "0.3"`.
+for packaging. Packages declare `exactGpu: "0.4"` and depend on `exact-gpu = "0.4"`.
+
+### GPU storage
+
+On Apple (macOS, iOS and tvOS), Android, Linux and Windows, a surface may implement:
+
+```rust
+fn storage(&mut self, data: &std::path::Path, cache: &std::path::Path,
+    temporary: &std::path::Path) {
+    self.cache = Some(cache.to_path_buf());
+}
+```
+
+The host calls this hook once for each canvas, after creation and before its first
+`bind`. The three absolute paths resolve that session's `app:/data`, `app:/cache`
+and `app:/tmp`. They are borrowed for the call; copy any path the surface keeps.
+The native ABI preserves Unix path bytes and Windows UTF-16 code units, including
+non-Unicode names. On Android, Linux and Windows, a storage delivery failure keeps
+the canvas and logs once at creation. The module does not create directories or retain
+paths for a surface that ignores them. Create a directory when needed and handle
+filesystem errors in the surface. Device recovery keeps the surface and its paths; a recreated canvas receives them
+again. Keep paths on the surface, since a loaded artifact can serve several sessions.
+
+A file written under `cache` can be shown with `image "app:/cache/<name>"`, shared
+by that path, or read as an asset. Use distinct names for changed snapshots. Cache
+and temporary files may be removed by the platform; durable files belong in `data`.
+An agent drive's named store supplies its own roots. An unnamed drive uses temporary
+process storage, not the installed app's files.
+
+The web does not call `storage`. Its GPU artifact is WebAssembly with generated
+wasm-bindgen JavaScript; Exact supplies it no filesystem or browser-storage bridge.
+A GPU module that needs persistence must supply its own browser API integration.
+The app's data module can separately use Exact's `storage.fs` and `storage.sqlite`
+APIs, backed by IndexedDB in this repo. Those APIs are not injected into GPU modules
+and supply no paths usable by `std::fs` or native SQLite.
+`exact-gpu` 0.4 carries the hook and the native `gpu_storage` export; rebuild GPU
+artifacts with the host.
 
 ### An authored workspace
 
@@ -5990,8 +6124,15 @@ impl DataSource for Scores {
 **secrets**: a session token, a key. Apple keeps them in the Keychain, Linux
 in a file per secret only the user can read (`0600`, under
 `$XDG_DATA_HOME/exact/<app id>/secrets`; not encrypted), Android in AES-GCM
-files with Android Keystore-wrapped keys, and the web in `localStorage`; Windows
-keeps them in memory for now. Opening Android's secret store deletes legacy
+files with Android Keystore-wrapped keys, and the web in origin-readable
+`localStorage`; Windows keeps them in memory for now.
+**For web refresh and session tokens, use a server-set HttpOnly, Secure cookie:**
+[web sign-in tokens and sessions](recipes/web-sessions.md) covers the shared
+native/web flow, selected at run time by `exactHost()` inside an answer
+(`'web'` or `'native'`, no grant; also on web workers). It refuses at module
+initialization and outside an answer; the bake leaves its answers for the host.
+Web `secret.keep` does not protect against injected scripts.
+Opening Android's secret store deletes legacy
 plaintext files without reading them; only encrypted entries are restored.
 The host reads secrets into a snapshot before boot, so a read is synchronous,
 and a scripted drive never keeps them. A best time is not

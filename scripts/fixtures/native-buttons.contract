@@ -44,7 +44,7 @@ component NativeButtons
             image "symbol:sf/lock.fill" -exact-tint-color="green" font-size=28 font-weight=600
             text "Lock"
           button appearance="auto" buttonStyle="tinted" testId="subtitle" press=go
-            image "symbol:sf/location.fill"
+            image "symbol:location-fill"
             text "Last Parked"
             text "Updated just now"
         button appearance="auto" buttonStyle="gray" width="100%" text-align="start" testId="check-update" press=go

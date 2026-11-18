@@ -4,7 +4,9 @@
 //! messages follow the runner's pace, not the transport's chunking, and no
 //! byte is dropped or reordered. What waits is bounded by the stream's
 //! ceiling, at most 1 MiB; a read that would pass it waits for a drain.
-use super::super::{complete, failed, has_ready, wake, Completed, Shared};
+//! An idle timeout hears each read and counts none of that wait: the host is
+//! not reading then, so it cannot tell a quiet peer (LLP 1016.000 D11).
+use super::super::{complete, failed, has_ready, wake, Completed, Quiet, Shared};
 use exact_runner::{FailureKind, Message, Outcome};
 use ibex2::stdlib::{abort::AbortController, fetch::StreamingResponse};
 
@@ -19,6 +21,7 @@ pub(super) fn read(
     response: StreamingResponse,
     limit: usize,
     abort: AbortController,
+    quiet: Option<Quiet>,
 ) {
     let bound = limit.min(RECEIVE_BYTES);
     let mut body = response.body;
@@ -29,7 +32,18 @@ pub(super) fn read(
             match body.read(&mut chunk) {
                 Ok(0) => return failed(FailureKind::Network, "the byte stream ended"),
                 Ok(n) => {
-                    if !append(shared, ticket, &chunk[..n], bound, &abort) {
+                    // Heard as they arrive, and again after any wait for a
+                    // drain, which holds the count.
+                    let heard = || {
+                        if let Some(quiet) = &quiet {
+                            quiet.heard();
+                        }
+                    };
+                    heard();
+                    let appended =
+                        append(shared, ticket, &chunk[..n], bound, &abort, quiet.as_ref());
+                    heard();
+                    if !appended {
                         let message = if abort.signal().aborted() {
                             "native request aborted"
                         } else {
@@ -51,18 +65,20 @@ pub(super) fn read(
         }
     }))
     .unwrap_or_else(|_| failed(FailureKind::Aborted, "the stream reader panicked"));
+    let run = Quiet::finish(quiet.as_ref(), run);
     body.cancel();
     complete(shared, ticket, run);
 }
 
 /// Append `bytes` to the message of `ticket` the runner has not taken, or
-/// queue a new one.
+/// queue a new one. A wait for a drain holds `quiet`'s count.
 fn append(
     shared: &Shared,
     ticket: u64,
     bytes: &[u8],
     bound: usize,
     abort: &AbortController,
+    quiet: Option<&Quiet>,
 ) -> bool {
     let mut state = shared.state.lock().unwrap();
     loop {
@@ -93,6 +109,9 @@ fn append(
             });
         match waiting {
             Some(queued) if queued.len() + bytes.len() > bound => {
+                if let Some(quiet) = quiet {
+                    quiet.hold();
+                }
                 state = shared
                     .processes
                     .drained

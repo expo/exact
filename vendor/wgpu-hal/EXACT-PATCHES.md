@@ -296,9 +296,20 @@ The caller owns the persistent envelope, identity and atomic file replacement.
 `BinaryArchive::counts` reports lookup hits and misses; `additions` counts only
 successful render and compute additions, so a failed addition cannot trigger a snapshot.
 Mesh pipelines keep their existing path. The metadata revision is 15.
-A simulator build (`target_abi = "sim"`) installs no archive: the simulator's
-Metal aborts the process serializing one (`MTLReportFailure` under
-`-[_MTLBinaryArchive legacySerializeToURL:options:error:]`, iOS 27 simulator).
+`Device::binary_archive_unavailable` says why a device keeps no archive, and
+`install_binary_archive` refuses one there. A simulator build (`target_abi = "sim"`)
+keeps none: the simulator's Metal aborts the process serializing one
+(`MTLReportFailure` under `-[_MTLBinaryArchive legacySerializeToURL:options:error:]`,
+iOS 27 simulator). Nor does a Mac whose Metal device does not support the Metal 3
+family. That is the paravirtualized GPU of a macOS virtual machine, which reports the
+Apple3 and Mac2 families: on macOS 26.6, 27.0 and 27.2 a second serialization of an
+archive in one process (on 26.6, also the first of an archive loaded from a file)
+leaves out what the first held, and the next process, missing those pipelines, traps
+adding one of them again (`VariantEntry::insertVariant`, "Unbalanced call to
+dispatch_group_leave()"). Intel Macs without Metal 3 are included unmeasured.
+`BinaryArchive::mark_additions` names a file that exists only while a pipeline is
+added to a restored archive, so the caller can tell that a launch stopped there and
+not restore that archive again; a pipeline is not added when the file cannot be written.
 
 This follows Apple's [binary archive workflow](https://developer.apple.com/documentation/metal/creating-binary-archives-from-device-built-pipeline-state-objects).
 The seam stays outside wgpu's portable `PipelineCache`, whose core header validates

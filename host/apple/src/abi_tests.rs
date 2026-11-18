@@ -15,6 +15,8 @@ mod long_poll;
 mod native_settle;
 #[path = "abi_refusal_tests.rs"]
 mod refusals;
+#[path = "abi_wake_tests.rs"]
+mod wake;
 
 fn plan(resource: Option<&str>) -> Vec<u8> {
     let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
@@ -189,7 +191,7 @@ fn plan_and_module_reloads_keep_the_document_owner() {
         file.display()
     );
     let reply = bridge.host.as_mut().unwrap().answer_hold(&request).unwrap();
-    let doc = exact_runner::agent::field_str(&reply, "doc").unwrap();
+    let doc = exact_runner::json::field_str(&reply, "doc").unwrap();
     // A picker's `startIn` opens in the chosen file's folder (LLP 1173 D2).
     let mut folder = |path: &str, owner: u64| {
         let request = format!(r#"{{"op":"documentFolder","owner":{owner},"path":"{path}"}}"#);
@@ -197,7 +199,7 @@ fn plan_and_module_reloads_keep_the_document_owner() {
     };
     let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     assert_eq!(
-        exact_runner::agent::field_str(&folder(&doc, u64::from(rt)), "folder").as_deref(),
+        exact_runner::json::field_str(&folder(&doc, u64::from(rt)), "folder").as_deref(),
         parent.to_str()
     );
     assert_eq!(folder(&doc, u64::from(rt) + 1), "{}");
@@ -259,17 +261,23 @@ fn plan_and_module_reloads_keep_the_document_owner() {
     std::fs::remove_file(file).unwrap();
 }
 
+type Preloaded = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
+
 #[derive(Clone, Default)]
 struct StorageModule {
     configured: bool,
     loaded: bool,
     calls: Arc<Mutex<Vec<&'static str>>>,
     preparing: Arc<std::sync::atomic::AtomicBool>,
+    preloaded: Preloaded,
 }
 
 impl DataSource for StorageModule {
     fn preload(&self) -> Result<bool, DataError> {
         Ok(!self.preparing.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    fn when_preloaded(&self, wake: Box<dyn FnOnce() + Send>) {
+        self.preloaded.lock().unwrap().push(wake);
     }
     fn app_id(&self) -> &str {
         "test.exact.storage.reload"
@@ -313,6 +321,7 @@ impl DataSource for StorageModule {
         Ok(Self {
             calls: self.calls.clone(),
             preparing: self.preparing.clone(),
+            preloaded: self.preloaded.clone(),
             ..Self::default()
         })
     }
@@ -321,22 +330,19 @@ impl DataSource for StorageModule {
 #[test]
 fn pending_native_preparation_keeps_the_running_app_and_carries_later_input() {
     use std::sync::atomic::Ordering;
+    extern "C" fn wake(_: *mut c_void) {}
+    let mut hooks = Hooks::none();
+    hooks.wake = Some(wake);
     let bytes = contract::compile("component App\n  state count = 0\n  action increment\n    count = count + 1\n  view\n    button press=increment testId=\"increment\"\n      text `${count}`\n").unwrap().encode();
     let source = StorageModule::default();
     let mut bridge = Bridge::new();
-    bridge.boot(&bytes, source.clone(), Hooks::none(), 390.0, 844.0);
+    bridge.boot(&bytes, source.clone(), hooks, 390.0, 844.0);
     bridge.data_ready();
     source.calls.lock().unwrap().clear();
     source.preparing.store(true, Ordering::SeqCst);
     for _ in 0..2 {
         bridge.input_write(&bytes);
-        let count = bridge.prepare_module(
-            [bytes.len(), 0, 0],
-            source.clone(),
-            Hooks::none(),
-            390.0,
-            844.0,
-        );
+        let count = bridge.prepare_module([bytes.len(), 0, 0], source.clone(), hooks, 390.0, 844.0);
         let batch = String::from_utf8_lossy(bridge.output_bytes(count as usize));
         assert!(batch.contains("\"pending\":true"), "{batch}");
         assert!(bridge.prepared.is_none());
@@ -353,15 +359,16 @@ fn pending_native_preparation_keeps_the_running_app_and_carries_later_input() {
     }
     let carried = bridge.host.as_ref().unwrap().carry();
     assert_eq!(carried.slots, vec![("count".into(), Value::Number(2.0))]);
-    source.preparing.store(false, Ordering::SeqCst);
-    bridge.input_write(&bytes);
-    bridge.prepare_module(
-        [bytes.len(), 0, 0],
-        source.clone(),
-        Hooks::none(),
-        390.0,
-        844.0,
+    assert!(
+        !source.preloaded.lock().unwrap().is_empty(),
+        "the candidate must wake the session when its image finishes loading"
     );
+    source.preparing.store(false, Ordering::SeqCst);
+    for wake in std::mem::take(&mut *source.preloaded.lock().unwrap()) {
+        wake();
+    }
+    bridge.input_write(&bytes);
+    bridge.prepare_module([bytes.len(), 0, 0], source.clone(), hooks, 390.0, 844.0);
     assert!(bridge.prepared.is_some());
     let kernel = bridge.host.as_ref().unwrap().runner().kernel();
     let button = kernel

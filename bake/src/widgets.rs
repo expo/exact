@@ -222,6 +222,7 @@ mod tests {
                 reach: Value::Null,
                 painter: None,
                 game: false,
+                host_work: false,
             };
             crate::receipt::emit(
                 &mut compat,
@@ -292,6 +293,7 @@ mod tests {
                 reach: Value::Null,
                 painter: None,
                 game: false,
+                host_work: false,
             };
             crate::receipt::emit(
                 &mut compat,
@@ -392,6 +394,7 @@ mod tests {
                 reach: Value::Null,
                 painter: None,
                 game: false,
+                host_work: false,
             };
             crate::receipt::emit(
                 &mut compat,

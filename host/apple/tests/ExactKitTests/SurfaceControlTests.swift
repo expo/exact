@@ -5,6 +5,7 @@ import UIKit
 #endif
 import XCTest
 import CryptoKit
+import ImageIO
 @testable import ExactKit
 @testable import ExactSurfaces
 
@@ -16,7 +17,48 @@ var controlEvents: [[String: Any]] = []
 private var boundObjects: [NSDictionary] = []
 private var boundJSON: [Data] = []
 private var motionPreferences: [Bool] = []
+private var storagePaths: [[String]] = []
+private var storageAtBind: [Int] = []
+private let storageSnapshot = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQMgn7DwAClAGcHVtGXwAAAABJRU5ErkJggg==")!
 final class SurfaceControlTests: XCTestCase {
+    func testCanvasReceivesItsSessionsStorageBeforeBindingAndOnlyOnce() throws {
+        storagePaths = []
+        var shared: GpuModule?
+        for store in ["first", "second"] {
+            let (session, canvas, _) = fixture()
+            defer { session.destroy() }
+            let module = try XCTUnwrap(shared ?? session.surfaceHost.modules[""])
+            shared = module
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("gpu-storage-\(UUID().uuidString)-\(store)")
+            defer { try? FileManager.default.removeItem(at: root) }
+            session.appFileRoots = ["data": root.path + "/data", "cache": root.path + "/cache", "tmp": root.path + "/temporary"]
+            module.storage = { _, d, dl, c, cl, t, tl in
+                let paths = [(d, dl), (c, cl), (t, tl)].map { String(decoding: UnsafeBufferPointer(start: $0.0, count: $0.1), as: UTF8.self) }
+                storagePaths.append(paths)
+                do {
+                    try FileManager.default.createDirectory(atPath: paths[1], withIntermediateDirectories: true)
+                    try storageSnapshot.write(to: URL(fileURLWithPath: paths[1] + "/snapshot.png"))
+                    return true
+                } catch { return false }
+            }
+            session.surfaceHost.destroy(view: canvas.id)
+            session.surfaceHost.modules[""] = module
+            boundJSON = []; storageAtBind = []
+            session.surfaceHost.surface(view: canvas, name: "storage-fixture", values: Data("[]".utf8))
+            XCTAssertEqual(storagePaths.last, [session.appFileRoots["data"]!, session.appFileRoots["cache"]!, session.appFileRoots["tmp"]!])
+            XCTAssertEqual(boundJSON.count, 1)
+            XCTAssertEqual(storageAtBind, [storagePaths.count])
+            let file = try XCTUnwrap(session.pickerHost.appFile("app:/cache/snapshot.png"))
+            defer { try? file.close() }
+            let bytes = try XCTUnwrap(file.readToEnd())
+            XCTAssertEqual(bytes, storageSnapshot)
+            let image = try XCTUnwrap(CGImageSourceCreateWithData(bytes as CFData, nil))
+            XCTAssertNotNil(CGImageSourceCreateImageAtIndex(image, 0, nil))
+            session.surfaceHost.surface(view: canvas, name: "storage-fixture", values: Data("[1]".utf8))
+        }
+        XCTAssertEqual(storagePaths.count, 2)
+        XCTAssertNotEqual(storagePaths[0], storagePaths[1])
+    }
     func testGpuModuleFollowsTheAgentMotionPreference() {
         let previous = DisplayPreferences.agent
         defer { DisplayPreferences.agent = previous }
@@ -63,6 +105,7 @@ final class SurfaceControlTests: XCTestCase {
         #endif
         let s = ExactApp.shared.makeSession(label: "control-test")
         let m = GpuModule(create: { _, _, _, _, _ in 1 }, bind: { _, p, n in
+                storageAtBind.append(storagePaths.count)
                 if let p { boundJSON.append(Data(bytes: p, count: n)) }
                 if let p, let object = try? JSONSerialization.jsonObject(with: Data(bytes:p, count:n)) as? NSDictionary { boundObjects.append(object) }; return 0
             },

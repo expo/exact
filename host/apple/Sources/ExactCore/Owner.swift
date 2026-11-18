@@ -40,11 +40,7 @@ package final class Owner: @unchecked Sendable {
     /// Notifications (T5): run after the job that posted them.
     private var later: [Job] = []
     private var mailbox: [MainCall] = []
-    private struct ScrollKey: Hashable {
-        let runtime: UInt32, view: UInt32
-        let collection: Bool
-    }
-    private var offsets: [ScrollKey: () -> Void] = [:]
+    private var scrolls = ScrollMailbox()
     /// Wakes `sync` waited on, kept for the next: a semaphore makes its
     /// kernel object at its first wait, a Mach call that a frame task's
     /// sixty syncs a second each paid. A wake is signalled only under the
@@ -165,19 +161,27 @@ package final class Owner: @unchecked Sendable {
 
     /// Replace a scroll fact without waking the owner. Every job reads the
     /// latest facts before running, including jobs for another runtime.
-    package func noteScroll(runtime: UInt32, view: UInt32, collection: Bool = false, _ body: @escaping () -> Void) {
-        lock.withLock { offsets[ScrollKey(runtime: runtime, view: view, collection: collection)] = body }
+    package func noteScroll(_ values: ScrollMailbox.Values, observing: Bool = false) {
+        lock.lock()
+        let note = scrolls.record(values, observing: observing)
+        guard observing else { lock.unlock(); return }
+        if isOwner { lock.unlock(); applyScroll(note); return }
+        jobs.append(Job { self.applyScroll(note) })
+        #if DEBUG
+        posts += 1
+        #endif
+        lock.unlock()
+        work.signal()
+    }
+    private func applyScroll(_ note: ScrollMailbox.Note) {
+        if lock.withLock({ scrolls.claim(note) }) { note.values.apply() }
     }
     private func drainOffsets() {
-        let pending: [() -> Void] = lock.withLock {
-            let pending = Array(offsets.values)
-            offsets.removeAll(keepingCapacity: true)
-            return pending
-        }
-        for update in pending { update() }
+        let pending = lock.withLock { scrolls.take() }
+        for note in pending { applyScroll(note) }
     }
     #if DEBUG
-    package var pendingScrollsForTests: Int { lock.withLock { offsets.count } }
+    package var pendingScrollsForTests: Int { lock.withLock { scrolls.pending } }
     #endif
 
     /// Give the stack pages under the boot back. A boot's decode, realize

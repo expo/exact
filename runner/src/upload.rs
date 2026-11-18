@@ -186,23 +186,27 @@ mod tests {
         assert_eq!(timed.timeout_refusal(), Some("a stream has no timeout"));
     }
 
-    /// LLP 1016.000 D11: only a WebSocket stream takes an idle timeout, on
-    /// every host, since each asks `timeout_refusal`.
+    /// LLP 1016.000 D11: only a WebSocket, event or byte stream takes an
+    /// idle timeout, on every host, since each asks `timeout_refusal`.
     #[test]
-    fn only_a_websocket_stream_takes_an_idle_timeout() {
+    fn only_a_websocket_event_or_byte_stream_takes_an_idle_timeout() {
         let stream = |url: &str| {
             let crate::Answer::Later(request) = crate::Answer::stream(Request::get(url)) else {
                 unreachable!()
             };
             request.idle_timeout(60_000)
         };
-        let only = Some("only a WebSocket stream takes an idle timeout");
-        assert_eq!(stream("wss://example.test/feed").timeout_refusal(), None);
-        assert_eq!(stream("WS://example.test/feed").timeout_refusal(), None);
-        assert_eq!(
-            stream("https://example.test/events").timeout_refusal(),
-            only
-        );
+        for url in [
+            "wss://example.test/feed",
+            "WS://example.test/feed",
+            "https://example.test/events",
+            "HTTP://example.test/bytes",
+            "/events?at=1:2",
+        ] {
+            assert_eq!(stream(url).timeout_refusal(), None, "{url}");
+        }
+        let only = Some("only a WebSocket, event or byte stream takes an idle timeout");
+        assert_eq!(stream("exact-native:").timeout_refusal(), only);
         assert_eq!(
             Request::get("wss://example.test/feed")
                 .idle_timeout(60_000)

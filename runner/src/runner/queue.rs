@@ -9,7 +9,7 @@
 //! refusal does not retry it. Reconciliation can cancel other instances'
 //! deadlines, which the checkpoint restores when that commit refuses.
 
-use super::modules::{CallOrigin, Causes};
+use super::provenance::{CallOrigin, Causes};
 use super::*;
 use std::collections::VecDeque;
 use std::rc::Rc;

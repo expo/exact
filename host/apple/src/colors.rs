@@ -66,7 +66,7 @@ impl<D: DataSource> Host<D> {
     pub fn check_modes(&mut self, pins: &[(&str, &str)]) -> String {
         match self.runner.check_modes(pins) {
             Ok(()) => format!("{{\"modes\":{}}}", self.runner.modes_json()),
-            Err(e) => exact_runner::agent::error(&format!("mode: {e:?}")),
+            Err(e) => exact_runner::json::error(&format!("mode: {e:?}")),
         }
     }
 

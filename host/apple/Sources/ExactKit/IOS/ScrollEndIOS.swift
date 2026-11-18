@@ -25,7 +25,7 @@ extension NodeView {
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
-        if let c = presenter?.collections, c.offsetDrivers[id] != nil || c.startOwed.contains(id) { return }
+        if let c = presenter?.collections, c.drivesOffset(id) || c.startOwed.contains(id) { return }
         presenter?.collections.animationEnded(id, atTarget: endedAtTarget(scrollView))
         scrollMayHaveEnded(scrollView)
     }
@@ -59,7 +59,7 @@ extension NodeView {
         guard (handlers.contains("scrollend") || presenter?.collections.owns(id) == true || presenter?.session?.timerAdmissions.enabled == true), hasScrollLayoutBox else { return }
         let end = scrollEnd ?? ScrollEnd()
         scrollEnd = end
-        guard end.moved(to: [sv.contentOffset.x, sv.contentOffset.y, scrollTopInset(sv), sv.zoomScale]) else { return }
+        guard end.moved(left: sv.contentOffset.x, top: sv.contentOffset.y, inset: scrollTopInset(sv), scale: sv.zoomScale) else { return }
         // A drag and its deceleration report their end; a touch that only
         // tracks reports none, so the quiet check asks until it lifts.
         if end.live || sv.isDragging || sv.isDecelerating || sv.isZooming || sv.isZoomBouncing { end.hold() } else { settleScrollEnd() }
@@ -93,8 +93,8 @@ extension NodeView {
     func authorOwnsScroll(_ sv: UIScrollView) -> Bool {
         guard let presenter else { return authoredScrollAnimating }
         return authoredScrollAnimating || presenter.elementScrolls.revealing(sv) != nil
-            || presenter.collections.offsetDrivers[id] != nil || presenter.collections.startOwed.contains(id)
-            || presenter.collections.entries[id]?.snapshot.underWay == true
+            || presenter.collections.drivesOffset(id) || presenter.collections.startOwed.contains(id)
+            || presenter.collections.snapshot(id)?.underWay == true
     }
 
     /// The scroll is over: its last `scroll` first, then `scrollend`, once.

@@ -3,6 +3,7 @@
 //! something (a haptic, the clipboard, a link out, the share sheet) is asked
 //! of the host's shell where it has one (`requests.rs`, LLP 1115.001 D5).
 
+use super::replacement::Waiting;
 use super::Presenter;
 use crate::host::HostError;
 use exact_plan::EventKind;
@@ -37,21 +38,23 @@ impl<D: DataSource> Presenter<D> {
         self.orientation_unavailable();
         self.package_turn();
         self.run_queued_commands();
+        self.resume_reload();
         if self.update_ready() && !self.activation_deferred() {
-            self.update_waits_for_requests = false;
-            self.pending_update = false;
+            let Some(Waiting::Update { explicit, .. }) = self.waiting.take() else {
+                return;
+            };
+            let waits = |hold| {
+                Some(Waiting::Update {
+                    explicit,
+                    hold: Some(hold),
+                })
+            };
             match self.activate_update(data()) {
                 Ok(true) => {}
                 Ok(false) => eprintln!("exact update: nothing is staged"),
-                Err(HostError::PreparingModule) => self.pending_update = true,
-                Err(HostError::RequestsPending) => {
-                    self.pending_update = true;
-                    self.update_waits_for_requests = true;
-                }
+                Err(HostError::PreparingModule) => self.waiting = waits("module"),
+                Err(HostError::RequestsPending) => self.waiting = waits("requests"),
                 Err(e) => eprintln!("exact update: activate: {e}"),
-            }
-            if !self.pending_update {
-                self.update_explicit = false;
             }
         }
     }
@@ -95,11 +98,7 @@ impl<D: DataSource> Presenter<D> {
                         eprintln!("exact update: no store, or a check is already running");
                     }
                 }
-                "deliveryActivate" => {
-                    self.pending_update = true;
-                    self.update_explicit = true;
-                    self.update_waits_for_requests = false;
-                }
+                "deliveryActivate" => self.owe_update(true),
                 "relaunch" => self.host.log(if self.agent {
                     "relaunch refused: the agent owns this process; start a new drive on the same storage"
                 } else {

@@ -146,7 +146,7 @@ pub(super) fn run(
     destination: &Arc<Location>,
     send: &mpsc::Sender<Message>,
     receive: mpsc::Receiver<Message>,
-    host: &StreamHost,
+    lane: &Lane,
 ) {
     let mut launch_workers = None;
     let mut prefetch_workers = None;
@@ -210,7 +210,7 @@ pub(super) fn run(
                 start_indices(
                     destination,
                     send,
-                    host,
+                    lane,
                     &grants,
                     workers.as_ref().unwrap(),
                     indices,
@@ -244,7 +244,7 @@ impl Drop for CloseGuard {
 fn start_indices(
     destination: &Arc<Location>,
     send: &mpsc::Sender<Message>,
-    host: &StreamHost,
+    lane: &Lane,
     launch_grants: &str,
     workers: &Arc<ibex2::stdlib::fetch_async::BoundedWorkerPool>,
     indices: Vec<(usize, usize)>,
@@ -292,7 +292,7 @@ fn start_indices(
             .expect("checked grants");
         let fetch = match fixture {
             Some(fetch) => fetch.with_grants(grants),
-            None => host().endow(grants).fetch,
+            None => lane.endow(grants).fetch,
         };
         let fetch = reach::gate_fetch(fetch, request.reach);
         let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
@@ -300,6 +300,7 @@ fn start_indices(
         let timeout = request.timeout_ms;
         let invalidates = cache::unsafe_method(&request.method);
         let mut req = fetch_request(request, false);
+        req.collected = true;
         if invalidates {
             let destination = destination.clone();
             req.received = Some(ibex2::stdlib::fetch::Received(Arc::new(

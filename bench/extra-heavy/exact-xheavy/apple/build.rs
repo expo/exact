@@ -20,7 +20,7 @@ fn main() {
     };
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
     let source = exact_xheavy_data::XHeavy::for_bake();
-    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(source.grants()))
+    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(source.grants()), exact_bake::hands_out_work!(source))
         .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     assert_eq!(compat.inputs["store"]["L"], "0", "app.json deploy.store must stay 0 (no update store)");
     // What the archive links, as its compatibility inputs name it (LLP 1047.001 D2).

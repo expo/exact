@@ -3,6 +3,10 @@
 use super::*;
 use exact_runner::{Answer, DataError, Store, Value};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// Every answer waits on a continuation until the test supplies its outcome.
 #[derive(Default)]
 struct Held;
@@ -11,7 +15,9 @@ impl DataSource for Held {
         Err(DataError::UnknownSource(name.into()))
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-        Ok(Answer::Later(exact_runner::Request::continuation(1)))
+        Ok(Answer::Later(
+            exact_runner::Request::continuation::<TestWork>(1),
+        ))
     }
     fn dispatch(&mut self, _: u64, _: &Store) -> exact_runner::Dispatch {
         exact_runner::Dispatch::Again
@@ -37,6 +43,69 @@ fn module() -> Option<crate::delivery::Module> {
         receipt: String::new(),
         bytes: Vec::new(),
     })
+}
+
+#[derive(Clone)]
+struct Preloading(std::rc::Rc<std::cell::Cell<bool>>);
+impl DataSource for Preloading {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(name.into()))
+    }
+    fn preload(&self) -> Result<bool, DataError> {
+        Ok(self.0.get())
+    }
+    fn replacement(&self, _: &[u8], _: &str, _: Vec<u8>) -> Result<Self, DataError> {
+        Ok(self.clone())
+    }
+}
+
+#[test]
+fn url_generations_and_updates_report_a_module_hold() {
+    let plan = crate::test_plan("component App\n  view\n    text \"ready\"\n");
+    for update in [false, true] {
+        let data = Preloading(std::rc::Rc::new(std::cell::Cell::new(true)));
+        let (mut p, error) = Presenter::boot_with(
+            &plan,
+            data.clone(),
+            (200., 200.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host.activate_data().unwrap();
+        p.painted = true;
+        p.compat = r#"{"inputs":{"executors":["hermes"]}}"#.into();
+        data.0.set(false);
+        if update {
+            p.set_updates(Some(Box::new(StagedModule {
+                plan: plan.clone().into(),
+                log: Arc::new(std::sync::Mutex::new(UpdateLog {
+                    has_module: true,
+                    seq: 1,
+                    ..UpdateLog::default()
+                })),
+            })));
+            p.owe_update(false);
+            p.run_commands(|| data.clone());
+        } else {
+            p.set_development(Some("http://127.0.0.1:9/".into()), None);
+            p.keep_generation(crate::fetch::Generation {
+                identity: "preloading".into(),
+                plan: plan.clone(),
+                module: module(),
+            });
+            p.poll_development(|| data.clone());
+        }
+        assert_eq!(p.replacement_pending(), Some("module"), "update: {update}");
+        data.0.set(true);
+        p.run_commands(|| data.clone());
+        if !update {
+            p.poll_development(|| data.clone());
+        }
+        assert_eq!(p.replacement_pending(), None);
+    }
 }
 
 #[derive(Default)]
@@ -198,6 +267,7 @@ fn an_immediate_update_retries_after_a_request_finishes_or_is_cancelled() {
             p.run_commands(|| Held);
             assert_eq!(log.lock().unwrap().commits, 0, "wait for {kind}");
             assert_eq!(p.host.runner().pending(), pending);
+            assert_eq!(p.replacement_pending(), Some("requests"));
         }
         {
             let log = log.lock().unwrap();
@@ -238,7 +308,7 @@ fn an_immediate_update_retries_after_a_request_finishes_or_is_cancelled() {
         assert!(p.delivery_pending(), "ready after {kind}");
         p.run_commands(|| Held);
         assert_eq!(log.lock().unwrap().commits, 1, "activate after {kind}");
-        assert!(!p.pending_update);
+        assert!(!p.update_owed());
         assert_eq!(log.lock().unwrap().attempts, 2, "one retry after {kind}");
         assert_eq!(p.host.runner().slot("typed"), Some(&Value::str("ada")));
         assert_eq!(p.host.runner().delivery().seq, 1);
@@ -281,8 +351,126 @@ fn a_plan_only_update_activates_with_a_request_pending() {
     p.run_commands(|| Held);
     assert_eq!(log.lock().unwrap().commits, 1);
     assert_eq!(log.lock().unwrap().attempts, 1);
-    assert!(!p.pending_update);
+    assert!(!p.update_owed());
     assert!(p.host.agent(r#"{"op":"tree"}"#).contains("new"));
+}
+
+/// One candidate waits, whichever producer brought it: a local reload, the
+/// development URL's generation or the staged update (LLP 1029.000.002 D9).
+#[test]
+fn the_newest_candidate_supersedes_one_that_waits_whichever_brought_it() {
+    const PRODUCERS: [&str; 3] = ["reload", "generation", "update"];
+    let plan = |name: &str| crate::test_plan(&format!("{APP}      text \"{name}\"\n"));
+    let pairs = PRODUCERS
+        .iter()
+        .flat_map(|first| PRODUCERS.iter().map(move |last| (*first, *last)))
+        .filter(|(first, last)| first != last);
+    for (first, last) in pairs {
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(APP),
+            Held,
+            (200., 200.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.painted = true;
+        p.compat = r#"{"delivery":{"activate":"immediate"}}"#.into();
+        let log = Arc::new(std::sync::Mutex::new(UpdateLog {
+            line: Some("staged seq 1".into()),
+            seq: 1,
+            ..UpdateLog::default()
+        }));
+        p.set_updates(Some(Box::new(StagedModule {
+            plan: plan("update").into(),
+            log: log.clone(),
+        })));
+        p.set_development(Some("http://127.0.0.1:9/".into()), None);
+        let ended = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let bring = |p: &mut Presenter<Held>, producer: &str| match producer {
+            "reload" => {
+                let ended = ended.clone();
+                let told = move |outcome| ended.borrow_mut().push(outcome);
+                let held = p.reload_with_outcome(&plan("reload"), Held, None, false, told);
+                assert_eq!(held.unwrap(), ReloadResult::Held("pointer"));
+            }
+            "generation" => {
+                p.keep_generation(crate::fetch::Generation {
+                    identity: "generation".into(),
+                    plan: plan("generation"),
+                    module: None,
+                });
+                p.poll_development(|| Held);
+            }
+            _ => {
+                p.update_foreground(true);
+                assert!(p.poll_update());
+                p.run_commands(|| Held);
+            }
+        };
+        p.pointer_down(100., 150., 0.).unwrap();
+        bring(&mut p, first);
+        bring(&mut p, last);
+        assert_eq!(p.replacement_pending(), Some("pointer"));
+        p.pointer_up(100., 150., 1.).unwrap();
+        for _ in 0..2 {
+            p.run_commands(|| Held);
+            p.poll_development(|| Held);
+        }
+        let tree = p.host.agent(r#"{"op":"tree"}"#);
+        // The label's text: the reply's tags name a `generation` too.
+        let only_last = PRODUCERS
+            .iter()
+            .all(|name| tree.contains(&format!("\"text\":\"{name}\"")) == (*name == last));
+        assert!(only_last, "{first} then {last}: {tree}");
+        assert_eq!(
+            log.lock().unwrap().commits,
+            usize::from(last == "update"),
+            "{first} then {last}"
+        );
+        let told: &[ReplacementOutcome] = match (first, last) {
+            ("reload", _) => &[ReplacementOutcome::Superseded],
+            (_, "reload") => &[ReplacementOutcome::Applied],
+            _ => &[],
+        };
+        assert_eq!(*ended.borrow(), told, "{first} then {last}");
+        assert_eq!(p.replacement_pending(), None);
+    }
+}
+
+/// `deliveryActivate` with nothing staged brings no candidate.
+#[test]
+fn an_activation_with_nothing_staged_leaves_the_candidate_that_waits() {
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(APP),
+        Held,
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.painted = true;
+    p.set_updates(Some(Box::new(StagedModule {
+        plan: crate::test_plan(APP).into(),
+        log: Arc::new(std::sync::Mutex::new(UpdateLog {
+            commits: 1,
+            ..UpdateLog::default()
+        })),
+    })));
+    p.pointer_down(100., 150., 0.).unwrap();
+    let reloaded = crate::test_plan(&(APP.to_string() + "      text \"reload\"\n"));
+    assert_eq!(
+        p.reload(&reloaded, Held).unwrap(),
+        ReloadResult::Held("pointer")
+    );
+    p.owe_update(true);
+    p.pointer_up(100., 150., 1.).unwrap();
+    p.run_commands(|| Held);
+    assert!(p.host.agent(r#"{"op":"tree"}"#).contains("reload"));
 }
 
 fn staged_update() -> (Presenter<Held>, Arc<std::sync::Mutex<UpdateLog>>) {
@@ -321,7 +509,7 @@ fn waiting_update() -> (Presenter<Held>, Arc<std::sync::Mutex<UpdateLog>>) {
     p.update_foreground(true);
     assert!(p.poll_update());
     p.run_commands(|| Held);
-    assert!(p.update_waits_for_requests);
+    assert!(p.update_hold() == Some("requests"));
     assert_eq!(log.lock().unwrap().attempts, 1);
     (p, log)
 }
@@ -348,7 +536,7 @@ fn an_automatic_retry_waits_for_the_foreground_after_background_completion() {
         "no activation while stopped"
     );
     assert_eq!(log.lock().unwrap().attempts, 1);
-    assert!(p.pending_update, "retain the automatic activation");
+    assert!(p.update_owed(), "retain the automatic activation");
     assert!(!p.delivery_pending(), "no delivery polling while stopped");
     assert!(!p.module_pending());
     p.executor.begin_pump();
@@ -376,7 +564,7 @@ fn delivery_activate_without_a_foreground_signal_applies_and_retries() {
     for finish_before_command in [true, false] {
         let (mut p, log) = staged_update();
         assert!(p.poll_update());
-        assert!(!p.pending_update, "headless runs do not auto-activate");
+        assert!(!p.update_owed(), "headless runs do not auto-activate");
         let pending = p.host.runner().pending();
         let finish = |p: &mut Presenter<Held>| {
             assert!(p
@@ -396,13 +584,13 @@ fn delivery_activate_without_a_foreground_signal_applies_and_retries() {
         p.run_commands(|| Held);
         assert_eq!(log.lock().unwrap().attempts, 1, "the explicit command runs");
         if !finish_before_command {
-            assert!(p.update_waits_for_requests);
+            assert!(p.update_hold() == Some("requests"));
             assert!(!p.delivery_pending());
             finish(&mut p);
             p.run_commands(|| Held);
         }
         assert_eq!(log.lock().unwrap().commits, 1);
-        assert!(!p.pending_update);
+        assert!(!p.update_owed());
         assert!(p.host.agent(r#"{"op":"tree"}"#).contains("new"));
     }
 }
@@ -453,10 +641,10 @@ fn an_uninstallable_module_roster_is_refused_without_waiting_for_requests() {
         p.tap(id).unwrap();
         p.run_commands(|| Held);
         assert!(
-            !p.pending_update,
+            !p.update_owed(),
             "terminal refusal ends the attempt: {names:?}"
         );
-        assert!(!p.update_waits_for_requests);
+        assert!(p.update_hold().is_none());
         assert_eq!(log.lock().unwrap().commits, 0);
         assert_eq!(log.lock().unwrap().asset_reads, 1);
         assert_eq!(log.lock().unwrap().module_reads, 0);
@@ -493,11 +681,9 @@ fn two_name_rosters_require_both_halves_before_waiting_for_requests() {
         if !matches!(result, Err(HostError::Asset(ref e)) if e == refusal) {
             failures.push(format!("{names:?}: {result:?}"));
         }
-        p.pending_update = true;
-        p.update_explicit = true;
-        p.update_waits_for_requests = false;
+        p.owe_update(true);
         p.run_commands(|| Held);
-        if p.pending_update || p.update_waits_for_requests {
+        if p.update_owed() {
             failures.push(format!("{names:?}: terminal refusal was queued"));
         }
         assert_eq!(log.lock().unwrap().module_reads, 0);
@@ -543,12 +729,10 @@ fn invalid_receipts_are_refused_before_waiting_for_requests() {
         if !matches!(result, Err(HostError::Asset(_))) {
             failures.push(format!("{result:?}"));
         }
-        p.pending_update = true;
-        p.update_explicit = true;
-        p.update_waits_for_requests = false;
+        p.owe_update(true);
         p.run_commands(|| Held);
         assert_eq!(log.lock().unwrap().module_reads, 0);
-        if p.pending_update || p.update_waits_for_requests {
+        if p.update_owed() {
             failures.push("terminal receipt refusal was queued".into());
         }
     }
@@ -565,11 +749,9 @@ fn an_invalid_plan_is_refused_before_waiting_for_requests() {
     assert!(p.host.runner().has_pending());
     assert!(matches!(p.activate_update(Held), Err(HostError::Plan(_))));
     assert_eq!(log.lock().unwrap().module_reads, 0);
-    p.pending_update = true;
-    p.update_explicit = true;
-    p.update_waits_for_requests = false;
+    p.owe_update(true);
     p.run_commands(|| Held);
-    assert!(!p.pending_update);
+    assert!(!p.update_owed());
     assert_eq!(log.lock().unwrap().module_reads, 0);
 }
 
@@ -594,11 +776,9 @@ fn unlinked_needs_are_refused_before_waiting_for_requests() {
         if !matches!(result, Err(HostError::Unlinked(_))) {
             failures.push(format!("permissions={permissions}: {result:?}"));
         }
-        p.pending_update = true;
-        p.update_explicit = true;
-        p.update_waits_for_requests = false;
+        p.owe_update(true);
         p.run_commands(|| Held);
-        if p.pending_update || p.update_waits_for_requests {
+        if p.update_owed() {
             failures.push(format!(
                 "permissions={permissions}: terminal refusal was queued"
             ));
@@ -671,8 +851,9 @@ fn an_update_refuses_and_a_dev_generation_lets_requests_go_after_its_window() {
     assert!(p.host.runner().has_pending());
     assert!(matches!(
         p.reload_module(&plan, Held, module(), false),
-        Err(HostError::RequestsPending)
+        Ok(ReloadResult::Held("requests"))
     ));
+    p.waiting = None;
 
     // The dev loop's generation: refused and held while the window runs,
     // then swapped, carrying what was typed.
@@ -682,13 +863,14 @@ fn an_update_refuses_and_a_dev_generation_lets_requests_go_after_its_window() {
         plan: plan.clone(),
         module: module(),
     };
-    p.pending_dev = Some(generation());
+    p.keep_generation(generation());
     p.poll_development(|| Held);
-    assert!(p.pending_dev.is_some(), "held while the window runs");
+    assert!(p.generation_waits(), "held while the window runs");
+    assert_eq!(p.replacement_pending(), Some("requests"));
     let since = p.dev.as_ref().unwrap().held_since.expect("the wait began");
     p.dev.as_mut().unwrap().held_since = Some(since - crate::host::LET_GO_AFTER);
     p.poll_development(|| Held);
-    assert!(p.pending_dev.is_none());
+    assert!(!p.generation_waits());
     assert_eq!(
         p.dev.as_ref().unwrap().identity.as_deref(),
         Some("gen"),
@@ -696,6 +878,43 @@ fn an_update_refuses_and_a_dev_generation_lets_requests_go_after_its_window() {
     );
     assert!(p.dev.as_ref().unwrap().held_since.is_none());
     assert_eq!(p.host.runner().slot("typed"), Some(&Value::str("ada")));
+}
+
+/// A held generation is the development loop's that brought it: a loop set
+/// in its place, or none, drops it (LLP 1029.000.002 D9).
+#[test]
+fn a_held_generation_goes_with_the_development_loop_that_brought_it() {
+    let plan = crate::test_plan(APP);
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        Held,
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.painted = true;
+    for next in [Some("http://127.0.0.1:10/".to_string()), None] {
+        p.set_development(Some("http://127.0.0.1:9/".into()), None);
+        p.set_touching(true);
+        p.keep_generation(crate::fetch::Generation {
+            identity: "gen".into(),
+            plan: plan.clone(),
+            module: module(),
+        });
+        p.poll_development(|| Held);
+        assert_eq!(p.replacement_pending(), Some("pointer"), "{next:?}");
+        p.set_development(next.clone(), None);
+        p.set_touching(false);
+        p.poll_development(|| Held);
+        assert!(!p.generation_waits(), "{next:?}");
+        assert_eq!(p.replacement_pending(), None, "{next:?}");
+        if let Some(dev) = &p.dev {
+            assert_eq!(dev.identity, None, "the new loop installed nothing");
+        }
+    }
 }
 
 /// LLP 1122 D4 on the Android reader: a host that turns only when woken is
@@ -871,10 +1090,10 @@ fn module_validation_keeps_the_live_sequence_and_root_drop_report() {
     p.host.activate_data().unwrap();
     p.painted = true;
     let epoch = p.host.runner().kernel().epoch();
-    assert!(p
-        .reload_module(&plan(true), Held, module(), false)
-        .unwrap()
-        .is_none());
+    assert_eq!(
+        p.reload_module(&plan(true), Held, module(), false).unwrap(),
+        ReloadResult::Applied(None)
+    );
     let runner = p.host.runner();
     let state = exact_runner::agent::state(runner);
     assert!(
@@ -887,4 +1106,262 @@ fn module_validation_keeps_the_live_sequence_and_root_drop_report() {
     );
     assert_eq!(runner.generation(), 2);
     assert!(runner.kernel().epoch() > epoch);
+}
+
+/// A replacement waits while a contact is down or a field composes, kept
+/// as bytes and prepared at its commit, and its producer hears how it ended
+/// (LLP 1029.000.002 D7, D9).
+#[test]
+fn a_replacement_waits_for_a_contact_and_a_composition_and_tells_its_end() {
+    use std::{cell::RefCell, rc::Rc};
+    let plan = |label: &str| {
+        crate::test_plan(&format!(
+            "component App\n  state typed = \"\"\n  action type(v)\n    typed = v\n  view\n    column width=200 height=200\n      input value=typed change=type testId=\"field\" width=180 height=30\n      text \"{label}\" testId=\"label\"\n"
+        ))
+    };
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan("one"),
+        (),
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let ended = Rc::new(RefCell::new(Vec::new()));
+    let tell = |ended: &Rc<RefCell<Vec<ReplacementOutcome>>>| {
+        let ended = ended.clone();
+        move |outcome| ended.borrow_mut().push(outcome)
+    };
+    let label = |p: &Presenter<()>| {
+        let k = p.host.kernel();
+        let node = k.node_by_key(k.find_by_test_id("label")[0]).unwrap();
+        node.props.str(PropId::Text).unwrap().to_string()
+    };
+    let field = |p: &Presenter<()>| {
+        let k = p.host.kernel();
+        k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id
+    };
+
+    // A press holds it, and a newer candidate supersedes it.
+    p.pointer_down(100., 150., 0.).unwrap();
+    assert!(p.contact_position().is_some());
+    let held = p.reload_with_outcome(&plan("two"), (), None, false, tell(&ended));
+    assert_eq!(held.unwrap(), ReloadResult::Held("pointer"));
+    let held = p.reload_with_outcome(&plan("three"), (), None, false, tell(&ended));
+    assert_eq!(held.unwrap(), ReloadResult::Held("pointer"));
+    assert_eq!(*ended.borrow(), [ReplacementOutcome::Superseded]);
+    assert_eq!(p.replacement_pending(), Some("pointer"));
+    // What changes during the hold is what it carries.
+    let now = p.host.now();
+    p.host
+        .dispatch_at(field(&p), exact_runner::Event::Change("ada".into()), now);
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "one");
+    p.pointer_up(100., 150., 1.).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(p.replacement_pending(), None);
+    assert_eq!(label(&p), "three");
+    assert_eq!(p.host.runner().slot("typed"), Some(&Value::str("ada")));
+    assert_eq!(
+        *ended.borrow(),
+        [ReplacementOutcome::Superseded, ReplacementOutcome::Applied]
+    );
+
+    // A composition holds it until the composition ends.
+    ended.borrow_mut().clear();
+    p.set_focus(Some(field(&p)), 2.);
+    let target = p.ime_target().unwrap();
+    assert!(p.ime_begin(target));
+    p.ime_preedit("に", None);
+    let held = p.reload_with_outcome(&plan("four"), (), None, false, tell(&ended));
+    assert_eq!(held.unwrap(), ReloadResult::Held("composition"));
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "three");
+    p.ime_commit("日");
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "four");
+    assert_eq!(*ended.borrow(), [ReplacementOutcome::Applied]);
+
+    // Auxiliary buttons hold a replacement even without a primary contact.
+    for bit in [2, 4] {
+        ended.borrow_mut().clear();
+        p.pointer_aux(bit, true, 100., 150., 3.);
+        let held = p.reload_with_outcome(&plan("four"), (), None, false, tell(&ended));
+        assert_eq!(held.unwrap(), ReloadResult::Held("pointer"));
+        p.run_commands(|| ());
+        assert!(ended.borrow().is_empty());
+        p.pointer_aux(bit, false, 100., 150., 4.);
+        p.run_commands(|| ());
+        assert_eq!(*ended.borrow(), [ReplacementOutcome::Applied]);
+        assert_eq!(p.replacement_pending(), None);
+    }
+
+    // One refused when it is prepared is told so, and not tried again; one
+    // its presenter outlives is dropped.
+    ended.borrow_mut().clear();
+    p.pointer_down(100., 150., 3.).unwrap();
+    let held = p.reload_with_outcome(b"not a plan", (), None, false, tell(&ended));
+    assert_eq!(held.unwrap(), ReloadResult::Held("pointer"));
+    p.pointer_up(100., 150., 4.).unwrap();
+    p.run_commands(|| ());
+    p.run_commands(|| ());
+    assert!(matches!(
+        ended.borrow()[..],
+        [ReplacementOutcome::Refused(_)]
+    ));
+    assert_eq!(label(&p), "four");
+    p.pointer_down(100., 150., 5.).unwrap();
+    let held = p.reload_with_outcome(&plan("five"), (), None, false, tell(&ended));
+    assert_eq!(held.unwrap(), ReloadResult::Held("pointer"));
+    drop(p);
+    assert_eq!(ended.borrow()[1..], [ReplacementOutcome::Dropped]);
+}
+
+/// A press the presenter gives a scrollbar, a sheet or a menu makes no
+/// contact, and one it cancels (a wheel taking over) ends its contact: the
+/// button is down all the same, and holds a replacement until its release
+/// (LLP 1029.000.002 D9).
+#[test]
+fn a_press_with_no_contact_holds_a_replacement_until_its_release() {
+    let plan = |label: &str| {
+        crate::test_plan(&format!(
+            "component App\n  view\n    column width=240 height=200 overflow-y=\"auto\"\n      text \"{label}\" testId=\"label\" width=200 height=1000 flex-shrink=0\n"
+        ))
+    };
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan("one"),
+        (),
+        (240., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let label = |p: &Presenter<()>| {
+        let k = p.host.kernel();
+        let node = k.node_by_key(k.find_by_test_id("label")[0]).unwrap();
+        node.props.str(PropId::Text).unwrap().to_string()
+    };
+    p.set_scrollbars(false);
+    p.frame();
+    let bar = p.brush.scrollbars.bars[0];
+    let (x, y) = (
+        bar.thumb.0 + bar.thumb.2 / 2.,
+        bar.thumb.1 + bar.thumb.3 / 2.,
+    );
+    p.pointer_down(x, y, 0.).unwrap();
+    assert!(
+        p.contact_position().is_none(),
+        "a thumb's drag is no contact"
+    );
+    assert_eq!(
+        p.reload(&plan("two"), ()).unwrap(),
+        ReloadResult::Held("pointer")
+    );
+    p.pointer_move(x, y + 20., 1.).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "one");
+    p.pointer_up(x, y + 20., 2.).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(p.replacement_pending(), None);
+    assert_eq!(label(&p), "two");
+
+    p.pointer_down(100., 100., 3.).unwrap();
+    p.pointer_cancel(4.).unwrap();
+    assert!(p.contact_position().is_none());
+    assert_eq!(
+        p.reload(&plan("three"), ()).unwrap(),
+        ReloadResult::Held("pointer")
+    );
+    p.pointer_up(100., 100., 5.).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "three");
+    // Escape abandons the press and leaves the button down.
+    p.pointer_down(100., 100., 6.).unwrap();
+    p.pointer_abandoned(7.).unwrap();
+    assert_eq!(
+        p.reload(&plan("four"), ()).unwrap(),
+        ReloadResult::Held("pointer")
+    );
+    p.pointer_up(100., 100., 8.).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "four");
+    // A pointer the device lost has no button down.
+    p.pointer_down(100., 100., 9.).unwrap();
+    p.pointer_lost(10.).unwrap();
+    assert_eq!(
+        p.reload(&plan("five"), ()).unwrap(),
+        ReloadResult::Applied(None)
+    );
+    // A finger on a shell's bar stays down when it leaves its target.
+    p.bar_event(crate::presenter::bars::TOP, 0, 10., 10., 11.);
+    p.bar_event(crate::presenter::bars::TOP, 2, 10., 400., 12.);
+    p.bar_event(crate::presenter::bars::TOP, 4, 10., 400., 12.);
+    assert_eq!(
+        p.reload(&plan("six"), ()).unwrap(),
+        ReloadResult::Held("pointer")
+    );
+    p.bar_event(crate::presenter::bars::TOP, 1, 10., 400., 13.);
+    p.run_commands(|| ());
+    assert_eq!(label(&p), "six");
+    // A finger on each bar: lifting either leaves the other down.
+    use crate::presenter::bars::{BOTTOM, TOP};
+    for (first, second) in [(TOP, BOTTOM), (BOTTOM, TOP)] {
+        p.bar_event(first, 0, 10., 10., 14.);
+        p.bar_event(second, 0, 10., 10., 14.);
+        p.bar_event(first, 1, 10., 10., 15.);
+        assert_eq!(
+            p.reload(&plan("seven"), ()).unwrap(),
+            ReloadResult::Held("pointer"),
+            "bar {second} still down"
+        );
+        p.bar_event(second, 3, 10., 10., 16.);
+        p.run_commands(|| ());
+        assert_eq!(label(&p), "seven");
+        p.reload(&plan("six"), ()).unwrap();
+    }
+}
+
+/// Android's reader gives a touch that is still down to its scroll
+/// (`Contacts.scrollClaimed`), a field or a hosted view: exact2 hears a cancel
+/// and no up, and the finger holds a replacement until the reader says it
+/// lifted.
+#[test]
+fn a_touch_the_reader_took_holds_a_replacement_until_the_finger_lifts() {
+    let plan = |label: &str| {
+        crate::test_plan(&format!(
+            "component App\n  view\n    text \"{label}\" width=200 height=200\n"
+        ))
+    };
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan("one"),
+        (),
+        (240., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    assert!(!p.set_touching(true));
+    p.reader_touch(0, 100., 100., 0.).unwrap();
+    p.reader_touch(2, 100., 140., 1.).unwrap();
+    p.reader_touch(3, 100., 140., 2.).unwrap();
+    assert!(p.contact_position().is_none());
+    let held = p.reload(&plan("two"), ()).unwrap();
+    assert_eq!(held, ReloadResult::Held("pointer"));
+    p.run_commands(|| ());
+    assert_eq!(p.replacement_pending(), Some("pointer"));
+    assert!(p.set_touching(false), "the lift asks for a turn");
+    p.run_commands(|| ());
+    assert_eq!(p.replacement_pending(), None);
+    // A touch a field or a hosted view has from its down reaches no
+    // `pointer_down` at all.
+    assert!(!p.set_touching(true));
+    let held = p.reload(&plan("three"), ()).unwrap();
+    assert_eq!(held, ReloadResult::Held("pointer"));
+    assert!(p.set_touching(false));
 }

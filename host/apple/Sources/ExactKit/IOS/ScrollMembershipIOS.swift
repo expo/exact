@@ -42,6 +42,8 @@ extension ScrollView {
     package override func didMoveToSuperview() {
         super.didMoveToSuperview()
         ScrollMembership.epoch &+= 1
+        NodeView.scrollLayoutEpoch &+= 1
     }
 }
+
 #endif

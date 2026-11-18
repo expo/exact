@@ -5,6 +5,7 @@ import CExact
 import CoreText
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// Where a field's glyphs ink, drawn at the screen's scale as it shows them,
 /// against the same glyphs drawn by Core Text where CSS puts them: from the

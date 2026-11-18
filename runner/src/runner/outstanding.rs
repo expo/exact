@@ -56,7 +56,7 @@ impl Outstanding {
                 if i > 0 {
                     out.push(',');
                 }
-                crate::agent::quote(item, &mut out);
+                crate::json::quote(item, &mut out);
             }
             out.push(']');
         }

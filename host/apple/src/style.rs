@@ -60,6 +60,8 @@ pub fn style_json(style: &StyleProps, env: &Env) -> (String, Vec<Skipped>) {
 /// `box_sizing` crosses: a projected segmented control fills its tablist's
 /// content box, and a border-box minimum must also hold the padding and
 /// border around it (LLP 1059 D2a).
+/// `field_sizing` crosses: native selects measure their shown value or
+/// their widest option before reporting an intrinsic size to layout.
 fn presenter_ignores(name: &str) -> bool {
     matches!(
         name,
@@ -92,7 +94,6 @@ fn presenter_ignores(name: &str) -> bool {
             | "grid_column"
             | "grid_row"
             | "justify_items"
-            | "field_sizing"
             | "text_transform"
     )
 }
@@ -443,10 +444,10 @@ pub(crate) fn style_json_rows(
             // and `pd` dark when that differs, the view picking by its own.
             RowValue::Filter(list) => {
                 let program = |dark| {
-                    exact_kernel::svg::scene::box_filter(list, style.text_color, dark)
+                    crate::link::families::box_filter(list, style.text_color, dark)
                         .map(|f| f.encode())
                 };
-                match exact_kernel::svg::scene::box_filter(list, style.text_color, false) {
+                match crate::link::families::box_filter(list, style.text_color, false) {
                     Some(f) => {
                         let light = f.encode();
                         let push = |out: &mut String, key: &str, p: &[f32]| {

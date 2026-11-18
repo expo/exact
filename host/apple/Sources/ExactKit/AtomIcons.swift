@@ -1,14 +1,13 @@
 // An inline atom's icon from an image source (LLP 1045.000 D2): an asset, an
 // `app:/` file, a `data:` URL or an http(s) URL, read as an `image` reads it
-// (`RasterInput.open`) and decoded at the pill's size off the main thread, an
-// SVG as the image host draws one (`exact_svg_image_scene`, `SvgIsland`).
+// (`ImageLink.readIcon`) and decoded at the pill's size off the main thread, an
+// SVG as the image host draws one (`SvgLink.documents`).
 // The editor and reader keep the icon's room empty until it arrives, then
 // restyle the field or invalidate the reader's layout and paint. An icon
 // that cannot be read is logged with the step that
 // failed, and its pill then keeps no room. A picture does not follow the
 // appearance, as a browser's `<img>` does not: an app gives a face another
 // source for another scheme.
-import CExact
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -82,7 +81,7 @@ package enum AtomIcons {
 
     /// Read `source` for `key` and tell its fields. A decode or a drawing
     /// that gives nothing from bytes it read is asked again after each of
-    /// the image loader's delays (`RasterLoader.declineDelays`), as a busy
+    /// the image loader's delays (`ImageLink.declineDelays`), as a busy
     /// system can decline one; a file that is not there or a source that
     /// does not parse is not.
     private static func read(_ key: String, _ source: String, pixels: Int, resolver: AssetResolver?, log: @escaping (String) -> Void, attempt: Int) {
@@ -90,9 +89,9 @@ package enum AtomIcons {
         do { image = try decode(source, pixels: pixels, resolver: resolver) } catch {
             failure = error as? Failure ?? .read(error)
         }
-        let named = source.hasPrefix("data:") ? "a data: URL" : RasterRetry.withoutQuery(source)
-        if let failure, failure.declined, attempt < RasterLoader.declineDelays.count {
-            let delay = RasterLoader.declineDelays[attempt]
+        let named = source.hasPrefix("data:") ? "a data: URL" : sourceWithoutQuery(source)
+        if let failure, failure.declined, attempt < ImageLink.declineDelays.count {
+            let delay = ImageLink.declineDelays[attempt]
             DispatchQueue.main.async { log("atom icon queued: \(named): \(failure); again in \(Int(delay * 1000)) ms") }
             queue.asyncAfter(deadline: .now() + delay) { read(key, source, pixels: pixels, resolver: resolver, log: log, attempt: attempt + 1) }
             return
@@ -130,7 +129,7 @@ package enum AtomIcons {
 
     /// Why a picture cannot be drawn: the step that failed.
     enum Failure: Error, CustomStringConvertible {
-        case data, read(Error), decode, svg(String), drawn
+        case data(limit: Int), read(Error), decode, svg(String), drawn
         /// Bytes it read gave no picture: a busy system can decline a decode.
         var declined: Bool {
             switch self {
@@ -140,7 +139,7 @@ package enum AtomIcons {
         }
         var description: String {
             switch self {
-            case .data: return "a data: URL over \(RasterInput.dataLimit) bytes or not one"
+            case .data(let limit): return "a data: URL over \(limit) bytes or not one"
             case .read(let error): return "read: \(error)"
             case .decode: return "ImageIO decoded no picture"
             case .svg(let why): return "SVG: \(why)"
@@ -150,16 +149,12 @@ package enum AtomIcons {
     }
 
     private static func decode(_ source: String, pixels: Int, resolver: AssetResolver?) throws -> CGImage {
-        let bytes: Data
-        if source.hasPrefix("data:") {
-            guard source.utf8.count <= RasterInput.dataLimit, let data = RasterInput.dataURL(source) else { throw Failure.data }
-            bytes = data
-        } else {
-            do { bytes = try RasterInput.open(source, resolver: resolver!).bytes() } catch { throw Failure.read(error) }
-        }
-        if try RasterMetadata.read(prefix: bytes.prefix(RasterMetadata.headerLimit), encodedBytes: bytes.count).svg {
-            return try svg(bytes, pixels: pixels)
-        }
+        guard let readIcon = ImageLink.readIcon else { throw Failure.read(ImagesUnlinked()) }
+        let bytes: Data, isSVG: Bool
+        do { (bytes, isSVG) = try readIcon(source, resolver) } catch ImageLink.IconFailure.data(let limit) {
+            throw Failure.data(limit: limit)
+        } catch ImageLink.IconFailure.read(let error) { throw Failure.read(error) }
+        if isSVG { return try svg(bytes, pixels: pixels) }
         guard let image = CGImageSourceCreateWithData(bytes as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let thumbnail = CGImageSourceCreateThumbnailAtIndex(image, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                                                              kCGImageSourceCreateThumbnailWithTransform: true,
@@ -171,25 +166,27 @@ package enum AtomIcons {
     /// An SVG drawn into a square of `pixels`, its view box fitted as an
     /// `image` fits it at that size.
     private static func svg(_ bytes: Data, pixels: Int) throws -> CGImage {
-        var length = 0, flags: UInt32 = 0
         let side = Double(pixels)
-        let buffer = bytes.withUnsafeBytes { raw in
-            exact_svg_image_scene(raw.baseAddress?.assumingMemoryBound(to: UInt8.self), bytes.count, side, side, &length, &flags)
-        }
-        guard let buffer else { throw Failure.svg("no scene") }
-        defer { exact_svg_image_free(buffer, length) }
-        let data = Data(bytes: buffer, count: length)
+        guard let documents = SvgLink.documents else { throw Failure.svg("SVG is not linked") }
+        guard let (data, flags) = documents.scene(bytes, width: side, height: side) else { throw Failure.svg("no scene") }
         guard flags & 2 == 0 else { throw Failure.svg(String(decoding: data, as: UTF8.self)) }
         guard let spec = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Failure.svg("its scene is not JSON") }
         let numbers = (spec["t"] as? [Any])?.compactMap { ($0 as? NSNumber)?.doubleValue } ?? []
         guard numbers.count == 6 else { throw Failure.svg("its scene has no transform") }
         let transform = CGAffineTransform(a: numbers[0], b: numbers[1], c: numbers[2], d: numbers[3], tx: numbers[4], ty: numbers[5])
         let render = {
-            SvgIsland.render(spec["els"] as? [Any] ?? [], rect: CGRect(x: 0, y: 0, width: side, height: side), w: pixels, h: pixels, k: 1,
-                             transform: transform, flip: true, dark: false, fonts: nil)?.makeImage()
+            documents.draw(spec["els"] as? [Any] ?? [], rect: CGRect(x: 0, y: 0, width: side, height: side), width: pixels, height: pixels, scale: 1,
+                           transform: transform, fonts: nil)?.makeImage()
         }
         // Text in it is drawn where the session's fonts are.
         guard let image = flags & 1 != 0 ? DispatchQueue.main.sync(execute: render) : render() else { throw Failure.drawn }
         return image
     }
+}
+
+/// An icon read where the composition has no images family; the roster
+/// links it for any plan with an icon in text, so only an embedder that
+/// left the product out sees this.
+private struct ImagesUnlinked: Error, CustomStringConvertible {
+    var description: String { "images are not linked" }
 }

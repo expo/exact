@@ -602,16 +602,25 @@ pub(super) fn env_parts(
     let (name, indices) = p
         .parse_until_before(Delimiter::Comma, |p| {
             let (mut name, mut indices) = (None, Vec::new());
-            while let Ok(token) = p.next() {
+            loop {
+                let start = p.position();
+                let Ok(token) = p.next().cloned() else {
+                    break;
+                };
                 let word = match token {
                     Token::Ident(text) if name.is_none() => text.to_string(),
                     // An index, `+0` as CSS's integers allow; a negative one
                     // as written, which `env::named` refuses
                     Token::Number {
                         int_value: Some(n), ..
-                    } if *n >= 0 => n.to_string(),
-                    // Anything else as written, which `env::named` refuses
-                    t => cssparser::ToCss::to_css_string(t),
+                    } if n >= 0 => n.to_string(),
+                    // Anything else as written, which `env::named` refuses;
+                    // only CSS's whitespace is trimmed, since a no-break
+                    // space is part of an identifier or a unit
+                    _ => p
+                        .slice_from(start)
+                        .trim_matches([' ', '\t', '\n', '\r', '\u{c}'])
+                        .to_string(),
                 };
                 match name {
                     None => name = Some(word),

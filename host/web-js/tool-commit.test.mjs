@@ -15,7 +15,7 @@ function runtimeServer(overrides = {}) {
   } });
 }
 
-// A tool whose action's commit is refused ends `failed` `refused-commit` (the runner's `modules/calls.rs`), never
+// A tool whose action's commit is refused ends `failed` `refused-commit` (the runner's `calls.rs`), never
 // `ok` over the state the refusal put back, through the agent's door and through WebMCP's.
 test('a tool whose commit is refused does not report it applied', async () => {
   const server = runtimeServer();
@@ -781,5 +781,57 @@ test("a device re-ask that answers at once supersedes the call's ask", async () 
       return output;
     });
     expect(result).toEqual([['superseded', 'applied'], ['superseded', 'applied']]);
+  } finally { await browser.close(); server.stop(true); }
+}, 60000);
+
+// A handoff holds a producer's complete handler, including its refusal rollback.
+test('surface records resume after a replacement hold without losing a valid record', async () => {
+  const runtime = readFileSync(new URL('./rt.js', import.meta.url), 'utf8')
+    .replace('DEVELOPMENT_STORE = null', 'DEVELOPMENT_STORE = "replacement-test"');
+  const server = runtimeServer({ '/host/web-js/rt.js': runtime });
+  const browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const rt = await import('/host/web-js/rt.js');
+      const { canvasPerformance } = await import('/host/web-js/facts.js');
+      rt.clock.agent = true;
+      canvasPerformance({ hud: ['world', { frames: ['?', 'n'] }] });
+      let read;
+      rt.mount(() => {
+        read = rt.res('hud', 'exactCanvasPerformance', () => ['world'], [null], ['world'], { frames: ['?', 'n'] }, [null]);
+        rt.effect(() => read());
+      });
+      let frozen = false;
+      const held = [];
+      globalThis.__exactDevReplacement = { defer(f) { if (!frozen) return false; held.push(f); return true; } };
+      const snapshot = () => [read()[0], exact.canvasPerformanceRefusals()];
+      exact.canvasPerformanceRecord('world', '{"frames":60}');
+      const initial = snapshot();
+      frozen = true;
+      exact.canvasPerformanceRecord('world', '{"frames":120}');
+      const during = snapshot();
+      frozen = false;
+      for (const f of held.splice(0)) f();
+      const after = snapshot();
+      // Refusal and rollback must also run after the hold, in arrival order.
+      frozen = true;
+      exact.canvasPerformanceRecord('world', '{"frames":180}');
+      exact.canvasPerformanceRecord('world', '{"frames":"bad"}');
+      frozen = false;
+      for (const f of held.splice(0)) f();
+      const refused = snapshot();
+      frozen = true;
+      const synchronous = [rt.commit(() => {}), rt.commit(() => { throw new rt.Refusal('test'); })];
+      return { initial, during, after, refused, synchronous };
+    });
+    expect(result.initial).toEqual([60, {}]);
+    expect(result.during).toEqual([60, {}]);
+    expect(result.after).toEqual([120, {}]);
+    expect(result.refused[0]).toBe(180);
+    expect(result.refused[1].world).toContain('frames');
+    expect(result.synchronous).toEqual([true, false]);
   } finally { await browser.close(); server.stop(true); }
 }, 60000);

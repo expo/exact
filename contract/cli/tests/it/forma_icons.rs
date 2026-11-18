@@ -483,7 +483,7 @@ fn a_shipped_target_without_a_source_is_refused() {
 #[test]
 fn an_sf_name_draws_its_role_or_its_icon_and_says_so() {
     let design = "  icon.reply = icon(sf \"bubble.left\", svg \"icons/reply.svg\")\n";
-    let view = "component App\n  view\n    column\n      image \"symbol:sf/chevron.backward\"\n      image \"symbol:sf/bubble.left\"\n      image \"symbol:sf/flag.checkered\"\n";
+    let view = "component App\n  view\n    column\n      image \"symbol:sf/chevron.backward\"\n      image \"symbol:sf/bubble.left\"\n      image \"symbol:sf/flag.2.crossed\"\n";
     let path = app("sf", "\"ios\": {}, \"web\": {}", design, view);
     let (plan, warnings) = contract::compile_path_all_warned(&path, false);
     let (plan, _) = plan.unwrap_or_else(|e| panic!("{e:?}"));
@@ -519,7 +519,7 @@ fn an_sf_name_draws_its_role_or_its_icon_and_says_so() {
     );
     assert!(
         said.iter().any(|(id, m)| *id == "lower-symbol-platform"
-            && m.contains("sf/flag.checkered")
+            && m.contains("sf/flag.2.crossed")
             && m.contains("web")),
         "{said:?}"
     );
@@ -645,7 +645,7 @@ fn a_template_of_literals_is_its_literal() {
 /// (the euxy port spent 20 minutes finding them).
 #[test]
 fn the_platform_warning_names_what_ships_and_how_to_stop() {
-    let view = "component App\n  view\n    column\n      image \"symbol:sf/pencil\"\n      image \"symbol:sf/flag.checkered\"\n";
+    let view = "component App\n  view\n    column\n      image \"symbol:sf/pencil\"\n      image \"symbol:sf/flag.2.crossed\"\n";
     let path = app(
         "ships",
         "\"ios\": {}, \"web\": {}}, \"deploy\": {\"store\": {\"ios\": \"0\", \"linux\": \"0\"}",
@@ -677,7 +677,7 @@ fn the_platform_warning_names_what_ships_and_how_to_stop() {
     // The advice is said once a build; a later use is a line.
     assert_eq!(
         flag,
-        "symbol `sf/flag.checkered` is blank on linux and web too: declare `icon.flag-checkered` as the first `lower-symbol-platform` warning shows, and write `symbol:icon.flag-checkered`"
+        "symbol `sf/flag.2.crossed` is blank on linux and web too: declare `icon.flag-2-crossed` as the first `lower-symbol-platform` warning shows, and write `symbol:icon.flag-2-crossed`"
     );
 }
 
@@ -741,7 +741,7 @@ fn later_platform_symbols_are_a_line_each_outside_the_cap() {
 #[test]
 fn a_nested_literal_template_folds_and_lints() {
     let design = "  icon.reply = icon(sf \"bubble.left\", svg \"icons/reply.svg\")\n";
-    let view = "component App\n  view\n    column\n      image `${`symbol:icon.reply`}`\n      Row(symbol=\"flag.checkered\")\n\ncomponent Row\n  props\n    symbol: string\n  view\n    image `symbol:sf/${symbol}`\n";
+    let view = "component App\n  view\n    column\n      image `${`symbol:icon.reply`}`\n      Row(symbol=\"flag.2.crossed\")\n\ncomponent Row\n  props\n    symbol: string\n  view\n    image `symbol:sf/${symbol}`\n";
     let path = app("nested", "\"ios\": {}, \"web\": {}", design, view);
     let (plan, warnings) = contract::compile_path_all_warned(&path, false);
     let (plan, _) = plan.unwrap_or_else(|e| panic!("{e:?}"));
@@ -755,7 +755,7 @@ fn a_nested_literal_template_folds_and_lints() {
     assert!(
         warnings
             .iter()
-            .any(|w| w.id == "lower-symbol-platform" && w.message.contains("flag.checkered")),
+            .any(|w| w.id == "lower-symbol-platform" && w.message.contains("flag.2.crossed")),
         "{warnings:?}"
     );
 }

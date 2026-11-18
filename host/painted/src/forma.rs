@@ -25,7 +25,7 @@ impl<D: DataSource> Host<D> {
     /// refused, as are names that are not strings.
     pub fn forma_json(&mut self, request: &str) -> String {
         let Ok(request) = serde_json::from_str::<serde_json::Value>(request) else {
-            return exact_runner::agent::error("forma: not a JSON request");
+            return exact_runner::json::error("forma: not a JSON request");
         };
         let runner = self.runner_mut();
         let place = match &request["view"] {
@@ -33,14 +33,14 @@ impl<D: DataSource> Host<D> {
             view => match view.as_u64().map(u32::try_from) {
                 Some(Ok(0)) => Place::Root,
                 Some(Ok(id)) if runner.kernel().node(id).is_some() => Place::Node(id),
-                _ => return exact_runner::agent::error("forma: `view` is no live view id"),
+                _ => return exact_runner::json::error("forma: `view` is no live view id"),
             },
         };
         let Some(names) = request["names"]
             .as_array()
             .and_then(|n| n.iter().map(|n| n.as_str()).collect::<Option<Vec<&str>>>())
         else {
-            return exact_runner::agent::error("forma: `names` is not a list of token names");
+            return exact_runner::json::error("forma: `names` is not a list of token names");
         };
         let _roles = runner.bind_roles();
         // A role drawn in the accent reads the nearest `accent-color` above,
@@ -70,7 +70,7 @@ impl<D: DataSource> Host<D> {
             if i > 0 {
                 out.push(',');
             }
-            exact_runner::agent::quote(name, &mut out);
+            exact_runner::json::quote(name, &mut out);
             out.push(':');
             match forma.color(name, place) {
                 Some(colour) => {

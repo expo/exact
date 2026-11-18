@@ -173,7 +173,7 @@ export function keptCrates({ root, env, profile, app = null }) {
     renameSync(at, path);
   };
   const commitOf = () => {
-    const git = (...args) => spawnSync('git', ['-C', checkoutRoot, ...args], { encoding: 'utf8' });
+    const git = (...args) => spawnSync('git', ['--no-optional-locks', '-C', checkoutRoot, ...args], { encoding: 'utf8' });
     const head = git('rev-parse', 'HEAD');
     const status = git('status', '--porcelain', '--untracked-files=no');
     return { commit: head.status === 0 ? head.stdout.trim() : null, dirty: status.status === 0 ? status.stdout.trim().length > 0 : null };

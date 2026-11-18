@@ -17,6 +17,7 @@ if (!round || !spec || !arm || !sim || !pin) { console.error('usage: build.mjs -
 const LIMIT_MIN = Number(args.limit ?? 75);
 const pairs = JSON.parse(readFileSync(resolve(HERE, 'pairs.json'), 'utf8'));
 const model = args.model ?? pairs[spec].model;
+const builder = model === 'gpt' ? 'gpt-6.2-sol' : 'claude-opus-5-5';
 const name = `${spec}-${arm}`;
 const dir = resolve(round, 'apps', name);
 for (const d of ['records', 'logs', 'apps', 'built']) mkdirSync(resolve(round, d), { recursive: true });
@@ -47,8 +48,8 @@ writeFileSync(resolve(round, 'logs', `${name}.prompt.md`), prompt);
 const env = { ...process.env, EXACT_SIM: sim, SIM: sim };
 for (const k of Object.keys(env)) if (k.startsWith('CLAUDE_CODE') || k === 'CLAUDECODE') delete env[k];
 const [cmd, argv] = model === 'gpt'
-  ? ['codex', ['exec', '--json', '--skip-git-repo-check', '--approve-for-me', '-c', 'sandbox_workspace_write.network_access=true', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="high"', '-C', dir, '-']]
-  : ['claude', ['-p', '--model', 'claude-opus-5-5', '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose']];
+  ? ['codex', ['exec', '--json', '--skip-git-repo-check', '--approve-for-me', '-c', 'sandbox_workspace_write.network_access=true', '-m', builder, '-c', 'model_reasoning_effort="high"', '-C', dir, '-']]
+  : ['claude', ['-p', '--model', builder, '--permission-mode', 'auto', '--output-format', 'stream-json', '--verbose']];
 const log = createWriteStream(resolve(round, 'logs', `${name}.jsonl`));
 const started = Date.now();
 const usage = { input: 0, cached: 0, output: 0, cost: null, calls: 0, toolCalls: 0 };
@@ -125,7 +126,7 @@ const kept = resolve(round, 'built', `${name}.app`);
 rmSync(kept, { recursive: true, force: true });
 if (app) cpSync(app, kept, { recursive: true });
 
-const record = { spec, arm, model, appId: finalId, assignedId: appId, appName, sim,
+const record = { spec, arm, model, builder, appId: finalId, assignedId: appId, appName, sim,
   pin: spawnSync('git', ['-C', pin, 'rev-parse', '--short=10', 'HEAD'], { encoding: 'utf8' }).stdout.trim(),
   minutes: Math.round(minutes * 100) / 100, exit: code, timedOut,
   tokens: { total: usage.input + usage.output, fresh: usage.input - usage.cached, ...usage },

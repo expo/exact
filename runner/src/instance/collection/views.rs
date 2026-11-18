@@ -1,5 +1,6 @@
 //! Wrapper/spacer views use the same kernel operations and styles as authored UI.
 use super::*;
+use crate::instance::document::ListChild;
 use exact_kernel::{PropValue, StyleId};
 pub(super) fn style(
     u: &mut Update<'_>,
@@ -236,19 +237,6 @@ impl Collection {
         Ok(())
     }
 }
-/// One child of a virtualized list's view, as a document written without a
-/// kernel holds it (LLP 1048.004): a spacer, or a mounted row's wrapper
-/// around its root.
-pub(in crate::instance) enum ListChild<'a> {
-    /// A spacer: its view and style (its props are fixed: hidden).
-    Spacer(ViewId, StyleProps),
-    /// An authored fixed root, emitted by the owning node's ordinary children.
-    Fixed(ViewId, bool),
-    /// A mounted row: its wrapper, the wrapper's style and props, and the
-    /// row's roots.
-    Row(ViewId, StyleProps, exact_kernel::PropList, &'a [Child]),
-}
-
 impl Collection {
     /// The list view's children, in order, with what their ops left in a
     /// kernel: each spacer's rows at its size, each wrapper's rows and its

@@ -17,7 +17,8 @@ pub(crate) fn kernel(measurer: Box<dyn TextMeasurer>) -> Kernel {
     } else {
         Column::Ios
     });
-    let mut kernel = Kernel::new(measurer);
+    // Grid layout is the composition's to link (`link::Grammars`).
+    let mut kernel = Kernel::by_use(measurer);
     kernel.set_pixel_borders();
     kernel
 }

@@ -142,8 +142,10 @@ impl Painter {
             true => faded(on_surface, metric::SEGMENTED_BUTTON_DISABLED_OUTLINE),
             false => material_role(Material::Outline, "-exact-separator", dark),
         };
-        // Compose strokes its border inside the shape (`BorderStroke`).
-        let width = material_dp(metric::SEGMENTED_BUTTON_OUTLINE);
+        // Compose strokes its border inside the shape (`BorderStroke`) and,
+        // as `Modifier.border` does, rounds it up to whole pixels.
+        let width =
+            (material_dp(metric::SEGMENTED_BUTTON_OUTLINE) * self.scale).ceil() / self.scale;
         let radii = shape.radii.map(|(r, _)| r);
         let path = exact_kernel::svg::parse_d(&outline_path(shape.rect, radii, width / 2.0));
         self.backend.svg_path(

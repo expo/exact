@@ -4,6 +4,10 @@
 use exact_runner::{Answer, DataError, DataSource, Dispatch, Outcome, Request, Value};
 use exact_web::Host;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[derive(Default)]
 struct Waiting {
     asked: usize,
@@ -18,7 +22,7 @@ impl DataSource for Waiting {
         _: &str,
         _: &[Value],
     ) -> Result<Answer, DataError> {
-        Ok(Answer::Later(Request::continuation(1)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(1)))
     }
     fn dispatch(&mut self, _: u64, _: &exact_runner::Store) -> Dispatch {
         Dispatch::Again
@@ -34,7 +38,7 @@ impl DataSource for Waiting {
         self.asked += 1;
         // Waits once more, then settles.
         Ok(if self.asked < 2 {
-            Answer::Later(Request::continuation(2))
+            Answer::Later(Request::continuation::<TestWork>(2))
         } else {
             Answer::Now(Value::Number(7.))
         })

@@ -679,6 +679,27 @@ fn a_refused_keyboard_lift_leaves_the_interaction_pin_where_it_was() {
     assert_eq!(p.collection_interaction(), Some(grip));
 }
 
+/// The keys lift a row with no pointer down (LLP 1094 D9): a replacement
+/// waits for the drop or the cancel, as it does for a press (LLP 1029.000.002
+/// D9).
+#[test]
+fn a_keyboard_reorder_holds_a_replacement_until_it_ends() {
+    let data = || Board(vec![("a1".into(), "a".into()), ("a2".into(), "a".into())]);
+    for end in ["Escape", " "] {
+        let mut p = board();
+        let grip = id(&p, "grip-a1");
+        assert!(p.group_key(grip, " ", 0.), "Space lifts");
+        assert!(p.group_key(grip, "ArrowDown", 10.));
+        let held = p.reload(&crate::test_plan(BOARD), data()).unwrap();
+        assert_eq!(held, crate::presenter::ReloadResult::Held("gesture"));
+        p.run_commands(data);
+        assert!(p.group.is_some(), "the lifted row is still the person's");
+        assert!(p.group_key(grip, end, 20.));
+        p.run_commands(data);
+        assert_eq!(p.replacement_pending(), None, "{end:?}");
+    }
+}
+
 #[test]
 fn padded_group_drop_refuses_geometry_changed_by_a_due_timer() {
     let source = BOARD

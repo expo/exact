@@ -178,6 +178,28 @@ fn android_matrix(mut m: [f32; 20]) -> [f32; 20] {
     m
 }
 
+/// How many kept rows the last finished recording draws inside a `FILTER`.
+#[cfg(test)]
+pub(crate) fn filtered_row_draws() -> usize {
+    let ops = super::FINISHED
+        .with(|f| f.borrow().clone())
+        .unwrap_or_default();
+    let (mut depth, mut rows, mut at) = (0usize, 0, 0);
+    while at < ops.len() {
+        match ops[at] {
+            FILTER => depth += 1,
+            FILTER_END => depth = depth.saturating_sub(1),
+            super::ROW_DRAW | super::ROW_DRAW_THROUGH if depth > 0 => rows += 1,
+            _ => {}
+        }
+        let Some(next) = super::stream::end(&ops, at) else {
+            break;
+        };
+        at = next;
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{

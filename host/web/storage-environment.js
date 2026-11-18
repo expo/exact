@@ -151,17 +151,20 @@ export function exclusiveSecret(store, prefix, name, work) {
     }
     const fresh = localStorage.getItem(key);
     if (fresh == null) store.map.delete(name); else store.map.set(name, fresh);
-    localStorage.setItem(marker, '1');
-    (store.leased ??= new Set()).add(name);
+    // Recovery is armed before the lease's first write (the store's `set`) or request with effects (`work`'s
+    // argument), as on every host (LLP 1146 D5): an armed lease that fails or is cut off loses the secret.
+    let armed = false;
+    const arm = () => { if (!armed) { localStorage.setItem(marker, '1'); armed = true; } };
+    (store.leased ??= new Map()).set(name, arm);
     let completed = false;
-    try { const value = await work(); completed = true; return value; } finally {
+    try { const value = await work(arm); completed = true; return value; } finally {
       try { store.persist(); } finally { store.leased.delete(name); }
       if (store.pending.has(name)) {
         discard(); store.map.delete(name);
         localStorage.removeItem(key);
         throw new Error('The shared secret could not be persisted');
       }
-      if (!completed) { discard(); store.map.delete(name); localStorage.removeItem(key); }
+      if (!completed && armed) { discard(); store.map.delete(name); localStorage.removeItem(key); }
       localStorage.removeItem(marker);
     }
   });

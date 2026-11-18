@@ -20,6 +20,7 @@ import { suiteBrowser, launchFacts, launchEnvironment, parseFlags } from '../../
 import { nodeNamed } from '../../scripts/agent-test.mjs';
 import { drivable, engineTests } from '../../scripts/coverage.mjs';
 import { declaration, deferred, fixture, requestClock, source, timedRequests } from './glue-fixture.mjs';
+import { parseSync } from 'rolldown/utils';
 
 const engineTest = await engineTests();
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../target', import.meta.url)), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
@@ -404,6 +405,36 @@ test('a clock jump stops at each intermediate timer when a runner request is par
     expect(elapsed()).toBe(0);
     expect(f.inflight.size).toBe(0);
     expect(f.requestsPending).toBe(1);
+  }
+});
+
+// LLP 1012, LLP 1046.003: a world's record can arm timers inside a jump.
+test('a world publication starts its Contract timer before a clock jump ends', async () => {
+  for (const wakeAt of [0, 100]) {
+    const f = fixture(); requestClock(f);
+    let published = false, awake = wakeAt === 0, due = Infinity, shown = 0;
+    f.flowDue = wakeAt || null;
+    f.exact.gpu = {
+      settled: async () => [], schedule() {},
+      clock() {
+        if (awake && !published && f.agentClock >= wakeAt + 100) {
+          published = true;
+          due = f.agentClock + 120;
+          f.flowDue = due;
+        }
+        return { nextTickAt: awake && !published ? wakeAt + 100 : undefined, reply: { world: [{}] } };
+      },
+    };
+    f.gpuInPlay = () => true;
+    f.wasm.exact_advance = to => {
+      if (!awake && to >= wakeAt) awake = true;
+      if (due <= to) { shown = 1; due = Infinity; }
+      return JSON.stringify({ ops: [], clock: to, timer_due_ms: Number.isFinite(due) ? due : null });
+    };
+    f.applyBatch = batch => { f.agentClock = batch.clock; f.flowDue = batch.timer_due_ms; return { batch }; };
+    expect(await f.exact.agent({ op: 'clock', to: 900 })).toMatchObject({ clock: 900 });
+    expect(shown).toBe(1);
+    expect(due).toBe(Infinity);
   }
 });
 
@@ -1051,64 +1082,6 @@ test('initial flow loading cannot hold the first frame or module activation', as
   await boot;
 });
 
-for (const letGo of [false, true]) test(`module replacement reaches the runner without waiting on a parked ticket (letGo=${letGo})`, async () => {
-  const f = fixture(), elapsed = requestClock(f), calls = [];
-  f.requestsPending = 1;
-  f.setInputReady = value => { f.inputReady = value; };
-  f.wasm.exact_boot_module = (...args) => {
-    calls.push(args[3]);
-    return letGo ? '{"ops":[]}' : '{"error":"runner still has a pending request"}';
-  };
-  const candidate = { realm: { id: 1 }, receipt: new Uint8Array([1]), letGo };
-  const result = f.boot(new Uint8Array([1]), null, () => true, candidate);
-  if (letGo) { await result; expect(f.activeModule).toBe(candidate); }
-  else await expect(result).rejects.toThrow('runner still has a pending request');
-  expect(calls).toEqual([Number(letGo)]);
-  expect(elapsed()).toBe(0);
-});
-
-test('module replacement waits for requests, rechecks supersession; the dev loop swaps after its settle window, an update refuses', async () => {
-  for (const [result, letGo] of [['accept', true], ['superseded', true], ['pending', true], ['accept', false], ['pending', false]]) {
-    const f = fixture(false), entered = deferred(), drained = deferred(), lines = [];
-    let current = true, swaps = 0, flag = null;
-    f.waitForInflight = async deadline => {
-      expect(deadline).toBe(letGo ? 1010 : 20010);
-      entered.resolve();
-      return drained.promise;
-    };
-    f.log = line => lines.push(line);
-    f.setInputReady = value => { f.inputReady = value; };
-    f.wasm.exact_boot_module = (...args) => { swaps++; flag = args[3]; return '{"ops":[],"timers":true}'; };
-    // An app that always has a request out, here a read and a write; the write is named when let go.
-    if (result === 'pending') f.inflight.add(new Promise(() => {})).add(Object.assign(new Promise(() => {}), { write: 'POST https://api.test/like' }));
-    const candidate = {realm:{id:1},receipt:new Uint8Array([1]),letGo};
-    const update = f.boot(new Uint8Array([1]), null, () => current, candidate);
-    const outcome = update.then(value => ({value}), error => ({error}));
-    await entered.promise;
-    expect(swaps).toBe(0);
-    expect(f.views.size).toBe(1);
-    expect(f.inputReady).toBe(true);
-    if (result === 'superseded') current = false;
-    drained.resolve(result !== 'pending');
-    const reply = await outcome;
-    if (result === 'superseded' || result === 'pending' && !letGo) {
-      expect(swaps).toBe(0);
-      expect(f.views.size).toBe(1);
-      expect(f.activeModule).toBeNull();
-      if (letGo) expect(reply.value).toBeNull();
-      else expect(String(reply.error)).toContain('in-flight requests');
-    } else {
-      expect(reply.error).toBeUndefined();
-      expect(swaps).toBe(1);
-      expect(flag).toBe(letGo ? 1 : 0);
-      expect(f.activeModule).toBe(candidate);
-      expect(f.inflight.size).toBe(0);
-      expect(lines.filter(l => l.startsWith('module replacement'))).toEqual(result === 'pending' ? ['module replacement let go of 2 requests still in flight after 1000 ms; aborted writes the server may or may not have seen: POST https://api.test/like'] : []);
-    }
-  }
-});
-
-
 test('scoped tree rendering trims only shared indentation and preserves guest depth', () => {
   const node = {id:7,parent:3,depth:4,type:'WebView',props:{testId:'panel'},handlers:[],children:[8],guest:[{depth:0,tag:'button',text:'guest'}]};
   const child = {id:8,parent:7,depth:5,type:'Text',props:{text:'child'},handlers:[],children:[]};
@@ -1327,10 +1300,21 @@ test('perf frames live lends the clock to the wall for its window and measures w
   try {
     await import('./frames.js');
     let clock = 500;
-    const advanced = [], gpu = [];
+    const advanced = [], gpu = [], requests = [], order = [];
+    const perf = { frameMs: { p50: 16.7 } }, renderHooks = { frame: { draws: { max: 3, count: 1 } } };
+    const glue = readFileSync(new URL('./gpu-glue.js', import.meta.url), 'utf8');
+    const api = parseSync('gpu-glue.js', glue).program.body
+      .flatMap(node => node.declarations ?? []).find(node => node.id.name === 'api').init;
+    const { start, end } = api.properties.find(node => node.key.name === 'live');
+    const live = glue.slice(start, end);
+    const collector = vm.runInNewContext(`({ ${live} })`, {
+      liveWindow: false, gpu: { gpu_seekable: seek => { gpu.push(seek); order.push(`seek ${seek}`); } },
+      surfaces: new Map([[7, { id: 1, view: 7 }]]), schedule() {},
+      agent: (view, request) => (requests.push([view, request]), order.push("state"), { world: { perf, renderHooks } }),
+    });
     const window = globalThis.exact.liveFrames({ ms: 200, origin: () => 0, log() {}, clock: () => clock,
       advance: to => { advanced.push(to); clock = to; },
-      gpu: { live: on => (gpu.push(on), on ? [] : [{ canvas: 7, perf: { frameMs: { p50: 16.7 } } }]) } });
+      gpu: collector });
     let done = false; window.then(() => { done = true; });
     for (let i = 0; i < 40 && !done; i++) {
       wall += 1000 / 60;
@@ -1339,12 +1323,14 @@ test('perf frames live lends the clock to the wall for its window and measures w
       await new Promise(resolve => setImmediate(resolve));
     }
     const reply = await window;
-    expect(gpu).toEqual([true, false]); // the world left the seek for its own frames, and came back
+    expect(gpu).toEqual([false, true]); // the world left the seek for its own frames, and came back
+    expect(order).toEqual(["seek false", "state", "state", "seek true"]); // the closing read is taken while still live
+    expect(requests).toEqual([[7, { op: 'state', perf_reset: true }], [7, { op: 'state', perf: true }]]);
     expect(reply.live).toEqual({ ms: 200, from: 500, to: 700 });
     expect(advanced.at(-1)).toBe(700); // the runner followed the wall to the window's end, and no further
     expect(reply.window.samples).toBeGreaterThan(8);
     expect(reply.window.p50).toBeCloseTo(16.67, 1);
-    expect(reply.world).toEqual([{ canvas: 7, perf: { frameMs: { p50: 16.7 } } }]);
+    expect(reply.world).toEqual([{ canvas: 7, perf, renderHooks }]);
     expect(globalThis.exact.frames).toBeUndefined(); // the window's sampler does not outlive it
   } finally {
     for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];

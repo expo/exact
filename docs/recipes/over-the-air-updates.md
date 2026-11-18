@@ -72,6 +72,6 @@ component App
             text "Update"
 ```
 
-`deliveryActivate()` applies it without a relaunch; with an `app.ts`, once
-no request is in flight. `deliveryCheck()` checks now. A check logs `exact
-update: current`, `staged seq <n>` or `refused: <why>`.
+`deliveryActivate()` and `immediate` wait for composition, pointers and
+gestures to end; module updates also wait for loading and requests. They apply
+without retry. `state.replacement.pending` names the hold.

@@ -827,7 +827,7 @@ final class HeldStateTests: XCTestCase {
         let answer = try XCTUnwrap(HeldState.rows(for: label, in: p))
         XCTAssertEqual(answer["node"] as? Int, Int(card.id))
         XCTAssertEqual((answer["site"] as? NSNumber)?.intValue, (try node(card.id)["site"] as? NSNumber)?.intValue)
-        XCTAssertTrue(app.apply(first))
+        XCTAssertEqual(app.apply(first), .applied)
         XCTAssertEqual(heard.count, 2, "\(heard)")
         XCTAssertEqual(heard.last?["state"] as? String, "active")
         XCTAssertEqual(heard.last?["revision"] as? Int, 7)
@@ -835,7 +835,7 @@ final class HeldStateTests: XCTestCase {
         let again = try XCTUnwrap(HeldState.view)
         XCTAssertFalse(again === card, "the new generation's card")
         XCTAssertEqual(again.props["testId"], "card")
-        XCTAssertTrue(app.apply(try plan("Another")))
+        XCTAssertEqual(app.apply(try plan("Another")), .applied)
         XCTAssertEqual(heard.count, 2, "\(heard)")
         XCTAssertNil(HeldState.view)
     }
@@ -860,7 +860,7 @@ final class HeldStateTests: XCTestCase {
         HeldState.heard = { heard.append($0) }
         app.holdCommand(["kind": "hold", "revision": 8, "hold": ["site": node["site"]!, "instance": node["instance"] ?? [], "state": "hover"]])
         XCTAssertTrue(card.holds("hover"), "\(heard)")
-        XCTAssertTrue(app.apply(first))
+        XCTAssertEqual(app.apply(first), .applied)
         let again = try XCTUnwrap(HeldState.view)
         XCTAssertFalse(again === card)
         var path: [NodeView] = []

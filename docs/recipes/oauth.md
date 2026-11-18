@@ -1,16 +1,18 @@
 # Recipe: OAuth sign-in and sign-out
 
-`@exact/oauth` handles PKCE, tokens, refresh and sign-out. Install it with
+`@exact/oauth` handles PKCE, tokens, refresh and sign-out. Install:
 `EXACT_APP_DIR=$PWD bun <exact2>/scripts/exact.mjs add oauth`.
 Provider setup: `bun exact.mjs docs sign-in providers`.
 
+Web tokens are origin-readable. [Cookie sessions](web-sessions.md) need your server.
+
 ```ts
 import { oauth } from '@exact/oauth';
-// `net.fetch` and `auth.session` take origins, without paths.
+// Grant origins, without paths.
 export const grants = ['net.fetch https://login.example.com', 'net.fetch https://api.example.com',
   'auth.session https://login.example.com', 'auth.callback com.example.app:/oauth',
   'secret.keep example.session'].join('\n');
-// Keep the issuer's path and trailing slash. Discovery finds the endpoints.
+// Keep the issuer's path and trailing slash.
 const provider = oauth({ issuer: 'https://login.example.com/oauth2/default', clientId: 'abc123',
   scopes: ['openid', 'profile', 'offline_access'], key: 'example.session',
   apis: ['https://api.example.com'] }); // Only these APIs receive the token.
@@ -52,8 +54,8 @@ component Account
   A failed read is not a sign-in problem.
 - `refresh me` reads again; sending a mutation instead asks the API twice.
 - Keep `session` a resource the sign-in screen reads; it readies the next press.
-- Provider logout: pass `{ endSession: true }` from a press and register its
-  callback. Details: `bun exact.mjs docs oauth endSession`.
+- Provider logout: pass `{ endSession: true }` from a press; register its
+  callback. `bun exact.mjs docs oauth endSession`.
 - A provider-ended session leaves signed-in state and sets `session.error`; a
   network failure, 429 or 5xx keeps it.
 

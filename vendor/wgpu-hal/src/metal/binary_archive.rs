@@ -10,8 +10,8 @@ use objc2::{
 use objc2_foundation::{NSArray, NSError, NSProcessInfo, NSString, NSURL};
 use objc2_metal::{
     MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLComputePipelineDescriptor,
-    MTLComputePipelineState, MTLDevice, MTLPipelineOption, MTLRenderPipelineDescriptor,
-    MTLRenderPipelineState,
+    MTLComputePipelineState, MTLDevice, MTLGPUFamily, MTLPipelineOption,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState,
 };
 use parking_lot::Mutex;
 use std::{io, path::PathBuf, sync::OnceLock};
@@ -30,6 +30,8 @@ pub struct BinaryArchive {
     hits: AtomicU64,
     misses: AtomicU64,
     additions: AtomicU64,
+    // A file present only while a pipeline is added to a restored archive.
+    marker: Mutex<Option<PathBuf>>,
 }
 // Metal archives have no thread affinity. The mutex serializes every operation,
 // including pipeline creation and serialization; the retained object never escapes.
@@ -46,20 +48,37 @@ impl Device {
         )
     }
 
-    /// Install the device's optional pipeline archive. Invalid data falls back
-    /// to an empty archive; unsupported systems return an error without changing it.
-    pub fn install_binary_archive(
-        &self,
-        data: Option<&[u8]>,
-    ) -> Result<Arc<BinaryArchive>, String> {
+    /// Why this device keeps no pipeline archive, or `None` where it can.
+    /// EXACT (EXACT-PATCHES.md, 15).
+    pub fn binary_archive_unavailable(&self) -> Option<&'static str> {
         if !available!(macos = 11.0, ios = 14.0, tvos = 14.0, visionos = 1.0) {
-            return Err("Metal binary archives require macOS 11 or iOS/tvOS 14".into());
+            return Some("Metal binary archives require macOS 11 or iOS/tvOS 14");
         }
         // The simulator's Metal aborts the process serializing an archive
         // (`MTLReportFailure` under `-[_MTLBinaryArchive legacySerializeToURL:options:error:]`,
         // iOS 27 simulator, 2026-11-12).
         if cfg!(target_abi = "sim") {
-            return Err("the simulator has no Metal binary archives".into());
+            return Some("the simulator has no Metal binary archives");
+        }
+        // A macOS virtual machine's paravirtualized GPU reports the Apple3 and
+        // Mac2 families but not Metal 3, and an archive it serialized twice in
+        // one process traps the next process in Metal (EXACT-PATCHES.md, 15).
+        // A Mac without Metal 3, which has not been measured, keeps none either.
+        if cfg!(target_os = "macos") && !self.shared.device.supportsFamily(MTLGPUFamily::Metal3) {
+            return Some("this Mac's Metal device does not support the Metal 3 family");
+        }
+        None
+    }
+
+    /// Install the device's optional pipeline archive. Invalid data falls back
+    /// to an empty archive; a device that keeps none (`binary_archive_unavailable`)
+    /// returns an error without changing it.
+    pub fn install_binary_archive(
+        &self,
+        data: Option<&[u8]>,
+    ) -> Result<Arc<BinaryArchive>, String> {
+        if let Some(reason) = self.binary_archive_unavailable() {
+            return Err(reason.into());
         }
         let mut installed = self.binary_archive.lock();
         let archive = autoreleasepool(|_| {
@@ -95,6 +114,7 @@ impl Device {
                 hits: AtomicU64::new(0),
                 misses: AtomicU64::new(0),
                 additions: AtomicU64::new(0),
+                marker: Mutex::new(None),
             }))
         })?;
         *installed = Some(Arc::clone(&archive));
@@ -127,6 +147,31 @@ impl BinaryArchive {
     /// Successful additions, across render and compute pipelines.
     pub fn additions(&self) -> u64 {
         self.additions.load(Ordering::Relaxed)
+    }
+    /// EXACT (EXACT-PATCHES.md, 15). Name a file that exists only while a
+    /// pipeline is added to this archive, when it was restored: one a launch
+    /// finds still there means the launch before it stopped inside such an
+    /// addition, and the archive it was restored from is not to be used again.
+    /// A pipeline is not added when the file cannot be written.
+    pub fn mark_additions(&self, path: PathBuf) {
+        *self.marker.lock() = Some(path);
+    }
+    /// `add`, under the marker when there is one; `None`, adding nothing, when
+    /// the marker cannot be written.
+    fn adding<R>(&self, add: impl FnOnce() -> R) -> Option<R> {
+        let marker = self.restored.then(|| self.marker.lock().clone()).flatten();
+        if let Some(marker) = &marker {
+            // An archive restored from a seed may have no cache directory yet.
+            if let Some(parent) = marker.parent() {
+                std::fs::create_dir_all(parent).ok()?;
+            }
+            std::fs::write(marker, b"").ok()?;
+        }
+        let result = add();
+        if let Some(marker) = &marker {
+            let _ = std::fs::remove_file(marker);
+        }
+        Some(result)
     }
     /// Snapshot bytes while excluding pipeline additions. Disk ownership and
     /// atomic replacement of the persistent envelope belong to the caller.
@@ -167,14 +212,15 @@ impl BinaryArchive {
             return cached;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        match archive.addRenderPipelineFunctionsWithDescriptor_error(descriptor) {
-            Ok(()) => {
+        match self.adding(|| archive.addRenderPipelineFunctionsWithDescriptor_error(descriptor)) {
+            Some(Ok(())) => {
                 self.additions.fetch_add(1, Ordering::Relaxed);
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 log::warn!("Metal render archive addition failed: {error}");
                 descriptor.setBinaryArchives(None);
             }
+            None => descriptor.setBinaryArchives(None),
         }
         device.newRenderPipelineStateWithDescriptor_error(descriptor)
     }
@@ -196,14 +242,15 @@ impl BinaryArchive {
             return cached;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        match archive.addComputePipelineFunctionsWithDescriptor_error(descriptor) {
-            Ok(()) => {
+        match self.adding(|| archive.addComputePipelineFunctionsWithDescriptor_error(descriptor)) {
+            Some(Ok(())) => {
                 self.additions.fetch_add(1, Ordering::Relaxed);
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 log::warn!("Metal compute archive addition failed: {error}");
                 descriptor.setBinaryArchives(None);
             }
+            None => descriptor.setBinaryArchives(None),
         }
         device.newComputePipelineStateWithDescriptor_options_reflection_error(
             descriptor,

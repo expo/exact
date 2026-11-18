@@ -16,8 +16,8 @@ use exact_plan::Value;
 pub(crate) struct Waiting {
     pub(super) args: Vec<Value>,
     pub(super) digest: u64,
-    /// The seed slept while idle: admitted, it is no answer until a fresh
-    /// one after the wake (LLP 1161.001 D1).
+    /// It was kept across idleness, as a seed or while it waited: admitted,
+    /// it is no answer until a fresh one after the wake (LLP 1161.001 D1).
     pub(super) slept: bool,
 }
 
@@ -51,6 +51,9 @@ pub(super) struct Admission {
     /// A waiting entry was admitted before readiness: it shows as a boot
     /// seed does, neither pending nor awaiting.
     pub(super) admitted_early: bool,
+    /// The seed this pass let go was kept across idleness: the fallback
+    /// that replaces it is no answer since the wake either (LLP 1161.001 D1).
+    pub(super) slept: bool,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -66,12 +69,12 @@ impl<D: DataSource> Runner<D> {
         ready: bool,
         states: &mut [Option<ResourceState>],
     ) -> Admission {
-        let row = self.resource_row(i);
-        let now = &args[..row.args.len as usize - usize::from(row.context)];
+        let now = &args[..self.identity_len(i)];
         let mut out = Admission {
             kept_seed: false,
             hold: false,
             admitted_early: false,
+            slept: false,
         };
         let seed = (states[i].as_ref())
             .filter(|s| s.kept_seed)
@@ -113,6 +116,7 @@ impl<D: DataSource> Runner<D> {
                 // may have been. Admitted, it stands while its ask is
                 // pending; otherwise the fallback shows.
                 out.hold = true;
+                out.slept = slept && matched != Match::Admit;
                 match matched {
                     Match::Admit => {
                         self.resources[i].kept_admitted = true;
@@ -292,8 +296,7 @@ impl<D: DataSource> Runner<D> {
     /// when it answers that entry's identity, kept or not; keeping or
     /// forgetting the stored entry (`replaced`) consumes it too.
     pub(super) fn answered_waiting(&mut self, i: usize, args: &[Value], replaced: bool) {
-        let row = self.resource_row(i);
-        let identity = row.args.len as usize - usize::from(row.context);
+        let identity = self.identity_len(i);
         let ours = (self.resources[i].waiting.as_ref())
             .is_some_and(|w| args.get(..identity) == Some(&w.args[..]));
         if replaced || ours {

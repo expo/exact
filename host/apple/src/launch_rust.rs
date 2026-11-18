@@ -353,7 +353,13 @@ impl LaunchContext for Context<'_> {
             Some((PreloadEvent::InvalidHeader, "invalid launch preload header"))
         } else if !crate::executor::valid_request(&request) {
             Some((PreloadEvent::Refused, "invalid launch preload request"))
-        } else if exact_runner::grants::admitting_request(self.grants, &request).is_none() {
+        } else if exact_runner::grants::admitting_request(
+            Some(&exact_runner::grants::LINKED),
+            self.grants,
+            &request,
+        )
+        .is_none()
+        {
             Some((PreloadEvent::RefusedGrant, "launch preload grant refused"))
         } else if self
             .used

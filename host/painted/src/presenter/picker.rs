@@ -889,7 +889,7 @@ fn an_old_worker_cannot_overwrite_a_pick_after_runner_replacement() {
         held.recv().unwrap();
         job.run()
     });
-    assert!(p.reload(&plan, ()).unwrap().is_none());
+    assert!(p.reload(&plan, ()).unwrap() == crate::presenter::ReloadResult::Applied(None));
     let sources = vec![source("new.jpg", b"new")];
     let view = p.host.runner().picker("attach").unwrap().view;
     let job = Import {

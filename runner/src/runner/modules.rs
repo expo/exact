@@ -27,6 +27,9 @@
 //! module's answers announces its sources' keys, so the host asks their
 //! readers again through [`Runner::apply_announced`].
 
+use super::provenance::CallOrigin;
+use super::reply::{response, Pending};
+use super::wakes::WakeHow;
 use super::{DataError, DataSource, Runner, RunnerError, Target};
 use crate::failure::FailureCode;
 use crate::request::{Answer, Dispatch, Outcome, Reply, Request, Response, Work};
@@ -39,9 +42,9 @@ mod agent;
 mod answered;
 mod arrival;
 mod bound;
-mod calls;
 mod ceremony;
 mod declared;
+mod declared_actions;
 mod devices;
 mod disclosed;
 mod events;
@@ -55,9 +58,9 @@ mod network;
 mod permits;
 mod pictures;
 mod poll;
-mod presence;
-mod processes;
 mod samples;
+mod seam;
+pub(in crate::runner) use seam::LinkedModules;
 mod services;
 mod sheet;
 mod spans;
@@ -66,31 +69,24 @@ mod stale;
 mod substitute_tests;
 mod values;
 mod views;
-mod wakes;
-pub use admit::CallOrigin;
-pub(super) use admit::{Causes, OriginsSaved};
-use admit::{Origins, Route};
-pub use calls::CallHow;
+use super::event::absent_is_none;
+use admit::Route;
 pub use declared::AppState;
 pub(super) use declared::CHOSEN;
 pub(super) use disclosed::STATED;
 pub(super) use events::EMITTED;
-pub use presence::{PresenceAnswer, PresenceAsk};
-pub(super) use processes::Refused;
 pub(super) use services::CLAIMED;
 use std::sync::{Arc, Mutex};
-use values::{absent_is_none, fill, set_path};
+use values::{fill, set_path};
 
 /// The key of the answer `decide` gives a send that lists what it answers,
 /// which its caller turns into the entry (`region_list.rs`, `listed_or`).
 const LISTS: &str = "exact:lists";
-pub use wakes::WakeHow;
-pub(super) use wakes::{EXPIRED, TOLD};
 
 /// The continuation tokens the runner keeps for its held module requests:
 /// a data source's count up from zero, far below, and its reserved ones
 /// (`BACKGROUND`) sit at the top, above.
-const TOKENS: std::ops::Range<u64> = 1 << 62..1 << 63;
+pub(in crate::runner) const TOKENS: std::ops::Range<u64> = 1 << 62..1 << 63;
 
 #[cfg(test)]
 thread_local! {
@@ -103,8 +99,6 @@ thread_local! {
 /// or the session ends).
 #[derive(Default)]
 pub(super) struct Extensions {
-    /// `@exact/child-process`'s children and clock (LLP 1133.007).
-    processes: processes::Processes,
     /// Each module's substitute as it reads on the host target, by the plan's
     /// string: parsed once, since the plan's strings never change under a
     /// runner (a new plan is a new runner); cleared when the target changes,
@@ -135,22 +129,16 @@ pub(super) struct Extensions {
     declared: declared::Declared,
     /// Module events not yet heard (D6).
     pub(super) events: events::Events,
-    /// Wakes, running and to come (LLP 1133.017 D5).
-    wakes: wakes::Wakes,
     /// Foreground-service claims under the agent (LLP 1133.033 D21).
     services: services::Services,
     /// What bound implementations disclose of their own objects (`disclosed.rs`).
     disclosed: disclosed::Disclosed,
-    /// Tool calls, running and to come (LLP 1133.023 D7).
-    calls: calls::Calls,
     /// Each bound live source's Contract readers, by resource, with the
     /// arguments each last asked with (`bound.rs`).
     pub(super) readers: BTreeMap<String, BTreeMap<usize, String>>,
     /// The argument groups each bound live source's implementation was
     /// asked for and not yet told are gone.
     groups: BTreeMap<String, BTreeSet<String>>,
-    /// Who each call comes from (`admit.rs`).
-    origins: Origins,
     /// Requests whose reply carries handles, by ticket (`handles.rs`).
     provisional: BTreeMap<u64, handles::Provisional>,
     /// Their replies, as they left the implementation.
@@ -166,8 +154,6 @@ pub(super) struct Extensions {
     /// The polled sources whose last answer was an error, not asked again by
     /// a poll (`poll.rs`).
     failed: BTreeSet<String>,
-    /// Presence secrets: the host's backend and the calls on it (`presence.rs`).
-    presence: presence::Presence,
     /// Sampled sources' cursors, tracks and canvas inputs (`samples.rs`).
     samples: samples::Samples,
     /// The ceremonies and signals held or answered, by held token, with
@@ -239,7 +225,7 @@ struct Held {
     /// The call's body for the implementation, once the ticket allows it.
     forward: Option<Vec<u8>>,
     origin: CallOrigin,
-    /// The invocation it is part of (`admit.rs`); 0 for none.
+    /// The invocation it is part of (`provenance.rs`); 0 for none.
     id: u64,
     /// The call's arguments: a denial fails it only where they ask for what
     /// the permission gates (`permission.continues`), and which of an
@@ -251,32 +237,6 @@ struct Held {
     request: Option<u64>,
     /// A ceremony waiting behind a modal one, with no ticket yet (`ceremony.rs`).
     queued: bool,
-}
-
-/// A held data-code call's two halves, whichever comes first: the host's
-/// reply, or the answer to send through it.
-#[derive(Default)]
-struct Pending {
-    reply: Option<Reply>,
-    outcome: Option<Outcome>,
-}
-
-impl Pending {
-    fn complete(slot: &Mutex<Pending>, outcome: Outcome) {
-        let mut s = slot.lock().unwrap_or_else(|e| e.into_inner());
-        match s.reply.take() {
-            Some(reply) => reply.send(outcome),
-            None => s.outcome = Some(outcome),
-        }
-    }
-}
-
-fn response(answer: &Json) -> Outcome {
-    Outcome::Response(Response {
-        status: 200,
-        headers: Vec::new(),
-        body: answer.to_string().into_bytes(),
-    })
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -328,6 +288,28 @@ enum Decision {
     Forward,
 }
 
+/// Module code reaches the runner's module state as `self.extensions`. It is
+/// `Extensions` wherever module code runs: the boot makes the state with the
+/// seam it chose for the runner, and module code is reached only through
+/// that seam.
+impl std::ops::Deref for super::module_seam::ModuleState {
+    type Target = Extensions;
+
+    fn deref(&self) -> &Extensions {
+        self.0
+            .downcast_ref()
+            .expect("the linked seam made this state")
+    }
+}
+
+impl std::ops::DerefMut for super::module_seam::ModuleState {
+    fn deref_mut(&mut self) -> &mut Extensions {
+        self.0
+            .downcast_mut()
+            .expect("the linked seam made this state")
+    }
+}
+
 impl Extensions {
     /// Whether `token` is a held module request (not I/O: no clock waits).
     pub(super) fn holds_token(&self, token: Option<u64>) -> bool {
@@ -337,7 +319,7 @@ impl Extensions {
 
 impl<D: DataSource> Runner<D> {
     /// What answers resource `i`, whose source `source` is a module's name.
-    pub(super) fn module_answer(
+    fn module_answer_linked(
         &mut self,
         i: usize,
         source: &str,
@@ -354,7 +336,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// What answers a send (`target`) to `source`, a module's name.
-    pub(super) fn module_send(
+    fn module_send_linked(
         &mut self,
         target: Target,
         source: &str,
@@ -510,7 +492,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Value tickets whose timeout has passed on the agent's clock (§6):
     /// each fails `TIMEOUT`, its ticket retired.
-    pub(super) fn module_deadlines(&mut self, now_ms: f64) {
+    fn module_deadlines_linked(&mut self, now_ms: f64) {
         if !self.native_slot().synced() {
             self.publish_sync();
         }
@@ -529,7 +511,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The reply to a held module request, as `fulfill` parses it.
-    pub(super) fn module_parse(
+    fn module_parse_linked(
         &mut self,
         target: Target,
         ty: TypesId,
@@ -561,7 +543,7 @@ impl<D: DataSource> Runner<D> {
             .clone()
     }
 
-    fn substitute(&self, row: &ModulesRow) -> std::sync::Arc<Json> {
+    pub(in crate::runner::modules) fn substitute(&self, row: &ModulesRow) -> std::sync::Arc<Json> {
         let key = row.substitute.0;
         if let Some(sub) = self.extensions.substitutes.borrow().get(&key) {
             return sub.clone();
@@ -782,7 +764,7 @@ impl<D: DataSource> Runner<D> {
     /// where the runner answers itself (a status), as does a `partial`
     /// source's. A default has this target's restrictions laid over it
     /// (`targets`). Its `facts` are the runner's own, over either.
-    fn value_of(&self, row: &ModulesRow) -> Option<Json> {
+    pub(in crate::runner::modules) fn value_of(&self, row: &ModulesRow) -> Option<Json> {
         let sub = self.substitute(row);
         if let Some(listed) = self.listed_value(row, &sub) {
             return Some(listed);
@@ -864,6 +846,7 @@ impl<D: DataSource> Runner<D> {
                     .map(|t| self.now_ms + t),
             ),
         };
+        let invocation = self.invocation_id();
         self.extensions.held.push(Held {
             token,
             reply: None,
@@ -876,7 +859,7 @@ impl<D: DataSource> Runner<D> {
             deadline,
             forward,
             origin,
-            id: self.invocation_id(),
+            id: invocation,
             args,
             permission,
             request: None,
@@ -890,7 +873,7 @@ impl<D: DataSource> Runner<D> {
         let body =
             json!({ "extension": self.plan.str(row.extension), verb: self.plan.str(row.declared) });
         // Ordered work a host runs, never transport: its body says what it holds.
-        let mut request = Request::continuation(token);
+        let mut request = Request::continuation::<crate::host_work::ModuleWork>(token);
         request.body = body.to_string().into_bytes();
         request
     }
@@ -1004,7 +987,7 @@ impl<D: DataSource> Runner<D> {
 
     /// The host dispatches held module request `token`: answered already,
     /// or held until the agent answers. `None` for a data source's token.
-    pub(super) fn module_dispatch(&mut self, token: u64) -> Option<Dispatch> {
+    fn module_dispatch_linked(&mut self, token: u64) -> Option<Dispatch> {
         if !TOKENS.contains(&token) {
             return None;
         }
@@ -1027,7 +1010,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Held module requests the agent answered since the host dispatched them.
-    pub(super) fn module_release(&mut self) -> Vec<(u64, Dispatch)> {
+    fn module_release_linked(&mut self) -> Vec<(u64, Dispatch)> {
         let (out, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.extensions.released)
             .into_iter()
             .partition(|(_, _, dispatched)| *dispatched);
@@ -1091,7 +1074,7 @@ impl<D: DataSource> Runner<D> {
     /// names a module's source or send, `{"extension": …, "source": …,
     /// "args": {…}}`, admitted here as a Contract read or send is, before any
     /// module. `None` for any other body.
-    pub(super) fn module_call(&mut self, native: &crate::Request) -> Option<Dispatch> {
+    fn module_call_linked(&mut self, native: &crate::Request) -> Option<Dispatch> {
         let body = &native.body;
         let v: Json = serde_json::from_slice(body).ok()?;
         let extension = v.get("extension")?.as_str()?;
@@ -1220,6 +1203,7 @@ impl<D: DataSource> Runner<D> {
                         .map(|t| self.now_ms + t),
                 };
                 let forward = (route == Route::Agent).then(|| self.forward_body(&row, args, None));
+                let invocation = self.invocation_id();
                 self.extensions.held.push(Held {
                     token,
                     reply: Some(slot.clone()),
@@ -1235,7 +1219,7 @@ impl<D: DataSource> Runner<D> {
                     deadline,
                     forward,
                     origin,
-                    id: self.invocation_id(),
+                    id: invocation,
                     args: held_args.clone(),
                     permission,
                     request,
@@ -1290,7 +1274,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The topic a data-code read of a module's source watches, its key.
-    pub(super) fn module_topic(&self, body: &[u8]) -> Option<String> {
+    fn module_topic_linked(&self, body: &[u8]) -> Option<String> {
         let v: Json = serde_json::from_slice(body).ok()?;
         let owner = v["owner"]
             .as_str()
@@ -1322,7 +1306,7 @@ impl<D: DataSource> Runner<D> {
 
     /// A typed answer to `ticket`, checked before the hold is spent, so it
     /// can be corrected. `None` when the hold is not a module's.
-    pub(super) fn module_check(&self, ticket: u64, text: &str) -> Option<Result<(), String>> {
+    fn module_check_linked(&self, ticket: u64, text: &str) -> Option<Result<(), String>> {
         let h = self.extensions.held.iter().find(|h| h.hold == ticket)?;
         if h.waits == Waits::Ceremony {
             let row = self.module_row(&h.source);
@@ -1405,13 +1389,12 @@ impl<D: DataSource> Runner<D> {
 
     /// Held module requests whose request is gone (superseded, its reader
     /// released, a refused commit): retired with their tickets (§6).
-    pub(super) fn retire_modules(&mut self) {
+    fn retire_modules_linked(&mut self) {
         self.release_idle();
         self.release_sampled();
         self.dispose_dropped();
         self.cancel_let_go();
         self.let_go_data_calls();
-        self.prune_origins();
         self.sheets_let_go();
         let gone: Vec<(u64, u64)> = (self.extensions.held.iter())
             .filter(|h| h.reply.is_none() && !self.sheet_kept(h.token))

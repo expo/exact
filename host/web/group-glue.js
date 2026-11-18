@@ -54,6 +54,9 @@ export function groupController({ views, collections, request, applyBatch, now, 
     if (r?.batch) applyBatch(r.batch);
     return r ?? { accepted: false };
   };
+  // While the keys hold a lifted row the document says so: no pointer is down, and a replacement waits for the drop
+  // or the cancel all the same (LLP 1029.000.002 D9; engagement.js).
+  const mark = () => doc.documentElement.toggleAttribute('data-exact-reorder-keys', !!cur?.keys && cur.phase === 'active');
   const centre = d => [d.ghost.left + d.ghost.dx + d.ghost.width / 2, d.ghost.top + d.ghost.dy + d.ghost.height / 2];
   // Where the contact is: the pointer by the grab, or the centre for a key session.
   const contact = d => d.keys ? centre(d) : [d.grab[0] + d.ghost.dx, d.grab[1] + d.ghost.dy];
@@ -164,7 +167,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
   // The answer to a drop or a cancel: a hold keeps the ghost where it is
   // (D8) until a batch's `reorder-state` says the hold ended.
   function after(d, r) {
-    if (r?.phase === 'holding') { d.phase = 'holding'; return; }
+    if (r?.phase === 'holding') { d.phase = 'holding'; mark(); return; }
     if (r?.phase === 'settling' || r?.phase === 'cancelling') land(d, r);
   }
   // The ending (D8): the ghost springs onto the row wherever it is (landed,
@@ -189,7 +192,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
   }
   function finish(d, r) {
     if (cur !== d) return;
-    cur = null;
+    cur = null; mark();
     d.ghost?.el.remove();
     for (const [el, name, fn] of d.listeners ?? []) el.removeEventListener(name, fn);
     const f = request({ ...binding(d.b), op: 'reorder-finish', token: d.token, now: now() });
@@ -281,7 +284,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
     cur = d;
     const r = call(d, 'reorder-begin', { ...geometry(m), flags: 2 });
     if (r.accepted !== true) { cur = null; collections.releaseRetainedInteraction(lease); return; }
-    d.token = r.token;
+    d.token = r.token; mark();
     const key = k => {
       if (k.exactFlowCapture) return;
       if (cur !== d || d.phase !== 'active' || k.repeat && !STEPS[k.key]) return;

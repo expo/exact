@@ -22,9 +22,12 @@ request failure.
 
 The sample `persona` values are public development identities. A real app should
 put a stable, non-secret principal id in the resource call and keep bearer
-credentials in the granted store. It should await an app-owned current-session
-helper inside the data source before issuing authenticated requests, then verify
-that the session authorizes the principal named by the resource. Exact does not
+credentials in the granted store on native hosts. On the web, use a server-set
+HttpOnly, Secure cookie. Select the transport inside the data source with
+`exactHost()`, as [web sessions](web-sessions.md) shows; one deploy serves both
+hosts. Await an app-owned current-session helper inside the data source before
+issuing authenticated requests, then verify that the session authorizes the
+principal named by the resource. Exact does not
 provide that session helper. This starter demonstrates owner gating, not a full
 authentication lifecycle; a real authenticated view must also gate retained
 answers by the app-owned authorized principal and auth generation.
@@ -52,8 +55,12 @@ and stop it after; start none of your own for them. They find it this way:
 
 Each test starts with empty client storage and an empty server: between tests the process
 restarts and its scratch database is removed. `database: false` restarts too, clearing memory.
-`reload` and `request` within a test keep its data. `verify` reruns its chosen test empty before
-relaunching on the store it leaves, with that server still running.
+`reload` and `request` within a test keep its data. A stop ends every process the server started,
+workers included, before the database is removed; one it cannot end fails the run and
+keeps the database, saying what is left. A run killed outright, its whole process group included, still ends its server. On macOS a process that leaves the server's process group on purpose (`setsid`,
+as a daemon does) is not followed: it is left running, and the run fails while it holds the server's
+port. `verify` reruns its chosen test empty before relaunching on the store it leaves, with that
+server still running.
 Remote servers stay shared. Only `test` and `agent --test` share an ancestor's server
 (an older `api-test` wrapper's), saying so; `verify` refuses an answering local server,
 including an ancestor's.

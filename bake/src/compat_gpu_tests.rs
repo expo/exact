@@ -20,7 +20,7 @@ fn package_gpu_ownership_uses_the_apple_destination() {
     // No `targets` means every host that draws GPU surfaces, which the watch is not.
     for supported in [Some("ios"), Some("tvos"), None] {
         let mut gpu = json!({
-            "crate": "rust", "exactGpu": "0.3",
+            "crate": "rust", "exactGpu": "0.4",
             "surfaces": {"sky": {"arity": 1, "factory": "sky_surface::surface"}}
         });
         if let Some(platform) = supported {

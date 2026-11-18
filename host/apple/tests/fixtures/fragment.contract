@@ -1,6 +1,7 @@
 routes nav
   home "/"
     item "/item/:id"
+    page "/page/:id"
 
 component App
   action follow(url: string)
@@ -25,3 +26,6 @@ component App
             image "assets/late.svg" width=100 display="block" id="tail"
             button id="leaver" blur=leave
               text "Leave"
+          if e.name == "page"
+            scroll testId="inner" height=100
+              box height=600

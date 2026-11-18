@@ -19,7 +19,7 @@ pub(super) struct Checkpoint {
     letting: usize,
     slots: Vec<Value>,
     resources: Vec<super::resources::ResourceRow>,
-    module_readers: std::collections::BTreeMap<String, std::collections::BTreeMap<usize, String>>,
+    module_readers: super::module_seam::Readers,
     uploads: super::uploads::Uploads,
     failed_mut: Vec<Option<crate::failure::Failure>>,
     refresh_next: Vec<usize>,
@@ -44,9 +44,9 @@ pub(super) struct Checkpoint {
     /// Kept-answer lines made before this commit (`Keeping::refused`).
     refused: usize,
     /// Who each request and `then` is from (LLP 1133.023 D7).
-    origins: super::modules::OriginsSaved,
+    origins: super::provenance::OriginsSaved,
     /// The arguments refused a child's resource (LLP 1133.007 D13).
-    refused_args: super::modules::Refused,
+    refused_args: super::processes::Refused,
     /// What sends had written into instances before it (LLP 1035.005.004 D6).
     send_undo: usize,
 }
@@ -83,7 +83,7 @@ impl<D: DataSource> Runner<D> {
             store,
             slots: self.slots.clone(),
             resources: self.resources.clone(),
-            module_readers: self.extensions.readers.clone(),
+            module_readers: self.readers_saved(),
             uploads: self.uploads.clone(),
             failed_mut: self.failed_mut.clone(),
             refresh_next: self.refresh_next.clone(),
@@ -166,7 +166,7 @@ impl<D: DataSource> Runner<D> {
                     old.entropy_reader |= attempted.entropy_reader;
                 }
                 self.resources = resources;
-                self.extensions.readers = c.module_readers;
+                self.readers_restore(c.module_readers);
                 self.release_sampled();
                 // A spent reply's turn read the store: its failure stands, and so does the read,
                 // which a draw of randomness alone doesn't make a contents read (LLP 1069.005 D2).
@@ -772,7 +772,7 @@ impl<D: DataSource> Runner<D> {
                     if i > 0 {
                         s.push_str(", ");
                     }
-                    crate::agent::untyped_json(a, &mut s);
+                    crate::json::untyped_json(a, &mut s);
                 }
                 s.push(')');
                 s
@@ -788,7 +788,7 @@ impl<D: DataSource> Runner<D> {
                 self.commands.push(command);
                 continue;
             }
-            match crate::instance::collection::IntoView::from_command(&command.args) {
+            match crate::list_api::IntoView::from_command(&command.args) {
                 Ok(request) => self.into_view.push(request),
                 Err(why) => self.log(format!("scrollIntoView refused: {why}")),
             }
@@ -1049,7 +1049,13 @@ impl<D: DataSource> Runner<D> {
             sent: false,
             grant: request
                 .stream
-                .then(|| crate::grants::admitting_request(self.data.grants(), &request))
+                .then(|| {
+                    crate::grants::admitting_request(
+                        self.links.grants,
+                        self.data.grants(),
+                        &request,
+                    )
+                })
                 .flatten()
                 .map(str::to_string),
             ask_again: false,

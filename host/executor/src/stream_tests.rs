@@ -989,6 +989,9 @@ fn forgetting_a_socket_closes_its_connection() {
 #[path = "byte_stream_tests.rs"]
 mod byte_tests;
 
+#[path = "stream_quiet_tests.rs"]
+mod quiet;
+
 #[test]
 fn an_upload_tells_its_bytes_sent_then_its_reply_ends_it() {
     let (core, script, woke) = setup();

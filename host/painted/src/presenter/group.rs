@@ -86,6 +86,12 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// Whether the keys hold a lifted row (D9): from Space to the drop or
+    /// the cancel.
+    pub(super) fn group_keyed(&self) -> bool {
+        (self.group.as_ref()).is_some_and(|s| !s.ghost && s.phase == Phase::Active)
+    }
+
     /// Whether a contact's grouped session still follows it.
     pub(super) fn group_live(&self) -> bool {
         self.group.as_ref().is_some_and(|s| {

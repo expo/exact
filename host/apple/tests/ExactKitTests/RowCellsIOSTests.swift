@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1115.000 D16 on iOS: rows of a list Contract marked (`listRows`) are
 /// drawn as a plain list's cells, to what a `UICollectionView` plain list
@@ -149,8 +150,8 @@ final class RowCellsIOSTests: XCTestCase {
         // A row that goes: the lines follow the rows.
         p.apply(wireBatch([["op": "children", "id": 2, "ids": [10, 11, 12]]]))
         XCTAssertEqual(separators(p).map(\.maxY), [1, 44, 88, 132])
-        XCTAssertEqual(p.rowCells.observation(try XCTUnwrap(p.views[11]))?["separator"] as? Bool, true)
-        XCTAssertEqual(p.rowCells.observation(try XCTUnwrap(p.views[2]))?["rows"] as? String, "cells")
+        XCTAssertEqual(p.rowCellsHost.observation(try XCTUnwrap(p.views[11]))?["separator"] as? Bool, true)
+        XCTAssertEqual(p.rowCellsHost.observation(try XCTUnwrap(p.views[2]))?["rows"] as? String, "cells")
         // Not under a leading image: a row whose text starts past one has its separator from the text.
         p.apply(wireBatch([["op": "frame", "id": 20, "x": 56.0, "y": 12.0, "w": 200.0, "h": 20.0]]))
         XCTAssertEqual(separators(p).filter { $0.maxY == 44 || $0.maxY == 1 }.map(\.minX), [56, 56])
@@ -192,7 +193,7 @@ final class RowCellsIOSTests: XCTestCase {
         XCTAssertEqual(shown.backgroundColor, RowCells.highlight)
         XCTAssertEqual(shown.alpha, 1, "at once")
         XCTAssertLessThan(shown.layer.zPosition, row.layer.zPosition, "under the row's own views")
-        XCTAssertEqual(p.rowCells.observation(row)?["ground"] as? String, "highlighted")
+        XCTAssertEqual(p.rowCellsHost.observation(row)?["ground"] as? String, "highlighted")
         XCTAssertEqual(separators(p).map(\.maxY), [1, 132, 176], "the separators above and below a highlighted row are hidden")
         // The finger leaves and comes back, then lets go outside: the ground follows, and fades.
         row.pressFollows(inside: false)
@@ -208,7 +209,7 @@ final class RowCellsIOSTests: XCTestCase {
         XCTAssertNil(content.layer.animation(forKey: "pressDim"))
         XCTAssertEqual(ground(p)?.frame, swipe.frame)
         content.touchesCancelled([], with: nil)
-        XCTAssertNil(p.rowCells.observation(swipe)?["ground"], "a cancelled touch lets the cell go")
+        XCTAssertNil(p.rowCellsHost.observation(swipe)?["ground"], "a cancelled touch lets the cell go")
     }
 
     func testTheAuthorsOwnPressAndGroundAndAListThatIsNoCellListKeepTheirOwn() throws {
@@ -259,14 +260,14 @@ final class RowCellsIOSTests: XCTestCase {
             XCTAssertEqual(separators(p).count, 5)
             p.apply(wireBatch([["op": "style", "id": 11, "style": [:]]]))
         }
-        XCTAssertTrue(p.rowCells.select(row) === row)
+        XCTAssertTrue(p.rowCellsHost.select(row) === row)
         let selected = try XCTUnwrap(ground(p))
         p.apply(wireBatch([["op": "style", "id": 11, "style": ["press_opacity_to": 0.4]]]))
         row.pressed = true
         XCTAssertTrue(ground(p) === selected, "authored feedback leaves native selection in place")
         row.pressed = false
-        XCTAssertEqual(p.rowCells.observation(row)?["ground"] as? String, "selected")
-        p.rowCells.ran(row, on: nil)
+        XCTAssertEqual(p.rowCellsHost.observation(row)?["ground"] as? String, "selected")
+        p.rowCellsHost.ran(row, on: nil)
         waitFor("the native selection ending", late: 1, cap: 2) { self.ground(p) == nil }
     }
 
@@ -284,7 +285,7 @@ final class RowCellsIOSTests: XCTestCase {
         p.viewport.removeFromSuperview(); shown.addSubview(p.viewport); shown.makeKeyAndVisible()
         window.isHidden = true; window = shown
         let row = try XCTUnwrap(p.views[11])
-        XCTAssertNotNil(p.rowCells.select(row))
+        XCTAssertNotNil(p.rowCellsHost.select(row))
         waitFor("a frame shows it") { p.showed(row) }
         let held = try XCTUnwrap(ground(p), "the selected row's ground")
         UIView.animate(withDuration: 0.5) { p.apply(wireBatch([["op": "frame", "id": 11, "x": 0.0, "y": 50.0, "w": 400.0, "h": 44.0]])) }
@@ -317,13 +318,13 @@ final class RowCellsIOSTests: XCTestCase {
         window.layoutIfNeeded()
         XCTAssertEqual(separators(p), lines, "the lines came back with the screen")
         // Selected, pushed over, and a batch while it is covered.
-        XCTAssertNotNil(p.rowCells.select(row))
-        let before = p.rowCells.screen(of: row)
+        XCTAssertNotNil(p.rowCellsHost.select(row))
+        let before = p.rowCellsHost.screen(of: row)
         stack.pushViewController(UIViewController(), animated: false)
         window.layoutIfNeeded()
-        p.rowCells.ran(row, on: before)
+        p.rowCellsHost.ran(row, on: before)
         p.apply(wireBatch([["op": "props", "id": 1, "set": ["testId": "covered again"]]]))
-        XCTAssertEqual(p.rowCells.observation(row)?["ground"] as? String, "selected", "still selected under the pushed screen")
+        XCTAssertEqual(p.rowCellsHost.observation(row)?["ground"] as? String, "selected", "still selected under the pushed screen")
     }
 
     func testATappedRowStaysSelectedUnderTheScreenItPushedAndLetsGoOnTheWayBack() throws {
@@ -337,26 +338,26 @@ final class RowCellsIOSTests: XCTestCase {
         window.rootViewController = stack
         window.layoutIfNeeded()
         // A tap that pushes nothing: selected while its press runs, then let go.
-        XCTAssertTrue(p.rowCells.select(row) === row)
+        XCTAssertTrue(p.rowCellsHost.select(row) === row)
         row.pressed = false
-        XCTAssertEqual(p.rowCells.observation(row)?["ground"] as? String, "selected", "the release does not take the ground")
-        p.rowCells.ran(row, on: p.rowCells.screen(of: row))
-        XCTAssertNil(p.rowCells.observation(row)?["ground"], "nothing was pushed: the cell lets go")
+        XCTAssertEqual(p.rowCellsHost.observation(row)?["ground"] as? String, "selected", "the release does not take the ground")
+        p.rowCellsHost.ran(row, on: p.rowCellsHost.screen(of: row))
+        XCTAssertNil(p.rowCellsHost.observation(row)?["ground"], "nothing was pushed: the cell lets go")
         RunLoop.main.run(until: Date(timeIntervalSinceNow: RowCells.hold + RowCells.fade + 0.5))
         XCTAssertNil(ground(p), "and its ground has faded and gone")
         // A tap whose press pushes a screen over the list's: the cell stays selected under it.
-        XCTAssertNotNil(p.rowCells.select(row))
-        let before = p.rowCells.screen(of: row)
+        XCTAssertNotNil(p.rowCellsHost.select(row))
+        let before = p.rowCellsHost.screen(of: row)
         XCTAssertTrue(before === screen)
         stack.pushViewController(UIViewController(), animated: false)
-        p.rowCells.ran(row, on: before)
-        XCTAssertEqual(p.rowCells.observation(row)?["ground"] as? String, "selected")
+        p.rowCellsHost.ran(row, on: before)
+        XCTAssertEqual(p.rowCellsHost.observation(row)?["ground"] as? String, "selected")
         XCTAssertNotNil(ground(p))
         // The screen comes back with no transition to ride: at once.
         stack.popViewController(animated: false)
-        p.rowCells.appearing(route, alongside: nil)
+        p.rowCellsHost.appearing(route, alongside: nil)
         XCTAssertNil(ground(p))
-        XCTAssertNil(p.rowCells.observation(row)?["ground"])
+        XCTAssertNil(p.rowCellsHost.observation(row)?["ground"])
     }
 }
 #endif

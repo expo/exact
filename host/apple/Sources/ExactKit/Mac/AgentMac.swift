@@ -955,7 +955,7 @@ extension Agent {
         // `key` handlers, then the event, which forwards to the surface.
         // canvasType sent the surface only, so Escape and KeyP never reached
         // Contract (platformer repro canvas-keys-macos).
-        if req["key"] == nil, let reply = presenter.controls.type(v, req["text"] as? String ?? "") { return reply }
+        if req["key"] == nil, let reply = presenter.controls.family.type(v, req["text"] as? String ?? "") { return reply }
         if v.props["editable"] == "false", req["key"] == nil { return ["error": "view \(v.id) is readonly"] }
         // @ref LLP 1038 D11 — type on the root delivers a location.
         if v.props["navigationBack"] != nil, req["key"] == nil {
@@ -1230,7 +1230,7 @@ extension Agent {
         if let now = session.clock, session.canvases.waitUntilReady() { session.canvases.settle(now: now) }
         presenter.canvas2d.waitForReplays()
         guard let path = req["path"] as? String else { return ["malformed": true, "error": "screenshot needs a path"] }
-        if req["window"] as? String == "pictureinpicture" { return pictureInPictureShot(path, of: (req["id"] as? NSNumber)?.uint32Value) } // LLP 1042 §9.1
+        if req["window"] as? String == "pictureinpicture" { return MediaLink.pictureShot?(self, path, (req["id"] as? NSNumber)?.uint32Value) ?? ["error": "picture in picture is not linked"] } // LLP 1042 §9.1
         let v = presenter.navigation.split.agentRoot
         if req["window"] as? Bool == true {
             // The window server's picture of this window, with canvas pixels

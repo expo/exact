@@ -181,9 +181,18 @@ fn deletion_remount_and_runtime_replacement_cannot_receive_old_release() {
         .unwrap()
         .primary
         .token;
-    p.reload(&crate::test_plan(&src), ()).unwrap();
-    assert!(!p.host.hold_update(token, Value::ZERO, f64::NAN).unwrap());
-    assert!(!p.pointer_up(150., 40., 200.).unwrap());
+    // A replacement waits for the press to end (LLP 1029.000.002 D9): here
+    // the device loses its pointer, and a late release follows.
+    assert_eq!(
+        p.reload(&crate::test_plan(&src), ()).unwrap(),
+        crate::presenter::ReloadResult::Held("pointer")
+    );
+    assert!(p.host.has_hold(token));
+    p.pointer_lost(200.).unwrap();
+    p.run_commands(|| ());
+    assert_eq!(p.replacement_pending(), None);
+    assert!(!p.host.has_hold(token));
+    assert!(!p.pointer_up(150., 40., 210.).unwrap());
     assert_eq!(count(&p), "0");
 }
 

@@ -12,10 +12,15 @@ to the panel to get the **direction** right — not to finish the design.
 
 | Seat | Command |
 |---|---|
-| Astra, max | `codex exec -m gpt-6-astra -c model_reasoning_effort="max" "<prompt>"` |
-| Fable, xhigh | `claude -p --model claude-fable-5-1 --effort xhigh "<prompt>"` |
-| Grok 4.7, xhigh | `grok -p "<prompt>" -m grok-4.7 --effort xhigh` |
+| Astra, max | `codex exec -m gpt-6.2-astra -c model_reasoning_effort="max" "<prompt>"` |
+| Fable, xhigh | `claude -p --model fable --effort xhigh "<prompt>"` |
+| Grok, xhigh | `grok -p "<prompt>" -m grok-4.7 --effort xhigh` |
 | Muse Wonder Full, xhigh | `muse exec --model muse-wonder-full --effort xhigh --trust-workspace "<prompt>"` |
+
+Each seat runs the latest model in its family. `--model fable` always resolves to the latest
+Fable. Codex and Grok take an exact version, so before a pass check `codex debug models` and
+[xAI's model list](https://docs.x.ai/docs/models); if either names a newer model in the
+seat's family, use it and update the row.
 
 Muse sits **if available**. If it fails to start, the panel is three and the report says so —
 do not stall the decision waiting on a seat. The other three are required; if one is down,

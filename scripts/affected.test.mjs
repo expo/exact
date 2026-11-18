@@ -473,7 +473,31 @@ test("the lane runs the iOS classes a commit's test files reach, and every class
   }
 });
 
-test('a path dependency outside both workspaces selects its consumer and the game lane', async () => {
+test('shader uniform tests are selected and run hourly from their own workspace', async () => {
+  const { checks, laneSelection, owners, retainSkippedFailures } = await import('./async.mjs');
+  const repo = new Repo(), graph = new Graph(repo);
+  const name = 'exact-shader-uniforms', dir = 'packages/shader/uniforms';
+  const catalogue = suites(repo).filter(s => s.id === `cargo:${name}`);
+  const command = ['cargo', 'test', '--manifest-path', `${dir}/Cargo.toml`, '--tests', '--no-fail-fast', '-p', name];
+  for (const file of ['src/reader.rs', 'tests/uniforms.rs', 'Cargo.toml', 'Cargo.lock']) {
+    const picked = select(graph, [`${dir}/${file}`], catalogue);
+    expect(picked.map(s => s.suite.id), file).toEqual([`cargo:${name}`]);
+    expect(commands(picked), file).toEqual([command]);
+  }
+  const lane = laneSelection([`${dir}/src/reader.rs`], { root: repo.root, repo });
+  expect(checks('', null, { ...lane, lane: [] }).find(([id]) => id === `cargo:${name}`))
+    .toEqual([`cargo:${name}`, command[0], command.slice(1)]);
+  const id = `cargo:${name}`, failure = `${id}: -p ${name} --test uniforms wgsl_blankspace`;
+  const owned = owners(id, '', [failure]);
+  expect(owned).toEqual({ [failure]: [id] });
+  for (const complete of [false, true]) {
+    const result = { checks: complete ? { [id]: { status: 0, complete } } : {}, failures: [] };
+    retainSkippedFailures([failure], result, owned, new Set());
+    expect(result.failures).toEqual(complete ? [] : [failure]);
+  }
+}, 120_000);
+
+test('a path dependency outside the tested workspaces selects its consumer and the game lane', async () => {
   const { laneSelection } = await import('./async.mjs');
   const repo = new Repo(), graph = new Graph(repo);
   const cargo = suites(repo).filter(s => s.kind === 'cargo');

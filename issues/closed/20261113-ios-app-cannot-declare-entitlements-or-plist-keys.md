@@ -1,6 +1,7 @@
 # An iOS app cannot declare the entitlements, Info.plist keys or privacy manifest its own native code needs
 
 **Status:** Closed
+**Resolution:** Closed by decision: entitlements and Info.plist keys stay derived (LLP 1069.008 D4, amended 2026-11-14); a key an app's own module needs becomes a row or a named switch when a builder names it.
 **Systems:** host/apple/build.mjs (`entitlements`, `usageKeys`), bake/src/reach.rs, runner/src/device.rs, scripts/app.schema.json
 **Severity:** P2
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13
@@ -74,9 +75,8 @@ a key Exact never writes asks for a feedback note naming it. The native-module a
 recipes explain the grant path, including `device.photos-add`.
 
 Admission of unowned Info.plist keys still needs a decision informed by a diary
-naming one, so this issue stays open. The notification service extension is tracked
-separately in `issues/20261113-an-ios-build-cannot-package-a.md`; it remains outside
-the visible-push admission (`rules/DEFERRED.md`, notifications).
+naming one. The notification service extension was tracked separately in
+`issues/closed/20261113-an-ios-build-cannot-package-a.md`.
 
 ## Decision (2026-11-14)
 

@@ -98,6 +98,7 @@ test steps (app.test.contract; every other form: docs/contract-grammar.md)
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
   back
+  presence allow (cancel, fail, lockout, invalidated)
   fail fetch "<prefix>", pass fetch …
   answer fetch "<prefix>" with 200 {"text":"Hello"}
   request POST "/items" {…} as grace expect 409
@@ -181,7 +182,7 @@ a dated record: The write reads the clock, not a ticked `now`; `performanceNow()
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Tests start with no storage. `clock data` lands replies, `clock settle` ends transitions, `clock held` lands held replies; `reload` keeps storage. `bun exact.mjs verify` tests, checks end screens, relaunches; `verify ios` last; `--shots <dir>` keeps shots. It runs `contract verify`; keep its receipt.
+a test, and verify: Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
   test "a pick survives a relaunch"
     tap "pick"
     clock data
@@ -212,7 +213,6 @@ component App
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
-- Symbols: `"symbol:<role>"` (below); `symbol:sf/<name>` is Apple-only.
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
 idioms with code (vocab <name>): bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics status-bar toast titlebar share use members svg env safe-area var media css cache rtl :active
-symbol roles: back close compose add microphone send search copy select-text more delete forward home person messages notifications settings repeat activity bookmark document select reorder list cart sort filter heart reply share ellipsis photo play pause skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop circle alert minus-circle pencil waveform info camera star minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag phone smartphone article radio; with a <role>-fill: bookmark select heart home notifications person play pause stop star alert info bag
+symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish

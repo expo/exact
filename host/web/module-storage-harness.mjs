@@ -6,6 +6,9 @@ import vm from 'node:vm';
 import { modulePrelude } from '../web-js/glue.mjs';
 
 const ROOT = resolve(import.meta.dir, '../..');
+// The Rust grant parser's seal (grant-admission.js `grantFNV`) over a test's entries.
+const sealed = entries => ({ version: 1, entries, error: null, seal: new TextEncoder().encode(JSON.stringify({ version: 1, entries, error: null }))
+  .reduce((hash, byte) => BigInt.asUintN(64, (hash ^ BigInt(byte)) * 1099511628211n), 14695981039346656037n).toString(16).padStart(16, '0') });
 const GRANTS = {version:1,entries:[[1,'net.fetch https://api.castle.test',['fetch','https','api.castle.test',443],null]],error:null,seal:'825ec7a8503217b3'};
 
 // The prelude replaces AbortSignal.timeout. Give each VM its own constructor
@@ -26,8 +29,10 @@ export async function moduleRealm(script, {
   placement = 'worker', key = 'k', top = '', secrets = false, stored = [],
   controlWorkerMessages = false, taskDelayedStorage = false,
 } = {}) {
-  const declaration = 'net.fetch https://api.castle.test' + (secrets ? '\nsecret.keep token' : '');
-  const normalized = secrets ? { version: 1, entries: [...GRANTS.entries, [2, 'secret.keep token', ['secret-keep', 'token'], null]], error: null, seal: '7c439325539248a1' } : GRANTS;
+  // `secrets`: true grants `token`; a list grants each name it holds.
+  const names = secrets === true ? ['token'] : secrets || [];
+  const declaration = ['net.fetch https://api.castle.test', ...names.map(name => `secret.keep ${name}`)].join('\n');
+  const normalized = sealed([...GRANTS.entries, ...names.map((name, i) => [i + 2, `secret.keep ${name}`, ['secret-keep', name], null])]);
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-worker-storage-')), captured = {};
   const saved = Object.fromEntries(['fetch', 'document', 'location', 'exact', 'Worker', '__exact_test_storage_event', '__exact_test_release_held_storage'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   let realm;
@@ -133,7 +138,7 @@ ${top}`);
     const commit = result => { for (const [name, value] of result.writes ?? []) {
       if (value == null) captured.runnerStore.delete(name); else captured.runnerStore.set(name, value);
     } };
-    const request = (op, source, extra = {}) => ({ op, id: realm.id, target: source, source, args: [], store: [['recovery-owner', source], ...captured.runnerStore], grants: secrets ? ['token'] : [], ...extra });
+    const request = (op, source, extra = {}) => ({ op, id: realm.id, target: source, source, args: [], store: [['recovery-owner', source], ...captured.runnerStore], grants: names, ...extra });
     return {
       done, door: () => captured.door, aborted: () => glue.call({ op: 'aborted', id: realm.id }).tickets,
       ask: source => glue.run(glue.call(request('answer', source)).continuation),

@@ -387,7 +387,7 @@ enum Message {
 
 struct Startup {
     receive: mpsc::Receiver<Message>,
-    host: StreamHost,
+    lane: Arc<Lane>,
 }
 
 /// Owns the launch work until adoption. Dropping it cancels every exchange;
@@ -396,6 +396,9 @@ pub struct Preloads {
     startup: Arc<Mutex<Option<Startup>>>,
     destination: Arc<Location>,
     send: mpsc::Sender<Message>,
+    /// The transport its exchanges run on, which the executor that adopts
+    /// it takes for its independent lane (`lane.rs`).
+    lane: Arc<Lane>,
 }
 impl Preloads {
     /// Start the first eight definitions off the caller's thread, with the
@@ -405,12 +408,17 @@ impl Preloads {
         grants: &str,
         host: impl Fn() -> ibex2::host::Host + Send + Sync + 'static,
     ) -> Self {
-        Self::start_clock(definitions, grants, Arc::new(host), Arc::new(Instant::now))
+        Self::start_clock(
+            definitions,
+            grants,
+            Lane::new(Arc::new(host)),
+            Arc::new(Instant::now),
+        )
     }
     fn start_clock(
         definitions: Vec<Definition>,
         grants: &str,
-        host: StreamHost,
+        lane: Arc<Lane>,
         clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     ) -> Self {
         let mut cache = cache::Cache::new(grants.into());
@@ -441,9 +449,13 @@ impl Preloads {
         });
         let (send, receive) = mpsc::channel();
         let set = Self {
-            startup: Arc::new(Mutex::new(Some(Startup { receive, host }))),
+            startup: Arc::new(Mutex::new(Some(Startup {
+                receive,
+                lane: lane.clone(),
+            }))),
             destination,
             send,
+            lane,
         };
         if !indices.is_empty() {
             update(&set.destination, |cache| {
@@ -513,7 +525,7 @@ impl Control {
         if !cache.preloads_open {
             return false;
         }
-        let Some(Startup { receive, host }) = self.startup.lock().unwrap().take() else {
+        let Some(Startup { receive, lane }) = self.startup.lock().unwrap().take() else {
             return true;
         };
         let destination = self.destination.clone();
@@ -523,7 +535,7 @@ impl Control {
             .name("exact-preload".into())
             .spawn(move || {
                 let _guard = thread_guard;
-                run(&destination, &send, receive, &host)
+                run(&destination, &send, receive, &lane)
             });
         spawned.is_ok()
     }
@@ -794,6 +806,12 @@ impl Core {
             self.machine.as_ref().map(|m| Arc::downgrade(&m.timer)),
         );
         drop(destination);
+        // Its exchanges' connections serve the lane's reads (`lane.rs`):
+        // no worker has started, so none holds another transport. The
+        // machine made its transports when the core was made, and keeps them.
+        if self.machine.is_none() {
+            *self.lane.lock().unwrap() = set.lane.clone();
+        }
         *owned = Some(set);
         Ok(())
     }
@@ -1360,6 +1378,7 @@ pub fn launch_fetch(
     let fetch = reach::gate_fetch(host.endow(grants).fetch, request.reach);
     let mut req = fetch_request(request, false);
     req.max_body = Some(cache::MAX_ENTRY);
+    req.collected = true;
     let result = fetch
         .stream(req, &abort.signal())
         .and_then(check_headers)

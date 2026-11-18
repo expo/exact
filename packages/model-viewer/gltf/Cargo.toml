@@ -1,0 +1,11 @@
+[package]
+name = "exact-model-gltf"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde_json = "1"
+exact-meshopt = { path = "../meshopt" }
+
+[workspace]

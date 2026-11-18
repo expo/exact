@@ -79,8 +79,8 @@ export const stepEnv = step => Object.fromEntries(LANE_DISTS.filter(d => d.steps
 /** Scripts that check every file of the checkout by design: a suite that runs one reads them all. */
 const WHOLE = new Set(['scripts/caps.mjs', 'scripts/metrics.mjs']);
 
-/** The Cargo workspaces whose packages' tests run: the root's, and the game's, kept apart from it. */
-const WORKSPACES = ['Cargo.toml', 'game/Cargo.toml'];
+/** The Cargo workspaces whose packages' tests run. */
+const WORKSPACES = ['Cargo.toml', 'game/Cargo.toml', 'packages/shader/uniforms/Cargo.toml'];
 
 /** The hosts an app's crate directory serves; the directory is the platform's name. */
 const APP_HOSTS = { web: ['web'], apple: ['macos', 'ios'], linux: ['linux'], windows: ['windows'], android: ['android'] };
@@ -244,7 +244,7 @@ export class Repo {
     this.defaultMembers = [];
     for (const manifest of WORKSPACES) {
       if (!listed.has(manifest)) continue;
-      // Resolved metadata includes path dependencies outside either workspace, including patched crates.
+      // Resolved metadata includes path dependencies outside these workspaces, including patched crates.
       const data = metadata?.[manifest] ?? cargoMetadata(root, manifest, true);
       this.#addWorkspace(data, manifest);
     }

@@ -35,15 +35,15 @@ export function helperClassifications(group) {
   ]),
   group("fills", ["one-shot"], "collection/view generation, window and fill token", "UI-owned",
     "The named public runner-crate source is the fills API or its value/admission helper. runner/src/runner/collection.rs validates feedback/fill against the current collection; instance/collection/index.rs versions rows and into_view.rs versions reveal requests.", [
-    ["runner:runner/src/instance/collection/api.rs",
+    ["runner:runner/src/instance/collection/into_view.rs", "Tree::into_view_json"],
+    ["runner:runner/src/instance/collection/nest.rs", "Tree::kept_positions_json"],
+    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection Tree::collection_data Tree::collection_mounted Tree::collections Tree::collections_bounded Tree::collections_shallow"],
+    ["runner:runner/src/list_api/feedback.rs",
       "CollectionFeedback::decode CollectionFeedback::decode_with_fill CollectionFeedback::encode CollectionFeedback::encode_with CollectionSnapshot::json " +
       "CollectionSnapshot::write_json ListAxis::name snapshots_json"],
-    ["runner:runner/src/instance/collection/into_view.rs", "Align::parse Tree::into_view_json"],
-    ["runner:runner/src/instance/collection/mod.rs", "set_bootstrap_extent set_lead_scale"],
-    ["runner:runner/src/instance/collection/nest.rs", "Tree::kept_positions_json"],
-    ["runner:runner/src/instance/collection/reorder_api.rs", "ReorderEnding::name ReorderGeometry::decode ReorderGeometry::encode ReorderPhase::name ReorderStep::from_key ReorderToken::list ReorderToken::serial"],
-    ["runner:runner/src/instance/collection/shown.rs", "RowsShown::extend"],
-    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection Tree::collection_data Tree::collection_mounted Tree::collections Tree::collections_bounded Tree::collections_shallow"],
+    ["runner:runner/src/list_api/into_view.rs", "Align::parse"],
+    ["runner:runner/src/list_api/mod.rs", "RowsShown::extend set_bootstrap_extent set_lead_scale"],
+    ["runner:runner/src/list_api/reorder.rs", "ReorderEnding::name ReorderGeometry::decode ReorderGeometry::encode ReorderPhase::name ReorderStep::from_key ReorderToken::list ReorderToken::serial"],
   ]),
   group("sockets and listens", ["subscription"], "source stream/watch and pending subscription in a session", "UI-owned",
     "The named public runner-crate source is the sockets and listens API or its value/admission helper. runner/src/runner/sockets.rs and listen.rs associate reader facts with source requests; retirement of the source removes the UI observer.", [
@@ -101,7 +101,7 @@ export function helperClassifications(group) {
       "Store::take_answer_sockets Store::take_sockets Store::take_topics Store::take_writes Store::unparsed Store::with_grants"],
   ]),
   group("wakes", ["durable operation"], "app action/wake invocation until expiration or end", "durable",
-    "The named public runner-crate source is the wakes API or its value/admission helper. runner/src/runner/modules/wakes.rs raises and expires action/wake invocations independently of a mounted view; declared/wake_list.rs allocates their references. Persistence after process exit is not established here.", [
+    "The named public runner-crate source is the wakes API or its value/admission helper. runner/src/runner/wakes.rs raises and expires action/wake invocations independently of a mounted view; modules/declared/wake_list.rs allocates their references. Persistence after process exit is not established here.", [
     ["runner:runner/src/request.rs", "Request::wake"],
   ]),
   group("UI input", ["one-shot"], "current mounted view, action binding or interaction", "UI-owned",
@@ -127,15 +127,15 @@ export function helperClassifications(group) {
   ]),
   group("native callbacks", ["one-shot", "subscription"], "module instance and granted handle or anchored invocation", "UI-owned",
     "The named public runner-crate source is the native callbacks API or its value/admission helper. runner/src/runner/modules/invoke.rs:1-22 anchors callbacks to handles/pending sends; Running::drop answers AbortError on session replacement. Final handlers may temporarily retain their anchor.", [
-    ["runner:runner/src/runner/modules/admit.rs", "CallOrigin::word"],
+    ["runner:runner/src/runner/provenance.rs", "CallOrigin::word"],
   ]),
   group("wakes", ["durable operation"], "app action/wake invocation until expiration or end", "durable",
-    "runner/src/runner/modules/wakes.rs raises and expires action/wake invocations independently of a mounted view; declared/wake_list.rs allocates their references. Persistence after process exit is not established here.", [
-    ["runner:runner/src/runner/modules/declared/wake_list.rs", "Runner::wake_entry_ended#not_before:1 Runner::wake_entry_ended#not_before:2"],
+    "runner/src/runner/wakes.rs raises and expires action/wake invocations independently of a mounted view; modules/declared/wake_list.rs allocates their references. Persistence after process exit is not established here.", [
+    ["runner:runner/src/runner/modules/declared/wake_list.rs", "Runner::wake_entry_ended_linked#not_before:1 Runner::wake_entry_ended_linked#not_before:2"],
   ]),
   group("presence", ["one-shot"], "outstanding presence call and secret generation", "UI-owned",
-    "The named public runner-crate source is the presence API or its value/admission helper. runner/src/runner/modules/presence.rs:224-249 drops a check whose call was let go. The authentication continuation is session-owned even though the keystore value is durable.", [
-    ["runner:runner/src/runner/modules/presence.rs", "PresenceAsk::json"],
+    "The named public runner-crate source is the presence API or its value/admission helper. runner/src/runner/presence_secrets.rs drops a check whose call was let go. The authentication continuation is session-owned even though the keystore value is durable.", [
+    ["runner:runner/src/runner/presence_secrets.rs", "PresenceAsk::json"],
   ]),
   group("holds", ["one-shot"], "held request/node until answer, cancellation or node retirement", "UI-owned",
     "runner/src/runner/device.rs:1-12 retires holds with the requesting node or ticket and refuses duplicate answers; the agent hold is not an executor request.", [
@@ -210,14 +210,14 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/flights.rs", "Host::flying Host::start_flights"],
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::focus_landed"],
     ["painted:host/painted/src/presenter/reveal.rs", "Presenter::reveal_flights"],
-    ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::drawn_at Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
+    ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
     ["painted:host/painted/src/presenter/stage/zoom.rs", "Presenter::navigation_container Presenter::source_node Presenter::source_rect Presenter::sync_sources"],
   ]),
   group("module announcements", ["subscription"], "bound module, app topic and its current readers", "UI-owned",
     "Store::announce_topic records changed app topics; exact_peer_changed delivers them to another session. Canvas extension activation checks the current plan's declared action before raising its event.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_peer_changed"],
     ["runner:runner/src/store.rs", "Store::announce_topic Store::take_announced"],
-    ["runner:runner/src/runner/modules/wakes.rs", "Runner::declares_action"],
+    ["runner:runner/src/runner/module_seam/forward.rs", "Runner::declares_action"],
     ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_activate"],
     ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::extension_activated"],
   ]),

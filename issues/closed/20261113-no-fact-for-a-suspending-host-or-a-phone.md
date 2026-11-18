@@ -1,6 +1,7 @@
 # An app cannot tell whether its host suspends it when hidden, or whether it runs on a phone
 
 **Status:** Closed
+**Resolution:** Fixed by 9aa713c4b and 1c129fe5d: `exactPage().frozen` is true from when the host has put the app in the background with no owner that keeps execution running, until it resumes (LLP 1069.000 D2 and D6, r5).
 **Systems:** runner reserved sources (`exactViewport`, `exactPage`, `exactSurface`), docs/contract-for-agents.md ("Platform facts")
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Exact diaries sent 2026-11-11 to 2026-11-13

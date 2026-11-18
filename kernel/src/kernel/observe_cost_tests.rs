@@ -227,3 +227,241 @@ fn observation_cost_of_many_owners() {
         );
     }
 }
+
+/// What taking the band costs (LLP 1123 D4): a row's change among 1,000
+/// rows, then layout, under a wrapper of full or automatic height that
+/// takes the band or not; and 1,000 rows that each hold a box that ignores
+/// the bottom or not. Ignored, since it times; run it with
+/// `cargo test --release -p exact-kernel --lib ignore_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn ignore_cost() {
+    use std::time::{Duration, Instant};
+    const ROWS: u32 = 1_000;
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    // A row's change, then layout, the median of 41
+    let time = |k: &mut Kernel, row: ViewId| {
+        let times = (0..41).map(|run| {
+            let height = if run % 2 == 0 { "11" } else { "10" };
+            let t = Instant::now();
+            k.apply(
+                0,
+                2 + run,
+                &[style(row, vec![], &[(StyleId::Height, height)])],
+            )
+            .unwrap();
+            lay_out(k);
+            t.elapsed()
+        });
+        median(times.collect())
+    };
+    let root = [(StyleId::SafeAreaIgnore, "none"), (StyleId::Height, "100%")];
+    for (height, ignore) in [("100%", "container"), ("auto", "container top")] {
+        for ignore in ["none", ignore] {
+            let rows: Vec<ViewId> = (10..10 + ROWS).collect();
+            let mut ops = create(3..=3);
+            ops.extend(create(rows.iter().copied()));
+            for &r in &rows {
+                ops.push(style(r, vec![], &[(StyleId::Height, "10")]));
+            }
+            ops.push(style(2, vec![], &root));
+            let wrapper = [(StyleId::SafeAreaIgnore, ignore), (StyleId::Height, height)];
+            ops.push(style(3, vec![], &wrapper));
+            ops.extend([children(1, &[2]), children(2, &[3]), children(3, &rows)]);
+            let mut k = owner(390.0, 844.0, ops);
+            k.set_owner_band(2, Some([47.0, 0.0, 34.0, 0.0]), &[])
+                .unwrap();
+            lay_out(&mut k);
+            let t = time(&mut k, 510);
+            println!("ignore_cost: wrapper of height {height}, ignore {ignore}: {t:.2?}");
+        }
+    }
+    for ignore in ["none", "container bottom"] {
+        let mut ops = Vec::new();
+        let mut rows = Vec::new();
+        for row in 0..ROWS {
+            let (outer, inner) = (10 + row * 2, 11 + row * 2);
+            rows.push(outer);
+            ops.extend(create(outer..=inner));
+            ops.push(style(outer, vec![], &[(StyleId::Height, "10")]));
+            let held = [(StyleId::SafeAreaIgnore, ignore), (StyleId::Height, "5")];
+            ops.push(style(inner, vec![], &held));
+            ops.push(children(outer, &[inner]));
+        }
+        ops.push(style(2, vec![], &root));
+        ops.extend([children(1, &[2]), children(2, &rows)]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([47.0, 0.0, 34.0, 0.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        let t = time(&mut k, 1010);
+        println!("ignore_cost: 1,000 rows each holding a box, ignore {ignore}: {t:.2?}");
+    }
+}
+
+/// What measuring a height target costs (`measure_height_targets`) where a
+/// reader exists, which measures in a layout of copies with the solve, and
+/// where none does: a `border-box` target of 1,000 rows in an owner, a row's
+/// change pending, then the measurement and the layout after it, the
+/// medians of 41, with the test build's size counting off. Run it with
+/// `cargo test --release -p exact-kernel --lib height_targets_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn height_targets_cost() {
+    use std::time::{Duration, Instant};
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    for reader in [false, true] {
+        let rows: Vec<ViewId> = (10..1_010).collect();
+        let mut ops = create(3..=3);
+        ops.extend(create(rows.iter().copied()));
+        ops.push(style(3, vec![], &[(StyleId::BoxSizing, "border-box")]));
+        for &r in &rows {
+            let reads = reader && r == 10;
+            let pad = match reads {
+                true => vec![(StyleId::PaddingTop, observed(Edge::Top, None))],
+                false => vec![],
+            };
+            ops.push(style(r, pad, &[(StyleId::Height, "10")]));
+        }
+        ops.extend([children(1, &[2]), children(2, &[3]), children(3, &rows)]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([47.0, 0.0, 0.0, 0.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k.tree_mut().track_sizes(false);
+        let (target, offer) = ([k.arena.key(slot(&k, 3))], Offer::definite(390.0, 844.0));
+        let (mut measures, mut layouts) = (Vec::new(), Vec::new());
+        for run in 0..41 {
+            let height = if run % 2 == 0 { "11" } else { "10" };
+            let change = [style(510, vec![], &[(StyleId::Height, height)])];
+            k.apply(0, 2 + run, &change).unwrap();
+            let t = Instant::now();
+            k.measure_height_targets(1, offer, &target).unwrap();
+            measures.push(t.elapsed());
+            let t = Instant::now();
+            lay_out(&mut k);
+            layouts.push(t.elapsed());
+        }
+        println!(
+            "height target of 1,000 rows, a reader {reader}: measure {:.2?}, the layout after {:.2?}",
+            median(measures),
+            median(layouts)
+        );
+    }
+}
+
+/// What a bulk mount costs where a reader exists (D9 "Cost"): one reader in
+/// an owner, then a commit that mounts 1,000 rows each a chain of `DEPTH`
+/// boxes, and the layout after it, against the same mount with no reader;
+/// the median of 21 mounts, with the test build's size counting off. Run it
+/// with `cargo test --release -p exact-kernel --lib mount_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn mount_cost() {
+    use std::time::{Duration, Instant};
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    for depth in [1u32, 10, 30] {
+        for reader in [false, true] {
+            let times = (0..21).map(|_| {
+                let mut ops = create(3..=4);
+                let pad = match reader {
+                    true => vec![(StyleId::PaddingTop, observed(Edge::Top, None))],
+                    false => vec![],
+                };
+                ops.push(style(4, pad, &[(StyleId::Height, "10")]));
+                ops.extend([children(1, &[2]), children(2, &[3, 4])]);
+                let mut k = owner(390.0, 844.0, ops);
+                k.set_owner_band(2, Some([47.0, 0.0, 0.0, 0.0]), &[])
+                    .unwrap();
+                lay_out(&mut k);
+                k.tree_mut().track_sizes(false);
+                // 1,000 rows under 3, each a chain of `depth` boxes
+                let mut ops = Vec::new();
+                let mut rows = Vec::new();
+                for row in 0..1_000u32 {
+                    let first = 10 + row * depth;
+                    rows.push(first);
+                    ops.extend(create(first..first + depth));
+                    for d in 0..depth - 1 {
+                        ops.push(children(first + d, &[first + d + 1]));
+                    }
+                }
+                ops.push(children(3, &rows));
+                let t = Instant::now();
+                k.apply(0, 2, &ops).unwrap();
+                lay_out(&mut k);
+                t.elapsed()
+            });
+            let t = median(times.collect());
+            println!("mount of 1,000 rows {depth} deep, a reader {reader}: {t:.2?}");
+        }
+    }
+}
+
+/// What opening or closing a popover costs where readers or boxes that
+/// ignore exist (D9 "Cost"): 1,000 rows in an owner, each holding a box that
+/// pads by its left observation, one that ignores the left edge, or neither,
+/// and a popover 5 opened and closed by its prop; the median of 41 toggles with their layouts, with the test build's
+/// size counting off. Run it with
+/// `cargo test --release -p exact-kernel --lib popover_toggle_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn popover_toggle_cost() {
+    use std::time::{Duration, Instant};
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    for rows_hold in ["nothing", "readers", "boxes that ignore"] {
+        let rows: Vec<ViewId> = (10..1_010).collect();
+        let mut ops = create([3, 5]);
+        ops.extend(create(rows.iter().copied()));
+        for &r in &rows {
+            let pad = match rows_hold {
+                "readers" => vec![(StyleId::PaddingLeft, observed(Edge::Left, None))],
+                _ => vec![],
+            };
+            let ignore = match rows_hold {
+                "boxes that ignore" => "container left",
+                _ => "none",
+            };
+            let rows = [(StyleId::Height, "10"), (StyleId::SafeAreaIgnore, ignore)];
+            ops.push(style(r, pad, &rows));
+        }
+        ops.push(style(
+            5,
+            vec![],
+            &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+        ));
+        ops.extend([children(1, &[2]), children(2, &[3, 5]), children(3, &rows)]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([0.0, 0.0, 0.0, 44.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k.tree_mut().track_sizes(false);
+        let times = (0..41).map(|run| {
+            let toggle = match run % 2 == 0 {
+                true => popover(5),
+                false => Op::ClearProp {
+                    id: 5,
+                    prop: crate::PropId::Popover,
+                },
+            };
+            let t = Instant::now();
+            k.apply(0, 2 + run, &[toggle]).unwrap();
+            lay_out(&mut k);
+            t.elapsed()
+        });
+        let t = median(times.collect());
+        println!("popover toggle beside 1,000 rows holding {rows_hold}: {t:.2?}");
+    }
+}

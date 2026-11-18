@@ -72,6 +72,9 @@ Your shell commands have no such help, so keep one directory.
 |`web`, `ios --run`, `windows --run`|For a person watching: its URL, rebuilds on save; a simulator; a window (from SSH, on the signed-in desktop). A second web loop of the same target for this app refuses, naming the first URL and PID.|
 |`share`|For a person to try an iPhone app on their own phone: prints an AppDrop link that installs it. Run it when the app is ready for them, and again after each change they should see; send the link it prints.|
 
+An unanswered modal system alert gets one `verify` finding. The screen beneath it is left unjudged,
+including at the largest text size; answer the alert before the test ends to check that screen.
+
 `verify`, `test` and `agent` compile, build and serve their own copy, saying a compile error as `contract build` does: no `contract build` before them, no dev server. `test linux` and `agent linux` do not build: run `bun exact.mjs linux` first and after each edit; nor do `test android` and `agent android`, which drive the APK `bun exact.mjs android` builds and installs on the device `ANDROID_SERIAL` names (`verify android` builds it). Run `verify` when the features work; `verify ios` or `verify android` once at the end for a phone app. On Windows, `test windows`,
 `agent windows` and `verify windows` build first and drive headless at `app.json`'s `host.windows.window` size, in
 DejaVu Sans with no frame; `verify windows` also captures the app as it opens on the desktop (`windows-window.png`):

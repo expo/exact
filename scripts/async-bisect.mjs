@@ -28,11 +28,42 @@ export async function bisectFailures(commits, failures, probe) {
   return out;
 }
 
+const OVER = /^(.* VIOLATION) by (\d+(?:\.\d+)?) MB$/;
+/** A byte-budget row's step: metrics.mjs rounds how far over its ceiling it is up to the next 0.1 MB. */
+const STEP = 0.1;
+const over = f => { const m = OVER.exec(f); return m && { row: m[1], steps: Math.round(Number(m[2]) / STEP) }; };
+
+/**
+ * Whether `failures` holds `f`. A byte-budget row's failure names how far over its ceiling it is
+ * (`... VIOLATION by 0.3 MB`); the same row at that distance or further holds it, so a step down is not new.
+ */
+export function holds(failures, f) {
+  const o = over(f);
+  if (!o) return failures.includes(f);
+  return failures.some(g => { const p = over(g); return p?.row === o.row && p.steps >= o.steps; });
+}
+
+/**
+ * The failures in `now` that `before` does not hold. A byte-budget row names each step it rose since `before`, so
+ * each step is attributed to the commit that took it.
+ */
+export function newFailures(before, now) {
+  return now.flatMap(f => {
+    const o = over(f);
+    if (!o) return before.includes(f) ? [] : [f];
+    const from = Math.max(0, ...before.map(over).filter(p => p?.row === o.row).map(p => p.steps));
+    return Array.from({ length: Math.max(0, o.steps - from) }, (_, i) => `${o.row} by ${((from + i + 1) * STEP).toFixed(1)} MB`);
+  });
+}
+
 /** The same failure names at a probe: other compile failures, timeouts and omitted steps obstruct attribution. */
 export function probeOutcomes(result, wanted) {
   return Object.fromEntries(wanted.map(f => {
-    const check = result.checks[f.split(': ', 1)[0]];
-    return [f, result.failures.includes(f) ? 'fail' : check && !check.skipped && check.complete ? 'pass' : 'unknown'];
+    const check = result.checks[f.split(': ', 1)[0]], o = over(f);
+    if (holds(result.failures, f)) return [f, 'fail'];
+    // The row over its ceiling by a distance it did not name says nothing of this step.
+    if (o && result.failures.includes(o.row)) return [f, 'unknown'];
+    return [f, check && !check.skipped && check.complete ? 'pass' : 'unknown'];
   }));
 }
 

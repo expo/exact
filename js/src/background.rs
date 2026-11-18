@@ -68,7 +68,7 @@ impl Module {
             return None;
         }
         b.out = true;
-        Some(Request::continuation(BACKGROUND))
+        Some(Request::continuation::<crate::ModuleTurn>(BACKGROUND))
     }
 
     /// A round's work: wait on the host's I/O worker for the completion of

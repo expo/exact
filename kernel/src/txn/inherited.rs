@@ -69,6 +69,10 @@ pub(super) fn inherited_changed(
     rows: StyleMask,
     receipt: &mut CommitReceipt,
 ) {
+    // A box that ignores takes a logical edge by its direction (LLP 1123 D4)
+    if rows.has(crate::StyleId::Direction) && arena.ignoring.contains(slot) {
+        arena.observations.restyled_taker(slot);
+    }
     if rows.has(crate::StyleId::FontSize) {
         arena.relative.invalidate(slot);
     }

@@ -108,9 +108,12 @@ export function placePopovers() {
   }, true);
 }
 function popoverObservation(root) {
-  const pop = [...root.querySelectorAll("[popover]:popover-open")].at(-1), source = pop && popoverSources.get(pop);
+  const modal = [...root.querySelectorAll("dialog:modal")].sort((a, b) => (a.exactOpened ?? 0) - (b.exactOpened ?? 0)).at(-1);
+  const alert = modal?.getAttribute("role") === "alertdialog";
+  const pop = alert ? modal : [...root.querySelectorAll("[popover]:popover-open")].at(-1), source = pop && popoverSources.get(pop);
   const id = (el) => globalThis.exact?.viewId?.(el) ?? Number(el.dataset.view);
   return pop ? {
+    ...(alert ? { kind: "confirmation" } : {}),
     phase: "open",
     popover: id(pop),
     source: source ? id(source) : null

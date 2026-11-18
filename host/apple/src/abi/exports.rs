@@ -15,16 +15,27 @@ macro_rules! host {
     ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr $(; linked = $linked:expr)?) => {
         $crate::host!($data, $plan, $compat, $delivery, $api, || <$data as ::std::default::Default>::default() $(; linked = $linked)?);
     };
-    ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr, $new:expr $(; linked = $linked:expr)?) => {
-        $crate::host!($data, $plan, $compat, $delivery, $api, $new, None $(; linked = $linked)?);
+    ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr, $new:expr; linked = $linked:expr) => {
+        $crate::host!(@core $data, $plan, $compat, $delivery, $api, $new, None, $linked);
     };
+    ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr, $new:expr) => {
+        $crate::host!($data, $plan, $compat, $delivery, $api, $new, None);
+    };
+    // An entry that registers a content region links them (LLP 1047.001
+    // D10): its set names `content_regions`, which no plan sets, so a
+    // production build whose manifest's `link` forgets it fails here.
     ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr, $new:expr, $region:expr; linked = $linked:expr) => {
+        const _: () = assert!(
+            $linked.has($crate::link::Capability::ContentRegions),
+            "an entry that registers a content region links `content_regions`: name it in app.json's `link`"
+        );
         $crate::host!(@core $data, $plan, $compat, $delivery, $api, $new, $region, $linked);
     };
     ($data:ty, $plan:expr, $compat:expr, $delivery:expr, $api:expr, $new:expr, $region:expr) => {
         $crate::grouped_list_exports!();
         $crate::markup_exports!();
         $crate::presence_exports!();
+        $crate::svg_exports!();
 
         $crate::host!(@core $data, $plan, $compat, $delivery, $api, $new, $region, $crate::link::ALL);
     };
@@ -35,7 +46,6 @@ macro_rules! host {
             $crate::decorations::read(input, len, count)
         }
         $crate::raster_exports!();
-        $crate::svg_image_exports!();
         $crate::textflow_exports!();
         $crate::collapse_exports!();
         $crate::app_module_exports!();
@@ -84,8 +94,11 @@ macro_rules! host {
             $crate::launch_preloads::copy_name(index as usize, out, capacity)
         }
         /// The optional WatchConnectivity adapter's private store callback.
+        /// Its stores are the host's I/O: an archive without I/O has none to
+        /// sync, and refuses as a binary that can never accept the request.
         #[no_mangle]
         pub unsafe extern "C" fn exact_watch_store(plan: *const u8, plan_len: usize, input: *const u8, len: usize, seal: Option<$crate::watch_sync::Seal>, reply: $crate::watch_sync::Reply, context: usize) {
+            if EXACT_LINKS.io.is_none() { return $crate::watch_sync::refuse(reply, context); }
             // SAFETY: the optional adapter holds these buffers through the callback.
             unsafe { $crate::watch_sync::call(plan, plan_len, input, len, seal, reply, context) }
         }
@@ -1295,6 +1308,8 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.tick_at(now_ms, frame_ms), |n| n)
         }
 
+        // The agent operations a production build uses, each its own export.
+        $crate::answers_exports!();
         /// An agent request from the input buffer; returns the reply's length.
         #[no_mangle]
         pub extern "C" fn exact_agent(rt: u32, len: usize) -> u32 {
@@ -1387,16 +1402,6 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, true, |b, _| b.command(len), |n| n)
         }
 
-        /// What SVG pixel work the live plan can need, as bits: 1 an island
-        /// (a `mask` or a `filter`; `exact_runner::svg_islands`), when the
-        /// host should open its island module off the main thread now (LLP
-        /// 1055.000 §8 ruling 4); 2 a filter (`exact_runner::svg_filters`),
-        /// when it should make its GPU filter pipelines now.
-        #[no_mangle]
-        pub extern "C" fn exact_svg_islands(rt: u32) -> u8 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.svg_islands(), |_| 0)
-        }
-
         /// 1 when the data source's activation evaluates a TypeScript module
         /// on the owner, which the presenter then posts from the first draw
         /// (LLP 1027.008 D1); 0 otherwise, and before a boot.
@@ -1450,6 +1455,24 @@ macro_rules! grouped_list_exports {
                 |b, _| b.grouped_list(view),
                 |n| n,
             )
+        }
+    };
+}
+
+/// The SVG family's exports (`include/exact_svg.h`; LLP 1047.001 D3, D10):
+/// its files' decoding and the live plan's island and filter work.
+#[macro_export]
+macro_rules! svg_exports {
+    () => {
+        $crate::svg_image_exports!();
+        /// What SVG pixel work the live plan can need, as bits: 1 an island
+        /// (a `mask` or a `filter`; `exact_runner::svg_islands`), when the
+        /// host should open its island module off the main thread now (LLP
+        /// 1055.000 §8 ruling 4); 2 a filter (`exact_runner::svg_filters`),
+        /// when it should make its GPU filter pipelines now.
+        #[no_mangle]
+        pub extern "C" fn exact_svg_islands(rt: u32) -> u8 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.svg_islands(), |_| 0)
         }
     };
 }

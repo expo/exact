@@ -66,6 +66,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         return at + rowTall.get(row, height) > -margin && at < height + margin
     }
     private val unrowedSeen = HashSet<Int>()
+    private val nativeLayerRows = ArrayList<Pair<Int, Int>>()
     internal var started = false
     private var ops: IntBuffer? = null
     private var first = true
@@ -247,6 +248,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val frames = android.view.Choreographer.getInstance()
         scrolling.stopped()
         contacts.stop()
+        touching(false) // a stopped activity hears no lift
         frames.removeFrameCallback(turn); turnPosted = false
         frames.removeFrameCallback(sampler); samplerPosted = false
         frames.removeFrameCallback(holder); holdFrom = 0L
@@ -263,7 +265,20 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     internal fun cancelContact(x: Float, y: Float, tool: Int) = contacts.scrollClaimed(x, y, tool)
 
     @SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(e: MotionEvent): Boolean = contacts.touch(e)
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        // Where the platform delivers the touch, before [Contacts] gives it to a scroll, a field or a hosted view.
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) touching(true)
+        val taken = contacts.touch(e)
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) touching(false)
+        return taken
+    }
+
+    /** exact2 is told whether a touch is down on this view ([Native.touching]). */
+    private fun touching(on: Boolean) {
+        if (!started) return
+        val o = owner
+        if (o != null) o.touching(on) else if (Native.touching(on)) pump()
+    }
 
     /** A mouse's wheel with `ctrl` held zooms the zoomable scroller under the pointer about it (LLP 1057.001.000 §5),
      * as a desktop's does: a notch is the platform's scroll distance, in points. */
@@ -941,13 +956,17 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val freed = ArrayList(freeing)
         for (id in freeing) free(id)
         freeing.clear()
-        layers.flush { slots.gone(Slots.layer(it)) }
+        layers.flush { slots.gone(Slots.layer(it)); natives?.layerFreed(it) }
         unrowedSeen.clear()
+        nativeLayerRows.clear()
         rowTop.clear(); rowGroup.clear(); ingestGroup = 0
         nearRows(stream)
         // A row's platform view waits for [feedRows] to say where the row is (it gives every one its view when it cannot).
         natives?.lazy = lazyOn
         ingest(stream, 0, stream.limit())
+        // A reference can precede its replacement drawing: bind the row to the final contents of the layer.
+        for ((layer, row) in nativeLayerRows) layers.natives(layer) { owner, id -> natives?.retained(owner, id, row) }
+        nativeLayerRows.clear()
         shared.finish()
         shared.releaseImages { id -> ingest(IntBuffer.wrap(intArrayOf(12, id)), 0, 2) }
         if (layers.playing()) { layers.sample(System.nanoTime()); playLayers() }
@@ -1085,7 +1104,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     // A hosted text field (kind 4) is not the stream's to make: exact2 says its fields apart ([Fields]),
                     // and the stream says only that it draws one.
                     if (kind == 4) fields?.drawn(id) else natives?.ensure(id, kind, w, h, String(bytes), ingestRow,
-                        b.get(i + 2) and 256 != 0)
+                        b.get(i + 2) and 256 != 0, if (slotOwner < 0) -1 - slotOwner else null)
                     i += 16 + (len + 3) / 4
                 }
                 26 -> {
@@ -1157,7 +1176,13 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     if (rowW > 0) { s.setPosition(0, 0, rowW, rowH); s.setClipToBounds(true) }
                     i += 2
                 }
-                29 -> { layers.node(b.get(i + 1)); if (ingestRow != 0) layers.inRow(b.get(i + 1), ingestRow); i += 2 }
+                29 -> {
+                    val id = b.get(i + 1)
+                    layers.node(id)
+                    layers.inRow(id, ingestRow)
+                    if (ingestRow != 0 && natives != null) nativeLayerRows.add(id to ingestRow)
+                    i += 2
+                }
                 30 -> {
                     // A layer's drawing, after its matrix, pivot, base and dash phase index (16 words).
                     val id = b.get(i + 1); val len = b.get(i + 2)
@@ -1422,9 +1447,14 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** A layer's drawing, op 30 at [at] and [len] long, walked for what it defines. */
     private fun layerDefs(b: IntBuffer, at: Int, len: Int) {
+        val id = b.get(at + 1)
         val outer = slotOwner
-        slotOwner = Slots.layer(b.get(at + 1))
-        slots.again(slotOwner) { ingest(b, at + 19, at + 3 + len) }
+        val outerRow = ingestRow
+        slotOwner = Slots.layer(id)
+        ingestRow = layers.row(id)
+        val walk = { slots.again(slotOwner) { ingest(b, at + 19, at + 3 + len) } }
+        natives?.layerAgain(id, walk) ?: walk()
         slotOwner = outer
+        ingestRow = outerRow
     }
 }

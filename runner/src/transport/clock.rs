@@ -57,7 +57,7 @@
 //! @ref LLP 1125 D9
 
 use super::{Fill, Out, Segment, State, Transport};
-use crate::agent::num;
+use crate::json::num;
 use crate::midi::{HOLD, TICKS_PER_SECOND};
 use crate::sound::{By, Cut};
 use exact_plan::Plan;

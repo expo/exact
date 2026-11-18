@@ -420,3 +420,30 @@ fn in_child(file: &File, span: Span) -> bool {
         .max_by_key(|(_, c)| c.span.line)
         .is_some_and(|(i, _)| i > 0)
 }
+
+/// An error about the `routes` name in a component other than the first: only the file's
+/// first component is the root that owns it, so a helper written above the root leaves the
+/// root's own uses unknown. Names the first component and guesses no root (LLP 1156.002 D9).
+pub(crate) fn routes_owner(e: &mut TypeError, file: &File) {
+    let (Some(routes), Some(first)) = (&file.routes, file.components.first()) else {
+        return;
+    };
+    let slot = &routes.slot;
+    let about_slot = match e.id {
+        "type-unknown-name" => e.message.starts_with(&format!("unknown name `{slot}`")),
+        "type-assign-not-state" => e.message.starts_with(&format!("`{slot}` is not a state")),
+        _ => false,
+    };
+    // A component's span is its keyword: the error's component is the last one at or above it.
+    let within = file
+        .components
+        .iter()
+        .filter(|c| c.span.source_id == e.span.source_id && c.span.line <= e.span.line)
+        .max_by_key(|c| c.span.line);
+    if about_slot && within.is_some_and(|c| !std::ptr::eq(c, first)) {
+        let first = &first.name;
+        e.message.push_str(&format!(
+            "; `routes {slot}` belongs to the file's first component, `{first}`: if `{first}` is a helper, move it below the component the app starts from"
+        ));
+    }
+}

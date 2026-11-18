@@ -107,11 +107,54 @@ impl Order {
     pub(crate) fn unpublished(&self) -> bool {
         !self.done.is_empty() || self.pending.iter().any(|&(_, _, publish, _)| publish)
     }
+
+    /// Discard the picture without reusing buffers still on the GPU.
+    pub(crate) fn clear(&mut self) {
+        for (_, _, publish, shown) in &mut self.pending {
+            *publish = false;
+            *shown = None;
+        }
+        self.done.clear();
+        self.latest = None;
+        self.previous = None;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_drops_published_and_waiting_pictures_but_keeps_busy_buffers() {
+        let mut o = Order::default();
+        for _ in 0..2 {
+            let slot = o.target().unwrap();
+            o.submitted(slot, Arc::new(AtomicBool::new(true)), true, None);
+        }
+        o.settle();
+        assert!(o.take().is_some());
+        let busy = o.target().unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        o.submitted(busy, done.clone(), true, None);
+        o.clear();
+        assert_eq!(o.take(), None);
+        assert!(!o.unpublished());
+        assert_eq!(o.in_flight(), 1);
+        for _ in 0..SLOTS * 2 {
+            assert_ne!(o.target(), Some(busy));
+        }
+        done.store(true, Ordering::Release);
+        o.settle();
+        assert_eq!(
+            o.take(),
+            None,
+            "a late completion cannot restore the picture"
+        );
+        let slot = o.target().unwrap();
+        o.submitted(slot, Arc::new(AtomicBool::new(true)), true, None);
+        o.settle();
+        assert_eq!(o.take(), Some((slot, 2)));
+    }
 
     /// An incomplete frame's buffer is the GPU's until its commands have
     /// run: no frame renders into it meanwhile, and it is never shown.

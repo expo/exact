@@ -175,6 +175,22 @@ fn declared_length_over_limit_is_rejected_before_body_is_exposed() {
     server.join().unwrap();
 }
 
+/// A request read for as long as its caller holds it: one that leases a
+/// session of its own (Exact patch 49).
+fn open_ended(url: &str) -> Request {
+    let mut request = Request::get(url);
+    request.open_ended = true;
+    request
+}
+
+/// A request its caller reads whole as it arrives: one that may share the
+/// transport's session (Exact patch 49).
+fn collected(url: &str) -> Request {
+    let mut request = Request::get(url);
+    request.collected = true;
+    request
+}
+
 #[test]
 fn fifth_session_wait_is_cancellable_and_drop_returns_a_lease() {
     let transport = Arc::new(DarwinTransport::new());
@@ -189,7 +205,7 @@ fn fifth_session_wait_is_cancellable_and_drop_returns_a_lease() {
         });
         responses.push(
             transport
-                .open(&Request::get(&url), &AbortSignal::default())
+                .open(&open_ended(&url), &AbortSignal::default())
                 .unwrap(),
         );
         servers.push(worker);
@@ -202,7 +218,7 @@ fn fifth_session_wait_is_cancellable_and_drop_returns_a_lease() {
     let clone = transport.clone();
     let (send, receive) = mpsc::channel();
     let worker = thread::spawn(move || {
-        send.send(clone.open(&Request::get(&url), &signal)).unwrap();
+        send.send(clone.open(&open_ended(&url), &signal)).unwrap();
     });
     thread::sleep(Duration::from_millis(50));
     assert!(matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
@@ -216,7 +232,7 @@ fn fifth_session_wait_is_cancellable_and_drop_returns_a_lease() {
     worker.join().unwrap();
     drop(responses.pop());
     let (url, small) = server_fn_small();
-    assert_eq!(transport.send(&Request::get(&url)).unwrap().body, b"ok");
+    assert_eq!(transport.send(&open_ended(&url)).unwrap().body, b"ok");
     drop(responses);
     for server in servers {
         server.join().unwrap();
@@ -254,29 +270,131 @@ fn completed_body_returns_connection_and_unregisters_old_abort() {
 
 #[test]
 fn completed_unread_bodies_do_not_exhaust_session_pool() {
-    let transport = DarwinTransport::new();
-    let old = AbortController::new();
-    let mut responses = Vec::new();
-    let mut servers = Vec::new();
-    for _ in 0..8 {
+    let kinds: [fn(&str) -> Request; 3] = [|url| Request::get(url), open_ended, collected];
+    for kind in kinds {
+        let transport = DarwinTransport::new();
+        let old = AbortController::new();
+        let mut responses = Vec::new();
+        let mut servers = Vec::new();
+        for _ in 0..8 {
+            let (url, worker) = server_fn_small();
+            responses.push(transport.open(&kind(&url), &old.signal()).unwrap());
+            servers.push(worker);
+        }
         let (url, worker) = server_fn_small();
-        responses.push(transport.open(&Request::get(&url), &old.signal()).unwrap());
-        servers.push(worker);
+        let final_response = transport
+            .open(&kind(&url), &AbortSignal::default())
+            .unwrap();
+        // Cancelling completed old exchanges cannot cancel the session's next task.
+        old.abort();
+        assert_eq!(final_response.collect().unwrap().body, b"ok");
+        for response in responses {
+            assert!(response.collect().is_err());
+        }
+        for server in servers {
+            server.join().unwrap();
+        }
+        worker.join().unwrap();
     }
-    let (url, worker) = server_fn_small();
-    let final_response = transport
-        .open(&Request::get(&url), &AbortSignal::default())
-        .unwrap();
-    // Cancelling completed old exchanges cannot cancel the session's next task.
-    old.abort();
-    assert_eq!(final_response.collect().unwrap().body, b"ok");
-    for response in responses {
-        assert!(response.collect().is_err());
+}
+
+/// Collected exchanges share one session (Exact patch 49): with four
+/// open-ended ones holding every session of their own, eight at once each
+/// have their heads, which the peer sends only once all eight requests are
+/// in (more than URLSession's six connections a host would let through),
+/// and their 4 MiB replies, more than the session holds ahead of a reader,
+/// arrive whole; eight more after them open no connection.
+#[test]
+fn collected_exchanges_share_one_session_and_none_waits() {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    use std::sync::{Condvar, Mutex};
+    const AT_ONCE: usize = 8;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let arrived = Arc::new((Mutex::new(0), Condvar::new()));
+    let (counted, gate) = (accepted.clone(), arrived.clone());
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            counted.fetch_add(1, SeqCst);
+            let gate = gate.clone();
+            thread::spawn(move || {
+                let mut head = Vec::new();
+                let mut byte = [0];
+                while stream.read_exact(&mut byte).is_ok() {
+                    head.push(byte[0]);
+                    if !head.ends_with(b"\r\n\r\n") {
+                        continue;
+                    }
+                    head.clear();
+                    let (count, all) = &*gate;
+                    let mut count = count.lock().unwrap();
+                    *count += 1;
+                    all.notify_all();
+                    let (count, _) = all
+                        .wait_timeout_while(count, Duration::from_secs(10), |n| *n < AT_ONCE)
+                        .unwrap();
+                    drop(count);
+                    let reply = [
+                        &b"HTTP/1.1 200 OK\r\nContent-Length: 4194304\r\n\r\n"[..],
+                        &[7; 4 << 20],
+                    ]
+                    .concat();
+                    if stream.write_all(&reply).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let transport = Arc::new(DarwinTransport::new());
+    let mut streams = Vec::new();
+    for _ in 0..4 {
+        let (url, server) = server(|mut stream| {
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n: open\n")
+                .unwrap();
+            let _ = stream.read(&mut [0]);
+        });
+        let response = transport
+            .open(&open_ended(&url), &AbortSignal::default())
+            .unwrap();
+        streams.push((response, server));
     }
-    for server in servers {
+    let opened: Vec<_> = (0..AT_ONCE)
+        .map(|_| {
+            let (transport, url) = (transport.clone(), url.clone());
+            thread::spawn(move || {
+                let started = std::time::Instant::now();
+                let response = transport.open(&collected(&url), &AbortSignal::default());
+                (started.elapsed(), response)
+            })
+        })
+        .collect();
+    for response in opened {
+        let (took, response) = response.join().unwrap();
+        assert!(
+            took < Duration::from_secs(8),
+            "a head waited {took:?} for the others"
+        );
+        assert_eq!(response.unwrap().collect().unwrap().body.len(), 4 << 20);
+    }
+    let before = accepted.load(SeqCst);
+    assert_eq!(before, AT_ONCE, "connections for eight exchanges at once");
+    for _ in 0..AT_ONCE {
+        let body = transport.send(&collected(&url)).unwrap().body;
+        assert_eq!(body.len(), 4 << 20);
+    }
+    assert_eq!(
+        accepted.load(SeqCst),
+        before,
+        "a later exchange opened a connection"
+    );
+    for (response, server) in streams {
+        drop(response);
         server.join().unwrap();
     }
-    worker.join().unwrap();
 }
 
 #[test]

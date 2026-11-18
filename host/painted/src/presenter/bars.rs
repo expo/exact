@@ -669,6 +669,15 @@ impl<D: DataSource> Presenter<D> {
     /// the bar's own top left. A target is lit while a finger holds it and
     /// chosen when the finger lifts in it; a finger that leaves it lets go.
     pub fn bar_event(&mut self, which: i32, action: i32, x: f32, y: f32, now_ms: f64) {
+        // The finger itself, which a move off its target leaves down: only
+        // its lift or its cancel ends it. Each bar is a view of its own, with
+        // a finger of its own.
+        let bit = if which == BOTTOM { 64 } else { 32 };
+        match action {
+            0 => self.pressed |= bit,
+            1 | 3 => self.pressed &= !bit,
+            _ => {}
+        }
         // Under a sheet the bars are the page's, under its scrim, and inert.
         if self.sheet_open() {
             return;

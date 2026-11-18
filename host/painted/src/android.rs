@@ -575,7 +575,11 @@ fn run<D: DataSource + Default>(
                         0 => p.pointer_down(x, y, now).map(|_| ()),
                         1 => p.pointer_up(x, y, now).map(|_| ()),
                         2 => p.pointer_move(x, y, now).map(|_| ()),
-                        _ => p.pointer_cancel(now),
+                        // This shell routes nothing: its cancel is the system's.
+                        _ => {
+                            p.pointer_released();
+                            p.pointer_cancel(now)
+                        }
                     }
                 }
                 Command::Repaint => {

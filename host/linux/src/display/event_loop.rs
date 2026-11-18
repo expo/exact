@@ -75,8 +75,6 @@ pub(crate) fn run<D: DataSource>(
     // A GPU canvas's `Frame::period_ms` (LLP 1009).
     p.set_frame_period(display.period_ms());
     let mut plan_seen = config.dev_plan.as_deref().and_then(mtime);
-    // The dev plan's modification time and since when it has waited on requests in flight.
-    let mut held: Option<(Option<ReloadStamp>, Instant)> = None;
     // First pixel is the first frame presented (LLP 1026 D11). It asks for
     // the launch's update check; the presenter's cadence asks for the rest
     // (LLP 1030.006 D5). The window counts as in the foreground throughout:
@@ -273,34 +271,30 @@ pub(crate) fn run<D: DataSource>(
                 plan_seen = m.clone();
                 if let Ok(bytes) = std::fs::read(path) {
                     let t = Instant::now();
+                    let name = path
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_default();
                     let module = exact_painted::delivery::Module::local(path, &config.compat);
-                    let let_go = held.as_ref().is_some_and(|(at, t)| {
-                        *at == m && t.elapsed() >= exact_painted::host::LET_GO_AFTER
-                    });
+                    // A held candidate is the presenter's until its hold
+                    // clears (LLP 1029.000.002 D9); its end is said then.
+                    let later = name.clone();
                     match module
                         .map_err(exact_painted::host::HostError::Asset)
-                        .and_then(|module| p.reload_module(&bytes, data(), module, let_go))
-                    {
-                        Ok(e) => println!(
-                            "reloaded {} in {:.1} ms{}",
-                            path.file_name()
-                                .map(|f| f.to_string_lossy().into_owned())
-                                .unwrap_or_default(),
+                        .and_then(|module| {
+                            p.reload_with_outcome(&bytes, data(), module, false, move |outcome| {
+                                println!("reload of {later}, held: {outcome:?}")
+                            })
+                        }) {
+                        Ok(exact_painted::presenter::ReloadResult::Held(reason)) => {
+                            println!("reload of {name} held: {reason}")
+                        }
+                        Ok(exact_painted::presenter::ReloadResult::Applied(e)) => println!(
+                            "reloaded {name} in {:.1} ms{}",
                             t.elapsed().as_secs_f64() * 1000.0,
                             e.map(|e| format!(" — {e}")).unwrap_or_default()
                         ),
-                        Err(exact_painted::host::HostError::PreparingModule) => plan_seen = None,
-                        // Asked again each turn; after a second it lets the requests go (LLP 1007 §6).
-                        Err(exact_painted::host::HostError::RequestsPending) => {
-                            plan_seen = None;
-                            if held.as_ref().is_none_or(|(at, _)| *at != m) {
-                                held = Some((m.clone(), Instant::now()));
-                            }
-                        }
                         Err(e) => eprintln!("exact: reload: {e}"),
-                    }
-                    if plan_seen.is_some() {
-                        held = None;
                     }
                 }
             }

@@ -1,0 +1,117 @@
+use ModelNode, ModelHotspot, ModelViewerState from "@exact/model-viewer"
+use ScrollingPage from "./scrolling.contract"
+
+routes nav
+  home "/"
+  scrolling "/scroll"
+  notfound
+
+shape CachedModel
+  path: string
+
+component App
+  state picked = ""
+  state src = "assets/assembly.glb"
+  state orbit = "0deg 90deg 105%"
+  state occlusion = true
+  state coloured = false
+  state faded = false
+  state hidden = false
+  state clipped = false
+  state offscreen = false
+  state brightHotspots = false
+  resource cached = cacheModel() as shape CachedModel
+  resource viewer = exactSurface("modelViewer") as shape ModelViewerState
+  action follow(url: string)
+    nav = go(nav, url)
+  action pick(name: string)
+    picked = name
+  action front
+    orbit = "0deg 90deg 105%"
+    postMessage("reset", "modelViewer")
+  action top
+    orbit = "0deg 0deg 105%"
+    postMessage("reset", "modelViewer")
+  action reset
+    postMessage("reset", "modelViewer")
+  action toggleOcclusion
+    occlusion = not occlusion
+  action toggleColour
+    coloured = not coloured
+  action toggleOpacity
+    faded = not faded
+  action toggleHidden
+    hidden = not hidden
+  action toggleClip
+    clipped = not clipped
+  action toggleHotspot
+    offscreen = not offscreen
+  action toggleHotspotOpacity
+    brightHotspots = not brightHotspots
+  action loadPlain
+    src = "assets/assembly.glb"
+  action loadMeshopt
+    src = "assets/assembly-meshopt.glb"
+  action replaceTwice
+    src = "assets/assembly.glb"
+    src = "assets/assembly-meshopt.glb"
+  action missing
+    src = "assets/missing.glb"
+  action truncated
+    src = "assets/truncated.glb"
+  action url
+    src = "https://example.org/model.glb"
+  view
+    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
+      if top(nav).name == "scrolling"
+        ScrollingPage(viewer=viewer, src=cached.path)
+      else
+        column gap=8 padding=8
+          link href="/scroll" testId="scrolling-page"
+            text "Scrolling page"
+          text "Model viewer" role="heading" aria-level=1
+          canvas surface=modelViewer(src=src, cameraControls=true, cameraOrbit=orbit, cameraTarget="0m 0m 0m", nodes=[ModelNode(name="Housing", color=(coloured ? "#0080ff" : ""), opacity=(faded ? 0.25 : 1), visibility=(hidden ? "hidden" : "visible"), occlusion=(occlusion ? "occluder" : "none"), occludedOpacity=0.3), ModelNode(name="Impeller", color="", opacity=1, visibility="visible", occlusion=(occlusion ? "revealed" : "none"), occludedOpacity=0.3)], hotspots=[ModelHotspot(child="inlet", node="Inlet", position=(offscreen ? "100m 0m 0m" : "0m 0.8m 0.85m"), normal="0 0 1"), ModelHotspot(child="impeller", node="Impeller", position="-0.35m 0m 0m", normal="")], clipPosition="0m 0m 0m", clipNormal=(clipped ? "0 0 -1" : ""), minHotspotOpacity=(brightHotspots ? 1 : 0.25)) message=pick width=320 height=320 flex-shrink=0 role="group" aria-label="Pump assembly" testId="pump"
+            if not viewer.presented
+              text "Loading model" position="absolute" inset=0 aria-busy=true testId="loading"
+            button "Inlet" press=pick("Inlet") position="absolute" testId="inlet"
+            button "Impeller" press=pick("Impeller") position="absolute" testId="impeller"
+          row gap=8
+            button press=front testId="front"
+              text "Front"
+            button press=top testId="top"
+              text "Top"
+            button press=reset testId="reset"
+              text "Reset"
+          row gap=8
+            button press=toggleOcclusion testId="occlusion"
+              text "Occlusion"
+            button press=toggleColour testId="colour"
+              text "Colour"
+            button press=toggleOpacity testId="opacity"
+              text "Opacity"
+            button press=toggleHidden testId="hidden"
+              text "Hide"
+            button press=toggleClip testId="clip"
+              text "Clip"
+          row gap=8
+            button press=toggleHotspot testId="hotspot-edge"
+              text "Move hotspot off canvas"
+            button press=toggleHotspotOpacity testId="hotspot-opacity"
+              text "Hotspot opacity"
+          row gap=8
+            button press=loadPlain testId="plain"
+              text "Plain"
+            button press=loadMeshopt testId="meshopt"
+              text "Meshopt"
+            button press=replaceTwice testId="replace-twice"
+              text "Replace twice"
+          row gap=8
+            button press=missing testId="missing"
+              text "Missing"
+            button press=truncated testId="truncated"
+              text "Truncated"
+            button press=url testId="url"
+              text "URL"
+          text picked testId="picked"
+          text viewer.error testId="error"
+          text viewer.cameraOrbit testId="camera-orbit" font-variant-numeric="tabular-nums"

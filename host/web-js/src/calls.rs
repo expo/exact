@@ -1,5 +1,5 @@
 //! The plan's tools (LLP 1111 D2) for calls.js, which runs a call of one as
-//! the runner's `modules/calls.rs` does (LLP 1133.023 D7, §10).
+//! the runner's `calls.rs` does (LLP 1133.023 D7, §10).
 
 use crate::emit::surface_type_json;
 use exact_plan::{DerivesId, Plan};

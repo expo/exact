@@ -11,7 +11,7 @@ enum HostLog {
     private static let logger = Logger(subsystem: "dev.exact", category: "host")
 
     static func capabilities(_ session: ExactSession, _ batch: Batch) {
-        guard HatchDiagnostics.available else { return }
+        guard HatchDiagnosticsLink.available else { return }
         func missing(_ product: String) {
             guard session.missingCapabilities.insert(product).inserted else { return }
             note(session, "plan uses an unavailable capability; link \(product) and call \(product).install() before creating sessions")
@@ -28,7 +28,7 @@ enum HostLog {
     }
 
     static func note(_ session: ExactSession?, _ line: @autoclosure () -> String) {
-        guard HatchDiagnostics.available, let session else { return }
+        guard HatchDiagnosticsLink.available, let session else { return }
         let line = line()
         session.log("host: " + line)
         logger.debug("\(line, privacy: .public)")

@@ -196,6 +196,7 @@ fn a_surface_touch_after_a_surface_key_restores_the_opener_ringless() {
             p.surface_event(serial, event::DISMISSED, 0., 0., 3.);
         } else {
             p.surface_event(serial, 0, x, y, 2.);
+            assert_eq!(p.interaction_hold(), Some("pointer")); // its own window's press
             p.surface_event(serial, 1, x, y, 3.);
         }
         p.run_commands(|| ());
@@ -210,7 +211,7 @@ fn a_surface_touch_after_a_surface_key_restores_the_opener_ringless() {
     }
 }
 
-fn boot() -> Presenter<()> {
+pub(super) fn boot() -> Presenter<()> {
     let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
@@ -361,7 +362,7 @@ fn text(p: &Presenter<()>, name: &str) -> String {
 }
 
 /// Tap `name` as a person does and run the commands its action issued.
-fn tap(p: &mut Presenter<()>, name: &str) -> Result<String, String> {
+pub(super) fn tap(p: &mut Presenter<()>, name: &str) -> Result<String, String> {
     let view = id(p, name);
     let result = p.tap(view);
     p.run_commands(|| ());

@@ -102,10 +102,8 @@ final class NativeFieldsMacTests: XCTestCase {
             XCTAssertEqual(cell.accessibilityAttributeValue(.role) as? String, "AXComboBox")
             XCTAssertEqual(cell.accessibilityAttributeValue(.roleDescription) as? String, NSAccessibility.Role.comboBox.description(with: nil))
             XCTAssertTrue(cell.accessibilityAttributeNames().contains(.expanded))
-            XCTAssertFalse(field.isAccessibilityExpanded())
             XCTAssertEqual(cell.accessibilityAttributeValue(.expanded) as? Bool, false)
             p.apply(wireBatch([["op": "props", "id": id, "set": ["accessibilityExpanded": "true"]]]))
-            XCTAssertTrue(field.isAccessibilityExpanded())
             XCTAssertEqual(cell.accessibilityAttributeValue(.expanded) as? Bool, true)
             p.apply(wireBatch([["op": "props", "id": id, "clear": ["accessibilityRole", "accessibilityExpanded"]]]))
             XCTAssertEqual(cell.accessibilityAttributeValue(.role) as? String, "AXTextField")
@@ -921,6 +919,54 @@ final class NativeFieldsMacTests: XCTestCase {
         try isGreen(text.placeholderColor, "a textarea")
         area.applyStyle([:])
         XCTAssertNil(text.placeholderColor, "no row: AppKit's again")
+    }
+}
+/// A field offers a combobox's expanded state and a stepper's bounds and
+/// steps only when it is one, as AppKit's `NSTextField`, `NSSearchField`,
+/// `NSComboBox` and `NSStepper` do. Another process (VoiceOver) is served the
+/// names the field's cell lists and, besides, an attribute or action for each
+/// typed method the field's class implements. This pins both halves; their
+/// merge is AppKit's accessibility server's, which only another process sees.
+final class FieldAccessibilityOfferMacTests: XCTestCase {
+    func testEachFieldOffersOnlyItsRolesAttributesAndActions() throws {
+        _ = NSApplication.shared
+        let p = Presenter()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        defer { window.close() }
+        let fields: [(id: Int, props: [String: String])] = [
+            (11, ["accessibilityLabel": "Plain"]),
+            (12, ["type": "search", "accessibilityLabel": "Search"]),
+            (13, ["accessibilityRole": "combobox", "accessibilityExpanded": "false", "accessibilityLabel": "Combo"]),
+            (14, ["type": "number", "min": "0", "max": "10", "value": "3", "accessibilityLabel": "Number"]),
+        ]
+        var ops: [[String: Any]] = [["op": "create", "id": 1, "kind": "view"], ["op": "roots", "ids": [1]],
+                                    ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0]]
+        for (i, f) in fields.enumerated() {
+            ops.append(["op": "create", "id": f.id, "kind": "input", "handlers": ["input"], "props": f.props])
+            ops.append(["op": "frame", "id": f.id, "x": 10.0, "y": 10.0 + Double(i) * 40, "w": 280.0, "h": 24.0])
+        }
+        ops.append(["op": "children", "id": 1, "ids": fields.map(\.id)])
+        p.apply(wireBatch(ops))
+        p.syncAccessibility()
+        let contested: Set<String> = ["AXExpanded", "AXMinValue", "AXMaxValue", "AXIncrement", "AXDecrement"]
+        var offered: [String: [String]] = [:]
+        for f in fields {
+            let field = try XCTUnwrap(p.views[UInt32(f.id)]?.field)
+            let element = try XCTUnwrap(NSAccessibility.unignoredDescendant(of: field) as? NSObject)
+            let names = element.accessibilityAttributeNames().map(\.rawValue) + element.accessibilityActionNames().map(\.rawValue)
+                + field.accessibilityAttributeNames().map(\.rawValue) + field.accessibilityActionNames().map(\.rawValue)
+            offered[f.props["accessibilityLabel"]!] = Set(names).intersection(contested).sorted()
+        }
+        XCTAssertEqual(offered, ["Plain": [], "Search": [], "Combo": ["AXExpanded"],
+                                 "Number": ["AXDecrement", "AXIncrement", "AXMaxValue", "AXMinValue"]])
+        let typed = [#selector(NSView.isAccessibilityExpanded), #selector(NSView.accessibilityMinValue), #selector(NSView.accessibilityMaxValue),
+                     #selector(NSView.accessibilityPerformIncrement), #selector(NSView.accessibilityPerformDecrement)]
+        for (field, appKit) in [(Field.self, NSTextField.self), (SearchField.self, NSSearchField.self)] as [(AnyClass, AnyClass)] {
+            let overridden = typed.filter { class_getMethodImplementation(field, $0) != class_getMethodImplementation(appKit, $0) }
+            XCTAssertEqual(overridden.map(NSStringFromSelector), [], "\(field) implements them for every field")
+        }
     }
 }
 #endif

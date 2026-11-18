@@ -2,7 +2,7 @@ import { listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popove
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
 import { syncViewportFit } from "./wasm/views.js";
-import { boot, loadRust, main, reportColors } from "./wasm/boot.js";
+import { boot, loadRust, main, reportColors, replacements } from "./wasm/boot.js";
 import { agentInputReady, agent, agentSettled } from "./wasm/agent.js";
 placePopovers();
 // @ref LLP 1007 §3: the wasm DOM host and its live session state.
@@ -585,7 +585,8 @@ export function track(p, ticket) {
     p.owner = host.incarnation;
   }
   inflight.add(p);
-  p.finally(() => inflight.delete(p));
+  // Its end may be what a replacement waits for (wasm/boot.js).
+  p.finally(() => { inflight.delete(p); replacements.changed(); });
 }
 export const holds = (ticket, owner = host.incarnation) => owner === host.incarnation && host.wasm?.exact_request_active(ticket) === 1;
 export const waiting = () => [...inflight].filter((p) => p.ticket == null || holds(p.ticket, p.owner));
@@ -744,12 +745,13 @@ globalThis.exact = {
       send(host.wasm.exact_collect_aborts());
     });
   },
+  replacementChanged: () => replacements.changed(),
   keptChanged: () => {
     if (host.wasm?.exact_changed) {
       applyBatch(JSON.parse(readOut(host.wasm.exact_changed(writeIn("doc-watch:doc:/")))));
     }
   },
-  // the GPU tier's reader and teller (gpu-tier.js); a fetch a realm aborted between batches (module-glue.js door 23); the kept documents' list changed (documents-glue.js, LLP 1069.010.000 D5)
+  // the GPU tier's reader and teller (gpu-tier.js); a fetch a realm aborted between batches (module-glue.js door 23); a commit ended, which may settle a request a replacement waits for (wasm/commit.js `applyBatch`); the kept documents' list changed (documents-glue.js, LLP 1069.010.000 D5)
   // @ref LLP 1038 D8/D11 — synchronous for the serialized popstate caller.
   navigate: (location) => {
     const nav = root.firstElementChild;
@@ -786,16 +788,21 @@ globalThis.exact = {
     if (rust && globalThis.exact.compat?.inputs?.rustMode !== "browser") {
       throw new Error("Rust replacement is disabled in this client; rebuild it");
     }
-    const assets = assetNamespace(cards);
-    let candidate = null;
+    if (!current()) return false;
+    const ticket = replacements.begin();
+    let assets = null, candidate = null;
     try {
+      if (!await replacements.wait(ticket) || !current()) return false;
+      assets = assetNamespace(cards);
       if (module) {
+        replacements.preparing(ticket, "module");
         candidate = {
           ...module,
           realm: await host.moduleLoader.prepare(module, host.logicInfo)
         };
       }
       if (rust) {
+        replacements.preparing(ticket, "module");
         await loadRust();
         if (candidate) {
           const js = new TextEncoder().encode(JSON.stringify(candidate.realm.id));
@@ -824,9 +831,12 @@ globalThis.exact = {
       if (candidate) {
         candidate.letGo = letGo;
       }
-      return await boot(bytes, assets, current, candidate) !== null;
+      replacements.preparing(ticket, null);
+      if (!current()) return false;
+      return await boot(bytes, assets, current, candidate, false, ticket) !== null;
     } finally {
-      if (host.devAssets !== assets) {
+      replacements.end(ticket);
+      if (assets && host.devAssets !== assets) {
         releaseAssets(assets);
       }
       if (candidate && host.activeModule !== candidate) {

@@ -2,12 +2,13 @@ import { socketProtocols } from './grant-admission.js';
 // Native ordered HTTP defaults to 64 MiB; independent requests may lower it.
 // A body over it is the host refusing the response (kind `Refused`, `failure(x)`'s
 // `refused`, LLP 1109 D3), on every host and executor, as a stream's event over its ceiling is.
-export async function boundedHttpBody(response, limit) {
+// `heard` is told of each read (an idle timeout's, below).
+export async function boundedHttpBody(response, limit, heard) {
   if (limit == null) limit = 64 * 1024 * 1024;
   if (!Number.isInteger(limit) || limit < 1 || limit > 64 * 1024 * 1024) throw Error("invalid HTTP response limit");
   if (!response.body) return new Uint8Array();
   const reader=response.body.getReader(), chunks=[]; let size=0;
-  try { for (;;) { const {done,value}=await reader.read(); if(done) break; size+=value.length; if(size>limit) throw Object.assign(Error("HTTP response exceeds limit"), {kind:'Refused'}); if(value.length) chunks.push(value); } }
+  try { for (;;) { const {done,value}=await reader.read(); if(done) break; if(value.length) heard?.(); size+=value.length; if(size>limit) throw Object.assign(Error("HTTP response exceeds limit"), {kind:'Refused'}); if(value.length) chunks.push(value); } }
   catch(error) { await reader.cancel().catch(()=>{}); throw error; } finally { reader.releaseLock(); }
   const bytes=new Uint8Array(size); let at=0; for(const chunk of chunks) { bytes.set(chunk,at); at+=chunk.length; } return bytes;
 }
@@ -97,13 +98,15 @@ const batch = (message, messages) => messages.forEach((m, i) => message(i < mess
 // Read an event stream to its end (LLP 1016.000): each read's events are
 // delivered then, every one, as one batch (D4). What ends the body is the
 // stream's last outcome.
-async function readEvents(response, limit, message, controller) {
+async function readEvents(response, limit, message, controller, quiet) {
   const parse = eventStream(limit), reader = response.body.getReader(), encoder = new TextEncoder();
   const failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(text) });
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) return failed(1, 'the event stream ended');
+      // Any bytes count, a comment's too: a server keeps a quiet stream alive with comments.
+      if (value.length) quiet?.heard();
       const received = performance.now();
       batch(message, parse(value).map(e => ({ ...e, coalesced: 0, received })));
     }
@@ -117,7 +120,8 @@ async function readEvents(response, limit, message, controller) {
 // A byte stream joins transport reads until the next task, bounded by
 // min(ceiling, 1 MiB). A full queue waits for delivery before pulling more.
 // `received` is the oldest read's time for the development stream timing.
-async function readBytes(response, limit, message, controller) {
+// An idle timeout counts no wait for delivery: the host reads nothing then.
+async function readBytes(response, limit, message, controller, quiet) {
   const reader = response.body.getReader(), encoder = new TextEncoder(), bound = Math.min(limit, 1048576);
   const failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(text) });
   let parts = [], size = 0, received = 0, timer = null, pending = null;
@@ -125,7 +129,7 @@ async function readBytes(response, limit, message, controller) {
   const abort = () => { stop(); reader.cancel().catch(() => {}); };
   controller.signal.addEventListener('abort', abort, { once: true });
   const wait = async () => {
-    if (pending) { await Promise.race([pending, stopped]); pending = null; }
+    if (pending) { quiet?.hold(); await Promise.race([pending, stopped]); pending = null; quiet?.heard(); }
     if (controller.signal.aborted) throw new DOMException('request aborted', 'AbortError');
   };
   const flush = () => {
@@ -148,6 +152,7 @@ async function readBytes(response, limit, message, controller) {
       await wait();
       if (done) { flush(); await wait(); return failed(1, 'the byte stream ended'); }
       if (!value.length) continue;
+      quiet?.heard();
       if (size + value.length > bound) { flush(); await wait(); }
       // Browsers can return one read longer than the bound. Deliver it in
       // bounded pieces, waiting for each before handing over another.
@@ -161,6 +166,8 @@ async function readBytes(response, limit, message, controller) {
       timer ??= setTimeout(flush, 0);
     }
   } catch (error) {
+    // What it had accepted is delivered before the timeout ends it.
+    if (quiet?.passed) flush();
     clearTimeout(timer);
     await reader.cancel().catch(() => {});
     if (controller.signal.aborted) return failed(4, 'request aborted');
@@ -173,12 +180,12 @@ async function readBytes(response, limit, message, controller) {
 
 // Fetch exposes no incremental sent-byte count. A render reports the whole body at the reply's headers,
 // then waits for the reply's body, within the upload's ceiling (LLP 1016.000 D10).
-async function renderUpload(url, method, headers, body, limit, message, signal, admits) {
+async function renderUpload(url, method, headers, body, limit, message, signal, admits, credentials) {
   const encoder = new TextEncoder(), failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(String(text)) });
   if (signal.aborted) return failed(4, 'request aborted');
   try {
     message({ event: 'exact:sending', id: '\0', data: '', coalesced: 0, received: performance.now() });
-    const response = await fetch(url, { method, headers, body, signal, redirect: 'follow' });
+    const response = await fetch(url, { method, headers, body, signal, credentials, redirect: 'follow' });
     if (body?.byteLength) message({ event: 'exact:progress', id: '\0', data: JSON.stringify({ loaded: body.byteLength, total: body.byteLength }), coalesced: 0, received: performance.now() });
     if (!response.url && response.type !== 'opaqueredirect') {
       await response.body?.cancel();
@@ -190,6 +197,7 @@ async function renderUpload(url, method, headers, body, limit, message, signal, 
     }
     return { kind: 0, status: response.status, headers: [...response.headers].map(([k, v]) => `${k}: ${v}`).join('\n'), body: await boundedHttpBody(response, limit) };
   } catch (error) {
+    if (globalThis.__exactRender && error?.renderDeferred) return { refused: error.message };
     if (signal.aborted) return failed(4, 'request aborted');
     return failed(error?.kind === 'Refused' ? 2 : 1, error?.message ?? error);
   }
@@ -199,8 +207,8 @@ async function renderUpload(url, method, headers, body, limit, message, signal, 
 // each `upload` progress event is a message of the bytes sent, and the reply,
 // any status, read whole within `limit`, is the outcome, as `request` gives
 // one. A reply whose last hop the grants do not admit is refused.
-function upload(url, method, headers, body, limit, message, signal, admits) {
-  if (globalThis.__exactRender) return renderUpload(url, method, headers, body, limit, message, signal, admits);
+function upload(url, method, headers, body, limit, message, signal, admits, credentials) {
+  if (globalThis.__exactRender) return renderUpload(url, method, headers, body, limit, message, signal, admits, credentials);
   const encoder = new TextEncoder(), failed = (kind, text) => ({ kind, status: 0, headers: '', body: encoder.encode(String(text)) });
   return new Promise(resolve => {
     const xhr = new globalThis.XMLHttpRequest(), abort = () => xhr.abort();
@@ -359,6 +367,7 @@ export async function readLongPoll(op, init, limit, message, controller, admits)
         }
       }
     } catch (e) {
+      if (globalThis.__exactRender && e?.renderDeferred) return { refused: e.message };
       if (controller.signal.aborted) return aborted();
       if (e?.kind === 'Refused') { replied(); return failed(2, String(e.message)); }
       error = deadline?.aborted ? `the request timed out after ${op.timeoutMs} ms` : String(e?.message ?? e) || 'a network error';
@@ -370,6 +379,24 @@ export async function readLongPoll(op, init, limit, message, controller, admits)
     await pause(wait);
     delete controller.retrying;
   }
+}
+
+// An HTTP stream's idle timeout (LLP 1016.000 D11), as `readSocket`'s: counted from the request, each read of the
+// body heard and its head not, nothing counted between `hold` and the next `heard`. When it passes, `signal` aborts
+// the request and the stream ends as a Timeout. It claims the end only if `controller` has not let the stream go, so
+// `passed` stays true whatever the abort it made then produces, a cancel from the mapper it reaches included.
+function quietFor(ms, controller) {
+  if (ms === undefined) return null;
+  const stop = new AbortController();
+  let timer = null;
+  const quiet = {
+    signal: stop.signal,
+    get passed() { return stop.signal.aborted; },
+    heard() { clearTimeout(timer); if (!stop.signal.aborted) timer = setTimeout(() => { if (!controller.signal.aborted) stop.abort(); }, ms); },
+    hold() { clearTimeout(timer); },
+  };
+  quiet.heard();
+  return quiet;
 }
 
 // The transport belongs to the resource's abort controller (LLP 1016.000).
@@ -498,8 +525,9 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
   const asset = method === 'GET' && !body && !bytes && Object.keys(headers).length === 0 && /^\/assets\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(url);
   const socket = op.stream && /^wss?:/i.test(url), capability = socket ? 'net.websocket' : 'net.fetch';
   if (op.protocols?.length && !socket) return failed(2, 'exactProtocols: only a WebSocket stream takes protocols');
-  // An idle timeout is a WebSocket stream's (LLP 1016.000 D11), refused before any other path is taken.
-  if (op.idleTimeoutMs !== undefined && (!socket || op.longPoll || op.upload)) return failed(2, 'only a WebSocket stream takes an idle timeout');
+  // An idle timeout is a WebSocket, event or byte stream's (LLP 1016.000 D11), refused before any other path is taken.
+  if (op.idleTimeoutMs !== undefined && (!op.stream || op.longPoll || op.upload || (/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^(wss?|https?):/i.test(url))))
+    return failed(2, 'only a WebSocket, event or byte stream takes an idle timeout');
   if (op.idleTimeoutMs !== undefined && (!Number.isInteger(op.idleTimeoutMs) || op.idleTimeoutMs < 1 || op.idleTimeoutMs > 3600000)) return failed(2, 'an idle timeout must be 1 to 3600000 ms');
   if (invalid) return failed(2, invalid);
   if (!native && !asset) try { new URL(url); } catch (error) { return failed(1, error); }
@@ -528,7 +556,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     const accept = headers.some(([k]) => k.toLowerCase() === 'accept') ? headers : [...headers, ['accept', 'application/json']];
     controllers.add(controller);
     try {
-      return await readLongPoll(op, { method: 'GET', headers: accept, redirect: redirectFor(op.origin, op.redirect ?? 'follow', op.reachState), cache: cache === undefined ? 'no-store' : cache, ...(op.mode !== undefined ? { mode: op.mode } : cache === 'only-if-cached' ? { mode: 'same-origin' } : {}) },
+      return await readLongPoll(op, { method: 'GET', headers: accept, credentials: op.credentials, redirect: redirectFor(op.origin, op.redirect ?? 'follow', op.reachState), cache: cache === undefined ? 'no-store' : cache, ...(op.mode !== undefined ? { mode: op.mode } : cache === 'only-if-cached' ? { mode: 'same-origin' } : {}) },
         op.maxResponseBytes ?? 1024 * 1024, message, controller, (u) => active() && admitsNetwork(scopedGrantSet(grantSet, op.scope), u, 'fetch'));
     } finally { controllers.delete(controller); delete controller.retrying; }
   }
@@ -564,25 +592,31 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
   const expires = op.timeoutMs === undefined ? Infinity : performance.now() + op.timeoutMs;
   const expired = () => deadline && !controller.signal.aborted && (deadline.aborted || performance.now() >= expires);
   controllers.add(controller);
-  const signal = deadline ? AbortSignal.any([controller.signal, deadline]) : controller.signal;
+  // An idle timeout counts from here, a body read from a file included.
+  const quiet = quietFor(op.idleTimeoutMs, controller), quietEnd = () => failed(10, `nothing arrived for ${op.idleTimeoutMs} ms`);
+  const ends = [deadline, quiet?.signal].filter(Boolean);
+  const signal = ends.length ? AbortSignal.any([controller.signal, ...ends]) : controller.signal;
   // `exactBodyFrom` (LLP 1108 D6 R2): the app file, read now under the
   // request's `fs.read` grant into a Blob body (a picked file is its own
   // File, never copied into a string), or refused before anything is sent.
   let fileBody;
   if (op.bodyFrom != null) {
+    // Nothing is sent on any of these ends, and the idle timeout is over with them.
+    const leave = (outcome) => { quiet?.hold(); return outcome; };
+    const aborted = () => leave(quiet?.passed ? quietEnd() : failed(4, 'request aborted'));
     const refused = fileBodyRefusal();
-    if (refused) return refused;
+    if (refused) return leave(refused);
     // The read yields to the deadline and to letting go: nothing is sent once either has ended it.
-    if (expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
-    if (signal.aborted) return failed(4, 'request aborted');
+    if (expired()) return leave(failed(10, `the request timed out after ${op.timeoutMs} ms`));
+    if (signal.aborted) return aborted();
     const stopped = new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
     const reading = bodyFile(op.bodyFrom, effective);
     reading.catch(() => {}); // a read that loses the race is nobody's
     try { fileBody = await Promise.race([reading, stopped]); }
-    catch (error) { return failed(error?.code === 'agent' ? 3 : 2, error); }
-    if (expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
-    if (signal.aborted) return failed(4, 'request aborted');
-    if (!active()) return failed(4, 'request source unloaded');
+    catch (error) { return leave(failed(error?.code === 'agent' ? 3 : 2, error)); }
+    if (expired()) return leave(failed(10, `the request timed out after ${op.timeoutMs} ms`));
+    if (signal.aborted) return aborted();
+    if (!active()) return leave(failed(4, 'request source unloaded'));
   }
   // `exactBodyTo` (LLP 1108 D6 R2, 2026-10-26): a 2xx body goes to the app
   // file (storage-fs.js `bodyTarget`), admitted under `fs.write` with its
@@ -608,13 +642,13 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     try {
       if (cache === 'only-if-cached') return failed(1, 'TypeError: Failed to fetch');
       if (redirectFor(op.origin, 'follow', op.reachState) !== 'follow') return failed(2, 'NotAllowedError: an upload follows its redirects, and one could reach a less public address space before the person answers');
-      const o = await upload(url, method, headers, decodedBody ?? fileBody ?? null, op.maxResponseBytes ?? 1024 * 1024, message, signal, u => admitsNetwork(effective, u, 'fetch'));
+      const o = await upload(url, method, headers, decodedBody ?? fileBody ?? null, op.maxResponseBytes ?? 1024 * 1024, message, signal, u => admitsNetwork(effective, u, 'fetch'), op.credentials);
       return o.kind === 4 && deadline?.aborted && !controller.signal.aborted ? failed(10, `the request timed out after ${op.timeoutMs} ms`) : o;
     } finally { controllers.delete(controller); }
   }
   // A browser answers a `manual` redirect with an opaque-redirect response
   // (Fetch §2.2.6: status 0, no Location)
-  const init = { method, headers, redirect: redirectFor(op.origin, op.redirect ?? 'follow', op.reachState), cache: cache === undefined ? 'default' : cache, ...(op.mode !== undefined ? { mode: op.mode } : cache === 'only-if-cached' ? { mode: 'same-origin' } : {}), signal };
+  const init = { method, headers, credentials: op.credentials, redirect: redirectFor(op.origin, op.redirect ?? 'follow', op.reachState), cache: cache === undefined ? 'default' : cache, ...(op.mode !== undefined ? { mode: op.mode } : cache === 'only-if-cached' ? { mode: 'same-origin' } : {}), signal };
   if (decodedBody) init.body = decodedBody;
   else if (fileBody) init.body = fileBody;
   if (op.stream && !headers.some(([k]) => k.toLowerCase() === 'accept')) init.headers = [...headers, ['accept', 'text/event-stream']];
@@ -640,14 +674,19 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
       : !admitsNetwork(effective, response.url, 'fetch'))) return failed(2, `outside the app's grants (net.fetch): redirected to ${new URL(response.url).origin}`);
     // A stream reads its body as events, or a TypeScript stream's as bytes;
     // anything else is its one answer.
+    // A timeout's record wins over what the abort it made produced.
+    const read = async (reader) => {
+      const o = await reader(response, op.maxResponseBytes ?? 1024 * 1024, message, controller, quiet);
+      return quiet?.passed ? quietEnd() : o;
+    };
     if (op.stream && response.ok && response.body && /^text\/event-stream\s*(;|$)/i.test(response.headers.get('content-type') ?? ''))
-      return await readEvents(response, op.maxResponseBytes ?? 1024 * 1024, message, controller);
+      return await read(readEvents);
     if (op.stream && protocol?.bytes && response.ok && response.body)
-      return await readBytes(response, op.maxResponseBytes ?? 1024 * 1024, message, controller);
+      return await read(readBytes);
     const headerText = [...response.headers].map(([k, v]) => `${k}: ${v}`).join('\n');
     // Written: its size first, as a pseudo-header (host.rs `outcome_from`); any other reply is read as usual, at most 1 MiB.
     if (target && response.ok) return { kind: 0, status: response.status, headers: `:exact-body-to: ${await target.put(response, op.maxResponseBytes ?? 1024 * 1024 * 1024)}\n${headerText}`, body: new Uint8Array() };
-    const result = { kind: 0, status: response.status, headers: headerText, body: await boundedHttpBody(response, target ? Math.min(op.maxResponseBytes ?? 1024 * 1024, 1024 * 1024) : op.maxResponseBytes) };
+    const result = { kind: 0, status: response.status, headers: headerText, body: await boundedHttpBody(response, target ? Math.min(op.maxResponseBytes ?? 1024 * 1024, 1024 * 1024) : op.maxResponseBytes, quiet?.heard) };
     if (fixture) {
       if (expired()) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
       if (signal.aborted) return failed(4, 'request aborted');
@@ -655,12 +694,14 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
     }
     return result;
   } catch (error) {
+    if (globalThis.__exactRender && error?.renderDeferred) return { refused: error.message };
     // Whichever ended it first: the combined signal keeps the first reason.
     if (deadline && signal.aborted && signal.reason === deadline.reason) return failed(10, `the request timed out after ${op.timeoutMs} ms`);
+    if (quiet?.passed) return quietEnd();
     // A store that would not take a written body (`Unavailable`) refuses it, as natively.
     return failed(controller.signal.aborted ? 4 : error?.kind === 'Refused' || error?.kind === 'Unavailable' ? 2 : 1, error);
   }
-  finally { controllers.delete(controller); target?.close(); }
+  finally { controllers.delete(controller); target?.close(); quiet?.hold(); }
 }
 
 // A stream on the JS target (host/web-js: rust-data.js, ts-data.js): `request`
@@ -670,7 +711,7 @@ export async function request(op, { grantSet, loadPageNative, moduleLoader, loca
 // is the asking commit's (LLP 1133.036 D6); a request without one is
 // checked as a non-app one is, never taken for the app's.
 export function streamed(req, grantSet, message, controller, bodyFile, protocol) {
-  return request({ method: req.method ?? 'GET', url: req.url, headers: req.headers ?? [], body: '', bodyBytes: req.raw?.length ? Uint8Array.from(req.raw) : undefined, bodyFrom: req.bodyFrom, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, redirect: req.redirect, longPoll: req.longPoll, upload: req.upload, timeoutMs: req.timeoutMs, idleTimeoutMs: req.idleTimeoutMs, protocols: req.protocols, stream: true, maxResponseBytes: req.maxResponseBytes, scope: req.scope, origin: req.origin ?? UNATTRIBUTED },
+  return request({ method: req.method ?? 'GET', url: req.url, headers: req.headers ?? [], credentials: req.credentials, body: '', bodyBytes: req.raw?.length ? Uint8Array.from(req.raw) : undefined, bodyFrom: req.bodyFrom, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, redirect: req.redirect, longPoll: req.longPoll, upload: req.upload, timeoutMs: req.timeoutMs, idleTimeoutMs: req.idleTimeoutMs, protocols: req.protocols, stream: true, maxResponseBytes: req.maxResponseBytes, scope: req.scope, origin: req.origin ?? UNATTRIBUTED },
     { grantSet, controllers: new Set(), controller, message, bodyFile, protocol, localAssetURL: url => new URL(url, location.href).href,
       loadPageNative: () => Promise.reject(new Error('a stream is not a page-module request')) });
 }

@@ -14,6 +14,9 @@ use exact_kernel::{PropId, StyleId};
 use exact_plan::{BindingKind, EventKind, Opcode, Plan, Stdlib, StrId};
 use std::fmt;
 
+mod apple;
+pub use apple::{apple_uses, data_url, image_sources, lays_out_grid, ImageSource};
+
 /// A capability beyond the core, linked into an artifact only when its plan
 /// uses it (LLP 1047 §4's roster, as each one moves behind its seam).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +73,9 @@ pub enum Capability {
     /// `background-image` or `mask-image`.
     Gradients,
     /// CSS grid's track, placement and keyword grammars, for a plan that
-    /// binds any of the six grid rows.
+    /// binds any of the six grid rows. On Apple, which parses them always and
+    /// links layout by use, the grid algorithm instead, for a plan whose
+    /// layout can reach it ([`apple_uses`]).
     Grid,
     /// `frame` and `measure` (LLP 1051.000): a plan whose actions read
     /// geometry. Native hosts answer from the kernel; the web links a
@@ -143,11 +148,42 @@ pub enum Capability {
     /// Locked secrets (LLP 1133.010 D16), selected by `secret.keep` grants
     /// with a presence policy, including names whose protection is optional.
     Presence,
+    /// A package's native modules, views and events (LLP 1047.001 D10,
+    /// D11): a plan whose `modules`, `views` or `module_events` table is not
+    /// empty. Native only ([`apple_uses`]); the web loads its packages
+    /// itself.
+    Modules,
+    /// Tool calls (LLP 1111; LLP 1047.001 D11): a plan whose `tools` table
+    /// is not empty. Native only ([`apple_uses`]).
+    Tools,
+    /// SVG decoding (LLP 1047.001 D10): an SVG element, or an image whose
+    /// file can be an SVG, which the host tells by its bytes. Native only.
+    Svg,
+    /// Loading and showing image files: an `image` whose source can be a
+    /// file, or a Markdown atom's icon. Native only.
+    Images,
+    /// The app module's native views and hatches (LLP 1024, LLP
+    /// 1075.003.000): a module tag, a `hatch`, or a package's view, and an
+    /// app whose module artifact connects the app-level hatches, which the
+    /// bake reads. Native only.
+    NativeViews,
+    /// Content regions (long documents): never set by a plan, since the
+    /// entry registers the region. An entry that registers one requires it
+    /// in its set, so a manifest's `link` names it. Native only.
+    ContentRegions,
+    /// Trace recording: a plan that runs `startTrace_EXPERIMENTAL` or
+    /// `stopTrace_EXPERIMENTAL`, or a manifest's `link` for an embedder that
+    /// calls the public API. Native only.
+    Traces,
+    /// The optional native controls: switches, checkboxes, radios, sliders,
+    /// pop-up selects, date pickers, progress, steppers and segmented
+    /// controls. A plain button is the core's. Native only.
+    Controls,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 37] = [
+    pub const ALL: [Capability; 45] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -185,6 +221,14 @@ impl Capability {
         Capability::TextStroke,
         Capability::SymbolPalette,
         Capability::Presence,
+        Capability::Modules,
+        Capability::Tools,
+        Capability::Svg,
+        Capability::Images,
+        Capability::NativeViews,
+        Capability::ContentRegions,
+        Capability::Traces,
+        Capability::Controls,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -227,6 +271,14 @@ impl Capability {
             Capability::TextStroke => "text_stroke",
             Capability::SymbolPalette => "symbol_palette",
             Capability::Presence => "presence",
+            Capability::Modules => "modules",
+            Capability::Tools => "tools",
+            Capability::Svg => "svg",
+            Capability::Images => "images",
+            Capability::NativeViews => "native_views",
+            Capability::ContentRegions => "content_regions",
+            Capability::Traces => "traces",
+            Capability::Controls => "controls",
         }
     }
 
@@ -248,6 +300,19 @@ pub struct Uses(u64);
 impl Uses {
     /// The core alone.
     pub const NONE: Uses = Uses(0);
+
+    /// The native roster's entries (LLP 1047.001 D10), which only an Apple
+    /// set names: [`apple_uses`] and the Apple bake select them, and no other
+    /// host links anything for them.
+    pub const NATIVE: Uses = Uses::NONE
+        .with(Capability::Modules)
+        .with(Capability::Tools)
+        .with(Capability::Svg)
+        .with(Capability::Images)
+        .with(Capability::NativeViews)
+        .with(Capability::ContentRegions)
+        .with(Capability::Traces)
+        .with(Capability::Controls);
 
     /// This set and `capability`.
     pub const fn with(self, capability: Capability) -> Uses {
@@ -275,9 +340,17 @@ impl Uses {
             if exact_grants::line_presence(line).is_some() {
                 uses = uses.with(Capability::Presence);
             }
+            // The listener's and the data executor's own lines, outside the
+            // I/O grammar, admit work the executor runs.
+            if exact_grants::process::is_process_line(line.trim()) {
+                uses = uses.with(Capability::Io);
+            }
             uses = match line.split_whitespace().next() {
                 Some("sqlite.open") => uses.with(Capability::Sqlite),
-                Some("auth.session") => uses.with(Capability::AuthSession),
+                // The sign-in sheet's answer reaches its source through the
+                // executor's pump.
+                Some("auth.session") => uses.with(Capability::AuthSession).with(Capability::Io),
+                Some("net.listen" | "env.launch") => uses.with(Capability::Io),
                 _ => uses,
             };
         }
@@ -887,6 +960,20 @@ mod grant_tests {
             let uses = super::uses(&plan);
             assert!(uses.has(Capability::Surfaces));
             assert_eq!(uses.has(Capability::Io), keep);
+        }
+    }
+
+    #[test]
+    fn the_listener_the_processes_and_the_sign_in_sheet_link_io() {
+        for grants in [
+            "net.listen unix:/tmp/exact-listen-fixture",
+            "process.spawn /usr/bin/git",
+            "auth.session https://example.test",
+        ] {
+            assert!(
+                Uses::NONE.with_grants(grants).has(Capability::Io),
+                "{grants}"
+            );
         }
     }
 

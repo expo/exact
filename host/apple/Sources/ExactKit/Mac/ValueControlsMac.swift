@@ -36,8 +36,7 @@ extension ControlHost {
         popup.selectItem(at: menu.chosen ?? -1)
     }
 
-    /// The control's size: a pop-up's is its widest item's, as HTML sizes a
-    /// select (D3), which its cell measures and its intrinsic size may not.
+    /// AppKit fits the widest item unless the author asks to fit the shown value.
     func naturalSize(_ control: NSControl) -> CGSize {
         HostPhases.shared.count(.nativeControlMeasurements)
         let natural = control.intrinsicContentSize
@@ -46,7 +45,15 @@ extension ControlHost {
         // range's intrinsic width on every host (`ControlKind::default_size`):
         // what the node falls back to where that has nothing to resolve against.
         if control is NSSlider { return CGSize(width: 129, height: ceil(natural.height)) }
-        guard control is NSPopUpButton, let cell = control.cell else { return natural }
+        guard let popup = control as? NSPopUpButton, let cell = popup.cell else { return natural }
+        if (popup as? SelectField)?.owner?.style["field_sizing"]?.string == "content",
+           let copy = cell.copy() as? NSPopUpButtonCell {
+            let probe = NSPopUpButton(frame: .zero, pullsDown: false)
+            probe.cell = copy
+            probe.menu = NSMenu()
+            probe.addItem(withTitle: popup.titleOfSelectedItem ?? "")
+            return CGSize(width: ceil(probe.intrinsicContentSize.width), height: natural.height)
+        }
         return CGSize(width: ceil(max(natural.width, cell.cellSize.width)), height: natural.height)
     }
 
@@ -61,6 +68,8 @@ extension ControlHost {
     /// value shown again, which an action that refused leaves unchanged.
     func chose(_ id: UInt32, _ value: String) {
         guard presenter.views[id] != nil else { return }
+        // The shown title can resize even when the action writes no bound value.
+        defer { sync() }
         let before = presenter.selectOptions?(id)
         presenter.controlValue(id, value, input: true, change: true)
         // The bound value is shown when it changes, as the web build's select:

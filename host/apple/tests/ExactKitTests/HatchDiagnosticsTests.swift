@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// What hatch code records is bounded (LLP 1075.003.000.001 §3.2): each
 /// bound refuses and counts past it, a call's time is its own, counts from
@@ -16,8 +17,20 @@ final class HatchDiagnosticsTests: XCTestCase {
         return ["rejected": state["rejected"] as? Int ?? -1, "abandoned": state["abandoned"] as? Int ?? -1, "dropped": state["dropped"] as? Int ?? -1]
     }
 
+    /// A development composition without the native module family has no
+    /// hatch store, and `perf hatches` answers empty.
+    func testASessionWithoutTheNativeModuleFamilyHasNoHatchStore() {
+        let make = NativeModuleLink.make
+        NativeModuleLink.make = nil
+        defer { NativeModuleLink.make = make }
+        let session = ExactApp.shared.makeSession()
+        defer { session.destroy() }
+        XCTAssertNil(session.hatchDiagnostics)
+        XCTAssertTrue(session.hatchPerf().isEmpty)
+    }
+
     func testEachBoundRefusesAndCountsPastIt() throws {
-        try XCTSkipUnless(HatchDiagnostics.measuring)
+        try XCTSkipUnless(HatchDiagnosticsLink.measuring)
         let store = HatchDiagnostics()
 
         // Counters: 64 names; a bad name or amount is refused.
@@ -69,7 +82,7 @@ final class HatchDiagnosticsTests: XCTestCase {
     }
 
     func testACallsTimeIsItsOwn() throws {
-        try XCTSkipUnless(HatchDiagnostics.measuring)
+        try XCTSkipUnless(HatchDiagnosticsLink.measuring)
         var now = 0.0
         let store = HatchDiagnostics(mediaTime: { now })
         store.timed("navigation", "built") {
@@ -88,7 +101,7 @@ final class HatchDiagnosticsTests: XCTestCase {
     }
 
     func testCountsFromFourThreadsSumExactlyAndTheRingOverwritesItsOldest() throws {
-        try XCTSkipUnless(HatchDiagnostics.measuring)
+        try XCTSkipUnless(HatchDiagnosticsLink.measuring)
         let store = HatchDiagnostics()
         let done = expectation(description: "four threads")
         done.expectedFulfillmentCount = 4

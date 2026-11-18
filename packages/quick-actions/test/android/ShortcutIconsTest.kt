@@ -104,7 +104,7 @@ class ShortcutIconsTest {
     }
 
     @Test fun missingAndUnknownSymbolsLeaveTheIconUnset() {
-        for (symbol in listOf(null, "", "no-such-symbol", "sf/flag.checkered", "sf/arrow_back")) {
+        for (symbol in listOf(null, "", "no-such-symbol", "sf/flag.2.crossed", "sf/arrow_back")) {
             assertNull(symbol, icon(dynamic(symbol)))
             shadowOf(manager).setIsRequestPinShortcutSupported(true)
             call(module, "requestPinShortcut", JSONObject().put("shortcut", item(symbol)))

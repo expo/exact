@@ -28,9 +28,10 @@
 // - input and accessibility: interaction enabled, the element, traits,
 //   label, value, hint, identifier, hidden-elements, all set again by props;
 // - motion: an `svg`'s scene layers and every Core Animation spec the view
-//   ran (`SvgHost.forget`, on release), so no animation of the old row
-//   plays on the new one (LLP 1055 D8; the new row's scene op starts its
-//   own). SVG elements are not views: an `svg` parks as one leaf.
+//   ran (the presenter's `svg` and `boxAnimations` forget them on release),
+//   so no animation of the old row plays on the new one (LLP 1055 D8; the
+//   new row's scene op starts its own). SVG elements are not views: an `svg`
+//   parks as one leaf.
 // - identity (LLP 1068 §4.9): the view's `incarnation`, zeroed when it
 //   parks, before the reset, and a never-used one issued at the take, in
 //   the batch that installs its props and handlers; an asynchronous
@@ -546,7 +547,7 @@ extension NodeView {
         parkTextRaster()
         liveText = nil
         loadGeneration += 1
-        presenter?.session?.rasters.cancel(id)
+        presenter?.session?.rasters?.cancel(id)
         // A symbol keeps its glyph and key: the same symbol again costs no
         // image, and `finishReuse` reports its size under the new id.
         buttonRasterView = nil

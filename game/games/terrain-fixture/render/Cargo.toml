@@ -1,0 +1,17 @@
+# Render hooks (app.json game.render): what the GPU module draws beyond the
+# engine's frame. Only the GPU shell links this crate; the simulation never does.
+# ../.shells is generated: `bun '../../app/shells.mjs' .` writes it, as any bake does.
+[package]
+name = "terrain-fixture-render"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+workspace = "../.shells"
+
+[dependencies]
+exact-game-render.workspace = true
+exact-gpu.workspace = true
+terrain-fixture-logic = { path = "../logic" }
+
+[build-dependencies]
+exact-gpu-reflect.workspace = true

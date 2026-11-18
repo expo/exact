@@ -1,6 +1,20 @@
 // A bound length's layout regions as the browser's safe area (LLP 1123 D10). `bun test ./host/web-js/regions.test.js`.
 import { test, expect } from "bun:test";
-import { regions } from "./regions.js";
+import { regions, cssNames } from "./regions.js";
+
+test("named lengths replace whole CSS identifiers throughout math", () => {
+  const names = { '-exact-body': '1rem', '-apple-system-body': '1rem', '-exact-hairline': 'var(--exact-hairline, 1px)' };
+  expect(cssNames('clamp(12px, calc(-EXACT-body + max(-apple-system-body, 1px)), 40px)', names))
+    .toBe('clamp(12px, calc(1rem + max(1rem, 1px)), 40px)');
+  expect(cssNames('min(-exact-\\62 ody, 14px)', names)).toBe('min(1rem, 14px)');
+  expect(cssNames('calc(-exact-hairline + env(-exact-layout-margins-inset-left))', names))
+    .toBe('calc(var(--exact-hairline, 1px) + env(safe-area-inset-left))');
+  for (const value of ['"-exact-body"', "'-exact-body'", 'url(-exact-body)', 'url("-exact-body")',
+    '/* -exact-body */ 16px', '--exact-body', 'x-exact-body', '-exact-body-extra', '1-exact-body',
+    '#-exact-body', '@-exact-body', '-exact-body()', 'var(--exact-body)', '-exact-unknown', 'constructor']) {
+    expect(cssNames(value, names)).toBe(value);
+  }
+});
 
 test("each region is its edge's safe area, inside calculations and behind a fallback", () => {
   expect(regions("calc(env(-exact-layout-margins-inset-left) + 7px)")).toBe("calc(env(safe-area-inset-left) + 7px)");

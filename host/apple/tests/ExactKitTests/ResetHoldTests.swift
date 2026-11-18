@@ -106,7 +106,7 @@ final class ResetHoldTests: XCTestCase {
         }
         XCTAssertEqual(windows.map { $0.attachedSheet != nil }, [true, true], "both sheets open at the restart")
         let ran = probe { sessions.map { $0.runtime.held } }
-        XCTAssertTrue(ExactApp.shared.apply(plan, label: "generation"))
+        XCTAssertEqual(ExactApp.shared.apply(plan, label: "generation"), .applied)
         let inside = ran().map(\.0)
         XCTAssertEqual(windows.map(\.isVisible), [true, true], "both windows on screen")
         XCTAssertEqual(windows.map { $0.attachedSheet == nil }, [true, true], "the restart ended both sheets")

@@ -1,5 +1,8 @@
 use super::{bind, child, create_headless, error, load, recover, unload, with};
 use crate::{wgpu, Frame, Placement, Registry, Surface, SurfaceError, Value};
+thread_local! {
+    static STORAGE_CALLS: std::cell::RefCell<Vec<[std::path::PathBuf; 3]>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 #[derive(Default)]
 struct Sign {
     frame: [f32; 4],
@@ -10,6 +13,15 @@ struct Sign {
     child_name: String,
 }
 impl Surface for Sign {
+    fn storage(
+        &mut self,
+        data: &std::path::Path,
+        cache: &std::path::Path,
+        temporary: &std::path::Path,
+    ) {
+        STORAGE_CALLS
+            .with_borrow_mut(|calls| calls.push([data.into(), cache.into(), temporary.into()]));
+    }
     fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
         Ok(())
     }
@@ -101,6 +113,91 @@ static REGISTRY: Registry = Registry {
     shaders: &[],
 };
 crate::module!(REGISTRY);
+#[test]
+fn storage_abi_refuses_invalid_paths_before_calling_the_surface() {
+    super::load_headless(&REGISTRY, "storage-test", &[]);
+    let id = create_headless("sign");
+    STORAGE_CALLS.with_borrow_mut(Vec::clear);
+    fn encode(path: &std::path::Path) -> Vec<u8> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            path.as_os_str().as_bytes().to_vec()
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            path.as_os_str()
+                .encode_wide()
+                .flat_map(u16::to_le_bytes)
+                .collect()
+        }
+    }
+    let root = std::env::current_dir().unwrap();
+    #[cfg(unix)]
+    let root = {
+        use std::os::unix::ffi::OsStrExt;
+        root.join(std::ffi::OsStr::from_bytes(b"cache-\xff"))
+    };
+    #[cfg(windows)]
+    let root = {
+        use std::os::windows::ffi::OsStringExt;
+        root.join(std::ffi::OsString::from_wide(&[0xd800]))
+    };
+    let path = encode(&root);
+    let invalid = [
+        Vec::new(),
+        encode(std::path::Path::new("relative")),
+        encode(&root.join("bad\0path")),
+        vec![0xff],
+    ];
+    for invalid in invalid {
+        // SAFETY: every slice is readable for the supplied length.
+        assert!(!unsafe {
+            gpu_storage(
+                id,
+                invalid.as_ptr(),
+                invalid.len(),
+                path.as_ptr(),
+                path.len(),
+                path.as_ptr(),
+                path.len(),
+            )
+        });
+        assert!(!error().is_empty());
+    }
+    // SAFETY: the null pointer is deliberately rejected before dereferencing it.
+    assert!(!unsafe {
+        gpu_storage(
+            id,
+            std::ptr::null(),
+            1,
+            path.as_ptr(),
+            path.len(),
+            path.as_ptr(),
+            path.len(),
+        )
+    });
+    assert!(error().contains("null pointer"));
+    STORAGE_CALLS.with_borrow(|calls| assert_eq!(calls.len(), 0));
+    // SAFETY: the paths outlive the call, including non-Unicode code units.
+    assert!(unsafe {
+        gpu_storage(
+            id,
+            path.as_ptr(),
+            path.len(),
+            path.as_ptr(),
+            path.len(),
+            path.as_ptr(),
+            path.len(),
+        )
+    });
+    STORAGE_CALLS
+        .with_borrow(|calls| assert_eq!(calls.as_slice(), &[[root.clone(), root.clone(), root]]));
+    assert_eq!(bind(id, "[]"), 0);
+    assert!(with(|m| m.instances[&id].bound).unwrap());
+    unload();
+}
 #[test]
 fn retiring_each_releases_textures_and_zero_frame_releases_a_capture() {
     assert_eq!(load(&REGISTRY, "test-gpu", &[]), 0);

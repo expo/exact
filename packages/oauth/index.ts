@@ -501,10 +501,10 @@ export function oauth(config: OAuthConfig): OAuthProvider {
   // rotated refresh token kept before anyone uses the new access token
   // (RFC 9700 §4.14.2). The exclusive work returns the failure it decided on,
   // and `refresh` throws it after the work: a host treats a work that throws
-  // as an update that stopped before its reply and forgets the session (LLP
-  // 1146 §5, "One at a time"), though the failure keeps it. An error the
-  // package did not decide on, such as a failed store write, still throws
-  // inside the work.
+  // after its POST or a write as an update that stopped and forgets the
+  // session (LLP 1146 §5, "One at a time"), though the failure keeps it. An
+  // error the package did not decide on, such as a failed store write, still
+  // throws inside the work.
   const refresh = async (store: OAuthStore, seen: Kept): Promise<Kept> => {
     const outcome = await exclusive(store, () => renew(store, seen).catch((e: unknown) => {
       if (e instanceof OAuthError) return e;

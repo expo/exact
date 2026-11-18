@@ -220,9 +220,9 @@ impl<D: DataSource> Bridge<D> {
                 if i > 0 {
                     json.push(',');
                 }
-                exact_runner::agent::quote(key, &mut json);
+                exact_runner::json::quote(key, &mut json);
                 json.push(':');
-                exact_runner::agent::quote(value, &mut json);
+                exact_runner::json::quote(value, &mut json);
             }
             json.push_str(",\"grantSet\":");
             json.push_str(&exact_runner::grants::normalized_json(data.grants()));
@@ -235,10 +235,10 @@ impl<D: DataSource> Bridge<D> {
 
     /// Activate after first pixel; no-op for binary-bound sources.
     pub fn data_ready(&mut self) -> u32 {
-        let batch = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
-            Host::data_ready,
-        );
+        let batch = self
+            .host
+            .as_mut()
+            .map_or_else(|| exact_runner::json::error("not booted"), Host::data_ready);
         self.emit(batch)
     }
 
@@ -478,7 +478,9 @@ impl<D: DataSource> Bridge<D> {
             .unwrap_or(u32::MAX)
     }
 
-    /// Logical text for all rows (empty keys), or two UTF-16 endpoints.
+    /// Logical text for the whole list, or between two UTF-16 endpoints, each
+    /// a keyed row or the fixed lead (`fixed` 0) or trail (1); any other
+    /// `fixed` names a row. As the Apple host's `list_text`.
     #[allow(clippy::too_many_arguments)]
     pub fn list_text(
         &mut self,
@@ -489,6 +491,8 @@ impl<D: DataSource> Bridge<D> {
         first_offset: usize,
         last_paragraph: usize,
         last_offset: usize,
+        first_fixed: u32,
+        last_fixed: u32,
     ) -> u32 {
         let bytes = &self.input[..len.min(self.input.len())];
         if first_len > bytes.len() {
@@ -496,15 +500,15 @@ impl<D: DataSource> Bridge<D> {
         }
         let first = String::from_utf8_lossy(&bytes[..first_len]);
         let last = String::from_utf8_lossy(&bytes[first_len..]);
-        let range = (first_len != 0).then_some((
+        let range = (first_len != 0 || first_fixed <= 1).then_some((
             exact_runner::ListTextPosition {
-                fixed: None,
+                fixed: (first_fixed <= 1).then_some(first_fixed == 1),
                 key: &first,
                 paragraph: first_paragraph,
                 offset: first_offset,
             },
             exact_runner::ListTextPosition {
-                fixed: None,
+                fixed: (last_fixed <= 1).then_some(last_fixed == 1),
                 key: &last,
                 paragraph: last_paragraph,
                 offset: last_offset,
@@ -640,7 +644,7 @@ impl<D: DataSource> Bridge<D> {
             .split_once('\0')
             .map_or((text, None), |(name, json)| (name, Some(json)));
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("surface record: not booted"),
+            || exact_runner::json::error("surface record: not booted"),
             |host| host.surface_record(name, json),
         );
         self.emit(out)
@@ -689,7 +693,7 @@ impl<D: DataSource> Bridge<D> {
             ..exact_runner::Viewport::default()
         };
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.resize(viewport, now_ms),
         );
         self.emit(out)
@@ -698,7 +702,7 @@ impl<D: DataSource> Bridge<D> {
     /// Re-answer `exactTime` resources (LLP 1027.000.000).
     pub fn set_time(&mut self, epoch_at_zero: f64, utc_offset: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.set_time(epoch_at_zero, utc_offset),
         );
         self.emit(out)
@@ -710,7 +714,7 @@ impl<D: DataSource> Bridge<D> {
     pub fn set_page(&mut self, bits: u32) -> u32 {
         let page = exact_runner::Page::from_bits(bits);
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.set_page(page),
         );
         self.emit(out)
@@ -720,7 +724,7 @@ impl<D: DataSource> Bridge<D> {
     /// element's computed `font-size`.
     pub fn set_root_font_size(&mut self, px: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.set_root_font_size(px),
         );
         self.emit(out)
@@ -730,7 +734,7 @@ impl<D: DataSource> Bridge<D> {
     /// `devicePixelRatio`.
     pub fn set_display_scale(&mut self, scale: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.set_display_scale(scale),
         );
         self.emit(out)
@@ -743,7 +747,7 @@ impl<D: DataSource> Bridge<D> {
         };
         let topic = topic.to_owned();
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.changed(&topic),
         );
         self.emit(out)
@@ -781,7 +785,7 @@ impl<D: DataSource> Bridge<D> {
         let seed = fields.next().and_then(|s| exact_num::parse_f64(s).ok());
         let (locale, zone) = (locale.to_owned(), zone.to_owned());
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.set_place(&locale, &zone, seed, fields.next()),
         );
         self.emit(out)
@@ -822,16 +826,16 @@ impl<D: DataSource> Bridge<D> {
         if self.input.get(..4) == Some(&3u32.to_le_bytes()) {
             let out = match (self.host.as_mut(), self.input.get(..len)) {
                 (Some(host), Some(bytes)) => host.reorder_motion(bytes),
-                (None, _) => exact_runner::agent::error("not booted"),
-                _ => exact_runner::agent::error("malformed reorder input"),
+                (None, _) => exact_runner::json::error("not booted"),
+                _ => exact_runner::json::error("malformed reorder input"),
             };
             return self.emit(out);
         }
         if len == 120 {
             let out = match (self.host.as_mut(), self.input.get(..len)) {
                 (Some(host), Some(bytes)) => host.transform_motion(bytes),
-                (None, _) => exact_runner::agent::error("not booted"),
-                _ => exact_runner::agent::error("malformed transform input"),
+                (None, _) => exact_runner::json::error("not booted"),
+                _ => exact_runner::json::error("malformed transform input"),
             };
             return self.emit(out);
         }
@@ -949,7 +953,7 @@ impl<D: DataSource> Bridge<D> {
                 None => "{\"accepted\":false}".into(),
             })
         })()
-        .unwrap_or_else(|error| exact_runner::agent::error(&error));
+        .unwrap_or_else(|error| exact_runner::json::error(&error));
         self.emit(out)
     }
 
@@ -971,7 +975,7 @@ impl<D: DataSource> Bridge<D> {
         // D4) before any view is looked up.
         let out = match self.host.as_mut() {
             Some(h) => h.answer_hold(&request).unwrap_or_else(|| h.agent(&request)),
-            None => exact_runner::agent::error("not booted"),
+            None => exact_runner::json::error("not booted"),
         };
         self.emit(out)
     }
@@ -984,7 +988,7 @@ impl<D: DataSource> Bridge<D> {
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
         let out = match self.host.as_mut() {
             Some(h) => exact_runner::commands::request(h.runner_mut(), &request),
-            None => exact_runner::agent::error("not booted"),
+            None => exact_runner::json::error("not booted"),
         };
         self.emit(out)
     }
@@ -995,7 +999,7 @@ impl<D: DataSource> Bridge<D> {
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
         let out = match self.host.as_mut() {
             Some(h) => h.auth(&request),
-            None => exact_runner::agent::error("not booted"),
+            None => exact_runner::json::error("not booted"),
         };
         self.emit(out)
     }
@@ -1426,6 +1430,8 @@ macro_rules! list_exports {
             first_offset: u32,
             last_paragraph: u32,
             last_offset: u32,
+            first_fixed: u32,
+            last_fixed: u32,
         ) -> u32 {
             EXACT_BRIDGE.with(|b| {
                 b.borrow_mut().list_text(
@@ -1436,6 +1442,8 @@ macro_rules! list_exports {
                     first_offset as usize,
                     last_paragraph as usize,
                     last_offset as usize,
+                    first_fixed,
+                    last_fixed,
                 )
             })
         }

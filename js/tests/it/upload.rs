@@ -166,7 +166,7 @@ fn an_upload_waits_out_a_reply_past_the_portable_transports_own_limits() {
 }
 
 /// LLP 1016.000 D11: an idle timeout out of range, or on anything but a
-/// WebSocket stream, is a TypeError before any request.
+/// WebSocket, event or byte stream, is a TypeError before any request.
 #[test]
 fn an_idle_timeout_fetch_refuses_is_a_type_error_before_any_request() {
     let root = Root::new();
@@ -176,7 +176,8 @@ fn an_idle_timeout_fetch_refuses_is_a_type_error_before_any_request() {
     let refused = call(&mut m, &mut s, "idle-refusals", "");
     let range =
         "TypeError: exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
-    let socket = "TypeError: exactIdleTimeout: only a WebSocket stream takes an idle timeout";
+    let socket =
+        "TypeError: exactIdleTimeout: only a WebSocket, event or byte stream takes an idle timeout";
     assert_eq!(
         refused.lines().collect::<Vec<_>>(),
         [range, range, range, socket, socket, socket, socket],

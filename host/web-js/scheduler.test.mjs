@@ -83,7 +83,7 @@ test('live tool deadlines refresh time and arm a wake without unrelated commits;
   expect(advance).toContain('function fire(');
   writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},wall={now:0},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{};
 export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};
-const Link={},Poisoned=false;let Timing=false,Instant=null,start=0;
+const Link={},Poisoned=false,deferForReplacement=()=>false;let Timing=false,Instant=null,start=0;
 export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\n${advance}`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
   try {

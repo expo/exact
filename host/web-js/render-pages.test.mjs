@@ -220,6 +220,37 @@ component App
   });
 }, 120000);
 
+// The build makes no page whose render drew randomness, a listed page's or the not-found page's included, and names each
+// such route once every page has rendered (LLP 1048.000 D7). The runtime's own facts, which an inline time asks for, draw
+// nothing.
+test('the build makes no page whose render drew randomness, and names each such route', async () => {
+  await builtPages(`routes nav
+  home "/" render=build
+    product "/product/:id" render=build pages=productPages()
+  notfound render=build
+
+component App
+  resource note = note(top(nav).name) as shape string
+  view
+    main
+      text note
+      text "Updated "
+        time datetime=1792209600000 format="date-medium"
+`, `export const grants = '';
+export function answer(name: string, args: any[]): any {
+  if (name === 'productPages') return ['a'];
+  if (args[0] !== 'home') crypto.getRandomValues(new Uint8Array(1));
+  return 'a note';
+}
+`, ({ status, output, dist }) => {
+    const refusal = route => `route \`${route}\` is render=build, but its render drew randomness, and a page made at build would give every reader the same random values (LLP 1069.005 D2). Declare the route render=request, rendered for each request, or render=client, rendered in the browser`;
+    expect([status, output.split('\n').filter(line => line.includes('drew randomness'))], output)
+      .toEqual([1, [`/product/a: ${refusal('product')}`, `/404: ${refusal('notfound')}`]]);
+    expect([readFileSync(resolve(dist, 'index.html'), 'utf8').includes('a note'), existsSync(resolve(dist, 'product/a/index.html')), existsSync(resolve(dist, '404.html'))])
+      .toEqual([true, false, false]);
+  });
+}, 120000);
+
 const failures = [
   ["throw new Error('catalog unavailable')", 'catalog unavailable'],
   ["return Promise.reject(new Error('catalog rejected'))", 'catalog rejected'],

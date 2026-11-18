@@ -9,6 +9,8 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// LLP 1100 D3: a profile's colour is made by Core Graphics in the profile's
 /// space — a standard one by name, an app's from its ICC file — and a reader

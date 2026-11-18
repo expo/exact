@@ -261,7 +261,7 @@ struct TextRasterJob {
             guard attributes[NSAttributedString.Key.exactHidden] as? Bool != true else { continue }
             if let icon = attributes[NSAttributedString.Key.exactAtomIcon] as? TextAtomIcon,
                !icon.tinted, let image = icon.image {
-                headroom = max(headroom, RasterImage.headroom(of: image))
+                headroom = max(headroom, ImageHeadroom.of(image))
                 deep = deep || image.bitsPerComponent > 8 || image.bitmapInfo.contains(.floatComponents)
                 if let space = image.colorSpace {
                     wide = wide || space == Self.p3
@@ -650,4 +650,20 @@ struct TextRasterJob {
         (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactHidden] as? Bool != true
     }
     #endif
+}
+
+/// The text workers: text rasters, and content regions' preparation, whose
+/// per-region dependencies preserve CoreText confinement without a second
+/// worker pool.
+package enum RegionTextExecutor {
+    package static let queue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "exact.text"; q.qualityOfService = .userInitiated
+        #if os(iOS) || os(tvOS)
+        q.maxConcurrentOperationCount = TextRasterizer.concurrency
+        #else
+        q.maxConcurrentOperationCount = 2
+        #endif
+        return q
+    }()
 }

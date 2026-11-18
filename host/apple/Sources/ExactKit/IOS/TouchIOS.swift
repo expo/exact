@@ -13,6 +13,7 @@ import UIKit
 /// `--live` only, logs the touches it dispatched.
 public final class ExactWindow: UIWindow {
     public override func sendEvent(_ event: UIEvent) {
+        ExactApp.shared.replacements.receive(event)
         // Read before UIKit delivers the event: which lifts lost the view their touch began on (`TouchLog.viewGone`),
         // and when the window had the event, on the mach clock of `UITouch.timestamp`
         #if EXACT_AGENT

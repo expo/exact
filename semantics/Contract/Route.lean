@@ -494,15 +494,12 @@ def push (t : Table) (r : Router) (location : String) : Verb :=
   let (e, out) ← mint r d
   return setStack out index (· ++ [{ e with fragment }])
 
-/-- Rewrite the top visit, keeping its id; at depth one only to the tab's
-own root route. -/
+/-- Rewrite the top visit, keeping its id, at any depth. -/
 def replace (t : Table) (r : Router) (location : String) : Verb :=
   if r.tabs.isEmpty then «open» t r location else do
   let d ← destination t r location
   let index ← selected r
   let .some tab := r.tabs[index]? | throw "router has no top"
-  if tab.stack.length == 1 && d.name != tab.name then
-    throw "replace cannot change the tab's root route"
   let .some old := tab.stack.getLast? | throw "router has no top"
   let e : Entry := { id := old.id, name := d.name, url := d.url, tab := d.tab, params := d.params,
                      fragment := fragmentOf location }
@@ -587,7 +584,7 @@ def routerOf (t : Table) (v : Value) : Option Router := do
   let ids := (r.tabs.flatMap (·.stack)).map (·.id)
   if ids.eraseDups.length != ids.length then .none
   let ok := r.tabs.all fun tb =>
-    (tb.stack.head?.map (·.name)) == .some tb.name &&
+    !tb.stack.isEmpty &&
     tb.stack.all fun e =>
       e.tab == tb.name && e.id < r.next && canonical e.url == e.url &&
       match matchName t e.url with

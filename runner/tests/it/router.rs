@@ -179,6 +179,31 @@ fn a_fragment_rides_on_the_visit_and_asks_one_scroll_per_activation() {
     assert_eq!(r.derive("fragment"), Some(&Value::str("")));
 }
 
+/// @ref LLP 1153 D5.1 — the same visit at another path is a new page: its
+/// route is asked to its opening position (no fragment), or to the fragment
+/// the location names; a new query alone keeps its place.
+#[test]
+fn a_visit_replaced_at_another_path_arrives_at_its_opening_position() {
+    let mut r = boot(fixture::plan(&table()), "/t/7");
+    let top = r.take_router_change().unwrap().top;
+    let visit = Value::Number(top as f64);
+    assert!(fragment_scrolls(&mut r).is_empty());
+    let swapped = act(&mut r, "replace", "/t/8").unwrap();
+    assert_eq!(
+        (swapped.top, swapped.fragment.as_str(), swapped.scroll),
+        (top, "", true)
+    );
+    assert_eq!(fragment_scrolls(&mut r), [scroll(&visit, "", 1)]);
+    assert!(!act(&mut r, "replace", "/t/8?q=a").unwrap().scroll);
+    assert!(fragment_scrolls(&mut r).is_empty());
+    let anchored = act(&mut r, "replace", "/t/9#moves").unwrap();
+    assert_eq!(
+        (anchored.fragment.as_str(), anchored.scroll),
+        ("moves", true)
+    );
+    assert_eq!(fragment_scrolls(&mut r), [scroll(&visit, "moves", 2)]);
+}
+
 /// @ref LLP 1153 D5 — a navigation is a router value assigned to the
 /// router's slot by a commit that lands: a `go` merely computed, or one
 /// whose commit is refused, scrolls nothing and spends no activation.

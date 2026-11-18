@@ -822,6 +822,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   | "copy" | "cut" | "paste" STRING ) NL
               | "pick" STRING ( STRING { STRING } | "cancel" ) NL
               | "authorize" [ "cancel" ] NL           (* the held sign-in, against the app's server (oauth recipe) *)
+              | "presence" ( "allow" | "cancel" | "fail" | "lockout" | "invalidated" ) NL
+                                                     (* answer the pending user-presence prompt, as tap @presence *)
               | "clock" ( "settle" | "data" | "+" NUMBER [ "real" ] | NUMBER ) NL
               | "clock" "held" { IDENT } [ NUMBER ( "s" | "ms" ) ] NL
                                                      (* real time, the clock frozen, until held requests reply *)
@@ -852,7 +854,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "expect" "refusal" STRING NL          (* one observed refusal of the named mutation slot *)
               | "expect" "text" STRING "==" STRING NL
               | "expect" "state" IDENT { "." ( IDENT | NUMBER ) }
-                  ( "==" test-value | ( ">=" | "<=" ) [ "-" ] NUMBER | "in" test-value { test-value } ) NL
+                  ( "==" state-literal | ( ">=" | "<=" ) [ "-" ] NUMBER | "in" state-literal { state-literal } ) NL
               | "expect" "sound" ( "has" | "missing" ) STRING
                   [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
                   [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
@@ -863,6 +865,10 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
 midi-fact     = "midi.state" ( "prompt" | "granted" | "denied" | "unavailable" )
               | ( "midi.inputs" | "midi.outputs" ) STRING ;  (* names, comma-separated *)
 HEX           = HEXDIGIT HEXDIGIT ;                  (* one byte, as in 90 3c 64 *)
+state-literal = [ "-" ] NUMBER | STRING | "true" | "false" | "none"
+              | "some" "(" state-literal ")"
+              | "[" [ state-literal { "," state-literal } [ "," ] ] "]"
+              | IDENT "(" [ IDENT "=" state-literal { "," IDENT "=" state-literal } [ "," ] ] ")" ;
 test-value    = [ "-" ] NUMBER | STRING | "true" | "false" | "none" | "[" "]" ;
 scalar        = [ "-" ] NUMBER | STRING | "true" | "false" | "null" ;
 METHOD        = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" ;
@@ -884,6 +890,14 @@ block in a run under platform timing. `query` and `built` read the same on every
 `evaluated` is each runtime's own, so a test that compares it names one host. The development
 source map names components; a host without one says so. A drive's `perf <target> during "…"`
 shows the same counts while a test is being written.
+
+`presence <answer>` waits as `clock data` does, with the virtual clock frozen, then
+answers the pending user-presence prompt through the driver's `tap @presence`.
+It fails if no prompt is pending, several match, or the data wait expires.
+It answers both a presence secret's unlock and `@exact/local-auth`'s `authenticate`;
+`invalidated` applies only to unlock. Use `prefer permission.local-auth granted`
+to handle the separate permission prompt, and `clock data` after the answer before
+checking its result. Scope tests with `on` to hosts that support the operation.
 
 `expect no failures` fails when, since the test launched or its last `expect no failures`, a
 resource was refused while no `fail fetch` fired, a send failed that no `expect refusal` names,
@@ -1189,8 +1203,12 @@ to a motion's end.
 value, not its options), else its descendants' text in order (a button's label),
 else a field's value. `expect state name.field` reads a field of a record at any
 depth, and `name.0` a list index (a whole number from 0); a missing field fails
-naming the fields there. The value is a number, including a negative (`== -3`),
-a string, a bool, `none`, or `[]` — not an expression (`-1 + 2` is refused).
+naming the fields there. The expected value uses the expression grammar's literals:
+numbers, including negatives (`== -3`), strings, bools, `none`, `some(literal)`,
+lists (`["a", "b"]`, `[[1, -2], []]`), and shapes with literal fields
+(`Point(x=1, y=-2)`). Lists and shapes may span lines and keep a trailing comma.
+Equality is structural, with no type coercion; a mismatch prints the actual and
+expected values. Computed expressions (`-1 + 2`, `[count]`) are refused.
 `expect wakelock held` and `expect wakelock released` compare `state.wakelock.held`.
 This is the runner's holder record: displayed elements requesting the lock, not
 whether the OS or browser granted it. A failure names the holding view ids and
@@ -1294,7 +1312,7 @@ says. Every roster function has a row and an example, and each example written
 | `encodeRouteSegment(text)` | String; routing's checked segment encoding | `encodeRouteSegment("a b")` is `"a%20b"` |
 | `open(router, location)` | Router | `top(open(nav, "/item/7")).name` is `"item"` |
 | `push(router, location)` | Router; same top URL does not add a visit | `depth(push(nav, "/item/7"))` is `2` |
-| `replace(router, location)` | Router; the top visit takes the location and keeps its id, a stack's first visit as any other | `top(replace(push(nav, "/item/7"), "/item/8")).url` is `"/item/8"` |
+| `replace(router, location)` | Router; the top visit takes the location and keeps its id. One at another path is a new page, whose scrollers start over (at `scrollTop=`, else at their start) | `top(replace(push(nav, "/item/7"), "/item/8")).url` is `"/item/8"` |
 | `back(router)` | Router | `depth(back(push(nav, "/item/7")))` is `1` |
 | `select(router, tabName)` | Router | `nav = select(nav, "search")`, in an action, shows the `search` tab |
 | `go(router, location)` | Router; the top, a pop to it on the selected stack, another tab whose top it is, or else a push onto the selected stack, whatever tab declares its route (into the route's declared tab: `open`) | `top(go(nav, "/item/7")).name` is `"item"` |
@@ -1303,7 +1321,7 @@ says. Every roster function has a row and an example, and each example written
 | `depth(router)` | Number | `depth(nav)` is `1` |
 | `params(router, parameterName)` | `string[]`: that parameter's non-empty values over the selected stack, bottom first, duplicates kept (one entry's own value is `entry.params.<name>`, `""` where its route does not bind it; the name must be a parameter of some route) | `params(push(nav, "/item/7"), "id")` is `["7"]` |
 | `searchParam(entry, name)` | String | `searchParam(top(push(nav, "/item/7?tab=notes")), "tab")` is `"notes"` |
-| `fragment(entry)` | String: what the entry's location had after `#`, fragment-encoded as the browser's `hash` is, `""` when none. It is no part of the screen: `/item/7#moves` is the visit to `/item/7`, and a `push`, `replace` or `go` that changes only the fragment changes it on that visit. Written as `path("item", id) + "#moves"`, or `href="#moves"` on a `link` to the screen shown. Once the route's content has arrived, each host scrolls to the element with that `id` in the entry's route, as a browser scrolls to a fragment (`top`, or no such element: the route's top) (LLP 1153 D5) | `fragment(top(push(nav, "/item/7#moves")))` is `"moves"` |
+| `fragment(entry)` | String: what the entry's location had after `#`, fragment-encoded as the browser's `hash` is, `""` when none. It is no part of the screen: `/item/7#moves` is the visit to `/item/7`, and a `push`, `replace` or `go` that changes only the fragment changes it on that visit. Written as `path("item", id) + "#moves"`, or `href="#moves"` on a `link` to the screen shown. Once the route's content has arrived, each host scrolls to the element with that `id` in the entry's route, as a browser scrolls to a fragment (`top`, or no such element: the route's top) (LLP 1153 D5). A visit given another path with none, a page swapped in by `replace`, starts each of its scrollers over instead: at its `scrollTop=`, at the end of a list with `scroll-start="end"`, else at its start; `scroll-restoration="manual"` keeps one where it was (D5.1) | `fragment(top(push(nav, "/item/7#moves")))` is `"moves"` |
 | `sharedFiles(entry, name)` | `SharedFiles`: `{files: Picked[], dropped, pending}`, the files a received share carried, by the token in the entry's `name` parameter; `pending` counts those still being copied, and a token the host did not set this launch answers no files (LLP 1133.024 D3; [`share_target`](reference.md#shares-from-other-apps-share_target)) | `sharedFiles(top(nav), "files").files.length` is the count of shared files that have landed |
 | `t("key", name=value, …)` | Localized string; validates tables/placeholders | `t("greeting", name=user.name)` is the `greeting` string of the app's locale with `{name}` filled |
 | `frame(id)` | `Geometry`, actions only; last layout where the viewer sees it, as `getBoundingClientRect`: in the viewport, every scroll offset and transform applied | `frame("card").height`, in an action, is the card's height as drawn |

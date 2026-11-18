@@ -40,25 +40,7 @@ use serde_json::json;
 /// The ceremonies and signals `state.extensions` lists, the newest last.
 const KEPT: usize = 16;
 
-/// The target this runner is built for, as a substitute's `targets` and a
-/// ceremony's `clientOrigin` name it.
-pub(in crate::runner) fn target() -> &'static str {
-    if cfg!(target_arch = "wasm32") {
-        "web"
-    } else if cfg!(target_os = "ios") {
-        "ios"
-    } else if cfg!(target_os = "tvos") {
-        "tvos"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "android") {
-        "android"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "linux"
-    }
-}
+pub(in crate::runner) use super::super::module_seam::build_target as target;
 
 /// The value at `path` (`publicKey.rp.id`) in `value`.
 pub(super) fn at<'a>(value: &'a Json, path: &str) -> Option<&'a Json> {

@@ -7,6 +7,7 @@ import XCTest
 private let recordBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 64)
 private var records: [String] = []
 private var taken = 0
+private var empty = false
 
 private final class VisibleWindow: NSWindow {
     override var occlusionState: NSWindow.OcclusionState { .visible }
@@ -18,9 +19,9 @@ private final class VisibleWindow: NSWindow {
 final class CanvasPresentedMacTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactSurfaces.install() } // LLP 1047.001 D4
 
-    func testThePresentedReportTakesEachLivePublishersRecord() {
+    func testThePresentedReportTakesEachLivePublishersRecord() throws {
         _ = NSApplication.shared
-        records = []; taken = 0
+        records = []; taken = 0; empty = false
         let m = GpuModule(create: { _, _, _, _, _ in 1 }, bind: { _, _, _ in 0 },
             render: { _, _, _, _, _ in 0 }, dirty: { _ in 0 }, destroy: { _ in },
             texture: { _, _, _, _, _ in 0 }, textureMetal: nil, sync: nil,
@@ -36,6 +37,7 @@ final class CanvasPresentedMacTests: XCTestCase {
                 bytes.withUnsafeBufferPointer { recordBuffer.update(from: $0.baseAddress!, count: $0.count) }
                 return UInt32(bytes.count)
             }, agent: nil, outPtr: { UnsafePointer(recordBuffer) })
+        m.presentationFlags = { _ in empty ? 4 : 0 }
         let s = ExactApp.shared.makeSession(label: "canvas-presented")
         defer { s.destroy() }
         s.surfaceHost.modules[""] = m; s.surfaceHost.attempted = [""]
@@ -53,6 +55,19 @@ final class CanvasPresentedMacTests: XCTestCase {
         s.surfaceHost.publishPresented()
         XCTAssertGreaterThan(taken, before, "the live publisher's record is taken at the report")
         XCTAssertTrue(records.isEmpty, "and handed on")
+        let layer = try XCTUnwrap(canvas.canvasMetal?.layer)
+        XCTAssertFalse(layer.isHidden)
+        empty = true
+        records = [#"{"presented":false}"#]
+        s.surfaceHost.publishPresented()
+        XCTAssertTrue(layer.isHidden, "an explicitly empty surface exposes its fallback")
+        empty = false
+        records = [#"{"presented":false}"#]
+        s.surfaceHost.publishPresented()
+        XCTAssertTrue(layer.isHidden, "loading again keeps the stale image hidden")
+        records = [#"{"presented":true}"#]
+        s.surfaceHost.publishPresented()
+        XCTAssertFalse(layer.isHidden)
         withExtendedLifetime(w) {}
     }
 }

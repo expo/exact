@@ -179,12 +179,13 @@ fn plan_keyed_by_state() -> Plan {
 /// As [`plan_keyed_by_state`]; `gated` adds `when open`, a root state that
 /// starts false and the action `open` sets.
 fn plan_keyed(gated: bool) -> Plan {
-    plan_keyed_with(gated, true)
+    plan_keyed_with(gated.then_some(false), true)
 }
 
-/// As [`plan_keyed`]; without `compiled`, `feeds` has no build-time answer,
-/// so its placeholder stands in before readiness.
-fn plan_keyed_with(gated: bool, compiled: bool) -> Plan {
+/// As [`plan_keyed`], gated when `gate` gives `open`'s initial value;
+/// without `compiled`, `feeds` has no build-time answer, so its placeholder
+/// stands in before readiness.
+fn plan_keyed_with(gate: Option<bool>, compiled: bool) -> Plan {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let string = b.primitive(TypeKind::String);
     let number = b.primitive(TypeKind::Number);
@@ -210,10 +211,10 @@ fn plan_keyed_with(gated: bool, compiled: bool) -> Plan {
     if compiled {
         b.set_resource_initial_args(feeds, &[Value::Number(0.), Value::str("")]);
     }
-    if gated {
+    if let Some(initial) = gate {
         let boolean = b.primitive(TypeKind::Bool);
-        let no = b.constant(&Value::Bool(false));
-        let open = b.slot("open", boolean, no);
+        let initial = b.constant(&Value::Bool(initial));
+        let open = b.slot("open", boolean, initial);
         let mut w = Asm::new();
         w.load_slot(open);
         let w = b.code(w);
@@ -708,6 +709,24 @@ fn an_admitted_seed_with_an_unknown_unchanged_identity_names_its_input() {
 }
 
 #[test]
+fn an_admitted_kept_answer_under_with_context_is_current() {
+    // Its entry holds only the identifying argument, the account; the
+    // context, `version`, is not compared (LLP 1161.001 D1).
+    let r = launch_plan(
+        plan_with_versioned_account(),
+        vec![
+            (
+                kept::kept_name("account"),
+                kept::encode(&[Value::Number(0.)], &Value::str("alice")),
+            ),
+            feeds_kept(&[Value::str("alice")], "feeds of alice"),
+        ],
+    );
+    shows(&r, "feeds", "feeds of alice");
+    assert!(r.resources[1].current, "a kept answer to this account");
+}
+
+#[test]
 fn a_reload_keeps_a_waiting_kept_answer() {
     let r = launch_keyed();
     let carried = r.carry();
@@ -817,9 +836,12 @@ fn a_fresh_answer_equal_to_the_build_time_one_is_a_known_identity() {
 
 #[test]
 fn a_kept_answer_admitted_after_its_gate_wakes_is_not_current_until_it_answers() {
-    // Idle through readiness, then woken with no id: it waits, and the id's
-    // arrival admits a value that slept, which is no answer yet.
+    // Idle through readiness, then woken with no id: it waits behind the
+    // bake's answer, and the id's arrival admits a value that slept. Neither
+    // is an answer since the wake.
     let mut r = opened_after_readiness("");
+    shows(&r, "feeds", "loading");
+    assert!(!r.resources[0].current, "the bake's answer");
     assert_eq!(r.take_requests().len(), 1);
     r.act("key", vec![Value::str("alice")]).unwrap();
     shows(&r, "feeds", "kept feeds of alice");
@@ -849,7 +871,7 @@ fn a_kept_seed_woken_before_readiness_with_no_id_keeps_its_sleep_history() {
     // its placeholder, and the id's arrival admits a value that slept, which
     // is no answer yet.
     let mut r = launch_plan(
-        plan_keyed_with(true, false),
+        plan_keyed_with(Some(false), false),
         vec![feeds_kept(
             &[Value::Number(0.), Value::str("alice")],
             "kept feeds of alice",
@@ -858,6 +880,32 @@ fn a_kept_seed_woken_before_readiness_with_no_id_keeps_its_sleep_history() {
     r.act("open", vec![Value::Bool(true)]).unwrap();
     shows(&r, "feeds", "");
     assert_eq!(lines_with(&r, WAITING).len(), 1);
+    r.act("key", vec![Value::str("alice")]).unwrap();
+    shows(&r, "feeds", "kept feeds of alice");
+    assert!(!r.resources[0].current, "a value kept across idleness");
+    r.data.ready = true;
+    r.data_ready().unwrap();
+    settle_requests(&mut r);
+    shows(&r, "feeds", "feeds of alice");
+    assert!(r.resources[0].current);
+}
+
+#[test]
+fn a_kept_entry_that_waits_awake_learns_a_later_sleep() {
+    // Open at boot with no id: it waits awake, on its placeholder. Its gate
+    // then closes and opens again before the id arrives, so the value the
+    // id admits slept, and is no answer yet.
+    let mut r = launch_plan(
+        plan_keyed_with(Some(true), false),
+        vec![feeds_kept(
+            &[Value::Number(0.), Value::str("alice")],
+            "kept feeds of alice",
+        )],
+    );
+    assert_eq!(lines_with(&r, WAITING).len(), 1);
+    r.act("open", vec![Value::Bool(false)]).unwrap();
+    r.act("open", vec![Value::Bool(true)]).unwrap();
+    assert!(r.carry().waiting[0].4, "a reload carries that it slept");
     r.act("key", vec![Value::str("alice")]).unwrap();
     shows(&r, "feeds", "kept feeds of alice");
     assert!(!r.resources[0].current, "a value kept across idleness");
@@ -1284,4 +1332,33 @@ fn a_reload_keeps_the_sleep_history_of_an_admitted_kept_answer() {
     let next = reload(&r, plan_kept_module_gated());
     shows(&next, "feeds", "kept feeds");
     assert!(!next.resources[0].current, "still no answer since the wake");
+}
+
+#[test]
+fn a_reload_keeps_the_entry_of_an_admitted_kept_module_that_has_not_asked() {
+    // Admitted before readiness, awake: it has neither slept nor asked, and
+    // has read no store. The replacement shows the same kept answer.
+    let r = Runner::boot_stored(
+        plan_kept_module(),
+        Source::default(),
+        Kernel::with_monospace(),
+        vec![(
+            kept::kept_name("feeds"),
+            kept::encode(&[Value::str("")], &Value::str("kept feeds")),
+        )],
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    shows(&r, "feeds", "kept feeds");
+    let next = Runner::boot_carrying(
+        plan_kept_module(),
+        Source::default(),
+        Kernel::with_monospace(),
+        &r.carry(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    shows(&next, "feeds", "kept feeds");
 }

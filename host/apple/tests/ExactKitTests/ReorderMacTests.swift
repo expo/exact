@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactDrag
 
 /// A mouse drag on a `reorderFor` handle, through AppKit's own mouse methods,
@@ -63,14 +64,14 @@ final class ReorderMacTests: XCTestCase {
         XCTAssertEqual(calls.log, ["begin 3 top=0.0", "move 7 dy=0.0", "move 7 dy=60.0", "drop 7 dy=60.0"])
         let hold = try XCTUnwrap(p.reorder as? ReorderHold)
         XCTAssertEqual(hold.phase, .settling, "the pin stays while the source returns")
-        XCTAssertEqual(p.collections.interaction, 3)
+        XCTAssertEqual(p.listHost.interaction, 3)
         hold.observe(ReorderRecorder.finished())
         XCTAssertNil(p.reorder)
         XCTAssertEqual(p.views[2]?.layer?.zPosition, 0)
         let released = expectation(description: "the pin retires after the finish")
         DispatchQueue.main.async { released.fulfill() }
         wait(for: [released], timeout: 1)
-        XCTAssertNil(p.collections.interaction)
+        XCTAssertNil(p.listHost.interaction)
     }
 
     func testAHorizontalStartOrARefusedCatchIsNoArrange() {

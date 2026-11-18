@@ -16,7 +16,12 @@ import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js"
 import * as rt from "./rt.js";
 import { environment, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
 
-const again = (source, why) => () => commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
+const again = (source, why) => {
+  const changed = () => {
+    if (!rt.deferForReplacement(changed)) return commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
+  };
+  return changed;
+};
 // `readers`: resource name → [its fields, in its shape's order, …].
 const byName = (readers, name, v) => readers[name][0].map(n => v[n]);
 
@@ -105,6 +110,7 @@ export function watchPage(freezes = false) {
   let previous = facts.read();
   Sounds.frozen = previous.frozen;
   pageChanged = () => {
+    if (rt.deferForReplacement(pageChanged)) return;
     const next = facts.read();
     const before = pageFields(previous), after = pageFields(next);
     const readers = Resources.filter(r => r.source === "exactPage" && pageReaders[r.name]?.[0].some(k => before[k] !== after[k]));
@@ -175,7 +181,8 @@ export function surfaces(readers, source = "exactSurface", report = "surfaceReco
     } catch (e) { why = String(e?.message ?? e); throw e; }
   };
   const x = globalThis.exact ??= {};
-  x[report] = (surface, json) => {
+  x[report] = function publish(surface, json) {
+    if (rt.deferForReplacement(() => publish(surface, json))) return;
     if (!names.has(surface)) return;
     const was = records.get(surface) ?? null;
     if (was === (json ?? null)) return;

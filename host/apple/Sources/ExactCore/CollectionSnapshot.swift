@@ -25,8 +25,8 @@ package struct CollectionSnapshot {
                 max(0, offset) + port + margin[1] + (velocity > 0 ? extra : 0) > edges[1]]
             return (0..<2).contains { mask & (1 << $0) != 0 && reached[$0] == (mask & (4 << $0) != 0) }
         }
-        package func owesReveal(offset: Double, port: Double) -> Bool {
-            max(0, offset) < reveal[0] || max(0, offset) + port > reveal[1]
+        package func owesReveal(offset: Double, port: Double, extent: Double) -> Bool {
+            max(0, offset) < reveal[0] || min(extent, max(0, offset) + port) > reveal[1]
         }
         package func owesRetirement(offset: Double, port: Double, moving: Bool) -> Bool {
             let bound = port + (moving ? maxLead : 0)

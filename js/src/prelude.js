@@ -149,6 +149,12 @@
           "; call it inside an answer"
       );
   }
+  global.exactHost = function exactHost() {
+    answerOnly("exactHost()");
+    var kind = host(12, "host", "");
+    if (kind === undefined) throw storageError("exactHost() is unavailable during bake", "bake");
+    return kind;
+  };
   // Host work an answer waits on that is neither a fetch nor storage (the
   // browser's digest settles in a later task): on the web it joins the
   // answer's storage turn, so the answer is pending on it, not on nothing.
@@ -438,6 +444,10 @@
       return overlaying;
     },
     inOverlay: inOverlay,
+    // store.js's, once the store is made below
+    secretEffect: function (call) {
+      storeEnv.secretEffect(call);
+    },
   });
   delete global.__exact_fetch;
   var request = fetches.request,
@@ -449,7 +459,7 @@
   delete global.__exact_auth;
 
   // --- the store (store.js) and storage (storage.js) ------------------------
-  var store = global.__exact_store({
+  var storeEnv = {
     host: host,
     presence: binary.presence,
     browserSecrets: browserSecrets,
@@ -467,7 +477,8 @@
       return overlaying;
     },
     inOverlay: inOverlay,
-  });
+  };
+  var store = global.__exact_store(storeEnv);
   delete global.__exact_store;
   var storageCalls = global.__exact_storage_calls({
     host: host,
@@ -729,13 +740,11 @@
     var text = settleResult(call, final);
     if (!call.secretCompleted) return text;
     var result = JSON.parse(text);
-    // A next lease supersedes the completion. Results the realm consumes
-    // itself leave it sticky until one reaches the host.
-    if (result.secret !== undefined) {
-      call.secretCompleted = false;
-      return text;
-    }
+    // Results the realm consumes itself leave the completion sticky until one
+    // reaches the host. A next lease's request is one: the host ends the
+    // completed lease before it asks for the next (LLP 1146 D5).
     if (
+      result.secret === undefined &&
       result.tag === 1 &&
       result.ticket === 0 &&
       (result.yielded || result.waiting || result.timer === undefined)
@@ -743,6 +752,7 @@
       return text;
     call.secretCompleted = false;
     result.secretComplete = true;
+    if (call.secretFailed) result.secretFailed = true;
     return JSON.stringify(result);
   }
   var nativeCall = (global.__exact_module_sync = function (request) {

@@ -7,7 +7,9 @@
 //! past that the sheet follows the finger, what it pressed is let go, and
 //! on release it settles on the detent its speed carries it to, or leaves
 //! the window down, which is the route's Back. Where a scroller is under
-//! the finger the scroller has the drag. Android's reader cancels the
+//! the finger, a sheet with several detents takes upward drags below its
+//! tallest and downward drags at a non-refreshing list's start. At its
+//! tallest, a new upward drag scrolls the list. Android's reader cancels the
 //! contact, and the drag with it, where a module view under the finger
 //! asked to keep its touch (`Under::sheet` in `scrollers.rs`).
 //!
@@ -36,12 +38,13 @@ pub(in crate::presenter) enum Gesture {
     /// A contact on a sheet that moves it once past the slop.
     Drag {
         modal: NodeKey,
-        finger: f32,
+        finger: (f32, f32),
         start: f32,
         top: f32,
         last: (f32, f64),
         velocity: f32,
         moving: bool,
+        directions: (bool, bool),
         contact: Contact,
     },
 }
@@ -205,12 +208,32 @@ impl<D: DataSource> Presenter<D> {
         Some((sheet.modal, self.sheet_top_now(sheet)))
     }
 
-    /// Whether a vertical scroller inside the top sheet is under a point.
-    fn sheet_scrolls_at(&mut self, x: f32, y: f32) -> bool {
-        self.scrollers_at(x, y)
-            .chain
-            .iter()
-            .any(|s| s.id != super::super::PAGE && s.axes.1 && s.max.1 > 0.0)
+    /// Which finger directions move the sheet rather than its nested list:
+    /// upward below the tallest detent, downward at a non-refreshing list's start.
+    /// Ownership stays fixed for the contact; unconsumed movement is not handed off.
+    pub(in crate::presenter) fn sheet_drag_directions(&self, chain: &[Scroller]) -> (bool, bool) {
+        let Some(sheet) = self.front_sheets().last() else {
+            return (false, false);
+        };
+        let vertical = || chain.iter().filter(|s| s.axes.1);
+        if vertical().next().is_none() {
+            return (true, true);
+        }
+        if sheet.heights.len() < 2 || vertical().all(|s| s.max.1 <= 0.) {
+            return (false, false);
+        }
+        let highest = self.viewport.1 - sheet.heights[sheet.heights.len() - 1];
+        (
+            self.sheet_top_now(sheet) > highest + 0.5,
+            vertical().all(|s| {
+                s.offset.1 <= 0.
+                    && !self
+                        .host
+                        .runner()
+                        .handlers_of(s.id)
+                        .contains(&EventKind::Refresh)
+            }),
+        )
     }
 
     /// A contact down: one on a scrim is the stage's; one on a sheet may
@@ -229,14 +252,21 @@ impl<D: DataSource> Presenter<D> {
             return true;
         }
         let handle = y < top + SHEET_HANDLE;
-        self.stage.gesture = (handle || !self.sheet_scrolls_at(x, y)).then_some(Gesture::Drag {
+        let under = self.scrollers_at(x, y);
+        let directions = if handle || (under.chain.is_empty() && !under.claims.1) {
+            (true, true)
+        } else {
+            under.sheet_directions
+        };
+        self.stage.gesture = (directions.0 || directions.1).then_some(Gesture::Drag {
             modal,
-            finger: y,
+            finger: (x, y),
             start: top,
             top,
             last: (y, now),
             velocity: 0.0,
             moving: false,
+            directions,
             contact,
         });
         false
@@ -283,9 +313,22 @@ impl<D: DataSource> Presenter<D> {
             Some(Gesture::Drag {
                 finger,
                 moving: false,
+                directions,
                 ..
             }) => {
-                if (y - finger).abs() <= SLOP {
+                let dx = (x - finger.0).abs();
+                let dy = (y - finger.1).abs();
+                if dx.max(dy) <= SLOP {
+                    return false;
+                }
+                if dx > dy
+                    || !(if y < finger.1 {
+                        directions.0
+                    } else {
+                        directions.1
+                    })
+                {
+                    self.stage.gesture = None;
                     return false;
                 }
                 // Past the slop the drag is the sheet's: what the contact
@@ -309,7 +352,7 @@ impl<D: DataSource> Presenter<D> {
             ..
         }) = &mut self.stage.gesture
         {
-            *top = (*start + y - *finger).clamp(highest, h);
+            *top = (*start + y - finger.1).clamp(highest, h);
             let dt = (now - last.1) as f32 / 1000.0;
             if dt > 0.0 {
                 let v = (y - last.0) / dt;

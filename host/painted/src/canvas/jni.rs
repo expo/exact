@@ -60,6 +60,7 @@ macro_rules! canvas_jni {
 
             const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
             const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
+            include!(concat!(env!("OUT_DIR"), "/launch.rs"));
 
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_environment(
@@ -695,6 +696,17 @@ macro_rules! canvas_jni {
                 tool: jint,
             ) {
                 with(|h| h.touch(action, x, y, tool));
+            }
+
+            /// Whether a touch is down on the view, before the reader routes
+            /// it (`touching`). Whether a replacement waited for the lift.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_touching(
+                _env: *mut JNIEnv,
+                _class: jclass,
+                on: jboolean,
+            ) -> jboolean {
+                flag(with(|h| h.touching(on == JNI_TRUE)).unwrap_or(false))
             }
 
             /// A finger past the touch's first (0 down, 1 up, 2 move, 3

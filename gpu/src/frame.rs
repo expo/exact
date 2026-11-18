@@ -13,6 +13,36 @@ use crate::{shaders, Frame, Module, SurfaceError};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+/// Draw the retained canvas layer of a composed window, or erase an empty one.
+#[cfg(any(windows, test))]
+pub(crate) fn render_scene(
+    surface: Option<&mut (dyn crate::Surface + 'static)>,
+    gpu: &crate::Gpu,
+    frame: &Frame,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+) {
+    if let Some(surface) = surface.filter(|s| !s.is_empty()) {
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        surface.prepare_assets(&gpu.device, &gpu.queue, format);
+        surface.render(frame, &gpu.device, &gpu.queue, encoder, target, format);
+    } else {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("empty canvas layer"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+}
+
 /// The canvases rendered since the last submit, with their commands.
 #[derive(Default)]
 pub(crate) struct Open {
@@ -151,6 +181,15 @@ impl Module {
         if !inst.bound {
             return Some(false);
         }
+        if inst.surface.is_empty() {
+            inst.held = None;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                inst.scratch = None;
+            }
+            inst.dirty = false;
+            return Some(false);
+        }
         #[cfg(target_os = "android")]
         if inst.ring.is_some() {
             return self.render_to_buffer(id, frame);
@@ -282,7 +321,7 @@ impl Module {
         );
         inst.drain();
         let mut failure = inst.surface.take_error();
-        let ready = cfg!(target_arch = "wasm32") || inst.surface.frame_ready();
+        let ready = cfg!(target_arch = "wasm32") || inst.surface.frame_presentable();
         let cap = inst.surface.max_fps();
         inst.cadence
             .after(cap, frame.now_ms, self.period_ms, wants || !ready);
@@ -399,7 +438,7 @@ impl Module {
                 None
             }
         };
-        let ready = inst.surface.frame_ready();
+        let ready = inst.surface.frame_presentable();
         let cap = inst.surface.max_fps();
         inst.cadence
             .after(cap, frame.now_ms, self.period_ms, wants || !ready);
@@ -409,7 +448,7 @@ impl Module {
             refused: commands.is_none(),
             commands,
             complete: ready,
-            drawn: ready && failure.is_none(),
+            drawn: inst.surface.frame_ready() && failure.is_none(),
             texture: None,
             failed: None,
             request: false,
@@ -545,7 +584,9 @@ impl Module {
             };
             #[cfg(target_os = "android")]
             if let (Some((slot, publish)), Some(ring)) = (c.buffer, inst.ring.as_mut()) {
-                let shown = publish.then(|| inst.presented.pending()).flatten();
+                let shown = (publish && c.drawn)
+                    .then(|| inst.presented.pending())
+                    .flatten();
                 ring.submitted(slot, publish, &gpu.queue, shown);
             }
             #[cfg(not(target_os = "android"))]
@@ -877,4 +918,95 @@ fn ride_next_submit(queue: &wgpu::Queue, first: Vec<First>) -> Option<usize> {
 fn presented_with_submit(queue: &wgpu::Queue) -> Option<usize> {
     // SAFETY: a counter of the queue wgpu owns is read; nothing is encoded.
     unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }.map(|q| q.counts().presented_with_submit)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod scene_tests {
+    use super::*;
+    use crate::{fixture, Surface, Value};
+
+    struct Layer(bool);
+    impl Surface for Layer {
+        fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            Ok(())
+        }
+        fn is_empty(&self) -> bool {
+            self.0
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            _: &wgpu::Device,
+            _: &wgpu::Queue,
+            encoder: &mut wgpu::CommandEncoder,
+            target: &wgpu::TextureView,
+            _: wgpu::TextureFormat,
+        ) -> bool {
+            if !self.0 {
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            false
+        }
+    }
+
+    #[test]
+    fn an_empty_or_removed_canvas_erases_the_composed_windows_retained_scene() {
+        let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+            return;
+        };
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            view_formats: &[],
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        });
+        let frame = Frame {
+            width: 4.,
+            height: 4.,
+            scale: 1.,
+            now_ms: 0.,
+            seekable: true,
+            period_ms: 0.,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        };
+        for (empty, expected) in [
+            (Some(false), [0, 255, 0, 255]),
+            (Some(true), [0, 0, 0, 0]),
+            (Some(false), [0, 255, 0, 255]),
+            (None, [0, 0, 0, 0]),
+        ] {
+            let mut surface = empty.map(Layer);
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            render_scene(
+                surface.as_mut().map(|s| s as &mut dyn Surface),
+                &gpu,
+                &frame,
+                &mut encoder,
+                &texture.create_view(&Default::default()),
+            );
+            gpu.queue.submit([encoder.finish()]);
+            assert_eq!(fixture::read(&gpu, &texture).unwrap().at(2, 2), expected);
+        }
+    }
 }

@@ -1,5 +1,5 @@
 //! A request with a source's grant scope (`exact_data::Mixed` sets one on
-//! each request) runs on the worker's own transport, so it reuses the
+//! each request) runs on its lane's transport, so it reuses the
 //! connections that transport keeps.
 use super::tests::{collect, job};
 use super::*;
@@ -89,8 +89,8 @@ fn a_scoped_request_rides_its_workers_transport() {
             "{outcome:?}"
         );
     }
-    // The ordered owner's transport and one for each independent worker.
-    assert!(made.load(Ordering::SeqCst) <= 1 + INDEPENDENT, "{made:?}");
+    // The ordered owner's transport and the independent lane's one.
+    assert_eq!(made.load(Ordering::SeqCst), 2);
     // A scope still narrows: an origin the app may reach and the scope may not.
     let mut outside = Request::get("https://other.test/x");
     outside.grants = Some("net.fetch https://example.test".into());

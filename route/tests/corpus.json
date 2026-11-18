@@ -1369,7 +1369,7 @@
       ]
     },
     {
-      "name": "a stack's first visit is replaced as any other: by its own route's query, then by other routes'",
+      "name": "replace at depth one: its own route's query, then other routes, keeping the id",
       "table": "interview",
       "steps": [
         {
@@ -1589,5 +1589,5 @@
   ],
   "law_locations": {"interview": ["/", "/post/42", "/post/42#reply", "/prompt/5/write?x=1", "/unknown/"], "messages": ["/", "/t/7/contact", "/t/7/contact#top", "/new?x=1"], "plain": ["/", "/item/7#moves", "/item/7/edit", "/archive/2026/a%2Fb"]},
   "oracle": {"browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36", "date": "2026-09-14", "canonical": "const u = new URL(\"https://x\" + (input.startsWith(\"/\") ? input : \"/\" + input)); u.pathname + u.search", "fragments": "the same URL's u.hash.slice(1), read 2026-10-30 in HeadlessChrome/146 (Playwright chromium_headless_shell-1243)", "location_of": "an http(s) URL's u.pathname + u.search + u.hash; another scheme's rule is the router's, its hash Chrome's", "components": "encodeURIComponent(input)", "search": "new URL(url, \"https://x\").searchParams.get(name) ?? \"\""},
-  "decisions": {"replace_root": "replace treats a stack's first visit as any other: it takes any route's location and keeps its id.", "chain_leaf": "The leaf preserves its canonical incoming location, including query and escape spelling; ancestors format only their own parameters.", "parameter_names": "Whole-segment ASCII identifiers: [A-Za-z_$][A-Za-z0-9_$]*.", "ids": "Seed roots in declared tab order from zero, the launch's own tab at its chain's root visit, before opening the launch chain; refuse before next exceeds the largest exactly representable JavaScript integer."}
+  "decisions": {"chain_leaf": "The leaf preserves its canonical incoming location, including query and escape spelling; ancestors format only their own parameters.", "parameter_names": "Whole-segment ASCII identifiers: [A-Za-z_$][A-Za-z0-9_$]*.", "ids": "Seed roots in declared tab order from zero, the launch's own tab at its chain's root visit, before opening the launch chain; refuse before next exceeds the largest exactly representable JavaScript integer."}
 }

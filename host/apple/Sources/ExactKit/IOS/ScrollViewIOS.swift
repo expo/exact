@@ -103,7 +103,7 @@ package class ScrollView: UIScrollView {
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()
         guard let node = superview as? NodeView, node.props["scrollStart"] == "end" || node.props["scrollFollowEnd"] == "true",
-              node.presenter?.collections.entries[node.id]?.snapshot.horizontal != true,
+              node.presenter?.collections.snapshot(node.id)?.horizontal != true,
               !isTracking, !isDecelerating, contentSize.height > 0, !node.authorOwnsScroll(self) else { return }
         let end = { (inset: UIEdgeInsets) in max(-inset.top, self.contentSize.height + inset.bottom - self.bounds.height) }
         guard contentOffset.y >= end(was) - 1, was.bottom != keptInset.bottom else { return }
@@ -554,7 +554,8 @@ extension NodeView {
     }
 
 
-    func applyPendingScroll() {
+    /// `instant`: a page that arrived (LLP 1153 D5.1), which `scroll-behavior: smooth` does not animate.
+    func applyPendingScroll(instant: Bool = false) {
         // Hold a saved position, and a position written meanwhile, until the port has a size. A pane UIKit shows again,
         // or one UIKit hid when its arrangement ends, stays covered whole, laid out as `display: none`, until the covers
         // that follow are delivered, and a write before then would clamp to the top.
@@ -587,7 +588,7 @@ extension NodeView {
         // `scroll-behavior: smooth` (CSS) animates a prop write, never a
         // reader's own scroll. Under the agent's frozen clock it lands at once
         // (as a modal presents, LLP 1035.003 D5), so `layout` reads the target.
-        let smooth = extras?.pendingScrollTransfer != true && style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes
+        let smooth = !instant && extras?.pendingScrollTransfer != true && style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes
         writeScrollPosition(in: sv, left: pendingScrollLeft, top: pendingScrollTop, animated: smooth, titleSlack: true)
     }
 

@@ -22,6 +22,7 @@
 //   and a background task held, until the runner says the invocation ended
 //   or the system's time runs out; then it expires the action and lets the
 //   app be suspended at once.
+import CExact
 import Foundation
 import CryptoKit
 import Security
@@ -424,7 +425,7 @@ extension NotificationPresenter {
     /// Drain endings when work lands, including batches that skip presentation.
     func applied(_ session: ExactSession) {
         guard let open = opened[ObjectIdentifier(session)], !open.isEmpty else { return }
-        let reply = session.agent("{\"op\":\"actions\",\"drain\":true}")
+        let reply = session.runtime.ask(exact_ended_actions, "")
         let ended = ((try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any])?["ended"] as? [[String: Any]] ?? []
         settle(session, ended: Set(ended.compactMap { $0["id"] as? String }))
     }
@@ -444,7 +445,7 @@ extension NotificationPresenter {
 extension ExactSession {
     /// Registration precedes data code and delivery of launching actions.
     func declareNotificationCategories(ready: @escaping () -> Void) {
-        NotificationPresenter.shared.declare(DeclaredCategories.lists(agent("{\"op\":\"declared\"}")), for: self, ready: ready)
+        NotificationPresenter.shared.declare(DeclaredCategories.lists(runtime.ask(exact_declared, "")), for: self, ready: ready)
     }
 
     func replaceBackgroundActions() { NotificationPresenter.shared.replaced(self) }
@@ -480,3 +481,14 @@ extension ExactSession {
     func endBackgroundActions() {}
 }
 #endif
+
+/// The built-in notifications behind `ModuleSeamLink.notifications`: the
+/// session's extensions above (their tvOS forms answer as none).
+final class BuiltInNotifications: NotificationHosting {
+    func declareCategories(_ session: ExactSession, ready: @escaping () -> Void) { session.declareNotificationCategories(ready: ready) }
+    func replaceBackgroundActions(_ session: ExactSession) { session.replaceBackgroundActions() }
+    func deliverResponses(_ session: ExactSession) { session.deliverNotificationResponses() }
+    func beginBackgroundAction(_ session: ExactSession, _ id: String) -> Bool { session.beginBackgroundAction(id) }
+    func backgroundActionsApplied(_ session: ExactSession) { session.backgroundActionsApplied() }
+    func endBackgroundActions(_ session: ExactSession) { session.endBackgroundActions() }
+}

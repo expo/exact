@@ -33,7 +33,6 @@ use crate::generated::SafeAreaIgnore;
 use crate::id::{NodeFlags, Offer, ViewId};
 use crate::layout::{self, LayoutMirror, LayoutReceipt};
 use crate::style::resolve_calc;
-use crate::Direction;
 use taffy::style::{BoxSizing, LengthPercentageAuto as Lpa, Position};
 use taffy::util::{MaybeResolve, ResolveOrZero};
 
@@ -105,9 +104,11 @@ impl HostBlock {
 /// What the host clears of `slot`'s allocation for its content root, top
 /// right bottom left (@ref LLP 1123 D3): a content owner's incoming band,
 /// none of it on each edge whose container region the root takes (D4), and
-/// the root's reservations (D11). No band while it is unavailable, as
-/// UIKit gives a view outside a window zero safe-area insets; and nothing
-/// for a box that is no content owner.
+/// the root's reservations (D11), with the keyboard's occupancy under
+/// `resizes-content` covering the band and the additional inset where it is
+/// deeper and the padding stacked on it (D7). No band while it is
+/// unavailable, as UIKit gives a view outside a window zero safe-area
+/// insets; and nothing for a box that is no content owner.
 pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
     arena
         .blocks
@@ -121,9 +122,13 @@ fn cleared(arena: &NodeArena, held: &Held) -> [f32; 4] {
         return [0.0; 4];
     }
     let band = arena.observations.band(held.slot).unwrap_or([0.0; 4]);
-    let taken = taken_edges(arena, held.slot, SafeAreaIgnore::Container);
+    let taken = super::ignore::edges(arena, held.slot, SafeAreaIgnore::Container);
     let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
-    reservation::reserved(arena, held.slot).map_or(band, |r| r.inside(band))
+    let cover = super::keyboard::cover(arena, held.slot);
+    match reservation::reserved(arena, held.slot) {
+        Some(r) => r.inside_covered(band, cover),
+        None => std::array::from_fn(|e| band[e].max(cover[e])),
+    }
 }
 
 /// Whether `slot` is a content owner's root: a box its host gave a block
@@ -134,49 +139,6 @@ pub(crate) fn owns(arena: &NodeArena, slot: u32) -> bool {
 
 fn is_owner(arena: &NodeArena, held: &Held) -> bool {
     held.given.is_some() && !arena.top_layer_slots.contains(held.slot)
-}
-
-/// The edges, top right bottom left, on which `slot` takes `region`'s
-/// depth (`-exact-safe-area-ignore`, @ref LLP 1123 D4): naming no region
-/// takes both, naming no edge takes every edge, and `start` and `end` are
-/// the box's inline start and end under its `direction`.
-fn taken_edges(arena: &NodeArena, slot: u32, region: SafeAreaIgnore) -> [bool; 4] {
-    let bits = arena.style(slot).rare.safe_area_ignore;
-    let has = |v: SafeAreaIgnore| bits & bit(v) != 0;
-    let named = [SafeAreaIgnore::Container, SafeAreaIgnore::Keyboard];
-    if bits == 0 || (named.into_iter().any(has) && !has(region)) {
-        return [false; 4];
-    }
-    // Read the direction only for a logical edge
-    let logical = has(SafeAreaIgnore::Start) || has(SafeAreaIgnore::End);
-    let rtl = logical
-        && arena
-            .computed_source(slot, crate::StyleId::Direction)
-            .direction
-            == Direction::Rtl;
-    let (right, left) = match rtl {
-        false => (SafeAreaIgnore::End, SafeAreaIgnore::Start),
-        true => (SafeAreaIgnore::Start, SafeAreaIgnore::End),
-    };
-    let edges = [
-        has(SafeAreaIgnore::Top),
-        has(SafeAreaIgnore::Right) || has(right),
-        has(SafeAreaIgnore::Bottom),
-        has(SafeAreaIgnore::Left) || has(left),
-    ];
-    match edges.contains(&true) {
-        true => edges,
-        false => [true; 4],
-    }
-}
-
-/// `v`'s bit in the `safe_area_ignore` row: one for each value after
-/// `none`, in order (`kernel/build/codec.rs`), without the name lookups of
-/// `keyword_bits`, since a layout reads it for every block.
-fn bit(v: SafeAreaIgnore) -> u8 {
-    let bit = 1 << (v as u8 - 1);
-    debug_assert_eq!(bit, v.keyword_bits());
-    bit
 }
 
 /// The blocks: a few routes and open popovers at most, so a list by slot,
@@ -476,10 +438,11 @@ impl Kernel {
             }
         }
         let before = self.arena.blocks.get(slot);
-        // Measure every reader again when a box gains or gives back a block, which
-        // changes the band its readers observe
+        // Measure the readers under a box that gains or gives back a block again, which
+        // changes the band they observe; a reader elsewhere that this moves has a frame
+        // that moved
         if self.arena.blocks.given(slot).is_some() != block.is_some() {
-            self.arena.observations.invalidate();
+            self.arena.observations.moved(slot);
         }
         self.arena.blocks.set(slot, block);
         self.block_changed(slot, before);

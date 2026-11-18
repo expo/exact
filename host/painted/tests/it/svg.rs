@@ -70,7 +70,7 @@ fn an_inline_svg_reports_its_cost_limit_once_per_node_lifetime() {
     p.frame();
     assert_eq!(warnings(&p).as_slice(), std::slice::from_ref(&expected));
     let old_key = p.host().kernel().find_by_test_id("chart")[0];
-    assert!(p.reload(&plan, ()).unwrap().is_none());
+    assert!(p.reload(&plan, ()).unwrap() == exact_painted::presenter::ReloadResult::Applied(None));
     assert_eq!(p.host().kernel().find_by_test_id("chart")[0], old_key);
     assert_eq!(p.frame().pixel(1, 10).unwrap().green(), 255);
     assert_eq!(warnings(&p).as_slice(), std::slice::from_ref(&expected));

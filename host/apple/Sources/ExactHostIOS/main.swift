@@ -199,8 +199,8 @@ func watchControl() {
             case "mount": root?.mount(arg)
             case "apply":
                 let bytes = FileManager.default.contents(atPath: arg) ?? Data()
-                let ok = exact.apply(bytes, label: String(arg.split(separator: "/").last ?? "plan"))
-                log("host: apply \(arg): \(ok ? "every session took it" : "refused")")
+                let result = exact.apply(bytes, label: String(arg.split(separator: "/").last ?? "plan"))
+                log("host: apply \(arg): \(result)")
             default: log("host: unknown control \(line)")
             }
         }
@@ -225,7 +225,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             guard let bytes = FileManager.default.contents(atPath: path) else {
                 fatalError("host: could not read the requested plan at \(path); compile the fixture and retry")
             }
-            guard exact.apply(bytes, label: "file plan") else {
+            guard exact.apply(bytes, label: "file plan") == .applied else {
                 fatalError("host: the requested plan at \(path) was refused; compile it for this host app and retry")
             }
         }

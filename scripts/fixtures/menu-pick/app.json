@@ -1,0 +1,16 @@
+{
+  "$schema": "../../app.schema.json",
+  "name": "Menu Pick",
+  "app": {
+    "id": "com.exact.menupick",
+    "name": "Menu Pick"
+  },
+  "host": {
+    "macos": { "minimumOS": "14.0" }
+  },
+  "deploy": {
+    "store": {
+      "macos": "0"
+    }
+  }
+}

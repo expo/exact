@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// While UIKit dims tints behind a sheet or an alert, the tint greys wherever it is drawn, as UIKit
 /// greys a view's `tintColor`, and a colour of its own keeps it (HIG, Color: a colour that says a
@@ -333,13 +335,13 @@ final class TintDimmingIOSTests: XCTestCase {
         let paragraph = try XCTUnwrap(p.views[2])
         XCTAssertFalse(paragraph.canRasterText, "the paragraph draws itself")
         XCTAssertNotNil(p.views[1]?.boxFilter?.picture, "the box is pictured")
-        until("the first picture lands") { !p.boxFilters.drawing }
+        until("the first picture lands") { !p.boxFilters!.drawing }
         dim(p, true)
-        XCTAssertTrue(p.boxFilters.drawing, "the picture draws again as the link greys")
-        until("that picture lands") { !p.boxFilters.drawing }
+        XCTAssertTrue(p.boxFilters!.drawing, "the picture draws again as the link greys")
+        until("that picture lands") { !p.boxFilters!.drawing }
         dim(p, false)
-        XCTAssertTrue(p.boxFilters.drawing, "and again as the link takes its colour back")
-        until("the last picture lands") { !p.boxFilters.drawing }
+        XCTAssertTrue(p.boxFilters!.drawing, "and again as the link takes its colour back")
+        until("the last picture lands") { !p.boxFilters!.drawing }
     }
 
 

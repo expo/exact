@@ -83,10 +83,10 @@ fn native_module_events_commit_only_for_the_view_allocation_that_emitted_them() 
     assert!(p.reader_module_event(menu, key, session, "change", "week".into(), 3.));
     assert_eq!(selection(&p), "week");
     let replacement = source.replace("testId=\"menu\"", "testId=\"replacement\"");
-    assert!(p
-        .reload(&crate::test_plan(&replacement), ())
-        .unwrap()
-        .is_none());
+    assert!(
+        p.reload(&crate::test_plan(&replacement), ()).unwrap()
+            == crate::presenter::ReloadResult::Applied(None)
+    );
     assert_eq!(id(&p, "replacement"), menu);
     assert_eq!(p.host.kernel().node(menu).unwrap().key, key);
     assert!(!p.reader_module_event(menu, key, session, "change", "old popup".into(), 3.));

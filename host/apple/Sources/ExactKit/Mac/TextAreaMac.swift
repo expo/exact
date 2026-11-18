@@ -668,20 +668,17 @@ final class Field: NSTextField {
         if comboOwner != nil { return .comboBox }
         return numberOwner != nil ? .incrementor : cell?.accessibilityRole() ?? super.accessibilityRole()
     }
-    override func isAccessibilityExpanded() -> Bool {
-        guard let node = comboOwner else { return super.isAccessibilityExpanded() }
-        return node.props["accessibilityExpanded"] == "true"
+    // A combobox's expanded state and a number input's bounds and steps are
+    // served by the cell (`FieldCell`), for those inputs alone. Do not
+    // implement their typed methods here: AppKit's accessibility server
+    // offers an attribute or an action for every instance of a class that
+    // implements its typed method.
+    /// A number input's bounds, which its cell serves.
+    var numberBounds: (min: NSNumber?, max: NSNumber?)? {
+        guard let owner = numberOwner else { return nil }
+        let stepping = NumberStepping(owner.props)
+        return (stepping.min.map { NSDecimalNumber(decimal: $0) }, stepping.max.map { NSDecimalNumber(decimal: $0) })
     }
-    override func accessibilityMinValue() -> Any? {
-        guard let owner = numberOwner else { return super.accessibilityMinValue() }
-        return NumberStepping(owner.props).min.map { NSDecimalNumber(decimal: $0) }
-    }
-    override func accessibilityMaxValue() -> Any? {
-        guard let owner = numberOwner else { return super.accessibilityMaxValue() }
-        return NumberStepping(owner.props).max.map { NSDecimalNumber(decimal: $0) }
-    }
-    override func accessibilityPerformIncrement() -> Bool { numberOwner?.step(up: true) ?? super.accessibilityPerformIncrement() }
-    override func accessibilityPerformDecrement() -> Bool { numberOwner?.step(up: false) ?? super.accessibilityPerformDecrement() }
     override class var cellClass: AnyClass? { get { FieldCell.self } set {} }
     override func becomeFirstResponder() -> Bool { focused(delegate) { super.becomeFirstResponder() } }
     override var focusRingMaskBounds: NSRect { uncovered(bareFieldMask(self) ?? super.focusRingMaskBounds) }
@@ -814,7 +811,7 @@ extension NSTextField {
         switch attribute {
         case .role: return NSAccessibility.Role.comboBox.rawValue
         case .roleDescription: return NSAccessibility.Role.comboBox.description(with: nil)
-        case .expanded: return isAccessibilityExpanded()
+        case .expanded: return comboOwner?.props["accessibilityExpanded"] == "true"
         default: return nil
         }
     }
@@ -824,10 +821,6 @@ final class SearchField: NSSearchField {
     override func mouseDown(with event: NSEvent) { pressingField(delegate, event, self) { super.mouseDown(with: event) } }
     override func accessibilityRole() -> NSAccessibility.Role? {
         comboOwner != nil ? .comboBox : cell?.accessibilityRole() ?? super.accessibilityRole()
-    }
-    override func isAccessibilityExpanded() -> Bool {
-        guard let node = comboOwner else { return super.isAccessibilityExpanded() }
-        return node.props["accessibilityExpanded"] == "true"
     }
     override class var cellClass: AnyClass? { get { SearchFieldCell.self } set {} }
     override func becomeFirstResponder() -> Bool { focused(delegate) { super.becomeFirstResponder() } }

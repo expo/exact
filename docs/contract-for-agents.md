@@ -204,9 +204,10 @@ is unavailable in agent mode unless the drive names a scratch store (--storage
 <name>)`), so an app that keeps its data there does nothing on a write; a chosen document (`doc:/`)
 still opens under its grant. That store, and an authored test's own store, includes
 a data module's `secret.keep`: files in the named scratch tree on Apple and Linux,
-and the page's `localStorage` on the web. Apple native modules use that store's
-data, cache and temporary roots too; a fresh drive clears them, and only picked
-temporary documents are cleared on each launch. A nameless drive keeps no secrets.
+and the page's `localStorage` on the web ([web sessions](recipes/web-sessions.md)).
+Apple native modules use that store's data, cache and temporary roots too; a fresh
+drive clears them, and only picked temporary documents are cleared on each launch.
+A nameless drive keeps no secrets.
 To show what survives a restart on any host, use an authored test's `reload` step (below).
 
 The driver prints each reply in a short text form. A `tap` or `type` is one line
@@ -895,7 +896,11 @@ bounded: outside every region, under `if` and `match`, or in a row of
 `list`, it is refused (`type-child-resource`): declare the root's resource over
 the list (`resource feeds = load(id) for id in ids key=id`) and pass each row its
 answer, or declare the mutation in the root and pass each row an action that
-sends it (`add=addWork`). A child's task runs in its instance's frame and ends
+sends it (`add=addWork`). Only the root declares a resource over a list, so a
+screen that needs one request per element takes the root's list resource as a
+prop.
+
+A child's task runs in its instance's frame and ends
 when that instance is destroyed. A hidden instance stays alive; gate its task
 with `when active` if it should stop while hidden. Data two features read
 belongs to the root, which passes it down; name its declarations with the
@@ -1517,6 +1522,15 @@ web, the page's `localStorage`, readable by any script on that origin; on Linux,
 unencrypted files in the app's data directory, retained across launches (an app
 without an ID keeps them in memory). A drive keeps it, by default,
 only in a named `--storage` store (`EXACT_STORE=real` gives an Apple drive, on a Mac, a simulator or a phone, the Keychain a normal launch reads).
+
+**Web refresh and session tokens belong in an HttpOnly, Secure cookie set by the
+app's server, which the page never reads.** Follow [web sign-in tokens and
+sessions](recipes/web-sessions.md) for SameSite, credentialed fetch, CSRF, rotation
+and logout, sharing the flow with native `secret.keep`. Inside an answer,
+`exactHost()` returns `'web'` or `'native'` at run time; no per-build transport
+setting is needed. This string store does not protect a web token from
+injected scripts. See the browser's [cookie attributes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie).
+
 A secret that only the person in front of the device may read (an account's token
 behind Face ID) carries a policy on its line, `secret.keep token user-presence`
 (`biometry-any`, `biometry-current-set`, `device-credential`), then `optional` when
@@ -2035,8 +2049,11 @@ redirectTo }` to `{ redirect, state }`), one that completes it (`{ code, state
 hooks and browser session manager do not run in a data module. Call the
 mutations with `cx.mutation`, open `redirect` with `openAuthSession` (it and
 `authCallback` are declared for every app in `app.contract.d.ts`), keep the
-refresh token with `store.set` under a `secret.keep` grant, and give the access
-token to `cx.setAuth`. The mutations' names are the deployment's:
+refresh token with `store.set` under a `secret.keep` grant on native hosts, and
+give the access token to `cx.setAuth`. This direct token flow exposes web tokens
+to page scripts. For [web sessions](recipes/web-sessions.md), put the flow behind
+your server's HttpOnly cookie; `cx.setAuth` does not turn a bearer token into a
+cookie. The mutations' names are the deployment's:
 
 ```ts
 const SESSION = 'example.session';
@@ -2622,15 +2639,20 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, Exact's menu rule; a `role="group"` box of rows with an `aria-label`: a titled section) | `UIMenu`, nested; a section an inline `UIMenu(title:)` (LLP 1021) |
 | `dialog role="alertdialog" aria-label="Remove book?"` of a `text`, its action(s) and one Cancel; or a `text` and one closing button alone | `UIAlertController(.alert)`: the label its title, the text its message; the one-button alert when it has no action (LLP 1115 D6; recipe [below](#a-confirmation)) |
 | a `dialog` whose own `background-color` or `background-image` you write (your panel, your colours), of any rows | HTML's top layer (LLP 1035.001 D11): presented full screen over whatever is up, a sheet included, with no transition of UIKit's, laid out as written and centred in the window, over UIKit's 20% dimming (a `::backdrop` block's `background-color` in its place, below). Its `animation` is its entrance; removed by an `if`, it stays until its `-exact-exit-animation` ends. `closedby="any"` closes it on a tap outside its box, Escape and VoiceOver's escape are its close request, and a field in it is centred above the keyboard. A box in the page with `z-index` stays under every sheet: use this |
-| any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it (`width="100%" box-sizing="border-box"` fills it); `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
+| any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it. The `dialog` has `fit-content` width, as in HTML. Put `width="100%" box-sizing="border-box"` on the `dialog` itself to fill the sheet between its side insets; a percentage width on a child alone resolves against the dialog's width. `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
 | `role="radiogroup"` of `button role="radio" aria-checked=…`, each one text or image (a value chosen from a few) | `UISegmentedControl`, as a tablist's; never a tab bar (LLP 1116.004 D5.2). Android draws Material's segmented buttons (two or more radios: equal shares of the row, the checked one filled with a check), and the Linux desktop and Windows the web's track with the checked radio raised on it. Keys of your own design: a radio that paints itself (its own background, border or radius, LLP 1104 D2), or `appearance="none"` on the `radiogroup`, keeps its buttons as you paint them; on the web, iOS, the Mac and the painted hosts (Linux, Windows and Android’s reader), the group keeps one Tab stop (the checked eligible radio, else the first) and arrow keys that press the next or previous eligible radio (Left and Right swapped right to left); on tvOS the focus engine moves between them |
 | a route whose first child is a `header` holding one heading (`text role="heading"`; an `aria-level` alone is not one), a text after it and its buttons | the navigation bar; a level-1 heading (`aria-level=1`) is a large title, in a sheet too, and any other level an inline one; the text after it the subtitle |
 | a route whose first child is a `header` holding buttons and no heading (readouts, a search field, a tablist and plain boxes around them too, nothing else) | the navigation bar with no title, its buttons trailing and the root's `navigationBack` control leading; a text or an image in it keeps the whole header in the page (`lower-header-no-bar`) |
 | a pushed route with no such `header` | a bar holding the system Back button alone (LLP 1115.000 D5.2) |
-| a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back |
+| a route with `navigationBar="none"` | no navigation bar: a full-bleed screen that draws its own way back; the edge swipe still goes back unless the route's control named by `navigationBack` is disabled; [disable that control during a run](recipes/navigation-stack.md) to refuse Back |
 | a route with `navigationPresentation="modal"` | a sheet |
 | a route pushed while a sheet is on top, with no `navigationPresentation` of its own | pushed inside the sheet, with the system Back; the sheet's swipe down, or a tap behind a `closedby="any"` one, closes the sheet with every route pushed inside it |
+
+A native `select` fits its widest option by default, as on the web
+(LLP 1069.001 D3). Write `field-sizing="content"` to fit the shown value, as a
+UIKit pop-up button does, on either Apple host or the web. These are intrinsic sizes; authored widths and
+minimum or maximum widths still size the control's layout box.
 
 What lies over the page beneath a modal `dialog` is the platform's dim:
 UIKit's beneath a sheet or the top layer, the web's and the painted hosts'
@@ -2827,8 +2849,11 @@ buttons under the row"). Its swipe actions
 are UIKit's, drawn by UIKit (rounded on iOS 26 and later) whatever the buttons
 paint; when every control the row names says `appearance="none"`, the paint is
 kept instead, in a grouped list too: the row swipes by its own scroll, as on
-the web, with one row open at a time (a native swipe row's opening closes it,
-and its drag closes a native one), a full swipe past half the row pressing the outermost action
+the web, with one row open at a time (any other swipe row's opening closes it,
+and its drag closes the other's, a grouped list's row included; a touch elsewhere
+in the scroll that holds it, or that scroll's drag, closes it, and the tap that
+closes it presses nothing, as in a UIKit table),
+a full swipe past half the row pressing the outermost action
 (a haptic as it arms), and each action a VoiceOver custom action of the row's
 content.
 
@@ -3472,19 +3497,25 @@ instantiates does not link its views' implementations.
 
 ### A package's GPU surfaces
 
+To show a static glTF model, add `@exact/model-viewer` from
+`packages/model-viewer` in this checkout. Its `modelViewer` surface supplies
+the camera, picking, node styles, faded-behind rendering, clipping and
+hotspot labels as Exact children. See [the model viewer recipe](recipes/model-viewer.md)
+for a runnable example, file sources and the surface record (LLP 1133.039).
+
 Any package may declare `gpu` beside `views` in its main `exact.json` (LLP 1153.003 D5):
 
 ```json
 "gpu": {
   "crate": "rust",
-  "exactGpu": "0.3",
+  "exactGpu": "0.4",
   "surfaces": { "sky": { "arity": 1, "factory": "sky_surface::surface" } },
   "targets": ["web", "macos", "ios", "linux"]
 }
 ```
 
 `crate` names a directory inside the package containing a standalone `Cargo.toml` and
-`Cargo.lock`. Its dependency is `exact-gpu = "0.3"`, without a path or Git source. It uses
+`Cargo.lock`. Its dependency is `exact-gpu = "0.4"`, without a path or Git source. It uses
 `exact_gpu::wgpu` and depends on no other Exact crate. Each factory returns
 `Box<dyn exact_gpu::Surface>`. The build generates the registry and `module!` exports,
 including the web dependencies; the package writes neither. `packages/fixtures/sky` is
@@ -3506,6 +3537,20 @@ The app adds the package with `bun exact.mjs add <directory or @scope/name>` and
 `@fixture/sky` becomes `fixture-sky`. Duplicate module or surface names are refused,
 including conflicts with `gpu.modules`. A placed surface may take up to `arity` positional
 arguments; the surface checks named arguments and defaults.
+
+A surface may add `"wgsl": "src"` to name the argument carrying an app shader
+(LLP 1181 D9). A string literal there must name a file under `assets/`. The compiler
+validates it as plain WGSL without optional WebGPU features, with one fragment
+entry, built-in inputs only, one `@location(0) vec4f` output and at most one
+resource: a uniform struct at group 0, binding 0. Members may be `f32`, `i32`,
+`u32` or `vec2f`–`vec4f`, without aliases,
+`@align` or `@size`. `time` and `devicePixelRatio` must be `f32`; `resolution` must
+be `vec2f`. `src`, `maxFps` and `animationPlayState` are reserved surface arguments.
+Other named arguments bind members, with a CSS colour accepted for a `vec4f`.
+The compiler checks literal values and compares the uniform reader's layout with
+naga. Failures report `analyze-surface-shader` at the shader declaration or canvas,
+with file, line and column. Computed sources and values are checked when they bind;
+surfaces without `wgsl` keep their own validation.
 
 `targets` names hosts among `web`, `macos`, `ios`, `tvos`, `android`, `linux` and
 `windows`, and defaults to all of them; the watch draws no GPU surface. An omitted host
@@ -3529,6 +3574,106 @@ error names each attempt's failure. An incompatible `exactGpu` requirement stops
 build before resolution. Neither input lock changes.
 The app commits no Rust files for a package. Modules load only when their surfaces mount;
 package WGSL is compiled into the crate, rather than shipped through `gpu.shaderRoots`.
+
+### Model viewer
+
+`cameraOrbit` is azimuth, polar angle from the top, then radius. Angles take
+`deg` or `rad`; lengths take `m`, `cm` or `mm`. A radius of `100%` fits a
+sphere around the target; `105%` leaves a margin. Unsaid, the orbit is
+`"0deg 75deg 105%"`, `cameraTarget="auto auto auto"` centres the model, and
+`fieldOfView="auto"` frames at 30°. A narrow canvas widens the vertical
+field of view to keep the model in frame. Zoom changes radius.
+
+Changing the orbit, target or field of view animates to that view.
+`postMessage("reset", "modelViewer")` returns to those authored values after
+a drag, including when a view button writes the same values again. The
+record's settled camera values can be saved and bound back as a named view.
+`interpolationDecay` is milliseconds, 50 by default; use 0 to jump, including
+when the app honours the person's reduced-motion preference.
+
+`cameraControls` is off unless written. On, drag to orbit, pinch or wheel to
+zoom, two-finger drag or a modified/right-button drag to pan; focused, use
+arrows, Shift + arrows and Page Up/Down. `disablePan` and `disableZoom` stop
+those camera moves. The canvas reserves all touches and wheels in its box
+at mount, even with zoom disabled. In a scrolling page, leave room beside
+it to scroll. To change input mode, mount another canvas, as
+[the scrolling fixture](../packages/model-viewer/test/fixture/scrolling.contract)
+does. With controls off, that fixture picks from `pointerup` by posting
+`pick <offsetX> <offsetY>` to the surface.
+
+Each `ModelNode` styles its named node and descendants. A deeper entry wins;
+for the same name, the last wins. The whole entry wins, without merging
+fields. `color=""` keeps material colours; otherwise use a CSS colour, with
+`opacity` from 0 to 1 and `visibility="visible"` or `"hidden"`. System
+colours such as `AccentColor` need platform context and are refused.
+Unnamed nodes use `#<index>`; duplicate names share a style.
+
+For the faded-behind style, mark the shell `occluder` and its inner parts
+`revealed`. The inner part draws at `occludedOpacity` where the shell hides
+it. Occluders are always opaque: use `occlusion="none"` when you want a
+translucent shell instead. A tap picks the revealed part through an
+occluder, but ordinary opaque geometry in front still blocks it. Hidden and
+clipped geometry, and non-occluders at zero opacity, cannot be picked.
+`message=pick` receives the deepest mesh node's name, or `""` for a miss.
+
+`clipPosition` is a point on the plane, in model coordinates; its `auto`
+axes use the model's centre. `clipNormal` points towards the half that
+stays. `""` disables it. Drawing, picking and hotspot anchors share the cut;
+the cut faces are not filled.
+
+A `ModelHotspot` anchors a direct canvas child by `testId`. Its position is
+in model coordinates; `position=""` uses the node subtree's bounding-box
+centre. `normal=""` skips the facing test. Labels follow the camera and dim
+to `minHotspotOpacity` (0.25 by default) behind opaque geometry outside
+their own subtree, or when their normal faces away. They stay pressable
+and accessible while dimmed; off-canvas, behind-camera, hidden-node and
+clipped anchors hide them. Write a named group and label on the canvas,
+and give hotspot buttons the same picking action as the model. On the web,
+a label that writes `filter` overrides its occlusion fade; put that filter
+on a child inside the label instead. iOS keyboard focus skips hotspots;
+VoiceOver can reach them. View buttons provide a touch alternative to orbit.
+
+`src` also accepts `app:/data/…`, `app:/cache/…` and `app:/tmp/…`. Data code
+downloads or imports a GLB, writes it under its `fs.write` grant, and returns
+the path to bind. Reading that path needs no surface grant. See
+[the fixture's cacheModel source](../packages/model-viewer/test/fixture/app.ts)
+and its scrolling route for a file created at runtime. Direct `https:`
+sources are refused. Names are ASCII, at most 128 bytes after removing
+`assets/`, with no `.` or `..` path part; files are at most 64 MiB.
+
+The reader supports `KHR_mesh_quantization` and `EXT_meshopt_compression`.
+It draws static triangles with material base colours. `OPAQUE` (the default)
+ignores material alpha; `MASK` keeps or drops the whole primitive at
+`alphaCutoff` (0.5 by default). Both use material opacity 1; `BLEND` uses
+the base colour factor's alpha. Node style `opacity` multiplies that material
+opacity, except for occluders, which stay opaque. Textures, animation, skins
+and morph targets are ignored. `.gltf`, sparse accessors and other required
+extensions are refused. On the web, parsing blocks the page once; native
+parsing runs off the frame thread.
+
+Read `exactSurface("modelViewer")` with the imported `ModelViewerState`:
+
+| Field | Use |
+|---|---|
+| `presented` | Hide the loader after the current picture is presented. |
+| `src`, `loaded`, `error` | The bound source, whether it loaded, and its error sentence (`""` on success). |
+| `triangles` | The displayed model's triangle count. |
+| `nodes` | Names and parent names (`""` at a root), for a parts list. |
+| `cameraOrbit`, `cameraTarget`, `fieldOfView` | The last settled camera, ready to save as a view. |
+| `cameraView` | `front`, `right`, `back` or `left`, optionally prefixed `upper-` or `lower-`. |
+
+A replacement keeps the old picture while loading. Failure clears it and
+sets `presented=true`, `loaded=false` and `error`. The empty frame ends the
+loader; show the error text that remains. The record belongs to the first
+live canvas of that surface name; each canvas's picks still reach its own
+handler. Import the package's shapes: records entering a GPU surface are
+positional, so their declaration order matters.
+
+The generated fixture is the tested model. Web drawing needs WebGPU. tvOS
+shows the model and accepts app view buttons, but has no remote orbit or
+focusable hotspots. Linux has no screen-reader bridge. Android, Windows and
+physical-phone behaviour remain unqualified; watchOS and the terminal have
+no GPU surface.
 
 ### Native SDK dependencies
 
@@ -3875,7 +4020,10 @@ name; two pages that would share a file are refused.
 release build as deploy makes one (no agent mode): a page for each `render=build` route
 (rendered under Bun unless the app has a render entry of its own), `404.html` for a `notfound`
 route rendered so, `shell.html`, and `routes.json`, the route table in the plan's order with each
-route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
+route's pattern, render policy and `notfound`. A route whose render draws randomness
+(`crypto.getRandomValues` or `crypto.randomUUID`, for example) cannot be `render=build`, since
+its page would give every reader the same random values: the build fails, naming the route;
+declare it `render=request` or `render=client` instead. An app with routes also gets `robots.txt`, which
 allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
 by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
 (a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built
@@ -4055,7 +4203,7 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
 - Each tab names its panel with `aria-controls`; the panels are the stacks, and every
   tab's stack stays mounted, so a pushed screen, a draft and a scroll offset survive
   a visit to another tab. A tab is `select(nav, name)`; selecting the shown tab
-  again pops it to its root. A sheet is a route of the tab's stack, rendered in the
+  again pops it to its first visit. A sheet is a route of the tab's stack, rendered in the
   panel's `for e in t.stack` like the others, and is presented over the tabs; with
   tabs the root's own children are no routes, and one with a `navigationKey` is refused.
 - On iOS the panels become a `UITabBarController`: a tab of one symbol over its label
@@ -4476,6 +4624,13 @@ which require optional capabilities. `-exact-spring(…)` (a `transition` timing
 function), `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines have
 specific documented behavior;
 they do not admit arbitrary frame callbacks or a second app-state graph.
+
+A native list (`list appearance="auto"`) applies a change at once, as UIKit
+does, unless a row carries a layout transition or an exit animation. Then a
+change in which rows it holds, or in their order, animates on iOS: rows slide
+to their new places and rows that come or go fade, with UIKit's own timing,
+not the written duration. Its first rows, a restyle and a list out of a window
+still apply at once.
 
 macOS and iOS play eligible box `translate`, `scale`, `rotate` and `opacity`
 animations and transitions in Core Animation. A transform stays sampled when
@@ -6279,8 +6434,9 @@ answers as any failure (a Rust source's request takes `Request::timeout(ms)`).
 Without it a stalled fetch waits the platform's limit (60 s without data on
 Apple). Test the error state with `fail fetch`, as above; a timeout itself is
 tested against a stand-in server that never answers (the reference's
-"exactTimeout"). A WebSocket stream that may go silent takes
-`exactIdleTimeout: ms` beside `exactStream`: the host ends it, as one
+"exactTimeout"). A stream that may go silent (a WebSocket, an event stream,
+a byte stream) takes `exactIdleTimeout: ms` beside `exactStream`: the host
+ends it, as one
 `error` event of kind `"Timeout"`, when nothing has arrived for that long,
 and the app refreshes the resource to open it again (the reference's
 "exactIdleTimeout"); `fail fetch` does not produce it.
@@ -6347,12 +6503,14 @@ size in points, from the box `layout <target>` prints: `expect layout "status-ma
 fails for a glyph a column stretched), `expect text "id" == "…"`
 (the node's text; a control's value, so a `select` reads its chosen value, not its
 options, and a checkbox with a `checked` binding `true` or `false`; else its descendants' — a button's label — else a field's value), and
-`expect state name == <number|string|bool|none|[]>`, where `name` may go on into
-a record's fields (`board.active.present`) or a list index (`rows.0`), and the
-number may be negative (`== -3`). Numeric bounds use `>=` or `<=` (`expect state offset >= 90`
+`expect state name == <literal>`, where `name` may go on into a record's fields
+(`board.active.present`) or a list index (`rows.0`). A literal is a number (negative
+allowed), string, bool, `none`, `some(literal)`, list (`["a", "b"]`, `[[1, -2], []]`),
+or shape with literal fields (`Point(x=1, y=-2)`). Equality compares the whole value
+structurally. Numeric bounds use `>=` or `<=` (`expect state offset >= 90`
 and `expect state offset <= 110`); they require a number, without coercing strings or bools.
 `expect state mode in "idle" "ready"` checks literal membership; alternatives use the same
-literals as `==`, separated by spaces. A mismatch names the value read. `expect wakelock held|released` reads
+literals as `==`, separated by spaces. A mismatch prints the actual and expected values. `expect wakelock held|released` reads
 `state.wakelock.held`: the runner's record of displayed elements requesting the
 lock, not whether the OS or browser granted it. A mismatch names the holding
 view ids and their testIds when present, or says nothing holds it.
@@ -7048,7 +7206,8 @@ resets them. The styles are `-exact-large-title`, `-exact-title1`, `-exact-title
 `font-size="-exact-caption1"` alone sets the size and keeps an inherited weight
 and line height, the style filling only what nothing above says.
 `font-size="min(-exact-subheadline, 31px)"` grows with the text size up to its
-cap, as UIKit's `UIFontMetrics.scaledFont(for:maximumPointSize:)` holds one: for a
+cap, whether written literally or bound to a string, as UIKit's
+`UIFontMetrics.scaledFont(for:maximumPointSize:)` holds one: for a
 row of equal cells that must stay one line at the accessibility sizes (a week's
 day numbers, which UIKit's calendar caps at 31 points), never to shrink text. A weight or
 line height written on the node wins either way, and `layout` names each one's

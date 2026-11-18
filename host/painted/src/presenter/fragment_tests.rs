@@ -11,6 +11,11 @@ use super::*;
 /// a link to its `#moves`, buttons that commit or scroll, and a scroller of
 /// ten 50 px rows, the `moves` box, a button, then ten more.
 fn plan() -> Vec<u8> {
+    plan_with("")
+}
+
+/// The plan with `port` written on the detail's scroller.
+fn plan_with(port: &str) -> Vec<u8> {
     let rows = |from: usize| -> String {
         (from..from + 10)
             .map(|i| format!("                box height=50 id=\"row-{i}\"\n"))
@@ -51,7 +56,7 @@ component App
               text "Bump"
             button press=aim testId="aim"
               text "Aim"
-            scroll testId="port" height=100
+            scroll testId="port" height=100{port}
               column
 {}                box id="moves" testId="target" height=50
                 button tabindex=2 testId="after"
@@ -64,8 +69,12 @@ component App
 }
 
 fn boot() -> Presenter<()> {
+    boot_with("")
+}
+
+fn boot_with(port: &str) -> Presenter<()> {
     let (mut p, error) = Presenter::boot_with_fixture_fonts(
-        &plan(),
+        &plan_with(port),
         (),
         (400., 800.),
         1.,
@@ -193,7 +202,7 @@ fn a_replacement_runner_arms_its_first_activation_and_checks_person_scrolls() {
     let _ = open(&mut p, "moves", None);
     let _ = open(&mut p, "to-moves", None);
     assert!(p.fragment_seen > 1);
-    assert!(p.reload(&plan(), ()).unwrap().is_none());
+    assert!(p.reload(&plan(), ()).unwrap() == crate::presenter::ReloadResult::Applied(None));
     settle(&mut p);
     assert_eq!(p.fragment_seen, 1);
     assert!(p.fragment_armed.is_some());
@@ -230,6 +239,31 @@ fn an_activation_already_taken_or_superseded_scrolls_nothing() {
             Some(target),
             "activation {activation}: the current hold stays"
         );
+    }
+}
+
+/// LLP 1153 D5.1: with no fragment, a page's scroller starts over: at its
+/// start with nothing written, at the offset `scrollTop` gives, and under
+/// `scroll-restoration="manual"` where it was.
+#[test]
+fn a_page_that_arrives_without_a_fragment_starts_its_scroller_over() {
+    for (port, expected) in [
+        ("", 0.),
+        (" scrollTop=120", 120.),
+        (r#" scroll-restoration="manual""#, 500.),
+    ] {
+        let mut p = boot_with(port);
+        let port_id = open(&mut p, "moves", None);
+        assert_eq!(p.scroll_of(port_id).1, 500.);
+        let visit = p.host.router_op().unwrap().top as f64;
+        let next = p.fragment_seen as f64 + 1.;
+        p.scroll_to_fragment(&[
+            exact_plan::Value::Number(visit),
+            exact_plan::Value::str(""),
+            exact_plan::Value::Number(next),
+        ]);
+        settle(&mut p);
+        assert_eq!(p.scroll_of(port_id).1, expected, "{port}");
     }
 }
 

@@ -78,6 +78,21 @@ test("the hold while pictures load ends at the app's own scroll, a newer navigat
   held(() => { person.personScrolls++; });
 });
 
+// LLP 1153 D5.1: a page that arrives in the same visit with no fragment (a `replace` to another path).
+test('a page that arrives with no fragment starts each scroller over, and leaves a manual one', () => {
+  const r = new El({ navigationKey: '9' }, root);
+  r.querySelector = () => null;
+  const plain = new El({}, r), authored = new El({}, r), kept = new El({ scrollRestoration: 'manual' }, r), list = new El({}, r);
+  for (const e of [plain, authored, kept, list]) Object.assign(e, { scrollHeight: 2000, clientHeight: 400, scrollTop: 700 });
+  authored.$scrollTop = 120;
+  list.$list = { manual: false, opensAtEnd: true };
+  f.arm(root, { top: 9, fragment: '', activation: 20, since: person.personScrolls }, person);
+  f.scroll(root, 9, '', log, 20);
+  expect([plain.scrollTop, authored.scrollTop, kept.scrollTop, list.scrollTop, r.aligned]).toEqual([0, 120, 700, 2000, 1]);
+  r.isConnected = false;
+  root.children.splice(root.children.indexOf(r), 1);
+});
+
 test('Back puts back the scrollers above the route, as those in it', () => {
   picture.complete = true;
   port.scrollTop = 120;

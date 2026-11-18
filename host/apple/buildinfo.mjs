@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 import { recordedSources } from './shader-libraries.mjs';
 
 const git = (dir, args) => {
-  const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  const r = spawnSync('git', ['--no-optional-locks', '-C', dir, ...args], { encoding: 'utf8' });
   return r.status === 0 ? r.stdout.trim() : null;
 };
 

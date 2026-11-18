@@ -1,11 +1,10 @@
 # Recipe: a navigation stack
 
-Keyed screens go in the app's first element (navigation root) or linked tabpanels.
+Keyed screens go in the navigation root or linked tabpanels.
 
 A route's first `header` with one heading is its bar (large at `aria-level=1`,
-inline at 2). `navigationBack="close"` names a control's `id`, not its action:
-`button id="close" press=back`. A missing literal id warns
-(`lower-navigation-back-id`); a control only on another route can't handle Back.
+inline at 2). `navigationBack="close"` names a route control's `id`:
+`button id="close" press=back`. A missing literal id warns (`lower-navigation-back-id`).
 
 <!-- check: app -->
 ```contract
@@ -67,7 +66,7 @@ component App
           text "Cancel"
 ```
 
-The list: a row that only navigates is a `link` (`href=path(…)`, not a template) that `follow` pushes.
+A navigating row is a `link href=path(…)` that `follow` pushes.
 
 <!-- check: route notes -->
 ```contract
@@ -97,8 +96,8 @@ column navigationKey=`${e.id}` navigationScroll="note-list" position="absolute" 
           text "Delete Note"
 ```
 
-The sheet: `navigationPresentation="modal"`; its Cancel's `id` is the root's `navigationBack`,
-which a swipe down presses. Web: a dialog, actions below.
+A sheet has `navigationPresentation="modal"`. A swipe down presses its Cancel,
+named by `navigationBack`. Web: a dialog, actions below.
 
 <!-- check: route add -->
 ```contract
@@ -133,14 +132,22 @@ test "add, open, delete after asking"
   expect state lib == []
 ```
 
-- An alert's `aria-label` is its title. Escape/Back chooses Cancel; only `closedby="any"`
-  dismisses outside. Another modal is a sheet, closed on ok ([after a write](after-a-write.md)).
+- `aria-label` titles an alert; Escape/Back chooses Cancel. Only `closedby="any"`
+  dismisses outside. Close a sheet [after its write](after-a-write.md).
 - Routes stay mounted: unique `testId`s. `clock settle` after a push, sheet or alert;
   `clock data` before reading a save.
 - Route motion: [motion](motion.md).
-- A run (a workout, quiz) has one exit that ends it or asks; no Back leaves it running.
-- An unmatched location offers home (`notfound`); a missing detail says so.
+- Handle unmatched locations (`notfound`) and missing details.
 - `link href="#tags"` scrolls to `id="tags"` once data lands.
 
-Each screen instance owns its state, resources, mutations and tasks. Pop destroys
-it; covering keeps it alive. Pass activity as a prop and gate tasks with `when active`.
+Each screen owns its state, resources, mutations and tasks. Pop destroys it;
+covering keeps it alive. Pass activity as a prop; gate tasks with `when active`.
+
+During a run, keep its `navigationBack` control mounted and disabled by bool state
+(`running`). iOS hides Back and refuses the edge swipe; the web refuses Back.
+A test's `back` step notes `back refused`.
+
+```text
+button id="close" press=back disabled=running display="none"
+  text "Back"
+```

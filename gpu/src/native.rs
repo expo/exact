@@ -1,7 +1,8 @@
 //! The native ABI: what the presenter `dlopen`s (LLP 1009 D2).
 //!
 //! One thread-local module; calls on the main thread. Strings are UTF-8
-//! bytes with lengths. The `unsafe` this module owns: the platform target
+//! bytes with lengths; filesystem paths use native encodings. The `unsafe`
+//! this module owns: the platform target
 //! handoff (a `CAMetalLayer` pointer the presenter registered, valid until
 //! it calls `destroy`) and the byte ranges a host hands over — each checked
 //! for a null pointer before it becomes a slice, every count checked for
@@ -236,6 +237,52 @@ pub fn load_headless(
 /// Create a surface without presentation; zero means refusal.
 pub fn create_headless(name: &str) -> u32 {
     with(|m| m.create_headless(name)).flatten().unwrap_or(0)
+}
+
+/// Give one canvas its native session's directories before binding it.
+pub fn storage(
+    id: u32,
+    data: &std::path::Path,
+    cache: &std::path::Path,
+    temporary: &std::path::Path,
+) -> bool {
+    with(|m| m.storage(id, data, cache, temporary)).unwrap_or(false)
+}
+
+/// Decode Unix path bytes or Windows UTF-16LE code units without Unicode replacement.
+/// Lengths at the ABI are bytes on both platforms.
+pub fn storage_path(bytes: &[u8]) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStrExt;
+        if bytes.contains(&0) {
+            refuse("gpu_storage: path contains NUL");
+            return None;
+        }
+        std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+    };
+    #[cfg(windows)]
+    let path = {
+        use std::os::windows::ffi::OsStringExt;
+        if !bytes.len().is_multiple_of(2) {
+            refuse("gpu_storage: odd UTF-16 byte length");
+            return None;
+        }
+        let wide: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        if wide.contains(&0) {
+            refuse("gpu_storage: path contains NUL");
+            return None;
+        }
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(&wide))
+    };
+    if !path.is_absolute() {
+        refuse("gpu_storage: storage needs three absolute directory paths");
+        return None;
+    }
+    Some(path)
 }
 
 /// Join acquisition workers and drop the device and every canvas; [`load`] may
@@ -552,7 +599,8 @@ pub fn readback(id: u32, width: f32, height: f32, scale: f32, now_ms: f64, out: 
     }
 }
 
-/// Current instance policy: bit 0 promises alpha one; bit 1 requests SDR.
+/// Current instance policy: bit 0 promises alpha one; bit 1 requests SDR;
+/// bit 2 discards the retained picture.
 /// Available before attachment, including for headless canvases.
 pub fn presentation_flags(id: u32) -> u32 {
     with(|m| m.presentation_flags(id)).unwrap_or(0)
@@ -827,6 +875,24 @@ macro_rules! module {
         /// Load ownership without a GPU.
         #[no_mangle]
         pub extern "C" fn gpu_load_headless() { $crate::native::load_headless(&$registry, concat!(env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")), $requirements); }
+
+        /// Give a canvas its session's data, cache and temporary directories.
+        /// # Safety
+        /// Each pointer is readable for its byte length during this call.
+        /// Paths are Unix bytes or Windows UTF-16LE, without a trailing NUL.
+        #[no_mangle]
+        pub unsafe extern "C" fn gpu_storage(id: u32,
+            data: *const u8, data_len: usize, cache: *const u8, cache_len: usize,
+            temporary: *const u8, temporary_len: usize) -> bool {
+            let paths = [(data, data_len), (cache, cache_len), (temporary, temporary_len)];
+            let mut decoded = [const { ::std::path::PathBuf::new() }; 3];
+            for (out, (ptr, len)) in decoded.iter_mut().zip(paths) {
+                let Some(bytes) = (unsafe { $crate::native::bytes("gpu_storage", ptr, len) }) else { return false };
+                let Some(path) = $crate::native::storage_path(bytes) else { return false };
+                *out = path;
+            }
+            $crate::native::storage(id, &decoded[0], &decoded[1], &decoded[2])
+        }
 
         /// Create ownership without a presentation target. Zero means refusal.
         /// # Safety

@@ -3,6 +3,7 @@ import AppKit
 import ImageIO
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// LLP 1053.000.000 on AppKit: a `glassGroup` node's container view is its
 /// innermost view and holds its children (D2); a material wins over it

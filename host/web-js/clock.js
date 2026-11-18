@@ -2,7 +2,7 @@
 // the wall clock `drive` and `paint` move it, under the agent the driver does.
 import { rt as Link } from './rt-link.js';
 import { beatAfter, timerOrder } from './beat.js';
-import { commit, journal, say, Poisoned, Rev, Sched, Clocked, Writes, Listener, Now, read, Invocation, Origin } from './rt.js';
+import { commit, journal, say, Poisoned, Rev, Sched, Clocked, Writes, Listener, Now, read, Invocation, Origin, deferForReplacement } from './rt.js';
 import { Mutations, Ticket } from './resources.js';
 import { start } from './mount.js';
 export const clock = { now: 0, timers: [], agent: false, generation: 1, epoch: 0 };
@@ -49,6 +49,7 @@ export function frames(action, name, index = order()) {
  * runner's error. Under the agent the journal gets the runner's line for an advance that fired. `timers` false runs
  * only armed `then`s and change actions, at `to` = now, as an agent's input ends (Runner::land_then; trivia F3). */
 export function advance(to, wall, stop, timers = true) {
+  if (deferForReplacement(() => advance(to, wall, stop, timers))) return true;
   if (!Number.isFinite(to)) return (say(`refused advance: NonFiniteClock (${to})`), journal.at(-1));
   if (Poisoned) return (say('refused advance: Poisoned'), journal.at(-1));
   to = Link.timerWait?.cutoff(to, wall) ?? to;

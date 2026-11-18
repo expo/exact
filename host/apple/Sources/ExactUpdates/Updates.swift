@@ -124,7 +124,7 @@ public final class ExactUpdates: ExactAppLifecycle {
     private weak var app: ExactApp?
     private let storeOpen: Bool
     private var firstPixelSeen = false
-    private var preparationRetry: DispatchWorkItem?
+    private var heldSelections: [UInt64: Updates.Selection] = [:]
     /// `deploy.activate` is `immediate` (build.mjs writes it into Info.plist).
     private let immediate = Bundle.main.object(forInfoDictionaryKey: "ExactUpdateActivate") as? String == "immediate"
     private lazy var checks = ForegroundUpdateChecks(
@@ -220,7 +220,14 @@ public final class ExactUpdates: ExactAppLifecycle {
         return ExactGeneration(plan: selection.plan, assets: assets, token: selection.token, module: module)
     }
 
-    public func generationStarted(_ app: ExactApp, token: UInt64) { if storeOpen { Updates.started(token) } }
+    public func generationStarted(_ app: ExactApp, token: UInt64) {
+        heldSelections[token] = nil
+        if storeOpen { Updates.started(token) }
+    }
+    public func replacementEnded(_ app: ExactApp, token: UInt64, outcome: ExactReplacementOutcome, reason: String) {
+        if let selection = heldSelections.removeValue(forKey: token) { Updates.discard(selection) }
+        status = "replacement \(outcome): \(reason)"
+    }
     public func initialGenerationRefused(_ app: ExactApp, token: UInt64, reason: String) {
         if storeOpen { Updates.refuse(token, reason: reason) }
     }
@@ -242,20 +249,20 @@ public final class ExactUpdates: ExactAppLifecycle {
 
     @discardableResult
     public func activate() -> Bool {
-        preparationRetry?.cancel()
-        preparationRetry = nil
         guard storeOpen, let app, let selected = Updates.prepare() else { return false }
-        let accepted: Bool
-        do { accepted = app.applyGeneration(try generation(selected, app: app), label: "update", commit: { Updates.commit(selected) }) }
+        let result: ExactApplyResult
+        do { result = app.applyGeneration(try generation(selected, app: app), label: "update", commit: { Updates.commit(selected) }) }
         catch { status = error.localizedDescription; Updates.discard(selected); return false }
-        if !accepted { Updates.discard(selected) }
-        if !accepted && app.generationPending {
-            status = "Preparing Rust update; the current app remains active"
-            let retry = DispatchWorkItem { [weak self] in self?.activate() }
-            preparationRetry = retry
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: retry)
+        switch result {
+        case .applied: return true
+        case .held(let reason):
+            heldSelections[selected.token] = selected
+            status = "replacement held: " + reason
+            return false
+        case .refused(let reason):
+            status = reason; Updates.discard(selected)
+            return false
         }
-        return accepted
     }
 
     public func handleCommand(_ name: String, app: ExactApp) -> Bool {

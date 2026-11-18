@@ -4,6 +4,10 @@ use exact_runner::Dispatch;
 use serde_json::json;
 use std::sync::Arc;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 struct Fixture;
 impl DataSource for Fixture {
     fn app_id(&self) -> &str {
@@ -37,7 +41,9 @@ impl DataSource for Fixture {
             panic!("a kept reply")
         };
         store.set_durable("token", std::str::from_utf8(&response.body).unwrap())?;
-        Ok(Some(exact_runner::Request::continuation(token + 1)))
+        Ok(Some(exact_runner::Request::continuation::<TestWork>(
+            token + 1,
+        )))
     }
 }
 

@@ -7,6 +7,10 @@
 //! fixture's hold and release, never by sleeping.
 use super::*;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 fn again(core: &Core, ticket: u64) {
     core.again(ticket)
         .expect("a re-ask is never refused for room");
@@ -103,7 +107,7 @@ fn past_sixteen_reads_and_re_asks_wait_and_effects_are_refused() {
     }
     core.resume_ordered();
     let opaque = core.run(
-        job(19, Request::continuation(19)),
+        job(19, Request::continuation::<TestWork>(19)),
         Some(Box::new(|| Outcome::Storage(vec![]))),
     );
     assert_eq!(opaque, limit);
@@ -112,7 +116,7 @@ fn past_sixteen_reads_and_re_asks_wait_and_effects_are_refused() {
         reply.send(Outcome::Storage(vec![]))
     })));
     assert_eq!(
-        core.run_owned(job(19, Request::continuation(19)), handed),
+        core.run_owned(job(19, Request::continuation::<TestWork>(19)), handed),
         limit
     );
     core.resume_ordered();
@@ -414,7 +418,7 @@ fn lifting_the_fence_with_the_window_full_keeps_re_asks_in_order() {
 /// as built in 2eca0ad80).
 #[test]
 fn a_background_round_beside_re_asks_is_admitted_and_behind_writes_refused() {
-    let background = || Request::continuation(exact_runner::BACKGROUND);
+    let background = || Request::continuation::<TestWork>(exact_runner::BACKGROUND);
     let (core, _fixture, woke) = setup();
     for ticket in 0..20 {
         again(&core, ticket);

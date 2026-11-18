@@ -10,6 +10,12 @@ import * as perf from './perf.js';
 import { resourceKey } from './resource-inspection.js';
 import { deliveryFacts } from './facts.js';
 import { cap } from './timer-observations.js';
+// `state.replacement`: the last replacement's report (checkpoint.js), and what a waiting one waits for (LLP
+// 1029.000.002 D9, the dev page's boundary in dev.mjs). Null before any replacement while none waits.
+const replacementState = () => {
+  const report = replacement(), pending = globalThis.__exactDevReplacement?.pending ?? null;
+  return report || pending ? { ...report, pending } : null;
+};
 // LLP 1133.003 §9's gate, under the agent only (ts-stream.js calls in):
 // `perf streams` reads, per stream, each message from its receipt to the
 // mapper's entry, to each decode and to the commit standing, in ms, from
@@ -314,6 +320,14 @@ export function install(exact) {
     images?.then(h => h.seek());
   };
   const seek = (sync = true) => { anim.register(exact.clock.now); anim.seek(exact.clock.now, sync); holdImages(); };
+  // Deliver world records before later timers (LLP 1012, LLP 1046.003).
+  const worldStep = to => {
+    const worlds = exact.gpu?.clock?.(false), now = exact.clock.now, next = worlds?.nextTickAt;
+    if (!worlds?.reply?.world?.length && !(next > now)) return to;
+    const due = [...(exact.clock.stopped ? [] : exact.clock.timers.map(t => t.due)),
+      ...(exact.mutations ?? []).flatMap(m => [m.due, m.next])].filter(t => t > now);
+    return Math.min(to, next > now ? next : to, ...due);
+  };
   // Whether this clock runs `a` (a refused tap's advice, scripts/agent-aim.mjs `pageOutside`): on the document's timeline,
   // and not held by its author, then or, not yet registered, at its registration.
   exact.clockRuns = anim.runs;
@@ -464,7 +478,7 @@ export function install(exact) {
           // (fired in its scroll wait or its frame) found no quiet round.
           let quiet = false, lastRound = exact.lists?.scrollsFired?.() ?? 0;
           const glide = { ms: GLIDE_BOUND_MS };
-          let moved = false;
+          let moved = false, world = {};
           for (let round = 0; round < 16; round++) {
             // A scroller still gliding from the last input moves on its own: it ends first (agent-input.js).
             if (!(await glidesSettled(glide))) return { clock: exact.clock.now, settled: false, reason: 'scroll' };
@@ -492,19 +506,25 @@ export function install(exact) {
             // round, so a run of sends never spends the rounds. Past the deadline,
             // or 4096 stops, the rest is one advance.
             // An answer's own timer (ts-fetch.js) is due as a task is: the settle goes to it, while its answer is live.
-            const at = exact.clock.now, epoch = exact.clock.epoch, to = Math.max(anim.settle(), ...exact.clock.timers.filter(t => t.data && t.live()).map(t => t.due));
+            const gpuPending = await settleGpu();
+            if (gpuPending.length) return gpuPendingReply(req, gpuPending);
+            world = exact.gpu?.clock?.(true) ?? {};
+            const at = exact.clock.now, epoch = exact.clock.epoch, to = Math.max(anim.settle(), world.settleAt ?? 0, ...exact.clock.timers.filter(t => t.data && t.live()).map(t => t.due));
             for (let stops = 0; ; stops++) {
               const before = exact.inflight.n, held = stops < 4096 && performance.now() < end;
-              const stopped = exact.advance(to, false, held ? () => exact.inflight.n > before : undefined);
+              const step = worldStep(to), stopped = exact.advance(step, false, held ? () => exact.inflight.n > before : undefined);
               if (typeof stopped === 'string') { seek(); return { error: `clock: ${stopped}`, clock: exact.clock.now }; }
-              if (!stopped) break;
+              if (!stopped && step >= to) break;
               while (exact.inflight.n > unwaited() && performance.now() < end) await new Promise(r => setTimeout(r, 1));
             }
             // Quiet, unless this round's work set a scroller moving: two frames tell (its first event comes at the
             // next frame's rendering step); then the next round waits for it and runs what it fired.
             if (!(to > at) && exact.clock.epoch === epoch) {
               if (!(await glidesSettled(glide))) return { clock: exact.clock.now, settled: false, reason: 'scroll' };
-              if (scrollsSeen() === scrolled) { quiet = true; break; }
+              if (scrollsSeen() === scrolled) {
+                if (!world.pending) { quiet = true; break; }
+                continue;
+              }
               moved = true;
               continue;
             }
@@ -522,7 +542,7 @@ export function install(exact) {
           if (!quiet && moved) return { clock: exact.clock.now, settled: false, reason: 'scroll' };
           const busy = busyIds();
           if (busy.length && !exact.inflight.n) return { clock: exact.clock.now, settled: false, reason: 'busy', busy };
-          return { clock: exact.clock.now, settled: !exact.inflight.n };
+          return { clock: exact.clock.now, settled: !exact.inflight.n && !world.pending, ...world.reply };
         }
         // A jump that crosses timers stops after each timer whose commit
         // sends, and its reply lands before the next fires, as the wasm
@@ -540,10 +560,10 @@ export function install(exact) {
         await exact.viewTransition?.();
         for (const end = performance.now() + 20000; ;) {
           while (due() && exact.inflight.n > unwaited() && performance.now() < end) await new Promise(r => setTimeout(r, 1));
-          const before = exact.inflight.n, stopped = exact.advance(req.to, false, () => exact.inflight.n > before);
+          const before = exact.inflight.n, step = worldStep(req.to), stopped = exact.advance(step, false, () => exact.inflight.n > before);
           // A refusal stops the jump at its time: the runner's error (a timer's, a `then`'s).
           if (typeof stopped === 'string') { seek(); return { error: `clock: ${stopped}`, clock: exact.clock.now }; }
-          if (!stopped) break;
+          if (!stopped && step >= req.to) break;
           // A reply is usually a task or two away: poll at the browser's
           // shortest timer, not a frame's worth (a 300 ms timer's minute
           // is 200 of these).
@@ -642,7 +662,7 @@ export function install(exact) {
         const mutationFailures = Object.fromEntries(exact.mutations.flatMap(m => { const failure = m.e(); return failure ? [[m.name, {code: failure[0], message: failure[1]}]] : []; }));
         // The writes shown over resources until they end or are answered (overlay.js), as the runner's `state.writes`.
         const writes = exact.writes?.() ?? [];
-        return masked(req, { replacement: replacement(), delivery: deliveryFacts, slots, derives, resources, ...ownedState, ...(observed.length ? { planDigest: exact.plan ?? null, resourceStatus, resourcesMeasuredFrom: exact.resources.find(r => r.observation).resourcesMeasuredFrom, failures } : {}), ...(Object.keys(mutationFailures).length ? {mutationFailures} : {}), mutationRequests: exact.mutations.reduce((n,m)=>n+m.requests,exact.mutations.retired ?? 0), device: { frozen: (exact.page ?? ownPage()).read().frozen, displayMode: displayMode(), navigationType: ownPage().read()['navigation-type'], gpuTier: (exact.page ?? ownPage()).read()['gpu-tier'], presented: (exact.page ?? ownPage()).read().presented }, ...(writes.length ? { writes } : {}), ...(Object.keys(failed).length ? { failed } : {}), pending, ...(Object.keys(exact.heldReplies?.() ?? {}).length ? { heldReplies: exact.heldReplies() } : {}), streams, watches: exact.watchState?.() ?? [], ...(faults.length ? { faults } : {}), ...(background ? { background } : {}), tasks, taskTiming, queued, ...(exact.extensions?.declared?.() ?? {}), ...(exact.extensions?.wake?.() ? { wake: exact.extensions.wake() } : {}), ...(exact.sounds ? { sounds: exact.sounds.state(req.sounds === 'all') } : {}), ...(exact.transport?.declared() ? { transport: exact.transport.state() } : {}), ...(exact.midi ? { midi: exact.midi.state(req.midi === 'all') } : {}), ...(exact.extensions ? { extensions: exact.extensions.state() } : {}), ...(exact.calls ? { intents: exact.calls.state() } : {}), wakelock: exact.wakelock?.() ?? { held: false, by: [] }, orientationlock: exact.orientationlock?.() ?? { held: false, by: [], words: [], lock: null, conflict: null, applied: 'unavailable' }, head, focus, language, storage, keyboard, atoms, decorations, navigation: (pageHistory() ?? navigation).observation(document.getElementById('exact-root')), media, mediaSession: exact.mediaSession?.state(id) ?? { owner: null, claimants: [], actions: [], playbackState: 'none', published: 'none' }, window: { title: document.title }, ...(exact.canvas2dState ? { canvas: exact.canvas2dState() } : {}), ...(exact.surfaceRefusals ? { surfaceRefusals: exact.surfaceRefusals() } : {}), reorder: exact.reorderState?.() ?? null, ...(exact.lists ? { scrollIntoView: exact.lists.intoView() } : {}), ...(exact.presenceLive ? { presence: presence() } : {}), ...(exact.hatchState ? { hatches: exact.hatchState() } : {}), ...tags() });
+        return masked(req, { replacement: replacementState(), delivery: deliveryFacts, slots, derives, resources, ...ownedState, ...(observed.length ? { planDigest: exact.plan ?? null, resourceStatus, resourcesMeasuredFrom: exact.resources.find(r => r.observation).resourcesMeasuredFrom, failures } : {}), ...(Object.keys(mutationFailures).length ? {mutationFailures} : {}), mutationRequests: exact.mutations.reduce((n,m)=>n+m.requests,exact.mutations.retired ?? 0), device: { frozen: (exact.page ?? ownPage()).read().frozen, displayMode: displayMode(), navigationType: ownPage().read()['navigation-type'], gpuTier: (exact.page ?? ownPage()).read()['gpu-tier'], presented: (exact.page ?? ownPage()).read().presented }, ...(writes.length ? { writes } : {}), ...(Object.keys(failed).length ? { failed } : {}), pending, ...(Object.keys(exact.heldReplies?.() ?? {}).length ? { heldReplies: exact.heldReplies() } : {}), streams, watches: exact.watchState?.() ?? [], ...(faults.length ? { faults } : {}), ...(background ? { background } : {}), tasks, taskTiming, queued, ...(exact.extensions?.declared?.() ?? {}), ...(exact.extensions?.wake?.() ? { wake: exact.extensions.wake() } : {}), ...(exact.sounds ? { sounds: exact.sounds.state(req.sounds === 'all') } : {}), ...(exact.transport?.declared() ? { transport: exact.transport.state() } : {}), ...(exact.midi ? { midi: exact.midi.state(req.midi === 'all') } : {}), ...(exact.extensions ? { extensions: exact.extensions.state() } : {}), ...(exact.calls ? { intents: exact.calls.state() } : {}), wakelock: exact.wakelock?.() ?? { held: false, by: [] }, orientationlock: exact.orientationlock?.() ?? { held: false, by: [], words: [], lock: null, conflict: null, applied: 'unavailable' }, head, focus, language, storage, keyboard, atoms, decorations, navigation: (pageHistory() ?? navigation).observation(document.getElementById('exact-root')), media, mediaSession: exact.mediaSession?.state(id) ?? { owner: null, claimants: [], actions: [], playbackState: 'none', published: 'none' }, window: { title: document.title }, ...(exact.canvas2dState ? { canvas: exact.canvas2dState() } : {}), ...(exact.surfaceRefusals ? { surfaceRefusals: exact.surfaceRefusals() } : {}), reorder: exact.reorderState?.() ?? null, ...(exact.lists ? { scrollIntoView: exact.lists.intoView() } : {}), ...(exact.presenceLive ? { presence: presence() } : {}), ...(exact.hatchState ? { hatches: exact.hatchState() } : {}), ...tags() });
       }
       // The page group (LLP 1069.000 D6), where the plan reads `exactPage` (facts.js); else the drive's facts
       // held here, so `root-font-size` still sets the root element's size `rem` follows (D3), as glue.js does.

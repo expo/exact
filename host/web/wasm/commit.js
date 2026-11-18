@@ -1179,6 +1179,8 @@ export function applyBatch(batch) {
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
       globalThis.exact.committed?.();
+      // A commit may settle the request a replacement waits for (boot.js).
+      globalThis.exact.replacementChanged?.();
     }
     host.frameSampler?.batch(batch.seq, outer ? performance.now() - began : 0);
   }

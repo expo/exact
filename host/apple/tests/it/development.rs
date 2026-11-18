@@ -200,6 +200,7 @@ fn local_development_plan_loads_the_pair_and_retries_partial_writes() {
         .next()
         .unwrap();
     let checks = r#"
+public enum ExactApplyResult: Equatable { case applied, held(String), refused(String) }
 struct ExactModule { let receipt: Data; let bytecode: Data }
 struct ExactGeneration { let plan: Data; let assets: String; let module: ExactModule }
 public final class ExactApp {
@@ -207,11 +208,12 @@ public final class ExactApp {
     var mode = "wasm"
     var rustPolicy: (mode: String, target: String) { (mode, "test-target") }
     var plain = 0
-    var generationPending = false
     var generations: [ExactGeneration] = []
-    func apply(_ bytes: Data, label: String) -> Bool { plain += 1; return true }
-    func applyGeneration(_ g: ExactGeneration, label: String, commit: () -> Bool) -> Bool {
-        precondition(commit()); generations.append(g); return true
+    func applyTogether(_ bytes: Data, label: String, resolver: String, token: UInt64, module: ExactModule?, development: Bool, now: Bool, commit: () -> Bool) -> ExactApplyResult {
+        // A watched file is the dev loop's: requests in flight hold it a second at most.
+        precondition(development && commit())
+        if let module { generations.append(ExactGeneration(plan: bytes, assets: resolver, module: module)) } else { plain += 1 }
+        return .applied
     }
     var initial: ExactGeneration?
     func installInitial(_ g: ExactGeneration) { initial = g }
@@ -224,42 +226,42 @@ func write(_ name: String, _ value: String) throws {
 }
 let app = ExactApp(), candidate = ExactDevelopmentPlan(directory.appendingPathComponent("app.plan").path)
 try write("app.plan", "plan")
-precondition(!candidate.hasModule && candidate.apply(to: app) && app.plain == 1)
+precondition(!candidate.hasModule && candidate.apply(to: app) == .applied && app.plain == 1)
 precondition(candidate.installInitial(on: app) == "app.plan has no module beside it" && app.initial == nil)
 let bare = candidate.revision
 try write("app.module.json", "receipt")
 let partial = candidate.revision
 precondition(partial != bare && candidate.hasModule)
-precondition(!candidate.apply(to: app) && app.plain == 1 && app.generations.isEmpty)
+precondition(candidate.apply(to: app) != .applied && app.plain == 1 && app.generations.isEmpty)
 precondition(candidate.installInitial(on: app)?.hasPrefix("local generation refused") == true && app.initial == nil)
 try write("app.hbc", "bytecode")
 // The pair as the launch generation (LLP 1116.003): installed whole, never applied over a running plan.
 precondition(candidate.installInitial(on: app) == nil && app.initial?.module.bytecode == Data("bytecode".utf8) && app.generations.isEmpty)
-precondition(candidate.revision != partial && candidate.apply(to: app))
+precondition(candidate.revision != partial && candidate.apply(to: app) == .applied)
 let pair = app.generations.last!
 precondition(pair.plan == Data("plan".utf8) && pair.module.receipt == Data("receipt".utf8))
 precondition(pair.module.bytecode == Data("bytecode".utf8))
 let first = candidate.revision
 try write("app.hbc", "replacement")
-precondition(candidate.revision != first && candidate.apply(to: app))
+precondition(candidate.revision != first && candidate.apply(to: app) == .applied)
 precondition(app.generations.last!.module.bytecode == Data("replacement".utf8))
 try FileManager.default.removeItem(at: directory.appendingPathComponent("app.module.json"))
-precondition(!candidate.apply(to: app) && app.plain == 1 && app.generations.count == 2)
+precondition(candidate.apply(to: app) != .applied && app.plain == 1 && app.generations.count == 2)
 try write("app.module.json", String(repeating: "x", count: (1 << 20) + 1))
-precondition(!candidate.apply(to: app) && app.generations.count == 2)
+precondition(candidate.apply(to: app) != .applied && app.generations.count == 2)
 try FileManager.default.removeItem(at: directory.appendingPathComponent("app.module.json"))
 try FileManager.default.removeItem(at: directory.appendingPathComponent("app.hbc"))
 try FileManager.default.createDirectory(at: directory.appendingPathComponent("rust/wasm"), withIntermediateDirectories: true)
 try write("rust/wasm/app.module.json", "{\"module\":{\"file\":\"app.module.wasm\"}}")
 let partialRust = candidate.revision
-precondition(candidate.hasModule && !candidate.apply(to: app))
+precondition(candidate.hasModule && candidate.apply(to: app) != .applied)
 try write("rust/wasm/app.module.wasm", "wasm")
-precondition(candidate.revision != partialRust && candidate.apply(to: app))
+precondition(candidate.revision != partialRust && candidate.apply(to: app) == .applied)
 precondition(app.generations.last!.module.bytecode == Data("wasm".utf8))
 let rustOnly = app.generations.count; try write("app.module.json", "{\"kind\":\"javascript\",\"plan\":{\"file\":\"app.plan\"}}")
-precondition(!candidate.apply(to: app) && app.generations.count == rustOnly)
+precondition(candidate.apply(to: app) != .applied && app.generations.count == rustOnly)
 try write("app.hbc", "hbc")
-precondition(candidate.apply(to: app))
+precondition(candidate.apply(to: app) == .applied)
 let mixed = app.generations.last!.module
 let receipt = try JSONSerialization.jsonObject(with: mixed.receipt) as! [String: Any]
 precondition(receipt["kind"] as? String == "mixed" && receipt["version"] as? Int == 1)
@@ -267,10 +269,10 @@ precondition(receipt["javascriptBytes"] as? Int == 3 && mixed.bytecode == Data("
 precondition((receipt["javascript"] as? [String: Any])?["kind"] as? String == "javascript")
 precondition(((receipt["rust"] as? [String: Any])?["module"] as? [String: Any])?["file"] as? String == "app.module.wasm")
 let both = app.generations.count; try FileManager.default.removeItem(at: directory.appendingPathComponent("rust/wasm/app.module.wasm"))
-precondition(!candidate.apply(to: app) && app.generations.count == both)
+precondition(candidate.apply(to: app) != .applied && app.generations.count == both)
 try write("rust/wasm/app.module.wasm", "wasm"); try write("app.module.json", "not JSON")
-precondition(!candidate.apply(to: app) && app.generations.count == both)
-app.mode = "off"; precondition(candidate.apply(to: app) && app.generations.last!.module.bytecode == Data("hbc".utf8))
+precondition(candidate.apply(to: app) != .applied && app.generations.count == both)
+app.mode = "off"; precondition(candidate.apply(to: app) == .applied && app.generations.last!.module.bytecode == Data("hbc".utf8))
 "#;
     let result = swift_e(&format!("{source}\n{checks}"));
     assert!(

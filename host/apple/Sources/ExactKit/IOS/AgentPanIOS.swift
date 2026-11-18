@@ -216,7 +216,7 @@ extension Agent {
         while let cur = n, !(cur is NodeView) { n = cur.superview }
         guard let node = n as? NodeView else { return FingerReach() }
         let local = node.local(p)
-        let element = node.kind == "svg" && !node.inert ? presenter.svg.target(node.id, at: local) : nil
+        let element = node.kind == "svg" && !node.inert ? presenter.svg?.target(node.id, at: local) : nil
         let run = element == nil && !node.disabled && !node.inert ? node.inlineActivationTarget(at: local) : nil
         let href = element == nil && run == nil && node.inlineActivationTarget(at: local) == nil ? node.inlineLink(at: local) : nil
         let action = element == nil ? node.activationTarget(at: p) : nil

@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// An app whose module artifact is there but the loader refuses answers
 /// `unavailable` to every native call, so a drive's ready line carries

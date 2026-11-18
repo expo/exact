@@ -1,8 +1,7 @@
 # Game recipes
 
-Each recipe has a runnable `Sim` fragment, assertions and the pitfalls beside it.
-Run them with `cargo test --manifest-path game/Cargo.toml -p exact-game --doc recipes`.
-They are compiled directly from these pages by `engine/src/recipes.rs`.
+Run the engine snippets with `cargo test --manifest-path game/Cargo.toml -p exact-game --doc recipes`.
+Compile the renderer snippet with `cargo test --manifest-path game/Cargo.toml -p exact-game-render --doc blended_hook_geometry`.
 
 The gameplay kit is what every game needs (`exact_game::steer`, `collect`, `spawn`,
 and `Actions` for a shop); the [starter](../new/logic/src/lib.rs) uses all of it:
@@ -33,6 +32,8 @@ Everything else:
 | Orbit a third-person camera | [Orbit camera](orbit-camera.md) | Engine look tests |
 | Flash what was hit | [Hit flash](hit-flash.md) | Engine presentation tests |
 | Catch a tap inside one tick | [Same-tick press](same-tick-press.md) | Engine input tests |
+| Cover a game until its first complete frame | [Loading cover](loading-cover.md) | [Surface publications](../README.md#publications-and-events) |
+| Draw blended geometry in a hook | [Blended hook geometry](blended-hook-geometry.md) | [Render hooks](../render/README.md#game-render-hooks) |
 | Export models from Blender | [Blender export](blender-export.md) | Asset fixture |
 | Light a tank or a sea from inside | [Underwater](underwater.md) | Underwater GPU test |
 

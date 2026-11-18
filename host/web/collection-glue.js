@@ -688,9 +688,12 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
         const epochs = new Map(s.rows.map(row => [row.view, row.epoch]));
         const freshRows = snapshot.rows.some(row => epochs.get(row.view) !== row.epoch);
         s.snapshot = snapshot;
-        for (const fixed of snapshot.fixed ?? []) for (const id of fixed.roots) {
-          const root = views.get(id), shell = root?.hasAttribute('data-exact-list-item') ? root : root?.parentElement;
-          if (shell?.hasAttribute('data-exact-list-item')) { shell.$collectionFixed = true; shell.setAttribute('role', 'presentation'); }
+        for (const [side, fixed] of (snapshot.fixed ?? []).entries()) for (const id of fixed.roots) {
+          // The list's child that holds the root: its item shell, or the root itself.
+          const root = views.get(id), shell = [root, root?.parentElement].find(el => el?.hasAttribute('data-exact-list-item'));
+          if (!root) continue;
+          (shell ?? root).$collectionFixed = side ? 'trail' : 'lead';
+          shell?.setAttribute('role', 'presentation');
         }
         s.sequence = s.sequence > BigInt(snapshot.scrollSequence) ? s.sequence : BigInt(snapshot.scrollSequence);
         for (const row of s.rows) if (row.el) rowOwners.delete(row.el);

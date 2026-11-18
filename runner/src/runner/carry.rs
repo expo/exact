@@ -31,7 +31,7 @@ pub struct Carried {
     pub resources: Vec<(String, String, Vec<Value>, Value)>,
     /// Kept entries waiting for their identifying arguments (LLP 1027.005
     /// D3, 2026-11-13): (resource name, source name, identifying arguments,
-    /// digest of the stored entry, whether its seed slept while idle).
+    /// digest of the stored entry, whether it was kept across idleness).
     pub waiting: Vec<(String, String, Vec<Value>, u64, bool)>,
     /// The resources whose answer came from a stream still open: a
     /// replacement that takes the answer shows it and asks again, opening
@@ -39,6 +39,10 @@ pub struct Carried {
     pub streams: Vec<String>,
     /// (Resource name, source name) pairs whose answer depends on the store.
     pub store_readers: Vec<(String, String)>,
+    /// (Resource name, source name) pairs whose answers are kept (LLP 1027
+    /// D4): the store readers and what the plan keeps whatever it reads
+    /// (`kept::keeps_answers`). A reload keeps only their kept entries.
+    pub keepers: Vec<(String, String)>,
     /// Of `store_readers`, those asked in the run that carried them, and
     /// whether each read what the store holds: one that only drew randomness
     /// is not asked again by a store change after the reload either
@@ -75,6 +79,7 @@ impl Carried {
         self.waiting = validated.waiting;
         self.streams = validated.streams;
         self.store_readers = validated.store_readers;
+        self.keepers = validated.keepers;
         self.read_contents = validated.read_contents;
         self
     }
@@ -105,6 +110,7 @@ impl<D: super::DataSource> super::Runner<D> {
     ) -> Result<Runner<D>, RunnerError> {
         Runner::boot_inner(
             RunnerLinks::ALL,
+            super::ModuleLinks::ALL,
             plan,
             data,
             kernel,
@@ -115,6 +121,18 @@ impl<D: super::DataSource> super::Runner<D> {
             launch,
         )
         .map(Runner::linking_every_device)
+    }
+
+    /// (Resource name, source name) of each declared resource `which` names.
+    fn declared_where(&self, which: impl Fn(usize) -> bool) -> Vec<(String, String)> {
+        (0..self.declared_resources().len())
+            .filter(|&i| which(i))
+            .map(|i| {
+                let row = &self.plan.resources[i];
+                let (name, source) = (self.plan.str(row.name), self.plan.str(row.source));
+                (name.to_string(), source.to_string())
+            })
+            .collect()
     }
 
     /// Session identity for a fresh reboot, without carrying application state.
@@ -184,18 +202,10 @@ impl<D: super::DataSource> super::Runner<D> {
                     _ => None,
                 })
                 .collect(),
-            store_readers: self
-                .resource_rows()
-                .take(self.declared_resources().len())
-                .enumerate()
-                .filter(|(i, _)| self.resources[*i].store_reader)
-                .map(|(_, resource)| {
-                    (
-                        self.plan.str(resource.name).to_string(),
-                        self.plan.str(resource.source).to_string(),
-                    )
-                })
-                .collect(),
+            store_readers: self.declared_where(|i| self.resources[i].store_reader),
+            keepers: self.declared_where(|i| {
+                self.resources[i].store_reader || super::kept::keeps_answers(&self.plan, i)
+            }),
             read_contents: self
                 .resource_rows()
                 .take(self.declared_resources().len())
@@ -268,6 +278,34 @@ impl<D: super::DataSource> Runner<D> {
         ));
     }
 
+    /// The host's word on what a replacement waits for (LLP 1029.000.002
+    /// D9), which `state.replacement.pending` reports.
+    pub fn set_replacement_pending(&mut self, pending: Option<&'static str>) {
+        self.replacement_pending = pending;
+    }
+
+    /// `state.replacement`: the last replacement's report and what a waiting
+    /// one waits for; null before any replacement while none waits.
+    pub(crate) fn replacement_state_json(&self, out: &mut String) {
+        if self.replacement.is_none() && self.replacement_pending.is_none() {
+            out.push_str("null");
+            return;
+        }
+        if self.replacement.is_some() {
+            self.replacement_json(out);
+            out.pop();
+            out.push(',');
+        } else {
+            out.push('{');
+        }
+        out.push_str("\"pending\":");
+        match self.replacement_pending {
+            Some(pending) => crate::json::quote(pending, out),
+            None => out.push_str("null"),
+        }
+        out.push('}');
+    }
+
     pub(crate) fn replacement_json(&self, out: &mut String) {
         use std::fmt::Write;
         let Some(report) = &self.replacement else {
@@ -277,16 +315,16 @@ impl<D: super::DataSource> Runner<D> {
         let _ = write!(
             out,
             "{{\"at\":{},\"dropped\":[",
-            crate::agent::num(report.at)
+            crate::json::num(report.at)
         );
         for (i, (name, why)) in report.dropped.iter().enumerate() {
             if i > 0 {
                 out.push(',');
             }
             out.push_str("{\"what\":\"state\",\"name\":");
-            crate::agent::quote(name, out);
+            crate::json::quote(name, out);
             out.push_str(",\"why\":");
-            crate::agent::quote(why, out);
+            crate::json::quote(why, out);
             out.push('}');
         }
         out.push_str("]}");
@@ -371,22 +409,34 @@ mod tests {
             for op in ["tags", "tree", "state", "logs", "unknown"] {
                 let reply = crate::agent::handle(&runner, &format!("{{\"op\":\"{op}\"}}"));
                 assert_eq!(
-                    crate::agent::field_num(&reply, "generation"),
+                    crate::json::field_num(&reply, "generation"),
                     Some(generation as f64),
                     "{reply}"
                 );
             }
             let state = crate::agent::handle(&runner, "{\"op\":\"state\"}");
             assert_eq!(
-                crate::agent::field_num(&state, "generation"),
+                crate::json::field_num(&state, "generation"),
                 Some(generation as f64)
             );
             assert_eq!(runner.kernel().incarnation(), 1);
             if generation == 1 {
                 assert!(state.contains("\"replacement\":null"));
+                // What the host says a waiting replacement waits for (LLP 1029.000.002 D9).
+                runner.set_replacement_pending(Some("pointer"));
+                let held = crate::agent::handle(&runner, "{\"op\":\"state\"}");
+                assert!(
+                    held.contains("\"replacement\":{\"pending\":\"pointer\"}"),
+                    "{held}"
+                );
+                runner.set_replacement_pending(None);
             }
             if generation == 2 {
                 assert!(state.contains("\"replacement\":{\"at\":50,"));
+                assert!(
+                    state.contains("\"why\":\"no place\"}],\"pending\":null}"),
+                    "{state}"
+                );
                 assert!(runner
                     .journal()
                     .next()
@@ -480,7 +530,7 @@ mod tests {
         );
         let cached = runner.inspection_digest.get().unwrap();
         assert_eq!(
-            crate::agent::field_str(&first, "planDigest").as_deref(),
+            crate::json::field_str(&first, "planDigest").as_deref(),
             Some(cached.as_str())
         );
         let address = cached.as_ptr();

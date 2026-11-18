@@ -309,11 +309,11 @@ mod presenter_tests {
         log.lock().unwrap().lines.push("staged seq 2".into());
         p.pointer_down(10., 10., 1_000.0).unwrap();
         assert!(p.poll_update());
-        assert!(p.pending_update);
+        assert!(p.update_owed());
         p.run_commands(|| ());
-        assert!(p.pending_update, "a held touch defers the activation");
+        assert!(p.update_owed(), "a held touch defers the activation");
         p.pointer_up(10., 10., 1_000.0).unwrap();
         p.run_commands(|| ());
-        assert!(!p.pending_update, "applied at the first turn with none");
+        assert!(!p.update_owed(), "applied at the first turn with none");
     }
 }

@@ -82,10 +82,10 @@ final class GenerationAcceptanceTests: XCTestCase {
         XCTAssertEqual(durableCommits, 0)
         XCTAssertEqual(try slots(), before)
         for session in sessions { session.runtime.discardPlan() }
-        XCTAssertTrue(app.applyGeneration(ExactGeneration(plan: plan, assets: app.resolver)) {
+        XCTAssertEqual(app.applyGeneration(ExactGeneration(plan: plan, assets: app.resolver)) {
             XCTAssertTrue(Thread.isMainThread)
             durableCommits += 1; return true
-        })
+        }, .applied)
         XCTAssertEqual(durableCommits, 1)
         XCTAssertEqual(try slots(), before)
     }

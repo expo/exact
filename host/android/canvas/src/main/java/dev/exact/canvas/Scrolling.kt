@@ -433,9 +433,10 @@ internal class Scrolling(private val view: ExactView) {
         // A hosted text field that drags its own selection or caret asked to keep its touch, as it asks a ScrollView.
         if (view.fieldKeeps()) return
         val across = ax > ay
-        if (claims and (if (across) 1 else 2) != 0) { mode = THEIRS; return }
+        val sheetDirection = if (y < downY) 8 else 16
+        if (claims and (if (across) 1 else 2 or sheetDirection) != 0) { mode = THEIRS; return }
         val takes = { side: Boolean -> chain.any { if (side) it.x else it.y } }
-        val other = (if (across) ay else ax) > slop && claims and (if (across) 2 else 1) == 0
+        val other = (if (across) ay else ax) > slop && claims and (if (across) 2 or sheetDirection else 1) == 0
         sideways = when {
             takes(across) -> across
             other && takes(!across) -> !across

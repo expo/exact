@@ -170,7 +170,7 @@ fn constrained_height_plateau_has_zero_displayed_release_velocity() {
 }
 #[test]
 fn cancellation_disable_deletion_and_reload_never_dispatch_late_release() {
-    for action in ["cancel", "disable", "hide", "reload"] {
+    for action in ["cancel", "disable", "hide"] {
         let mut p = boot(APP);
         recognize(&mut p);
         p.pointer_move(200., 210., 20.).unwrap();
@@ -185,9 +185,6 @@ fn cancellation_disable_deletion_and_reload_never_dispatch_late_release() {
             .token;
         match action {
             "cancel" => p.pointer_cancel(30.).unwrap(),
-            "reload" => {
-                p.reload(&crate::test_plan(APP), Rows).unwrap();
-            }
             name => {
                 p.tap(id(&p, name)).unwrap();
             }
@@ -197,6 +194,33 @@ fn cancellation_disable_deletion_and_reload_never_dispatch_late_release() {
         assert!(!p.pointer_up(200., 100., 40.).unwrap());
         assert_eq!(text(&p, "count"), "0");
     }
+}
+
+/// A replacement during the drag waits for its release, which reaches the
+/// runner that saw the press (LLP 1029.000.002 D9).
+#[test]
+fn a_reload_during_a_drag_waits_for_the_release() {
+    let mut p = boot(APP);
+    recognize(&mut p);
+    p.pointer_move(200., 210., 20.).unwrap();
+    let token = p
+        .contact
+        .as_ref()
+        .unwrap()
+        .hold
+        .as_ref()
+        .unwrap()
+        .primary
+        .token;
+    assert_eq!(
+        p.reload(&crate::test_plan(APP), Rows).unwrap(),
+        crate::presenter::ReloadResult::Held("pointer")
+    );
+    assert!(p.host.has_hold(token), "the drag goes on");
+    p.pointer_up(200., 100., 40.).unwrap();
+    p.run_commands(|| Rows);
+    assert_eq!(p.replacement_pending(), None);
+    assert!(!p.host.has_hold(token));
 }
 
 #[test]

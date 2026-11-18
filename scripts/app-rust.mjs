@@ -54,14 +54,7 @@ contract.workspace = true
 //! compile error here rather than a record built one position off.
 
 fn main() {
-    let path = std::path::Path::new("../app.contract");
-    // The contract and every file it uses.
-    contract::rerun_if_changed(path);
-    let (plan, calls) = contract::compile_path_for_rust(path)
-        .unwrap_or_else(|e| panic!("app.contract does not compile: {e:?}"));
-    let rust = contract::rust(&plan, &calls).expect("contract rust");
-    let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("shapes.rs");
-    std::fs::write(out, rust).unwrap();
+    contract::build_rust(std::path::Path::new("../app.contract")).expect("contract rust");
 }
 `,
     'data/src/lib.rs': `//! The app's data: what app.contract's sources answer. \`query\` answers now, with no I/O, so the build bakes it

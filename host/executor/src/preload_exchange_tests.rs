@@ -839,19 +839,11 @@ fn closing_a_failed_coordinator_drops_complete_and_concurrent_holds_and_stays_cl
     for asynchronous in [false, true] {
         let server = Server::new();
         let (core, woke) = server.core(asynchronous, true);
-        let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let failing = fail.clone();
         server.plan("/complete", Plan::new(200, &[], b"complete"));
         let set = Preloads::start(
             vec![definition(&server, "/complete")],
             &core.grants,
-            move || {
-                assert!(
-                    !failing.swap(false, Ordering::Relaxed),
-                    "injected preload factory panic"
-                );
-                ibex2::host::Host::new()
-            },
+            ibex2::host::Host::new,
         );
         complete_set(&set);
         let control = set.control();
@@ -874,7 +866,10 @@ fn closing_a_failed_coordinator_drops_complete_and_concurrent_holds_and_stays_cl
         let (reached, paused) = channel();
         let (resume, resume_at_close) = channel();
         *control.destination.before_close.lock().unwrap() = Some((reached, resume_at_close));
-        fail.store(true, Ordering::Relaxed);
+        // The coordinator fails on its own thread, with a prefetch's start
+        // queued behind the failure, and closes.
+        let fail = Box::new(|| panic!("injected preload coordinator panic"));
+        control.send.send(Message::Hop(fail)).unwrap();
         server.plan("/panic", Plan::new(200, &[], b"own"));
         core.run(job(2, server.request("/panic").prefetch()), None)
             .unwrap();
@@ -957,7 +952,7 @@ fn a_coordinator_panic_releases_pending_launch_and_prefetch_waiters() {
                 panic!("injected preload factory panic")
             };
             if prefetch {
-                core.stream_host = Arc::new(factory);
+                *core.lane.get_mut().unwrap() = Lane::new(Arc::new(factory));
                 core.run(job(1, server.request("/panic").prefetch()), None)
                     .unwrap();
             } else {
@@ -1023,13 +1018,14 @@ fn a_forgotten_unsafe_waiter_is_sent_after_failure_drop_deadline_refusal_or_work
                 let (entered, reached) = channel();
                 if ending >= 3 {
                     let held = Arc::new(Mutex::new(held));
-                    control.startup.lock().unwrap().as_mut().unwrap().host = Arc::new(move || {
-                        ibex2::host::Host::with_transport(Box::new(Refuse {
-                            entered: entered.clone(),
-                            release: held.clone(),
-                            panic: ending == 4,
-                        }))
-                    });
+                    control.startup.lock().unwrap().as_mut().unwrap().lane =
+                        Lane::new(Arc::new(move || {
+                            ibex2::host::Host::with_transport(Box::new(Refuse {
+                                entered: entered.clone(),
+                                release: held.clone(),
+                                panic: ending == 4,
+                            }))
+                        }));
                 } else {
                     let mut reply = Plan::new(200, &[], b"unused");
                     reply.held = Some(held);
@@ -1099,7 +1095,7 @@ fn a_preloads_transport_idle_timeout_follows_its_exchange_deadline() {
             let host = move || ibex2::host::Host::with_transport(Box::new(Record(send.clone())));
             let request = server.request("/deadline").timeout(120_000);
             if prefetch {
-                core.stream_host = Arc::new(host);
+                *core.lane.get_mut().unwrap() = Lane::new(Arc::new(host));
                 core.run(job(1, request.prefetch()), None).unwrap();
             } else {
                 let mut def = definition(&server, "/deadline");
@@ -1166,16 +1162,7 @@ fn cancelling_an_unsafe_hold_invalidates_before_its_failure_message_is_processed
             let now = clock.clone();
             control.test_clock(Arc::new(move || *now.lock().unwrap()));
             let (entered, reached) = channel();
-            let (release, held) = channel();
-            let held = Arc::new(Mutex::new(held));
-            let count = AtomicUsize::new(0);
-            control.startup.lock().unwrap().as_mut().unwrap().host = Arc::new(move || {
-                if count.fetch_add(1, Ordering::Relaxed) == 1 {
-                    entered.send(()).unwrap();
-                    held.lock().unwrap().recv_timeout(HANG).unwrap();
-                }
-                ibex2::host::Host::new()
-            });
+            let (release, held) = channel::<()>();
             server.plan(
                 "/cart",
                 Plan::new(200, &[("Cache-Control", "max-age=60")], b"old"),
@@ -1189,12 +1176,12 @@ fn cancelling_an_unsafe_hold_invalidates_before_its_failure_message_is_processed
             if prefetch {
                 core.cancel(&[1]);
             }
-            server.plan("/blocked", Plan::new(200, &[], b"unused"));
-            control.extend(
-                vec![definition(&server, "/blocked")],
-                &core.grants,
-                Arc::new(|_, _| {}),
-            );
+            // The preload thread is held, so the hold's failure waits unread.
+            let stall = move || {
+                entered.send(()).unwrap();
+                held.recv_timeout(HANG).unwrap();
+            };
+            control.send.send(Message::Hop(Box::new(stall))).unwrap();
             reached.recv_timeout(HANG).unwrap();
             *clock.lock().unwrap() += Duration::from_secs(2);
             control.test_tick();

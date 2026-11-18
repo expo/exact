@@ -1137,7 +1137,7 @@ fn the_scopes_are_told_a_change_once_end_in_order_and_are_built_again_after_a_re
     // A reload (§4.3): every node, then the window, then the app, ends; the
     // old incarnation's registrations are dropped; all are built again.
     let plan = contract::compile(WORDS).unwrap().encode();
-    assert!(p.reload(&plan, ()).unwrap().is_none());
+    assert!(p.reload(&plan, ()).unwrap() == crate::presenter::ReloadResult::Applied(None));
     assert_eq!(
         notes(),
         [

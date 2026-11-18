@@ -15,6 +15,7 @@ import { liveById, installFits } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)
 export { animationClocks, launchLocation, launchVisits } from './navigation.js';
 export { fontFamily } from './font-family.js';
+export { cssNames } from './regions.js';
 import { Head, markDocument, projectRoots, openTabs, prepareTabs, unopened, tp } from './document.js';
 export { Head, unopened, tp };
 export { canSetStatus, statusSubject } from './document.js';
@@ -423,6 +424,13 @@ export function R(r, reasking = false) {
 function settle() {
   for (const n of Settle) if (!n.gone) fresh(n);
 }
+// Keep a document handoff's checkpoint still. Defer the whole reply or
+// recommit, including what its caller does on refusal, under its own origin.
+export function deferForReplacement(f) {
+  if (Writes || !DEVELOPMENT_STORE) return false;
+  const origin = Origin.now(), invocation = Invocation.id;
+  return globalThis.__exactDevReplacement?.defer(() => Origin.run(origin, () => Invocation.run(invocation, f))) ?? false;
+}
 /** One commit: `f` runs; its writes, sends and refreshes land; settlement
  * runs; a refusal anywhere up to here puts everything back and leaves the
  * tree untouched; then the tree updates, completion callbacks run, requests go out, commands run. */
@@ -624,6 +632,7 @@ export function commit(f, what = 'commit', finished) {
  * reads are owed (a reconciling ask), they fail, keeping what they show, before a commit publishes it; a refusal of
  * that leaves nothing owed. */
 export function recommit(f, what) {
+  if (deferForReplacement(() => recommit(f, what))) return;
   const done = commit(f, what),
     owed = done === false ? Resources.filter(r => r.reconciling) : [],
     why = Refused?.message;
@@ -709,10 +718,14 @@ export function act(fn, types, skip = 0, names) {
     }
     fn(...a);
   };
-  const a = (...x) => commit(() => go(x), 'action');
+  const a = (...x) => {
+    if (deferForReplacement(() => a(...x))) return true;
+    return commit(() => go(x), 'action');
+  };
   a.t =
     f =>
-    (...v) => {
+    function action(...v) {
+      if (deferForReplacement(() => action(...v))) return true;
       if (Poisoned)
         try {
           f();
@@ -845,7 +858,9 @@ export const Store = {
   // Outside a render, keeping what is already kept is no write, as the runner's `Store::set`.
   set(k, v) {
     if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
-    if (v != null && this.map.get(k) === v) return;
+    const same = v == null ? !this.map.has(k) : this.map.get(k) === v;
+    if (v != null && same) return;
+    if (!same) this.leased?.get(k)?.(); // a lease's write arms its recovery (storage-environment.js `exclusiveSecret`)
     if (v == null) this.map.delete(k);
     else this.map.set(k, v);
     this.writes.push([k, v]);

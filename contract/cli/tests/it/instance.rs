@@ -205,6 +205,27 @@ fn a_child_owns_its_resource_except_where_data_sizes_its_uses() {
     assert_eq!(e.id, "type-child-resource");
     assert_eq!(e.span.line, 7);
     assert_eq!(e.message, "`Row` declares `resource s`, and this use is under a `for` over data (line 6): each row would ask `s` on its own, with nothing here saying how many. A component that owns requests is used where its instances are tabs, screens or `if` arms. For one request per row, declare it in `A` over the list, `resource rowS = s(x) for x in … key=…`, and pass each row its answer as a prop (docs/contract-for-agents.md, \"A feature's requests\")");
+    // Through a wrapper component, and as a slot fill that the slot's
+    // component repeats, the use is still a row's.
+    let wrapped = rows.replace(
+        "      Row()\n",
+        "      Wrap()\ncomponent Wrap\n  view\n    Row()\n",
+    );
+    let e = contract::compile(&wrapped).unwrap_err();
+    assert!(
+        e.message.starts_with(
+            "`Row` declares `resource s`, and this use is under a `for` over data (line 6)"
+        ),
+        "{e}"
+    );
+    let filled = "shape S\n  id: string\ncomponent A\n  view\n    Card()\n      Row()\ncomponent Card\n  slot\n  state ids = [\"a\"]\n  view\n    column\n      for id in ids key=id\n        children\ncomponent Row\n  resource s = s() as shape S\n  view\n    text s.id\n";
+    let e = contract::compile(filled).unwrap_err();
+    assert!(
+        e.message.starts_with(
+            "`Row` declares `resource s`, and this use is under a `for` over data (line 12)"
+        ),
+        "{e}"
+    );
     // The repair it names compiles.
     let fixed = "shape S\n  id: string\ncomponent A\n  state ids = [\"a\"]\n  resource rowS = s(x) for x in ids key=x as shape S\n  view\n    column\n      for r in rowS key=r.id\n        Row(s=r)\ncomponent Row\n  props\n    s: S\n  view\n    text s.id\n";
     contract::compile(fixed).unwrap_or_else(|e| panic!("{e}"));
@@ -212,11 +233,7 @@ fn a_child_owns_its_resource_except_where_data_sizes_its_uses() {
     let listed = "shape S\n  id: string\ncomponent A\n  view\n    Row()\ncomponent Row\n  state ids = [\"a\"]\n  resource s = s(x) for x in ids key=x as shape S\n  view\n    text \"x\"\n";
     let e = contract::compile(listed).unwrap_err();
     assert_eq!(e.id, "type-child-resource");
-    assert!(
-        e.message.contains("may declare a resource over a list"),
-        "{}",
-        e.message
-    );
+    assert_eq!(e.message, "only the root, the root file's first component (`A`), may declare a resource over a list (`resource s = s(…) for …`, one request per element). Declare it in `A` (`resource rowS = s(…) for …`) and pass its answers down to `Row` as a prop (docs/contract-for-agents.md, \"A feature's requests\")");
 }
 
 #[test]

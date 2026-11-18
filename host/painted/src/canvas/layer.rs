@@ -305,6 +305,101 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_views_are_kept_inside_their_animated_ancestors() {
+        use crate::presenter::{PainterChoice, Presenter};
+        use exact_kernel::motion::motion_node;
+        use exact_motion::Property;
+        use exact_runner::Event;
+
+        let source = r#"keyframes rise
+  from opacity=0 translate="0px 12px"
+  to opacity=1 translate="0px 0px"
+
+component App
+  state shown = false
+  state color = "red"
+  action show
+    shown = true
+  action change
+    color = "blue"
+  view
+    column
+      button "Show" testId="show" press=show
+      button "Change" testId="change" press=change
+      if shown
+        column testId="ancestor" animation="rise 300ms linear both"
+          test-view testId="native" width=40 height=20 shade=color
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (200., 200.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host_mut().lowering = true;
+        p.host_mut()
+            .engine
+            .set_lowered_properties(&[Property::Opacity, Property::Translate]);
+        let tap = |p: &mut Presenter<()>, name: &str, time| {
+            let key = p.host().kernel().find_by_test_id(name)[0];
+            let id = p.host().kernel().node_by_key(key).unwrap().id;
+            assert!(p.host_mut().dispatch_at(id, Event::Press, time).is_none());
+            p.after_commit();
+        };
+        tap(&mut p, "show", 0.);
+        let ancestor = p.host().kernel().find_by_test_id("ancestor")[0];
+        assert_ne!(p.host().lowered_mask(ancestor), 0);
+        p.frame();
+        let first = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut layer = None;
+        let mut at = 0;
+        while at < first.len() {
+            let next = end(&first, at).unwrap();
+            if first[at] == LAYER_SET {
+                let body = &first[at + 19..next];
+                let mut i = 0;
+                while i < body.len() {
+                    if body[i] == super::super::NATIVE {
+                        assert_eq!(body[i + 2], crate::paint::NativeKind::Module as u32);
+                        layer = Some(first[at + 1]);
+                    }
+                    i = end(body, i).unwrap();
+                }
+            }
+            at = next;
+        }
+        let layer = layer.expect("the module view is drawn inside the layer");
+        p.frame();
+        let retained = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        while at < retained.len() {
+            assert_ne!(
+                retained[at], LAYER_SET,
+                "unchanged content is not sent again"
+            );
+            at = end(&retained, at).unwrap();
+        }
+        assert!(ALIVE.with(|a| a
+            .borrow()
+            .iter()
+            .any(|(id, key, _)| *id == layer && *key == motion_node(ancestor))));
+        tap(&mut p, "change", 1000.);
+        p.frame();
+        let changed = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut updated = false;
+        while at < changed.len() {
+            updated |= changed[at] == LAYER_SET && changed[at + 1] == layer;
+            at = end(&changed, at).unwrap();
+        }
+        assert!(updated, "changed module props replace the layer's drawing");
+    }
+
     /// The ops a stream draws, rows' bodies in place, and each layer's
     /// drawing apart.
     fn walk(b: &[u32], drawn: &mut Vec<u32>, layers: &mut Vec<Vec<u32>>) {

@@ -22,6 +22,7 @@ import {
   onEnd,
   commit,
   recommit,
+  deferForReplacement,
   say,
   W,
   R,
@@ -116,7 +117,7 @@ function reply(t, name, source, held, f, next, gone) {
   // what the answer's module calls read (ts-data.js `__exact_module`); not `call.held`, held.js's count of its held
   // fetches
   if (t.call) t.call.wanted = held;
-  return o => Origin.run(t.askOrigin, () => Invocation.run(t.invocation, () => {
+  const land = o => Origin.run(t.askOrigin, () => Invocation.run(t.invocation, () => {
     if (
       commit(
         () => {
@@ -149,6 +150,9 @@ function reply(t, name, source, held, f, next, gone) {
       if (t.r) again(t);
     }, 'a failed request');
   }));
+  return o => {
+    if (!deferForReplacement(() => land(o))) return land(o);
+  };
 }
 // runner lines.rs
 const revalidated = (name, same) =>

@@ -52,16 +52,29 @@
     function secretWrite(name, value) {
       var currentCall = env.current();
       var task = currentCall && currentCall.secrets && currentCall.secrets[0];
-      if (browserSecrets || !task || !task.held || task.name !== String(name)) return false;
-      host(26, String(currentCall.id), JSON.stringify({ name: String(name), value: value }));
+      if (!task || !task.held || task.name !== String(name)) return false;
+      // The browser host records it as the lease's, which arms its recovery
+      // (host/web/module-glue.js `publish`); a native host writes it through.
+      var e = host(26, String(currentCall.id), JSON.stringify({ name: String(name), value: value }));
+      if (e != null) throw new Error(e);
       return true;
     }
+    // A request with effects that `call` makes while it holds its lease arms the
+    // lease's recovery as the request is made (fetch.js), not when the answer
+    // settles, by which time a callback that did not await it may have ended.
+    env.secretEffect = function (call) {
+      var task = call && call.secrets && call.secrets[0];
+      if (!task || !task.held) return;
+      var e = host(26, String(call.id), JSON.stringify({ name: task.name, effect: true }));
+      if (e != null) throw new Error(e);
+    };
     store.exclusive = function (name, work) {
       if (env.overlaying()) return Promise.reject(inOverlay("store.exclusive()"));
       var call = env.current();
       if (!call || call.replied || call.letGo)
         return Promise.reject(new Error("store.exclusive() called outside an answer"));
-      if (!browserSecrets && call.secrets && call.secrets.length)
+      // One lease at a time (LLP 1146 D5): an answer holding one name never waits for another.
+      if (call.secrets && call.secrets.length)
         return Promise.reject(new Error("nested secret leases are unsupported"));
       return new Promise(function (resolve, reject) {
         if (!browserSecrets) host(24, String(call.id), String(name));
@@ -89,7 +102,10 @@
           }
         }
         call.secrets.shift();
-        if (browserSecrets && !call.secrets.length) call.secretCompleted = true;
+        if (browserSecrets) {
+          call.secretCompleted = true;
+          call.secretFailed = !ok;
+        }
         (ok ? task.resolve : task.reject)(value);
       };
       if (error) {

@@ -494,6 +494,9 @@ impl<D: DataSource> Presenter<D> {
     /// synthesis; then the node's `pointerdown` (LLP 1005 §3), which the
     /// contact never waits for.
     pub fn pointer_down(&mut self, x: f32, y: f32, now_ms: f64) -> Result<bool, String> {
+        // Before anything routes it: a scrollbar's, a sheet's or a menu's
+        // press makes no contact, and holds a replacement all the same.
+        self.pressed |= 1;
         self.brush.ripples.input(now_ms);
         // A finger of an earlier touch whose up never came.
         #[cfg(any(target_os = "android", test))]
@@ -1107,6 +1110,7 @@ impl<D: DataSource> Presenter<D> {
         now_ms: f64,
         event_ms: f64,
     ) -> Result<bool, String> {
+        self.pressed &= !1;
         self.brush.ripples.input(now_ms);
         if self.stage_up(x, y, now_ms, event_ms) {
             return Ok(true);
@@ -1391,14 +1395,22 @@ impl<D: DataSource> Presenter<D> {
             HeldKind::Swipe { .. } => self.end_swipe(held, end, now_ms),
         }
     }
-    /// The device's pointer is gone or abandoned (Escape, a lost device, a
-    /// dropped report, a refused mapping): its contact and every button.
+    /// The device's pointer is gone (a lost device, a dropped report, a
+    /// refused mapping, a window without the focus): its contact and every
+    /// button, none of which is down any more.
     pub fn pointer_lost(&mut self, now_ms: f64) -> Result<(), String> {
+        self.pressed = 0;
+        self.pointer_abandoned(now_ms)
+    }
+    /// Escape abandons the contact and what each button holds. The buttons
+    /// stay down: their releases are still to come.
+    pub fn pointer_abandoned(&mut self, now_ms: f64) -> Result<(), String> {
         self.cancel_aux(self.contact_canvas(), now_ms);
         self.pointer_cancel(now_ms)
     }
     /// Escape, wheel takeover, disconnection, or invalidated binding: no
-    /// release event, except a pan that began, which releases at rest.
+    /// release event, except a pan that began, which releases at rest. The
+    /// button may still be down: its release is the shell's to say.
     pub fn pointer_cancel(&mut self, now_ms: f64) -> Result<(), String> {
         self.brush.ripples.input(now_ms);
         self.stage_cancel(now_ms);

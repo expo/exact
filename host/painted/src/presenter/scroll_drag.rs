@@ -55,15 +55,17 @@ impl<D: DataSource> Presenter<D> {
             .scroller(id, &limits)
             .ok_or("scroll drag: target is not a scroller")?;
         let under = self.scrollers_at(start.0, start.1);
+        // These are reader samples, not sheet input. Only authored gestures refuse them.
+        let claims = (under.claims.0, under.claims.1 && !under.sheet);
         let primary_claimed = if dx.abs() > dy.abs() {
-            under.claims.0
+            claims.0
         } else {
-            under.claims.1
+            claims.1
         };
         if primary_claimed && r["probe"] == true {
             return Ok(serde_json::json!({"scrollDrag": "presenter"}).to_string());
         }
-        if (dx != 0. && under.claims.0) || (dy != 0. && under.claims.1) {
+        if (dx != 0. && claims.0) || (dy != 0. && claims.1) {
             return Err("scroll drag: a gesture owns this axis; use native input".into());
         }
         if under.field.is_some() {

@@ -75,7 +75,7 @@ static ALERT: LazyLock<StyleProps> = LazyLock::new(|| {
     metric_row(&mut s, StyleId::RowGap, metric::ALERT_GAP);
     metric_row(&mut s, StyleId::ColumnGap, metric::ALERT_ACTION_GAP);
     let px = |m| metrics::length_in(m, metrics::Column::Neutral, 16., 16.).unwrap();
-    let alpha = match crate::generated::METRICS[metric::MODAL_SHADOW_ALPHA].neutral {
+    let alpha = match crate::generated::METRICS[metric::MODAL_SHADOW_ALPHA].neutral() {
         crate::MetricValue::Number(n) => n,
         _ => unreachable!(),
     };
@@ -103,7 +103,7 @@ fn surface(s: &mut StyleProps, y: usize, blur: usize, alpha: usize) {
         metric_row(s, id, metric::SURFACE_RADIUS);
     }
     let px = |m| metrics::length_in(m, metrics::Column::Neutral, 16., 16.).unwrap();
-    let crate::MetricValue::Number(alpha) = crate::generated::METRICS[alpha].neutral else {
+    let crate::MetricValue::Number(alpha) = crate::generated::METRICS[alpha].neutral() else {
         unreachable!()
     };
     s.set_dynamic(

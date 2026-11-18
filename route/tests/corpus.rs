@@ -723,21 +723,6 @@ fn a_rooted_launch_is_the_screen_alone() {
         "write"
     );
 
-    // At depth one the screen takes a location of its own route or another's, keeping its id.
-    let other = success(replace(t, r.clone(), "/prompt/8/write"));
-    assert_eq!(
-        (top(&other).unwrap().id, top(&other).unwrap().url.as_str()),
-        (0, "/prompt/8/write")
-    );
-    let prompts = success(replace(t, r.clone(), "/prompts"));
-    assert_eq!(
-        (
-            top(&prompts).unwrap().id,
-            top(&prompts).unwrap().name.as_str()
-        ),
-        (0, "prompts")
-    );
-
     // Another tab is seeded at its root, in declaration order, and kept.
     let home = success(select(t, pushed.clone(), "home"));
     assert_eq!(home.tab, "home");

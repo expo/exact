@@ -91,7 +91,7 @@ impl<D: DataSource> Runner<D> {
     /// A permission that requires others on this target (`requires`, LLP
     /// 1133.030 D12 item 1) reads the least of its own state and theirs:
     /// `denied`, then `prompt`, then `unknown`, then `granted`.
-    pub(super) fn permission_state(&self, name: &str) -> String {
+    pub(in crate::runner::modules) fn permission_state(&self, name: &str) -> String {
         self.permission_state_on(name, &mut Vec::new())
     }
 
@@ -221,7 +221,7 @@ impl<D: DataSource> Runner<D> {
     /// Set permission `name`'s state: the permission tickets pending for it
     /// settle as `allow` or `deny` would, and every name of its module is
     /// asked again.
-    pub(super) fn set_permission(&mut self, name: &str, state: &str) {
+    pub(in crate::runner::modules) fn set_permission(&mut self, name: &str, state: &str) {
         let which = if state == "denied" { "deny" } else { "allow" };
         self.set_permission_as(name, state, which)
     }

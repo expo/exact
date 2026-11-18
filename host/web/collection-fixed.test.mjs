@@ -6,10 +6,29 @@ import { join, resolve } from 'node:path';
 import { hostFixtureFile } from './tests/glue-fixture.mjs';
 import { withLook } from './look.mjs';
 const sheet = withLook(readFileSync(new URL('./index.html', import.meta.url), 'utf8')).split('<style>')[1].split('</style>')[0];
-import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
+import { cdpBrowser, chromium, refuseStale, webChanges } from '../../scripts/agent-launch.mjs';
+import { open, assertWebDistApp } from '../../scripts/agent.mjs';
+import { resolveApp } from '../../scripts/app.mjs';
+import { jsTargetBuild } from './serve.mjs';
 import { need } from '../../scripts/coverage.mjs';
 const { unavailable } = chromium();
 const test = need('chrome', unavailable, { test: bunTest });
+// The wasm target's test boots a plan of its own in a Caltrain wasm build that
+// links every capability, as the async lane's EXACT_WEB_DIST is.
+const wasmDist = resolve(process.env.EXACT_WEB_DIST ?? 'host/web/dist');
+const wasmBuild = 'EXACT_WEB_LINK=all bun host/web/build.mjs caltrain-web --wasm';
+async function wasmMissing() {
+  if (unavailable) return ['chrome', unavailable];
+  try {
+    const app = resolveApp('caltrain');
+    await assertWebDistApp(wasmDist, app);
+    if (jsTargetBuild(wasmDist)) return ['fixture', `${wasmDist} is a JS-target build: ${wasmBuild}`];
+    if (JSON.parse(readFileSync(join(wasmDist, 'bake.json'), 'utf8')).binary?.configuration?.flags?.EXACT_WEB_LINK !== 'all') return ['fixture', `${wasmDist} does not link every capability: ${wasmBuild}`];
+    refuseStale('web', join(wasmDist, '.exact-build.json'), webChanges(wasmDist, app).all, wasmBuild);
+  } catch (error) { return ['fixture', error.message]; }
+  return null;
+}
+const wasmTest = need(...((await wasmMissing()) ?? ['chrome', null]), { test: bunTest });
 let server, suite, evaluate, call, fixtureDir, compiledMode = 'virtual';
 beforeAll(async () => {
   if (unavailable) return;
@@ -268,6 +287,90 @@ test('a partial selection copies the text a reader sees, across row retirement',
   expect(result.retired).toBe(true);
   expect(result.after).toBe(result.across);
 }, 30_000);
+
+// Partial selections with an endpoint in fixed content, in both directions:
+// Copy after the rows between retire equals Copy before. The lead's
+// paragraphs count across its children, a hidden one not among them; a cut
+// Markdown paragraph copies the text the reader selected; row 0 holds a
+// nested list, whose paragraphs the outer copy leaves out. `settle` waits out
+// a scroll's commit on the page's target.
+const FIXED_SPAN = `component App
+  view
+    list virtualized=true appearance="none" height=200 width=320 estimated-item-height=40 testId="list"
+      text "Gone" display="none"
+      text "**Header** line" markup="markdown" testId="header"
+      text "Subhead line" testId="subhead"
+      for n in range(80) key=n
+        column testId=\`row-\${n}\`
+          text \`Row \${n}\` height=40
+          if n == 0
+            list virtualized=true appearance="none" height=80 width=300 estimated-item-height=40 testId="inner"
+              text "Inner header" testId="inner-header"
+              for m in range(40) key=m
+                text \`Inner \${m}\` height=40 testId=\`inner-\${m}\`
+              text "Inner footer" testId="inner-footer"
+      text "Footer line" testId="trail"
+`;
+const rows = Array.from({ length: 80 }, (_, n) => `Row ${n}`).join('\n\n');
+// [list, anchor, focus, a row that retires, scroll before, scroll after, copy, highlighted paragraphs]
+const SPANS = {
+  'lead to row': ['list', ['header', 2], ['row-1', 3], 'row-1', 0, 100000, 'ader line\n\nSubhead line\n\nRow 0\n\nRow', 4],
+  'second lead child to row': ['list', ['subhead', 3], ['row-1', 3], 'row-1', 0, 100000, 'head line\n\nRow 0\n\nRow', 3],
+  'row to trail': ['list', ['row-78', 4], ['trail', 4], 'row-78', 100000, 0, '78\n\nRow 79\n\nFoot', 3],
+  'lead to trail': ['list', ['subhead', 8], ['trail', 6], 'row-0', 0, 1600, `line\n\n${rows}\n\nFooter`, null],
+  'nested lead to row': ['inner', ['inner-header', 6], ['inner-1', 3], 'inner-1', 0, 100000, 'header\n\nInner 0\n\nInn', 3],
+  'nested row to trail': ['inner', ['inner-38', 6], ['inner-footer', 5], 'inner-38', 100000, 0, '38\n\nInner 39\n\nInner', 3],
+};
+const fixedSpan = settle => `(async () => {
+  const frames=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+  const byId=id=>document.querySelector('[data-testid="'+id+'"]');
+  const scroll=async(list,top)=>{byId(list).scrollTop=top;${settle};await frames();};
+  const node=id=>document.createTreeWalker(byId(id),NodeFilter.SHOW_TEXT).nextNode();
+  const copy=()=>{const clipboardData=new DataTransfer();byId('list').dispatchEvent(new ClipboardEvent('copy',{clipboardData,bubbles:true,cancelable:true}));return clipboardData.getData('text/plain');};
+  const out={};
+  for(const [name,[list,[a,ao],[b,bo],row,top,away]] of Object.entries(${JSON.stringify(SPANS)})) for(const forward of [true,false]){
+    getSelection().removeAllRanges();if(list!=='list')await scroll('list',0);await scroll(list,top);
+    if(forward)getSelection().setBaseAndExtent(node(a),ao,node(b),bo);else getSelection().setBaseAndExtent(node(b),bo,node(a),ao);
+    await frames();
+    const before=copy(),highlight=CSS.highlights.get('exact-list-selection')?.size;
+    await scroll(list,away);
+    out[name+(forward?'':' backward')]={before,highlight,retired:!byId(row),after:copy()};
+  }
+  return out;
+})()`;
+function expectFixedSpan(result) {
+  for (const [name, [, , , , , , text, highlight]] of Object.entries(SPANS)) {
+    for (const key of [name, name + ' backward']) {
+      const r = result[key];
+      expect([key, r.before, r.retired, r.after]).toEqual([key, text, true, text]);
+      if (highlight != null) expect([key, r.highlight]).toEqual([key, highlight]);
+    }
+  }
+}
+
+test('a partial selection between fixed content and rows copies the same text after the rows between retire', async () => {
+  const mode = 'copy-fixed-span', path = join(fixtureDir, mode + '.contract');
+  writeFileSync(path, FIXED_SPAN);
+  const built = Bun.spawnSync([resolve('target/debug/exact-web-js'), 'js', path, '-o', join(fixtureDir, mode)]);
+  if (built.exitCode) throw Error(new TextDecoder().decode(built.stderr));
+  compiledMode = mode;
+  await call('Page.navigate', {url:`http://127.0.0.1:${server.port}/app/${mode}/`});
+  await evaluate(`new Promise((resolve,reject)=>{const read=async()=>{if(globalThis.ready){await exact.lists.pending();await exact.lists.settle();resolve();}else requestAnimationFrame(read);};read();setTimeout(()=>reject(Error('app did not mount: '+globalThis.appError)),5000);})`);
+  expectFixedSpan(await evaluate(fixedSpan('await exact.lists.settle()')));
+}, 30_000);
+
+wasmTest('on the wasm target, a partial selection between fixed content and rows copies the same text after the rows between retire', async () => {
+  const path = join(fixtureDir, 'fixed-span.contract'), plan = join(fixtureDir, 'fixed-span.plan');
+  writeFileSync(path, FIXED_SPAN);
+  const built = Bun.spawnSync([resolve('target/debug/contract'), 'build', path, '-o', plan]);
+  if (built.exitCode) throw Error(new TextDecoder().decode(built.stderr));
+  const s = await open({ host: 'web', plan, webDist: wasmDist });
+  try {
+    await s.clock('settle');
+    // A frozen clock holds the commit a scroll asks for: the drive moves it in real time.
+    expectFixedSpan(await s.carrier.evaluate(fixedSpan("await new Promise(r=>setTimeout(r,0))")));
+  } finally { await s.close(); }
+}, 120_000);
 
 test('compiled logical copy evaluates row scopes and endpoints without mounting views', async () => {
   const source = `component App

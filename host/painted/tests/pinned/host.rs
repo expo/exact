@@ -617,10 +617,11 @@ fn a_reload_carries_state_and_starts_the_pictures_over() {
     assert!(p.set_time(1_790_000_000_000.0, -240.0).is_none());
     let _ = p.tap(view(&p, "change-station"));
     let _ = p.wheel(view(&p, "station-search"), 0.0, 50.0);
-    let error = p
-        .reload(crate::caltrain_plan(), caltrain_data::Caltrain)
-        .unwrap();
-    assert!(error.is_none(), "{error:?}");
+    assert_eq!(
+        p.reload(crate::caltrain_plan(), caltrain_data::Caltrain)
+            .unwrap(),
+        exact_painted::presenter::ReloadResult::Applied(None)
+    );
     assert!(has(&p, "stations-screen"), "the route carried");
     assert_eq!(p.page(), (0.0, 0.0), "scroll does not survive a restart");
     assert_eq!(p.host().runner().place(), &place);

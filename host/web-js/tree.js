@@ -214,6 +214,8 @@ export function P(e, name, f) {
       else writeValue(e, v ?? '');
       e.exactDecorations?.sync();
     } else if (name === 'scrollTop' || name === 'scrollLeft') {
+      // Kept as `$scrollTop`, `$scrollLeft`: where the scroller opens when its page arrives (fragment.js, LLP 1153 D5.1).
+      e['$' + name] = v == null ? undefined : Number(v);
       if (v != null) (Scrolls.get(e) ?? Scrolls.set(e, {}).get(e))[name] = Number(v);
     } else if (BOOL.test(name)) {
       if (name === 'inert') e.authoredInert = v === 'true';

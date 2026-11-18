@@ -41,6 +41,8 @@ extern "C" {
         body_file_len: u64,
         max_body: usize,
         timeout_seconds: f64,
+        open_ended: c_int,
+        collected: c_int,
         speculative: c_int,
         out_error: *mut *mut c_char,
     ) -> *mut std::ffi::c_void;
@@ -67,18 +69,21 @@ extern "C" {
 
 /// The platform transport on Apple platforms.
 ///
-/// Owns a lazy pool of at most four `NSURLSession`s. Each session has a serial
-/// delegate queue and is leased to one response until native completion.
-/// This bounds concurrent callbacks while keeping their order,
-/// connection reuse, and isolation between hosts. A fifth open waits cancellably
-/// for a lease; consumers must consume or drop large unfinished responses to
-/// return their leases. Small responses prefetch into the bounded queue and
-/// return their session when complete, even before the body is consumed.
+/// Owns a lazy pool of `NSURLSession`s (Exact patch 49). A collected
+/// exchange (`Request::collected`), up to 64 MiB and not open-ended, runs on
+/// one shared session, whose delegate waits only while a reply is a mebibyte
+/// ahead of its reader: every such exchange shares its connection pool, and
+/// HTTP/2 or HTTP/3 one connection an origin. Any other
+/// exchange leases one of at most four sessions of its own until native
+/// completion; a fifth open of that kind waits cancellably for a lease, so
+/// consumers must consume or drop large unfinished responses to return
+/// theirs. Small responses complete and return their session even before the
+/// body is consumed.
 ///
-/// Each body hands off through a 64 KiB queue. A full queue blocks only that
-/// lease's delegate, never callbacks for another leased session. Foundation may
-/// also own one callback's `NSData` and internal network buffers; their size is
-/// platform-controlled. There is no body-sized allocation in Ibex.
+/// A leased exchange hands its body off through a 64 KiB queue, and a full
+/// queue blocks only that lease's delegate. Foundation may also own one
+/// callback's `NSData` and internal network buffers; their size is
+/// platform-controlled.
 ///
 /// CFNetwork can defer its response callback until an initial body byte arrives,
 /// including with an explicit MIME type. `open` returns at that callback, before
@@ -323,6 +328,8 @@ impl Transport for DarwinTransport {
                 file.map_or(0, |f| f.0.len()),
                 request.body_limit(),
                 request.timeout.map_or(0.0, |timeout| timeout.as_secs_f64()),
+                c_int::from(request.open_ended),
+                c_int::from(request.collected),
                 c_int::from(request.speculative),
                 &mut error,
             )
@@ -479,6 +486,61 @@ mod tests {
                 "request {attempt} opened a new connection; the session is not being reused"
             );
         }
+    }
+
+    /// An open-ended request goes on a session of its own kind, whose
+    /// exchanges have no whole-exchange limit (Exact patch 48), and an
+    /// ordinary one after it back on the session that keeps URLSession's:
+    /// against one keep-alive peer, the third request reuses the first's
+    /// connection and the second opened its own.
+    #[test]
+    fn an_open_ended_request_takes_a_session_of_its_kind() {
+        use std::io::{Read, Write};
+        use std::sync::{atomic::Ordering::SeqCst, Arc};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = format!("http://{address}/");
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (counted, ended) = (accepted.clone(), done.clone());
+        let peer = std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                if ended.load(SeqCst) {
+                    return;
+                }
+                counted.fetch_add(1, SeqCst);
+                std::thread::spawn(move || {
+                    let mut head = Vec::new();
+                    let mut byte = [0];
+                    while stream.read_exact(&mut byte).is_ok() {
+                        head.push(byte[0]);
+                        if head.ends_with(b"\r\n\r\n") {
+                            head.clear();
+                            let reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+                            if stream.write_all(reply).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        let transport = DarwinTransport::new();
+        let mut open = Request::get(&url);
+        open.open_ended = true;
+        for request in [Request::get(&url), open, Request::get(&url)] {
+            let response = transport.send(&request).unwrap();
+            assert_eq!(response.body, b"ok");
+        }
+        assert_eq!(transport.last_connection_was_reused(), Some(true));
+        assert_eq!(accepted.load(SeqCst), 2);
+        // The peer stops at the next connection, and its readers with the
+        // transport's.
+        drop(transport);
+        done.store(true, SeqCst);
+        drop(std::net::TcpStream::connect(address));
+        peer.join().unwrap();
     }
 
     /// Cookies are ambient authority the grant check cannot see, so the

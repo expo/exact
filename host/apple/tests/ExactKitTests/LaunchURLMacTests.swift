@@ -309,12 +309,12 @@ final class LaunchURLMacTests: XCTestCase {
                                   "LSItemContentTypes": ["public.html", "public.xhtml"], "ExactWebPage": true]
         let markdown: [String: Any] = ["CFBundleTypeRole": "Viewer", "LSItemContentTypes": ["net.daringfireball.markdown"], "CFBundleTypeExtensions": ["md"]]
         let browser: [String: Any] = ["CFBundleDocumentTypes": [web]]
-        XCTAssertTrue(Picker.declarations(in: browser).isEmpty)
-        XCTAssertEqual(Picker.types(in: browser), [])
+        XCTAssertTrue(DocumentTypes.declarations(in: browser).isEmpty)
+        XCTAssertEqual(DocumentTypes.types(in: browser), [])
         XCTAssertFalse(ExactDocuments.accepts(page, metadata: browser))
         let both: [String: Any] = ["CFBundleDocumentTypes": [markdown, web]]
-        XCTAssertEqual(Picker.declarations(in: both).count, 1)
-        XCTAssertFalse(Picker.types(in: both).contains(.html))
+        XCTAssertEqual(DocumentTypes.declarations(in: both).count, 1)
+        XCTAssertFalse(DocumentTypes.types(in: both).contains(.html))
         XCTAssertFalse(ExactDocuments.accepts(page, metadata: both))
         XCTAssertTrue(ExactDocuments.accepts(notes, metadata: both))
         let viewer: [String: Any] = ["CFBundleDocumentTypes": [["CFBundleTypeRole": "Viewer", "LSItemContentTypes": ["public.html"]], web]]

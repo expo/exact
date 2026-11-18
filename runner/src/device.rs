@@ -758,15 +758,75 @@ pub fn is_device_line(line: &str) -> bool {
 
 /// Every device grant in `spec`, or every malformed one, each reported.
 pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
-    let (mut grants, mut errors) = (Vec::<DeviceGrant>::new(), Vec::new());
+    checked(spec).map(|all| {
+        (all.into_iter())
+            .map(|g| DeviceGrant {
+                device: &DEVICES[g.row],
+                purpose: g.purpose,
+                container: g.container,
+            })
+            .collect()
+    })
+}
+
+/// What the runner reads of a row: its name and what checking a line asks
+/// of it. An app links this, not the table's build facts, which are read
+/// where a build or a server derives a host's spelling (the bake, the CLI,
+/// the served web's `Permissions-Policy`).
+struct Rule {
+    name: &'static str,
+    purpose: bool,
+    keeps_no_answers: bool,
+    needs: Option<&'static str>,
+    conflicts: Option<&'static str>,
+    narrows: Option<&'static str>,
+}
+
+static RULES: [Rule; DEVICES.len()] = {
+    let mut rules = [const {
+        Rule {
+            name: "",
+            purpose: false,
+            keeps_no_answers: false,
+            needs: None,
+            conflicts: None,
+            narrows: None,
+        }
+    }; DEVICES.len()];
+    let mut i = 0;
+    while i < DEVICES.len() {
+        let d = &DEVICES[i];
+        rules[i] = Rule {
+            name: d.name,
+            purpose: d.purpose,
+            keeps_no_answers: d.keeps_no_answers,
+            needs: d.needs,
+            conflicts: d.conflicts,
+            narrows: d.narrows,
+        };
+        i += 1;
+    }
+    rules
+};
+
+/// A checked device line: its row in [`DEVICES`] and [`RULES`].
+struct Checked<'a> {
+    row: usize,
+    purpose: &'a str,
+    container: Option<&'a str>,
+}
+
+/// [`device_grants`] over [`RULES`].
+fn checked(spec: &str) -> Result<Vec<Checked<'_>>, Vec<String>> {
+    let (mut grants, mut errors) = (Vec::<Checked>::new(), Vec::new());
     for line in spec.lines().map(str::trim).filter(|l| is_device_line(l)) {
         let mut words = line.split_whitespace();
         let name = words
             .next()
             .unwrap_or_default()
             .trim_start_matches("device.");
-        let Some(device) = DEVICES.iter().find(|d| d.name == name) else {
-            let known: Vec<_> = DEVICES.iter().map(|d| d.name).collect();
+        let Some(row) = RULES.iter().position(|d| d.name == name) else {
+            let known: Vec<_> = RULES.iter().map(|d| d.name).collect();
             errors.push(format!(
                 "`device.{name}` is not a device grant; the table has {}",
                 known.join(", ")
@@ -791,7 +851,7 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
                 errors.push(format!(
                     "`{line}`: write `device.cloudkit` or `device.cloudkit iCloud.<name>`; the container is one identifier, with no purpose string"
                 ));
-            } else if let Some(have) = grants.iter().find(|g| g.device.name == name) {
+            } else if let Some(have) = grants.iter().find(|g| RULES[g.row].name == name) {
                 if have.container != container {
                     errors.push(format!(
                         "`device.cloudkit` names two containers, `{}` and `{}`; only one container is supported",
@@ -800,8 +860,8 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
                     ));
                 }
             } else {
-                grants.push(DeviceGrant {
-                    device,
+                grants.push(Checked {
+                    row,
                     purpose: "",
                     container,
                 });
@@ -814,14 +874,14 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
             ));
             continue;
         }
-        if !device.purpose {
+        if !RULES[row].purpose {
             match words.next() {
                 Some(word) => errors.push(format!(
                     "`{line}`: nothing asks the person for `device.{name}`, so its line names no purpose: write `device.{name}` (not `{word}`)"
                 )),
-                None if grants.iter().any(|g| g.device.name == name) => {}
-                None => grants.push(DeviceGrant {
-                    device,
+                None if grants.iter().any(|g| RULES[g.row].name == name) => {}
+                None => grants.push(Checked {
+                    row,
                     purpose: "",
                     container: None,
                 }),
@@ -834,41 +894,42 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
             ));
             continue;
         };
-        match grants.iter().find(|g| g.device.name == name) {
+        match grants.iter().find(|g| RULES[g.row].name == name) {
             Some(have) if have.purpose != purpose => errors.push(format!(
                 "`device.{name}` names two purposes, `{}` and `{purpose}`",
                 have.purpose
             )),
             Some(_) => {}
-            None => grants.push(DeviceGrant {
-                device,
+            None => grants.push(Checked {
+                row,
                 purpose,
                 container: None,
             }),
         }
     }
     for g in &grants {
-        if let Some(needed) = g.device.needs {
-            if !grants.iter().any(|h| h.device.name == needed) {
+        let rule = &RULES[g.row];
+        if let Some(needed) = rule.needs {
+            if !grants.iter().any(|h| RULES[h.row].name == needed) {
                 errors.push(format!(
                     "`device.{}` needs `device.{needed} <purposeKey>` beside it (grant-needs)",
-                    g.device.name
+                    rule.name
                 ));
             }
         }
-        if let Some(other) = g.device.conflicts {
-            if grants.iter().any(|h| h.device.name == other) {
+        if let Some(other) = rule.conflicts {
+            if grants.iter().any(|h| RULES[h.row].name == other) {
                 errors.push(format!(
                     "`device.{}` and `device.{other}` both: no platform gives the first beside the second (grant-conflict)",
-                    g.device.name
+                    rule.name
                 ));
             }
         }
-        if let Some(wider) = g.device.narrows {
-            if grants.iter().any(|h| h.device.name == wider) {
+        if let Some(wider) = rule.narrows {
+            if grants.iter().any(|h| RULES[h.row].name == wider) {
                 errors.push(format!(
                     "`device.{}` and `device.{wider}` both: write the one the app needs (grant-twice)",
-                    g.device.name
+                    rule.name
                 ));
             }
         }
@@ -883,13 +944,13 @@ pub fn device_grants(spec: &str) -> Result<Vec<DeviceGrant<'_>>, Vec<String>> {
 /// Whether `spec` grants the device `name`: what a first-party capability
 /// reads before it acts, refusing by name without it (D3).
 pub fn granted(spec: &str, name: &str) -> bool {
-    device_grants(spec).is_ok_and(|all| all.iter().any(|g| g.device.name == name))
+    checked(spec).is_ok_and(|all| all.iter().any(|g| RULES[g.row].name == name))
 }
 
 /// Whether `spec` grants a device whose app keeps no answers
 /// (LLP 1069.008.000 D7).
 pub fn keeps_no_answers(spec: &str) -> bool {
-    device_grants(spec).is_ok_and(|all| all.iter().any(|g| g.device.keeps_no_answers))
+    checked(spec).is_ok_and(|all| all.iter().any(|g| RULES[g.row].keeps_no_answers))
 }
 
 /// The served web's `Permissions-Policy` (D6): `feature=(self)` for each

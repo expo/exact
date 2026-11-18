@@ -788,6 +788,27 @@ fn symbols_answer_to_apple_names_and_aliases_and_the_plan_carries_the_role() {
         ("doc.plaintext", "article"),
         ("article", "article"),
         ("radio", "radio"),
+        // expo/exact#835: a workout's and a timer's symbols, by Apple's names and Material's.
+        ("figure.run", "running"),
+        ("directions_run", "running"),
+        ("figure.walk", "walking"),
+        ("directions_walk", "walking"),
+        ("stopwatch", "stopwatch"),
+        ("timer", "timer"),
+        ("clock.arrow.circlepath", "history"),
+        ("history", "history"),
+        ("straighten", "ruler"),
+        ("gauge.with.dots.needle.67percent", "speed"),
+        ("speedometer", "speed"),
+        ("location.fill", "location-fill"),
+        ("near_me", "location"),
+        ("location.slash.fill", "location-off-fill"),
+        ("location_off", "location-off"),
+        ("near_me_disabled", "location-off"),
+        ("forward.end.fill", "skip-next-fill"),
+        ("skip_next", "skip-next"),
+        ("flag.checkered", "finish"),
+        ("sports_score", "finish"),
     ] {
         let (plan, warnings) = contract::compile_warned(&format!(
             "component App\n  view\n    image \"symbol:{written}\"\n"

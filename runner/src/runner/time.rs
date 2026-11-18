@@ -245,7 +245,7 @@ impl<D: DataSource> Runner<D> {
                     if i > 0 {
                         said.push_str(", ");
                     }
-                    crate::agent::untyped_json(a, &mut said);
+                    crate::json::untyped_json(a, &mut said);
                 }
                 self.log(format!(
                     "setLocale({said}) refused: a BCP 47 tag (\"de\", \"pt-BR\"), or \"\" for the host's locale"
@@ -256,7 +256,7 @@ impl<D: DataSource> Runner<D> {
                 self.store.forget_kept(CHOSEN);
             } else {
                 let mut text = String::new();
-                crate::agent::quote(tag, &mut text);
+                crate::json::quote(tag, &mut text);
                 self.store.keep(CHOSEN, text.into_bytes());
             }
             if !self.write_locale().is_empty() {
@@ -331,7 +331,7 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             // The platform expired a wake an implementation raised.
-            if let Some(expired) = topic.strip_prefix(super::modules::EXPIRED) {
+            if let Some(expired) = topic.strip_prefix(super::wakes::EXPIRED) {
                 let (more, error) = self.expire_told_wake(expired);
                 receipts.extend(more);
                 if let Some(error) = error {
@@ -340,7 +340,7 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             // A wake a bound implementation raised (LLP 1133.017 D8).
-            if let Some(wake) = topic.strip_prefix(super::modules::TOLD) {
+            if let Some(wake) = topic.strip_prefix(super::wakes::TOLD) {
                 self.raise_told_wake(wake);
                 continue;
             }

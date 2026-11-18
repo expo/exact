@@ -59,6 +59,59 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+/// The WGSL IR used by reflection, including entry points, bindings and member offsets.
+pub use naga;
+
+// WebGPU without optional features: sample_index is a core built-in
+// (https://www.w3.org/TR/WGSL/#builtin-values). Cube arrays and the f32
+// half-precision operations are core too; Naga's default omits the latter.
+const WEBGPU_CAPABILITIES: Capabilities = Capabilities::MULTISAMPLED_SHADING
+    .union(Capabilities::CUBE_ARRAY_TEXTURES)
+    .union(Capabilities::SHADER_FLOAT16_IN_FLOAT32);
+
+/// A WGSL parse or validation error in the original source.
+#[derive(Debug)]
+pub struct Diagnostic {
+    /// Naga's diagnostic, including its source excerpt.
+    pub message: String,
+    /// The original byte location, when naga supplies one.
+    pub location: Option<naga::SourceLocation>,
+    /// Whether parsing succeeded and validation rejected the module.
+    pub validation: bool,
+}
+
+/// Parse and validate WGSL without generating Rust (LLP 1181 D9).
+/// The returned module retains WGSL's binding numbers and uniform layouts.
+pub fn inspect(source: &str) -> Result<Module, Diagnostic> {
+    validated(source).map(|(module, _)| module)
+}
+
+fn validated(source: &str) -> Result<(Module, ModuleInfo), Diagnostic> {
+    let mut options = naga::front::wgsl::Options::new();
+    options.capabilities = WEBGPU_CAPABILITIES;
+    let module = naga::front::wgsl::Frontend::new_with_options(options)
+        .parse(source)
+        .map_err(|e| Diagnostic {
+            location: e
+                .labels()
+                .find(|(span, _)| span.is_defined())
+                .map(|(span, _)| span.location(source)),
+            message: e.emit_to_string(source),
+            validation: false,
+        })?;
+    let info = Validator::new(ValidationFlags::all(), WEBGPU_CAPABILITIES)
+        .validate(&module)
+        .map_err(|e| Diagnostic {
+            location: e
+                .spans()
+                .find(|(span, _)| span.is_defined())
+                .map(|(span, _)| span.location(source)),
+            message: e.emit_to_string(source),
+            validation: true,
+        })?;
+    Ok((module, info))
+}
+
 /// What [`generate`] produced: one Rust source, and the shaders it came from.
 #[derive(Debug)]
 pub struct Generated {
@@ -123,10 +176,7 @@ pub fn generate(dir: &Path) -> Result<Generated, String> {
 /// over the validated interface and never the text. A shader that fails to
 /// parse or validate is an error naming the line and column.
 pub fn interface_digest(source: &str) -> Result<u64, String> {
-    let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
-    let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
-        .validate(&module)
-        .map_err(|e| e.emit_to_string(source))?;
+    let (module, info) = validated(source).map_err(|e| e.message)?;
     let shader = Shader {
         name: "",
         module: &module,
@@ -154,10 +204,7 @@ pub fn reflect(name: &str, source: &str) -> Result<String, String> {
 
 /// [`reflect`], and the interface digest the module was generated with.
 pub fn reflect_with_digest(name: &str, source: &str) -> Result<(String, u64), String> {
-    let module = naga::front::wgsl::parse_str(source).map_err(|e| e.emit_to_string(source))?;
-    let info = Validator::new(ValidationFlags::all(), Capabilities::empty())
-        .validate(&module)
-        .map_err(|e| e.emit_to_string(source))?;
+    let (module, info) = validated(source).map_err(|e| e.message)?;
     let shader = Shader {
         name,
         module: &module,

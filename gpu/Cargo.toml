@@ -5,7 +5,7 @@
 # @ref LLP 1009 D1/D2
 [package]
 name = "exact-gpu"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 license.workspace = true
 description = "GPU canvas: the Surface trait, the on-demand module, wgpu on every host"
@@ -18,6 +18,7 @@ name = "exact_gpu"
 crate-type = ["rlib"]
 
 [dependencies]
+exact-color = { path = "../color" }
 exact-plan = { path = "../plan" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

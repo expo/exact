@@ -23,8 +23,15 @@ fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
     let grants = module_fixture_data::Fixture.grants();
-    let compat = exact_bake::compatibility_id(&app_dir, "linux", &target, &manifest, Some(grants))
-        .unwrap_or_else(|e| panic!("compatibility id: {e}"));
+    let compat = exact_bake::compatibility_id(
+        &app_dir,
+        "linux",
+        &target,
+        &manifest,
+        Some(grants),
+        exact_bake::hands_out_work!(module_fixture_data::Fixture),
+    )
+    .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();
     contract::native::android_entry(&app_dir, &manifest, &baked, &out_dir)
         .unwrap_or_else(|e| panic!("android: {e}"));

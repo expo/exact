@@ -189,6 +189,42 @@ fn a_helper_above_the_root_is_told_to_move_below_it() {
 }
 
 #[test]
+fn the_routes_name_in_a_later_component_names_the_first() {
+    let app = "routes nav\n  home \"/\"\n\ncomponent Helper\n  view\n    text \"x\"\n\ncomponent App\n  action open(url: string)\n    nav = go(nav, url)\n  view\n    main navigationKey=`${top(nav).id}` navigate=open\n      text \"home\"\n";
+    let e = refused(app);
+    assert!(
+        e.message.ends_with("`routes nav` belongs to the file's first component, `Helper`: if `Helper` is a helper, move it below the component the app starts from"),
+        "{}: {}",
+        e.id,
+        e.message
+    );
+    // The root first: the same app compiles.
+    let (helper, root) = app
+        .split_once("component Helper")
+        .map(|(head, rest)| {
+            let (helper, root) = rest.split_once("component App").unwrap();
+            (
+                format!("component Helper{helper}"),
+                format!("{head}component App{root}"),
+            )
+        })
+        .unwrap();
+    contract::compile(&format!("{root}\n{helper}")).unwrap_or_else(|e| panic!("{e}"));
+    // Another unknown name in a later component gains nothing.
+    let other = refused(
+        "routes nav\n  home \"/\"\n\ncomponent Helper\n  view\n    text \"x\"\n\ncomponent App\n  view\n    text `${missing}`\n",
+    );
+    assert_eq!(other.id, "type-unknown-name", "{}", other.message);
+    assert!(
+        !other
+            .message
+            .contains("belongs to the file's first component"),
+        "{}",
+        other.message
+    );
+}
+
+#[test]
 fn action_refusals_keep_independent_child_use_errors() {
     let sibling = "component Wrap\n  view\n    Label(count=\"bad\")\n\ncomponent Label\n  props\n    count: number\n  view\n    text `${count}`\n";
     let unknown = format!(

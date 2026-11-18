@@ -918,8 +918,11 @@ impl<D: DataSource> Presenter<D> {
             self.pointer_aux(2, true, x, y, now);
             self.pointer_aux(2, false, x, y, now);
         } else {
-            self.pointer_down(x, y, now)?;
-            self.pointer_up(x, y, now)?;
+            // The click lifts whatever its down did, so no press is left held.
+            let down = self.pointer_down(x, y, now);
+            let up = self.pointer_up(x, y, now);
+            down?;
+            up?;
         }
         Ok(format!(
             "{{\"tapped\":{id},\"{kind}\":true,\"at\":[{},{}],\"delivery\":\"presenter\"}}",

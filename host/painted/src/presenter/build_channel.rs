@@ -463,17 +463,28 @@ mod tests {
         // A generation built on `a` before those edits puts `a` back: the
         // snapshot is asked for, and the loop's design is applied over it.
         p.painted = true;
-        p.pending_dev = Some(crate::fetch::Generation {
+        p.keep_generation(crate::fetch::Generation {
             identity: "gen-a".into(),
             plan: a.encode(),
             module: None,
         });
         p.poll_development(|| ());
-        assert!(p.pending_dev.is_none(), "installed");
+        assert!(!p.generation_waits(), "installed");
         assert_ne!(p.host.runner().design(), last);
         assert!(link(&mut p).snapshot, "a snapshot is asked for");
         p.dev.as_mut().unwrap().design = Some(design::snapshot(&s, &design::tokens(&c)).json());
         p.serve_live();
         assert_eq!(p.host.runner().design(), last);
+
+        // A value-only snapshot applies during a press, with no generation to replace.
+        p.painted = true;
+        p.pointer_aux(2, true, 10., 10., 0.);
+        p.dev.as_mut().unwrap().design = Some(design::snapshot(&s, &design::tokens(&b)).json());
+        p.poll_development(|| ());
+        assert_eq!(
+            p.host.runner().design(),
+            design::digest(&design::tokens(&b))
+        );
+        p.pointer_aux(2, false, 10., 10., 0.);
     }
 }

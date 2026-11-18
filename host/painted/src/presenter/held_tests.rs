@@ -344,13 +344,13 @@ fn a_new_generation_lets_a_hold_go_unsaid_and_takes_it_again() {
     assert_eq!(serve(&mut p, vec![hold(7, hover)])[0]["state"], "hover");
     let install = |p: &mut Presenter<()>, identity: &str, app: &str| {
         p.painted = true;
-        p.pending_dev = Some(crate::fetch::Generation {
+        p.keep_generation(crate::fetch::Generation {
             identity: identity.into(),
             plan: plan(app),
             module: None,
         });
         p.poll_development(|| ());
-        assert!(p.pending_dev.is_none(), "installed");
+        assert!(!p.generation_waits(), "installed");
         p.frame();
     };
     install(&mut p, "gen-b", APP);
@@ -509,13 +509,13 @@ fn a_held_press_named_inside_survives_a_displayed_generation() {
     let child = target(&p, "child", "active");
     assert_eq!(serve(&mut p, vec![hold(4, child)])[0]["state"], "active");
     p.painted = true;
-    p.pending_dev = Some(crate::fetch::Generation {
+    p.keep_generation(crate::fetch::Generation {
         identity: "gen-b".into(),
         plan: plan(APP),
         module: None,
     });
     p.poll_development(|| ());
-    assert!(p.pending_dev.is_none(), "installed");
+    assert!(!p.generation_waits(), "installed");
     assert_eq!(
         reports(&mut p),
         [json!({"kind": "held", "state": "active", "revision": 4})]

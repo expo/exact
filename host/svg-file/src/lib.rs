@@ -238,7 +238,8 @@ fn still(_: exact_kernel::NodeKey, _: exact_motion::Property) -> Option<exact_mo
 /// processing as [`parse`].
 pub fn load(text: &str) -> Result<Loaded, Error> {
     let document = parse(text)?;
-    let mut kernel = Kernel::with_monospace_on_demand();
+    // An SVG file lays out no box: its scratch kernel links no grid layout.
+    let mut kernel = Kernel::on_demand(Box::new(exact_kernel::MonospaceMeasurer::default()));
     kernel
         .apply(document.root, 0, &document.ops)
         .map_err(|e| Error::at(0, format!("the kernel refused the document: {e:?}")))?;

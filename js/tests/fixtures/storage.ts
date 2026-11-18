@@ -600,7 +600,7 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
       [socket, { exactStream, exactIdleTimeout: 3600001 }],
       [socket, { exactStream, exactIdleTimeout: 1.5 }],
       [socket, { exactIdleTimeout: 60000 }],
-      ["https://example.test/events", { exactStream, exactIdleTimeout: 60000 }],
+      ["exact-native:", { exactStream, exactIdleTimeout: 60000 }],
       ["https://example.test/poll", { exactStream, exactIdleTimeout: 60000, exactLongPoll: { cursor: "since", from: "seq" } }],
       ["https://example.test/upload", { method: "POST", body: "x", exactStream, exactUploadProgress: true, exactIdleTimeout: 60000 }],
     ];

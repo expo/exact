@@ -8,8 +8,9 @@ impl<D: DataSource> Presenter<D> {
     /// every check; a boot note it left goes to the journal.
     pub fn set_updates(&mut self, updates: Option<Box<dyn crate::delivery::Store>>) {
         self.updates = updates;
-        self.update_waits_for_requests = false;
-        self.update_explicit = false;
+        if let Some(Waiting::Update { explicit, hold }) = self.waiting.as_mut() {
+            (*explicit, *hold) = (false, None);
+        }
         self.update_checks =
             (self.updates.as_ref()).map(|_| super::checks::Checks::from_compat(&self.compat));
         if let Some(note) = self.updates.as_mut().and_then(|u| u.take_note()) {
@@ -31,8 +32,12 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Connect the existing development URL loop; polling starts after first pixel.
+    /// Connect the existing development URL loop; polling starts after first
+    /// pixel. A generation the loop it replaces brought, held, goes with it.
     pub fn set_development(&mut self, url: Option<String>, identity: Option<String>) {
+        if matches!(self.waiting, Some(Waiting::Generation(..))) {
+            self.waiting = None;
+        }
         self.dev = url.map(|url| crate::fetch::Poller::new(url, self.compat.clone(), identity));
         // Its answers wake the executor's fd, so a host that turns only when
         // woken (the Android reader's canvas host) takes them at once.
@@ -58,6 +63,7 @@ impl<D: DataSource> Presenter<D> {
             .into_iter()
             .chain(self.image_turn_due_in_ms())
             .chain(self.update_check_due())
+            .chain(self.reload_due_in_ms())
             .reduce(f64::min);
         let dev = self.dev.as_ref().filter(|_| self.painted);
         let poll = dev
@@ -94,15 +100,12 @@ impl<D: DataSource> Presenter<D> {
             Some(Ok(Some(generation)))
                 if self.dev.as_ref().unwrap().identity.as_ref() == Some(&generation.identity) => {}
             Some(Ok(Some(generation))) => {
-                // A newer generation waits its own second; the poll fetching
-                // the held one again does not restart it.
-                if self.pending_dev.as_ref().map(|g| &g.identity) != Some(&generation.identity) {
-                    self.dev.as_mut().unwrap().held_since = None;
-                }
                 // Held, or refused below: the poll downloads it again only
-                // once the dev server publishes another.
+                // once the dev server publishes another. A newer generation
+                // waits its own second; the poll fetching the held one again
+                // does not restart it.
                 self.dev.as_mut().unwrap().held = Some(generation.identity.clone());
-                self.pending_dev = Some(generation);
+                self.keep_generation(generation);
             }
             // A dev loop's status (its producers starting) once, not each tick.
             Some(Err(error)) => self.dev.as_mut().unwrap().say(&error),
@@ -110,15 +113,20 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Install the generation a tick kept, when it may go.
+    /// Install the generation a tick kept, when it may go: the tick keeps it
+    /// as bytes until no interaction holds it (LLP 1029.000.002 D9).
     fn apply_development(&mut self, data: impl FnOnce() -> D) {
-        if let Some(generation) = self.pending_dev.take() {
+        let is_generation = |waiting: &mut Waiting<D>| matches!(waiting, Waiting::Generation(..));
+        if self.waiting.as_mut().is_some_and(is_generation) && self.activation_deferred() {
+            return;
+        }
+        if let Some(Waiting::Generation(generation, _)) = self.waiting.take_if(is_generation) {
             let let_go = self
                 .dev
                 .as_ref()
                 .and_then(|dev| dev.held_since)
                 .is_some_and(|t| t.elapsed() >= LET_GO_AFTER);
-            match self.reload_module(&generation.plan, data(), generation.module.clone(), let_go) {
+            match self.reload_now(&generation.plan, data(), generation.module.clone(), let_go) {
                 Ok(_) => {
                     let waker = self.executor.waker();
                     let dev = self.dev.as_mut().unwrap();
@@ -137,23 +145,25 @@ impl<D: DataSource> Presenter<D> {
                     self.rehold();
                     self.report_status();
                 }
-                Err(HostError::PreparingModule) => self.pending_dev = Some(generation),
+                Err(HostError::PreparingModule) => {
+                    self.waiting = Some(Waiting::Generation(generation, Some("module")));
+                }
                 Err(HostError::RequestsPending) => {
                     self.dev
                         .as_mut()
                         .unwrap()
                         .held_since
                         .get_or_insert_with(Instant::now);
-                    self.pending_dev = Some(generation);
+                    self.waiting = Some(Waiting::Generation(generation, Some("requests")));
                 }
                 Err(error) => eprintln!("exact url: candidate refused: {error}"),
             }
-            if self.pending_dev.is_none() {
+            if self.waiting.is_none() {
                 self.dev.as_mut().unwrap().held_since = None;
             }
         }
         // The live table: the snapshot and the commands poll's batches.
-        if self.pending_dev.is_none() {
+        if !self.waiting.as_mut().is_some_and(is_generation) {
             self.serve_live();
         }
     }
@@ -183,6 +193,10 @@ impl<D: DataSource> Presenter<D> {
                 .preload()
                 .map_err(|e| HostError::Asset(format!("candidate module: {e:?}")))?
             {
+                // Whoever keeps the candidate tries it at the shell's next
+                // turn: the loader wakes its loop for that one.
+                let wake = self.executor.waker();
+                data.when_preloaded(Box::new(move || wake()));
                 return Err(HostError::PreparingModule);
             }
             let mut validation = module
@@ -298,17 +312,19 @@ impl<D: DataSource> Presenter<D> {
     /// A development generation or an update is being prepared: the display
     /// loop polls for it. A loading data source wakes the loop itself.
     pub fn delivery_pending(&self) -> bool {
-        self.pending_dev.is_some() || self.update_ready()
+        matches!(self.waiting, Some(Waiting::Generation(..))) || self.update_ready()
     }
 
     pub(super) fn update_ready(&self) -> bool {
-        self.pending_update
-            && (self.update_explicit
-                || self
-                    .update_checks
-                    .as_ref()
-                    .is_none_or(|c| c.activation_allowed()))
-            && !(self.update_waits_for_requests && self.host.runner().has_pending())
+        let Some(Waiting::Update { explicit, hold }) = self.waiting else {
+            return false;
+        };
+        (explicit
+            || self
+                .update_checks
+                .as_ref()
+                .is_none_or(|c| c.activation_allowed()))
+            && !(hold == Some("requests") && self.host.runner().has_pending())
     }
 
     /// Wake an idle display while an executable image is loading off-thread.
@@ -395,8 +411,7 @@ impl<D: DataSource> Presenter<D> {
             self.check_update();
         }
         if asks.activate {
-            self.pending_update = true;
-            self.update_waits_for_requests = false;
+            self.owe_update(false);
         }
         if !was_ready && self.update_ready() {
             self.executor.notify();
@@ -423,26 +438,29 @@ impl<D: DataSource> Presenter<D> {
             .as_mut()
             .is_some_and(|c| c.completed(&line))
         {
-            self.pending_update = true;
-            self.update_waits_for_requests = false;
+            self.owe_update(false);
         }
         true
     }
 
-    /// A composition, a held touch or a predictive Back gesture is in
-    /// progress: activation waits for a turn with none (LLP 1030.003 D5,
-    /// LLP 1030.006 D6).
+    /// An interaction holds a replacement ([`Presenter::interaction_hold`]):
+    /// a composition; a button, a touch or a bar's finger down; or a gesture,
+    /// the predictive Back or a row the keys lifted. Activation waits for a
+    /// turn with none (LLP 1029.000.002 D9, LLP 1030.003 D5, LLP 1030.006 D6).
     pub(super) fn activation_deferred(&self) -> bool {
-        self.contact_position().is_some()
-            || self.composing_field().is_some()
-            || self.hosted_composing()
-            || self.back_previewing()
+        self.interaction_hold().is_some()
     }
 
     /// Apply the staged bundle now with carry (`deliveryActivate`, LLP 1030
     /// D7): its assets stand in for the root's by name, its plan restarts
-    /// the app. `Ok(false)` when nothing is staged.
+    /// the app. `Ok(false)` when nothing is staged, or while an interaction
+    /// holds it, which the first [`Presenter::run_commands`] without one
+    /// applies.
     pub fn activate_update(&mut self, data: D) -> Result<bool, HostError> {
+        if self.activation_deferred() {
+            self.owe_update(false);
+            return Ok(false);
+        }
         if self.content_registration.is_some() {
             return Err(HostError::Layout(
                 "content-region trial requires session retirement before update".into(),
@@ -567,6 +585,8 @@ impl<D: DataSource> Presenter<D> {
                 .unwrap_or_default(),
         ));
         self.host.log("exact update: activated the staged bundle");
+        // The update is the newest candidate: one that waited does not apply.
+        self.supersede();
         self.sync_delivery();
         self.after_commit();
         Ok(true)
@@ -677,10 +697,10 @@ component App
     #[test]
     fn development_candidate_first_settle_reads_launch_facts() {
         let (mut p, facts) = dated_presenter();
-        assert!(p
-            .reload(&candidate_plan(), facts.clone())
-            .unwrap()
-            .is_none());
+        assert!(
+            p.reload(&candidate_plan(), facts.clone()).unwrap()
+                == crate::presenter::ReloadResult::Applied(None)
+        );
         assert_first_facts(&facts);
     }
 
@@ -815,7 +835,10 @@ component App
         assert_eq!(p.host.runner().generation(), 2);
         for generation in 3..=4 {
             let epoch = p.host.kernel().epoch();
-            assert!(p.reload(&old, ()).unwrap().is_none());
+            assert_eq!(
+                p.reload(&old, ()).unwrap(),
+                crate::presenter::ReloadResult::Applied(None)
+            );
             assert_eq!(p.host.runner().generation(), generation);
             assert!(p.host.kernel().epoch() > epoch);
             assert_eq!(pixel(&mut p), (0, 0, 255));

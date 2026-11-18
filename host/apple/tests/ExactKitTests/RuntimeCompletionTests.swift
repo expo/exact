@@ -4,6 +4,8 @@ import XCTest
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactCollections
+@testable import ExactCore
 
 final class RuntimeCompletionTests: XCTestCase {
     private typealias Receive = (RuntimeCompletion) -> Void
@@ -24,26 +26,53 @@ final class RuntimeCompletionTests: XCTestCase {
     }
 
     func testScrollFactsKeepObservedOrderAndRejectOnlySupersededOrRetiredWrites() {
-        let runtime = Runtime(), other = Runtime()
-        defer { runtime.destroy(); other.destroy() }
-        let door = runtime.completions, lease = other.completionLease
-        var seen: [Int] = []
-        let current = door.lease()
-        let first = door.scroll(current, view: 1) { seen.append(10) }
-        let second = door.scroll(current, view: 1) { seen.append(20) }
-        let anotherView = door.scroll(current, view: 2) { seen.append(25) }
-        first(); second()
+        let runtime = Runtime()
+        defer { runtime.destroy() }
+        var mailbox = ScrollMailbox(), seen: [Double] = []
+        let door = runtime.completions
+        func values(_ top: Double, view: UInt32 = 1) -> ScrollMailbox.Values {
+            ScrollMailbox.Values(lease: door.lease(), runtime: runtime.rt, view: view,
+                position: .offset(page: false, left: 0, top: top))
+        }
+        func apply(_ note: ScrollMailbox.Note) {
+            if mailbox.claim(note), case .offset(_, _, let top) = note.values.position { seen.append(top) }
+        }
+        for taken in [false, true] {
+            mailbox.record(values(10))
+            let draining = taken ? mailbox.take() : []
+            apply(mailbox.record(values(20), observing: true))
+            for note in taken ? draining : mailbox.take() { apply(note) }
+            XCTAssertEqual(seen, [20], "an inline owner observation supersedes the older buffered offset")
+            XCTAssertEqual(mailbox.observed, 0, "consuming both writes releases the watermark")
+            seen.removeAll()
+        }
+        let first = mailbox.record(values(10), observing: true)
+        let second = mailbox.record(values(20), observing: true)
+        let another = mailbox.record(values(25, view: 2), observing: true)
+        apply(first); apply(second)
         XCTAssertEqual(seen, [10, 20], "observed scrolls keep every queued delivery")
-        let queued = door.scroll(current, view: 1) { seen.append(30) }
-        let quiet = door.scroll(current, view: 1) { seen.append(40) }
-        quiet(); queued(); anotherView()
+        let queued = mailbox.record(values(30), observing: true)
+        mailbox.record(values(40))
+        for note in mailbox.take() { apply(note) }
+        apply(queued); apply(another)
         XCTAssertEqual(seen, [10, 20, 40, 25], "order is per scroller")
-        door.scroll(lease, view: 1) { XCTFail("a foreign lease cannot write") }()
-        let retired = door.scroll(current, view: 1) { XCTFail("a retired generation cannot write") }
+        XCTAssertEqual(mailbox.observed, 0)
+        mailbox.record(values(50))
+        let retired = mailbox.record(values(60), observing: true)
         door.replace()
-        retired()
-        door.scroll(door.lease(), view: 1) { seen.append(50) }()
-        XCTAssertEqual(seen.last, 50)
+        for note in mailbox.take() { XCTAssertFalse(mailbox.claim(note)) }
+        apply(retired)
+        XCTAssertEqual(seen, [10, 20, 40, 25])
+        mailbox.record(values(70))
+        mailbox.record(ScrollMailbox.Values(lease: door.lease(), runtime: runtime.rt, view: 1,
+            position: .collection(revision: 7, sequence: 8, offset: 70)))
+        XCTAssertEqual(mailbox.pending, 1, "one mailbox slot holds both facts for a scroller")
+        let pending = mailbox.take()
+        XCTAssertEqual(pending.count, 2)
+        for note in pending { apply(note) }
+        XCTAssertEqual(seen.last, 70)
+        XCTAssertEqual(mailbox.pending, 0)
+        XCTAssertEqual(mailbox.observed, 0)
     }
 
     func testEveryPostedPathRefusesARetiredGenerationBeforeEnteringRust() {
@@ -53,34 +82,40 @@ final class RuntimeCompletionTests: XCTestCase {
     func testScrollOrderingRetainsOnlyOutstandingWrites() {
         let runtime = Runtime()
         defer { runtime.destroy() }
-        let door = runtime.completions, lease = door.lease()
-        var seen: [Int] = []
-        for view in UInt32(1)...1000 {
-            var older: (() -> Void)? = door.scroll(lease, view: view) { XCTFail("superseded") }
-            let latest = door.scroll(lease, view: view) { seen.append(Int(view)) }
-            latest()
-            if view == 1 { XCTAssertEqual(door.pendingScrollViewsForTests, 1, "the older write still needs its watermark") }
-            older?()
-            older = nil
-            latest()
+        var mailbox = ScrollMailbox()
+        let door = runtime.completions
+        func values(_ view: UInt32) -> ScrollMailbox.Values {
+            ScrollMailbox.Values(lease: door.lease(), runtime: runtime.rt, view: view,
+                position: .offset(page: false, left: 0, top: Double(view)))
         }
-        XCTAssertEqual(door.pendingScrollViewsForTests, 0, "drained scrollers retain no history")
-        XCTAssertEqual(seen, Array(1...1000), "a consumed write cannot run twice")
-        var discarded: (() -> Void)? = door.scroll(lease, view: 1) { XCTFail("discarded") }
-        XCTAssertNotNil(discarded)
-        XCTAssertEqual(door.pendingScrollViewsForTests, 1)
-        discarded = door.scroll(lease, view: 2) {}
-        XCTAssertEqual(door.pendingScrollViewsForTests, 1, "mailbox replacement releases the displaced write")
-        discarded = nil
-        XCTAssertEqual(door.pendingScrollViewsForTests, 0)
-        let retired = door.scroll(lease, view: 1) { XCTFail("retired") }
+        for view in UInt32(1)...1000 {
+            let older = mailbox.record(values(view), observing: true)
+            mailbox.record(values(view))
+            let latest = mailbox.take()
+            XCTAssertEqual(latest.count, 1)
+            XCTAssertTrue(mailbox.claim(latest[0]))
+            XCTAssertEqual(mailbox.observed, 1, "the older observation still needs its watermark")
+            XCTAssertFalse(mailbox.claim(older))
+            XCTAssertEqual(mailbox.observed, 0, "drained scrollers retain no history")
+        }
+        mailbox.record(values(1))
+        let inline = mailbox.record(values(1), observing: true)
+        XCTAssertTrue(mailbox.claim(inline))
+        mailbox.record(values(1))
+        XCTAssertEqual(mailbox.observed, 1, "replacing a buffered offset releases its pending write")
+        for note in mailbox.take() { XCTAssertTrue(mailbox.claim(note)) }
+        XCTAssertEqual(mailbox.observed, 0)
+        let retired = mailbox.record(values(1), observing: true)
         door.replace()
-        let current = door.scroll(door.lease(), view: 1) { seen.append(1001) }
-        retired()
-        XCTAssertEqual(door.pendingScrollViewsForTests, 1, "an old generation cannot release a new write")
-        current()
-        XCTAssertEqual(door.pendingScrollViewsForTests, 0)
-        XCTAssertEqual(seen.last, 1001)
+        let current = mailbox.record(values(1), observing: true)
+        XCTAssertFalse(mailbox.claim(retired))
+        XCTAssertEqual(mailbox.observed, 1, "an old generation cannot release a new write")
+        XCTAssertTrue(mailbox.claim(current))
+        XCTAssertFalse(mailbox.claim(current), "a consumed observation cannot run twice")
+        XCTAssertEqual(mailbox.observed, 0)
+        mailbox.record(values(1))
+        door.close()
+        for note in mailbox.take() { XCTAssertFalse(mailbox.claim(note)) }
     }
 
     func testEveryPostedPathRefusesADestroyedSessionBeforeEnteringRust() {
@@ -223,13 +258,13 @@ final class RuntimeCompletionTests: XCTestCase {
         XCTAssertTrue(landed.isEmpty)
         XCTAssertTrue(session.hasPublished())
         XCTAssertNil(p.views[1_000_000])
-        XCTAssertTrue(p.collections.covers(node.id))
+        XCTAssertTrue(p.listHost.covers(node.id))
         waitForMainQueue("the ordered publications drain together")
         XCTAssertEqual(landed, Array(0..<8))
         XCTAssertEqual(session.publishedDrainCountForTests - drains, 1, "all ready publications share one scheduled drain")
         XCTAssertFalse(session.hasPublished())
         XCTAssertNotNil(p.views[1_001_999])
-        XCTAssertTrue(p.collections.covers(node.id))
+        XCTAssertTrue(p.listHost.covers(node.id))
         XCTContext.runActivity(named: "T large publication ops=4000 scroll_callback_ms=\(duration * 1000)") { _ in }
     }
 
@@ -237,7 +272,7 @@ final class RuntimeCompletionTests: XCTestCase {
         let (session, window, node, scroll) = try grid()
         defer { session.destroy(); window.isHidden = true }
         let p = session.presenter
-        let target = try XCTUnwrap(p.collections.entries[node.id]?.snapshot.rows.first?.root)
+        let target = try XCTUnwrap(p.listHost.entries[node.id]?.snapshot.rows.first?.root)
         let view = try XCTUnwrap(p.views[target])
         var landed: [Int] = []
         session.onLandForTests = { _, batch in landed += batch.journal.compactMap(Int.init) }
@@ -312,15 +347,15 @@ final class RuntimeCompletionTests: XCTestCase {
         let (session, window, node, _) = try grid()
         defer { session.destroy(); window.isHidden = true }
         let p = session.presenter
-        let entry = try XCTUnwrap(p.collections.entries[node.id])
+        let entry = try XCTUnwrap(p.listHost.entries[node.id])
         let pin = try XCTUnwrap(entry.snapshot.rows.first?.root)
         XCTAssertNotNil(entry.lastFacts)
-        XCTAssertEqual(p.collections.owningCollection(pin), node.id)
+        XCTAssertEqual(p.listHost.owningCollection(pin), node.id)
         var reports = 0
-        let feedback = p.collections.onFeedback
-        p.collections.onFeedback = { reports += 1; feedback?($0) }
+        let feedback = p.listHost.onFeedback
+        p.listHost.onFeedback = { reports += 1; feedback?($0) }
         session.holdFillForTests()
-        p.collections.pointer(pin)
+        p.listHost.pointer(pin)
         XCTAssertEqual(reports, 0, "a pin report waits for the in-flight fill")
         session.publish(.fill(node.id), RuntimeCompletion(lease: session.runtime.completionLease, batch: wireBatch([])))
         waitFor("the landed fill releases its pin report") { entry.lastFacts?.interaction == pin }

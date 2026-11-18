@@ -50,8 +50,8 @@ test "the welcome shows until Continue, then never again"
   expect tree has "habits"
 ```
 
-- **Not a route of its own.** A welcome at `/` that Continue replaces with `/habits` is
-  what every launch at `/` opens again, and `push` puts the list over it, with a Back.
+- **Not a route of its own.** Were the welcome the route at `/`, every launch would open
+  it again; `push` would leave it under the list, with a Back.
 - **No move after launch.** A `task` that leaves the welcome is a timer, too late: the
   first frame already shows the welcome, at every launch. A `persist` state is read before
   the first frame, so a relaunch opens on the list. On the web that holds for a route

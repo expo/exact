@@ -3,6 +3,7 @@ import AppKit
 import IOSurface
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 @testable import ExactSurfaces
 
 private var capturedPaintPixels: [[UInt8]] = []
@@ -570,7 +571,7 @@ final class PaintCaptureMacTests: XCTestCase {
         for scale in [CGFloat(1), 1.2, 2.4] {
             session.pageZoom = Double(scale / window.backingScaleFactor)
             window.displayIfNeeded()
-            p.boxFilters.render()
+            p.boxFilters!.render()
             window.displayIfNeeded()
             let layer = try XCTUnwrap(box.layer)
             for capture in [{ Capture.picture(of: root, scale: scale) }, { Capture.bitmap(of: root, scale: scale) }] {

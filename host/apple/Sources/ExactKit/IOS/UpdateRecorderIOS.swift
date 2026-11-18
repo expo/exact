@@ -190,7 +190,7 @@ final class UpdateRecorder {
         if (r.missed > 0 && !r.quiet) || r.overrun > 0 {
             let from = concludedBefore ?? now - interval / 1000
             r.phases = HostPhases.shared.window(from: from, to: now)
-            r.hatches = session?.hatchDiagnostics.window(from: from, to: now)
+            r.hatches = session?.natives.diagnostics?.window(from: from, to: now)
         }
         if recording.keep(r), let drawable { recording.awaiting[drawable] = (recording.records.count - 1, expected) }
     }
@@ -206,7 +206,7 @@ final class UpdateRecorder {
     private func drainProbe() {
         for report in probe?.take() ?? [] {
             recording.shown(drawable: report.drawable, presented: report.presented) { [session] from, to in
-                (HostPhases.shared.window(from: from, to: to), session?.hatchDiagnostics.window(from: from, to: to))
+                (HostPhases.shared.window(from: from, to: to), session?.natives.diagnostics?.window(from: from, to: to))
             }
         }
     }

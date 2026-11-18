@@ -8,7 +8,7 @@ extension ExactApp {
     /// stale when a session does not run the batch's base (the connection
     /// then fetches the snapshot), else applied or why not. The build
     /// channel (LLP 1122 D4) hears of a refused colour and of a new design.
-    func design(_ frame: String) -> String {
+    package func design(_ frame: String) -> String {
         var answer = "applied", refused = false, design: String?
         for session in sessions where session.state != .destroyed && session.booted {
             let batch = session.runtime.designRows(frame)

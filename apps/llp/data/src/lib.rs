@@ -304,6 +304,9 @@ fn document_tables_share_columns_without_changing_outline_offsets() {
     assert!(!format!("{:?}", section[10]).contains("LongUnbreakableHeader"));
 }
 
+/// It reads the corpus on the host's worker (LLP 1047.001 D12).
+impl exact_runner::HostWork for Llp {}
+
 impl DataSource for Llp {
     fn app_id(&self) -> &str {
         "com.exact.llp"
@@ -355,7 +358,7 @@ impl DataSource for Llp {
             None => {
                 self.next += 1;
                 self.inflight.insert(self.next, root);
-                return Ok(Answer::Later(Request::continuation(self.next)));
+                return Ok(Answer::Later(Request::continuation::<Self>(self.next)));
             }
         }
         Ok(Answer::Now(self.value(source, &asked, args)))

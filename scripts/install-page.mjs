@@ -1,7 +1,47 @@
 // @ref LLP 1030.003#d6a--the-standard-install-page — generated public UI, separate from the app boot graph.
 import { mkdirSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
+import { spawn } from 'node:child_process';
 import { resolve, extname, sep } from 'node:path';
+
+/** Optional source revision and porcelain status for an install page. Reading
+ * status never refreshes the index. A slow git gets SIGTERM at five seconds,
+ * then SIGKILL after one second and releases the read even if stdout stays open.
+ * Failed or timed-out reads and output beyond one MiB yield no provenance. */
+export function sourceProvenance(dir) {
+  const git = (...args) => new Promise(done => {
+    let child, text = '', bytes = 0, expired = false, settled = false, force;
+    try { child = spawn('git', ['--no-optional-locks', ...args], { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] }); }
+    catch { done(null); return; }
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer); clearTimeout(force);
+      done(value);
+    };
+    const stop = () => {
+      if (settled) return;
+      child.kill('SIGKILL');
+      child.stdout.destroy();
+      child.unref();
+      finish(null);
+    };
+    const timer = setTimeout(() => {
+      expired = true;
+      child.kill('SIGTERM');
+      force = setTimeout(stop, 1000);
+    }, 5000);
+    child.on('error', () => finish(null));
+    child.on('close', code => finish(!expired && code === 0 ? text.trim() : null));
+    child.stdout.on('data', data => {
+      if (settled) return;
+      bytes += data.length;
+      if (bytes > 1024 * 1024) stop();
+      else text += data;
+    });
+  });
+  return Promise.all([git('rev-parse', '--short=10', 'HEAD'), git('status', '--porcelain')]);
+}
 
 export const INSTALL_ROOT = '/.exact/install/';
 export const INSTALL_PLATFORMS = ['web', 'ios', 'macos'];

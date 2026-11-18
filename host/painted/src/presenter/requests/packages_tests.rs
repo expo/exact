@@ -8,6 +8,10 @@ use crate::hatches::{install, Context as HatchContext, Element, Hatches, Ticket}
 use crate::package::{json, Context, Entry, Json, Package, Reply};
 use std::cell::RefCell;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 thread_local!(static HEARD: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) });
 thread_local!(static STATE: RefCell<&'static str> = const { RefCell::new("prompt") });
 thread_local!(static NOTIFIER: RefCell<Option<crate::package::Notifier>> = const { RefCell::new(None) });
@@ -62,7 +66,7 @@ impl DataSource for DeferredReply {
         _: &[exact_runner::Value],
     ) -> Result<exact_runner::Answer, exact_runner::DataError> {
         Ok(exact_runner::Answer::Later(
-            exact_runner::Request::continuation(1),
+            exact_runner::Request::continuation::<TestWork>(1),
         ))
     }
 

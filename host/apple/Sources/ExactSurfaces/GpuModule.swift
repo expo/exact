@@ -101,6 +101,17 @@ final class GpuModule {
     }
 
     typealias LoadFn = @convention(c) () -> UInt32
+    typealias StorageFn = @convention(c) (UInt32, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int) -> Bool
+    var storage: StorageFn?
+
+    func giveStorage(_ id: UInt32, session: ExactSession) -> Bool {
+        guard let data = session.appFileRoots["data"], let cache = session.appFileRoots["cache"],
+              let temporary = session.appFileRoots["tmp"] else { return true }
+        let d = Array(data.utf8), c = Array(cache.utf8), t = Array(temporary.utf8)
+        return d.withUnsafeBufferPointer { dp in c.withUnsafeBufferPointer { cp in t.withUnsafeBufferPointer { tp in
+            storage?(id, dp.baseAddress, d.count, cp.baseAddress, c.count, tp.baseAddress, t.count) ?? true
+        } } }
+    }
     typealias TierFn = @convention(c) (UInt32) -> UInt32
     typealias RetierFn = @convention(c) () -> Void
     typealias CreateFn = @convention(c) (UnsafePointer<UInt8>?, Int, UnsafeMutableRawPointer?, UInt32, UInt32) -> UInt32
@@ -158,6 +169,7 @@ final class GpuModule {
     /// Whether a canvas's next frame is due at a frame time under its cap (`Module::due`), and its cap.
     var due: DueFn?
     var maxFps: WantsFn?
+    var presentationFlags: WantsFn?
 
     let wantsInput: WantsFn?
     /// Whether a canvas's world reads gamepads; absent from an older module,
@@ -324,7 +336,8 @@ final class GpuModule {
             guard let p = dlsym(handle, name) else { return nil }
             return unsafeBitCast(p, to: T.self)
         }
-        guard let load = sym("gpu_load", LoadFn.self), let reducedMotion = sym("gpu_reduced_motion", SeekableFn.self), let create = sym("gpu_create", CreateFn.self), let bind = sym("gpu_bind", BindFn.self),
+        guard let storage = sym("gpu_storage", StorageFn.self),
+              let load = sym("gpu_load", LoadFn.self), let reducedMotion = sym("gpu_reduced_motion", SeekableFn.self), let create = sym("gpu_create", CreateFn.self), let bind = sym("gpu_bind", BindFn.self),
               let render = sym("gpu_render", RenderFn.self), let flush = sym("gpu_flush", SyncFn.self), let dirty = sym("gpu_dirty", DirtyFn.self), let destroy = sym("gpu_destroy", DestroyFn.self),
               let texture = sym("gpu_texture", TextureFn.self), let childrenMode = sym("gpu_children_mode", WantsFn.self),
               let readback = sym("gpu_readback", ReadbackFn.self),
@@ -335,6 +348,7 @@ final class GpuModule {
         }
         let module = GpuModule(create: create, bind: bind, render: render, dirty: dirty, destroy: destroy, texture: texture, textureMetal: sym("gpu_texture_metal", TextureMetalFn.self), sync: sym("gpu_sync", SyncFn.self), childrenMode: childrenMode, readback: readback, child: child, childrenCount: childrenCount, placement: placement, shader: sym("gpu_shader", ShaderFn.self), validateShader: sym("gpu_shader_validate", ShaderFn.self), clearShaders: sym("gpu_shaders_clear", ClearShadersFn.self), errorLen: errorLen, errorPtr: errorPtr, wantsInput: sym("gpu_wants_input", WantsFn.self), input: sym("gpu_input", BindFn.self), messages: sym("gpu_messages", WantsFn.self), published: sym("gpu_published", WantsFn.self), agent: sym("gpu_agent", BindFn.self), outPtr: sym("gpu_out_ptr", ErrorPtrFn.self))
         module.performanceReporting = sym("gpu_performance_reporting", PerformanceReportingFn.self)
+        module.storage = storage
         module.performance = sym("gpu_performance", PerformanceFn.self)
         module.flushFn = flush
         if artifact.isEmpty,
@@ -375,6 +389,7 @@ final class GpuModule {
         module.hostFrame = sym("gpu_host_frame", HostFrameFn.self)
         module.due = sym("gpu_due", DueFn.self)
         module.maxFps = sym("gpu_max_fps", WantsFn.self)
+        module.presentationFlags = sym("gpu_presentation_flags", WantsFn.self)
         module.bindAt = sym("gpu_bind_at", BindAtFn.self)
         module.canvasSize = sym("gpu_size", SizeFn.self)
         module.wantsPads = sym("gpu_wants_pads", WantsFn.self)

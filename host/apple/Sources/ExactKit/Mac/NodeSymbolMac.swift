@@ -25,7 +25,7 @@ extension NodeView {
             let generation = loadGeneration
             image = name.isEmpty ? faceSymbol.flatMap { FaceSymbol.image($0, points: points) } : symbolImage(name, SymbolMeasure.configuration(points: points, weight: weight))
             symbolFound = image != nil; if points <= 0 { image = nil }
-            if name.isEmpty, props["symbolPath"] == nil, props["symbolAsset"] == nil, !source.hasPrefix("symbol:sf/"), source != "symbol:", symbolRefusal != source { symbolRefusal = source; presenter?.session?.log("image \(RasterRetry.withoutQuery(source)) refused: unknown symbol role") }
+            if name.isEmpty, props["symbolPath"] == nil, props["symbolAsset"] == nil, !source.hasPrefix("symbol:sf/"), source != "symbol:", symbolRefusal != source { symbolRefusal = source; presenter?.session?.log("image \(sourceWithoutQuery(source)) refused: unknown symbol role") }
             if !name.isEmpty || props["symbolAsset"] != nil || source.hasPrefix("symbol:sf/") || source == "symbol:" { symbolRefusal = nil }
             let clip = symbolClip ?? SymbolClip()
             if symbolClip == nil { clip.wantsLayer = true; clip.layer?.masksToBounds = true; symbolClip = clip; (clipBox ?? self).addSubview(clip) }

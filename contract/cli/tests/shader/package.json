@@ -1,0 +1,5 @@
+{
+  "name": "@fixture/fragment",
+  "version": "1.0.0",
+  "exports": { ".": "./exact.json" }
+}

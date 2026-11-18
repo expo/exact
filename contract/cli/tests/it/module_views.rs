@@ -73,7 +73,7 @@ impl Drop for App {
 #[test]
 fn a_package_gpu_surface_checks_its_positional_arity() {
     let declaration = r#"{"kind":"interface","name":"@fixture/sky","version":"1.0.0",
-        "gpu":{"crate":"rust","exactGpu":"0.3","surfaces":{"sky":{"arity":1,"factory":"sky::surface"}}}}"#;
+        "gpu":{"crate":"rust","exactGpu":"0.4","surfaces":{"sky":{"arity":1,"factory":"sky::surface"}}}}"#;
     let app = App::new(
         "gpu-arity",
         "component App\n  view\n    canvas surface=sky(1, 2)\n",
@@ -118,7 +118,7 @@ fn a_package_gpu_declaration_checks_device_requirements_at_build() {
         )],
     );
     let path = app.0.join("node_modules/@fixture/sky/exact.json");
-    let gpu = json!({"crate":"rust", "exactGpu":"0.3", "surfaces":{"sky":{"arity":0,"factory":"sky::surface"}},
+    let gpu = json!({"crate":"rust", "exactGpu":"0.4", "surfaces":{"sky":{"arity":0,"factory":"sky::surface"}},
         "limits":{"required":{"maxStorageBufferBindingSize":268435456},"optional":{"maxBufferSize":1073741824}},
         "features":{"required":["subgroups", "primitive-index"],"optional":["float32-filterable"]}});
     let write = |gpu: &Json| {

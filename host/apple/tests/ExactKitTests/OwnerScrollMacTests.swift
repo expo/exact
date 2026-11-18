@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1072: a list scrolled with its slices built on the owner thread while
 /// main paints what they mount. The macOS host keeps slices synchronous in
@@ -71,7 +72,7 @@ final class OwnerScrollMacTests: XCTestCase {
         }
         session.drainFill()
         spin(0.1)
-        XCTAssertFalse(session.presenter.collections.fillLatency.isEmpty, "slices were built on the owner")
+        XCTAssertFalse(session.presenter.listHost.fillLatency.isEmpty, "slices were built on the owner")
         XCTAssertGreaterThan(list.subviewsDeep.count, 3, "the list still shows rows")
     }
 }

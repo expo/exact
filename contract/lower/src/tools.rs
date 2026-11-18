@@ -18,7 +18,7 @@ use contract_syntax::{Component, File, Span, Stmt};
 use contract_types::Ty;
 
 /// The commands a call's commit does not run: each moves the person's view
-/// (LLP 1111 D4a; the runner's `modules/calls.rs` skips them).
+/// (LLP 1111 D4a; the runner's `calls.rs` skips them).
 pub const SKIPPED: &[&str] = &[
     "focus",
     "blur",

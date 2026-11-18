@@ -56,8 +56,8 @@
 //!
 //! @ref LLP 1125 D2–D5, D7, D9
 
-use crate::agent::num;
 use crate::compare;
+use crate::json::num;
 use crate::midi::{Midi, Queued, HOLD, TICKS_PER_SECOND};
 use crate::sound::{Added, By, Cut, Sounds};
 use exact_plan::{ActionsId, Plan, Value, HAPTIC_KINDS};

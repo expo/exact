@@ -1419,3 +1419,35 @@ component App
         .iter()
         .any(|m| plan.str(m.declared) == "reading"));
 }
+
+#[test]
+fn package_records_keep_the_declared_surface_field_order() {
+    let app = App::new("surface-order");
+    let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/model-viewer")
+        .canonicalize()
+        .unwrap();
+    symlink_dir(package, app.0.join("node_modules/@exact/model-viewer")).unwrap();
+    let root = app.0.join("app.contract");
+    std::fs::write(&root, r##"use ModelNode from "@exact/model-viewer"
+component App
+  view
+    canvas surface=modelViewer(nodes=[ModelNode(name="Housing", color="#0080ff", opacity=0.5, visibility="visible", occlusion="occluder", occludedOpacity=0.3)])
+"##).unwrap();
+    let plan = contract::compile_path(&root).unwrap();
+    let mut runner = exact_runner::Runner::boot(
+        plan,
+        NoData,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let updates = runner.take_surface_updates();
+    assert_eq!(updates.len(), 1);
+    let args: serde_json::Value = serde_json::from_str(&updates[0].arguments_json()).unwrap();
+    assert_eq!(
+        args["nodes"][0],
+        serde_json::json!(["Housing", "#0080ff", 0.5, "visible", "occluder", 0.3])
+    );
+}

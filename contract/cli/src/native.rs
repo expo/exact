@@ -181,7 +181,8 @@ fn watched_rust_hatches(
 /// Rust hatches, `modules/android/*.rs` or `modules/linux/*.rs`, with the
 /// reader's Kotlin ones told beside them; the reader's alone when the app
 /// has no Rust ones; none when it gives `android` no word); and what
-/// [`android_reach`] writes, and the widgets' `widgets.rs` ([`widgets`]).
+/// [`android_reach`] writes, the widgets' `widgets.rs` ([`widgets`]), and
+/// `launch.rs`, the launch modules called once before boot.
 pub fn android_entry(
     app_root: &Path,
     manifest: &Manifest,
@@ -189,6 +190,11 @@ pub fn android_entry(
     out_dir: &Path,
 ) -> Result<(), String> {
     let install = "Option<::exact_painted::hatches::Install>";
+    std::fs::write(
+        out_dir.join("launch.rs"),
+        crate::logic::painted_launch_parts(app_root, manifest, "android")?,
+    )
+    .map_err(|e| e.to_string())?;
     let text = match watched_rust_hatches(app_root, manifest, "android")? {
         Some(rust) => format!(
             "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_painted::hatches::install_with_reader::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"

@@ -231,9 +231,8 @@ component RealWorld
       if depth(nav) > 1
         nav = replace(nav, "/login")
       else
-        // A tab's first entry can only be its root, so a first visit gives up
-        // its query, and /login follows (`signInNext`): Back is the global
-        // feed, never Your Feed again.
+        // Replacing a first visit with /login would leave no Back: it becomes
+        // the global feed and /login is pushed over it (`signInNext`).
         loginNext = true
         nav = replace(nav, "/")
   action pushSignIn

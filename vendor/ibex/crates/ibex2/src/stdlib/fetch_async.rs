@@ -137,6 +137,8 @@ pub struct HopRequest {
     pub timeout: Option<std::time::Duration>,
     /// Refuse speculative work on constrained networks (LLP 1162 D7).
     pub speculative: bool,
+    /// The request's `collected` (Exact patch 49), for a blocking transport.
+    pub collected: bool,
 }
 
 /// A started exchange: what activates and what cancels it. Dropping it
@@ -454,6 +456,7 @@ impl FetchTask {
                 max_body: current.body_limit(),
                 timeout: current.timeout,
                 speculative: current.speculative,
+                collected: current.collected,
             };
             (request, state.hop)
         };
@@ -976,6 +979,7 @@ fn run_blocking(
     request.max_body = Some(hop.max_body);
     request.timeout = hop.timeout;
     request.speculative = hop.speculative;
+    request.collected = hop.collected;
     request.redirect = crate::stdlib::fetch::RedirectMode::Manual;
     let _sending = hop.body;
     let refused = Arc::new(Mutex::new(None));

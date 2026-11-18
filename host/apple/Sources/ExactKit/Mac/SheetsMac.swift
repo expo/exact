@@ -188,7 +188,7 @@ extension NSView {
 extension Presenter {
     /// Whether `window` holds this session's nodes: its view's window, the
     /// sheet of one of its dialogs or alerts, or one of its popovers'.
-    func hosts(_ window: NSWindow?) -> Bool {
+    package func hosts(_ window: NSWindow?) -> Bool {
         guard let window else { return false }
         return window === viewport.window || window === alerts.sheet || dialogs.entries.contains { $0.sheet?.window === window } || menus.hosts(window)
     }

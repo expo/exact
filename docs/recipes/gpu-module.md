@@ -1,12 +1,11 @@
 # Recipe: a GPU module (a canvas drawn in Rust)
 
-For a package, `bun exact.mjs add <package>` then `canvas surface=name(…)`. For compute
-limits and features, see [device requirements](../reference.md#gpu-device-requirements).
+For a package, `bun exact.mjs add <package>` then `canvas surface=name(…)`. For limits and
+features, see [device requirements](../reference.md#gpu-device-requirements).
 
-A `canvas surface=name(…)` that no data module draws is drawn by the app's GPU module: a crate
-`gpu/` beside app.json whose surfaces implement `exact_gpu::Surface`, loaded after the first pixel
-(`apps/caltrain/gpu` is a whole one). `exact_gpu::wgpu` is wgpu 30, whose fields differ from older
-tutorials': `gpu/README.md` covers shaders, dynamic offsets, performance and color.
+A `canvas surface=name(…)` that no data module draws uses `gpu/` beside `app.json`,
+loaded after first pixel. Implement `exact_gpu::Surface`; see `apps/caltrain/gpu`.
+`exact_gpu::wgpu` is wgpu 30; `gpu/README.md` covers its use.
 
 **It joins a workspace exact2 generates for the app's GPU crates** (LLP 1153.003 D5.1), `.exact/gpu/`, apart
 from the host's: write no root `Cargo.toml` and copy nothing up.
@@ -78,3 +77,7 @@ exact_gpu::module!(REGISTRY);
 ```text
 canvas surface=clear() width=200 height=120 testId="sky"
 ```
+
+Native files: [implement `Surface::storage`](../reference.md#gpu-storage) for the session's paths.
+The web does not receive these paths or an Exact storage bridge; persistence there
+requires the GPU module's own browser API integration.

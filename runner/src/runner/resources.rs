@@ -45,6 +45,14 @@ pub(crate) struct ResourceRow {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// The plan row declaring a resource, shared by its runtime members and instances.
+    pub(super) fn resource_site(&self, i: usize) -> usize {
+        match self.owned_row(i) {
+            Some(owned) => owned.site,
+            None => self.member(i).map_or(i, |member| member.family),
+        }
+    }
+
     /// Runtime rows include list members; declaration walks use the plan.
     pub(super) fn resource_row(&self, i: usize) -> &exact_plan::ResourcesRow {
         if let Some(member) = &self.resources[i].member {
@@ -58,6 +66,13 @@ impl<D: DataSource> Runner<D> {
 
     pub(super) fn resource_rows(&self) -> impl Iterator<Item = &exact_plan::ResourcesRow> {
         (0..self.resources.len()).map(|i| self.resource_row(i))
+    }
+
+    /// How many of resource `i`'s arguments identify its answer: the call's
+    /// own, before its `with` context (LLP 1027.005 D1, D6).
+    pub(super) fn identity_len(&self, i: usize) -> usize {
+        let row = self.resource_row(i);
+        row.args.len as usize - usize::from(row.context)
     }
 
     /// Whether a change to the store asks resource `i` again: its own ask
@@ -99,5 +114,47 @@ impl<D: DataSource> Runner<D> {
         row.store_reader |= contents;
         row.contents_reader = contents;
         row.reads_known = true;
+    }
+
+    /// The names the store holds a value for — never the values (LLP 1018
+    /// D5: a token is not the agent's to see).
+    /// A presence name is listed with its occupancy, `token: locked,
+    /// user-presence`, `pending`, `plain` or `absent` (LLP 1133.010 §7).
+    pub fn store_names(&self) -> Vec<String> {
+        let presence = self.presence_list();
+        let mut names: Vec<String> = (self.store.names().into_iter())
+            .filter(|n| !n.starts_with(Store::PRESENCE) && !presence.iter().any(|(p, _)| p == n))
+            .map(str::to_string)
+            .collect();
+        names.extend(
+            presence
+                .into_iter()
+                .map(|(name, said)| format!("{name}: {said}")),
+        );
+        names.sort();
+        names
+    }
+
+    /// The store, for a test that reads what an action kept.
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Whether resource `name` observed device state (secrets, filesystem,
+    /// or SQLite). Bake marks its compiled value as a placeholder, refreshed
+    /// when the data source becomes ready (LLP 1018 D4 / LLP 1027 D4).
+    pub fn resource_reads_store(&self, name: &str) -> bool {
+        self.resource_rows()
+            .position(|r| self.plan.str(r.name) == name)
+            .is_some_and(|i| self.resources[i].store_reader)
+    }
+
+    /// Whether resource `name` drew secure randomness (LLP 1069.005 D2):
+    /// a device read whose value bake leaves out of the plan, so no random
+    /// value is shared by every install; the device asks it.
+    pub fn resource_draws_entropy(&self, name: &str) -> bool {
+        self.resource_rows()
+            .position(|r| self.plan.str(r.name) == name)
+            .is_some_and(|i| self.resources[i].entropy_reader)
     }
 }

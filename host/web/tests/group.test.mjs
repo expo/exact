@@ -124,3 +124,65 @@ check('a centre past a short port\'s edge scrolls toward that edge', async () =>
   }
 }, 60000);
 
+
+// LLP 1029.000.002 D9: the keys lift a row with no pointer down (LLP 1094
+// D9), and a replacement waits for the drop or the cancel. Both web targets
+// ask `engagement`, which reads the mark this glue leaves on the document.
+const keyed = `<!doctype html>
+<div id="exact-root">
+  <div id="port" data-view="2" data-reordergroup="g" style="height: 200px; width: 200px; overflow: auto">
+    <div id="wrap" data-view="3" style="height: 40px"><div id="grip" data-view="4" style="height: 20px">g</div></div>
+  </div>
+</div>
+<script type="module">
+  import { groupController } from './group-glue.js';
+  import { engagement } from './engagement.js';
+  window.woken = 0;
+  window.held = engagement(() => woken++);
+  const port = document.getElementById('port'), wrap = document.getElementById('wrap'), grip = document.getElementById('grip');
+  const views = new Map([[2, port], [3, wrap], [4, grip]]);
+  const mapping = () => ({ port, revision: 1, scrollSequence: 1, scrollTop: 0, portWidth: 200, portHeight: 200, rowWidth: 200, totalExtent: 40, contentY: 0 });
+  const collections = { reorderMapping: () => mapping(), retainInteraction: () => 1, releaseRetainedInteraction() {}, releaseInteraction() {}, reorderContact() {} };
+  // A drop holds until its move shows (LLP 1094 D8); a cancel ends at once.
+  const phase = { 'reorder-cancel': 'cancelling', 'reorder-terminal': 'holding' };
+  const ctrl = window.ctrl = groupController({ views, collections, request: r => ({ accepted: true, token: 1, phase: phase[r.op] ?? 'active' }), applyBatch() {},
+    now: () => performance.now(), ready: () => true, inert: () => false, root: document.getElementById('exact-root'), gripOf: () => grip });
+  ctrl.bind({ el: grip, row: wrap, list: 2, runtime: 0, handleKey: 4, listKey: 2, wrapperKey: 3, rootKey: 1, rowEpoch: 1 }, { group: 'g', keys: true });
+  grip.focus();
+  window.ready = true;
+</script>`;
+
+check('a row the keys lifted holds a replacement until it drops or cancels', async () => {
+  const server = createServer((req, res) => {
+    if (req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(keyed); return; }
+    res.writeHead(200, { 'content-type': 'text/javascript' });
+    res.end(readFileSync(resolve(WEB, req.url === '/engagement.js' ? 'engagement.js' : 'group-glue.js')));
+  });
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  const suite = await cdpBrowser({ args: ['--window-size=600,900'] }), { cdp } = suite;
+  try {
+    const { sessionId } = await suite.page();
+    const call = (method, params) => cdp.send(method, params, sessionId);
+    const evaluate = async (expression) => (await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result.value;
+    await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
+    const key = async (key, code, windowsVirtualKeyCode) => {
+      for (const type of ['keyDown', 'keyUp']) await call('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode });
+    };
+    for (const [end, code, vk] of [['Escape', 'Escape', 27], [' ', 'Space', 32]]) {
+      expect(await evaluate('held()')).toBeNull();
+      await key(' ', 'Space', 32);
+      expect(await evaluate('held()')).toBe('gesture');
+      await key('ArrowDown', 'ArrowDown', 40);
+      expect(await evaluate('held()')).toBe('gesture');
+      const before = await evaluate('woken');
+      await key(end, code, vk);
+      expect(await evaluate('held()')).toBeNull();
+      // A waiting replacement is told when the row comes down: no event of the tracker's own follows a key.
+      expect(await evaluate('woken')).toBeGreaterThan(before);
+      await evaluate(`ctrl.state({ token: '1', phase: 'settling' })`); // the held drop's move showed
+    }
+  } finally {
+    await suite.close();
+    server.close();
+  }
+}, 60000);

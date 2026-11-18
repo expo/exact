@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 @testable import ExactSurfaces
 
 /// The indices the fake surface places (`gpu_placement` 1), moved right by
@@ -683,8 +685,8 @@ final class CanvasPlacedDrawingIOSTests: XCTestCase {
         fill.backgroundColor = .blue
         child.renderFilter() // drawn off the main thread, landing later
         let end = Date(timeIntervalSinceNow: 20)
-        repeat { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) } while p.boxFilters.drawing && Date() < end
-        XCTAssertFalse(p.boxFilters.drawing)
+        repeat { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) } while p.boxFilters!.drawing && Date() < end
+        XCTAssertFalse(p.boxFilters!.drawing)
         XCTAssertTrue(d.canvas.needsCapture, "and so do the ones that land")
     }
 

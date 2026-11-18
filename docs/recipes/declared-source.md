@@ -58,4 +58,7 @@ A reply's `errors` fail it with `error` (`extensions.code` is `failure(r).reason
 secret needs `secret.keep github.token` in `app.ts`'s grants; while it is absent nothing
 is sent (`refused`). A `send` takes `method "POST"` and `body json`.
 
+On the web that store is origin-readable. Use your server's
+[HttpOnly cookie sessions](web-sessions.md) for refresh and session tokens.
+
 Token refresh, pagination, offline queues, overlays, streams and uploads stay in `app.ts`.

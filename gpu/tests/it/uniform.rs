@@ -6,6 +6,33 @@ use exact_gpu::{fixture, wgpu, FrameUniform};
 const TEXT: &str = "struct U { c: vec4<f32> }\n@group(0) @binding(0) var<uniform> u: U;\n@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {\n  let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n  return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);\n}\n@fragment fn fs() -> @location(0) vec4<f32> { return u.c; }\n";
 
 #[test]
+fn surface_colours_use_the_shared_parser_and_clip_to_srgb() {
+    use exact_gpu::color::{self, Parsed};
+
+    let encoded = |source| match color::parse(source).unwrap() {
+        Parsed::Legacy(c, _) => [
+            f64::from(c.r) / 255.0,
+            f64::from(c.g) / 255.0,
+            f64::from(c.b) / 255.0,
+            c.a,
+        ],
+        Parsed::Wide(c) => {
+            // The kernel's Color::from_linear_srgb clips after encoding.
+            let [r, g, b] = c
+                .linear_srgb()
+                .map(|v| color::linear_to_srgb(v).clamp(0.0, 1.0));
+            [r, g, b, c.alpha]
+        }
+        Parsed::Current => panic!("a surface cannot resolve currentColor"),
+    };
+    let actual = encoded("#0a84ff");
+    for (actual, expected) in actual.into_iter().zip([0.039, 0.518, 1.0, 1.0]) {
+        assert!((actual - expected).abs() < 0.001);
+    }
+    assert_eq!(encoded("color(display-p3 1 0 0)"), [1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
 fn each_frame_draws_its_own_bytes() {
     let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
         return;

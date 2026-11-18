@@ -37,10 +37,12 @@ package protocol SurfacesCapability: AnyObject {
 package struct WorldClock {
     package var pending = false
     package var settleAt: Double?
+    package var nextTickAt: Double?
     package var reply: [String: Any] = [:]
-    package init(pending: Bool = false, settleAt: Double? = nil, reply: [String: Any] = [:]) {
+    package init(pending: Bool = false, settleAt: Double? = nil, nextTickAt: Double? = nil, reply: [String: Any] = [:]) {
         self.pending = pending
         self.settleAt = settleAt
+        self.nextTickAt = nextTickAt
         self.reply = reply
     }
 }

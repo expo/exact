@@ -133,7 +133,10 @@ fn a_reload_adopts_its_paint_under_its_own_roles() {
     .unwrap();
     assert!(err.is_none(), "{err:?}");
     let _ = p.frame();
-    assert_eq!(p.reload(&b.encode(), ()).unwrap(), None);
+    assert_eq!(
+        p.reload(&b.encode(), ()).unwrap(),
+        exact_painted::presenter::ReloadResult::Applied(None)
+    );
     let swatch = {
         let k = p.host().kernel();
         k.node_by_key(k.find_by_test_id("swatch")[0]).unwrap().id

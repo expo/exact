@@ -719,14 +719,86 @@ for (const placement of ['main', 'worker']) test(`${placement}: a second lease s
   try {
     const second = await w.ask('chain');
     expect(second.request.method).toBe('POST');
+    expect(environment.disk.get('exact.secret.token')).toBe('first');
     const competing = w.ask('competing');
-    await environment.requested(2);
+    await environment.requested(3);
+    // The first lease ended before the second asked for its own.
     const grantsWhilePending = environment.grantCount();
     expect((await w.resume('chain', { status: 200, headers: [], body: 'second' })).value).toBe('second');
-    await environment.granted(2);
+    await environment.granted(3);
     const observed = await competing;
-    expect(grantsWhilePending).toBe(1);
+    expect(grantsWhilePending).toBe(2);
     expect(observed.value).toBe('second');
+  } finally { w.done(); environment.restore(); }
+}, 20000);
+
+// Two answers take two names in opposite orders (LLP 1146 D5): each lease ends
+// with its body, so neither answer holds one name while it waits for the other.
+for (const placement of ['main', 'worker']) test(`${placement}: answers taking two leases in opposite orders both finish`, async () => {
+  const environment = secretEnvironment('old');
+  const w = await moduleRealm(`const [first, second] = source === 'a' ? ['foo', 'bar'] : ['bar', 'foo'];
+  return store.exclusive(first, async () => {
+    await fetch('https://api.castle.test/' + source);
+    store.set(first, source);
+  }).then(() => store.exclusive(second, async () => { store.set(second, source); return source; }));`,
+  { placement, secrets: ['foo', 'bar'], taskDelayedStorage: true });
+  try {
+    expect((await w.ask('a')).request.url).toBe('https://api.castle.test/a');
+    expect((await w.ask('b')).request.url).toBe('https://api.castle.test/b');
+    await environment.granted(2);
+    const a = w.resumeWithDeliver('a', undefined, w.commit), b = w.resumeWithDeliver('b', undefined, w.commit);
+    await environment.requested(4);
+    const settled = await race(Promise.allSettled([a, b]));
+    expect(settled).not.toBe('STILL WAITING');
+    expect(settled).toMatchObject([{ status: 'fulfilled', value: { tag: 0, value: 'a' } }, { status: 'fulfilled', value: { tag: 0, value: 'b' } }]);
+    expect(environment.grantCount()).toBe(4);
+    expect([environment.disk.get('exact.secret.foo'), environment.disk.get('exact.secret.bar')].sort()).toEqual(['a', 'b']);
+    expect(w.runnerValue('foo')).toBe(environment.disk.get('exact.secret.foo'));
+    expect(w.runnerValue('bar')).toBe(environment.disk.get('exact.secret.bar'));
+    for (const name of ['foo', 'bar']) expect(environment.disk.has(`exact.exclusive.exact.secret.${name}`)).toBe(false);
+  } finally { w.done(); environment.restore(); }
+}, 20000);
+
+for (const placement of ['main', 'worker']) test(`${placement}: a lease started inside another is refused`, async () => {
+  const environment = secretEnvironment('old');
+  const w = await moduleRealm(`const [first, second] = source === 'a' ? ['foo', 'bar'] : ['bar', 'foo'];
+  let inner;
+  return store.exclusive(first, async () => {
+    await fetch('https://api.castle.test/' + source);
+    inner = store.exclusive(second, async () => store.set(second, source));
+    store.set(first, source);
+  }).then(() => inner).catch(error => error.message);`, { placement, secrets: ['foo', 'bar'], taskDelayedStorage: true });
+  try {
+    expect((await w.ask('a')).request.url).toBe('https://api.castle.test/a');
+    expect((await w.ask('b')).request.url).toBe('https://api.castle.test/b');
+    await environment.granted(2);
+    const settled = await race(Promise.allSettled([w.resume('a'), w.resume('b')]));
+    expect(settled).not.toBe('STILL WAITING');
+    expect(settled.map(s => s.value.value)).toEqual(['nested secret leases are unsupported', 'nested secret leases are unsupported']);
+    expect(environment.requestCount()).toBe(2);
+    expect(environment.disk.get('exact.secret.foo')).toBe('a');
+    expect(environment.disk.get('exact.secret.bar')).toBe('b');
+  } finally { w.done(); environment.restore(); }
+}, 20000);
+
+// A lease that ended before its answer's delivery may have a later holder by then.
+for (const placement of ['main', 'worker']) test(`${placement}: an answer reads and delivers the value a later holder of its ended lease left`, async () => {
+  const environment = secretEnvironment('old');
+  const w = await moduleRealm(`if (source === 'two') return store.exclusive('foo', async () => store.set('foo', 'two'))
+    .then(() => store.exclusive('bar', async () => store.get('foo')));
+  if (source === 'bar') return store.exclusive('bar', async () => { await fetch('https://api.castle.test/bar'); });
+  return store.exclusive('foo', async () => store.set('foo', 'later'));`, { placement, secrets: ['foo', 'bar'], taskDelayedStorage: true });
+  try {
+    expect((await w.ask('bar')).request.url).toBe('https://api.castle.test/bar');
+    const two = w.askWithDeliver('two', w.commit);
+    await environment.requested(3);
+    expect(environment.disk.get('exact.secret.foo')).toBe('two');
+    expect((await w.askWithDeliver('later', w.commit)).tag).toBe(0);
+    expect(w.runnerValue('foo')).toBe('later');
+    await w.resume('bar');
+    expect((await race(two)).value).toBe('later');
+    expect(environment.disk.get('exact.secret.foo')).toBe('later');
+    expect(w.runnerValue('foo')).toBe('later');
   } finally { w.done(); environment.restore(); }
 }, 20000);
 
@@ -987,7 +1059,8 @@ for (const placement of ['main', 'worker']) test(`${placement}: a completed leas
   } finally { w.done(); environment.restore(); }
 }, 20000);
 
-for (const placement of ['main', 'worker']) for (const caught of [false, true]) test(`${placement}: today's rejected lease with queued storage ${caught ? 'publishes its partial credential after an outer catch' : 'recovers by deleting the credential'}`, async () => {
+// A failed body is an unfinished lease whether or not the answer catches its failure.
+for (const placement of ['main', 'worker']) for (const caught of [false, true]) test(`${placement}: a rejected lease with queued storage forgets its partial credential${caught ? ' after an outer catch' : ''}`, async () => {
   const environment = secretEnvironment('old');
   const w = await moduleRealm(`if (source === 'head') {
     const file = read('app:/data/head');
@@ -1013,12 +1086,12 @@ for (const placement of ['main', 'worker']) for (const caught of [false, true]) 
     const failedResult = await race(failed);
     if (caught) expect(failedResult.value).toBe('caught: lease body failed');
     else expect(failedResult.tag).toBe(2);
-    expect(failedResult.writes.at(-1)).toEqual(['token', 'partial', true]);
+    expect(failedResult.writes.at(-1)).toEqual(['token', null, true]);
     const following = await w.askWithDeliver('following', w.commit);
-    expect(following.value).toBe(caught ? 'partial' : null);
-    expect(environment.disk.get('exact.secret.token') ?? null).toBe(caught ? 'partial' : null);
+    expect(following.value).toBeNull();
+    expect(environment.disk.has('exact.secret.token')).toBe(false);
     expect(environment.disk.has('exact.exclusive.exact.secret.token')).toBe(false);
-    expect(w.runnerValue('token')).toBe(caught ? 'partial' : null);
+    expect(w.runnerValue('token')).toBeNull();
   } finally { w.done(); environment.restore(); }
 }, 20000);
 
@@ -1252,7 +1325,8 @@ for (const placement of ['main', 'worker']) test(`${placement}: an interrupted s
   } finally { w.done(); environment.restore(); }
 }, 20000);
 
-for (const placement of ['main', 'worker']) for (const wait of ['GET', 'timer']) test(`${placement}: an interrupted secret lease after a ${wait} exposes today's half-written credential`, async () => {
+// A write arms recovery as a request with effects does, as a native lease's first write does.
+for (const placement of ['main', 'worker']) for (const wait of ['GET', 'timer']) test(`${placement}: a secret lease interrupted at a ${wait} after a write leaves no half-written credential`, async () => {
   const environment = secretEnvironment('old');
   const body = wait === 'GET' ? "await fetch('https://api.castle.test/token');" : 'await new Promise(resolve => setTimeout(resolve, 0));';
   const w = await moduleRealm(`if (source === 'interrupted') return store.exclusive('token', async () => {
@@ -1266,10 +1340,11 @@ for (const placement of ['main', 'worker']) for (const wait of ['GET', 'timer'])
     if (wait === 'GET') expect(interrupted.request.method).toBe('GET');
     else expect(interrupted.timer).toBeDefined();
     expect(environment.disk.get('exact.secret.token')).toBe('half-written');
-    expect(environment.disk.has('exact.exclusive.exact.secret.token')).toBe(false);
+    expect(environment.disk.get('exact.exclusive.exact.secret.token')).toBe('1');
     w.forget([]);
-    expect((await w.ask('successor')).value).toBe('half-written');
-    expect(environment.disk.get('exact.secret.token')).toBe('half-written');
+    expect((await w.ask('successor')).value).toBeNull();
+    expect(environment.disk.has('exact.secret.token')).toBe(false);
+    expect(environment.disk.has('exact.exclusive.exact.secret.token')).toBe(false);
   } finally { w.done(); environment.restore(); }
 }, 20000);
 

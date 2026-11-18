@@ -100,10 +100,14 @@ function renderDeclaration(dir, render) {
 /** Check actual unfiltered Cargo edges: aliases and target/build dependencies
  * must not smuggle the GPU render crate into simulation or host metadata. */
 export function renderGraph(metadata, game) {
+  const members = new Set(metadata.workspace_members);
+  const logic = metadata.packages.find(pkg => pkg.name === game.crate && members.has(pkg.id));
+  if (logic?.dependencies?.some(dep => dep.kind === null && dep.name === 'exact-game-render')) {
+    console.warn('warning: hook code in the logic crate: its optional features are outside the determinism lint run, and the logic crate can name renderer types; move it to render/');
+  }
   if (!game.render) return;
   const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
   const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
-  const members = new Set(metadata.workspace_members);
   const find = name => metadata.packages.find(pkg => pkg.name === name && members.has(pkg.id))?.id;
   const forbidden = find(game.render.crate), name = game.crate.slice(0, -'-logic'.length);
   if (!forbidden) throw new Error(`game.render package ${game.render.crate} is absent from Cargo metadata`);
@@ -408,10 +412,21 @@ const sdkLockFile = source => [resolve(source, 'app/shells.lock'), resolve(gameR
 // path packages, which carry no source or checksum, seed it the same way.
 export function withRootPins(sdk, root = existsSync(resolve(gameRoot, '../Cargo.lock')) ? readFileSync(resolve(gameRoot, '../Cargo.lock'), 'utf8') : '') {
   // A root's new major of a package the SDK lock holds is a pin too; a compatible one is not.
-  const held = new Set((Bun.TOML.parse(sdk).package ?? []).map(pkg => `${pkg.name} ${series(pkg.version)}`));
+  const packages = Bun.TOML.parse(sdk).package ?? [];
+  const held = new Set(packages.map(pkg => `${pkg.name} ${series(pkg.version)}`));
   const pins = lockBlocks(root)
     .filter(block => (/^source = "registry\+/m.test(block) || !/^source = /m.test(block)) && !held.has(seriesId(block)));
-  return pins.length ? `${sdk.trimEnd()}\n\n${pins.join('\n\n')}\n` : sdk;
+  if (!pins.length) return sdk;
+  // A lock names a dependency by its bare name while it holds one version. A
+  // second version of that name makes the bare edge ambiguous, and Cargo then
+  // resolves it afresh: codespan-reporting's `>=0.1, <0.3` took the root's
+  // unicode-width 0.1.14 over the SDK's 0.2.2. Naming the SDK's version keeps it.
+  let seeded = sdk;
+  for (const name of new Set(pins.map(block => /^name = "([^"]+)"/m.exec(block)[1]))) {
+    const versions = packages.filter(pkg => pkg.name === name).map(pkg => pkg.version);
+    if (versions.length === 1) seeded = seeded.replaceAll(`\n "${name}",\n`, `\n "${name} ${versions[0]}",\n`);
+  }
+  return `${seeded.trimEnd()}\n\n${pins.join('\n\n')}\n`;
 }
 const cargoMetadata = (cwd, flags, env) => spawnSync('cargo', ['metadata', ...flags, '--format-version', '1'], {cwd, env, encoding:'utf8', maxBuffer:64 * 1024 * 1024});
 // A lock's versions by package name.
@@ -538,13 +553,10 @@ export function prepareGame(dir, game, source = gameRoot, {updateLock = false, f
   }
   const checked = result => {
     const graph = JSON.parse(result.stdout);
-    if (game.render) {
-      // A platform-filtered graph omits inactive target edges. Check every
-      // production edge before accepting any build or publishing an own lock.
-      const all = target ? lockedMetadata(root, ['--offline', '--locked'], env) : result;
-      if (all.status !== 0) throw refused(all);
-      renderGraph(JSON.parse(all.stdout), game);
-    }
+    // Render isolation needs the inactive target edges too.
+    const all = game.render && target ? lockedMetadata(root, ['--offline', '--locked'], env) : result;
+    if (all.status !== 0) throw refused(all);
+    renderGraph(all === result ? graph : JSON.parse(all.stdout), game);
     return graph;
   };
   if (updateLock || existsSync(own)) {

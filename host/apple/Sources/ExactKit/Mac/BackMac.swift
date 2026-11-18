@@ -364,6 +364,8 @@ final class BackSwipe {
             if steps {
                 if side > 0 { self?.presenter.navigation.goBack() } else { self?.presenter.navigation.goForward() }
             }
+            // AppKit's tracking takes the gesture's remaining scroll events: it says when the fingers lift.
+            if phase == .ended || phase == .cancelled || complete { self?.presenter.session?.app.replacements.lifted(.scrollWheel) }
             if complete { self?.tracking = false }
         }
         return true

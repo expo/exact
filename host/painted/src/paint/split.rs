@@ -1,5 +1,6 @@
 //! @ref LLP 1115.004 D16 — Windows list/details.
 //! @ref LLP 1115.002 D4 — pane placement, list selection and the empty detail.
+use super::stage::Pane;
 use super::*;
 use crate::presenter::split::{Split, DIVIDER};
 
@@ -12,7 +13,13 @@ impl Painter {
         }
     }
 
-    fn split_clip(&mut self, rect: Rect4, ts: Transform, clip: Option<Rect4>) -> Option<Rect4> {
+    /// Clip to `rect`, in the space of `ts`, within the walk's `clip`.
+    pub(super) fn split_clip(
+        &mut self,
+        rect: Rect4,
+        ts: Transform,
+        clip: Option<Rect4>,
+    ) -> Option<Rect4> {
         self.backend.push_clip(&Shape::rect(rect), ts);
         let rect = bbox(ts, rect);
         Some(clip.map_or(rect, |c| intersect(c, rect)))
@@ -30,17 +37,13 @@ impl Painter {
             return;
         }
         let Some(s) = self.split.as_ref() else {
-            self.node_at(walk, id, ts, offset, clip);
-            if self.keeps(id) {
-                self.keep_route(walk, id);
-            }
-            return;
+            return self.route_node(walk, id, ts, offset, clip, None);
         };
         if s.chevrons.contains(&id) || s.placeholder == Some(id) {
             return;
         }
         if id != s.root && !s.routes.contains(&id) {
-            return self.node_at(walk, id, ts, offset, clip);
+            return self.route_node(walk, id, ts, offset, clip, None);
         }
         if (walk.scene.hidden)(id) {
             return;
@@ -56,9 +59,12 @@ impl Painter {
                 s.list_width,
                 s.rect.3,
             );
-            let clipped = self.split_clip(list, ts, clip);
-            self.node_at(walk, id, ts, offset, clipped);
-            self.backend.pop_clip();
+            let list = Pane {
+                rect: list,
+                ts,
+                ground: None,
+            };
+            self.route_node(walk, id, ts, offset, clip, Some(list));
             self.backend.fill(
                 &Shape::rect((pane.0 - DIVIDER, pane.1, DIVIDER, pane.3)),
                 look::role("-exact-separator", self.dark),
@@ -74,11 +80,13 @@ impl Painter {
             }
             self.backend.pop_clip();
         } else {
-            let clipped = self.split_clip(pane, ts, clip);
-            self.backend
-                .fill(&Shape::rect(pane), page_color(self.dark), ts);
-            self.node_at(walk, id, ts, (-pane.0, -pane.1), clipped);
-            self.backend.pop_clip();
+            let pane = Pane {
+                rect: pane,
+                ts,
+                ground: Some(page_color(self.dark)),
+            };
+            let offset = (-pane.rect.0, -pane.rect.1);
+            self.route_node(walk, id, ts, offset, clip, Some(pane));
         }
     }
 

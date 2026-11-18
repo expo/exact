@@ -552,6 +552,12 @@ test('a root crate\'s new registry dependency or new path crate resolves before 
   assert.deepEqual(outsideSdkLock(lock(block('cssparser','0.37.1','dd')),seeded,members),[`cssparser 0.37.1 ${registry}`],'the root lock decides the version');
   assert.deepEqual(outsideSdkLock(lock(block('itoa','1.0.9','cc')),seeded,members),[`itoa 1.0.9 ${registry}`],'the SDK lock still decides its own packages');
   assert.equal(withRootPins(sdk,''),sdk);
+  // The root's older major of a package the SDK holds (vt100's unicode-width 0.1) leaves the
+  // SDK's edges naming its own version: a bare one would let Cargo take either.
+  const width=lock(`${block('codespan-reporting','0.13.1','ff')}dependencies = [\n "unicode-width",\n]\n`,block('unicode-width','0.2.2','gg'));
+  const pinned=Bun.TOML.parse(withRootPins(width,lock(block('unicode-width','0.1.14','hh')))).package;
+  assert.deepEqual(pinned.map(p=>`${p.name} ${p.version}`),['codespan-reporting 0.13.1','unicode-width 0.2.2','unicode-width 0.1.14']);
+  assert.deepEqual(pinned[0].dependencies,['unicode-width 0.2.2']);
 });
 
 

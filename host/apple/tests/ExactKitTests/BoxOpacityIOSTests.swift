@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
 
 final class BoxOpacityIOSTests: XCTestCase {
     private final class CountedLayer: CALayer {

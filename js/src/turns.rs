@@ -121,7 +121,7 @@ impl Module {
         let parked = &mut self.parked[at].1;
         parked.ticket = TIMER;
         parked.effects = false;
-        Some((ticket, Request::continuation(call)))
+        Some((ticket, Request::continuation::<crate::ModuleTurn>(call)))
     }
 
     /// Parked calls let go in the prelude too, with the fetches they wait on.

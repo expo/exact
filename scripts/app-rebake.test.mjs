@@ -98,7 +98,7 @@ test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('restored and equal-mtime Contra
 // what the module resolves from.
 test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('a package GPU declaration and lock are native build inputs', async () => {
   await withContractBake(({dir, write, bake, app}) => {
-    const declaration = targets => JSON.stringify({gpu:{crate:'rust', exactGpu:'0.3', targets, surfaces:{sky:{arity:1, factory:'sky_surface::surface'}}}});
+    const declaration = targets => JSON.stringify({gpu:{crate:'rust', exactGpu:'0.4', targets, surfaces:{sky:{arity:1, factory:'sky_surface::surface'}}}});
     write('package.json', JSON.stringify({dependencies:{'@fixture/sky':'1.0.0'}}));
     write('node_modules/@fixture/sky/package.json', JSON.stringify({name:'@fixture/sky', exports:'./exact.json'}));
     write('node_modules/@fixture/sky/exact.json', declaration(['macos']));

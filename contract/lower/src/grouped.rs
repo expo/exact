@@ -484,10 +484,17 @@ fn section(
     for a in attrs.iter().filter(|a| a.name == "background-color") {
         match &a.value {
             Expr::Str(v, _) if v == "transparent" => cardless = true,
+            Expr::Str(_, _) => {
+                return err(
+                    "lower-grouped-list",
+                    "a section's `background-color` may only be the literal `\"transparent\"`, which drops its card: the system draws the card, so a colour is refused",
+                    a.span,
+                )
+            }
             _ => {
                 return err(
                     "lower-grouped-list",
-                    "a section's `background-color` is the literal `\"transparent\"`, which drops its card; the system draws the card otherwise",
+                    "a section's `background-color` may only be the literal `\"transparent\"`, written as is, which drops its card: a computed value is refused, even one that is `\"transparent\"`, because whether a section has a card is fixed when the app is built. To switch at run time, write two `section`s under an `if`, one with `background-color=\"transparent\"`",
                     a.span,
                 )
             }

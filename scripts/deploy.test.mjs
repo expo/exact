@@ -464,6 +464,26 @@ async function rejects(action, matches) {
     less.bundle&&!capability.bundle&&capability.missing[0].includes('androidUses.camera')&&!extension.bundle&&extension.missing[0].includes('androidExtensions.pedometer')
     &&!permission.bundle&&permission.missing[0].includes('WRITE_CALENDAR')&&!engine.bundle&&engine.missing[0].includes('Hermes bytecode 97'),
     JSON.stringify({less,capability,extension,permission,engine}));
+  // An Apple cohort takes a generation that needs no capability beyond what its binary linked; one that names no
+  // linked set links everything, and a capability its roster predates was in its core (LLP 1047.001 D13).
+  const linking=(linked,roster)=>({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,platform:'ios',...(linked?{linked}:{}),...(roster?{linkRoster:roster}:{})}}});
+  const apple=(plan,module)=>{const c=structuredClone(moved);Object.assign(c.graph.artifacts[0].requires,{appleUses:plan});c.graph.artifacts.push({name:'typescript/app.hbc',requires:module?{appleUses:module}:{}});return c;};
+  const within=classifyArtifacts(apple(['grid']),linking(['grid','io'],['grid','io','svg']));
+  const grid=classifyArtifacts(apple(['grid','svg']),linking(['grid'],['grid','io','svg']));
+  const timer=classifyArtifacts(apple([],['io']),linking(['grid'],['grid','io','svg']));
+  const everything=classifyArtifacts(apple(['svg'],['io']),linking(null));
+  const older=classifyArtifacts(apple(['svg']),linking(['grid'],['grid','io']));
+  const unrostered=classifyArtifacts(apple(['svg']),linking(['grid']));
+  // An SVG plan requires box effects with it, whose engine SVG's filters run on: a cohort that linked SVG alone
+  // lacks it, one that linked both takes the plan.
+  const roster=['effects','grid','io','svg'];
+  const svgAlone=classifyArtifacts(apple(['effects','svg']),linking(['svg'],roster));
+  const svgPair=classifyArtifacts(apple(['effects','svg']),linking(['effects','svg'],roster));
+  result('an Apple cohort refuses a generation needing a capability its binary does not link, and takes one within it',
+    within.bundle&&!grid.bundle&&grid.missing[0].includes('app.plan: appleUses.svg (not linked into the installed binary')
+    &&!timer.bundle&&timer.missing[0].includes('typescript/app.hbc: appleUses.io')&&everything.bundle&&older.bundle&&!unrostered.bundle
+    &&!svgAlone.bundle&&svgAlone.missing[0].includes('app.plan: appleUses.effects')&&svgPair.bundle,
+    JSON.stringify({within,grid,timer,everything,older,unrostered,svgAlone,svgPair}));
   result('artifact graph separates binary changes, compatible older cohorts, and named missing dependencies',
     same.binary&&same.bundle&&old.binary&&old.bundle&&old.warnings[0].includes('will run the old code')
     &&!absent.bundle&&absent.missing[0].includes('sources.camera')&&!unsupported.bundle&&unsupported.missing[0].includes('gpuSurfaces.map')

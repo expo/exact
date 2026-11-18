@@ -921,7 +921,7 @@ if (long) {
     const f = spawnSync('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-Osize', '-target', triple, '-sdk', sdk, '-o', floor, resolve(ROOT, 'host/apple/ios/floor.swift')], { encoding: 'utf8' });
     out.ios_floor_bytes = f.status === 0 ? strippedSize(floor) : NaN;
     for (const optimize of ['speed', 'size', 'balanced']) {
-      const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), hello.crate('apple'), '--ios', '--optimize', optimize], { cwd: ROOT, env, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), hello.crate('apple'), '--ios', '--no-install', '--optimize', optimize], { cwd: ROOT, env, encoding: 'utf8' });
       const binary = appleArtifacts(hello, { destination: 'ios-simulator', trust: 'production', optimize }).binary;
       if (r.status !== 0 || !existsSync(binary)) {
         const log = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), `metrics-ios-${optimize}.log`);
@@ -1001,23 +1001,26 @@ if (long) {
 // lane files; the gate is JS_TARGET_KIB below.
 const WEB_CORE_KIB = { realworld: 304, 'video-player': 249, caltrain: 310 };
 
-// The iOS gate since 2026-10-08 (Charlie: a tripwire, today's size plus
-// ~100 KB): bytes of the hello app's stripped executable over the empty UIKit
-// app, as the ios-size step measures them. Over one is a VIOLATION the async
-// lane files against the commit. The measurement is deterministic (two commits
-// with no Apple change built byte-identical), so the headroom is for growth,
-// not noise. It would have stopped the fit-content series (LLP 1075.003
-// §9.11), which grew every app by 427 KB (speed) and 115 KB (size) before
-// c81074f19 cut the copy it added. A feature that costs every app ~100 KB
-// should link by use (LLP 1047.001). Raise one only on purpose, with the
-// reason here; lower it when a cut lands. Set at 8,593,568 B (speed) and
-// 5,999,248 B (size): main at 2e48efad1 with the layout pass's measure
-// passed one way (LLP 1047.001, "One layout pass in every app").
-// Lowered 2026-10-08 (LLP 1047.001: the motion engine settles unless
-// something moves): 8,495,088 B and 5,949,632 B at e6caf40bf, plus ~100 KB.
-// Balanced set 2026-11-14 (LLP 1047.001 D9, the iOS and tvOS default): 16,801,696 B
-// at 8f1fd7d64, plus ~100 KB.
-const IOS_HELLO_BYTES = { speed: 8_600_000, size: 6_050_000, balanced: 16_900_000 };
+// The iOS gate (LLP 1047.001 D8; Charlie, 2026-10-08: a tripwire, today's
+// size plus ~100 KB): bytes of the hello app's stripped executable over the
+// empty UIKit app, as the ios-size step measures them. Over one is a VIOLATION
+// the async lane files against the commit, and files again at each further
+// 100 KB. The measurement is deterministic (two commits with no Apple change
+// built byte-identical), so the headroom is for growth, not noise. A feature
+// that costs every app ~100 KB should link by use (LLP 1047.001). Raise one
+// only on purpose, with the reason here; lower it when a cut lands.
+// These are a tripwire at main's size, not an accepted size: the core grew
+// about 0.3 MB a day for five weeks from October's ceilings, and once a row was
+// over, more growth was the same failure, so nothing attributed it. Each is
+// main at dd4a54a91 (Xcode 27.2), after LLP 1047.001 §9's cuts so far: grid
+// layout, the runner's native modules, tool calls, presence secrets and
+// font-axis motion, CSS filter, SVG, images, lists and the native module with
+// its hatches linked by use; hatch diagnostics and the agent dispatcher out of
+// production; grant reads and the motion handover through their links; the
+// metrics and device tables packed. Each is that size plus ~100 KB.
+// The size row's target is 8 MB, 8,000,000 B (Charlie, 2026-11-17); the cuts
+// that reach it are issues/20261113-ios-hello-app-twice-its-binary-budget.md's.
+const IOS_HELLO_BYTES = { speed: 16_155_000, size: 10_540_000, balanced: 14_720_000 };
 
 // 8. Long: web bytes by capability (LLP 1047 D9), for the three apps the
 // size work tracks. Each app's app.wasm as shipped (raw, gzip, brotli-11),
@@ -1185,8 +1188,14 @@ if (long) {
   // LLP 1047.001 D8: the hello app's iOS binary over an empty UIKit app's, for speed, size and balanced (gated: IOS_HELLO_BYTES).
   for (const optimize of ['speed', 'size', 'balanced']) {
     const bytes = out[`ios_${optimize}_bytes`], limit = IOS_HELLO_BYTES[optimize];
-    const budget = Number.isFinite(bytes) ? `; budget ${limit.toLocaleString('en-US')} B, ${bytes.toLocaleString('en-US')} B ${bytes <= limit ? 'within' : 'VIOLATION'}` : '';
-    rows.push([`iOS: hello app, optimized for ${optimize}`, out[`ios_${optimize}_failed`] ? 'FAILED' : mib(bytes), out[`ios_${optimize}_failed`] ?? `production, simulator, stripped, over an empty UIKit app (${mib(out.ios_floor_bytes)}); one text node: the core and nothing a plan adds; ${{ size: 'the embed default', balanced: 'the iOS and tvOS app default', speed: 'the Mac default' }[optimize]}${budget}`]);
+    // Over, the row says by how much, rounded up to the next 0.1 MB (the ceiling's headroom): the async lane's failure
+    // carries the step, so each step up is a new failure it attributes and a step down is not (async-bisect.mjs
+    // `newFailures`).
+    // These rows are in decimal MB, as the step and the size target are.
+    const mb = (v) => (Number.isFinite(v) ? `${(v / 1e6).toFixed(2)} MB` : 'n/a');
+    const over = `VIOLATION by ${(Math.ceil((bytes - limit) / 100_000) / 10).toFixed(1)} MB`;
+    const budget = Number.isFinite(bytes) ? `; budget ${limit.toLocaleString('en-US')} B, ${bytes.toLocaleString('en-US')} B ${bytes <= limit ? 'within' : over}` : '';
+    rows.push([`iOS: hello app, optimized for ${optimize}`, out[`ios_${optimize}_failed`] ? 'FAILED' : mb(bytes), out[`ios_${optimize}_failed`] ?? `production, simulator, stripped, over an empty UIKit app (${mb(out.ios_floor_bytes)}); one text node: the core and nothing a plan adds; ${{ size: 'the embed default', balanced: 'the iOS and tvOS app default', speed: 'the Mac default' }[optimize]}${budget}`]);
   }
   for (const [label, key, success] of [
     ['agent proof: development iOS', 'agent_development_ios_failed', 'Hello built'],

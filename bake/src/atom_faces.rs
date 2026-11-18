@@ -77,6 +77,7 @@ mod tests {
             "aarch64-apple-darwin",
             &manifest,
             Some(""),
+            false,
         );
         super::SKIP.with(|s| s.set(false));
         compat.unwrap()

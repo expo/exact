@@ -72,6 +72,22 @@ pub(crate) struct Presence {
 }
 
 impl<D: DataSource> Host<D> {
+    /// [`crate::link::MotionLowering`]'s presentation: the transitions handed
+    /// over to Core Animation present their targets before sampling.
+    pub(crate) fn hand_over_transitions(&mut self) {
+        let new = self.engine.starts_on_frame() && !self.native_mode();
+        let runs = &self.inline_runs;
+        for view in super::svg_lower::hand_over_transitions(
+            self.runner.kernel(),
+            &mut self.engine,
+            &|v| runs.contains_key(&v),
+            &|v| !self.runner.handlers_of(v).is_empty(),
+            new,
+        ) {
+            self.svg.played(view);
+        }
+    }
+
     /// A host-known look changes scale through the same motion engine as authored targets.
     pub fn look_motion(&mut self, view: ViewId, states: u8, now_ms: f64) -> String {
         self.now_ms = self.now_ms.max(now_ms);
@@ -395,18 +411,8 @@ impl<D: DataSource> Host<D> {
         // Before sampling: a transition handed over presents its target.
         // Under the agent's clock (no first-frame rule) motion is sampled:
         // nothing new is handed over, and what was comes back.
-        if self.svg.play_transitions {
-            let new = self.engine.starts_on_frame() && !self.native_mode();
-            let runs = &self.inline_runs;
-            for view in super::svg_lower::hand_over_transitions(
-                self.runner.kernel(),
-                &mut self.engine,
-                &|v| runs.contains_key(&v),
-                &|v| !self.runner.handlers_of(v).is_empty(),
-                new,
-            ) {
-                self.svg.played(view);
-            }
+        if let Some(motion) = self.turn.motion.filter(|_| self.svg.play_transitions) {
+            (motion.present)(self);
         }
         let frame = self.engine.frame();
 

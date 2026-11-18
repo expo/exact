@@ -25,7 +25,6 @@ function host(width, height) {
     readOut: value => value, prepareFonts: async () => [],
     launchLocation: () => '/', preferences: () => 0, foldBits: () => 0, now: () => 0,
     loadStage: async () => {}, focus: { keep: () => null }, ask: () => ({}),
-    waitForInflight: async () => true, SETTLE_DEADLINE_MS: 1000,
     pageFacts: { bits: () => 0 }, applyBatch: () => {}, presence: { resize: x => x },
     wasm: {
       exact_plan: () => 1, exact_out: () => 0, exact_in: () => 0, exact_plan_fonts: () => '[]',

@@ -9,7 +9,7 @@
 //! when a move, a block gained or given back, or a box joining or leaving
 //! the top layer gives it another holder.
 
-use super::observe::{holder, holds, Holder};
+use super::area::{holder, holds, Holder};
 use super::Kernel;
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
@@ -29,6 +29,17 @@ pub(crate) struct Targets {
     /// The boxes that joined or left the top layer since the last layout,
     /// whose subtrees may have another holder.
     pub(crate) moved: Vec<u32>,
+}
+
+impl Targets {
+    /// The session's reports and the registry, which a reset keeps.
+    pub(crate) fn after_reset(&mut self) -> Self {
+        Targets {
+            session: std::mem::take(&mut self.session),
+            registered: self.registered.clone(),
+            ..Default::default()
+        }
+    }
 }
 
 /// An owner's or the session's last report, and the highest generation any

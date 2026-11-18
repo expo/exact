@@ -79,6 +79,7 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
     // An accepted receipt can retire native contact before the shared driver
     // hears it. Terminal phases acknowledge that state without dispatch/time.
     if matches!(phase, "up" | "cancel") && p.contact_position().is_none() {
+        p.pointer_released();
         return Ok(reply(p, phase, None));
     }
     let from = p.host().now();
@@ -103,7 +104,11 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
         };
         let (x, y, w, h) = p.rect_of(id).ok_or("contact target has no painted box")?;
         let (x, y) = xy.unwrap_or((x + w / 2., y + h / 2.));
-        if !p.pointer_down(x, y, from)? {
+        let taken = p.pointer_down(x, y, from);
+        if !matches!(taken, Ok(true)) {
+            p.pointer_released(); // the driver holds no contact it cannot lift
+        }
+        if !taken? {
             return Err("contact down did not hit eligible input".into());
         }
         at = (x, y);

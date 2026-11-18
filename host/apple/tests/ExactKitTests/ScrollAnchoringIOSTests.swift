@@ -40,6 +40,28 @@ final class ScrollAnchoringIOSTests: XCTestCase {
         return ops
     }
 
+    func testScrollLayoutBoxCachesUntilItsAncestryOrDisplayChanges() throws {
+        let (p, _) = fixture(top: 200)
+        defer { p.reset(); window.isHidden = true }
+        let node = try XCTUnwrap(p.views[1])
+        XCTAssertTrue(node.hasScrollLayoutBox)
+        let walks = NodeView.scrollLayoutWalksForTests
+        for _ in 0..<120 { XCTAssertTrue(node.hasScrollLayoutBox) }
+        XCTAssertEqual(NodeView.scrollLayoutWalksForTests, walks)
+        let parent = NodeView(id: 100, kind: "view", presenter: p)
+        parent.style = ["display": .string("none")]
+        parent.addSubview(p.viewport)
+        XCTAssertFalse(node.hasScrollLayoutBox, "moving an ancestor invalidates descendants")
+        parent.style = [:]
+        XCTAssertTrue(node.hasScrollLayoutBox, "a direct ancestor style write invalidates descendants")
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["display": "none"]]]))
+        XCTAssertFalse(node.hasScrollLayoutBox)
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["display": "block"]]]))
+        XCTAssertTrue(node.hasScrollLayoutBox)
+        window.addSubview(p.viewport)
+        XCTAssertTrue(node.hasScrollLayoutBox)
+    }
+
     func testAFoldAboveThePortLeavesTheContentStill() {
         let (p, sv) = fixture(top: 200)
         p.apply(wireBatch([["op": "style", "id": 2, "style": ["height": 0.0]]] + rows(header: 0)))

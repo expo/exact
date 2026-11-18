@@ -295,6 +295,19 @@ pub struct Request {
     /// Portable file transfers may outlive the ordinary total deadline while
     /// still bounding each socket wait. An explicit `timeout` takes precedence.
     pub idle_timeout: Option<std::time::Duration>,
+    /// The response is read for as long as the caller holds it, as an
+    /// event stream or a byte stream is: no limit of the transport's own
+    /// ends it, neither on the whole exchange nor on a quiet body. The
+    /// portable transport keeps its limits on connecting and on the head;
+    /// URLSession, which shows a head only with the first body bytes, can
+    /// keep none (Exact patch 48). An explicit `timeout` still applies.
+    pub open_ended: bool,
+    /// The caller reads the reply to its end as it arrives, into memory, as
+    /// a plain request's `collect` does. On Apple such an exchange may share
+    /// a session with others, which holds at most a mebibyte of its reply
+    /// ahead of the reader (Exact patch 49); any other exchange has a
+    /// session of its own while it runs.
+    pub collected: bool,
     /// Told the body's bytes as they are sent (Exact patch 23).
     pub sent: Option<Sent>,
     /// Each hop's response head, before redirects or body reads (LLP 1162 D4).
@@ -376,6 +389,8 @@ impl Request {
             max_body: None,
             timeout: None,
             idle_timeout: None,
+            open_ended: false,
+            collected: false,
             sent: None,
             received: None,
             response_body: None,

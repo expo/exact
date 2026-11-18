@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { bisectAffected, bisectFailures, probeOutcomes } from './async-bisect.mjs';
+import { bisectAffected, bisectFailures, holds, newFailures, probeOutcomes } from './async-bisect.mjs';
 import { spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -31,7 +31,26 @@ test('only a finished probe can clear a failure; a failure it found still counts
   expect(probeOutcomes({ failures: [], checks: { test: { complete: true, status: 1 } } }, ['test: absent'])).toEqual({ 'test: absent': 'pass' });
 });
 
-import { checkout, withLaneEdits, run as runCheck, failureSelection, nothing, probeSteps, extraChecks, checks, fullCoverage, covers, failureAffected, retainSkippedFailures } from './async.mjs';
+import { checkout, withLaneEdits, run as runCheck, failureSelection, nothing, probeSteps, extraChecks, checks, fullCoverage, covers, failureAffected, failures, retainSkippedFailures } from './async.mjs';
+
+test('a byte-budget row is a new failure at each further step over its ceiling, and not at a step down', async () => {
+  const row = (over) => failures('metrics', `  iOS: hello app, optimized for size   12.69 MB   production; budget 12,590,000 B, 12,690,000 B VIOLATION by ${over} MB\n`, 1)[0];
+  expect(row('0.3')).toBe('metrics: iOS: hello app, optimized for size VIOLATION by 0.3 MB');
+  expect([holds([row('0.3')], row('0.4')), holds([row('0.3')], row('0.3')), holds([row('0.3')], row('0.2'))]).toEqual([false, true, true]);
+  expect(newFailures([row('0.3')], [row('0.2')])).toEqual([]);
+  // Three commits in one run each took a step: each step is its own failure, attributed to the commit that took it.
+  const steps = newFailures([row('0.2')], [row('0.5')]);
+  expect(steps).toEqual([row('0.3'), row('0.4'), row('0.5')]);
+  const at = { 0: '0.2', 1: '0.3', 2: '0.4', 3: '0.5' };
+  const found = await bisectFailures(['0', '1', '2', '3'], steps, async (sha, wanted) =>
+    probeOutcomes({ failures: [row(at[sha])], checks: { metrics: { complete: true, status: 1 } } }, wanted));
+  expect(steps.map(f => found[f].commit)).toEqual(['1', '2', '3']);
+  // A row that does not name its distance neither passes nor fails a step.
+  const plain = 'metrics: iOS: hello app, optimized for size VIOLATION';
+  expect(probeOutcomes({ failures: [plain], checks: { metrics: { complete: true, status: 1 } } }, [row('0.3')])[row('0.3')]).toBe('unknown');
+  expect(failures('metrics', '  blocking gate (warm)   31.0 s   VIOLATION: gate; budget 30 s; VIOLATION: over budget\n', 1))
+    .toEqual(['metrics: blocking gate (warm) VIOLATION']);
+});
 
 test('completed tests can pass at a probe while another test in the same check fails', async () => {
   const result = await bisectFailures(['0', '1', '2', '3', '4'], ['test: a', 'test: b'], async sha => {

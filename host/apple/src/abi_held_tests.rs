@@ -2,6 +2,10 @@
 //! it, and let go with the request it was for.
 use super::*;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// Holds every call it is asked for until `release` names one.
 #[derive(Clone, Default)]
 struct Holding(Arc<Mutex<(u64, Option<u64>)>>);
@@ -13,7 +17,9 @@ impl DataSource for Holding {
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
         let mut asked = self.0.lock().unwrap();
         asked.0 += 1;
-        Ok(Answer::Later(exact_runner::Request::continuation(asked.0)))
+        Ok(Answer::Later(
+            exact_runner::Request::continuation::<TestWork>(asked.0),
+        ))
     }
     fn dispatch(&mut self, _: u64, _: &Store) -> exact_runner::Dispatch {
         exact_runner::Dispatch::Held

@@ -173,7 +173,7 @@ export function keptProducts({ root, cache: name, env, tools = [], skip = [], la
           if (!files) return false;
           // Not while a file was changing under the compile, and only what git has: a kept entry is a committed state.
           if (!files.every(file => under(resolve(root, file))?.every(([, s]) => s.mtimeMs < started))) return false;
-          const git = spawnSync('git', ['-C', root, 'status', '--porcelain', '--', ...files], { encoding: 'utf8' });
+          const git = spawnSync('git', ['--no-optional-locks', '-C', root, 'status', '--porcelain', '--', ...files], { encoding: 'utf8' });
           if (git.status !== 0 || git.stdout !== '') return false;
           const manifest = JSON.stringify({ files: files.map(file => [file, digest(resolve(root, file))]), env: asked(spec).map(k => [k, env[k] ?? null]) });
           const dir = resolve(cache, id), entry = resolve(dir, sha(manifest).slice(0, 16)), making = `${entry}.${process.pid}`;
