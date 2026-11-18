@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { closeSync, createWriteStream, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { within } from './paths.mjs';
+import { slashRelative, within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
 import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
@@ -207,7 +207,7 @@ const graphOf = app => moduleGraph(app.dir, app.manifest);
 
 /** Whether a changed input (as receiptChanges names it) is only the plan's. */
 export function planSource(path, app, graph = graphOf(app)) {
-  const at = resolve(ROOT, path), rel = relative(app.dir, at);
+  const at = resolve(ROOT, path), rel = slashRelative(app.dir, at);
   if (!rel || rel.startsWith('..') || isAbsolute(rel) || NATIVE_TREE.test(rel) || rel === DECLARATIONS) return false;
   for (let dir = dirname(at); dir !== app.dir && within(app.dir, dir); dir = dirname(dir)) if (existsSync(resolve(dir, 'Cargo.toml'))) return false;
   if (/\.contract$/.test(rel)) return true;

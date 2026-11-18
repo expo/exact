@@ -15,10 +15,11 @@
 // generated exports without source definitions, linker aliases and cfg_attr exports
 // can escape. A macro with a computed API name is refused by the Rust parser.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { seamCensus } from './probes/seamcensus.mjs';
 import { discover } from './completion-inventory.mjs';
 import { classifications } from './completion-inventory-table.mjs';
+import { slashRelative } from './paths.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
 const CEILINGS = 'scripts/seam-ceilings.json';
@@ -30,7 +31,7 @@ export function census(root = ROOT, entries = discover(root)) {
   const sites = Object.fromEntries(categories.map(k => [k, []]));
   const sources = new Map();
   function swiftSite(row, text) {
-    const path = relative(root, row.path);
+    const path = slashRelative(root, row.path);
     if (!sources.has(path)) sources.set(path, readFileSync(row.path, 'utf8').split('\n'));
     text ??= sources.get(path)[row.line - 1].trim();
     return { id: `${path}: ${text.replace(/\s+/g, ' ')}`, path, line: row.line, text };

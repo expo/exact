@@ -2,6 +2,7 @@
 import {spawnSync} from 'node:child_process';
 import {readFileSync, mkdirSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
+import {EXE} from '../scripts/paths.mjs';
 
 const root = resolve(import.meta.dir, '..');
 const game = resolve(root, 'game');
@@ -12,7 +13,7 @@ function run(cmd, args, options = {}) {
   const env = {...process.env, ...options.env, CARGO_TARGET_DIR:resolve(game, 'target/vocab'), RUSTC_BOOTSTRAP:'1'};
   const result = spawnSync(cmd, args, {cwd: game, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...options, env});
   if (result.error || result.status !== 0) {
-    const diagnostics = result.stdout.split('\n').flatMap(line => {
+    const diagnostics = (result.stdout ?? '').split('\n').flatMap(line => {
       try { const m = JSON.parse(line); return m.message?.rendered ? [m.message.rendered] : []; } catch { return []; }
     }).join('');
     throw new Error(result.error?.message ?? (diagnostics + result.stderr || `${cmd} failed`));
@@ -133,7 +134,7 @@ export function generate() {
   const folder = resolve(target, 'game-vocab'); mkdirSync(folder, {recursive:true});
   const source = `fn main() {\n${entries.filter(e => ['Component','Resource'].includes(e.kind) && e.defaults).map(e =>
     `println!("{}\\t{}", ${JSON.stringify(e.name)}, exact_game::json::to_string(&${e.path}::default()).expect("default serializes"));`).join('\n')}\n}`;
-  const file = resolve(folder, 'defaults.rs'), exe = resolve(folder, 'defaults');
+  const file = resolve(folder, 'defaults.rs'), exe = resolve(folder, `defaults${EXE}`);
   // rustc's dependencies can change at the same filename, so always compile the tiny evaluator.
   writeFileSync(file, source);
   run('rustc', ['--edition=2021', file, '-L', `dependency=${resolve(target, 'debug/deps')}`, '--extern', `exact_game=${rlib}`, '-o', exe]);

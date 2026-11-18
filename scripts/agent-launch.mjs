@@ -10,7 +10,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, hostname, tmpdir } from 'node:os';
-import { basename, delimiter, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { slashRelative, within } from './paths.mjs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -826,8 +826,8 @@ const DIRECTORY_WATCH = /\/[^./]+$/;
 /** Dep-info's inputs modified after `since`, or gone, generated outputs and absent optional directories aside. */
 export function depInfoNewer(since, bin, info, base, directories = [], products = new Map(), outputs = []) {
   const files = new Set(directories.flatMap(({path, entries}) => (entries ?? []).filter(e => !e.directory).map(e => resolve(path, e.name))));
-  const paths = depInfoInputs(bin, info, base).filter(p => !GENERATED.test(p)
-    && (existsSync(p) || !DIRECTORY_WATCH.test(p) || files.has(p) || directories.some(directory => directory.path === p)));
+  const paths = depInfoInputs(bin, info, base).filter(p => { const slashed = p.split(sep).join('/');
+    return !GENERATED.test(slashed) && (existsSync(p) || !DIRECTORY_WATCH.test(slashed) || files.has(p) || directories.some(directory => directory.path === p)); });
   return watchedNewer(since, paths, directories, products, outputs);
 }
 
@@ -841,7 +841,7 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
     if (!existsSync(resolve(app, 'app.json'))) return () => false;
     if (!skips.has(app)) {
       const ignored = notBuildInput(app);
-      skips.set(app, (path, directory) => !INPUT_TREE.test(relative(app, path))
+      skips.set(app, (path, directory) => !INPUT_TREE.test(slashRelative(app, path))
         && (ignored(path) || (directory ? basename(path).startsWith('.') : NOT_INPUT.test(basename(path)))));
     }
     return skips.get(app);

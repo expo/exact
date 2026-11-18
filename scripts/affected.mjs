@@ -43,9 +43,11 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, normalize, relative, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 import { parseAst } from 'rolldown/parseAst';
 import { classesReached } from '../host/apple/xctest.mjs';
+import { OFFLINE_MISSING } from './filesystem.mjs';
+import { slashRelative } from './paths.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
 
@@ -263,7 +265,7 @@ export class Repo {
   #addWorkspace(data, manifest) {
     const members = new Set(data.workspace_members), byId = new Map();
     for (const p of data.packages) {
-      const dir = relative(this.root, dirname(p.manifest_path));
+      const dir = slashRelative(this.root, dirname(p.manifest_path));
       if (p.source !== null || dir.startsWith('..')) continue;
       const known = this.packages.get(p.name);
       const pkg = known ?? { name: p.name, dir, manifest: null, targets: p.targets, deps: [] };
@@ -311,7 +313,7 @@ export class Repo {
    * tests compile it: an integration test, a bench, an example, or a module declared under `#[cfg(test)]` and what is
    * under it) or `library`. */
   rustRole(file, pkg) {
-    if (file === join(pkg.dir, 'build.rs')) return 'build';
+    if (file === posix.join(pkg.dir, 'build.rs')) return 'build';
     const { test, build } = this.#rolesOf(pkg);
     return test.has(file) ? 'test' : build.has(file) ? 'build' : 'library';
   }
@@ -319,15 +321,15 @@ export class Repo {
   #rolesOf(pkg) {
     if (this.#roles.has(pkg.dir)) return this.#roles.get(pkg.dir);
     const own = this.under(pkg.dir || '.').filter(f => f.endsWith('.rs') && this.ownerOf.get(f) === pkg.dir);
-    const targetRoots = new Set(pkg.targets.map(t => relative(this.root, t.src_path)));
+    const targetRoots = new Set(pkg.targets.map(t => slashRelative(this.root, t.src_path)));
     // The files the modules `f` declares: `mod name;` in a target's root (`lib.rs`, `build.rs`) or a mod.rs is name.rs
     // or name/mod.rs beside it, in a.rs a/name.rs or a/name/mod.rs, `#[path]`'s beside the declaring file. A test
     // module's directory is all test code (what it declares inside an inline module is under it too); a library
     // module's holds its test modules.
     const declared = (f, keep, sweep) => this.sources(f).mods.filter(keep).flatMap(({ name, path }) => {
       const base = targetRoots.has(f) || /(?:^|\/)(?:lib|main|mod)\.rs$/.test(f) ? dirname(f) : f.slice(0, -3);
-      const at = path ? [normalize(join(dirname(f), path))] : [join(base, `${name}.rs`), join(base, name, 'mod.rs')];
-      return [...at.filter(p => this.fileSet.has(p)), ...(path || !sweep ? [] : this.under(join(base, name)).filter(p => p.endsWith('.rs')))];
+      const at = path ? [posix.normalize(posix.join(dirname(f), path))] : [posix.join(base, `${name}.rs`), posix.join(base, name, 'mod.rs')];
+      return [...at.filter(p => this.fileSet.has(p)), ...(path || !sweep ? [] : this.under(posix.join(base, name)).filter(p => p.endsWith('.rs')))];
     });
     const reach = (roots, keep, sweep) => {
       const seen = new Set(roots);
@@ -337,7 +339,7 @@ export class Repo {
     // Test code: integration tests, benches, examples, the modules declared under #[cfg(test)], and what they declare.
     // Test-only is what test code reaches and the library's own modules, from its targets' roots, do not; of those,
     // the build script's are its own.
-    const rootsOf = keep => pkg.targets.filter(t => keep(t.kind)).map(t => relative(this.root, t.src_path)).filter(f => this.fileSet.has(f));
+    const rootsOf = keep => pkg.targets.filter(t => keep(t.kind)).map(t => slashRelative(this.root, t.src_path)).filter(f => this.fileSet.has(f));
     const library = reach(rootsOf(kind => !kind.some(k => ['test', 'bench', 'example', 'custom-build'].includes(k))), m => !m.test, false);
     const build = new Set([...reach(rootsOf(kind => kind.includes('custom-build')), m => !m.test, false)].filter(f => !library.has(f)));
     const tests = reach([...own.filter(f => /^(?:tests|benches|examples)\//.test(pkg.dir ? f.slice(pkg.dir.length + 1) : f)),
@@ -350,8 +352,15 @@ export class Repo {
 }
 
 function cargoMetadata(root, manifest, resolved) {
-  const args = ['metadata', '--format-version', '1', '--offline', '--manifest-path', resolve(root, manifest), ...(resolved ? ['--locked'] : ['--no-deps'])];
-  const r = spawnSync('cargo', args, { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
+  const path = resolve(root, manifest);
+  const args = ['metadata', '--format-version', '1', '--offline', '--manifest-path', path, ...(resolved ? ['--locked'] : ['--no-deps'])];
+  const run = command => spawnSync('cargo', command, { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
+  let r = run(args);
+  if (r.status !== 0 && resolved && OFFLINE_MISSING.test(r.stderr ?? '')) {
+    const fetched = run(['fetch', '--locked', '--manifest-path', path]);
+    if (fetched.status === 0) r = run(args);
+    else r.stderr += `\ncargo fetch --locked:\n${fetched.stderr || fetched.error?.message}`;
+  }
   if (r.status !== 0) throw new Error(`cargo ${args.join(' ')}: ${r.stderr.trim()}`);
   return JSON.parse(r.stdout);
 }
@@ -422,7 +431,7 @@ export class Graph {
       for (const f of repo.under(pkg.dir || '.')) {
         if (repo.ownerOf.get(f) !== pkg.dir) continue;
         const role = f.endsWith('.rs') ? repo.rustRole(f, pkg) : null;
-        if (dev || (role && role !== 'test') || f === join(pkg.dir, 'Cargo.toml')) files.push(f);
+        if (dev || (role && role !== 'test') || f === posix.join(pkg.dir, 'Cargo.toml')) files.push(f);
         if (!role || (role === 'test' && !dev)) continue;
         const { library, test } = repo.sources(f);
         if (role === 'library') {
@@ -432,7 +441,7 @@ export class Graph {
       }
       for (const d of pkg.deps) if (dev || d.kinds.some(k => k !== 'dev')) add(`pkg:${d.name}`, `${pkg.dir}/Cargo.toml`);
       // A workspace apart from the root's: its manifest and lock (the root's are `GLOBAL`)
-      if (pkg.manifest && pkg.manifest !== 'Cargo.toml') files.push(pkg.manifest, join(dirname(pkg.manifest), 'Cargo.lock'));
+      if (pkg.manifest && pkg.manifest !== 'Cargo.toml') files.push(pkg.manifest, posix.join(dirname(pkg.manifest), 'Cargo.lock'));
     } else if (kind === 'test' || kind === 'js' || kind === 'load') {
       files.push(arg);
       const { imports, literals } = repo.sources(arg);
@@ -475,7 +484,7 @@ export class Graph {
       try { manifest = JSON.parse(repo.read(`${arg}/package.json`) || '{}'); } catch {}
       for (const spec of Object.values({ ...manifest.dependencies, ...manifest.devDependencies })) {
         const dir = /^file:(.+)$/.exec(spec)?.[1];
-        if (dir && repo.dirs.has(normalize(join(arg, dir)))) add(`dir:${normalize(join(arg, dir))}`, `${arg}/package.json: ${spec}`);
+        if (dir && repo.dirs.has(posix.normalize(posix.join(arg, dir)))) add(`dir:${posix.normalize(posix.join(arg, dir))}`, `${arg}/package.json: ${spec}`);
       }
     } else if (kind === 'platform') {
       for (const dir of PLATFORMS[arg] ?? []) for (const f of repo.under(dir)) if (!PLATFORM_TEST.test(f)) files.push(f);
@@ -491,8 +500,8 @@ function importNode(repo, from, spec) {
     return repo.dirs.has(dir) ? `dir:${dir}` : null;
   }
   if (!spec.startsWith('.')) return null;
-  const base = normalize(join(dirname(from), spec));
-  for (const candidate of [base, ...['.mjs', '.js', '.ts', '.tsx', '.mts', '.cjs', '.json'].map(e => base + e), ...['index.mjs', 'index.js', 'index.ts'].map(e => join(base, e))]) {
+  const base = posix.normalize(posix.join(dirname(from), spec));
+  for (const candidate of [base, ...['.mjs', '.js', '.ts', '.tsx', '.mts', '.cjs', '.json'].map(e => base + e), ...['index.mjs', 'index.js', 'index.ts'].map(e => posix.join(base, e))]) {
     if (repo.fileSet.has(candidate)) return `file:${candidate}`;
   }
   return repo.dirs.has(base) ? `dir:${base}` : null;
@@ -567,7 +576,7 @@ function references(graph, file, literals, pkgDir, as) {
       // directory (`resolve(import.meta.dir, 'new')`, `join(here, 'caps.mjs')`); not onto a temporary directory.
       const passed = words.length === 1 && PATH_CALL.test(call);
       if (!word.includes('/') && word !== '.' && word !== '..' && passed && OWN_DIR.test(literal.base ?? '')) {
-        const near = join(own, word);
+        const near = posix.join(own, word);
         if (repo.fileSet.has(near)) { add(`${test ? 'script' : 'file'}:${near}`, word); return; }
         if (repo.dirs.has(near)) { add(repo.apps.has(near) ? `app:${near}` : `dir:${near}`, word); return; }
       }
@@ -577,7 +586,7 @@ function references(graph, file, literals, pkgDir, as) {
       const path = word.replace(/^\/(?=\.\.?\/)/, '');
       if (path.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(path)) return;
       for (const base of bases[literal.from] ?? [...bases.own, ...bases.package, ...bases.root]) {
-        const target = normalize(join(base, path)).replace(/\/$/, '');
+        const target = posix.normalize(posix.join(base, path)).replace(/\/$/, '');
         if (target === '.' || target.startsWith('..')) continue;
         // A container, or the code's own directory or one above it, is where its paths start; a build script reads
         // the one above it (an app's crate builds its app).

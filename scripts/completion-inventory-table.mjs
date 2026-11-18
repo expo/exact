@@ -1045,7 +1045,6 @@ export const classifications = [
       "Runner::update_into_views_inner#nodes_visited:1 Runner::update_into_views_inner#regions_skipped:1 Runner::update_into_views_inner#rows_keyed:1 " +
       "Runner::update_into_views_inner#rows_rebound:1 Runner::update_into_views_inner#rows_reused:1 Runner::update_into_views_inner#rows_scanned:1 " +
       "Runner::update_into_views_inner#store_bytes_copied:1"],
-    ["runner:runner/src/runner/kept.rs", "Runner::send_one#mutation_requests:1"],
     ["runner:runner/src/runner/lists.rs", "Runner::update_ops#rows_scanned:1"],
     ["runner:runner/src/runner/live_time.rs", "Runner::tick_live_times#batch:1"],
     ["runner:runner/src/runner/mapper_turns.rs", "Behind::hold#bytes:1 Behind::hold#messages:1 Behind::next#bytes:1 Behind::next#messages:1"],
