@@ -1110,7 +1110,8 @@ const api = {
     const world = worlds({ op: "clock", settle });
     const pending = settle && world.some((w) => w.quiescent === false);
     const candidates = world.filter((w) => w.quiescent === false && Number.isFinite(w.settleAt)).map((w) => w.settleAt);
-    return { pending, settleAt: candidates.length ? Math.max(...candidates) : undefined,
+    const ticks = world.map(w => w.nextTickAt).filter(Number.isFinite);
+    return { pending, settleAt: candidates.length ? Math.max(...candidates) : undefined, nextTickAt: ticks.length ? Math.min(...ticks) : undefined,
       reply: world.length ? { world: world.map(({ canvas, tick, hash, quiescent, error, assets, changing }) => ({ canvas, tick, hash, quiescent, changing, ...(error ? {error, assets} : {}) })) } : {} };
   },
   surface(view, name, values) {

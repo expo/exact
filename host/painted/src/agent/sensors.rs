@@ -1,7 +1,7 @@
-//! A clock advance across which a canvas has a sensor input (LLP 1133.013
-//! D6): the worlds advance a display frame at a time, each frame's samples
-//! handed to their surfaces before the frame, as a live frame does. One jump
-//! would queue a whole span at once, past the world's 1,024-event bound.
+//! Clock advances stop at world ticks so their published records reach
+//! Contract before later timers (LLP 1012, LLP 1046.003). Sensor inputs also
+//! stop each display frame, posting its samples before the world advances
+//! (LLP 1133.013 D6), within the world's 1,024-event bound.
 
 use super::{clock_hatched, Presenter};
 use exact_runner::DataSource;
@@ -9,8 +9,8 @@ use exact_runner::DataSource;
 /// One display frame of the agent's clock, in ms.
 const FRAME: f64 = 1000.0 / 60.0;
 
-/// [`clock_hatched`] to `to`, stepping the worlds a frame at a time while
-/// the substitute feeds a canvas; the caller steps the worlds to the last.
+/// [`clock_hatched`] to `to`, stopping at world ticks and sensor frames;
+/// the caller steps the worlds to the last.
 pub(super) fn clock_framed<D: DataSource>(
     p: &mut Presenter<D>,
     to: f64,
@@ -31,14 +31,33 @@ fn framed<D: DataSource>(
     mut seek: impl FnMut(&mut Presenter<D>, f64) -> (f64, Option<String>),
 ) -> (f64, Option<String>) {
     loop {
-        if !p.host().runner().surface_sensor_inputs() {
+        // Deliver world records before later timers (LLP 1012, LLP 1046.003).
+        p.sync_surfaces();
+        let worlds = p.worlds(serde_json::json!({"op":"clock","settle":false}));
+        p.sync_surfaces();
+        let now = p.host().now();
+        let next = worlds
+            .iter()
+            .filter_map(|w| w["nextTickAt"].as_f64())
+            .filter(|at| at.is_finite() && *at > now)
+            .reduce(f64::min);
+        let sensing = p.host().runner().surface_sensor_inputs();
+        if worlds.is_empty() && !sensing {
             return seek(p, to);
         }
         // The frame's samples reach the world before the frame does: a
         // world steps as its host's clock moves, and takes each queued
         // event in the tick its stamp falls in.
-        let step = (p.host().now() + FRAME).min(to);
-        post_samples(p, step);
+        let mut step = next.unwrap_or(to).min(to);
+        if sensing {
+            step = step.min(now + FRAME);
+        }
+        if let Some(due) = p.host().timer_due_ms().filter(|due| *due > now) {
+            step = step.min(due);
+        }
+        if sensing {
+            post_samples(p, step);
+        }
         let (landed, e) = seek(p, step);
         if e.is_some() || landed < step || landed >= to {
             return (landed, e);

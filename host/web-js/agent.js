@@ -320,6 +320,14 @@ export function install(exact) {
     images?.then(h => h.seek());
   };
   const seek = (sync = true) => { anim.register(exact.clock.now); anim.seek(exact.clock.now, sync); holdImages(); };
+  // Deliver world records before later timers (LLP 1012, LLP 1046.003).
+  const worldStep = to => {
+    const worlds = exact.gpu?.clock?.(false), now = exact.clock.now, next = worlds?.nextTickAt;
+    if (!worlds?.reply?.world?.length && !(next > now)) return to;
+    const due = [...(exact.clock.stopped ? [] : exact.clock.timers.map(t => t.due)),
+      ...(exact.mutations ?? []).flatMap(m => [m.due, m.next])].filter(t => t > now);
+    return Math.min(to, next > now ? next : to, ...due);
+  };
   // Whether this clock runs `a` (a refused tap's advice, scripts/agent-aim.mjs `pageOutside`): on the document's timeline,
   // and not held by its author, then or, not yet registered, at its registration.
   exact.clockRuns = anim.runs;
@@ -504,9 +512,9 @@ export function install(exact) {
             const at = exact.clock.now, epoch = exact.clock.epoch, to = Math.max(anim.settle(), world.settleAt ?? 0, ...exact.clock.timers.filter(t => t.data && t.live()).map(t => t.due));
             for (let stops = 0; ; stops++) {
               const before = exact.inflight.n, held = stops < 4096 && performance.now() < end;
-              const stopped = exact.advance(to, false, held ? () => exact.inflight.n > before : undefined);
+              const step = worldStep(to), stopped = exact.advance(step, false, held ? () => exact.inflight.n > before : undefined);
               if (typeof stopped === 'string') { seek(); return { error: `clock: ${stopped}`, clock: exact.clock.now }; }
-              if (!stopped) break;
+              if (!stopped && step >= to) break;
               while (exact.inflight.n > unwaited() && performance.now() < end) await new Promise(r => setTimeout(r, 1));
             }
             // Quiet, unless this round's work set a scroller moving: two frames tell (its first event comes at the
@@ -552,10 +560,10 @@ export function install(exact) {
         await exact.viewTransition?.();
         for (const end = performance.now() + 20000; ;) {
           while (due() && exact.inflight.n > unwaited() && performance.now() < end) await new Promise(r => setTimeout(r, 1));
-          const before = exact.inflight.n, stopped = exact.advance(req.to, false, () => exact.inflight.n > before);
+          const before = exact.inflight.n, step = worldStep(req.to), stopped = exact.advance(step, false, () => exact.inflight.n > before);
           // A refusal stops the jump at its time: the runner's error (a timer's, a `then`'s).
           if (typeof stopped === 'string') { seek(); return { error: `clock: ${stopped}`, clock: exact.clock.now }; }
-          if (!stopped) break;
+          if (!stopped && step >= req.to) break;
           // A reply is usually a task or two away: poll at the browser's
           // shortest timer, not a frame's worth (a 300 ms timer's minute
           // is 200 of these).

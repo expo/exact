@@ -1187,18 +1187,26 @@ public final class Agent {
         // The agent's clock is a seek: frame tasks fire virtual frames (LLP 1073 D3).
         session.runtime.presentFrames(false)
         while true {
+            guard session.canvases.waitUntilReady() else {
+                return Batch(ops: [], timers: false, motion: false, clock: session.clock, error: "canvas creation is still in flight")
+            }
+            // Deliver world records before later timers (LLP 1012, LLP 1046.003).
+            let now = session.clock ?? floor
+            let worlds = session.canvases.clock(settle: false)
+            let next = worlds.nextTickAt.flatMap { $0 > now ? $0 : nil }
+            let at = worlds.reply.isEmpty ? to : min(to, next ?? to, session.timerDue.flatMap { $0 > now ? $0 : nil } ?? to)
             // A data module's timer the last step released lands first too (exact-runner's `data_timers.rs`).
-            let waited = (session.timerDue.map { $0 <= to } == true || session.timerLanding) && waitForReplies(until: deadline)
+            let waited = (session.timerDue.map { $0 <= at } == true || session.timerLanding) && waitForReplies(until: deadline)
             let held = waited && steps < 4096
-            let batch = session.runtime.advance(now: to, untilRequest: held)
+            let batch = session.runtime.advance(now: at, untilRequest: held)
             session.apply(batch)
-            session.clock = max(floor, batch.clock ?? to)
+            session.clock = max(floor, batch.clock ?? at)
             if batch.error == nil, let limit = session.natives.refreshHatchClock(at: session.clock ?? to) {
                 return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
             }
             // A stop at `to` may leave a timer due there: only a plain advance ends.
-            if batch.error != nil || !held { return batch }
-            steps += 1
+            if batch.error != nil || (!held && at >= to) { return batch }
+            if held { steps += 1 }
         }
     }
 
