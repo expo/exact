@@ -1,5 +1,6 @@
 # Builds the docs site (docs/site) after a push to main that changes docs/ and publishes it to Cloudflare Pages,
-# project exact-docs.
+# project exact-docs. For a pull request with the `docs-preview` label it only builds, and
+# docs-preview-publish.yml publishes that build.
 #
 # The build job runs the code of the branch it builds, so it holds no secret. The deploy job holds the
 # Cloudflare token and runs none of what the build made: it uploads the build's files with main's wrangler.
@@ -12,20 +13,32 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/docs.yml'
+  pull_request:
+    types: [opened, labeled, synchronize]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-    # A run started by hand builds main and no other branch.
-    if: github.repository == 'expo/exact' && github.ref == 'refs/heads/main'
+    # A run started by hand builds main and no other branch. A pull request from a fork gets no preview, and a
+    # label other than `docs-preview` starts no build.
+    if: >-
+      github.repository == 'expo/exact' && (
+        (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'docs-preview') &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          (github.event.action != 'labeled' || github.event.label.name == 'docs-preview')))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    # A build of main is never stopped by a newer push, which waits for it, as ci.yml's run on main does.
+    # A build of main is never stopped by a newer push, which waits for it, as ci.yml's run on main does. A pull
+    # request's newer push replaces its build.
     concurrency:
       group: docs-build-${{ github.ref }}
-      cancel-in-progress: false
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     permissions:
       contents: read
     steps:
@@ -72,7 +85,7 @@ jobs:
   deploy:
     needs: build
     # Only the branch main is published as the site. A tag named main has another ref.
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: docs

@@ -39,9 +39,11 @@ between the edit and the full build removes the generated Markdown and indexes.
 ## Publishing
 
 `.github/workflows/docs.yml` builds the site after a push to `main` that changes `docs/` and
-publishes that build to the Cloudflare Pages project `exact-docs`. Its build job runs the branch's
-code and holds no secret; its deploy job holds the Cloudflare token and uploads the build's files
-without running them.
+publishes that build to the Cloudflare Pages project `exact-docs`. For a pull request with the
+`docs-preview` label it only builds, and `docs-preview-publish.yml` publishes that build at
+`https://pr-<number>.exact-docs.pages.dev` until the pull request closes or loses the label
+(`docs-preview-cleanup.yml`). A job that builds runs the branch's code and holds no secret; a job
+that holds the Cloudflare token uploads a build's files without running them.
 `bun run build:pages` makes what is uploaded: `dist.pages`, which is `dist` with each page at
 `<path>.html` (Pages redirects `/start` to `/start/` for a `start/index.html`), a `_headers` within
 Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a request that prefers
