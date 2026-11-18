@@ -4,6 +4,7 @@ import CoreGraphics
 import CoreImage
 import UniformTypeIdentifiers
 @testable import ExactKit
+@testable import ExactImages
 
 /// LLP 1100 D13: a photo the picker converts to JPEG keeps its color
 /// profile and, where the system can encode one, its gain map.

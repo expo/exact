@@ -1,6 +1,7 @@
 import WebKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 #if os(macOS)
 import AppKit
 #else
@@ -42,7 +43,7 @@ final class IframeEmbedTests: XCTestCase {
         }
         let session = ExactApp.shared.makeSession(label: label)
         sessions.append(session)
-        session.webviews.moduleLocation = { arm }
+        session.webHost.moduleLocation = { arm }
         XCTAssertNil(session.boot(size: CGSize(width: 400, height: 300)).error)
         #if os(macOS)
         _ = NSApplication.shared
@@ -138,7 +139,7 @@ final class IframeEmbedTests: XCTestCase {
     /// viewports below the window's bottom, where a held leaf waits to come near.
     func testAHatchedFrameWaitsForTheModuleOrMadeWithoutIt() throws {
         let session = try session("frame-waits")
-        let natives = session.natives
+        let natives = session.nativeViews!
         NativeViews.uninstallTable()
         natives.hasAppModule = true
         defer { natives.hasAppModule = false; NativeViews.uninstallTable() }

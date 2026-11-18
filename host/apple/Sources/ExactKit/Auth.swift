@@ -92,7 +92,7 @@ extension ExactSession {
             return authDone(ticket, AuthFailure(status: 501, message: "this build links no sign-in sheet (auth_session): rebuild with the `auth.session` grant"))
         }
         let opened = link.open(url: url, callback: parts, ephemeral: op["ephemeral"] as? Bool ?? false,
-                               anchor: { [weak self] in self?.presenter.shareAnchor(nil).0?.window },
+                               anchor: { [weak self] in self?.presenter.presentationAnchor(nil).0?.window },
                                done: { [weak self] in self?.authCompleted(ticket, $0) })
         switch opened {
         case .success(let sheet): authSessions.live[ticket] = sheet

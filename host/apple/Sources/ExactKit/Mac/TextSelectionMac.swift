@@ -47,7 +47,7 @@ package final class TextSelection {
         positions.removeAll(keepingCapacity: true)
         if allListText {
             if let list, presenter?.views[list.id] === list {
-                if let snapshot = presenter?.collections.entries[list.id]?.snapshot {
+                if let snapshot = presenter?.collections.snapshot(list.id) {
                     if snapshot.count > 0 || !snapshot.fixed.isEmpty { return }
                 } else if let a = logicalAnchor, let b = logicalFocus,
                           presenter?.onListIndex?(list.id, a.key) != nil,
@@ -57,7 +57,7 @@ package final class TextSelection {
             return
         }
         if let list, var a = logicalAnchor, var b = logicalFocus {
-            let count = presenter?.collections.entries[list.id]?.snapshot.count ?? 0
+            let count = presenter?.collections.snapshot(list.id)?.count ?? 0
             let ai = a.fixed.map { $0 ? count : -1 } ?? presenter?.onListIndex?(list.id, a.key)
             let bi = b.fixed.map { $0 ? count : -1 } ?? presenter?.onListIndex?(list.id, b.key)
             if let ai, let bi {
@@ -722,7 +722,7 @@ package final class TextSelection {
             // Fixed paragraphs stay mounted on either side of this window.
             let clip = scroll.contentView
             let maximum = max(0, (clip.documentView?.frame.height ?? 0) - clip.bounds.height)
-            let snapshot = presenter?.collections.entries[list.id]?.snapshot
+            let snapshot = presenter?.collections.snapshot(list.id)
             let dataEnd = snapshot.map { $0.extent - ($0.fixed.last?.size ?? 0) }
             let offset = toStart ? 0 : dataEnd.map { min(maximum, max(0, list.contentBox().minY + CGFloat($0) - clip.bounds.height)) } ?? maximum
             clip.scroll(to: CGPoint(x: clip.bounds.minX, y: offset))
@@ -848,7 +848,7 @@ package final class TextSelection {
             anchor = first; focus = last; anchorIndex = 0; focusIndex = length(last); dragged = true
             // Empty fixed-region boundaries retain the logical ends even
             // when the first or last data row has retired.
-            if let snapshot = presenter?.collections.entries[owner.id]?.snapshot {
+            if let snapshot = presenter?.collections.snapshot(owner.id) {
                 logicalAnchor = Position(key: "", row: -1, paragraph: 0, offset: 0, fixed: false)
                 logicalFocus = Position(key: "", row: snapshot.count, paragraph: Int(UInt32.max), offset: 0, fixed: true)
             } else {
@@ -941,7 +941,7 @@ package final class TextSelection {
         while let view = ancestor {
             if let n = view as? NodeView {
                 if n.props["listItemKey"] != nil { wrapper = n; break }
-                if let snapshot = presenter?.collections.entries[n.id]?.snapshot {
+                if let snapshot = presenter?.collections.snapshot(n.id) {
                     for (side, fixed) in snapshot.fixed.enumerated() {
                         var paragraphs: [NodeView] = []
                         for id in fixed.roots {

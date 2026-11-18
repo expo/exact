@@ -119,7 +119,7 @@ pub fn encode(v: &Value, out: &mut String) {
         }),
         Value::Number(n) => exact_num::push_text!(out, "{}", exact_num::Shortest(*n)),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        v @ exact_plan::str_value!() => crate::agent::quote(v.text(), out),
+        v @ exact_plan::str_value!() => crate::json::quote(v.text(), out),
         Value::Option(None) | Value::Unit => out.push_str("null"),
         Value::Option(Some(v)) => encode(v, out),
         Value::List(items) | Value::Record(items) => {

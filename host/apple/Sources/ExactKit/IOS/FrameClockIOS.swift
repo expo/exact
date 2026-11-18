@@ -16,11 +16,11 @@ import UIKit
 /// change with the rate the clock asks for.
 /// It asks for the highest rate any user is asking for. Users tick in the
 /// order they gave (`Order`), the session's frame first.
-final class FrameClock: NSObject {
-    static let shared = FrameClock()
+package final class FrameClock: NSObject {
+    package static let shared = FrameClock()
 
     /// A correction moves the port before the reveal and the pump read it.
-    enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip }
+    package enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip }
 
     private final class User {
         weak var owner: AnyObject?
@@ -45,19 +45,19 @@ final class FrameClock: NSObject {
     var running: Bool { link.map { !$0.isPaused } ?? false }
     /// Bit `Order.rawValue` of each user asking for frames now
     var asking: UInt64 { users.values.reduce(0) { $1.owner == nil ? $0 : $0 | 1 << UInt64($1.order.rawValue) } }
-    func wants(_ owner: AnyObject) -> Bool { users[ObjectIdentifier(owner)]?.owner != nil }
+    package func wants(_ owner: AnyObject) -> Bool { users[ObjectIdentifier(owner)]?.owner != nil }
 
     /// Main thread only. `owner` takes frames at `rate` until `drop` or its
     /// release (a released owner is let go at the next frame, so an owner
     /// that may die off the main thread need not drop itself); asking again
     /// only changes its rate or tick.
-    func want(_ owner: AnyObject, _ order: Order, rate: CAFrameRateRange = .default, tick: @escaping (CADisplayLink) -> Void) {
+    package func want(_ owner: AnyObject, _ order: Order, rate: CAFrameRateRange = .default, tick: @escaping (CADisplayLink) -> Void) {
         let key = ObjectIdentifier(owner)
         if users[key]?.order != order { self.order = nil }
         users[key] = User(owner: owner, order: order, rate: rate, tick: tick)
         update()
     }
-    func drop(_ owner: AnyObject) {
+    package func drop(_ owner: AnyObject) {
         guard users.removeValue(forKey: ObjectIdentifier(owner)) != nil else { return }
         order = nil
         update()
@@ -65,7 +65,7 @@ final class FrameClock: NSObject {
 
     /// What something moving on screen asks for: the display's full rate,
     /// never under 60 (`screen` nil: the app's fastest).
-    static func full(on screen: UIScreen?) -> CAFrameRateRange {
+    package static func full(on screen: UIScreen?) -> CAFrameRateRange {
         let fastest = screen?.maximumFramesPerSecond
             ?? UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.maximumFramesPerSecond }.max() ?? 60
         let m = Float(fastest)

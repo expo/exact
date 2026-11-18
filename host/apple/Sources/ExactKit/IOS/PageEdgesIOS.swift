@@ -154,6 +154,15 @@ extension Presenter {
         guard let sv = v.scrollView else { return Bands() }
         let r = v.convert(v.bounds, to: route)
         let top = judge.bars(of: v, in: route, top: true), bottom = judge.bars(of: v, in: route, top: false)
+        // More than bars over the scroller keeps its top where it is; an open
+        // foot over the route's bottom cover (a tab bar), apart from a title's
+        // collapse, still reaches it, as a hand-built table under a fixed
+        // header runs under its tab bar. Bars under it keep both edges.
+        if top == nil, apart, bottom?.isEmpty == true, case .edges(let e)? = navigation.covers[route.id],
+           e.bottom > 0.5, route.bounds.height - r.maxY > 0.5 {
+            let band = UIEdgeInsets(top: 0, left: 0, bottom: route.bounds.height - r.maxY, right: 0)
+            return Self.drawn(band, v, sv) ? Bands(band: band) : Bands()
+        }
         guard let top, apart || bottom != nil else { return Bands() }
         let underBar = apart && top.isEmpty && r.minY > 0.5
         var overCover = false
@@ -171,7 +180,7 @@ extension Presenter {
 
     /// A virtualized list draws rows a port past its own (D5): a longer band is not taken.
     private static func drawn(_ band: UIEdgeInsets, _ v: NodeView, _ sv: UIScrollView) -> Bool {
-        guard v.presenter?.collections.entries[v.id] != nil else { return true }
+        guard v.presenter?.collections.owns(v.id) == true else { return true }
         let i = sv.adjustedContentInset, own = v.pageBand
         let port = v.bounds.height - (i.top - own.top) - (i.bottom - own.bottom)
         return band.top <= port + 0.5 && band.bottom <= port + 0.5
@@ -197,7 +206,7 @@ extension NodeView {
         // under the bar as the push lands, its port keeps its size, and the kept
         // scrollTop would only move the offset, which reads as the reader leaving
         // the end.
-        let follows = props["scrollFollowEnd"] == "true" || presenter?.collections.entries[id] != nil
+        let follows = props["scrollFollowEnd"] == "true" || presenter?.collections.owns(id) == true
         let atEnd = follows && sv.contentOffset.y >= end() - 1 && !authorOwnsScroll(sv)
         let oldOwn = bandInset, top = sv.contentOffset.y + scrollTopInset(sv)
         more.pageBand = band; more.bandInset = own

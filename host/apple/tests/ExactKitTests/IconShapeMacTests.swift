@@ -9,6 +9,7 @@ import AppKit
 import XCTest
 import ExactCore
 @testable import ExactKit
+@testable import ExactImages
 
 final class IconShapeMacTests: XCTestCase {
     private var window: NSWindow!

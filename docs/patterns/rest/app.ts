@@ -3,8 +3,8 @@ import type { Answer, Result, Sources } from './app.contract.d.ts';
 // The server's address, its one place: server.ts listens on it (a phone reaches the Mac by its LAN address or HTTPS).
 export const API = 'http://127.0.0.1:8787';
 export const grants = `net.fetch ${API}`;
-// Who may sign in: the server's token and the name the app shows for it. A real sign-in keeps its token
-// with `secret.keep token` and store.set, and asks the server for the name.
+// Public development identities. Real sign-in keeps native tokens with `secret.keep` and store.set;
+// the web uses a server-set HttpOnly cookie. See docs/recipes/web-sessions.md for one shared flow.
 const PEOPLE = [{ token: 'ada', name: 'Ada Lovelace' }, { token: 'grace', name: 'Grace Hopper' }];
 
 type Answered = { ok: true; body: unknown } | { ok: false; error: string };

@@ -28,7 +28,7 @@ impl<D: DataSource> Bridge<D> {
         };
         let pins: Vec<(&str, &str)> = pins.iter().map(|(a, v)| (a.as_str(), v.as_str())).collect();
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| match check {
                 true => h.check_modes(&pins),
                 false => h.set_modes(&pins),
@@ -50,7 +50,7 @@ impl<D: DataSource> Bridge<D> {
         };
         let text = text.to_owned();
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.hold_facts(&text),
         );
         self.emit(out)
@@ -64,7 +64,7 @@ impl<D: DataSource> Bridge<D> {
         };
         let text = text.to_owned();
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.apply_live(&text),
         );
         self.emit(out)
@@ -120,7 +120,7 @@ impl<D: DataSource> Bridge<D> {
             .split_once('\0')
             .map_or((text, None), |(name, json)| (name, Some(json)));
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.canvas_performance_record(name, json),
         );
         self.emit(out)
@@ -135,7 +135,7 @@ impl<D: DataSource> Bridge<D> {
             return self.refuse("viewport geometry: expected [insets, rectangles, keyboard]");
         };
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("viewport geometry: not booted"),
+            || exact_runner::json::error("viewport geometry: not booted"),
             |host| host.viewport_geometry(geometry),
         );
         self.emit(out)
@@ -170,7 +170,7 @@ impl<D: DataSource> Bridge<D> {
             ..exact_runner::Viewport::default()
         };
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.resize_with(viewport, now_ms, geometry.flatten()),
         );
         self.emit(out)

@@ -19,6 +19,15 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// The reader calls this after every turn of the host, which is where
     /// the journal is written out when asked for (`canvas/journal.rs`).
     pub fn requests(&mut self) -> Option<Vec<i32>> {
+        if !self.launch.done() {
+            if !self.p.module_pending() {
+                self.launch.activated();
+            }
+            self.launch.turn(&crate::launch_marks::items(
+                &self.p.host().runner().outstanding(),
+            ));
+        }
+        self.launch.record_done();
         self.echo_journal();
         if self.p.host.sound.ready() {
             let files = self

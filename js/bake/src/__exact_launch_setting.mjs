@@ -9,8 +9,10 @@ const physicalId=id=>{ if (!isAbsolute(id)) return id; try { return realpathSync
 
 /** The declaration of the binding app.ts exports as `grants`, as `staticFacts` reads it. */
 export function grantsDeclaration(body) {
-  const local=body.flatMap(s=>s.type==='ExportNamedDeclaration' && !s.source ? (s.specifiers ?? []) : [])
-    .find(x=>(x.exported.name ?? x.exported.value)==='grants')?.local;
+  const local=body.flatMap(s=>s.type==='ExportNamedDeclaration' && s.exportKind!=='type' && !s.source ? (s.specifiers ?? []) : [])
+    .find(x=>x.exportKind!=='type' && (x.exported.name ?? x.exported.value)==='grants')?.local;
+  if (!local && !body.some(s=>s.type==='ExportNamedDeclaration' && s.declaration?.type==='VariableDeclaration'
+    && s.declaration.declarations.some(d=>d.id.type==='Identifier' && d.id.name==='grants'))) return undefined;
   const name=local ? local.name ?? local.value : 'grants';
   return body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
     .flatMap(s=>s?.type==='VariableDeclaration' ? s.declarations : []).find(d=>d.id.type==='Identifier' && d.id.name===name);
@@ -24,6 +26,15 @@ export function grantsDeclaration(body) {
 export function launchGrants(code, parse, names, staticFacts) {
   const parsed=parse('app.ts',code);
   if (parsed.errors.length) return code;
+  const declaration=grantsDeclaration(parsed.program.body);
+  // Launch-marked settings still require app.ts to declare the grants they extend (LLP 1153.002 D2).
+  const exported=x=>x && (x.name ?? x.value);
+  const reexport=!declaration && parsed.program.body.find(s=>s.exportKind!=='type' && (s.type==='ExportAllDeclaration' ? !s.exported || exported(s.exported)==='grants'
+    : s.type==='ExportNamedDeclaration' && (s.specifiers ?? []).some(x=>x.exportKind!=='type' && exported(x.exported)==='grants')));
+  if (reexport) {
+    if (!names.length) return code;
+    throw new Error(`app.ts: \`${code.slice(reexport.start,reexport.end).replace(/;$/,'')}\` may give the module its grants, and ${names.join(', ')} is marked "launch": true in app.json, whose env.launch line the bake adds to grants declared in app.ts: declare export const grants in app.ts`);
+  }
   // The grants as evaluated, however they are spelled (`'env.' + 'launch HOME'`), a development build's line included.
   const grants=staticFacts(code,parse).grants;
   const written=(grants ?? '').split('\n').map(line=>line.trim()).filter(line=>/^(?:development\s+)?env\.launch(?:\s|$)/.test(line));
@@ -31,14 +42,7 @@ export function launchGrants(code, parse, names, staticFacts) {
   if (!names.length) return code;
   const value=JSON.stringify([...grants ? [grants] : [], ...names.map(name=>`env.launch ${name}`)].join('\n'));
   // Only the binding app.ts exports as `grants` is rewritten: a private one of that name is the app's own.
-  const declaration=grants===undefined ? null : grantsDeclaration(parsed.program.body);
-  if (declaration) return code.slice(0,declaration.init.start)+value+code.slice(declaration.init.end);
-  // Grants another module may give: a declaration added here would shadow (`export *`) or duplicate them. A type-only
-  // re-export (`export type * from`, `export { type grants } from`) gives no value.
-  const exported=x=>x && (x.name ?? x.value);
-  const reexport=parsed.program.body.find(s=>s.exportKind!=='type' && (s.type==='ExportAllDeclaration' ? !s.exported || exported(s.exported)==='grants'
-    : s.type==='ExportNamedDeclaration' && s.source && (s.specifiers ?? []).some(x=>x.exportKind!=='type' && exported(x.exported)==='grants')));
-  if (reexport) throw new Error(`app.ts: \`${code.slice(reexport.start,reexport.end).replace(/;$/,'')}\` may give the module its grants, and ${names.join(', ')} is marked "launch": true in app.json, whose env.launch line the bake adds to grants declared in app.ts: declare export const grants in app.ts`);
+  if (grants!==undefined && declaration) return code.slice(0,declaration.init.start)+value+code.slice(declaration.init.end);
   if (!topLevelNames(parsed.program.body).has('grants')) return `${code}\nexport const grants = ${value};\n`;
   // Beside the app's own `grants`, the bake's lines take a name of their own, exported as `grants`.
   let local='__exact_launch_grants';

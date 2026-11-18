@@ -5,6 +5,10 @@ use exact_kernel::{Kernel, NodeType};
 use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
 use exact_runner::{Answer, DataError, DataSource, InFlight, Request, Runner, Store, Value};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[derive(Default)]
 struct Data {
     /// Answer `request` with a continuation token rather than a plain request.
@@ -28,7 +32,7 @@ impl DataSource for Data {
             "open" => Answer::Now(Value::Bool(store.get("closed").is_none())),
             "request" if self.token => {
                 self.live.push(Some(1));
-                Answer::Later(Request::continuation(1))
+                Answer::Later(Request::continuation::<TestWork>(1))
             }
             "request" => {
                 self.live.push(None);

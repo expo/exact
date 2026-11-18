@@ -2,6 +2,9 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
+@testable import ExactNativeViews
 @testable import ExactSurfaces
 
 /// A virtualized list's retired row lends its views to the next row of its
@@ -489,7 +492,7 @@ final class NodePoolIOSTests: XCTestCase {
         let row = try XCTUnwrap(p.views[100]), list = try XCTUnwrap(p.views[102])
         let scroll = try XCTUnwrap(list.scroll)
         let card = try XCTUnwrap(p.views[110]), other = try XCTUnwrap(p.views[120])
-        XCTAssertFalse(p.collections.owns(102), "the inner list is not a collection")
+        XCTAssertFalse(p.listHost.owns(102), "the inner list is not a collection")
         scroll.contentOffset = CGPoint(x: 240, y: 0)
 
         p.apply(wireBatch([outer(200)] + destroy(carouselIDs(100)) + carouselOps(200, y: 140, kind: kind)

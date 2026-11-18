@@ -392,7 +392,7 @@ export const answer = async (name: string, args: string[][], _store: unknown, st
     expect(html).not.toContain('"revalidate":true');
     expect(lines.join('\n')).not.toMatch(/failed|structuredClone|dynamic import/);
     const api = language === 'Rust' ? 'storage request' : 'storage.fs.readFile()';
-    expect(lines.join('\n')).toContain(`resource prefs is pending: a page rendered on the server has no storage (${api})`);
+    expect(lines.join('\n')).toContain(`resource prefs is pending: ${api} needs the reader's device`);
     const direct = await render('/item/7', 30000);
     expect([direct.status, direct.settled, direct.failed]).toEqual([200, true, []]);
     // The reader's page adopts the document and asks the source, which now reads storage.

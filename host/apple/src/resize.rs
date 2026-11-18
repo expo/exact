@@ -169,11 +169,18 @@ impl<D: DataSource> Host<D> {
     }
 
     /// The SVG scenes, when the composition links SVG, and then the box
-    /// animations this batch owes.
+    /// animations this batch owes, when anything can move.
     pub(super) fn emit_svg(&mut self, batch: &mut Batch) {
         if let Some(scenes) = self.turn.svg {
             scenes(self, batch);
         }
+        if let Some(motion) = self.turn.motion {
+            (motion.turn)(self, batch);
+        }
+    }
+
+    /// [`crate::link::MotionLowering`]'s turn: the boxes' lowered animations.
+    pub(crate) fn emit_box_motion(&mut self, batch: &mut Batch) {
         self.svg
             .emit_boxes(self.runner.kernel(), &self.engine, batch);
     }

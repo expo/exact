@@ -70,8 +70,25 @@ fn anchored(records: &str) -> (ModelViewer, Vec<Value>) {
 }
 fn update(s: &mut ModelViewer, now: f64) {
     let mut h = std::mem::take(&mut s.hotspots);
-    h.update(s.model(), &s.arguments, &frame(now), s.generation);
+    h.update(s.model(), &s.arguments, &frame(now));
     s.hotspots = h;
+}
+
+#[test]
+fn a_pending_source_does_not_retest_the_unchanged_displayed_model() {
+    let (mut s, mut a) = anchored(r#"[[["label","Impeller","0m 0m 0m"]]]"#);
+    s.set_performance_reporting(true);
+    update(&mut s, 0.);
+    assert_eq!(s.hotspots.occlusion_updates, 1);
+    let opacity = s.placement_opacity(0);
+    a[0] = text("assets/replacement.glb");
+    s.bind(&a, None).unwrap();
+    update(&mut s, 0.);
+    assert_eq!(s.hotspots.occlusion_updates, 0);
+    assert_eq!(s.placement_opacity(0), opacity);
+    s.asset("replacement.glb", Ok(MESHOPT));
+    update(&mut s, 0.);
+    assert_eq!(s.hotspots.occlusion_updates, 1);
 }
 
 #[test]
@@ -187,7 +204,7 @@ fn hotspot_placements_track_the_camera_round_to_device_pixels_and_retire_childre
     let mut f = frame(0.);
     f.scale = 2.;
     let mut h = std::mem::take(&mut s.hotspots);
-    h.update(s.model(), &s.arguments, &f, s.generation);
+    h.update(s.model(), &s.arguments, &f);
     s.hotspots = h;
     let p = s.placement(0).unwrap();
     assert_eq!(p.homography, [1., 0., 220.5, 0., 1., 188.5, 0., 0., 1.]);
@@ -209,13 +226,19 @@ fn hotspot_placements_track_the_camera_round_to_device_pixels_and_retire_childre
 #[test]
 fn hotspot_occlusion_is_throttled_in_motion_and_refreshed_at_rest_and_after_reload() {
     let (mut s, _) = anchored(r#"[[["label","Assembly","1m 0m 0m","0 0 1"]]]"#);
+    s.set_performance_reporting(true);
     update(&mut s, 0.);
+    let first_ms = s.hotspots.occlusion_ms.expect("occlusion was measured");
+    assert_eq!(s.hotspots.occlusion_updates, 1);
+    assert_eq!(s.hotspots.occlusion_total_ms, first_ms);
     assert_eq!(s.placement_opacity(0), 1.);
     let x = s.placement(0).unwrap().homography[2];
     let m = s.model_mut().unwrap();
     m.camera.pose.theta = std::f32::consts::PI;
     m.camera.goal.theta = std::f32::consts::PI + 0.1;
     update(&mut s, 50.);
+    assert_eq!(s.hotspots.occlusion_ms, Some(first_ms));
+    assert_eq!(s.hotspots.occlusion_updates, 1);
     assert_ne!(
         s.placement(0).unwrap().homography[2],
         x,

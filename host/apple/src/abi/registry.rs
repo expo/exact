@@ -110,7 +110,7 @@ pub fn refuse(rt: u32, why: &str, busy: bool) -> u32 {
 pub fn refuse_agent(rt: u32, why: &str) -> u32 {
     REFUSAL.with(|r| {
         let mut r = r.borrow_mut();
-        *r = exact_runner::agent::error(&format!("runtime {rt}: {why}")).into_bytes();
+        *r = exact_runner::json::error(&format!("runtime {rt}: {why}")).into_bytes();
         r.len() as u32
     })
 }

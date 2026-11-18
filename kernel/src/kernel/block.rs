@@ -104,9 +104,11 @@ impl HostBlock {
 /// What the host clears of `slot`'s allocation for its content root, top
 /// right bottom left (@ref LLP 1123 D3): a content owner's incoming band,
 /// none of it on each edge whose container region the root takes (D4), and
-/// the root's reservations (D11). No band while it is unavailable, as
-/// UIKit gives a view outside a window zero safe-area insets; and nothing
-/// for a box that is no content owner.
+/// the root's reservations (D11), with the keyboard's occupancy under
+/// `resizes-content` covering the band and the additional inset where it is
+/// deeper and the padding stacked on it (D7). No band while it is
+/// unavailable, as UIKit gives a view outside a window zero safe-area
+/// insets; and nothing for a box that is no content owner.
 pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
     arena
         .blocks
@@ -122,7 +124,11 @@ fn cleared(arena: &NodeArena, held: &Held) -> [f32; 4] {
     let band = arena.observations.band(held.slot).unwrap_or([0.0; 4]);
     let taken = super::ignore::edges(arena, held.slot, SafeAreaIgnore::Container);
     let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
-    reservation::reserved(arena, held.slot).map_or(band, |r| r.inside(band))
+    let cover = super::keyboard::cover(arena, held.slot);
+    match reservation::reserved(arena, held.slot) {
+        Some(r) => r.inside_covered(band, cover),
+        None => std::array::from_fn(|e| band[e].max(cover[e])),
+    }
 }
 
 /// Whether `slot` is a content owner's root: a box its host gave a block

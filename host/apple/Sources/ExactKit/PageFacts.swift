@@ -18,10 +18,10 @@
 // person sees, not Exact's text at 17 points among controls at 53.
 #if os(macOS)
 import AppKit
-typealias FocusWindow = NSWindow
+package typealias FocusWindow = NSWindow
 #else
 import UIKit
-typealias FocusWindow = UIWindow
+package typealias FocusWindow = UIWindow
 #endif
 import Network
 
@@ -98,7 +98,7 @@ package enum PageFacts {
     /// `isVisible` is false for a minimized window). A window behind another
     /// is visible. A window not yet shown counts for nothing, so a page boots
     /// visible, as a browser's does.
-    static var hidden: Bool {
+    static package var hidden: Bool {
         // The drive can hide the page (`prefer visibility-state hidden`); it
         // cannot make a page visible that the system has put away. A real
         // background (the touch runner's Home, a system sheet over the
@@ -208,13 +208,13 @@ package enum PageFacts {
         #endif
     }
 
-    static var onLine: Bool {
+    static package var onLine: Bool {
         if substituted { return agent.onLine }
         startMonitor()
         return satisfied
     }
     /// `onLine` as last read, starting no monitor: online until something reads it.
-    static var lastOnLine: Bool { substituted ? agent.onLine : satisfied }
+    static package var lastOnLine: Bool { substituted ? agent.onLine : satisfied }
     /// Both Apple platforms have a share sheet.
     static var canShare: Bool { substituted ? agent.canShare : true }
     /// iOS's and the Mac's sheets take file URLs and a node's picture
@@ -318,7 +318,7 @@ package enum PageFacts {
     static var frozen: Bool {
         if substituted { return agent.frozen }
         #if os(iOS) || os(tvOS)
-        return AppBackground.now && !AudioSession.backgroundExecutionEligible()
+        return AppBackground.now && !(MediaLink.audioSession?.backgroundExecutionEligible() ?? false)
         #else
         return false
         #endif
@@ -354,7 +354,7 @@ package enum PageFacts {
 
     /// Calls `changed` on the main queue when any reading may have changed;
     /// the caller holds the tokens and removes them.
-    static func observe(_ changed: @escaping () -> Void) -> [NSObjectProtocol] {
+    static package func observe(_ changed: @escaping () -> Void) -> [NSObjectProtocol] {
         #if os(macOS)
         // Visibility: hiding, occlusion, and a minimize or restore, which
         // need not change the occlusion. Focus (#114): any window's key change
@@ -386,7 +386,7 @@ package enum PageFacts {
             }
         }
     }
-    static func forget(_ tokens: [NSObjectProtocol]) {
+    static package func forget(_ tokens: [NSObjectProtocol]) {
         tokens.forEach(NotificationCenter.default.removeObserver)
     }
 }
@@ -467,7 +467,7 @@ package enum AppBackground {
         case UIApplication.didEnterBackgroundNotification:
             guard cached != true else { return }
             cached = true
-            AudioSession.enteredBackground()
+            MediaLink.audioSession?.enteredBackground()
         case UIApplication.willEnterForegroundNotification, UIApplication.didBecomeActiveNotification: cached = false
         default: break
         }

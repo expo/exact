@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 extension PopoverSheetIOSTests {
     func page(session: ExactSession? = nil) throws -> Presenter {

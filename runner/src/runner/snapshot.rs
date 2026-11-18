@@ -70,7 +70,7 @@ impl<D: DataSource> Runner<D> {
                             return Err(format!("refresh {name} returned a value outside its declared timeline type"));
                         }
                         let mut json = String::new();
-                        crate::agent::typed_json(&self.plan, ty, &value, &mut json);
+                        crate::json::typed_json(&self.plan, ty, &value, &mut json);
                         return Ok(json);
                     }
                     Answer::Later(request) => {

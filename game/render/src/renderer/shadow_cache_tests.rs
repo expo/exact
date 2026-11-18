@@ -199,6 +199,7 @@ fn look(
         None,
         Default::default(),
         &Default::default(),
+        None,
     )
     .unwrap();
     let records = r.probe.as_ref().unwrap().records.take();
@@ -368,6 +369,7 @@ fn look_preserves_unbuilt_invalid_and_incompatible_caches() {
         None,
         Default::default(),
         &Default::default(),
+        None,
     )
     .unwrap();
     drop(encoder);
@@ -539,6 +541,7 @@ fn cached_casters_match_redrawing_after_scene_changes() {
         None,
         Default::default(),
         &Default::default(),
+        None,
     )
     .unwrap();
     assert!(!r.shadows.as_ref().unwrap().cached.as_ref().unwrap().valid);

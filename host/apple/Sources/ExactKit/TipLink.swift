@@ -88,7 +88,7 @@ extension Presenter {
     /// holds and `--reset-storage` forgets the tips too.
     private func tipStore() -> URL? {
         guard ExactEnv.agentMode, let session else { return nil }
-        let data = URL(fileURLWithPath: NativeViews.roots(session: session).data, isDirectory: true)
+        let data = URL(fileURLWithPath: AppRoots.of(session: session).data, isDirectory: true)
         return data.deletingLastPathComponent().appendingPathComponent("tips", isDirectory: true)
     }
 

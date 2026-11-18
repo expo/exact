@@ -23,6 +23,9 @@ if (import.meta.main) await proof(import.meta, async ({pin, pinSave, open, check
     check('the reeds sway between two ticks of a still simulation',!Buffer.from(early.data).equals(Buffer.from(late.data)));
     const hooks=(await s.state()).world[0].renderHooks;
     check(`the generated GPU module carries the game's render hooks (${JSON.stringify(hooks?.stages)})`,!!hooks);
+    const frame=hooks?.frame;
+    check('the hook frame report peaks at one sky draw of one triangle and a 16-byte upload',frame?.draws?.max===1&&frame.draws.count>0&&frame.triangles?.max===1&&frame.uploadBytes?.max===16,frame);
+    check('the hook frame report names its item unit',frame?.items==='items',frame?.items);
   }
   const endSave=resolve(out,'wind-300.world');await w.save(endSave);pinSave('continuation',endSave);await s.close();
   const restored=await start(save),rw=restored.world('world');

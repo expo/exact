@@ -15,7 +15,7 @@ pub(super) struct RenderCheckpoint {
     rows: crate::instance::RowWrites,
     notes: Vec<String>,
     renewed: Vec<ViewId>,
-    shown: crate::instance::collection::shown::RowsShown,
+    shown: crate::list_api::RowsShown,
     deferred_edges: Vec<(u32, Vec<Target>)>,
     held_edges: Vec<u32>,
 }

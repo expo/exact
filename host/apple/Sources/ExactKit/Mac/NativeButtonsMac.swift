@@ -327,7 +327,7 @@ final class NativeButtonMac: NSButton {
 
 extension NodeView {
     /// A `button appearance="auto"` (LLP 1069.011 D3).
-    var isNativeButton: Bool { kind == "control" && props["type"] == "button" }
+    package var isNativeButton: Bool { kind == "control" && props["type"] == "button" }
 
     /// Where a native control sits: the isolation container's content when
     /// the glass-group pass made one (D9), else the node.

@@ -132,6 +132,8 @@ fn compat(args: &[String]) -> ExitCode {
             None,
             None,
             &settings,
+            // Outside a build no linked set is named, which host work selects into.
+            false,
         )
     });
     match result {

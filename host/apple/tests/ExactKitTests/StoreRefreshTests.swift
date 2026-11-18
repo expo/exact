@@ -1,6 +1,7 @@
 import XCTest
 import ExactCore
 @testable import ExactKit
+@testable import ExactCollections
 #if canImport(UIKit)
 import UIKit
 #else
@@ -234,7 +235,7 @@ final class StoreRefreshTests: XCTestCase {
         // The real collection feedback starts an owner slice; its waiter is
         // cancelled synchronously when the window is destroyed.
         let node = try XCTUnwrap(destroyed.presenter.views.values.first)
-        destroyed.presenter.collections.onFill?(node.id, Data())
+        destroyed.presenter.listHost.onFill?(node.id, Data())
         XCTAssertTrue(destroyed.fillInFlight)
         let released = expectation(description: "destroying a queued reader releases the reload")
         destroyed.refreshSharedStore { _ in released.fulfill() }

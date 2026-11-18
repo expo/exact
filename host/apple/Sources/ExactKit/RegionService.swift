@@ -1,21 +1,7 @@
 // One active job, one replaceable latest request, one completion awaiting UI.
 // No CTLine/CTTypesetter crosses this queue. Immutable glyph/caret values do.
+import CExact
 import Foundation
-
-/// The existing raster workers also execute region preparation. Per-region
-/// dependencies preserve CoreText confinement without a second worker pool.
-enum RegionTextExecutor {
-    static let queue: OperationQueue = {
-        let q = OperationQueue()
-        q.name = "exact.text"; q.qualityOfService = .userInitiated
-        #if os(iOS) || os(tvOS)
-        q.maxConcurrentOperationCount = TextRasterizer.concurrency
-        #else
-        q.maxConcurrentOperationCount = 2
-        #endif
-        return q
-    }()
-}
 
 final class RegionArtifact: Sendable {
     let id: UInt64
@@ -286,4 +272,22 @@ final class RegionServiceLifetime {
     }
     func reset() { service.reset() }
     deinit { service.close() }
+}
+
+/// A region's artifact told to the runtime, and its fallback.
+extension Runtime {
+    func regionComplete(_ artifact: RegionArtifact) -> Batch {
+        return on {
+            let p = artifact.metadata
+            let retained = Unmanaged.passRetained(artifact).toOpaque()
+            return read(exact_region_complete(rt, artifact.id,
+                ExactMetrics(width: Float(p.width), height: Float(p.height), baseline: Float(p.firstBaseline)),
+                retained, { pointer in
+                    if let pointer { Unmanaged<RegionArtifact>.fromOpaque(pointer).release() }
+                }))
+        }
+    }
+    func regionFallback(_ request: UInt64) -> Batch {
+        on { read(exact_region_fallback(rt, request)) }
+    }
 }

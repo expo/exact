@@ -96,11 +96,11 @@ final class SaveTextTests: XCTestCase {
         export("plain/file.txt")
         XCTAssertEqual(try Data(contentsOf: destination), bytes)
         try files.removeItem(at: destination)
-        let opened = try XCTUnwrap(session.picker.appFile("app:/tmp/\(name)/plain/file.txt"))
+        let opened = try XCTUnwrap(session.pickerHost.appFile("app:/tmp/\(name)/plain/file.txt"))
         let original = dir.appendingPathComponent("plain/file.txt")
         try files.removeItem(at: original)
         try files.createSymbolicLink(at: original, withDestinationURL: outside.appendingPathComponent("file.txt"))
-        session.picker.copyOut(view: view, file: opened, to: destination)
+        session.pickerHost.copyOut(view: view, file: opened, to: destination)
         XCTAssertEqual(try Data(contentsOf: destination), bytes, "the file opened before the panel showed")
         try files.removeItem(at: destination)
         try files.removeItem(at: original)
@@ -136,10 +136,10 @@ final class SaveTextTests: XCTestCase {
         let session = try booted()
         let before = scratch()
         save(session)
-        let staged = session.picker.exports.values.map(\.1)
+        let staged = session.pickerHost.exports.values.map(\.1)
         defer {
             staged.forEach { try? FileManager.default.removeItem(at: $0) }
-            session.picker.exports.removeAll()
+            session.pickerHost.exports.removeAll()
             window?.rootViewController?.presentedViewController?.dismiss(animated: false)
         }
         XCTAssertEqual(staged.count, 1, "the exporting picker is shown: \(session.agent(#"{"op":"logs"}"#))")

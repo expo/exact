@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
+@testable import ExactNativeViews
 
 /// LLP 1075.003 Stage 2 over the native fixture's tabs: Exact's
 /// `UITabBarController`, one controller per tab, items from the authored
@@ -76,7 +78,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         view.frame = host.view.bounds
         view.layoutIfNeeded()
         if module {
-            session.natives.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"], "build.mjs --test --ios builds the fixture's module"))
+            session.nativeViews!.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"], "build.mjs --test --ios builds the fixture's module"))
         }
         until("root tab container and selected stack are ready") {
             let navigation = session.presenter.navigation
@@ -734,6 +736,8 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         let second = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         XCTAssertEqual(home.viewControllers.count, 2, "Home's stack is kept")
+        waitForMainQueue("Second's first title layout")
+        waitFor("Second settles before editing") { !Agent(session: session).nativeInFlight() }
         // A change made while Home is hidden shows when it is selected.
         XCTAssertNil(second.tabBarItem.badgeValue, "no badge box, no badge")
         try tapNode(session, "bump-second")
@@ -1174,36 +1178,32 @@ final class NavigationTabsIOSTests: XCTestCase {
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
         tapTab(tabs, 1)
         XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
-        spin(0.3)
         let nav = try XCTUnwrap(tabs.tabControllers?[1] as? UINavigationController)
         // UIKit shows no large title where it places a vertical bar: the iPhone Duo upright or closed
         // holds a 28-point title in a fixed 58-point bar
         let large = !nav.traitCollection.placesVerticalBar
         let list = try node(session, "list-second"), sv = try XCTUnwrap(list.scroll)
         let css = { sv.contentOffset.y + sv.adjustedContentInset.top }
-        let expanded = nav.navigationBar.frame.height
+        if large { waitFor("the large title opens") { self.showsLargeTitle(nav) } }
         list.pendingScrollTop = 600
         list.applyPendingScroll()
-        spin(0.3)
-        XCTAssertEqual(css(), 600, accuracy: 0.5, "scrolled down")
-        if large {
-            XCTAssertLessThan(nav.navigationBar.frame.height, expanded, "the large title collapsed")
-        } else {
-            XCTAssertEqual(nav.navigationBar.frame.height, expanded, accuracy: 0.5, "the bar kept its height")
+        waitFor("the content scrolls down and the large title collapses") {
+            abs(css() - 600) < 0.5 && !self.showsLargeTitle(nav) && !Agent(session: session).nativeInFlight()
         }
         // The other tab, then back: selecting a tab keeps its scroll.
         tapTab(tabs, 0)
         XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
         tapTab(tabs, 1)
         XCTAssertEqual(tabs.selectedIndex, 1, "Second selected again")
-        spin(0.3)
+        waitFor("the returning tab settles") { !Agent(session: session).nativeInFlight() }
         XCTAssertEqual(css(), 600, accuracy: 0.5, "a tab selected from another keeps its place")
+        XCTAssertFalse(showsLargeTitle(nav), "the returning scrolled tab keeps its inline title")
         // The selected tab, tapped again at its root.
         tapTab(tabs, 1)
-        until("its content scrolled to the top") { abs(css()) < 0.5 && !sv.isDecelerating }
-        spin(0.5)
+        waitFor("the content returns to the top and the large title opens") {
+            abs(css()) < 0.5 && !sv.isDecelerating && !Agent(session: session).nativeInFlight() && (!large || self.showsLargeTitle(nav))
+        }
         XCTAssertEqual(css(), 0, accuracy: 0.5)
-        XCTAssertEqual(nav.navigationBar.frame.height, expanded, accuracy: 0.5, large ? "and the large title expanded" : "and the bar kept its height")
         XCTAssertEqual(nav.viewControllers.count, 1)
     }
 
@@ -1228,7 +1228,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         // Unanimated, as under the agent's clock: whether the scroll runs is decided before it starts
         p.navigation.scrollsToTopAnimated = false
         let feed = { p.views.values.first { $0.props["testId"] == "feed" && $0.window != nil } }
-        let offset = { feed().flatMap { p.collections.geometry($0.id)?.offset } ?? .nan }
+        let offset = { feed().flatMap { p.listHost.geometry($0.id)?.offset } ?? .nan }
         func scroll(to y: Double) throws {
             let sv = try XCTUnwrap(feed()?.scroll)
             sv.setContentOffset(CGPoint(x: 0, y: CGFloat(y) - sv.adjustedContentInset.top), animated: false)
@@ -1356,7 +1356,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         until("the app's container holds the tabs") { navigation.tabController == nil && navigation.tabOwner != nil }
         try tapNode(session, "detail")
         until("Detail is shown") { navigation.primaryNavigation?.viewControllers.count == 2 }
-        let (anchor, rect) = session.presenter.shareAnchor(nil)
+        let (anchor, rect) = session.presenter.presentationAnchor(nil)
         let sheet = try XCTUnwrap(ShareSheet.present(["Workout"], title: "Workout", from: XCTUnwrap(anchor), at: rect, outcome: { _ in }) as? UIActivityViewController)
         defer { sheet.dismiss(animated: false) }
         until("the share sheet is presented over the app's tabs") { sheet.presentingViewController != nil && sheet.viewIfLoaded?.window != nil }

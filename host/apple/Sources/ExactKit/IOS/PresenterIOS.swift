@@ -83,8 +83,8 @@ package final class Presenter {
     lazy var focusEvents = FocusEvents(self)
     /// Views leaving with their exit, by id (LLP 1063, `PresenceIOS.swift`).
     var leaving: [UInt32: Leaving] = [:]
-    /// Shared elements in flight, by the arriver's id (LLP 1013.000, `FlightsIOS.swift`).
-    var flights: [UInt32: Flight] = [:]
+    /// The shared elements in flight (LLP 1013.000, `FlightLink`).
+    package lazy var flightHost: any FlightHosting = FlightLink.make?(self) ?? NoFlights()
     private(set) var chrome = ChromeIndex()
     var listRowDependencies: ListRowDependencies?
     #if DEBUG
@@ -101,7 +101,7 @@ package final class Presenter {
         view.relook()
     }
     package func carrying(_ key: String) -> [NodeView] { chrome.ids(key).sorted().compactMap { views[$0] } }
-    func takeChangedNames() -> Set<String> { chrome.takeChangedNames() }
+    package func takeChangedNames() -> Set<String> { chrome.takeChangedNames() }
     var scrollers: Set<UInt32> = []
     var pendingScrolls: Set<UInt32> = []
     /// The batch's suppression triggers for scroll anchoring (`ScrollAnchoring.swift`).
@@ -128,29 +128,30 @@ package final class Presenter {
         guard fixedGradients.count > 0 else { return }
         for node in fixedGradients.allObjects where node.window != nil { node.reaimFixedGradient() }
     }
-    var videoVisibility: VideoVisibilityHost?
-    lazy package var collections = CollectionHost(self)
-    lazy var stickies = StickyHost(self)
+    package var videoVisibility: VideoVisibilityHost?
+    lazy package var collections: any ListHosting = ListLink.make?(self) ?? NoLists()
+    lazy var stickies: any StickyHosting = StickyLink.make?(self) ?? NoStickies()
     let tableGrid = TableGrid()
     lazy var pool = NodePool(self)
     /// Heavy leaves held mid-fling (LLP 1068 §5.1).
     lazy var leaves = HeavyLeaves(self)
     lazy var flats = FlatLeaves(self)
     /// The native swipe rows (LLP 1008 §9), a grouped list's included.
-    package lazy var swipeActions = SwipeActionsHost(self); lazy var rowCells = RowCells(self)
+    package lazy var swipeActions: any SwipeActionsHosting = SwipeActionsLink.make?(self) ?? NoSwipeActions()
+    lazy var rowCells: any RowCellsHosting = SwipeActionsLink.makeRowCells?(self) ?? NoRowCells()
     lazy var accent = AppAccent(self)
     /// The native menu arm (LLP 1021 D3).
     lazy var menus = MenuHost(presenter: self)
     /// The `input`s the batch being applied makes in a closed box (`MenuHost.waitingFields`).
     var fieldsWaiting = Set<UInt32>()
     lazy var keyboardToolbars = KeyboardToolbars(self)
-    lazy var segments = SegmentHost(self)
+    lazy var segments: any SegmentHosting = ControlLink.makeSegments?(self) ?? NoSegments()
     /// Present only when the composition links them (LLP 1047.001 D4).
     package lazy var groupedLists: GroupedLists? = GroupedListsLink.make?(self)
     lazy var controls = ControlHost(self)
     lazy var fieldSelections = FieldSelections(self)
     /// Nodes marked `hatch="word"` (LLP 1075.003.000).
-    lazy var elements = ElementHatches(self)
+    package internal(set) lazy var elements: any ElementHatching = NativeModuleLink.makeElements?(self) ?? NoElementHatches()
     lazy var navigation = NavigationHost(presenter: self)
     #if os(tvOS)
     lazy var menuKey = MenuKey(presenter: self)
@@ -180,7 +181,7 @@ package final class Presenter {
     let boxAnimations = BoxAnimations()
     /// Boxes under CSS `filter`, drawn again after each batch (LLP 1055.000 D14).
     let boxFilters = BoxFilterLink.makeSet?()
-    let canvas2d: Canvas2DCanvases = SurfacesLink.installed?.canvas2D() ?? NoCanvas2D()
+    package let canvas2d: Canvas2DCanvases = SurfacesLink.installed?.canvas2D() ?? NoCanvas2D()
     /// The input being edited, if any (UIKit exposes no first responder):
     /// what a canvas painted through its surface captures every frame for
     /// (LLP 1014 D4 d), and what the keyboard reveals.
@@ -338,7 +339,7 @@ package final class Presenter {
     /// it again — the old picture stays until the new one is decoded, as a
     /// browser keeps the old `src`.
     func assetChanged(_ name: String) {
-        session?.rasters.invalidate(name)
+        session?.rasters?.invalidate(name)
         for v in views.values where v.kind == "image" && v.imageSource == name { v.loadImage(name) }
     }
 
@@ -348,17 +349,17 @@ package final class Presenter {
         listRowDependencies = nil
         resetFragments()
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
-        WakeLock.hold(self, false) // the new host's first batch says it again
+        WakeLockLink.hold?(self, false) // the new host's first batch says it again
         releaseOrientationLock()
         focusEvents.reset(); TipLink.installed?.withdraw(owner: self)
         // Every hatched node ends first, its view and platform object there.
         elements.reset()
-        resetFlights()
+        flightHost.reset()
         canvasKey = nil
         session?.transformInputHold?.cancel()
         reorder?.abandon()
         reorderGroup?.abandon()
-        session?.rasters.reset()
+        session?.rasters?.reset()
         collections.reset(); elementScrolls.cancelAll()
         autofocusProcessed.removeAll()
         segments.reset()
@@ -418,7 +419,7 @@ package final class Presenter {
     var onPress, onClose, onCancel: ((UInt32) -> Void)?
     var onChange: ((UInt32, String) -> Void)?
     /// Host intrinsic sizes, several at once under one layout.
-    var onIntrinsic: (([(UInt32, CGSize?)]) -> Void)?
+    package internal(set) var onIntrinsic: (([(UInt32, CGSize?)]) -> Void)?
     /// A capability an action called (LLP 1005 §3), after its commit.
     var onCommand: ((String, [Any], UInt32?) -> Void)?
     /// A `key` handler called `preventDefault()` (`keyDown(at:_:)`, KeyEvents.swift).
@@ -649,7 +650,7 @@ package final class Presenter {
     /// A scroller (nil: the page) moved, handler or not: `frame()` reads
     /// boxes where the viewer sees them (LLP 1051.000 D1).
     var onScrolled: ((UInt32?, Double, Double) -> Void)?
-    var listViews: [UInt32: NodeView] = [:]
+    package var listViews: [UInt32: NodeView] = [:]
     var textViews: [UInt32: NodeView] = [:] { didSet { NodeView.textGeometry &+= 1 } }
     /// Attached paragraphs that use a raster and lack it whole. Direct drawing owes no raster work.
     var owedText: Set<UInt32> = []
@@ -691,7 +692,7 @@ package final class Presenter {
         dispatchPressHandler(id, from: original)
         if let original, views[id] === original { menus.invoke(original, bubbled: bubbled) }
     }
-    func change(_ id: UInt32, _ value: String) { send(id) { [self] in onChange?(id, value) } }
+    package func change(_ id: UInt32, _ value: String) { send(id) { [self] in onChange?(id, value) } }
     /// A text field typed into since it took the focus: its `change` fires
     /// when the editing ends or Enter commits it, HTML's `change` (LLP
     /// 1069.001 D4); every keystroke is its `input`.
@@ -731,7 +732,7 @@ package final class Presenter {
     /// window; the browser fires no blur on removal, so neither does this
     /// host), and never while a batch is being applied — it waits for the
     /// batch to finish, then goes if its view survived it.
-    private(set) var applying = false
+    private(set) package var applying = false
     private var waiting: [(UInt32?, () -> Void)] = []
     /// Paragraphs whose presented colour a batch changed, painted as it ends.
     var presentedText: Set<UInt32> = []
@@ -747,7 +748,7 @@ package final class Presenter {
         guard textHost(id) != nil else { return }
         if applying { waiting.append((id, f)) } else { navigation.finishBootOwner(); f() }
     }
-    func hover(_ view: NodeView, _ over: Bool) {
+    package func hover(_ view: NodeView, _ over: Bool) {
         if over { hoverInline(nil) }
         guard views[view.id] === view else { return }
         if over {
@@ -759,7 +760,7 @@ package final class Presenter {
             send(view.id) { [self] in onHover?(view.id, false) }
         }
     }
-    func key(_ id: UInt32, _ press: KeyPress) { send(id) { [self] in onKey?(id, press) } }
+    package func key(_ id: UInt32, _ press: KeyPress) { send(id) { [self] in onKey?(id, press) } }
     func clipboard(_ id: UInt32, _ kind: UInt32, _ text: String) { send(id) { [self] in onClipboard?(id, kind, text) } }
     func contextmenu(_ id: UInt32) { send(id) { [self] in onContextmenu?(id) } }
     /// A `contextmenu` with its point (studio diary R22): kind 10 and its line.
@@ -777,8 +778,8 @@ package final class Presenter {
     func scroll(_ id: UInt32, _ metrics: [Double]) { send(id) { [self] in onScroll?(id, metrics) } }
     func scrollend(_ id: UInt32) { send(id) { [self] in onScrollend?(id) } }
     func scrollDrag(_ id: UInt32, _ end: (velocity: CGPoint, target: CGPoint?)?) { send(id) { [self] in onScrollDrag?(id, end) } }
-    func submit(_ id: UInt32) { send(id) { [self] in onSubmit?(id) } }
-    func load(_ id: UInt32) { send(id) { [self] in onLoad?(id) } }
+    package func submit(_ id: UInt32) { send(id) { [self] in onSubmit?(id) } }
+    package func load(_ id: UInt32) { send(id) { [self] in onLoad?(id) } }
     package func message(_ id: UInt32, _ value: String) {
         guard let view = views[id], view.handlers.contains("message") else { return }
         send(id) { [weak self, weak view] in
@@ -911,7 +912,7 @@ package final class Presenter {
                 ApplyProfile.time("pass.text") { paintPresentedText() }
                 paintChangedText()
                 if let boxFilters, !boxFilters.isEmpty { boxFilters.render() }
-                refreshPixelatedImages()
+                ImageLink.pixelated?.refresh(in: self)
                 videoVisibility?.changed()
                 let q = waiting
                 waiting = []
@@ -1048,9 +1049,9 @@ package final class Presenter {
                 #endif
             case .flight:
                 if let from = (op.payload["from"] as? NSNumber)?.uint32Value, flats.isFlat(from) { flats.promote(from) }
-                beginFlight(op)
+                flightHost.begin(op)
             case .land:
-                if let f = flights[id] { landFlight(f) }
+                flightHost.land(id)
             case .rank:
                 if let rank = op.rank { flats.rank(id, rank) }
             case .layoutHits:
@@ -1082,7 +1083,7 @@ package final class Presenter {
                 elements.destroyed(id)
                 stickies.forget(id)
                 tableGrid.forget(id)
-                forgetFlight(id)
+                flightHost.forget(id)
                 if flats.isFlat(id) { flats.destroy(id); return }
                 if endExit(id) { return }
                 if let view = views[id] { glassGroups.depart(view) }
@@ -1102,7 +1103,7 @@ package final class Presenter {
                     return
                 }
                 if kind == .frame { pool.framed(id) }
-                if flightFrame(op) { return }
+                if flightHost.frame(op) { return }
                 if views[id] != nil { applyGeometry(op) }
             case .present:
                 if flats.isFlat(id) {
@@ -1118,7 +1119,7 @@ package final class Presenter {
                 case "scale": v.scale = x; v.applyTransform()
                 case "rotate": v.rotate = x; v.rotationAxis = [op.y, op.w, op.h]; v.applyTransform()
                 case "opacity": v.presentOpacity(x)
-                case "flight": presentFlight(id, x)
+                case "flight": flightHost.present(id, x)
                 default: break
                 }
             default: menus.sheets.applied(op); owners.applied(op)
@@ -1189,7 +1190,7 @@ package final class Presenter {
         groupedLists?.sync(changed: changed)
         if rowFill, pageGeometryOwed || listRowDependencies?.scrollers != scrollers { rowFill = false }
         if !rowFill { pageGeometryOwed = false; reachPageEdges() } // a list mounted now reaches its bands too
-        if !flights.isEmpty { flightsBatchApplied() }
+        if !flightHost.isEmpty { flightHost.batchApplied() }
         #if os(tvOS)
         menuKey.sync()
         playPauseKey.sync()
@@ -1242,9 +1243,10 @@ package final class Presenter {
 
     /// Everything kept for `id` goes, the view out of the map (not out of
     /// the window): `leaving` forgets it (a destroy) or recycles it (a
-    /// parked row, `NodePool`).
+    /// parked row, `NodePool`). An `exiting` view stays to play its exit
+    /// (LLP 1063), so its `svg` scene stays drawn until `endExit`.
     @discardableResult
-    func release(_ id: UInt32, _ leaving: (NodeView) -> Void) -> NodeView? {
+    func release(_ id: UInt32, exiting: Bool = false, _ leaving: (NodeView) -> Void) -> NodeView? {
         #if os(iOS)
         if #available(iOS 27.1, *) { arrangements.remove(id) }
         #endif
@@ -1252,7 +1254,8 @@ package final class Presenter {
         listRowDependencies?.rowOwners.removeValue(forKey: id)
         focusEvents.removed(id)
         session?.canvases.destroy(view: id)
-        svg?.forget(id); boxAnimations.forget(id)
+        if !exiting { svg?.forget(id) }
+        boxAnimations.forget(id)
         canvas2d.forget(id)
         if let view = views[id] { autofocusProcessed.remove(ObjectIdentifier(view)); leaving(view) }
         listViews.removeValue(forKey: id)
@@ -1297,7 +1300,7 @@ package final class Presenter {
             #endif
             return false
         }
-        let contained = NodeView.keepingGhosts(want.filter { !heldByArrangement($0) && !navigation.ownsContainment(of: $0, under: parent) && !menus.lifted($0) && !isFlying($0) }, in: container)
+        let contained = NodeView.keepingGhosts(want.filter { !heldByArrangement($0) && !navigation.ownsContainment(of: $0, under: parent) && !menus.lifted($0) && !flightHost.isFlying($0) }, in: container)
         // Keep paragraph coverage below authored children when UIKit owns its view
         let text = parent.specs?.rasterView
         let offset = text?.superview === container ? 1 : 0

@@ -133,21 +133,21 @@ import XCTest
             "content": UInt32(2), "pending": UInt32(4), "request": "0", "source": "1", "publication": "0",
             "current": true, "frames": [[String: Any]](), "members": [UInt32(2), UInt32(3)]]],
             timers: false, motion: false, clock: nil, error: nil))
-        XCTAssertTrue(session.regions.owns(node))
+        XCTAssertTrue(session.regionHost.owns(node))
         apply([["op": "region", "disabled": "incomplete text flow uses native layout"]])
-        XCTAssertFalse(session.regions.owns(node))
-        XCTAssertNil(session.regions.failure)
+        XCTAssertFalse(session.regionHost.owns(node))
+        XCTAssertNil(session.regionHost.failure)
         let ordinary = try XCTUnwrap(node.paragraphLayout())
         XCTAssertTrue(ordinary.flowIncomplete)
         XCTAssertFalse(ordinary.lines.isEmpty)
         apply([["op": "flow", "id": 3, "shapes": [["kind": "Circle", "cx": 180, "cy": 60, "r": 20]]]])
         XCTAssertFalse(try XCTUnwrap(node.paragraphLayout()).flowIncomplete)
-        XCTAssertFalse(session.regions.owns(node))
+        XCTAssertFalse(session.regionHost.owns(node))
     }
     func testOrdinaryBatchesStillAllowRegionRegistrationRefusalAndRetirement() {
         let session = ExactApp.shared.makeSession(label: "region-registration")
         defer { session.destroy() }
-        let controller = session.regions
+        let controller = session.regionHost
         func prepare(_ ops: [[String: Any]], error: String? = nil) {
             controller.prepare(batchFixture(ops: ops, timers: false, motion: false, clock: nil, error: error))
         }

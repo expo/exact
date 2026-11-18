@@ -1702,3 +1702,25 @@ pass timing plus per-view counts for hookless armed canvases. Hookless games
 compiled timing out before. Projecting the lighting's SH over the cube's texels,
 instead of a θ/φ grid, kept libm's `sinf`/`cosf`/`rem_pio2_large` out of the
 module and saved 5,803 bytes. The 550–650 KB target stays unmet.
+
+## Terrain fixture live run
+
+An armed live-clock window on `game/games/terrain-fixture` after its terrain presented
+(LLP 1182.000 D4a). The smoke configuration has lighting, edits and blending off.
+The web row is a sanity reading from the agent's headless Chrome. Each row is one 5 s window of `perf frames live 5000` at 1280 × 720, scale 1, one
+sample, `Quality::High`.
+
+| Renderer | Commit | Device | OS | Build profile | Refresh | Frame interval | Encode | Hook `prepare` | Draws, triangles a frame | Forward pass (GPU) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Chrome 158 on WebGPU, headless | `88076cf40` and the fixture | Mac Studio, Apple M5 Ultra | macOS 27.2.1 | `web` (optimized) | 60 Hz (16.6 ms period) | p50 17.2 ms, p95 21.8 ms | p50 0.8 ms, p95 0.9 ms | under 0.1 ms | 823, 213,232 | p50 0.11 ms, p95 0.12 ms |
+| Metal | not run | | | | | | | | | |
+
+The web row's adapter is not named in `state`; timestamp queries were available and the forward
+pass is the query's reading. All 2,312 section addresses were meshed before this window opened. Its frames
+uploaded no terrain bytes.
+
+## Terrain decision workload
+
+The fixture's [benchmark runner](../games/terrain-fixture/README.md#decision-workload)
+records the switches, host metadata, mount observations and three live windows
+for LLP 1182.000 D4b. Its rows carry the uncalibrated label.

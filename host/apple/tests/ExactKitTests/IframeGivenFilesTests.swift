@@ -275,7 +275,7 @@ final class IframeGivenFilesTests: XCTestCase {
         #endif
         let made = try (0..<count).map { n -> (ExactSession, NodeView) in
             let session = ExactApp.shared.makeSession(label: "given-files-\(n)")
-            session.webviews.moduleLocation = { module }
+            session.webHost.moduleLocation = { module }
             XCTAssertNil(session.boot(plan: try fixturePlan("WEB_DOCUMENTS"), size: CGSize(width: 300, height: 200)).error)
             return (session, try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "pdf" }))
         }

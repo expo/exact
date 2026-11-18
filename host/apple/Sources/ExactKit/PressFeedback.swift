@@ -299,7 +299,7 @@ extension NodeView {
         defer { refreshPressTranslation() }
         defer { overflowClipGeometryChanged() }
         let before = layer.transform
-        defer { if !CATransform3DEqualToTransform(before, layer.transform) { refreshPixelatedImages() } }
+        defer { if !CATransform3DEqualToTransform(before, layer.transform) { ImageLink.pixelated?.refresh(under: self) } }
         // Flying scaled whole in its clip (LLP 1013.000 D4.4): the
         // flight's scale only.
         if flightLook != nil { stopPressEase() }
@@ -390,7 +390,7 @@ extension NodeView {
         defer { refreshPressTranslation() }
         defer { overflowClipGeometryChanged() }
         let before = layer?.transform ?? CATransform3DIdentity
-        defer { if !CATransform3DEqualToTransform(before, layer?.transform ?? CATransform3DIdentity) { refreshPixelatedImages() } }
+        defer { if !CATransform3DEqualToTransform(before, layer?.transform ?? CATransform3DIdentity) { ImageLink.pixelated?.refresh(under: self) } }
         // A backdrop mirrors its box as the transform moves and scales it.
         defer { if !backdropOperations.isEmpty { applyBackdrop() } }
         // A frame's web view takes its scale by geometry (`FrameScaleMac.swift`).
@@ -477,7 +477,7 @@ extension NodeView {
     /// (the author paints its pressed state), and not a scrim covering the
     /// window (a backdrop that closes a sheet shows nothing in UIKit). A
     /// native button is UIKit's own and never comes here.
-    var platformPressDims: Bool {
+    package var platformPressDims: Bool {
         guard !authorsPress, !isNativeButton, !isSurfaceControl,
               handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress,
               !handlers.contains("pointerdown"), !handlers.contains("pointerup") else { return false }
@@ -500,7 +500,7 @@ extension NodeView {
     }
 
     /// Dim (`down`) or fade back. `instantly` drops it without the fade.
-    func dimPress(_ down: Bool, instantly: Bool = false) {
+    package func dimPress(_ down: Bool, instantly: Bool = false) {
         let key = "pressDim"
         let now = CACurrentMediaTime()
         if down {

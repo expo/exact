@@ -7,7 +7,7 @@ extension ExactSession {
     /// the pages they leave.
     func rest() {
         runtime.trim()
-        rasters.trimCold()
+        rasters?.trimCold(keeping: nil)
         text.dropColdShaped()
         if let m = text.measurer { Owner.shared.post { m.dropColdShaped() } }
         #if os(iOS) || os(tvOS)

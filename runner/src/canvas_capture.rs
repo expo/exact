@@ -148,14 +148,14 @@ impl CanvasCapture {
             *state = CaptureState::Answered;
         }
         let mut body = String::from("{\"path\":");
-        crate::agent::quote(&self.path, &mut body);
+        crate::json::quote(&self.path, &mut body);
         body.push_str(&format!(
             ",\"width\":{},\"height\":{},\"scale\":{},\"type\":",
             self.width,
             self.height,
-            crate::agent::num(self.scale)
+            crate::json::num(self.scale)
         ));
-        crate::agent::quote(media_type, &mut body);
+        crate::json::quote(media_type, &mut body);
         body.push('}');
         json(200, body)
     }
@@ -420,9 +420,9 @@ pub fn media_type_of(image: &[u8]) -> Option<&'static str> {
 /// A refusal: `name` a DOM exception's, `message` the reason.
 pub fn refused(name: &str, message: &str) -> Outcome {
     let mut body = String::from("{\"name\":");
-    crate::agent::quote(name, &mut body);
+    crate::json::quote(name, &mut body);
     body.push_str(",\"message\":");
-    crate::agent::quote(message, &mut body);
+    crate::json::quote(message, &mut body);
     body.push('}');
     json(400, body)
 }

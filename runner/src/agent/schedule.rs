@@ -1,7 +1,7 @@
 //! The agent's view of what is scheduled (LLP 1092 D10): each task's next
 //! due time (`null` while idle or spent) and each queue's waiting sends.
 
-use super::{num, quote};
+use crate::json::{num, quote};
 use crate::runner::{DataSource, Runner};
 
 /// `"queued":{"wrote":2}`: each mutation with sends waiting their turn.

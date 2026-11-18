@@ -137,6 +137,15 @@ The render's `store` stays empty and refuses writes, including deletions. A sour
 the error. An uncaught TypeScript store error fails its resource and keeps its placeholder;
 a Rust source that returns a refusal refuses the render.
 
+An answer that depends on the visitor cannot be decided by the server renderer,
+which has no visitor. With `--render js`, a credentialed fetch stays pending:
+the page shows its pending state, the checkpoint marks it unresolved, and the
+browser asks after adoption. The rule covers TypeScript fetches, declared sources
+and Rust `data.fetch`: `credentials: 'include'` and default `same-origin`
+requests to the manifest's `app.origin`, normalized to its URL origin. Use explicit
+`include` for cookie endpoints when `app.origin` is unset; use `credentials: 'omit'`
+for public reads that send no cookies. See [web sessions](recipes/web-sessions.md).
+
 ## CSS that is not here
 
 Each is refused at build, with the remedy; write the remedy the first time.

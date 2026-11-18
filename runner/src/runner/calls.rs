@@ -232,12 +232,7 @@ impl<D: DataSource> Runner<D> {
         let value = match (tool.returns, returns.flatten()) {
             (Some(d), Some(v)) => {
                 let mut s = String::new();
-                crate::agent::typed_json(
-                    &self.plan,
-                    self.plan.derives[d.0 as usize].ty,
-                    &v,
-                    &mut s,
-                );
+                crate::json::typed_json(&self.plan, self.plan.derives[d.0 as usize].ty, &v, &mut s);
                 serde_json::from_str(&s).unwrap_or(Json::Null)
             }
             _ => Json::Null,

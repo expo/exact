@@ -554,7 +554,7 @@ impl<D: DataSource> Runner<D> {
                     ),
                     false => (crate::save_file::plain_app_path(given), *given),
                 };
-                !plain || !crate::save_file::covered(self.data.grants(), &capability, at)
+                !plain || !self.covers(&capability, at)
             }) {
                 return Err(format!(
                     "grant-missing ({option}={given} needs {capability})"
@@ -579,11 +579,11 @@ impl<D: DataSource> Runner<D> {
                     let grants = self.data.grants();
                     let at = format!("{option}[{i}].{field}");
                     if capability == "net.fetch" {
-                        if let Some(why) = fetch_refusal(grants, &at, given) {
+                        if let Some(why) = fetch_refusal(self.links.grants, grants, &at, given) {
                             return Err(why);
                         }
                     } else if !crate::save_file::plain_app_path(given)
-                        || !crate::save_file::covered(grants, capability, given)
+                        || !self.covers(capability, given)
                     {
                         return Err(format!("grant-missing ({at}={given} needs {capability})"));
                     }
@@ -660,8 +660,13 @@ impl<D: DataSource> Runner<D> {
 /// its userinfo, query or fragment: it has a user name or password, which a
 /// browser's `Request` refuses too
 /// (<https://fetch.spec.whatwg.org/#dom-request>), or no `net.fetch` line
-/// admits it.
-fn fetch_refusal(grants: &str, at: &str, given: &str) -> Option<String> {
+/// admits it, read through `link` (none does without I/O).
+fn fetch_refusal(
+    link: crate::grants::GrantsLink,
+    grants: &str,
+    at: &str,
+    given: &str,
+) -> Option<String> {
     let (shown, userinfo) = crate::grants::redacted(given);
     if userinfo {
         return Some(format!(
@@ -669,7 +674,10 @@ fn fetch_refusal(grants: &str, at: &str, given: &str) -> Option<String> {
         ));
     }
     let web = given.starts_with("https://") || given.starts_with("http://");
-    let ok = web && crate::grants::admitting(grants, None, given).is_some();
+    let ok = web
+        && link
+            .and_then(|link| (link.admitting)(grants, None, given))
+            .is_some();
     (!ok).then(|| format!("grant-missing ({at}={shown} needs net.fetch)"))
 }
 
@@ -692,7 +700,10 @@ pub(in crate::runner) fn overlay(value: &mut Json, over: &Json) {
 
 #[cfg(test)]
 mod tests {
-    use super::fetch_refusal;
+    /// [`super::fetch_refusal`] in an archive that links I/O.
+    fn fetch_refusal(grants: &str, at: &str, given: &str) -> Option<String> {
+        super::fetch_refusal(Some(&crate::grants::LINKED), grants, at, given)
+    }
 
     #[test]
     fn a_record_url_with_a_password_is_refused_without_showing_it() {
@@ -716,6 +727,11 @@ mod tests {
         assert_eq!(
             fetch_refusal(grants, at, "https://other.example/f?token=t#x").as_deref(),
             Some("grant-missing (requests[0].url=https://other.example/f needs net.fetch)")
+        );
+        // Without I/O nothing is admitted, as under grants that name nothing.
+        assert_eq!(
+            super::fetch_refusal(None, grants, at, "https://example.com/f").as_deref(),
+            Some("grant-missing (requests[0].url=https://example.com/f needs net.fetch)")
         );
     }
 }

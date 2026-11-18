@@ -1,4 +1,8 @@
 use super::*;
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use ibex2::{
     boundary::HostError,
     stdlib::{
@@ -222,7 +226,7 @@ fn unannotated_http_and_native_writes_remain_in_one_fifo() {
     for ticket in 2..=3 {
         let writes: Sender<_> = writes.clone();
         core.run(
-            job(ticket, Request::continuation(ticket)),
+            job(ticket, Request::continuation::<TestWork>(ticket)),
             Some(Box::new(move || {
                 writes.send(ticket).unwrap();
                 Outcome::Storage(vec![ticket as u8])
@@ -370,7 +374,7 @@ fn byte_budget_and_illegal_opt_ins_refuse_before_transport() {
     .unwrap();
     fixture.wait_held(1);
     for request in [
-        Request::continuation(1).independent_http(1),
+        Request::continuation::<TestWork>(1).independent_http(1),
         Request::storage(vec![]).independent_http(1),
         Request::get("https://example.test/read").independent_http(0),
         Request::get("https://example.test/read").independent_http((64 << 20) + 1),
@@ -438,7 +442,7 @@ fn retirement_aborts_held_http_discards_queued_effects_and_stops_wakes() {
     let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let check = executed.clone();
     core.run(
-        job(2, Request::continuation(2)),
+        job(2, Request::continuation::<TestWork>(2)),
         Some(Box::new(move || {
             let _guard = guard;
             check.store(true, Ordering::SeqCst);
@@ -542,7 +546,8 @@ fn response_ceiling_and_missing_continuations_fail_without_poisoning_the_lane() 
             message: "HTTP response exceeds limit".into(),
         }
     );
-    core.run(job(2, Request::continuation(1)), None).unwrap();
+    core.run(job(2, Request::continuation::<TestWork>(1)), None)
+        .unwrap();
     assert!(matches!(
         collect(&core, &woke, 1)[0].1,
         Outcome::Failed {
@@ -562,14 +567,14 @@ fn response_ceiling_and_missing_continuations_fail_without_poisoning_the_lane() 
     ));
     assert_eq!(fixture.state.lock().unwrap().2.len(), 1);
     core.run(
-        job(4, Request::continuation(2)),
+        job(4, Request::continuation::<TestWork>(2)),
         Some(Box::new(|| Outcome::Storage(vec![42]))),
     )
     .unwrap();
     assert_eq!(collect(&core, &woke, 1)[0].1, Outcome::Storage(vec![42]));
 
     // Storage retains priority over a continuation even for an async handoff.
-    let mut storage = Request::continuation(3);
+    let mut storage = Request::continuation::<TestWork>(3);
     storage.storage = Some(vec![]);
     let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed = invoked.clone();
@@ -595,7 +600,7 @@ fn asynchronous_module_reply_keeps_io_available_and_ordered_results_in_order() {
     let (core, _fixture, woke) = setup();
     let (handed, replies) = channel();
     core.run_owned(
-        job(10, Request::continuation(1)),
+        job(10, Request::continuation::<TestWork>(1)),
         Some(OwnedWork::Later(Box::new(move |reply| {
             handed.send(reply).unwrap();
         }))),
@@ -604,7 +609,7 @@ fn asynchronous_module_reply_keeps_io_available_and_ordered_results_in_order() {
     let reply = replies.recv_timeout(Duration::from_secs(5)).unwrap();
     let (entered, ran) = channel();
     core.run(
-        job(11, Request::continuation(2)),
+        job(11, Request::continuation::<TestWork>(2)),
         Some(Box::new(move || {
             entered.send(()).unwrap();
             Outcome::Storage(vec![2])
@@ -939,7 +944,7 @@ fn writes_and_opaque_work_keep_the_sixteen_ticket_admission_bound() {
     auth.http = HttpScheduling::Ordered;
     for request in [
         Request::post_json("https://example.test/refused-write", "{}"),
-        Request::continuation(1),
+        Request::continuation::<TestWork>(1),
         Request::storage(vec![]),
         Request::capture_surface("surface"),
         native,
@@ -1216,7 +1221,7 @@ fn held_work(core: &Core, ticket: u64) -> Arc<Mutex<Option<std::thread::ThreadId
     let dropped = Arc::new(Mutex::new(None));
     let guard = DropsOn(dropped.clone());
     core.run(
-        job(ticket, Request::continuation(ticket)),
+        job(ticket, Request::continuation::<TestWork>(ticket)),
         Some(Box::new(move || {
             let _guard = &guard;
             Outcome::Storage(vec![])
@@ -1335,7 +1340,7 @@ fn a_large_body_on_the_platform_transport_drains_behind_handed_off_turns() {
     );
     // A handed-off turn that completes a little later, like the owner's.
     let turn = |ticket: u64| {
-        let mut request = Request::continuation(ticket);
+        let mut request = Request::continuation::<TestWork>(ticket);
         request.http = HttpScheduling::Ordered;
         let work: OwnedWork = OwnedWork::Later(Box::new(|reply: Reply| {
             std::thread::spawn(move || {
@@ -1407,7 +1412,7 @@ fn a_native_call_is_handed_off_and_never_holds_the_ordered_lane() {
     .unwrap();
     let reply = replies.recv_timeout(Duration::from_secs(5)).unwrap();
     core.run(
-        job(21, Request::continuation(1)),
+        job(21, Request::continuation::<TestWork>(1)),
         Some(Box::new(|| Outcome::Storage(vec![1]))),
     )
     .unwrap();

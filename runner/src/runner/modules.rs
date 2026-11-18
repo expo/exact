@@ -873,7 +873,7 @@ impl<D: DataSource> Runner<D> {
         let body =
             json!({ "extension": self.plan.str(row.extension), verb: self.plan.str(row.declared) });
         // Ordered work a host runs, never transport: its body says what it holds.
-        let mut request = Request::continuation(token);
+        let mut request = Request::continuation::<crate::host_work::ModuleWork>(token);
         request.body = body.to_string().into_bytes();
         request
     }

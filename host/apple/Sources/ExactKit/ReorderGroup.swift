@@ -89,23 +89,6 @@ struct ReorderGroupState: Equatable {
     }
 }
 
-extension CollectionHost {
-    /// The row wrapper at or above `descendant`: what a ghost snapshots.
-    func wrapper(of descendant: UInt32) -> NodeView? {
-        guard let presenter, var node: NSObject = presenter.views[descendant] else { return nil }
-        while true {
-            if let view = node as? NodeView, presenter.views[view.id] === view,
-               entries.values.contains(where: { $0.snapshot.rows.contains { $0.view == view.id } }) { return view }
-            #if os(macOS)
-            guard let parent = (node as? NSView)?.superview else { return nil }
-            #else
-            guard let parent = (node as? UIView)?.superview else { return nil }
-            #endif
-            node = parent
-        }
-    }
-}
-
 extension NodeView {
     /// The grouped list this grip's row is in, and its group (D1).
     package var reorderGroupList: (list: UInt32, group: String)? {
@@ -154,7 +137,7 @@ package final class ReorderGroupHold {
         pointerDriven = drawn
         generation = presenter.session?.generation
         pin = presenter.collections.holdPointer(handle.id)
-        guard let top = presenter.collections.geometry(list)?.offset else {
+        guard let top = presenter.collections.mainOffset(list) else {
             presenter.collections.releaseInteractionLater(ifCurrent: pin); return nil
         }
         let wrapper = presenter.collections.wrapper(of: handle.id)

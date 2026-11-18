@@ -36,18 +36,18 @@ impl<D: DataSource> Host<D> {
     pub fn auth(&mut self, json: &str) -> String {
         match self.auth_word {
             Some(word) => word(self, json),
-            None => exact_runner::agent::error("openAuthSession is not linked into this artifact"),
+            None => exact_runner::json::error("openAuthSession is not linked into this artifact"),
         }
     }
 
     /// [`Host::auth`], when the artifact links auth.
     pub(crate) fn auth_linked(&mut self, json: &str) -> String {
-        use exact_runner::agent::{field_bool, field_num, field_str, quote};
+        use exact_runner::json::{field_bool, field_num, field_str, quote};
         let ticket = field_num(json, "ticket").unwrap_or(0.0) as u64;
         match field_str(json, "op").as_deref() {
             Some("arm") => {
                 let Some(at) = self.auth_out.iter().position(|o| o.ticket == ticket) else {
-                    return exact_runner::agent::error("no such auth request");
+                    return exact_runner::json::error("no such auth request");
                 };
                 let out = self.auth_out.remove(at);
                 let origin = field_str(json, "origin");
@@ -94,7 +94,7 @@ impl<D: DataSource> Host<D> {
                 }
                 "{\"settled\":true}".into()
             }
-            _ => exact_runner::agent::error("auth: arm or done"),
+            _ => exact_runner::json::error("auth: arm or done"),
         }
     }
 }

@@ -1,6 +1,7 @@
 import { bindGpuProduct, bakeSelection } from './app-shells.mjs';
 export { bindGpuProduct, bakeSelection } from './app-shells.mjs';
 import { takeLock } from '../host/web/build-lock.mjs';
+import { refreshCargoRustShapes } from './cargo-dep-info.mjs';
 import { capturePrivacyManifest } from '../host/apple/privacy.mjs';
 import { appleMetadataProblem } from '../host/apple/plist.mjs';
 import { appleImplementations } from '../js/bake/src/typescript.mjs';
@@ -49,8 +50,8 @@ import { installedFileDependencies } from './file-dependencies.mjs';
 import { startSweep } from './sweep.mjs';
 import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
   androidCargo, appCrates, appleCargo, authoredWorkspace, cargoDiagnosticsCommand, cargoOnPath, claimTargetCrates,
-  declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
-export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath } from './cargo-check.mjs';
+  wholeProgram, declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
+export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
 import { appCrateName, gpuModules, packageGpuInputs, packageGpuManifest, gpuView, joinMetadata, joinsGpu, settleShells } from './app-shells.mjs';
 export { gpuModules } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
@@ -398,12 +399,6 @@ export function platformCrateKind(dir, kind) {
     ? (existsSync(resolve(dir, kind, 'Cargo.toml')) ? kind : 'apple') : kind;
 }
 
-/** Platform-specific source folder; shared Apple modules remain valid for existing apps. */
-export function moduleDirectory(dir, platform) {
-  const own = resolve(dir, platform, 'modules');
-  return existsSync(own) ? own : resolve(dir, 'modules', ['ios', 'macos', 'tvos'].includes(platform) ? 'apple' : platform);
-}
-
 /** The app `nameOrCrate` selects (`caltrain`, `caltrain-web`, …; or `EXACT_APP_DIR`): its directory, Cargo workspace,
  * target directory, crate identity (`appCrateName`), and manifest. */
 export function resolveApp(nameOrCrate) {
@@ -579,11 +574,14 @@ export function readManifest(dir, name) {
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
   const manifest = resolveVariant({ host: {}, deploy: {}, ...parsed }, selectedVariant(dir)); // the selected variant's identity (LLP 1030.008 D2)
+  launchModules(dir, manifest);
   canonicalizeDocumentExtensions(manifest);
   return packageGpuManifest(manifest, dir);
 }
 
 import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocumentExtensions } from './document-utis.mjs';
+import { launchModules, moduleDirectory } from './launch-modules.mjs';
+export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
 import { appIconProblems, publishedIcons } from './app-icons.mjs';
 import { claimVariant, resolveVariant, selectedVariant, variantProblems } from './variants.mjs';
@@ -1229,26 +1227,17 @@ export const cargoLibraryTarget = (pkg) => pkg.targets.find(t => t.kind.some(k =
 export const appleCargoClaims = (app, target, units) => [...new Set(units.map(unit =>
   resolve(app.target, '.apple-cargo-locks', target, `lib${unit.name.replace(/-/g, '_')}.lock`)))].sort();
 
-/** What ships to an Apple device or an Android phone is optimized as one module: fat LTO
- * makes the stripped binary smaller than thin — 4.8% on Apple, no slower to boot, for 16 s
- * of a production build (LLP 1036.000 §8); 6.4% for Caltrain's Android library (16.6 →
- * 15.6 MB), whose release build takes about a minute longer. Said on the command line and
- * not in `[profile.release]`, which every developer tool builds with. Cargo's fingerprints
- * keep thin and fat apart: a target directory used both ways (a macOS and a Linux bake on a
- * Mac) recompiles, and never reuses the other's artifacts. */
-export function wholeProgram(kind, profile) {
-  return ['apple','ios','macos','tvos','android'].includes(kind) && profile === 'release' ? ['--config','profile.release.lto="fat"'] : [];
-}
-
 /** What an app's bake watches besides its sources (its asset roots that exist, whether a backend origin is chosen, which of the settings files `.env.local` and `.env` exist); unset, a missing one stays an input where the app holds its build output, and every build reruns the script and relinks (bake/src/receipt/watch.rs). Every baking build passes it. `app`: its `dir`, `manifest`. */
 export const bakeWatchEnv = app => ({ EXACT_ASSET_ROOTS: ['assets', 'deck', ...(app.manifest.game ? [] : ['gpu/shaders'])].filter(root => (root === 'assets' && app.manifest.game && (app.manifest.game.assets === true || existsSync(resolve(app.dir, 'art')))) || existsSync(resolve(app.dir, root))).join(','), EXACT_BACKEND_SELECTION: existsSync(resolve(app.dir, '.exact/backend-origin')) ? 'present' : 'absent', EXACT_ENV_FILES: ['.env.local', '.env'].filter(file => existsSync(resolve(app.dir, file))).join(',') });
 /** The dev loop's bake driver (host/web/dev.mjs): an app's `<app>-dev` bin (`devBin`), else `exact-dev`, on host-dev (seconds after an edit, not release's minute), with `bakeWatchEnv` (nothing rebuilt when nothing changed): its cargo args before `--`, cwd and env over `env`. */
 export const devBinRun = (app, devBin, env) => ({ args: ['run', '-q', ...(devBin ? injectedProfiles(app) : []), '--profile', HOST_DEV, '-p', devBin ? app.crate('web') : 'exact-web', '--bin', devBin ?? 'exact-dev'], cwd: devBin ? app.workspace : ROOT, env: { ...env, ...bakeWatchEnv(app) } });
 /** Build the target and optional GPU, returning Cargo's actual receipt. `check` builds no linked product; `options.kind` selects a crate kind independently of the receipt's platform. */
 export function buildBake(app, platform, target, options = {}) {
+  launchModules(app.dir, app.manifest, [options.kind === 'android' ? 'android' : platform]);
   // `kind` names another crate for the platform's cohort: Android's Canvas host bakes as Linux from `<app>-android`.
   const kind=options.kind??platformCrateKind(app.dir,platform), apple=['apple','ios','macos','tvos'].includes(kind);
   let env=withHostDeployment({...process.env,...options.env});env.CARGO_TARGET_DIR=app.target;env.EXACT_BAKE_OUTPUT=options.output??bakeOutput(app,env);
+  env.EXACT_RUST_SHAPES = '1';
   const privacyManifests = apple ? [capturePrivacyManifest(resolve(app.dir, 'PrivacyInfo.xcprivacy'))] : [], watch = target.includes('apple-watchos');
   if(platform==='web'||watch)env=webToolchainEnv(env,{linksWasm:target==='wasm32-unknown-unknown'&&!options.check});
   if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
@@ -1284,6 +1273,7 @@ export function buildBake(app, platform, target, options = {}) {
   for(const {pkg,unit} of selected) {
     if (pkg.id === graph.root.id && pkg.targets.some(t => t.kind.includes('custom-build'))) env.EXACT_BAKE_PACKAGE_DIR = realpathSync(dirname(pkg.manifest_path));
     const profile = (gpuPackage(pkg) ? options.gpuProfile : null) ?? options.profile ?? (platform === 'web' ? 'web' : 'release');
+    refreshCargoRustShapes(env.CARGO_TARGET_DIR,target,profile,[...graph.packages.values()],env,graph.metadata.build_directory);
     // The GPU bake can create the first asset directory (for a typed level).
     Object.assign(env, bakeWatchEnv(app));
     // The app's own web artifact builds std for size; a GPU crate keeps the toolchain's std.
@@ -1368,6 +1358,7 @@ export function classifyArtifacts(candidate, cohort, signingKey = null) {
     } else if(key==='appleRasterIcons') {
       for(const [svg, rendition] of Object.entries(need)) if(canonicalBuild(have[key]?.[svg]??null)!==canonicalBuild(rendition)) fail(`.${svg} (requires the installed SVG rendition)`);
     } else if(key==='executors'||key==='hatches') { for(const item of need) if(!have[key]?.includes(item)) fail(key==='hatches'?`.${item} (handled by this platform's module, not by the installed one)`:`.${item}`); // hatches: LLP 1075.003.000.001 §4.3, a cohort from before the capability handles none
+    } else if(key==='appleUses') { /* LLP 1047.001 D13: what the binary was composed from, as a subset; a cohort that names no set links everything, and a capability its roster predates was in its core */ if(Array.isArray(have.linked)) for(const item of need) if(!have.linked.includes(item)&&(!Array.isArray(have.linkRoster)||have.linkRoster.includes(item))) fail(`.${item} (not linked into the installed binary; that needs a new binary)`);
     } else if(['androidUses','androidExtensions','androidPermissions'].includes(key)) { /* LLP 1030.006 D4a: what the APK was composed from, as a subset */ for(const item of need) if(!have.androidLinked?.[key.slice(7).toLowerCase()]?.includes(item)) fail(`.${item} (not in the installed APK; that needs a new APK)`); } else if(key==='hermesBytecode') { if(have[key]!==need) fail(` (the module is Hermes bytecode ${need}; this cohort's APK runs ${have[key]??'none'}, which needs a new APK)`); } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
       const grants=new Set((have.grantCeiling??'').split('\n').filter(Boolean));
       if(need===null||have.grantCeiling===null) fail(' (unknown baked grants)');

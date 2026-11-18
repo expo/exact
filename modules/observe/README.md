@@ -1,6 +1,6 @@
 # Observe
 
-Sends Expo Observe's performance metrics and custom events from an Exact app, under Observe's metric names. It works on iOS, macOS, Linux and the web.
+Sends Expo Observe's performance metrics and custom events from an Exact app, under Observe's metric names. It works on iOS, macOS, Android, Linux and the web.
 
 ## Turning it on
 
@@ -20,11 +20,13 @@ These settings are optional:
 
 On Apple, the launch part installs fatal-signal handlers, starts a network-path monitor and enables battery monitoring on iOS. Its deferred service loads after startup; a direct native query can load it on demand. Pending crash records live in the app's Application Support directory.
 
+Android reports its OS version and device model. Its launch-module interface does not expose battery or connectivity facts, so those attributes are omitted.
+
 ## Metrics
 
 | Metric | From | To |
 |---|---|---|
-| `expo.app_startup.cold_launch_time` / `warm_launch_time` | process start | launch end: didFinishLaunching on Apple, the display opening on Linux |
+| `expo.app_startup.cold_launch_time` / `warm_launch_time` | process start | launch end: didFinishLaunching on Apple, the display opening on Linux, the host starting on Android |
 | `expo.app_startup.ttr` | launch end (page activation on the web) | the first frame on screen |
 | `expo.app_startup.tti` | launch end | the first frame where nothing on screen is loading (below) |
 | `expo.navigation.cold_ttr` / `warm_ttr` / `tti` | the input (or commit) that changed the route | the same marks for the new screen; `tti` only with `cold_ttr` (a screen shown before, as on a back or a tab seen before, has none) |
@@ -67,7 +69,7 @@ On Apple, the local `recent` query reports `sent: true` only for rows acknowledg
 
 The web exporter drops queued rows when configuration, sampling or development mode prevents dispatch. It retains metadata only for the current session and sessions with queued rows. The tabs of an app share one queue in `localStorage`; one tab at a time sends it, holding a Web Lock, so each row is sent once.
 
-On Linux, the processes of an app share one queue file; each changes it under a file lock, and one process at a time sends it. Startup has a 30-second deadline; a pending activation or resource reports a timeout without a TTI value. The exporter subscribes after startup and replays the journal's retained events. Headless runs keep the bounded in-memory journal but do not start the exporter or emit startup metrics. Crash capture records Rust panics, not fatal signals. Refused dispatches drop Linux's pending rows; Apple retains rows with `sent: false`.
+On Linux and Android, the processes of an app share one queue file; each changes it under a file lock, and one process at a time sends it. Android keeps the queue, install ID and pending panic records under its app cache directory; Linux uses `XDG_STATE_HOME`, defaulting to `~/.local/state`. Startup has a 30-second deadline; a pending activation or resource reports a timeout without a TTI value. Android's render and interactive marks wait for the reader's frame-presentation acknowledgements. Its APK's SHA-256 identifies the build for cold and warm launches. The exporter subscribes after startup and replays the journal's retained events. Headless runs keep the bounded in-memory journal but do not start the exporter or emit startup metrics. Crash capture records Rust panics, not fatal signals. Refused dispatches drop these hosts' pending rows; Apple retains rows with `sent: false`.
 
 ## Tests
 

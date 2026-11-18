@@ -3,6 +3,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 pub struct Replies {
     pub clock: Rc<Cell<Instant>>,
     pub advance_after: Option<usize>,
@@ -58,7 +62,7 @@ impl DataSource for Replies {
     }
     fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
         let index = args[0].as_number().unwrap() as usize;
-        let mut request = Request::continuation(index as u64 + 1);
+        let mut request = Request::continuation::<TestWork>(index as u64 + 1);
         if self.refuse == Some(index) {
             request.timeout_ms = Some(1);
         }

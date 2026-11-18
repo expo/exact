@@ -124,7 +124,11 @@ final class LaunchServiceTests: XCTestCase {
         let launch = ExactLaunch()
         let session = ExactApp.shared.makeSession(label: label)
         addTeardownBlock { launch.link?.invalidate(); session.destroy() }
-        XCTAssertNil(session.boot(plan: try fixturePlan("HEADLESS"), size: CGSize(width: 400, height: 800)).error)
+        XCTAssertNil(session.boot(plan: try fixturePlan("STILL_PAGE"), size: CGSize(width: 400, height: 800)).error)
+        // Settle the session first: this launch evaluates only when the test says (`ExactLaunch.shared` hears the
+        // session's work end), so work in flight when it evaluates, such as the tick that hears the page's first present,
+        // would leave the candidate unset with nothing to evaluate again when it lands
+        settleViewlessSession(session)
         launch.delegateInit()
         launch.didFinishLaunching()
         launch.bootEntered(session)

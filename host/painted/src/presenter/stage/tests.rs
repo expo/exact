@@ -8,12 +8,39 @@ use crate::paint::Backend;
 
 #[path = "parts_tests.rs"]
 mod parts;
+#[path = "replay_tests.rs"]
+mod replay;
 #[path = "rules_tests.rs"]
 mod rules;
 #[path = "scroll_tests.rs"]
 mod scroll;
+#[path = "through_tests.rs"]
+mod through;
 #[path = "zoom_tests.rs"]
 mod zoom;
+
+/// A removed destination inside a shared container whose size can shrink.
+pub(in crate::presenter) const SHRINKING_PANELS: &str = r##"component App
+  state second = false
+  action swap
+    second = true
+  view
+    main navigationKey=(second ? "b" : "a") viewport-fit="cover" width="100%" height=(second ? 100 : 600) EFFECT
+      column position="relative" height="100%" SCALER
+        if !second
+          column role="tabpanel" id="panel-a" position="absolute" inset=0
+            column navigationKey="a" position="absolute" top=0 left=0 width="100%" height=600 background-color="#ff0000"
+              button press=swap testId="swap" height=40
+                text "Swap"
+        if second
+          column role="tabpanel" id="panel-b" position="absolute" inset=0
+            column navigationKey="b" position="absolute" inset=0 background-color="#0000ff"
+      row role="tablist" position="absolute" bottom=0
+        button role="tab" aria-controls="panel-a" aria-selected=(!second) press=swap
+          text "First"
+        button role="tab" aria-controls="panel-b" aria-selected=second press=swap
+          text "Second"
+"##;
 
 /// A page, a sheet with two detents and one with none, a route pushed
 /// inside the first sheet, and a page pushed over the first.
@@ -111,7 +138,7 @@ fn phone() -> Presenter<()> {
     phone_source(APP)
 }
 
-fn phone_source(source: &str) -> Presenter<()> {
+pub(in crate::presenter) fn phone_source(source: &str) -> Presenter<()> {
     let mut p = boot_source(source);
     p.serve_windows(Box::new(Pixels));
     assert_eq!(p.serve_bars(Box::new(Pixels)), None);
@@ -120,7 +147,7 @@ fn phone_source(source: &str) -> Presenter<()> {
     p
 }
 
-fn id(p: &Presenter<()>, name: &str) -> ViewId {
+pub(in crate::presenter) fn id(p: &Presenter<()>, name: &str) -> ViewId {
     let kernel = p.host().kernel();
     let found = kernel.find_by_test_id(name);
     assert!(!found.is_empty(), "no node has the test id {name}");
@@ -131,14 +158,14 @@ fn has(p: &Presenter<()>, name: &str) -> bool {
     !p.host().kernel().find_by_test_id(name).is_empty()
 }
 
-fn tap(p: &mut Presenter<()>, name: &str) {
+pub(in crate::presenter) fn tap(p: &mut Presenter<()>, name: &str) {
     let view = id(p, name);
     p.tap(view).unwrap();
     p.run_commands(|| ());
 }
 
 /// Advance the clock by `ms` and paint.
-fn after(p: &mut Presenter<()>, ms: f64) {
+pub(in crate::presenter) fn after(p: &mut Presenter<()>, ms: f64) {
     let now = p.host().now() + ms;
     p.tick(now);
     p.frame();

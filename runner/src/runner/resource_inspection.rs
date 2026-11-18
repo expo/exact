@@ -1,7 +1,7 @@
 //! Development-only resource provenance (LLP 1142 D9). These identifiers
 //! describe requests; settlement never consults them to decide what to show.
 use super::*;
-use crate::agent::{num, quote};
+use crate::json::{num, quote};
 use crate::perf::ResourceWork;
 use std::fmt::Write as _;
 

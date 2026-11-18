@@ -125,12 +125,13 @@ mod perf;
 pub mod persist;
 mod query;
 mod queue;
+mod render;
 mod resource_inspection;
 mod world_origin;
 pub use queue::QUEUE_BOUND;
 mod history;
 pub mod router;
-pub use lists::{ListTextPolicy, ListTextPosition};
+pub use crate::list_api::{ListTextPolicy, ListTextPosition};
 mod settlement;
 pub(crate) use settlement::zero;
 mod sockets;
@@ -150,8 +151,9 @@ pub use presence_secrets::{PresenceAnswer, PresenceAsk};
 mod processes;
 mod provenance;
 mod seams;
+pub(crate) use processes::refusal as process_refusal;
 pub use provenance::CallOrigin;
-pub use seams::{ModuleLinks, PresenceSecrets, Tools};
+pub use seams::{ModuleLinks, PresenceSecrets, TextAxes, Tools};
 mod wakes;
 pub use wakes::WakeHow;
 #[cfg(test)]
@@ -407,7 +409,7 @@ pub struct Runner<D: DataSource> {
     batch: u64,
     commands: Vec<Command>,
     /// `scrollIntoView` commands an action stated, run after its update.
-    into_view: Vec<crate::instance::collection::IntoView>,
+    into_view: Vec<crate::list_api::IntoView>,
     /// Where the host last showed each scroller (`frame`, LLP 1051.000 D1).
     scrolled: crate::geometry::Scrolled,
     /// Each `resize` handler's node and the content box last delivered.
@@ -419,7 +421,7 @@ pub struct Runner<D: DataSource> {
     /// Views the next applied batch renews (LLP 1078): rebound list rows.
     renewed: Vec<ViewId>,
     /// Rows the next batch mounts out of their port, and those that showed (LLP 1055 D13).
-    shown: crate::instance::collection::shown::RowsShown,
+    shown: crate::list_api::RowsShown,
     /// Retiring list rows are rebound to new items ([`Runner::set_row_reuse`]).
     reuse: bool,
     /// The 2D canvases (LLP 1056 D4), when Canvas 2D is linked.
@@ -551,7 +553,7 @@ pub struct Runner<D: DataSource> {
     /// Tool calls, running and to come (LLP 1133.023 D7).
     calls: calls::Calls,
     /// Locked secrets: the host's backend and the calls on it.
-    presence: presence_secrets::Presence,
+    presence: seams::PresenceState,
     /// The host's target, once it said ([`Runner::set_module_target`]).
     module_target: Option<String>,
     /// The optional parts this runner links, for its plan.
@@ -586,7 +588,7 @@ pub struct Runner<D: DataSource> {
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
-    text_axes: text_axes::TextAxes,
+    text_axes: seams::TextAxesState,
     place: crate::time::Place,
     host_direction: Option<exact_kernel::Direction>, // the platform's, told at launch ([`Runner::direction`])
     surface_records: exact_kernel::SortedMap<String, String>,
@@ -948,7 +950,7 @@ impl<D: DataSource> Runner<D> {
             processes: Default::default(),
             wakes: Default::default(),
             calls: Default::default(),
-            presence: Default::default(),
+            presence: seams::PresenceState(seams.presence.state()),
             module_target: None,
             seams,
             delivery,
@@ -958,7 +960,7 @@ impl<D: DataSource> Runner<D> {
             presented: crate::page::Presented::at_boot(),
             time: crate::time::launch_time(),
             live_times: Default::default(),
-            text_axes: Default::default(),
+            text_axes: seams::TextAxesState(seams.text_axes.state()),
             place: launched_place.clone().unwrap_or_default(),
             window_name: crate::time::launch_window_name(),
             host_direction: crate::time::launch_direction(),

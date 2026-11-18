@@ -67,7 +67,9 @@ pub mod hardened;
 pub mod head;
 pub mod held;
 pub mod instance;
+pub mod json;
 pub mod launch_env;
+pub mod list_api;
 pub mod listen;
 pub mod lists;
 pub mod local_network;
@@ -78,7 +80,9 @@ pub mod presence;
 pub mod process;
 mod program;
 pub use program::Program;
+pub mod host_work;
 pub mod request;
+pub use host_work::HostWork;
 pub mod runner;
 pub mod sandbox;
 pub mod save_file;
@@ -114,14 +118,14 @@ pub use exact_canvas;
 pub use exact_plan::{Items, Str, Value};
 pub use format::formatting;
 pub use head::Head;
-pub use instance::collection::{set_bootstrap_extent, set_lead_scale};
-pub use instance::collection::{
-    AnchorCorrection, CollectionFeedback, CollectionFill, CollectionFixed, CollectionRow,
+pub use instance::{DocNode, DocTree, DocTreeError, ListLinks, SurfaceUpdate, LISTS};
+pub use list_api::{set_bootstrap_extent, set_lead_scale};
+pub use list_api::{
+    Align, AnchorCorrection, CollectionFeedback, CollectionFill, CollectionFixed, CollectionRow,
     CollectionSnapshot, FeedbackError, ListAxis, ReorderBinding, ReorderEnding, ReorderFrame,
     ReorderGeometry, ReorderPhase, ReorderProgress, ReorderStart, ReorderStep, ReorderToken,
     ReorderWrapper, RowMeasurement,
 };
-pub use instance::{DocNode, DocTree, DocTreeError, ListLinks, SurfaceUpdate, LISTS};
 pub use page::Page;
 pub use process::{ProcessOp, WorkClock, PROCESS_URL};
 pub use request::{
@@ -147,7 +151,7 @@ pub use runner::{
     RESIZE_UNDELIVERED, TIMER_FIRE_LIMIT, VIRTUAL_FRAME_MS,
 };
 pub use runner::{AppState, Forma, LiveApplied, LiveRefusal, Place};
-pub use runner::{CallHow, ModuleLinks, Modules, PresenceSecrets, Tools, WakeHow};
+pub use runner::{CallHow, ModuleLinks, Modules, PresenceSecrets, TextAxes, Tools, WakeHow};
 pub use runner::{ModuleIdentity, ModuleInstance};
 pub use upload::{UPLOAD_PROGRESS, UPLOAD_SENDING};
 /// The binding core's names (LLP 1121 D12): what `contract forma gen rust`

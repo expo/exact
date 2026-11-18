@@ -16,7 +16,7 @@ package struct CornerShape: Equatable {
     private init(k: [Float]) { self.k = k }
 
     /// The row, or nil when every corner is `round` (no row is sent).
-    init?(_ value: BatchValue?) {
+    package init?(_ value: BatchValue?) {
         guard let corners = value?.array, corners.count == 4 else { return nil }
         k = corners.map { c in
             switch c.string {

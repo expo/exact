@@ -229,7 +229,7 @@ pub(crate) fn gradient_json(g: &exact_kernel::gradient::Gradient) -> String {
             let mut g = live.clone();
             g.interpolation = session.interpolation(dark);
             let mut css = String::new();
-            exact_runner::agent::quote(&g.wire(), &mut css);
+            exact_runner::json::quote(&g.wire(), &mut css);
             css
         };
         let (light, night) = (written(false), written(true));
@@ -251,7 +251,7 @@ pub(crate) fn gradient_json(g: &exact_kernel::gradient::Gradient) -> String {
     );
     if g.needs_box() || radii {
         let mut css = String::new();
-        exact_runner::agent::quote(&session.wire(), &mut css);
+        exact_runner::json::quote(&session.wire(), &mut css);
         return format!("{{\"css\":{css}{tint}}}");
     }
     // LLP 1100 D2: interpolated outside sRGB, the ramp crosses as unclipped

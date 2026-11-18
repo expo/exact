@@ -23,6 +23,17 @@ export function cargoOnPath(env = process.env, home = homedir()) {
   return true;
 }
 
+/** What ships to an Apple device or an Android phone is optimized as one module: fat LTO
+ * makes the stripped binary smaller than thin — 4.8% on Apple, no slower to boot, for 16 s
+ * of a production build (LLP 1036.000 §8); 6.4% for Caltrain's Android library (16.6 →
+ * 15.6 MB), whose release build takes about a minute longer. Said on the command line and
+ * not in `[profile.release]`, which every developer tool builds with. Cargo's fingerprints
+ * keep thin and fat apart: a target directory used both ways (a macOS and a Linux bake on a
+ * Mac) recompiles, and never reuses the other's artifacts. */
+export function wholeProgram(kind, profile) {
+  return ['apple','ios','macos','tvos','android'].includes(kind) && profile === 'release' ? ['--config','profile.release.lto="fat"'] : [];
+}
+
 /** Every Cargo process Exact starts refuses implicit Hermes acquisition. */
 export function cargoEnvironment(env = process.env) { return withHostDeployment({ ...env, HERMES_LEAN_SYS_OFFLINE: '1' }); }
 

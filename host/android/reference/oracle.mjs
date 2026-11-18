@@ -390,7 +390,8 @@ function pixels(ref, cand, texts, density, file, dir) {
  * JVM against the phone, and its repeat; Exact headless against the reader, and its repeat; and Compose against
  * Exact, both on the phone. The phone renders name no text boxes: each is compared at its side's headless ones,
  * placed where the phone put the specimen (the catalogue's whole screen; the reader's page, below the status bar the
- * phone reports, its bars where its state has them).
+ * phone reports, its bars where its state has them). On a device that has never shown an app full screen, Android's
+ * one-time "Viewing full screen" hint covers the catalogue's pictures: dismiss it once (its "Got it") before a run.
  */
 function phone(serial) {
   const dir = join(out, 'phone');

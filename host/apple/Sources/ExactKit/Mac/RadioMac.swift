@@ -38,15 +38,6 @@ extension ControlHost {
         setOn(control, on)
     }
 
-    /// The focus moves to the radio an arrow checks, from the radio that
-    /// had it: a native button's own `NSButton`, which owns its focus; a
-    /// node that takes no focus leaves it where it is.
-    func focusRadio(_ node: NodeView, keyboard: Bool = false) {
-        let responder = node.isNativeButton ? presenter.keyView(of: node) : node
-        guard let window = node.window, responder.acceptsFirstResponder, window.firstResponder !== responder else { return }
-        window.makeFirstResponder(responder)
-    }
-
     /// A click checks the radio and moves no focus, as a click on AppKit's
     /// radio button does (LLP 1115.000 D7.1): a field being edited keeps its
     /// editor, its edit committed before the radio's `change`.

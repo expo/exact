@@ -525,6 +525,20 @@ fn materials_segmented_buttons_share_the_row_and_fill_the_checked_one() {
         page,
         "a square corner"
     );
+    // The outline is whole pixels, as `Modifier.border` rounds it: 1 dp is
+    // 3 px at 2.4375, not two and a faint third.
+    let frame = (*p.frame()).clone();
+    let x = ((mi.0 + mi.2 / 2.0) * 2.4375) as u32;
+    let top = (mi.1 * 2.4375) as u32;
+    let column: Vec<u8> = (top.saturating_sub(1)..top + 6)
+        .map(|y| frame.pixel(x, y).unwrap().demultiply().red())
+        .collect();
+    let line = *column.iter().min().unwrap();
+    let whole = column
+        .iter()
+        .filter(|&&r| r <= line.saturating_add(8))
+        .count();
+    assert_eq!(whole, 3, "the outline's pixels: {column:?}");
     // The checked one is filled, the others show the page; its check comes
     // before its label, which an unchecked one centres.
     let inside = |s: (f32, f32, f32, f32)| (s.0 + s.2 - 6.0, s.1 + 6.0);

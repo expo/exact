@@ -294,7 +294,7 @@ pub fn checkpoint<D: DataSource>(runner: &Runner<D>, location: &str) -> String {
     let _ = write!(
         json,
         ",\"time\":{},\"logic\":",
-        exact_runner::agent::num(checkpoint.now_ms)
+        exact_runner::json::num(checkpoint.now_ms)
     );
     match &checkpoint.logic {
         Some(logic) => crate::batch::quote(logic, &mut json),
@@ -363,7 +363,7 @@ fn push_value(value: &Value, out: &mut String) {
         Value::Number(n) if n.is_infinite() && *n > 0.0 => out.push_str("{\"n\":\"Infinity\"}"),
         Value::Number(n) if n.is_infinite() => out.push_str("{\"n\":\"-Infinity\"}"),
         Value::Number(n) if *n == 0.0 && n.is_sign_negative() => out.push_str("-0"),
-        Value::Number(n) => exact_runner::agent::num(*n).push_to(out),
+        Value::Number(n) => exact_runner::json::num(*n).push_to(out),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         text @ exact_plan::str_value!() => crate::batch::quote(text.text(), out),
         Value::Unit => out.push_str("null"),

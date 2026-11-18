@@ -9,6 +9,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 struct Ordered {
     release: Option<Receiver<()>>,
     parsed: Arc<Mutex<Vec<String>>>,
@@ -25,9 +29,9 @@ impl DataSource for Ordered {
         _: &[Value],
     ) -> Result<Answer, exact_runner::DataError> {
         Ok(Answer::Later(match name {
-            "a" => Request::continuation(1),
-            "b" => Request::continuation(2).independent_http(4096), // Invalid opt-in is a refusal before effects.
-            _ => Request::continuation(3),
+            "a" => Request::continuation::<TestWork>(1),
+            "b" => Request::continuation::<TestWork>(2).independent_http(4096), // Invalid opt-in is a refusal before effects.
+            _ => Request::continuation::<TestWork>(3),
         }))
     }
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
@@ -176,7 +180,7 @@ impl DataSource for Burst {
         _: &[Value],
     ) -> Result<Answer, exact_runner::DataError> {
         let n: u64 = name[1..].parse().unwrap();
-        Ok(Answer::Later(Request::continuation(n + 1)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(n + 1)))
     }
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
         let release = (token == 1).then(|| self.release.take().unwrap());

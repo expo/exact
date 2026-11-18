@@ -232,6 +232,7 @@ fn restore_and_load_are_seen_by_render_without_a_bind_or_tick() {
 #[test]
 fn seekable_observers_make_no_clock_calls_and_long_advances_time_only_retained_ticks() {
     use crate::perf::CLOCK_READS;
+    use exact_game::TickObserver;
     let world = World::new(60, 0);
     let mut render = None;
     let mut perf = Perf::default();
@@ -248,11 +249,12 @@ fn seekable_observers_make_no_clock_calls_and_long_advances_time_only_retained_t
             &mut trace,
             &mut error,
             &mut hook_poses,
-            measure,
-            3600,
+            measure.then_some(Clock::Seekable),
+            None,
         );
         for left in (0..3600).rev() {
-            after(&world, left);
+            after.before_tick(u64::from(left) + 1);
+            after.after_tick(&world, left);
         }
         assert_eq!(CLOCK_READS.with(|n| n.get()), if measure { 480 } else { 0 });
     }

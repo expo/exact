@@ -253,7 +253,7 @@ impl Markdown {
         }
         self.inflight
             .insert(self.next, (asked.to_owned(), file, text));
-        Answer::Later(Request::continuation(self.next))
+        Answer::Later(Request::continuation::<Self>(self.next))
     }
 }
 
@@ -394,6 +394,9 @@ fn forgot(reply: Result<Json, String>) -> Value {
     let message = reply.err().unwrap_or_default();
     Value::record(vec![Value::Bool(message.is_empty()), Value::str(&message)])
 }
+
+/// It reads files on the host's worker (LLP 1047.001 D12).
+impl exact_runner::HostWork for Markdown {}
 
 impl DataSource for Markdown {
     fn app_id(&self) -> &str {

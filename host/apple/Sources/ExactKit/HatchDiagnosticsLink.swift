@@ -2,7 +2,7 @@ import Foundation
 
 /// A session's hatch diagnostics store (HatchDiagnostics.swift; LLP
 /// 1075.003.000.001 §3.1–3.3): what the core asks of it.
-protocol HatchDiagnosing: AnyObject {
+package protocol HatchDiagnosing: AnyObject {
     func attach(_ session: ExactSession?)
     func timed<T>(_ scope: String, _ moment: String, site: Int?, counts: Bool, _ body: () -> T) -> T
     func ended(node: UInt32)
@@ -19,10 +19,10 @@ protocol HatchDiagnosing: AnyObject {
 /// production composition compiles no store (LLP 1047.001 D11): a session
 /// has none, its hatch calls go untimed, and the module's table has no
 /// diagnostics entry.
-enum HatchDiagnosticsLink {
+package enum HatchDiagnosticsLink {
     /// Whether this binary keeps diagnostics: a development composition, and
     /// not a production bake.
-    static let available: Bool = {
+    package static let available: Bool = {
         #if EXACT_AGENT
         return !ExactEnv.productionBake
         #else
@@ -32,10 +32,10 @@ enum HatchDiagnosticsLink {
 
     /// Whether hatch calls are timed now (main thread): from boot where
     /// frames are sampled from boot, else from `measurePerf`.
-    nonisolated(unsafe) static var measuring = available && FrameSampler.atBoot
+    nonisolated(unsafe) static package var measuring = available && FrameSampler.atBoot
 
     /// A new session's store, or nil in a production composition.
-    static func store() -> (any HatchDiagnosing)? {
+    static package func store() -> (any HatchDiagnosing)? {
         #if EXACT_AGENT
         return HatchDiagnostics()
         #else
@@ -45,7 +45,7 @@ enum HatchDiagnosticsLink {
 
     /// The diagnostics' call table that the host's hatch table names, or nil
     /// where this binary keeps none.
-    static var table: UnsafeRawPointer? {
+    static package var table: UnsafeRawPointer? {
         #if EXACT_AGENT
         return available ? HatchDiagnostics.table : nil
         #else

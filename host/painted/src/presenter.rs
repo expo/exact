@@ -21,7 +21,7 @@ use crate::raster::Raster;
 use crate::text::{Measurer, Shared, TextEngine};
 use exact_kernel::{NodeType, Overflow, PropId, ViewId};
 use exact_plan::{EventKind, Plan};
-use exact_runner::agent::{num, quote};
+use exact_runner::json::{num, quote};
 use exact_runner::{DataSource, Event};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -132,6 +132,11 @@ mod wheel;
 use scroll_end::Completion;
 #[cfg(all(test, not(windows)))]
 mod scroll_end_tests;
+/// The host work `scroll_end_tests` hands out (LLP 1047.001 D12).
+#[cfg(all(test, not(windows)))]
+struct TestWork;
+#[cfg(all(test, not(windows)))]
+impl exact_runner::HostWork for TestWork {}
 mod shortcuts;
 mod status_bar;
 #[cfg(target_os = "android")]

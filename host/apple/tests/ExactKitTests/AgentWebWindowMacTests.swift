@@ -75,7 +75,7 @@ final class AgentWebWindowMacTests: XCTestCase {
         waitForMainQueue()
         XCTAssertEqual(window.level, .normal, "a host-owned window retains the guest-liveness fallback")
         defer {
-            session.webviews.reset()
+            session.webHost.reset()
             XCTAssertEqual(window.level, .agentBehind, "removing the last guest restores the host's driven level")
         }
         guard window.level == .normal else { return }
@@ -150,7 +150,7 @@ final class AgentWebWindowMacTests: XCTestCase {
         XCTAssertTrue(Agent.windowsBehind, "this regression must run in frozen agent mode before mounting a guest")
         let module = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_TEST_WEB_MODULE"])
         if Self.pages == nil { Self.pages = try FramePages() }
-        session.webviews.moduleLocation = { module }
+        session.webHost.moduleLocation = { module }
         XCTAssertTrue(session.openIncoming("/?origin=http://127.0.0.1:\(Self.pages!.port)"))
         window.contentView = ExactView(session: session)
         XCTAssertNil(session.boot(plan: try fixturePlan("IFRAME_PARTITION"), size: window.contentView!.bounds.size).error)

@@ -1154,7 +1154,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         drop(owner);
         // It reads and writes the Store too: it takes its turn (`order.rs`).
         self.deliver_in_turn((token, continuation, child), outcome, reply, store);
-        Ok(Some(Request::continuation(continuation)))
+        Ok(Some(Request::continuation::<crate::host_work::WorkerTurn>(
+            continuation,
+        )))
     }
 
     fn module_landed(

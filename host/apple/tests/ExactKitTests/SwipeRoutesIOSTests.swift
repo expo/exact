@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// Hand-written swipe rows in a route's page (`host/apple/tests/fixtures/swipe-push.contract`),
 /// a projected row and a painted one, swiped with real touches from the XCTest touch runner:
@@ -20,14 +21,14 @@ final class SwipeRoutesIOSTests: XCTestCase {
         func isOpen(_ kind: Kind, on route: String = "start") -> Bool {
             guard let owner = try? row(kind, on: route) else { return false }
             if kind == .painted { return (owner.scrollView?.contentOffset.x ?? 0) > 1 }
-            return p.swipeActions.cell(of: owner)?.configurationState.isSwiped == true
+            return p.swipeHost.cell(of: owner)?.configurationState.isSwiped == true
         }
         /// Whether the row's own motion is over: its scroll's, or its cell's.
         func atRest(_ kind: Kind) -> Bool {
             guard let owner = try? row(kind) else { return false }
             if kind == .painted { return !(owner.scrollView.map { $0.isDragging || $0.isDecelerating } ?? false) }
             func moving(_ layer: CALayer) -> Bool { !(layer.animationKeys() ?? []).isEmpty || (layer.sublayers ?? []).contains(where: moving) }
-            var table = p.swipeActions.cell(of: owner)?.superview
+            var table = p.swipeHost.cell(of: owner)?.superview
             while let view = table, !(view is UITableView) { table = view.superview }
             return !(table.map { moving($0.layer) } ?? false)
         }
@@ -46,7 +47,7 @@ final class SwipeRoutesIOSTests: XCTestCase {
             try drag(from: CGPoint(x: r.maxX - 30, y: r.midY), to: CGPoint(x: r.maxX - 200, y: r.midY), velocity: 500)
         }
         func facts(_ kind: Kind) -> String {
-            "\(kind) at \((try? frame(kind)) ?? .null), open row: \(p.swipeActions.openRow.map(String.init) ?? "none"), page y: \((try? node("start-page"))?.scrollView?.contentOffset.y ?? -1)"
+            "\(kind) at \((try? frame(kind)) ?? .null), open row: \(p.swipeHost.openRow.map(String.init) ?? "none"), page y: \((try? node("start-page"))?.scrollView?.contentOffset.y ?? -1)"
         }
     }
 
@@ -104,7 +105,7 @@ final class SwipeRoutesIOSTests: XCTestCase {
         for kind in Kind.allCases {
             try s.swipe(kind)
             waitFor("\(kind) opens", cap: 5, facts: { s.facts(kind) }) { s.isOpen(kind) }
-            XCTAssertNotNil(s.p.swipeActions.openRow, "\(kind) is the open row: \(s.facts(kind))")
+            XCTAssertNotNil(s.p.swipeHost.openRow, "\(kind) is the open row: \(s.facts(kind))")
             // The header's button, outside the row's view, pushes.
             s.p.press(try s.node("open-detail").id)
             settle(2, "detail pushed")
@@ -117,7 +118,7 @@ final class SwipeRoutesIOSTests: XCTestCase {
             nav.popViewController(animated: true)
             settle(1, "back on the rows")
             XCTAssertTrue(s.isOpen(kind), "\(kind) is still open after the pop: \(s.facts(kind))")
-            XCTAssertEqual(s.p.swipeActions.openRow, try s.row(kind).id, "and is the open row again")
+            XCTAssertEqual(s.p.swipeHost.openRow, try s.row(kind).id, "and is the open row again")
             let r = try s.frame(kind)
             try s.drag(from: CGPoint(x: 60, y: r.midY), to: CGPoint(x: 240, y: r.midY), velocity: 500)
             waitFor("\(kind) closes by its own drag", cap: 5, facts: { s.facts(kind) }) { !s.isOpen(kind) }

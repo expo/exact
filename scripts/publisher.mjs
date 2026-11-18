@@ -146,7 +146,10 @@ function typescriptBundle(bundle, build, baked, cohort) {
   // a pair of another version, or one whose source derives a permission the APK does not declare, needs a new APK.
   const android = inputs.hermesBytecode !== undefined ? { hermesBytecode: meta.bytecodeVersion ?? null } : {};
   if (inputs.androidLinked) android.androidPermissions = meta.androidPermissions ?? [];
-  const requires = { grantCeiling: meta.grants ?? '', [grantKey]: inputs[grantKey], ...runtimeRequired, ...android };
+  // A module that can leave an answer for the executor needs an Apple binary that links it, and so does one whose
+  // receipt omits `typescriptHostWork` (LLP 1047.001 D12, D13).
+  const apple = ['ios', 'macos'].includes(inputs.platform) && meta.typescriptHostWork !== false ? { appleUses: ['io'] } : {};
+  const requires = { grantCeiling: meta.grants ?? '', [grantKey]: inputs[grantKey], ...runtimeRequired, ...android, ...apple };
   // A new stream's bake already lists a pair when its widgets or activities need one (bake/src/widgets.rs); this one replaces it.
   const other = (a) => !a.name.startsWith('typescript/');
   const artifacts = build.graph.artifacts.filter(other).map((a) => {
@@ -172,7 +175,8 @@ function planGraph(tool, app, plan, compat, env, entries) {
       const entry = planGraph(tool, app, bytes, compat, env);
       icons.push(...(entry.appleIcons ?? []));
       const raster = entry.artifacts[0].requires.appleRasterIcons;
-      graph.artifacts.push({ ...entry.artifacts[0], name, requires: raster ? { appleRasterIcons: raster } : {} });
+      const uses = entry.artifacts[0].requires.appleUses;
+      graph.artifacts.push({ ...entry.artifacts[0], name, requires: { ...(raster ? { appleRasterIcons: raster } : {}), ...(uses ? { appleUses: uses } : {}) } });
     }
     graph.appleIcons = [...new Map(icons.sort((a, b) => Buffer.compare(Buffer.from(a.svg), Buffer.from(b.svg))).map(icon => [icon.svg, icon])).values()];
     return graph;
@@ -328,7 +332,7 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
       // module pins, linked composition and texture thinning; an Android
       // cohort's composition and Hermes bytecode version are compared with
       // what the generation requires (LLP 1030.006 D4, D4a).
-      const packaged = new Set(['typescriptModule', 'linked', 'textureFamily', 'appleRasterIcons', 'androidLinked', 'hermesBytecode']);
+      const packaged = new Set(['typescriptModule', 'linked', 'linkRoster', 'textureFamily', 'appleRasterIcons', 'androidLinked', 'hermesBytecode']);
       const keys = new Set([...Object.keys(compat.inputs), ...Object.keys(inputs)]);
       superseded = [...keys].filter(key => !packaged.has(key) && canonicalJson(compat.inputs[key] ?? null) !== canonicalJson(inputs[key] ?? null));
       // A module of another Hermes bytecode version than the APK's engine runs is for a newer APK (LLP 1030.006 D4).

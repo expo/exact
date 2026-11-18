@@ -211,7 +211,7 @@ extension NodeView {
         }
         return nil
     }
-    var defaultLink: String? {
+    package var defaultLink: String? {
         guard kind == "button", !handlers.contains("press"), let url = props["href"], !url.isEmpty else { return nil }
         return url
     }

@@ -9,6 +9,7 @@
 // native module's quit work runs (LLP 1069.010 Q4), five seconds at most for
 // all together, and the agent's exit 1.5 (`QuitHold`). What the store
 // already has completes on disk regardless.
+import CExact
 import Foundation
 #if canImport(UIKit)
 import UIKit
@@ -18,7 +19,7 @@ public extension ExactSession {
     /// Whether the app must finish work an answer started, asked of the
     /// runner now: what a quit waits for.
     var mustFinish: Bool {
-        guard let data = agent("{\"op\":\"background\"}").data(using: .utf8),
+        guard let data = runtime.ask(exact_must_finish, "").data(using: .utf8),
               let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         return reply["mustFinish"] as? Bool == true
     }

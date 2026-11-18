@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// A batch that only builds, moves or drops a virtualized list's rows (a
 /// fling's fills, many a second) skips the route projection; anything the
@@ -40,7 +41,7 @@ final class ListRowsIOSTests: XCTestCase {
 
     func testRowsBuiltMovedAndDroppedInAVirtualizedListAreOnlyListRows() {
         let p = presenter()
-        XCTAssertTrue(p.collections.owns(1))
+        XCTAssertTrue(p.listHost.owns(1))
         XCTAssertTrue(p.onlyListRows(wireBatch([
             ["op": "create", "id": 20, "kind": "view"], ["op": "create", "id": 21, "kind": "view"],
             ["op": "children", "id": 20, "ids": [21]], ["op": "children", "id": 1, "ids": [10, 20]],
@@ -272,7 +273,7 @@ final class ListRowsIOSTests: XCTestCase {
         print("LANE L benchmark fills=20 navigation_syncs=\(p.navigation.syncCalls - syncs) dependency_builds=\(p.listRowDependencyBuilds - builds)")
         XCTAssertEqual(p.navigation.syncCalls - syncs, 0)
         XCTAssertEqual(p.listRowDependencyBuilds - builds, 1)
-        XCTAssertEqual(p.collections.entries[1]?.snapshot.rows.count, 20)
+        XCTAssertEqual(p.listHost.entries[1]?.snapshot.rows.count, 20)
         for op: [String: Any] in [
             ["op": "props", "id": 1, "set": ["id": "other"]],
             ["op": "children", "id": 1, "ids": [10, 50]],
@@ -403,7 +404,7 @@ final class ListRowsIOSTests: XCTestCase {
         XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
         view.layoutIfNeeded()
         let p = session.presenter
-        p.collections.settle()
+        p.listHost.settle()
         session.drainFill()
         let list = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "list" })
         let scroll = try XCTUnwrap(list.scroll)
@@ -415,7 +416,7 @@ final class ListRowsIOSTests: XCTestCase {
         }
         for y in [300, 600, 900, 1200, 900, 600, 300, 0] {
             scroll.contentOffset.y = CGFloat(y)
-            p.collections.settle()
+            p.listHost.settle()
             session.drainFill()
         }
         session.onApplyForTests = nil

@@ -155,7 +155,7 @@ extension NavigationHost {
     /// The module's `tabContainer`, when it is connected: the app's own
     /// container for these tabs' controllers, or nil.
     private func askTabContainer(_ tabs: NavigationTabs, selected: Int) -> UIViewController? {
-        guard let natives = presenter.session?.natives, natives.hatchesConnected, natives.tabCalls != nil else { return nil }
+        guard let natives = presenter.session?.natives, natives.hatchesConnected, natives.hasTabHatches else { return nil }
         let names = tabs.panels.map { $0.props["id"] ?? "" }
         return natives.tabContainerHatch(names: names, nodes: tabs.tabs.map(\.id), selected: selected, controllers: tabPanels.compactMap { tabStacks[$0] }) as? UIViewController
     }
@@ -797,6 +797,10 @@ extension NavigationHost {
             for _ in 0..<4 {
                 let top = sv.adjustedContentInset.top
                 sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -top - nav.navigationBar.frame.height), in: sv, clamped: false)
+                // UIKit 26 can defer the bar's layout after an unanimated pull.
+                nav.navigationBar.setNeedsLayout()
+                nav.view.setNeedsLayout()
+                nav.navigationBar.layoutIfNeeded()
                 nav.view.layoutIfNeeded()
                 if sv.adjustedContentInset.top <= top + 0.5 { break }
             }

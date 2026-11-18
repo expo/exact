@@ -853,8 +853,10 @@ impl Request {
         listen.refusal().map(str::to_string)
     }
 
-    /// Yield to a host-owned executor without inventing a network URL or grant.
-    pub fn continuation(token: u64) -> Self {
+    /// Yield to a host-owned executor without inventing a network URL or
+    /// grant, for a source `S` that declares it hands out such work
+    /// ([`crate::HostWork`], LLP 1047.001 D12).
+    pub fn continuation<S: crate::HostWork + ?Sized>(token: u64) -> Self {
         Self {
             continuation: Some(token),
             ..Self::get("")
@@ -1441,7 +1443,7 @@ mod scheduling_tests {
         for request in [
             Request::get("https://example.test"),
             Request::post_json("https://example.test", "{}"),
-            Request::continuation(1),
+            Request::continuation::<crate::host_work::TestWork>(1),
             Request::storage(vec![]),
         ] {
             assert_eq!(request.http, HttpScheduling::Ordered);

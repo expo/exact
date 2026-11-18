@@ -4,6 +4,7 @@ import XCTest
 import ImageIO
 import Darwin
 @testable import ExactKit
+@testable import ExactImages
 
 @_silgen_name("proc_pid_rusage")
 private func rasterProfileRusage(_ pid: Int32, _ flavor: Int32, _ buffer: UnsafeMutableRawPointer) -> Int32

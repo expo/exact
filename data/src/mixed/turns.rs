@@ -301,6 +301,9 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The host work these tests hand out (LLP 1047.001 D12).
+    struct TestWork;
+    impl exact_runner::HostWork for TestWork {}
 
     #[derive(Default)]
     struct Source {
@@ -319,7 +322,7 @@ mod tests {
 
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
             self.next += 1;
-            Ok(Answer::Later(Request::continuation(self.next)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(self.next)))
         }
 
         fn parse(
@@ -332,10 +335,10 @@ mod tests {
             if source == "feed" {
                 if matches!(outcome, Outcome::Message(_)) {
                     self.next += 1;
-                    return Ok(Answer::Later(Request::continuation(self.next)));
+                    return Ok(Answer::Later(Request::continuation::<TestWork>(self.next)));
                 }
                 if matches!(outcome, Outcome::Storage(_)) {
-                    return Ok(Answer::Later(Request::continuation(self.next)));
+                    return Ok(Answer::Later(Request::continuation::<TestWork>(self.next)));
                 }
             }
             Ok(Answer::Now(Value::str("done")))

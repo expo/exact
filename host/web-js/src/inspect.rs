@@ -200,7 +200,7 @@ pub fn table(plan: &Plan, sites: &Sites) -> Result<String, String> {
                 (Some(v @ exact_plan::str_value!()), false) => json!(v.text()),
                 (Some(v), false) => {
                     let mut s = String::new();
-                    agent::untyped_json(v, &mut s);
+                    exact_runner::json::untyped_json(v, &mut s);
                     json!(s)
                 }
                 _ => Json::Null,

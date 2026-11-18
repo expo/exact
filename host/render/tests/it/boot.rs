@@ -11,6 +11,10 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const SRC: &str = r#"
 routes nav
   tab home "/" render=request paint=boot
@@ -46,7 +50,7 @@ impl DataSource for Cards {
         let fast = matches!(args.first(), Some(Value::List(speed)) if speed.first().and_then(Value::as_str) == Some("fast"));
         match source {
             "cards" if fast => Ok(Answer::Now(Value::list(vec![Value::str("quick")]))),
-            "cards" => Ok(Answer::Later(Request::continuation(1))),
+            "cards" => Ok(Answer::Later(Request::continuation::<TestWork>(1))),
             other => Err(DataError::UnknownSource(other.into())),
         }
     }

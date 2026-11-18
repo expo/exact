@@ -22,8 +22,9 @@ pub(super) fn depth([outer, inner]: [f32; 2], at: f32) -> f32 {
 /// then, on each edge where an ancestor at or below that reserves, from its
 /// padding edge to its observation there plus its reservations, and from
 /// further out where that edge lies in the area; an owner's root from the
-/// allocation's edge, with the band as its observation. A box's own
-/// reservations are not among them.
+/// allocation's edge, with the band as its observation and its padding
+/// stacked on the keyboard it clears. A box's own reservations are not
+/// among them.
 pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2]; 4] {
     let from = |open: [bool; 4]| -> [[f32; 2]; 4] {
         std::array::from_fn(|e| [0.0, if open[e] { band[e] } else { 0.0 }])
@@ -59,7 +60,14 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
             false => space.padding_edges(arena, s),
         };
         let observed: [f32; 4] = std::array::from_fn(|e| depth(sides[e], edges[e]));
-        let inside = r.inside(observed);
+        // The keyboard an owner's root clears is no part of the container
+        // region, so only the padding stacked on it reaches past it (D9)
+        let cover = match space.owner == Some(s) {
+            true => super::keyboard::cover(arena, s),
+            false => [0.0; 4],
+        };
+        let cover = std::array::from_fn(|e| if r.padding[e] > 0.0 { cover[e] } else { 0.0 });
+        let inside = r.inside_covered(observed, cover);
         for e in 0..4 {
             if open[e] && (r.added[e] != 0.0 || r.padding[e] != 0.0) {
                 // A padding edge at or past the area's inner side joins it

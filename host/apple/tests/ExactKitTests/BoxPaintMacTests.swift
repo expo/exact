@@ -3,6 +3,7 @@ import AppKit
 import ImageIO
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// A node's box as the Mac paints it, read back as pixels: a rounded box's
 /// border in the colour the host sends for its sides, and each corner at

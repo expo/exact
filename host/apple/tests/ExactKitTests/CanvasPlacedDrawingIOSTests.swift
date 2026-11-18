@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 @testable import ExactSurfaces
 
 /// The indices the fake surface places (`gpu_placement` 1), moved right by

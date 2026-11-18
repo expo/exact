@@ -10,6 +10,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tiny_skia::Transform;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 fn submit<D: DataSource>(p: &mut Presenter<D>) -> Option<SubmittedFrame> {
     p.display_frame()
 }
@@ -25,7 +29,7 @@ impl DataSource for Empty {
     }
     fn answer(&mut self, _: &mut Store, name: &str, _: &[Value]) -> Result<Answer, DataError> {
         assert_eq!(name, "work");
-        Ok(Answer::Later(Request::continuation(1)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(1)))
     }
     fn parse(
         &mut self,

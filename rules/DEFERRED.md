@@ -686,6 +686,23 @@ out: textures, the canvas's children as a texture, several passes, compute, a
 translucent canvas, Display P3 and HDR, matrices and arrays as uniforms, a
 built-in pointer, and inline or downloaded source (LLP 1181 §8).
 
+**Expanded (Charlie, 2026-11-17, expo/exact#724; LLP 1133.039):**
+`@exact/model-viewer`, a GPU package showing a binary glTF from the app's
+assets or files, with meshopt and quantization, an orbit camera, pick,
+per-node styles, the faded-behind style, hotspot labels and a clipping plane,
+on the web, macOS, iOS, tvOS (view only), Android, Linux and Windows; and
+`exact-gpu`'s `placement_opacity`. Unblocks technical-model viewers without
+an app-owned renderer. Take: waived by Charlie, 2026-11-17. Still out
+(LLP 1133.039 §8): animation, skins and morph targets; PBR beyond the
+headlight; AR; direct URLs, multi-file glTF and download progress; USDZ and
+Draco; lines, points, sparse accessors and instancing; several clip planes
+and capped sections; picked points, normals and measurement; zoom by field
+of view; input handed back to a page; adjustable VoiceOver orbit, tvOS remote
+orbit, Mac trackpad scroll panning, Reduce Motion on `Frame` and Linux
+AT-SPI; interaction prompts, posters, lazy loading and auto-rotation; an
+orthographic camera and camera-orbit bounds. Picking and hotspot occlusion
+share a BVH, admitted when the measured ray costs met §8's trigger.
+
 ## Features carried over as "no"
 
 **Admitted (Charlie, 2026-10-12, textrows ruling):** bounded

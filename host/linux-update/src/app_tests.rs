@@ -8,6 +8,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const UPDATE_COMPAT: &str = r#"{"id":"fixture00000000","inputs":{"app":"com.exact.fixture","keys":null,"trust":"development","store":{"L":"A"},"rustMode":"wasm"},"delivery":{"channel":"prod","origin":"https://updates.example"}}"#;
 /// Dev binaries check only a named origin; name the fixture's.
 const ORIGIN: &str = "https://updates.example";
@@ -1145,7 +1149,9 @@ fn delivered_module_reads_wait_for_requests_and_all_assets_verify_before_commit(
             Err(DataError::UnknownSource(name.into()))
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(exact_runner::Request::continuation(1)))
+            Ok(Answer::Later(
+                exact_runner::Request::continuation::<TestWork>(1),
+            ))
         }
         fn replacement(&self, _: &[u8], _: &str, _: Vec<u8>) -> Result<Self, DataError> {
             Ok(Self)

@@ -1354,8 +1354,8 @@ test('game web, release and unwired gpu-dev bakes never open registry generation
       const dir=${JSON.stringify(dir)};
       for(const [platform,profile,target] of [['web','web','wasm32-unknown-unknown'],['linux','release',${JSON.stringify(bakeTarget('linux'))}],['linux','gpu-dev',${JSON.stringify(bakeTarget('linux'))}]]) {
         const name='fixture-'+platform;
-        const host={id:name,name,targets:[{kind:[platform==='web'?'cdylib':'bin'],name:'fixture'}]};
-        const gpu={id:'fixture-gpu',name:'fixture-gpu',targets:[{kind:['cdylib'],name:'surface'}]};
+        const host={id:name,name,manifest_path:dir+'/host/Cargo.toml',targets:[{kind:[platform==='web'?'cdylib':'bin'],name:'fixture'}]};
+        const gpu={id:'fixture-gpu',name:'fixture-gpu',manifest_path:dir+'/gpu/Cargo.toml',targets:[{kind:['cdylib'],name:'surface'}]};
         const metadata={workspace_root:dir,packages:[host,gpu],resolve:{nodes:[{id:host.id,deps:[]},{id:gpu.id,deps:[]}]}};
         const app={dir,workspace:dir,target:dir+'/target',hasGpu:true,manifest:{app:{id:'fixture'},rust:false,game:{}},crate:kind=>'fixture-'+kind,prepare:()=>metadata};
         const before=builds.length;

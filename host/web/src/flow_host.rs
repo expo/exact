@@ -55,7 +55,7 @@ impl<D: DataSource> Host<D> {
                     // @ref LLP 1043.000 §8 — the kernel's admission rule, by structure.
                     let slot = kernel.arena().slot_of(id).expect("live child");
                     match kernel.arena().auto_flow_refusal(slot) {
-                        Some(refusal) => exact_runner::agent::quote(refusal.message(), &mut json),
+                        Some(refusal) => exact_runner::json::quote(refusal.message(), &mut json),
                         None => json.push_str("null"),
                     }
                     json.push('}');

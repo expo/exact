@@ -435,8 +435,10 @@ export function placeReporter(params, platform = globalThis) {
         params.get("formatLocale") ?? ""
       ].join("\0");
     }
+    // Take a render's seed, 0, as its time facts do (host/web-js/build.mjs `exactTime`), since a draw there would count
+    // as the page's own (LLP 1069.005 D2)
     if (seed === undefined) {
-      seed = platform.crypto.getRandomValues(new Uint32Array(1))[0];
+      seed = platform.__exactRender ? 0 : platform.crypto.getRandomValues(new Uint32Array(1))[0];
     }
     return [
       platform.navigator.language,

@@ -1,6 +1,10 @@
 //! Both geometric edges: an async start must settle before end can read its answer.
 use exact_kernel::Kernel;
 use exact_plan::Value;
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     Answer, CollectionFeedback, DataError, DataSource, Outcome, Request, Runner, Store,
 };
@@ -32,7 +36,7 @@ impl DataSource for AsyncRows {
     }
     fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
         if self.later {
-            Ok(Answer::Later(Request::continuation(
+            Ok(Answer::Later(Request::continuation::<TestWork>(
                 args[0].as_number().unwrap() as u64 + 100,
             )))
         } else {
@@ -47,7 +51,7 @@ impl DataSource for AsyncRows {
         _: Outcome,
     ) -> Result<Answer, DataError> {
         if std::mem::take(&mut self.continuation) {
-            Ok(Answer::Later(Request::continuation(777)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(777)))
         } else {
             Ok(Answer::Now(self.value.clone()))
         }

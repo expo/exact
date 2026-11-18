@@ -7,6 +7,7 @@ import CoreText
 import IOSurface
 #endif
 @testable import ExactKit
+@testable import ExactImages
 
 final class TextPaintTests: XCTestCase {
     func testAnInvisibleStrokedSiblingCannotLeakIntoAVisibleRun() {

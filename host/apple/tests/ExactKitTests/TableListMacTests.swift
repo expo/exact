@@ -6,6 +6,8 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
 
 final class TableListMacTests: XCTestCase {
     private var fixture: TableFixture?
@@ -225,7 +227,7 @@ final class TableListMacTests: XCTestCase {
     func testAListTheRunnerDoesNotWindowHasItsChildrenAsTheTablesRows() throws {
         let f = try TableFixture(count: 0, source: Self.plain)
         fixture = f
-        XCTAssertFalse(f.presenter.collections.owns(f.list.id), "the runner does not window this list")
+        XCTAssertFalse(f.presenter.listHost.owns(f.list.id), "the runner does not window this list")
         XCTAssertTrue(f.table.superview === f.document, "the table is in the list's own scroller")
         // The heading and the sixty rows; the box out of the flow is no row, and stays in the document.
         try check(f, "at the top", rows: 61)
@@ -460,7 +462,7 @@ extension TableListMacTests {
         if let feed = f.presenter.tables.feeds[list.id], let item = feed.rows.first(where: { $0.node === row || $0.root == row.id }) {
             return feed.table.convert(feed.table.rect(ofRow: item.index), to: view).maxY
         }
-        if let entry = f.presenter.collections.entries[list.id] {
+        if let entry = f.presenter.listHost.entries[list.id] {
             let wrapper = try XCTUnwrap(entry.snapshot.rows.compactMap { f.presenter.views[$0.view] }
                 .first { row === $0 || row.isDescendant(of: $0) }, "the authored row is in a current mounted wrapper")
             XCTAssertNotNil(wrapper.props["listItemKey"])
