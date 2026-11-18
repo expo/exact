@@ -347,7 +347,7 @@
         "additionalProperties": false,
         "properties": {
           "name": {
-            "description": "What setAppIcon takes and appIcon answers: ASCII letters and digits, starting with a letter, at most 32, unique regardless of case. Not AppIcon, the primary's Icon Composer project's name, or another asset's in the app's catalogs.",
+            "description": "What setAppIcon takes and appIcon answers: ASCII letters and digits, starting with a letter, at most 32, unique regardless of case. Not AppIcon, the name of the primary's Icon Composer project (the app's or a variant's), or another asset's in the app's catalogs.",
             "type": "string",
             "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
           },
@@ -1571,11 +1571,13 @@
               "ios": {
                 "type": "object",
                 "properties": { "icon": { "type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app, in place of host.ios.icon." } },
+                "required": ["icon"],
                 "additionalProperties": false
               },
               "macos": {
                 "type": "object",
                 "properties": { "icon": { "type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app, in place of host.macos.icon." } },
+                "required": ["icon"],
                 "additionalProperties": false
               }
             },

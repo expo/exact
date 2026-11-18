@@ -2005,8 +2005,8 @@ and select it with `--variant dev` (or `EXACT_VARIANT=dev`; the flag wins): `bun
 - `icons` replace every icon source of the app, `color_scheme_dark.icons` and Icon Composer's `host.ios.icon`
   and `host.macos.icon` included. Without them the variant keeps the app's icons.
 - `host.ios.icon` and `host.macos.icon` name the variant's own Icon Composer project. It replaces the app's on
-  that platform and wins there over `icons`, as the app's does; the other hosts take `icons`. A variant has no
-  other member of `host`.
+  that platform and wins there over `icons`, as the app's does. A platform the variant names no project for
+  keeps the app's, unless the variant has `icons`. A variant has no other member of `host`.
 - `env` gives values to settings the manifest's `env` declares. The order is the environment, the variant's
   `env`, `.env.local`, then `.env`.
 

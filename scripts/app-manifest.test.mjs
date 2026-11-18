@@ -1086,6 +1086,7 @@ test('app.json variants: a suffix, a name, icons and settings per name, refused 
       // Of `host`, a variant names its Icon Composer projects and nothing else.
       [{ dev: { ...dev, host: { ios: { icon: 'assets/Dev.icon', minimumOS: '18.0' } } } }, /variants\.dev\.host\.ios\.minimumOS: not a known key/],
       [{ dev: { ...dev, host: { android: { id: 'com.example.other' } } } }, /variants\.dev\.host\.android: not a known key/],
+      [{ dev: { ...dev, host: { ios: {} } } }, /variants\.dev\.host\.ios: missing required "icon"/],
       [{ dev }, /variants\.dev\.host\.ios\.icon: assets\/Dev\.icon gives the primary icon the name of alternate_icons\[0\] \("dev"\) on Apple; rename one/, { alternate_icons: [{ name: 'dev', icons: [{ src: 'assets/missing.png' }] }] }],
       [{ dev: { ...dev, icons: [{ src: 'assets/missing.png' }] } }, /variants\.dev\.icons\[0\]\.src: assets\/missing\.png does not exist/],
       [{ dev }, /host\.ios\.appClip\.id com\.other\.Clip does not begin with com\.example\.v\./, { host: { ios: { appClip: { id: 'com.other.Clip' } } } }],
