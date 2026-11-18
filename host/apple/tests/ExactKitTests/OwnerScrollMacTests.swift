@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1072: a list scrolled with its slices built on the owner thread while
 /// main paints what they mount. The macOS host keeps slices synchronous in

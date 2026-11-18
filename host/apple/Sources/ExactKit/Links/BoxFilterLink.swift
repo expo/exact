@@ -3,10 +3,9 @@
 // filtered boxes, and the filter engine (`FilterExtent`, `FilterProgram`,
 // `SvgFilterGPU`), which SVG's filters use too, so the SVG product depends on
 // this one. The core reaches it only through what this file declares.
-// `ExactEffects.install()` sets `make` and `makeSet`; without it a box's
-// `filter` draws nothing, and a plan with one is refused at boot
-// (`Unlinked("effects")`). The engine is still ExactKit's while the SVG
-// files that call it are, so `prewarm` keeps its default until they move.
+// `ExactEffects.install()` sets its slots; without it a box's `filter`
+// draws nothing, and a plan with one is refused at boot
+// (`Unlinked("effects")`).
 // `clip-path` stays in the core: its parser is small and its mask is the
 // core's rounded-outline mask (`ClipPath.mask`).
 import CoreGraphics
@@ -66,5 +65,5 @@ package enum BoxFilterLink {
     package static var makeSet: (() -> any BoxFilterSet)?
     /// Make the GPU filter pipelines now, off the main thread, for a plan
     /// that can show a filter, before its first picture.
-    package static var prewarm: (() -> Void)? = { SvgFilterMetal.prewarm() }
+    package static var prewarm: (() -> Void)?
 }

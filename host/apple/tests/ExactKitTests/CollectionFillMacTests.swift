@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1050.000 stage 1 on AppKit: a collection's scroll callback builds only
 /// what shows when a gap shows, defers the rest to the pump, and responsive

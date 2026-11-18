@@ -16,7 +16,13 @@ export const STREAM_REFUSAL = null;
 // fetch is counted on its answer, held (`call.held`) or not (`call.plain`), or as tied to no answer
 // (`answering.loose`); an answer with only held fetches out counts for no clock (held.js `counted`, whose
 // hooks the page's entry sets on `answering`, build.mjs).
-export function fetch(input, options) { return owned(fetchInCall(input, options)).then(responseFor); }
+export function fetch(input, options) {
+  const call = currentContext();
+  return owned(fetchInCall(input, options)).then(responseFor, error => {
+    if (globalThis.__exactRender && error?.renderDeferred) return answering.refuseVisitor(error.message, call);
+    throw error;
+  });
+}
 // A response's body reads and clones in the module's promise domain, without changing the page's Response prototype:
 // the four Hermes's Response has (js/src/binary.js).
 export function responseFor(response) {
@@ -514,6 +520,7 @@ Object.defineProperty(NoFunction, 'prototype', { value: globalThis.Function.prot
 // Fixed, so no `delete` or write uncovers the inherited one.
 for (const f of [NoFunction, noEval]) Object.defineProperty(f, 'constructor', { value: NoFunction, writable: false, configurable: false });
 const guarded = {
+  exactHost() { answerOnly('exactHost()'); return 'web'; },
   Date: GuardedDate, Math: GuardedMath, Function: NoFunction, eval: noEval,
   XMLHttpRequest: noIo('XMLHttpRequest'), WebSocket: noIo('WebSocket'), EventSource: noIo('EventSource'),
   Intl: Object.freeze(Object.create(NativeIntl, { DateTimeFormat: { value: DateTimeFormat } })),
@@ -581,7 +588,7 @@ function seeded(n) {
   return stream(n);
 }
 export const { Date, Math, Intl, setTimeout, setInterval, requestAnimationFrame, requestIdleCallback, clearTimeout, clearInterval,
-  cancelAnimationFrame, cancelIdleCallback, performance, scheduler, queueMicrotask, XMLHttpRequest, WebSocket, EventSource, crypto } = guarded;
+  cancelAnimationFrame, cancelIdleCallback, performance, scheduler, queueMicrotask, XMLHttpRequest, WebSocket, EventSource, crypto, exactHost } = guarded;
 // Not a binding of this module's own: its `fetch` keeps the page's `AbortSignal.timeout` for `exactTimeout`.
 export { GuardedAbortSignal as AbortSignal, ModuleResponse as Response };
 // By name, since no binding of this module may be named `Function` or `eval` here; a module imports `eval` under

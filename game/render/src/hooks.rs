@@ -4,6 +4,7 @@ use crate::{FrameInput, RenderError};
 use exact_game::{Component, Entity, Mat4, Ref, Resource, Target, Transform, World};
 use exact_gpu::wgpu;
 
+pub(crate) mod budget;
 pub(crate) mod gpu_timing;
 mod materials;
 pub(crate) mod metrics;
@@ -80,6 +81,9 @@ impl Needs {
     pub const ANIMATE: Self = Self(8);
     /// Presentation resources are still preparing. Does not stop simulation ticks.
     pub const PENDING: Self = Self(16);
+    /// Pending only for want of allowance. A redraw at the same time cannot help.
+    /// Has effect only with `PENDING`.
+    pub const STARVED: Self = Self(32);
     /// Whether all the requested bits are present.
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -95,9 +99,39 @@ impl std::ops::BitOr for Needs {
     }
 }
 
+/// A live frame's time limit for hook preparation (LLP 1182.000 D6).
+#[derive(Clone, Copy, Debug)]
+pub struct Deadline {
+    start: crate::perf::Stamp,
+    offset_ms: f64,
+}
+impl Deadline {
+    pub(crate) fn new(start: crate::perf::Stamp, offset_ms: f64) -> Self {
+        Self { start, offset_ms }
+    }
+
+    pub(crate) fn remaining_at(&self, now: crate::perf::Stamp) -> f64 {
+        self.offset_ms - self.start.elapsed_at(now)
+    }
+
+    /// Whether the frame has reached its preparation deadline.
+    pub fn passed(&self) -> bool {
+        self.remaining_at(crate::perf::Stamp::now()) <= 0.
+    }
+
+    /// Milliseconds left for preparation, or zero after the deadline.
+    pub fn remaining_ms(&self) -> f64 {
+        self.remaining_at(crate::perf::Stamp::now()).max(0.)
+    }
+}
+
 /// Host clock and lifecycle facts, separate from saved game time.
 #[derive(Clone, Copy, Debug)]
 pub struct HookTime {
+    /// Bounded units this call to prepare may complete.
+    pub allowance: u32,
+    /// The preparation deadline for a live canvas with a known frame period.
+    pub deadline: Option<Deadline>,
     /// Seconds since the last draw; zero on resets, clamped to 100 ms on live gaps.
     pub dt: f32,
     /// Histories must be primed before this draw.
@@ -126,6 +160,8 @@ pub struct HookTime {
 impl Default for HookTime {
     fn default() -> Self {
         Self {
+            allowance: 0,
+            deadline: None,
             dt: 0.,
             reset: true,
             seekable: true,
@@ -250,6 +286,8 @@ pub struct FrameWork {
 pub trait Hooks: Default {
     /// Compile away all hook preparation for the default implementation.
     const ENABLED: bool = true;
+    /// Maximum bounded units per advancing frame, or zero to opt out.
+    const ALLOWANCE: u32 = 0;
     /// Allocate/resize resources, extract immutable world data, and upload uniforms.
     fn prepare(
         &mut self,
@@ -274,6 +312,10 @@ pub trait Hooks: Default {
     /// A named readiness reason, while PENDING is set.
     fn pending_reason(&self) -> &str {
         "render hook resources pending"
+    }
+    /// A JSON object of the game's own presentation counters, read with `state`. Diagnostics only.
+    fn report(&self) -> Option<&str> {
+        None
     }
     /// Last rejected shader/pipeline update, even if a previous set still draws.
     fn error(&self) -> Option<&str> {
@@ -447,6 +489,7 @@ mod pose_tests {
 pub(crate) struct HookClock {
     last: Option<(f64, bool)>,
     generation: Option<u64>,
+    pub budget: Option<Box<budget::Budget>>,
 }
 impl HookClock {
     pub fn reset(&mut self) {
@@ -473,6 +516,8 @@ impl HookClock {
         self.last = Some((frame.now_ms, frame.seekable));
         self.generation = Some(generation);
         HookTime {
+            allowance: 0,
+            deadline: None,
             dt,
             reset,
             paused,

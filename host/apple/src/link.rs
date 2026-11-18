@@ -38,7 +38,8 @@ pub fn linked() -> Uses {
 }
 
 /// The kernel's style grammars and grid layout, which a native host links
-/// by use (LLP 1047.001 D3, D10): each `Some` is registered at boot.
+/// by use (LLP 1047.001 D3, D10), and the families' kernel code the host's
+/// core paths reach ([`families`]): each `Some` is registered at boot.
 #[derive(Clone, Copy)]
 pub struct Grammars {
     backdrop: Option<fn()>,
@@ -46,6 +47,8 @@ pub struct Grammars {
     timelines: Option<fn()>,
     wide_colors: Option<fn()>,
     grid: Option<fn()>,
+    svg: Option<fn()>,
+    effects: Option<fn()>,
 }
 
 impl Grammars {
@@ -78,6 +81,16 @@ impl Grammars {
             } else {
                 None
             },
+            svg: if uses.has(Capability::Svg) {
+                Some(families::link_svg)
+            } else {
+                None
+            },
+            effects: if uses.has(Capability::Effects) {
+                Some(families::link_effects)
+            } else {
+                None
+            },
         }
     }
 
@@ -89,12 +102,61 @@ impl Grammars {
             self.timelines,
             self.wide_colors,
             self.grid,
+            self.svg,
+            self.effects,
         ]
         .into_iter()
         .flatten()
         {
             link();
         }
+    }
+}
+
+/// The families' kernel code the host's core paths call (LLP 1047.001 D10):
+/// registered at boot when the composition links the family ([`Grammars`]),
+/// so an archive without it names none of that code. Unregistered, each
+/// answers what a plan without the family needs, which is all admission lets
+/// such an archive run.
+pub(crate) mod families {
+    use exact_kernel::svg::filter::{Filter, FilterList};
+    use exact_kernel::{style::ColorValue, Kernel, NodeRef, ViewId};
+    use std::{collections::HashSet, sync::OnceLock};
+
+    type Sources = fn(&Kernel, ViewId) -> HashSet<ViewId>;
+    type Blended = fn(&Kernel, &NodeRef<'_>) -> bool;
+    type BoxFilter = fn(&FilterList, ColorValue, bool) -> Option<Filter>;
+
+    static SVG: OnceLock<(Sources, Blended)> = OnceLock::new();
+    static EFFECTS: OnceLock<BoxFilter> = OnceLock::new();
+
+    /// SVG: the nodes a scene reads, and whether a node is drawn into one.
+    pub fn link_svg() {
+        let _ = SVG.set((
+            exact_kernel::svg::scene_sources,
+            exact_kernel::svg::in_blended_scene,
+        ));
+    }
+
+    /// Box effects: a box's `filter` resolved to its program.
+    pub fn link_effects() {
+        let _ = EFFECTS.set(exact_kernel::svg::scene::box_filter);
+    }
+
+    /// The nodes `root`'s scene reads; none without SVG.
+    pub(crate) fn scene_sources(kernel: &Kernel, root: ViewId) -> HashSet<ViewId> {
+        SVG.get()
+            .map_or_else(HashSet::new, |svg| (svg.0)(kernel, root))
+    }
+
+    /// Whether `node` is drawn into an SVG's pixels; never without SVG.
+    pub(crate) fn in_blended_scene(kernel: &Kernel, node: &NodeRef<'_>) -> bool {
+        SVG.get().is_some_and(|svg| (svg.1)(kernel, node))
+    }
+
+    /// A box's `filter` as its program; none without box effects.
+    pub(crate) fn box_filter(list: &FilterList, text: ColorValue, dark: bool) -> Option<Filter> {
+        EFFECTS.get().and_then(|filter| filter(list, text, dark))
     }
 }
 
@@ -116,6 +178,8 @@ pub struct IoLinks {
     /// Copy an app file a share names for the sheet, under the app's
     /// `fs.read` grants: [`crate::picker::share_copy`].
     pub share_copy: ShareCopy,
+    /// Tell the app's widgets its store changed: [`crate::store::widget_changed`].
+    pub widget_changed: fn(&str),
 }
 
 /// How [`IoLinks`] copies an app file a share names (`{"path","to"}`) under
@@ -156,12 +220,14 @@ impl IoLinks {
         start: crate::executor::start_io,
         write_file: crate::host::canvas_capture::write,
         share_copy: crate::picker::share_copy,
+        widget_changed: crate::store::widget_changed,
     };
 }
 
-/// A turn's family work after its commits (LLP 1047.001 D10), which
-/// `Host::finish` runs in this order: the documents a source's answers
-/// watch (I/O), then, after the resize rounds, the SVG scenes the batch owes.
+/// A turn's family work (LLP 1047.001 D10): after its commits, which
+/// `Host::finish` runs in this order, the documents a source's answers
+/// watch (I/O), then, after the resize rounds, the SVG scenes the batch
+/// owes; and through the turn, what Core Animation plays of the motion.
 /// Each is `None` when the composition does not link its family, so the
 /// archive names none of its code.
 pub struct TurnLinks<D: DataSource> {
@@ -169,6 +235,41 @@ pub struct TurnLinks<D: DataSource> {
     pub documents: Option<fn(&mut crate::Host<D>)>,
     /// Send the SVG scenes laid out, moved or restyled this turn.
     pub svg: Option<fn(&mut crate::Host<D>, &mut crate::batch::Batch)>,
+    /// Hand Core Animation the motion it can play (`svg_lower`): boxes',
+    /// SVG paths' and live filters'. Linked when anything can move, as the
+    /// engine is; where nothing moves there is nothing to hand over.
+    pub motion: Option<MotionLowering<D>>,
+}
+
+/// [`TurnLinks::motion`]'s parts, each where the turn reaches it.
+pub struct MotionLowering<D: DataSource> {
+    /// At boot, over the engine's first sync of the tree: which motion Core
+    /// Animation plays and which the engine samples.
+    pub boot: fn(&mut crate::Host<D>, &exact_kernel::motion::MotionSync),
+    /// The same for each commit's sync.
+    pub commit: fn(&mut crate::Host<D>, &exact_kernel::motion::MotionSync),
+    /// Before sampling: hand over the transitions Core Animation plays.
+    pub present: fn(&mut crate::Host<D>),
+    /// After a turn's layout: the boxes' lowered animations it owes.
+    pub turn: fn(&mut crate::Host<D>, &mut crate::batch::Batch),
+}
+
+impl<D: DataSource> Clone for MotionLowering<D> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D: DataSource> Copy for MotionLowering<D> {}
+
+/// Whether anything in a plan that `uses` can move: a spring or a hold, a
+/// drag, keyframes, a timeline, or a transition CSS would play.
+const fn moves(uses: Uses) -> bool {
+    uses.has(Capability::Motion)
+        || uses.has(Capability::Drag)
+        || uses.has(Capability::Animations)
+        || uses.has(Capability::Timelines)
+        || uses.has(Capability::Transitions)
 }
 
 impl<D: DataSource> Clone for TurnLinks<D> {
@@ -190,6 +291,16 @@ impl<D: DataSource> TurnLinks<D> {
             },
             svg: if uses.has(Capability::Svg) {
                 Some(crate::Host::<D>::emit_svg_scenes)
+            } else {
+                None
+            },
+            motion: if moves(uses) {
+                Some(MotionLowering {
+                    boot: crate::Host::<D>::lower_motion,
+                    commit: crate::Host::<D>::lower_committed_motion,
+                    present: crate::Host::<D>::hand_over_transitions,
+                    turn: crate::Host::<D>::emit_box_motion,
+                })
             } else {
                 None
             },
@@ -335,14 +446,7 @@ impl<D: DataSource> Links<D> {
             } else {
                 None
             },
-            // Anything that moves: a spring or a hold, a drag, keyframes, a
-            // timeline, or a transition CSS would play.
-            engine: if uses.has(Capability::Motion)
-                || uses.has(Capability::Drag)
-                || uses.has(Capability::Animations)
-                || uses.has(Capability::Timelines)
-                || uses.has(Capability::Transitions)
-            {
+            engine: if moves(uses) {
                 &exact_motion::EngineLinks::ALL
             } else {
                 &exact_motion::EngineLinks::SETTLE
@@ -363,6 +467,13 @@ impl<D: DataSource> Links<D> {
                 } else {
                     exact_runner::ModuleLinks::<D>::NONE.presence
                 },
+                // As `RunnerLinks::text_axes`, which makes their engine.
+                text_axes: if uses.has(Capability::Transitions) || uses.has(Capability::Animations)
+                {
+                    exact_runner::ModuleLinks::<D>::ALL.text_axes
+                } else {
+                    exact_runner::ModuleLinks::<D>::NONE.text_axes
+                },
             },
             turn: TurnLinks::of(uses),
         }
@@ -370,9 +481,25 @@ impl<D: DataSource> Links<D> {
 }
 
 /// The capabilities `plan` uses that `linked` lacks, by name; `None` when
-/// it links them all.
+/// it links them all. A `data:` image that is an SVG uses SVG, as the bake
+/// counts it, so a plan applied after the bake is held to the same rule; a
+/// bundled asset's bytes are the bake's alone to read.
 pub fn missing(plan: &exact_plan::Plan, linked: Uses) -> Option<String> {
-    let missing = exact_runner::uses::apple_uses(plan).beyond(linked);
+    let mut uses = exact_runner::uses::apple_uses(plan);
+    let data_svg = exact_runner::uses::image_sources(plan)
+        .iter()
+        .any(|source| {
+            source
+                .bundled()
+                .and_then(|name| name.strip_prefix("data:"))
+                .is_some_and(|url| {
+                    exact_runner::uses::data_url(url).is_none_or(|b| exact_svg_file::sniff(&b))
+                })
+        });
+    if data_svg {
+        uses = uses.with(Capability::Svg).with(Capability::Effects);
+    }
+    let missing = uses.beyond(linked);
     (!missing.is_empty()).then(|| missing.to_string())
 }
 
@@ -469,7 +596,7 @@ mod tests {
         for (plan, name) in [
             (&tools, "tools"),
             (&view, "modules, native_views"),
-            (&svg, "svg"),
+            (&svg, "effects, svg"),
             (&image, "images"),
             (&hatch, "native_views"),
             (&control, "controls"),

@@ -19,6 +19,11 @@ The starter's planet page is `render=request`: its figures are a live API's, and
 makes a parameterised route's pages only from a `pages=` list. `serve` sends it whole, with
 its data.
 
+The server has no visitor: `--render js` leaves credentialed reads pending for
+the browser to ask after adoption, in TypeScript, declared sources and Rust.
+Public TypeScript reads may use `credentials: 'omit'`.
+See [web sessions](web-sessions.md) and [source rendering](../start-here-site.md).
+
 See [serving and hosting](website-hosting.md) for the build, development server and static hosting, including a mount such as `/app/`.
 
 ## The markup

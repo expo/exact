@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class CollectionPageBandIOSTests: XCTestCase {
     func testAnAuthoredOffsetWinsAfterTheListInsetChangesInABatch() throws {

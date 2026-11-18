@@ -64,8 +64,11 @@ fn a_source_route_grows_from_the_first_card_and_returns_from_its_kept_drawing() 
         assert_eq!(beneath, Pose::REST);
         assert!(near(start.height.unwrap() * start.scale, card.3));
         assert!(near(start.radius * start.scale, 16.));
-        assert!(p.stage_paint().items.iter().any(|item| matches!(item,
-            Item::Clip(shape, _) if near(shape.rect.3 * start.scale, card.3))));
+        assert!(p
+            .stage_paint()
+            .crossing
+            .iter()
+            .any(|cross| cross.height.is_some_and(|h| near(h * start.scale, card.3))));
         assert!(
             near(start.dx, card.0) && near(start.dy, card.1),
             "{start:?} {card:?}"
@@ -130,7 +133,6 @@ fn a_source_that_is_missing_hidden_or_outside_its_clip_uses_the_platform_fallbac
                 assert!(!p.stage_moving(), "an unresolved full-screen source cuts");
                 assert_eq!((out, incoming), (Pose::REST, Pose::REST));
                 let detail = p.host.kernel().node(id(&p, "route-detail")).unwrap().key;
-                assert!(!p.brush.kept(detail));
                 assert!(p.stage.zooms.is_empty());
                 assert!(!p.back_progress(0, 0., 0, p.host.now()));
                 back(&mut p);

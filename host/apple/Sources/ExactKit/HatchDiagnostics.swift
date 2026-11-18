@@ -442,8 +442,9 @@ private let hatchRecord: HatchRecordFn = { host, kind, node, scope, scopeLength,
 }
 
 extension ExactSession {
-    /// This session's store, which a development composition always makes.
-    var hatchDiagnostics: HatchDiagnostics { natives.diagnostics as! HatchDiagnostics }
+    /// This session's store, which a development composition makes when it
+    /// links the native module family; none without it.
+    var hatchDiagnostics: HatchDiagnostics? { natives.diagnostics as? HatchDiagnostics }
 
-    func hatchPerf() -> [String: Any] { hatchDiagnostics.perf(of: self) }
+    func hatchPerf() -> [String: Any] { hatchDiagnostics?.perf(of: self) ?? [:] }
 }

@@ -103,6 +103,7 @@ pub struct WorldSurface<G: Game, P: Executor = (), const ASSETS: bool = false, H
     samples: Option<exact_game::SceneSamples>,
     /// This frame's timing facts (`Surface::timing`), for the hooks' `FrameView.time`.
     timing: exact_gpu::FrameTiming,
+    scheduled_cap: std::cell::Cell<u32>,
     /// Delivered textures a live renderer prepares later (`prepare_now`).
     waiting: std::collections::BTreeMap<String, exact_game::asset::TextureData>,
     /// Models a live preparation left for a later frame.
@@ -192,6 +193,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
     }
     fn restart_perf(&mut self) {
         self.perf.restart();
+        if let Some(budget) = &mut self.hook_clock.budget {
+            budget.reset_counters();
+        }
         self.gpu_timing = None;
         if let Some(metrics) = self
             .render
@@ -200,6 +204,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         {
             metrics.disarm();
         }
+    }
+    fn frame_cap(&self) -> u32 {
+        let game = self
+            .sim
+            .as_ref()
+            .map_or(0, |sim| G::max_fps(sim.world(), sim.args()));
+        exact_gpu::lower_cap(game, self.hooks.max_fps())
     }
     fn finish_restore(&mut self) {
         if self.sim.as_ref().is_some_and(|s| !s.is_loading()) {
@@ -282,8 +293,11 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.raster_scale()
     }
     fn max_fps(&self) -> u32 {
-        let game = (self.sim.as_ref()).map_or(0, |sim| G::max_fps(sim.world(), sim.args()));
-        exact_gpu::lower_cap(game, crate::Hooks::max_fps(&self.hooks))
+        let cap = self.frame_cap();
+        if H::ENABLED && H::ALLOWANCE > 0 {
+            self.scheduled_cap.set(cap);
+        }
+        cap
     }
     fn timing(&mut self, timing: &exact_gpu::FrameTiming) {
         self.timing = *timing;
@@ -303,6 +317,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     fn clock(&mut self, seekable: bool) {
         if self.seekable != seekable {
             self.perf.submitted_live = None;
+            if let Some(budget) = &mut self.hook_clock.budget {
+                budget.reset_clock();
+            }
         }
         self.seekable = seekable;
         if let Some(report) = &mut self.perf.reporting {
@@ -336,7 +353,16 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.surface_arguments()
     }
     fn bind(&mut self, values: &[Value], at_ms: Option<f64>) -> Result<(), SurfaceError> {
-        self.bind_arguments(values, at_ms)
+        self.bind_arguments(values, at_ms)?;
+        if H::ENABLED && H::ALLOWANCE > 0 {
+            if let Some(now) = at_ms {
+                self.hook_clock
+                    .budget
+                    .get_or_insert_with(Box::default)
+                    .bind(now);
+            }
+        }
+        Ok(())
     }
     fn assets(&mut self) -> exact_gpu::AssetChanges {
         if !ASSETS {
@@ -464,7 +490,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     }
 
     fn preparing(&self) -> bool {
-        self.hooks.needs().contains(crate::Needs::PENDING)
+        crate::hooks::budget::preparing(self.hooks.needs(), self.seekable)
     }
     fn device_ready(&mut self, features: wgpu::Features, _: wgpu::Limits) {
         if ASSETS {
@@ -547,7 +573,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         if self.encoded.is_some() && self.perf.reporting.is_some() {
             let scale = self.raster_scale();
             let samples = self.samples.map_or(1, exact_game::SceneSamples::count);
-            let cap = self.max_fps();
+            let cap = self.frame_cap();
             if let Some(report) = &mut self.perf.reporting {
                 report.encoded(frame, &self.timing, scale, samples, self.perf.stats, cap);
             }
@@ -659,7 +685,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         let live = performance::Live {
             thermal: self.timing.thermal_state,
             quality: self.rung.map(|rung| rung.level.keyword()),
-            max_fps: self.max_fps(),
+            max_fps: self.frame_cap(),
             idle: self.still,
             audio: performance::audio(self.presentation.audio_state(), self.interrupted),
             memory: (self.render.as_ref())
@@ -787,6 +813,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                 }
                 if r.perf_reset {
                     self.perf.reset();
+                    if let Some(budget) = &mut self.hook_clock.budget {
+                        budget.reset_counters();
+                    }
                     if let Some(timing) = &mut self.gpu_timing {
                         timing.reset();
                     }
@@ -853,16 +882,14 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                 self.ready_work.unwrap_or(work).json(),
                 self.ready_work.map_or_else(Default::default, |before| work.since(before)).json()));
             if H::ENABLED {
-                if let Some((renderer, _)) = &self.render {
-                    if let Some(metrics) = &renderer.hook_metrics {
-                        metrics.append(
-                            &mut reply,
-                            self.hooks.work(),
-                            self.hooks.needs(),
-                            self.hooks.item_name(),
-                        );
-                    }
-                }
+                crate::hooks::metrics::append_state(
+                    self.render
+                        .as_ref()
+                        .and_then(|(r, _)| r.hook_metrics.as_deref()),
+                    &mut reply,
+                    &self.hooks,
+                    self.hook_clock.budget.as_deref(),
+                );
             }
             // Only the agent's armed timing is the agent's to report.
             if let Some(timing) = self.gpu_timing.as_mut().filter(|t| t.armed()) {
@@ -917,6 +944,49 @@ mod lifecycle_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "surface_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    struct Empty;
+    impl Game for Empty {
+        type Args = ();
+        const ID: &'static str = "budgeted-clock";
+        fn setup(_: &mut World, _: &()) {}
+        fn tick(_: &mut World, _: &exact_game::Input, _: &()) {}
+    }
+
+    #[derive(Default)]
+    struct Hook;
+    impl crate::Hooks for Hook {
+        const ALLOWANCE: u32 = 64;
+    }
+
+    #[test]
+    fn preparation_budget_starts_at_the_timed_bind() {
+        let mut surface = WorldSurface::<Empty, (), false, Hook>::default();
+        surface.bind(&[], Some(0.)).unwrap();
+        surface.clock(true);
+        let mut time = crate::HookTime::default();
+        let budget = surface.hook_clock.budget.get_or_insert_with(Box::default);
+        budget.frame(&mut time, 16., 64, None, None);
+        assert_eq!(time.allowance, 64);
+    }
+
+    #[test]
+    fn preparation_budget_restore_clears_overshoots() {
+        let mut surface = WorldSurface::<Empty, (), false, Hook>::default();
+        surface.bind(&[], None).unwrap();
+        let save = surface.carry().unwrap().unwrap();
+        let budget = surface.hook_clock.budget.get_or_insert_with(Box::default);
+        budget.record(-2.);
+        surface.restore(&save, Restore::Carry).unwrap();
+        let mut json = String::new();
+        surface.hook_clock.budget.unwrap().append(&mut json, 64);
+        assert_eq!(json, r#"{"allowance":64,"overFrames":0,"overMs":0}"#);
+    }
+}
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod residency_tests {

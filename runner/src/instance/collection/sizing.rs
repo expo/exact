@@ -201,8 +201,7 @@ impl Collection {
                     })?;
             }
             if binding.kind == BindingKind::Prop && binding.id == PropId::KeepMounted as u16 {
-                keep =
-                    keep::idents(&u.eval_list(&binding, frames, view, node)?).unwrap_or_default();
+                keep = idents(&u.eval_list(&binding, frames, view, node)?).unwrap_or_default();
             }
             if binding.kind == BindingKind::Prop && binding.id == PropId::ScrollStart as u16 {
                 at_end = u.eval_list(&binding, frames, view, node)?.as_str() == Some("end");

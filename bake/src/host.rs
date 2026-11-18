@@ -130,12 +130,8 @@ pub fn bake<D: DataSource>(
     // What the APK's build reads beside the plan: its capabilities and derived permissions, and for an app the
     // hatches' install (`hatches.rs`), as a TypeScript app's Android crate writes it.
     if platform == "android" {
-        if shape.composed {
-            contract::native::android_entry(&app, &manifest, &baked, &out)
-        } else {
-            contract::native::android_reach(&app, &baked, &out)
-        }
-        .unwrap_or_else(|e| panic!("android: {e}"));
+        contract::native::android_entry(&app, &manifest, &baked, &out)
+            .unwrap_or_else(|e| panic!("android: {e}"));
     }
     let entry = Entry {
         platform,

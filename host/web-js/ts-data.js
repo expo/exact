@@ -432,8 +432,8 @@ const expectRefusal = (m, args) => expecting(m, args) && !isDocument(args) ? new
 // journal and the server's log; a stream's controller is the owner of the file its body is read from as it opens, and
 // a stream refused that file starts no request, so it no longer counts as in flight (held.js `counted`).
 const refusedInRender = new Set();
-function refuseInRender(api, owner) {
-  rt.journal.push(`t=${rt.clock.now} storage refused (render): ${owner?.name ?? owner?.streamName ?? 'background work'}: ${api}: a page rendered on the server has no storage; the reader's page asks again`);
+function refuseInRender(api, owner, unavailable = 'storage') {
+  rt.journal.push(`t=${rt.clock.now} ${unavailable} refused (render): ${owner?.name ?? owner?.streamName ?? 'background work'}: ${api}: a page rendered on the server has no ${unavailable}; the reader's page asks again`);
   if (owner) { owner.refused = api; owner.recount?.(); }
   const name = owner?.name ?? owner?.streamName;
   if (name) refusedInRender.add(name);
@@ -441,7 +441,10 @@ function refuseInRender(api, owner) {
 }
 // Set as this module loads, before any app module's code can make a file-body fetch (a prewarmed realm evaluates them
 // well before its render starts).
-if (globalThis.__exactRender) answering.refuseStorage = refuseInRender;
+if (globalThis.__exactRender) {
+  answering.refuseStorage = refuseInRender;
+  answering.refuseVisitor = (api, owner) => refuseInRender(api, owner, 'visitor credentials');
+}
 // Answers that watched a document in a render (`storage.fs.watch`), by name: the reader's page asks each again, as it
 // does an open stream's, and makes its watch.
 const watchedInRender = new Set();

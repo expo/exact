@@ -351,6 +351,12 @@ pub trait Backend {
     fn rows(&self) -> bool {
         false
     }
+    /// Whether a kept drawing ([`tape`](super::tape)) may hold this
+    /// backend's rows by reference, drawing them through its transform
+    /// ([`Backend::row_draw_through`]); otherwise it records their draw calls.
+    fn rows_through(&self) -> bool {
+        false
+    }
     /// Whether recordings can be made at the local origin. Device-rasterized
     /// text needs the viewport origin to preserve its hinting phase.
     fn row_local(&self) -> bool {
@@ -375,6 +381,11 @@ pub trait Backend {
     }
     /// Draw kept row `id` with its top-left at `origin`, covering `bounds`.
     fn row_draw(&mut self, _id: u32, _origin: (f32, f32), _bounds: Rect4) {}
+    /// Draw kept row `id` through `ts`, which maps the row's space (its
+    /// top-left at the origin, in the units it was recorded in) into the
+    /// page; `bounds` is what the row covers in its space. A kept drawing
+    /// scaled or turned (`tape.rs`).
+    fn row_draw_through(&mut self, _id: u32, _ts: Transform, _bounds: Rect4) {}
     /// Kept row `id` is not drawn again.
     fn row_free(&mut self, _id: u32) {}
     /// The rows of scroller `id`, painted at its `scroll` offset, follow

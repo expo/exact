@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// Hand-written swipe rows in a route's page (`host/apple/tests/fixtures/swipe-push.contract`),
 /// a projected row and a painted one, swiped with real touches from the XCTest touch runner:

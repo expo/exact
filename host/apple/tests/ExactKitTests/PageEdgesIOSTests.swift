@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import ExactGroupedLists
 
 /// LLP 1130: a page with no native container keeps the area it is laid out

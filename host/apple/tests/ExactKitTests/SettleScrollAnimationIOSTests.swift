@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import UIKit
 
 /// Under platform timing (LLP 1035.003 D5) a smooth correction is an

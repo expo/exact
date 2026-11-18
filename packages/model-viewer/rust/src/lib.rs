@@ -1,5 +1,6 @@
 //! The modelViewer GPU surface (LLP 1133.039 D1–D12).
 mod arguments;
+mod bvh;
 mod camera;
 mod hotspots;
 mod input;
@@ -28,12 +29,13 @@ use styles::Effective;
 struct Parsed {
     sequence: u64,
     name: String,
-    scene: Result<Scene, String>,
+    scene: Result<(Scene, bvh::Bvh), String>,
     timing_session: u64,
     parse_ms: Option<f64>,
 }
 struct Model {
     scene: Scene,
+    bvh: bvh::Bvh,
     camera: Camera,
     effective: Vec<Effective>,
     clip: Clip,
@@ -145,6 +147,7 @@ impl ModelViewer {
                 );
                 pick::pick(
                     &m.scene,
+                    &m.bvh,
                     &m.effective,
                     m.clip,
                     origin,
@@ -337,8 +340,7 @@ impl Surface for ModelViewer {
                 Source::Ready { scene, .. } => scene.as_deref(),
                 _ => self.previous.as_deref(),
             };
-            self.hotspots
-                .update(model, &self.arguments, &frame, self.generation);
+            self.hotspots.update(model, &self.arguments, &frame);
         }
     }
     fn placement(&self, index: usize) -> Option<Placement> {
@@ -352,6 +354,9 @@ impl Surface for ModelViewer {
         if request["op"] == "state" && request["performance"] == true {
             let timing = self.timing.as_ref()?;
             let mut metrics = timing.snapshot(&self.hotspots);
+            if let Some(model) = self.model() {
+                metrics["bvhBytes"] = model.bvh.bytes().into();
+            }
             if let Some(arrival) = &timing.arrival {
                 metrics["sinceArrivalMs"] = arrival.elapsed().into();
             }
@@ -473,15 +478,13 @@ impl Surface for ModelViewer {
             _ => self.previous.as_deref_mut(),
         };
         let Some(model) = model else {
-            self.hotspots
-                .update(None, &self.arguments, frame, self.generation);
+            self.hotspots.update(None, &self.arguments, frame);
             renderer::clear(encoder, target);
             self.drawn_generation = complete.then_some(self.generation);
             return self.preparing();
         };
         let moving = model.camera.step(&model.scene, frame.now_ms);
-        self.hotspots
-            .update(Some(model), &self.arguments, frame, self.generation);
+        self.hotspots.update(Some(model), &self.arguments, frame);
         if model
             .renderer
             .as_ref()
@@ -492,8 +495,7 @@ impl Surface for ModelViewer {
                 Ok(renderer) => model.renderer = Some(renderer),
                 Err(SurfaceError(error)) => {
                     self.fail(error);
-                    self.hotspots
-                        .update(None, &self.arguments, frame, self.generation);
+                    self.hotspots.update(None, &self.arguments, frame);
                     renderer::clear(encoder, target);
                     self.drawn_generation = Some(self.generation);
                     return false;

@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1115.000 D16 on iOS: rows of a list Contract marked (`listRows`) are
 /// drawn as a plain list's cells, to what a `UICollectionView` plain list

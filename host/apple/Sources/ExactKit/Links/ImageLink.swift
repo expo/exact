@@ -2,13 +2,15 @@
 // roster's `Images`): reading and decoding an `image`'s or a box's
 // `background-image` source, the session's loader and budget, animated
 // GIF/WebP frames, and `image-rendering: pixelated`. The core reaches it only
-// through what this file declares. Each slot's default is today's
-// implementation, so every app still links images; the family's own target
-// will install them instead. Placing a bitmap in its box (`RasterGeometry`)
-// is the core's. Icons in text and native views' pictures use this family's
-// loader and decoders, and Surfaces' Canvas 2D images read and fetch through
-// them, so those products depend on this one.
+// through what this file declares, and `ExactImages.install()` fills its
+// slots: a composition without the family leaves them empty, and a plan with
+// an image is refused at boot (`Unlinked("images")`). Placing a bitmap in its
+// box (`RasterGeometry`) is the core's. Icons in text read through
+// `readIcon`, which the roster's `images` rule covers; Surfaces' Canvas 2D
+// images fetch and read through the family's decoders, so `ExactSurfaces`
+// depends on `ExactImages`.
 import CoreGraphics
+import Foundation
 import QuartzCore
 
 /// A decoded bitmap a view draws.
@@ -97,19 +99,51 @@ package protocol PixelatedImaging: AnyObject {
     func refresh(in presenter: Presenter)
 }
 
-/// The slots are set before any session is made, and read on the main thread.
+/// The slots are set before any session is made. They are read on the main
+/// thread, but for `readIcon` and `declineDelays`, which icons in text read on
+/// their own queue.
 package enum ImageLink {
     /// A session's loader.
-    package static var makeLoader: (() -> any ImageLoader)? = { RasterLoader() }
+    package static var makeLoader: (() -> any ImageLoader)?
     /// Animated images' players.
-    package static var animated: (any AnimatedImages)? = AnimatedRasters.shared
+    package static var animated: (any AnimatedImages)?
     /// Pixelated sampling.
-    package static var pixelated: (any PixelatedImaging)? = PixelatedSampling()
+    package static var pixelated: (any PixelatedImaging)?
     /// A scroller moving fast (`true`) or no longer: decode workers yield to it.
-    package static var travelling: ((AnyObject, Bool) -> Void)? = { RasterWorkers.shared.travelling($0, $1) }
+    package static var travelling: ((AnyObject, Bool) -> Void)?
+    /// An icon in text (`AtomIcons`): `source` read as an `image` reads it,
+    /// and whether its bytes are an SVG's. It throws `IconFailure` for a
+    /// source it could not read, and the decoder's error for bytes it could
+    /// not tell.
+    package static var readIcon: ((_ source: String, _ resolver: AssetResolver?) throws -> (bytes: Data, svg: Bool))?
+    /// The waits, in seconds, before a decode the system declined is asked
+    /// again.
+    package static var declineDelays: [Double] = []
+
+    package enum IconFailure: Error {
+        /// A `data:` URL over `limit` bytes, or not one.
+        case data(limit: Int)
+        case read(any Error)
+    }
+}
+
+/// Whether `source` names a scheme a package may serve: never one a host
+/// owns (`HOST_SCHEMES`, contract/cli/src/declaration.rs).
+package func packageMayServe(_ source: String) -> Bool {
+    guard let colon = source.firstIndex(of: ":") else { return false }
+    let scheme = source[..<colon]
+    guard let first = scheme.first, first.isLetter, first.isLowercase,
+          scheme.allSatisfy({ ($0.isLetter && $0.isLowercase) || $0.isNumber || $0 == "-" }) else { return false }
+    return !["app", "doc", "symbol", "data", "http", "https", "blob", "file", "asset"].contains(String(scheme))
 }
 
 /// `source` with no query or fragment, as a log names it.
 package func sourceWithoutQuery(_ source: String) -> String {
     source.unicodeScalars.firstIndex(where: { $0 == "?" || $0 == "#" }).map { String(source.unicodeScalars[..<$0]) } ?? source
+}
+
+extension ExactSession {
+    /// The app module's `image` entry and its instance, for a package's
+    /// pictures; nil for an artifact without one. Main thread.
+    package func packageImageEntry() -> (UnsafeMutableRawPointer, PackageImageFn)? { natives.imageEntry() }
 }

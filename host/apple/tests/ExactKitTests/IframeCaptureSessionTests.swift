@@ -2,6 +2,7 @@ import PDFKit
 import WebKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 #if os(macOS)
 import AppKit
 #endif
@@ -18,7 +19,7 @@ final class IframeCaptureSessionTests: XCTestCase {
         }
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "iframe-pdf")
-        session.webviews.moduleLocation = { module }
+        session.webHost.moduleLocation = { module }
         defer { session.destroy() }
         XCTAssertNil(session.boot(plan: try fixturePlan("IFRAME_PDF"), size: CGSize(width: 640, height: 500)).error)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 500), styleMask: [.titled], backing: .buffered, defer: false)

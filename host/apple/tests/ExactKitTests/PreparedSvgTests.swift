@@ -1,5 +1,7 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// A batch's SVG scene, prepared on the owner (LLP 1072 stage 4), draws as
 /// the raw one does: a shape whose path changes is redrawn, and one that

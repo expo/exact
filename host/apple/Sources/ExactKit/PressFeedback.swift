@@ -477,7 +477,7 @@ extension NodeView {
     /// (the author paints its pressed state), and not a scrim covering the
     /// window (a backdrop that closes a sheet shows nothing in UIKit). A
     /// native button is UIKit's own and never comes here.
-    var platformPressDims: Bool {
+    package var platformPressDims: Bool {
         guard !authorsPress, !isNativeButton, !isSurfaceControl,
               handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress,
               !handlers.contains("pointerdown"), !handlers.contains("pointerup") else { return false }
@@ -500,7 +500,7 @@ extension NodeView {
     }
 
     /// Dim (`down`) or fade back. `instantly` drops it without the fade.
-    func dimPress(_ down: Bool, instantly: Bool = false) {
+    package func dimPress(_ down: Bool, instantly: Bool = false) {
         let key = "pressDim"
         let now = CACurrentMediaTime()
         if down {

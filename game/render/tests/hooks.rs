@@ -545,6 +545,144 @@ fn a_look_frame_leaves_the_hook_clock_where_the_live_frames_left_it() {
     assert_eq!([&looked[..2], &looked[3..]].concat(), live);
     assert_eq!(live[2], (0.016, false), "{live:?}");
 }
+#[derive(Default)]
+struct Budgeted(Vec<(u32, bool)>);
+
+impl Hooks for Budgeted {
+    const ALLOWANCE: u32 = 64;
+
+    fn prepare(
+        &mut self,
+        _: &HookGpu<'_>,
+        view: &FrameView<'_>,
+        _: &RenderWorld<'_>,
+    ) -> Result<(), RenderError> {
+        self.0
+            .push((view.time.allowance, view.time.deadline.is_some()));
+        Ok(())
+    }
+}
+
+#[test]
+fn preparation_budget_follows_the_canvas_clock() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<TestGame, (), false, Budgeted>::default();
+    surface.bind(&[], None).unwrap();
+    surface.clock(true);
+    let mut frame = frame();
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    let look = surface
+        .agent(r#"{"op":"state","look":true,"now":0}"#)
+        .unwrap();
+    assert!(look.contains("\"look\""), "{look}");
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    surface.agent(r#"{"op":"state","perf":true}"#).unwrap();
+    frame.now_ms = 16.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(
+        surface.render_hooks().0,
+        [(0, false), (0, false), (0, false), (64, false), (0, false)]
+    );
+
+    surface.clock(false);
+    frame.seekable = false;
+    frame.now_ms = 32.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0.last(), Some(&(64, false)));
+
+    surface.clock(true);
+    frame.seekable = true;
+    frame.now_ms = 48.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0.last(), Some(&(0, false)));
+}
+
+#[test]
+fn preparation_budget_reports_and_resets_live_overshoot() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<TestGame, (), false, Budgeted>::default();
+    surface.bind(&[], None).unwrap();
+    surface.clock(false);
+    let mut frame = frame();
+    frame.seekable = false;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0, [(64, false)]);
+
+    // A positive period below the clock's resolution makes this frame late
+    // before prepare, without a sleep or a threshold tied to the GPU.
+    frame.period_ms = 2. * f64::MIN_POSITIVE;
+    frame.now_ms = 48.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0.last(), Some(&(1, true)));
+    let mut budget = |request| {
+        let state = surface.agent(request).unwrap();
+        let mut state: serde_json::Value = serde_json::from_str(&state).unwrap();
+        state["world"]["renderHooks"]["budget"].take()
+    };
+    let before = budget(r#"{"op":"state"}"#);
+    assert_eq!(before["allowance"], 64);
+    assert_eq!(before["overFrames"], 1);
+    assert!(before["overMs"].as_f64().unwrap() > 0.);
+    for request in [r#"{"op":"state","perf_reset":true}"#, r#"{"op":"state"}"#] {
+        let after = budget(request);
+        assert_eq!(after["overFrames"], 0);
+        assert_eq!(after["overMs"], 0);
+    }
+}
+
+#[test]
+fn preparation_budget_stops_live_work_between_units() {
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct Work(u32);
+    impl Hooks for Work {
+        const ALLOWANCE: u32 = 64;
+
+        fn prepare(
+            &mut self,
+            _: &HookGpu<'_>,
+            view: &FrameView<'_>,
+            _: &RenderWorld<'_>,
+        ) -> Result<(), RenderError> {
+            self.0 = 0;
+            if let Some(deadline) = view.time.deadline {
+                for _ in 0..view.time.allowance {
+                    let start = Instant::now();
+                    while start.elapsed() < Duration::from_millis(1) {
+                        std::hint::spin_loop();
+                    }
+                    self.0 += 1;
+                    if deadline.passed() {
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<TestGame<true>, (), false, Work>::default();
+    surface.bind(&[], None).unwrap();
+    let mut frame = Frame {
+        seekable: false,
+        ..frame()
+    };
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    frame.now_ms = 4.;
+    frame.period_ms = 4.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert!((1..Work::ALLOWANCE).contains(&surface.render_hooks().0));
+}
+
 struct Running;
 impl Game for Running {
     type Args = ();
@@ -554,12 +692,46 @@ impl Game for Running {
     fn tick(_: &mut World, _: &Input, _: &()) {}
 }
 #[derive(Default)]
-struct Pending;
-impl Hooks for Pending {
+struct Pending<const STARVED: bool = false, const UNITS: u32 = 0, const ANIMATE: bool = false>;
+impl<const STARVED: bool, const UNITS: u32, const ANIMATE: bool> Hooks
+    for Pending<STARVED, UNITS, ANIMATE>
+{
+    const ALLOWANCE: u32 = UNITS;
+
     fn needs(&self) -> Needs {
-        Needs::PENDING
+        let mut needs = Needs::PENDING;
+        if STARVED {
+            needs = needs | Needs::STARVED;
+        }
+        if ANIMATE {
+            needs = needs | Needs::ANIMATE;
+        }
+        needs
     }
 }
+#[test]
+fn preparation_budget_settles_only_pending_work_that_can_progress() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut pending = WorldSurface::<TestGame, (), false, Pending<false, 64>>::default();
+    let mut starved = WorldSurface::<TestGame, (), false, Pending<true, 64>>::default();
+    let mut animated = WorldSurface::<TestGame, (), false, Pending<true, 64, true>>::default();
+    for (surface, settles, wants_more) in [
+        (&mut pending as &mut dyn Surface, true, true),
+        (&mut starved as &mut dyn Surface, false, false),
+        (&mut animated as &mut dyn Surface, false, true),
+    ] {
+        surface.bind(&[], None).unwrap();
+        surface.clock(true);
+        let (_, wants) = fixture::render(&gpu, surface, &frame()).unwrap();
+        assert_eq!(wants, wants_more);
+        assert_eq!(surface.preparing(), settles);
+        surface.clock(false);
+        assert!(surface.preparing());
+    }
+}
+
 // A loading phase is overload: its frames are submitted before the hooks are ready.
 #[test]
 fn a_long_gap_while_hooks_are_pending_is_clamp_not_idle() {

@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class CollectionMacTests: XCTestCase {
     private func snapshot(revision: Int = 1, correction: [String: Any]? = nil) -> [String: Any] {

@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// x2apps codeedit #2 on AppKit: a text field's `input` reports the
 /// selection its edit left; its `select` fires for the person's

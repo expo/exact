@@ -115,7 +115,7 @@ extension NodeView {
     /// scroller's band, a native control or a cell over it) by
     /// `Presenter.moveOrPlace`: a view `new` under it, made or put there
     /// since the last frame, takes its place at once.
-    func moveOrPlace(new: Bool = false, _ change: () -> Void) {
+    package func moveOrPlace(new: Bool = false, _ change: () -> Void) {
         guard let presenter else { return change() }
         presenter.moveOrPlace(new ? nil : self, change)
     }

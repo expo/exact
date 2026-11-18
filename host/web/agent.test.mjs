@@ -408,6 +408,36 @@ test('a clock jump stops at each intermediate timer when a runner request is par
   }
 });
 
+// LLP 1012, LLP 1046.003: a world's record can arm timers inside a jump.
+test('a world publication starts its Contract timer before a clock jump ends', async () => {
+  for (const wakeAt of [0, 100]) {
+    const f = fixture(); requestClock(f);
+    let published = false, awake = wakeAt === 0, due = Infinity, shown = 0;
+    f.flowDue = wakeAt || null;
+    f.exact.gpu = {
+      settled: async () => [], schedule() {},
+      clock() {
+        if (awake && !published && f.agentClock >= wakeAt + 100) {
+          published = true;
+          due = f.agentClock + 120;
+          f.flowDue = due;
+        }
+        return { nextTickAt: awake && !published ? wakeAt + 100 : undefined, reply: { world: [{}] } };
+      },
+    };
+    f.gpuInPlay = () => true;
+    f.wasm.exact_advance = to => {
+      if (!awake && to >= wakeAt) awake = true;
+      if (due <= to) { shown = 1; due = Infinity; }
+      return JSON.stringify({ ops: [], clock: to, timer_due_ms: Number.isFinite(due) ? due : null });
+    };
+    f.applyBatch = batch => { f.agentClock = batch.clock; f.flowDue = batch.timer_due_ms; return { batch }; };
+    expect(await f.exact.agent({ op: 'clock', to: 900 })).toMatchObject({ clock: 900 });
+    expect(shown).toBe(1);
+    expect(due).toBe(Infinity);
+  }
+});
+
 test('a clock jump lands what is in flight before each timer fires', async () => {
   const f = fixture();
   timedRequests(f);

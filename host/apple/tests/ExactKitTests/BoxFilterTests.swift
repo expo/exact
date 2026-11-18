@@ -7,6 +7,8 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactSvg
+@testable import ExactImages
 @testable import ExactSurfaces
 @testable import ExactEffects
 

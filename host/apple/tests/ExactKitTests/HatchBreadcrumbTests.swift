@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// The crash breadcrumb (LLP 1075.003.000.001 §4.4): what a process that
 /// died inside a hatch call left is read by the next launch; a call that

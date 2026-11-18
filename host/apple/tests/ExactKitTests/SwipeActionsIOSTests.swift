@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// A native swipe row (LLP 1008 §9) costs no table and no scroll view at rest:
 /// batches leave its content in the owner, clipped, where the authored scroll

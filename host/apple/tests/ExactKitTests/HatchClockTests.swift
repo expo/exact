@@ -6,6 +6,7 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactNativeViews
 
 final class HatchClockTests: XCTestCase {
     func testCoalescedAftersDoNotDriveSeeksOrSettlement() {

@@ -5,12 +5,8 @@ import Foundation
 
 #if os(macOS)
 import AppKit
-typealias ExactWebPlatformView = NSView
-typealias ExactWebImage = NSImage
 #else
 import UIKit
-typealias ExactWebPlatformView = UIView
-typealias ExactWebImage = UIImage
 #endif
 
 private typealias WebEventFn = @convention(c) (
@@ -206,7 +202,7 @@ private let exactWebReplyCallback: WebReplyFn = { context, _, token, kind, bytes
     if Thread.isMainThread { deliver() } else { DispatchQueue.main.async(execute: deliver) }
 }
 
-final class WebViews {
+final class WebViews: WebHosting {
     /// The session these views belong to (LLP 1031 D12: the arm's library
     /// is loaded once per process; the views and their node ids are the
     /// session's).
@@ -913,20 +909,4 @@ final class WebViews {
       return JSON.stringify(out);
     })()
     """
-}
-
-extension ExactSession {
-    /// `postMessage(text, target)`: the compiler marks an iframe target; a name that is both a
-    /// live frame's id and a canvas surface, or a canvas post to a frame's id, is refused.
-    func post(_ text: String, to target: String, iframe: Bool) {
-        if webviews.hasFrame(target) && canvases.hasSurface(target) {
-            fputs("exact: postMessage: ambiguous iframe id and canvas surface \(target)\n", stderr)
-        } else if iframe {
-            webviews.postMessage(target, text)
-        } else if webviews.hasFrame(target) {
-            fputs("exact: postMessage: canvas name collides with an iframe id \(target)\n", stderr)
-        } else {
-            canvases.post(target, text)
-        }
-    }
 }

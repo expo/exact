@@ -76,6 +76,8 @@ pub(crate) struct Observations {
     passing: IdMap<u32, [bool; 4]>,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
+    /// The keyboard each owner's host reports, and the policy (D7).
+    pub(crate) keyboards: super::keyboard::Keyboards,
 }
 
 impl Observations {
@@ -99,8 +101,9 @@ impl Observations {
     }
 
     /// Measure again the readers of `owner`'s band, the session's for `None`,
-    /// and every box that ignores, which band changes are too rare to sort.
-    fn invalidate_band(&mut self, owner: Option<u32>) {
+    /// and every box that ignores, since a change to a band or a keyboard can
+    /// move what any of them takes.
+    pub(super) fn invalidate_band(&mut self, owner: Option<u32>) {
         self.readouts.retain(|_, r| r.owner != owner);
         self.takings.measured.clear();
     }
@@ -123,12 +126,13 @@ impl Observations {
     }
 
     /// What a reset keeps: what the host reported for the session, its band,
-    /// its view's targets and the registered targets, as the arena keeps the
-    /// environment. What the tree held goes with it.
+    /// its view's targets, the registered targets and the keyboard policy, as
+    /// the arena keeps the environment. What the tree held goes with it.
     pub(crate) fn after_reset(&mut self) -> Self {
         Observations {
             session: self.session,
             targets: self.targets.after_reset(),
+            keyboards: self.keyboards.after_reset(),
             ..Default::default()
         }
     }
@@ -167,6 +171,7 @@ impl Observations {
         self.spaces.remove(&slot);
         self.forget_taken(slot);
         self.passing.remove(&slot);
+        self.keyboards.forget(slot);
         self.stopped_reading(slot);
     }
 
@@ -243,7 +248,7 @@ impl Kernel {
     /// Whether a band's change can move a layout though the content root
     /// does not move: some box reads an observation, or some box inside a
     /// root ignores the band (an owner's root's taking is its clearance).
-    fn band_read(&self) -> bool {
+    pub(super) fn band_read(&self) -> bool {
         let arena = &self.arena;
         !arena.readers.observers.is_empty()
             || (arena.ignoring.iter()).any(|s| !super::block::owns(arena, s))

@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// LLP 1031 D3: resources follow the containing view, including a display
 /// scale change that leaves every logical point and the live runner intact.

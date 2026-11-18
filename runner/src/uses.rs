@@ -15,7 +15,7 @@ use exact_plan::{BindingKind, EventKind, Opcode, Plan, Stdlib, StrId};
 use std::fmt;
 
 mod apple;
-pub use apple::{apple_uses, image_sources, lays_out_grid, ImageSource};
+pub use apple::{apple_uses, data_url, image_sources, lays_out_grid, ImageSource};
 
 /// A capability beyond the core, linked into an artifact only when its plan
 /// uses it (LLP 1047 §4's roster, as each one moves behind its seam).

@@ -20,9 +20,12 @@ import { withHostDeployment } from '../../scripts/filesystem.mjs';
 import { replaceBuild } from '../web/serve.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
-import { RustMissing, fromSet, fromSets, fetchedAllowed, launch, rustMissing } from '../../scripts/tools.mjs';
+import { RustMissing, fromSet, fromSets, fetchedAllowed, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
 import { EXE } from '../../scripts/paths.mjs';
 export { EXE };
+import { buildScriptDir, crateDir, depInfoOf, fresh as cargoFresh, refreshCargoRustShapes } from '../../scripts/cargo-dep-info.mjs';
+export { buildScriptDir, crateDir, depInfoOf, freshCompiler };
+export const fresh = (product, dep, also = []) => cargoFresh(product, dep, also);
 import { BINARYEN_DOWNLOAD } from '../web/stages.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -103,22 +106,8 @@ function replace(path, write) {
 }
 const cargoWasmArgs = (manifest) => [`+${WEB}`, 'build', '--release', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifest, ...LINK_FLAGS()];
 function cargoWasm(manifest) {
-  return spawnSync('cargo', cargoWasmArgs(manifest), { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET } });
+  return spawnSync('cargo', cargoWasmArgs(manifest), { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: TARGET, EXACT_RUST_SHAPES: '1' } });
 }
-/** The dep-info Cargo writes beside binary `product`: `<name>.d`, beside
- * `<name>` or `<name>.exe` alike. */
-export const depInfoOf = (product) => product.replace(/\.exe$/i, '') + '.d';
-/** The package directory of a source a dep-info lists: the path before its
- * last `src` component, by either separator. null outside one, and for a build
- * script's output, whose path has a `src` only when a folder above it is named so. */
-export function crateDir(file) {
-  if (buildScriptDir(file)) return null;
-  const at = Math.max(file.lastIndexOf('/src/'), file.lastIndexOf('\\src\\'));
-  return at < 0 ? null : file.slice(0, at);
-}
-/** The build script directory (`…/build/<package>-<hash>`) of a file a
- * dep-info lists under its `out/`, by either separator. null for others. */
-export const buildScriptDir = (file) => /^(.*[\\/]build[\\/][^\\/]+)[\\/]out[\\/]/.exec(file)?.[1] ?? null;
 /** The dep-info of each module `buildModule` built, by the path it returned. */
 const moduleDepInfo = new Map();
 /** The package directories the module at `built` (what `buildModule` returned) was compiled from, by its dep-info:
@@ -130,34 +119,7 @@ export function moduleSourceDirs(built) {
     return [...new Set(files.map(crateDir).filter(Boolean))];
   } catch { return []; }
 }
-/** Whether `product` is newer than everything Cargo's dep-info `dep` says
- * it was built from, and than what the build scripts behind it declared
- * (`cargo:rerun-if-changed`, beside each `out/` it read). An unchanged
- * module then skips Cargo, whose no-op check under `-Zbuild-std` costs
- * about a second an edit (LLP 1071 §7, the dev loop). */
-export function fresh(product, dep, also = []) {
-  try {
-    const built = statSync(product).mtimeMs, text = readFileSync(dep, 'utf8');
-    const files = text.slice(text.indexOf(': ') + 2).trim().split(/(?<!\\)\s+/).map(f => f.replace(/\\ /g, ' '));
-    // A build script's relative paths are its package's: the package is
-    // found by name among the crate roots the dep-info lists.
-    const roots = new Map();
-    for (const f of files) {
-      const dir = crateDir(f);
-      if (dir && !roots.has(dir)) roots.set(dir, /^name\s*=\s*"([^"]+)"/m.exec(readFileSync(resolve(dir, 'Cargo.toml'), 'utf8'))?.[1]);
-    }
-    const byName = new Map([...roots].map(([dir, name]) => [name, dir]));
-    for (const o of new Set(files.map(buildScriptDir).filter(Boolean))) {
-      const dir = byName.get(/[\\/]build[\\/](.+)-[0-9a-f]+$/.exec(o)[1]);
-      for (const m of readFileSync(resolve(o, 'output'), 'utf8').matchAll(/^cargo:(?::)?rerun-if-changed=(.+)$/gm)) files.push(resolve(dir, m[1]));
-    }
-    // A directory is watched whole, as Cargo scans one.
-    const newer = f => { const st = statSync(f); return st.mtimeMs > built || (st.isDirectory() && readdirSync(f).some(n => newer(resolve(f, n)))); };
-    return ![...files, ...also].some(newer);
-  } catch { return false; }
-}
-/** Write `text` to `path` only when it differs: an unchanged generated
- * crate keeps its mtime, so `fresh` holds. */
+/** An unchanged generated crate keeps its mtime for Cargo. */
 const keep = (path, text) => { if (!existsSync(path) || readFileSync(path, 'utf8') !== text) writeFileSync(path, text); };
 /** A generated crate's `Cargo.lock`: the workspace's, again whenever the
  * workspace's changes, so it builds the versions the workspace pins (and
@@ -168,19 +130,38 @@ function lockFrom(crate) {
   writeFileSync(resolve(crate, 'Cargo.lock'), lock);
   writeFileSync(from, id);
 }
-/** Cargo's module at `wasm`, optimized to `<out>/app.module.wasm` unless
- * that is still newer than everything the module was built from. */
+/** Cargo's module at `wasm`, optimized to `<out>/app.module.wasm`. */
 function module(manifest, name, out, label) {
   const wasm = resolve(TARGET, 'wasm32-unknown-unknown/release', `${name}.wasm`), done = resolve(out, 'app.module.wasm');
   mkdirSync(out, { recursive: true });
   const release = awaitBuildOutput({ id: label, dir: dirname(manifest) }, resolve(TARGET, '.claims', `${name}.lock`));
   moduleDepInfo.set(done, wasm.replace(/\.wasm$/, '.d'));
   try {
-    if (fresh(done, wasm.replace(/\.wasm$/, '.d'), [manifest])) return done;
-    if (cargoWasm(manifest).status !== 0) throw new Error(`${label} did not build`);
-    replace(done, (temp) => optimize(wasm, temp, 'module'));
+    prepareModule(wasm, done, { manifest, targetDir: TARGET, profile: 'release' }, () => {
+      if (cargoWasm(manifest).status !== 0) throw new Error(`${label} did not build`);
+    });
     return done;
   } finally { release(); }
+}
+
+// A dev build's staging directory is replaced each time. Keep the optimized
+// module beside Cargo's artifact so a new stage need not optimize it again.
+function prepareModule(wasm, done, { manifest, targetDir, profile }, build) {
+  const cached = wasm.replace(/\.wasm$/, '.optimized.wasm'), from = `${cached}.from`;
+  const env = { ...process.env, CARGO_TARGET_DIR: targetDir, EXACT_RUST_SHAPES: '1' };
+  const result = spawnSync('cargo', [`+${WEB}`, 'metadata', '--offline', '--format-version', '1', '--manifest-path', manifest],
+    { env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (result.status !== 0) throw new Error(`module metadata: ${result.stderr || result.error?.message}`);
+  const metadata = JSON.parse(result.stdout);
+  refreshCargoRustShapes(targetDir, 'wasm32-unknown-unknown', profile, metadata.packages, env, metadata.build_directory);
+  build();
+  // Cargo may restore an older artifact when features change back.
+  const id = createHash('sha256').update(readFileSync(wasm)).update(JSON.stringify([WASM_OPT(), OPT])).digest('hex');
+  if (!existsSync(cached) || !existsSync(from) || readFileSync(from, 'utf8') !== id) {
+    replace(cached, temp => optimize(wasm, temp, 'module'));
+    replace(from, temp => writeFileSync(temp, id));
+  }
+  replace(done, temp => cpSync(cached, temp, { preserveTimestamps: true }));
 }
 
 export function buildModule(app, out = resolve(MODULES, app), draw = false, dir = resolve(root, 'apps', app)) {
@@ -204,10 +185,10 @@ export function buildModule(app, out = resolve(MODULES, app), draw = false, dir 
     const release = awaitBuildOutput(resolved, resolve(resolved.target, '.claims', `${name}.lock`));
     try {
       keep(resolve(crate, 'src/lib.rs'), lib);
-      if (fresh(done, wasm.replace(/\.wasm$/, '.d'), [manifestPath, resolve(crate, 'src/lib.rs')])) return done;
-      const args = [`+${WEB}`, 'build', '--locked', '--offline', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifestPath, ...injectedProfiles({ manifest }, workspace), ...LINK_FLAGS()];
-      if (spawnSync('cargo', args, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: resolved.target } }).status !== 0) throw new Error(`${app}: the module did not build`);
-      replace(done, (temp) => optimize(wasm, temp, 'module'));
+      prepareModule(wasm, done, { manifest: manifestPath, targetDir: resolved.target, profile: 'web' }, () => {
+        const args = [`+${WEB}`, 'build', '--locked', '--offline', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '--manifest-path', manifestPath, ...injectedProfiles({ manifest }, workspace), ...LINK_FLAGS()];
+        if (spawnSync('cargo', args, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CARGO_TARGET_DIR: resolved.target, EXACT_RUST_SHAPES: '1' } }).status !== 0) throw new Error(`${app}: the module did not build`);
+      });
       return done;
     } finally { release(); }
   }
@@ -496,16 +477,6 @@ export const withoutDev = (text) => text.replace(/^[ \t]*\/\/ dev-only \{.*\n[\s
  * where only Cargo could answer and Rust is missing. */
 const COMPILER = resolve(TARGET_DIR, `debug/exact-web-js${EXE}`);
 const compilerKept = () => kept({ crate: 'exact-web-js', product: COMPILER, depInfo: depInfoOf(COMPILER), group: ['debug'], buildDirs: [resolve(TARGET_DIR, 'debug/build')], stamp: resolve(MODULES, 'kept', 'exact-web-js.json') });
-/** `fresh`, for a compiler binary: also stale after an edit to the lockfile
- * or to the manifest of the workspace or of any crate it was built from. */
-export function freshCompiler(product) {
-  try {
-    const dep = depInfoOf(product), text = readFileSync(dep, 'utf8');
-    const files = text.slice(text.indexOf(': ') + 2).trim().split(/(?<!\\)\s+/).map(f => f.replace(/\\ /g, ' '));
-    const crates = new Set(files.map(crateDir).filter(Boolean).map(dir => resolve(dir, 'Cargo.toml')));
-    return fresh(product, dep, [resolve(root, 'Cargo.lock'), resolve(root, 'Cargo.toml'), ...crates]);
-  } catch { return false; }
-}
 export function webCompiler() {
   // The optimised compiler (`host-dev`) the JS dev loop built for its design
   // reader: a copy it makes for one build while that build is done and

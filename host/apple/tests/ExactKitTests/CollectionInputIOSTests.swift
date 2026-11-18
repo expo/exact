@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1070.000 §2.5 under UIKit: an input counts against the request under
 /// way when it began, by its own timestamp against the time the request

@@ -15,8 +15,8 @@ mod sensors;
 mod stdio;
 
 use crate::presenter::Presenter;
-use exact_runner::instance::collection::Align;
 use exact_runner::json::{error, field_bool, field_num, field_str, num};
+use exact_runner::Align;
 use exact_runner::DataSource;
 use std::io::Write;
 

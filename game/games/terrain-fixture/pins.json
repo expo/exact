@@ -3,7 +3,7 @@
     "60": "0x69527b29456e47c8"
   },
   "saves": {
-    "continuation": "8dd63d23e5d4e68163c15d1e445ad5548e43457c7ce1bfa7b52216f3c9c572a6"
+    "continuation": "ea1c8ab4ccec86c9c666cd0d216cd37308d3607ba0ab6ea3f54bd53f036f68ef"
   },
   "hosts": [
     "linux",
@@ -17,9 +17,9 @@
   "profiles": [
     "gpu-dev"
   ],
-  "inputs": "2b0e4c48a7c63f611a383751a21bc342a2737894efeb53da18c6baa0b37864e3",
-  "sourceInputs": "1800f155ee0afef265b612ecbf564cea294771b09aaa6c4a120710317792912b",
-  "game": "terrain-fixture",
-  "generated": "bun game/prove.mjs terrain-fixture --hosts 'linux,web'",
-  "at": "88076cf409079aa24dc6106769993cd842631783"
+  "inputs": "711a3424f026a12fa39a606e2236305573f0189a87bf1f76720ef8e62e1c3f02",
+  "sourceInputs": "283ecd189b8bbafd44dcba3009041ba64d6bf8fc65f946b9017a236fe91610fe",
+  "game": "terrain-fixture-workload",
+  "generated": "bun game/prove.mjs terrain-fixture --repin --hosts 'linux,web'",
+  "at": "5ef91c48cab7ae37ac7b8d407f97cf9da1f7741c"
 }

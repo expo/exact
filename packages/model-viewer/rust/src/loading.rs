@@ -199,33 +199,31 @@ impl ModelViewer {
         let limit = self.max_buffer_size;
         let timed = self.timing.is_some();
         let timing_session = self.timing_session;
-        if self.seekable || cfg!(target_arch = "wasm32") {
+        let parsed_name = name.clone();
+        let parse = move || {
             let start = timed.then(Stamp::now);
-            let scene = glb::parse_with_limit(&bytes, limit);
-            self.finish(Parsed {
+            let scene = glb::parse_with_limit(&bytes, limit).map(|scene| {
+                let bvh = crate::bvh::Bvh::new(&scene);
+                (scene, bvh)
+            });
+            Parsed {
                 sequence,
-                name,
+                name: parsed_name,
                 scene,
                 timing_session,
                 parse_ms: start.map(|s| s.elapsed()),
-            });
+            }
+        };
+        if self.seekable || cfg!(target_arch = "wasm32") {
+            self.finish(parse());
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let sender = self.sender.clone();
-                let parsed_name = name.clone();
                 match std::thread::Builder::new()
                     .name("model-viewer parse".into())
                     .spawn(move || {
-                        let start = timed.then(Stamp::now);
-                        let scene = glb::parse_with_limit(&bytes, limit);
-                        let _ = sender.send(Parsed {
-                            sequence,
-                            name: parsed_name,
-                            scene,
-                            timing_session,
-                            parse_ms: start.map(|s| s.elapsed()),
-                        });
+                        let _ = sender.send(parse());
                     }) {
                     Ok(handle) => self.parsers.push(handle),
                     Err(e) => {
@@ -276,7 +274,7 @@ impl ModelViewer {
                 .map(|(arrival, parse)| (arrival.elapsed() - parse).max(0.));
         }
         match result.scene {
-            Ok(scene) => {
+            Ok((scene, bvh)) => {
                 let mut camera = Camera::new(&scene, &self.arguments);
                 if load.keep_camera {
                     if let Some(old) = &self.previous {
@@ -292,6 +290,7 @@ impl ModelViewer {
                 }
                 let mut model = Box::new(Model {
                     scene,
+                    bvh,
                     camera,
                     effective: vec![],
                     clip: Clip::default(),

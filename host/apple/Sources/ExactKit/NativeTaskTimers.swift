@@ -86,6 +86,7 @@ final class NativeTaskTimers {
     }
     #if DEBUG
     func timerForTests(_ index: UInt32) -> Timer? { entries[index]?.timer }
+    func pendingForTests(_ index: UInt32) -> Bool { entries[index]?.pending == true }
     #endif
 }
 
@@ -118,6 +119,12 @@ extension ExactSession {
         taskTimers.update(batch.nativeTimers, epoch: generation, enabled: clock == nil && !ExactEnv.agentFreezes && state != .destroyed)
         timerAdmissions.update(batch.timerWaits)
     }
+    /// A task's native firing that waited while a batch applied or owner work was in flight (`deliverNativeTimer`) is
+    /// asked for again once neither holds it, whatever ended the hold: an answer applied, held or stale, or a check
+    /// that withdrew its advance.
+    func releaseWaitingFirings() { if !applying, !ownerInFlight { taskTimers.resume() } }
+    /// A firing waits in its queue while a batch applies or owner work is in flight, and is asked for again once neither
+    /// holds it (`releaseWaitingFirings`).
     func deliverNativeTimer() {
         guard state != .destroyed, clock == nil, !ExactEnv.agentFreezes, !applying, !ownerInFlight,
               let timer = taskTimers.take() else { return }

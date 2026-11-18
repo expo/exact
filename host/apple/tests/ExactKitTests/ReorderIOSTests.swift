@@ -3,6 +3,7 @@ import UIKit
 import UIKit.UIGestureRecognizerSubclass
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactDrag
 
 /// UIKit recognizes Arrange: a handle whose touch-action keeps the List's

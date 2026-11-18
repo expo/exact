@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 final class NativeButtonRasterIOSTests: XCTestCase {
     private var session: ExactSession?

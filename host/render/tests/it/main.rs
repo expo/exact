@@ -15,6 +15,7 @@ struct TestWork;
 impl exact_runner::HostWork for TestWork {}
 
 mod boot;
+mod build;
 mod checkpoints;
 mod direct;
 mod each;

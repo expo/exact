@@ -122,6 +122,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         host?.presenter.afterBatch { [weak self] in
             guard let host = self?.host else { return }
             host.coversChanged()
+            // Its scrollers' bands (LLP 1130, 1131) were taken away while it was out of the
+            // window under a pushed route, and no batch comes to give them back on a pop.
+            host.presenter.reachPageEdges()
             if let pending = host.presenter.pendingFocusNode, host.isArriving(pending) {
                 host.presenter.flushPendingFocus()
             }

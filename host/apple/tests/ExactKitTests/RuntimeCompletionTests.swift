@@ -4,6 +4,7 @@ import XCTest
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactCore
 
 final class RuntimeCompletionTests: XCTestCase {

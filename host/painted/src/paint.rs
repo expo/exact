@@ -27,6 +27,7 @@ pub(crate) use presentation::Presentation;
 pub mod border;
 mod shape;
 pub use shape::Shape;
+use space::sticky;
 mod box_filter;
 pub(crate) mod button;
 mod caret;
@@ -807,9 +808,15 @@ impl Painter {
             dialog: None,
         };
         self.rows_begin(&walk);
-        for root in scene.roots {
+        let kept = self.kept_places(&walk, None, scene.roots);
+        let space = Transform::from_translate(-scene.page.0, -scene.page.1);
+        let last = self.stage_after(scene.roots);
+        for (at, root) in scene.roots.iter().enumerate() {
+            self.replay_kept(walk.scene, &kept, at, space);
             self.node(&mut walk, *root, Transform::identity(), scene.page, None);
+            self.paint_stage(&mut walk, *root, Some(*root) == last);
         }
+        self.replay_kept(walk.scene, &kept, scene.roots.len(), space);
         self.paint_ghost(&mut walk);
         self.paint_alert(&mut walk);
         self.rows_end();
@@ -1292,35 +1299,6 @@ impl Painter {
         }
         self.hosted_view(node, rect, ts);
     }
-}
-
-/// @ref LLP 1083 D4 — a sticky box moves by its constraint's offset at its
-/// scroller's scroll: the scroller's own, the page's for a root that does
-/// not scroll itself, none for a box that only clips. Painted there, it is
-/// hit there too.
-fn sticky(scene: &Scene<'_>, id: ViewId, offset: (f32, f32)) -> (f32, f32) {
-    let kernel = scene.kernel;
-    let Some(node) = kernel
-        .node(id)
-        .filter(|n| n.layout_position() == exact_kernel::PositionType::Sticky)
-    else {
-        return offset;
-    };
-    let Some(c) = kernel.sticky_constraint(node.key) else {
-        return offset;
-    };
-    let Some(scroller) = kernel.node(c.scroller) else {
-        return offset;
-    };
-    let scroll = if effective_overflow(&scroller) != (Overflow::Visible, Overflow::Visible) {
-        scene.scroll.get(&c.scroller).copied().unwrap_or((0.0, 0.0))
-    } else if scroller.parent.is_none() {
-        scene.page
-    } else {
-        (0.0, 0.0)
-    };
-    let (dx, dy) = c.offset(scroll);
-    (offset.0 - dx, offset.1 - dy)
 }
 
 /// Where a picture goes under CSS `object-fit`, centred in the content box:

@@ -84,6 +84,9 @@ pub struct GrantLinks {
     /// Whether an `fs.read` or `fs.write` line admits a path:
     /// [`crate::save_file::covered`].
     pub covers: fn(&str, &str, &str) -> bool,
+    /// Why data code may not call a child process's operation from an
+    /// origin (LLP 1133.007 D13); `process.spawn` lines link I/O.
+    pub process: fn(&str, crate::CallOrigin) -> Result<(), String>,
 }
 
 /// The I/O grant grammar.
@@ -92,6 +95,7 @@ pub const LINKED: GrantLinks = GrantLinks {
     admitting,
     session_admits,
     covers: crate::save_file::covered,
+    process: crate::runner::process_refusal,
 };
 
 /// Read one I/O grant line.

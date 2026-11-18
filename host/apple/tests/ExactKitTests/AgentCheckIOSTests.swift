@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 @testable import ExactGroupedLists
 import UIKit
 

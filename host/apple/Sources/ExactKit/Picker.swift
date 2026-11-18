@@ -19,82 +19,12 @@ import UIKit
 import AppKit
 #endif
 
-#if os(iOS)
-/// What the core asks of the photo picker's module, which links PhotosUI.
-package protocol MediaPickerCapability: AnyObject {
-    /// Present the photo picker over `controller` for a media-only
-    /// `accept`. `done` runs once, on the main queue, with each chosen file
-    /// staged in the temporary directory and the name to give it (none
-    /// when cancelled), and why a chosen file could not be staged, if one
-    /// could not; the caller removes the staged files.
-    func present(over controller: UIViewController, accept: [String], multiple: Bool,
-                 done: @escaping ([(url: URL, name: String)], String?) -> Void)
-}
-
-/// The photo picker's module, installed by the composition.
-package enum MediaPickerLink {
-    package static var installed: MediaPickerCapability?
-}
-#endif
-
-/// The app's directories behind `app:/`, so an `image` source can read the
-/// app's own file (D7): told by the library at boot and with each picked
-/// name, so a photo kept in `app:/data` shows after a relaunch with nothing
-/// picked (recipes F18).
-enum AppFiles {
-    private static let lock = NSLock()
-    private static var roots: [String: URL] = [:]
-    static func learn(_ reply: [String: Any]) {
-        guard let r = reply["roots"] as? [String: String] else { return }
-        lock.lock(); defer { lock.unlock() }
-        for (name, path) in r { roots[name] = URL(fileURLWithPath: path, isDirectory: true) }
-    }
-    /// The roots the library has now (`appRoots`), before the first frame's
-    /// images load and again once storage is configured.
-    @discardableResult static func learn(_ runtime: Runtime) -> [String: String] {
-        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_app_roots, "").utf8))
-        let object = reply as? [String: Any] ?? [:]
-        learn(object)
-        return object["roots"] as? [String: String] ?? [:]
-    }
-    /// Where an `app:/data|cache|tmp/…` path names, for a file the host
-    /// writes there; nil for `..` or a root. A file the app names is read
-    /// through `open` or `file`, never through this.
-    static func url(_ path: String) -> URL? {
-        guard let at = place(path) else { return nil }
-        return at.names.reduce(at.root) { $0.appendingPathComponent($1) }
-    }
-    /// The regular file `path` names, opened through no symbolic link
-    /// (`AppFileWalk`), as `readFile` and a share open it; nil for any other.
-    static func open(_ path: String) -> FileHandle? {
-        lock.lock(); let roots = roots; lock.unlock()
-        return AppFileWalk.open(path, roots: roots)
-    }
-    /// The URL of the file `open` finds, for a reader that takes a URL (a
-    /// player, picture in picture); nil where `open` refuses.
-    static func file(_ path: String) -> URL? {
-        guard let at = place(path), let handle = AppFileWalk.open(at.root, at.names) else { return nil }
-        try? handle.close()
-        return at.names.reduce(at.root) { $0.appendingPathComponent($1) }
-    }
-    private static func place(_ path: String) -> (root: URL, names: [String])? {
-        guard path.hasPrefix("app:/") else { return nil }
-        let parts = path.dropFirst(5).split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count >= 2, !parts.dropFirst().contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return nil }
-        lock.lock(); let root = roots[parts[0]]; lock.unlock()
-        return root.map { ($0, Array(parts.dropFirst())) }
-    }
-}
-
-final class Picker: NSObject {
+final class Picker: NSObject, FilePicking {
     unowned let session: ExactSession
     /// Inputs whose picker is showing, with the session generation that
     /// showed it: a second `showPicker` does nothing, and a replacement
     /// generation's input with the same id opens its own.
     private var open: [UInt32: Int] = [:]
-    /// Chosen documents under `startAccessingSecurityScopedResource`, until
-    /// the session ends (LLP 1069.010 D1).
-    var scoped: [URL] = []
     /// The holds of document pickers a drive shows for real (`--touch
     /// platform`), by element: what the person's choice answers.
     var documentTickets: [UInt32: UInt64] = [:]

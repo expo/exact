@@ -13,14 +13,14 @@ package final class FlippedView: NSView {
     package override var isFlipped: Bool { true }
     /// A finger came down on the trackpad over this document, while it
     /// accepts indirect touches (`CollectionHost.watchContact`).
-    var contactBegan: ((TimeInterval) -> Void)?
+    package var contactBegan: ((TimeInterval) -> Void)?
     package override func touchesBegan(with event: NSEvent) {
         if !event.touches(matching: .began, in: self).isEmpty { contactBegan?(event.timestamp) }
         super.touchesBegan(with: event)
     }
     package override func hitTest(_ point: NSPoint) -> NSView? { raisedHit(super.hitTest(point), point) }
     /// What the mounted rows cover, in this view's coordinates; nil: anything.
-    var preparedLimit: (() -> NSRect?)?
+    package var preparedLimit: (() -> NSRect?)?
     /// AppKit's last request, kept so rows built later can widen the answer.
     private(set) var requestedPrepared: NSRect?
     package override func prepareContent(in rect: NSRect) {
@@ -35,7 +35,7 @@ package final class FlippedView: NSView {
         return clamped.isNull || clamped.isEmpty ? visibleRect : clamped.union(visibleRect)
     }
     /// The rows changed: offer AppKit what they now cover of its request.
-    func refreshPrepared() {
+    package func refreshPrepared() {
         guard preparedLimit != nil else { return }
         let target = clampPrepared(requestedPrepared ?? preparedContentRect)
         if preparedContentRect != target { preparedContentRect = target }

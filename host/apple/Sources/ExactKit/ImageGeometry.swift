@@ -9,7 +9,7 @@ import UIKit
 #endif
 
 /// A PQ or HLG transfer (LLP 1100 D4).
-func isHDRSpace(_ space: CGColorSpace) -> Bool {
+package func isHDRSpace(_ space: CGColorSpace) -> Bool {
     #if os(tvOS)
     // The PQ/HLG-specific queries have no tvOS availability annotation.
     // This query covers both BT.2100 transfers and is available on tvOS.
@@ -19,30 +19,30 @@ func isHDRSpace(_ space: CGColorSpace) -> Bool {
     #endif
 }
 
-enum ImageHeadroom {
+package enum ImageHeadroom {
     /// An image's headroom, where the system says one (iOS 18 / macOS 15);
     /// before that, PQ's and HLG's default (1000 / 203 cd/m²).
-    static func of(_ image: CGImage) -> Float {
+    package static func of(_ image: CGImage) -> Float {
         if #available(iOS 18, macOS 15, tvOS 18, *) { return of(reported: image.contentHeadroom, space: image.colorSpace) }
         return of(reported: 0, space: image.colorSpace)
     }
 
     /// Zero is unknown, not SDR. Preserve a known tag; otherwise BT.2100
     /// supplies its reference default, and other spaces remain untagged.
-    static func of(reported: Float, space: CGColorSpace?) -> Float {
+    package static func of(reported: Float, space: CGColorSpace?) -> Float {
         if reported > 0 { return reported }
         return space.map(isHDRSpace) == true ? 1000 / 203 : 0
     }
 }
 
 /// A one-pixel halo keeps the smooth pass continuous across bounded tiles.
-enum RasterTiles {
-    static func enlargement(_ image: CGImage, rect: CGRect, scale: CGSize) -> CGSize {
+package enum RasterTiles {
+    package static func enlargement(_ image: CGImage, rect: CGRect, scale: CGSize) -> CGSize {
         CGSize(width: max(1, (rect.width * scale.width / CGFloat(image.width)).rounded()),
                height: max(1, (rect.height * scale.height / CGFloat(image.height)).rounded()))
     }
 
-    static func region(_ image: CGImage, rect: CGRect, visible: CGRect, enlargement n: CGSize) -> CGRect {
+    package static func region(_ image: CGImage, rect: CGRect, visible: CGRect, enlargement n: CGSize) -> CGRect {
         let full = CGSize(width: CGFloat(image.width) * n.width, height: CGFloat(image.height) * n.height)
         guard full.width.isFinite, full.height.isFinite, rect.width > 0, rect.height > 0 else { return .null }
         let sx = rect.width / full.width, sy = rect.height / full.height
@@ -55,7 +55,7 @@ enum RasterTiles {
         return CGRect(x: left, y: bottom, width: right - left, height: top - bottom)
     }
 
-    static func each(_ image: CGImage, rect: CGRect, visible: CGRect, enlargement n: CGSize, tint: CGColor?,
+    package static func each(_ image: CGImage, rect: CGRect, visible: CGRect, enlargement n: CGSize, tint: CGColor?,
                      draw: (CGImage, CGRect, CGRect) -> Void) {
         let full = CGSize(width: CGFloat(image.width) * n.width, height: CGFloat(image.height) * n.height)
         let covered = region(image, rect: rect, visible: visible, enlargement: n)
@@ -81,8 +81,8 @@ enum RasterTiles {
     }
 }
 
-enum RasterGeometry {
-    static func rect(natural: CGSize, content: CGRect, fit: String) -> CGRect {
+package enum RasterGeometry {
+    package static func rect(natural: CGSize, content: CGRect, fit: String) -> CGRect {
         guard natural.width > 0, natural.height > 0 else { return .zero }
         if fit == "fill" { return content }
         let x = content.width / natural.width, y = content.height / natural.height
@@ -121,7 +121,7 @@ enum RasterGeometry {
         ctx.restoreGState()
     }
 
-    static func filter(_ layer: CALayer, rendering: String?) {
+    package static func filter(_ layer: CALayer, rendering: String?) {
         let filter: CALayerContentsFilter = rendering == "crisp-edges" ? .nearest : .linear
         layer.magnificationFilter = filter
         layer.minificationFilter = filter
@@ -141,4 +141,21 @@ enum RasterGeometry {
         }
     }
 
+}
+
+/// Zeroed memory for a bitmap that lives only while `body` runs. A large
+/// one is pages returned to the system as it ends: a freed large malloc
+/// block can stay dirty in the allocator's cache, charged to the process,
+/// until it is reused. A small one is not worth the system calls.
+package func withScratch<T>(_ count: Int, _ body: (UnsafeMutableRawPointer) throws -> T?) rethrows -> T? {
+    guard count > 0 else { return nil }
+    if count < 128 * 1024 {
+        guard let small = calloc(count, 1) else { return nil }
+        defer { free(small) }
+        return try body(small)
+    }
+    guard let pages = mmap(nil, count, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0),
+          pages != MAP_FAILED else { return nil }
+    defer { munmap(pages, count) }
+    return try body(pages)
 }

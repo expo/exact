@@ -29,7 +29,7 @@ package final class Frames: NSObject {
     /// A frame task (LLP 1073 D5): each tick is the runtime's frame at the tick's target time.
     var tasks = false
     /// A hatch's frame ticket is live (LLP 1075.003.000.001 §2.4): each tick calls it, after the frame's tasks.
-    var hatches = false
+    package var hatches = false
     /// Keep every existing app frame request when scheduling or resuming the session.
     var hasWork: Bool { motion || canvas2d || timerSoon || session?.canvases.wantsFrames == true }
     private var canvasRequested = false
@@ -188,7 +188,7 @@ package final class Frames: NSObject {
     /// Inside `tick`: work it applies can end motion, but the callback is recorded before the run ends.
     private var ticking = false
 
-    func run(_ wanted: Bool) {
+    package func run(_ wanted: Bool) {
         if wanted, session?.clock != nil { requestCanvas() }
         let on = (wanted || hatches) && session?.clock == nil
         if !on, !ticking { session?.frameHealth.stop() }

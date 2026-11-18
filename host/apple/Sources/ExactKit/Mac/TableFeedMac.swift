@@ -995,4 +995,12 @@ extension NodeView {
         return find(self)
     }
 }
+
+extension Presenter {
+    /// What is under `point`, in the viewport's superview, asked as the hover
+    /// path asks (`TableRowCell.whatIsThere`).
+    package func viewUnder(_ point: NSPoint) -> NSView? { TableRowCell.whatIsThere { viewport.hitTest(point) } }
+    /// A press a native table holds ends unanswered: its window resigned key.
+    package func cancelTablePress() { tables.cancelPress() }
+}
 #endif

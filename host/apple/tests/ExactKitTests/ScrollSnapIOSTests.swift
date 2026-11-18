@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1008: nearest projected rest on both axes; oversized areas remain freely scrollable.
 final class ScrollSnapIOSTests: XCTestCase {

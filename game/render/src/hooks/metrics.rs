@@ -1,5 +1,5 @@
 //! Hook diagnostics stay outside saved state and allocate only for hooked canvases.
-use super::{HookWork, Hooks, Needs};
+use super::{budget, HookWork, Hooks, Needs};
 use crate::perf::Ring;
 pub(crate) const NAMES: [&str; 6] = [
     "prepare",
@@ -20,6 +20,7 @@ struct FrameMetrics {
 #[derive(Default)]
 pub(crate) struct Metrics {
     pub engine: HookWork,
+    pub prepare_budget: Option<budget::PrepareSample>,
     before: Option<(HookWork, Option<HookWork>)>,
     cpu: [Ring; 6],
     frame: Option<FrameMetrics>,
@@ -126,7 +127,15 @@ impl Metrics {
         }
     }
 
-    pub fn append(&self, out: &mut String, work: Option<HookWork>, needs: Needs, item_name: &str) {
+    pub fn append(
+        &self,
+        out: &mut String,
+        work: Option<HookWork>,
+        needs: Needs,
+        item_name: &str,
+        budget: Option<&budget::Budget>,
+        allowance: u32,
+    ) {
         let stages = stages(needs);
         out.push_str(&format!(",\"renderHooks\":{{\"stages\":{stages},\"attachmentBytes\":{},\"gpuTiming\":\"optional query set; opaque/background inside forward, surface inside continuation\",\"engineWork\":{{\"beforeReady\":{},\"afterReady\":{}}},\"reportedWork\":",
             self.attachment_bytes,self.before.map_or(self.engine,|b|b.0).json(),self.engine.since(self.before.map_or(self.engine,|b|b.0)).json()));
@@ -160,9 +169,55 @@ impl Metrics {
         } else {
             out.push_str("null");
         }
+        out.push_str(",\"budget\":");
+        if let Some(budget) = budget {
+            budget.append(out, allowance);
+        } else {
+            out.push_str("null");
+        }
         out.push('}');
     }
 }
+pub(crate) fn append_state<H: Hooks>(
+    metrics: Option<&Metrics>,
+    out: &mut String,
+    hooks: &H,
+    budget: Option<&budget::Budget>,
+) {
+    if let Some(metrics) = metrics {
+        metrics.append(
+            out,
+            hooks.work(),
+            hooks.needs(),
+            hooks.item_name(),
+            budget,
+            H::ALLOWANCE,
+        );
+        out.pop();
+        out.push(',');
+    } else {
+        out.push_str(",\"renderHooks\":{");
+    }
+    out.push_str("\"game\":");
+    match hooks.report() {
+        Some(report) if game_object(report).is_ok() => out.push_str(report.trim()),
+        Some(_) => out.push_str("null,\"gameError\":\"render hook report must be a JSON object\""),
+        None => out.push_str("null"),
+    }
+    out.push('}');
+}
+
+fn game_object(text: &str) -> Result<(), exact_game::DataError> {
+    use exact_game::Reader;
+
+    let mut reader = exact_game::json::Decoder::new(text);
+    reader.begin_struct()?;
+    while reader.field()?.is_some() {
+        reader.skip()?;
+    }
+    reader.finish()
+}
+
 pub(crate) fn stages(needs: Needs) -> String {
     let mut names = vec!["compute", "opaque", "background"];
     if needs.contains(Needs::SCENE_COPY) {
@@ -198,6 +253,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn render_hooks_budget_is_null_for_an_opted_out_hook() {
+        let hooks = read(&Metrics::default(), None, "items");
+        assert_eq!(hooks.get("budget"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn render_hooks_game_report() {
+        #[derive(Default)]
+        struct GameReport(Option<&'static str>);
+        impl Hooks for GameReport {
+            fn report(&self) -> Option<&str> {
+                self.0
+            }
+        }
+
+        for metrics in [None, Some(&Metrics::default())] {
+            for (report, expected, refused) in [
+                (
+                    Some(r#" {"units":3,"nested":[true,null]} "#),
+                    serde_json::json!({"units": 3, "nested": [true, null]}),
+                    false,
+                ),
+                (Some("[]"), serde_json::Value::Null, true),
+                (Some("{\"units\":}"), serde_json::Value::Null, true),
+                (Some("{} false"), serde_json::Value::Null, true),
+                (None, serde_json::Value::Null, false),
+            ] {
+                let mut json = String::from("{\"world\":{\"ready\":true");
+                append_state(metrics, &mut json, &GameReport(report), None);
+                json.push_str("}}");
+                let state: serde_json::Value = serde_json::from_str(&json).unwrap();
+                let hooks = &state["world"]["renderHooks"];
+                assert_eq!(hooks.get("game"), Some(&expected));
+                assert_eq!(
+                    hooks.get("gameError").and_then(|error| error.as_str()),
+                    refused.then_some("render hook report must be a JSON object")
+                );
+            }
+        }
+    }
+
     fn reporter(counts: [u64; 4]) -> Reporter {
         let [draws, triangles, upload_bytes, items] = counts;
         Reporter(FrameWork {
@@ -221,7 +318,7 @@ mod tests {
 
     fn read(metrics: &Metrics, work: Option<HookWork>, item_name: &str) -> serde_json::Value {
         let mut json = String::from("{\"world\":true");
-        metrics.append(&mut json, work, Needs::NONE, item_name);
+        metrics.append(&mut json, work, Needs::NONE, item_name, None, 0);
         json.push('}');
         serde_json::from_str::<serde_json::Value>(&json).unwrap()["renderHooks"].take()
     }

@@ -1,8 +1,8 @@
 //! Canvas-child anchors and occlusion (LLP 1133.039 D8).
 use crate::{
     arguments::{error, list, normal, position, string, Arguments},
+    bvh::Ray,
     camera::Pose,
-    pick::triangle,
     styles::{self, Occlusion},
     Model,
 };
@@ -81,7 +81,6 @@ pub struct Hotspots {
     pub dirty: bool,
     tested_pose: Option<Pose>,
     tested_at: Option<f64>,
-    generation: Option<u64>,
     pub gpu: Option<crate::labels::Labels>,
 }
 impl Hotspots {
@@ -117,10 +116,9 @@ impl Hotspots {
         }
     }
 
-    pub fn update(&mut self, model: Option<&Model>, a: &Arguments, frame: &Frame, generation: u64) {
+    pub fn update(&mut self, model: Option<&Model>, a: &Arguments, frame: &Frame) {
         let retest = model.is_some_and(|m| {
             self.dirty
-                || self.generation != Some(generation)
                 || self.tested_pose.is_none()
                 || (!m.camera.moving() && self.tested_pose != Some(m.camera.pose))
                 || (m.camera.moving()
@@ -218,7 +216,6 @@ impl Hotspots {
             }
             self.tested_pose = model.map(|m| m.camera.pose);
             self.tested_at = Some(frame.now_ms);
-            self.generation = Some(generation);
             self.dirty = false;
         }
     }
@@ -242,7 +239,7 @@ fn descendant(scene: &Scene, mut node: usize, root: usize) -> bool {
     }
 }
 
-fn occluded(m: &Model, node: usize, anchor: V3, normal: Option<V3>) -> bool {
+pub(super) fn occluded(m: &Model, node: usize, anchor: V3, normal: Option<V3>) -> bool {
     let eye = m.camera.pose.eye();
     let delta = sub(anchor, eye);
     if normal.is_some_and(|n| dot(n, delta) >= 0.) {
@@ -251,18 +248,22 @@ fn occluded(m: &Model, node: usize, anchor: V3, normal: Option<V3>) -> bool {
     let distance = dot(delta, delta).sqrt();
     let direction = norm(delta);
     let near = m.camera.ray_depth(direction)[0];
-    for (p, s) in m.scene.primitives.iter().zip(&m.effective) {
+    for (p_index, (p, s)) in m.scene.primitives.iter().zip(&m.effective).enumerate() {
         if !s.visible || !s.opaque() || descendant(&m.scene, p.node, node) {
             continue;
         }
-        for tri in m.scene.indices[p.indices.start as usize..p.indices.end as usize].chunks_exact(3)
-        {
-            let [a, b, c] = std::array::from_fn(|k| m.scene.vertices[tri[k] as usize].p);
-            if triangle(eye, direction, a, b, c).is_some_and(|t| {
-                t >= near && t < distance && m.clip.keeps(add(eye, mul(direction, t)))
-            }) {
-                return true;
-            }
+        if m.bvh.hits(
+            &m.scene,
+            p_index,
+            Ray {
+                origin: eye,
+                direction,
+                depth: [near, distance],
+                clip: m.clip,
+            },
+            |t, _, _| t < distance,
+        ) {
+            return true;
         }
     }
     false

@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import ExactSurfaces
 import UIKit
 

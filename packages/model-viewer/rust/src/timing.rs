@@ -6,6 +6,8 @@
 //! Contract's metrics schema admits only its standard fields. Values describe
 //! the latest operation. Occlusion totals count updates since asset delivery.
 //! Disabling collection drops every sample, including worker results still in flight.
+//! `parseMs` includes BVH construction, on the same executor as parsing.
+//! Detailed state also reports the BVH's heap allocation as `bvhBytes`.
 //! `parseWaitMs` includes delivery copying, worker dispatch and the wait until a
 //! frame consumes the result. `uploadMs` includes CPU packing, buffers, pipelines
 //! and attachments. `loadToSubmitMs` ends at submission, before presentation.
@@ -66,14 +68,67 @@
 //! | C6 | 69.83/74.51/69.11 | 23.34 | 29.49 | 29.16 | 127.98–183.58 | 8.64 | 40.26 |
 //! | C7 | 69.83/74.51/69.11 | 23.76 | 27.93 | 28.05 | 126.29–181.27 | 7.64 | 40.60 |
 //!
-//! The 2 ms pick and 4 ms occlusion budgets both miss consistently across these
-//! loads. Both scan CPU triangles without an acceleration structure. Some
-//! replacements update occlusion on the retained picture while parsing and
-//! again on the new picture: two updates total about 80 ms, contributing to
-//! result-consumption waits. These measurements do not qualify the 200 ms cold
-//! first-frame budget. No budget has been raised.
+//! The original renderer rejects rays outside each node's box before scanning
+//! triangles (koolkao/occlusion-viewer b63cff7, src/pick.rs); Exact's adaptation
+//! omitted that rejection. The old 0.4–0.9 ms native figure used another model.
+//! These concentric spheres cross both boxes at the centre, so box rejection
+//! alone cannot accelerate that pick. The picker scans 500,000 triangles once
+//! across its two disjoint primitive classes, not twice. Hotspot rays stop at
+//! their first blocker. A fresh optimized macOS CPU run below is much faster
+//! than the simulator rows; those rows do not isolate simulator, scheduling or
+//! code-generation costs. A debug CPU run took 46.49/189.28 ms (pick/labels),
+//! and optimizing only the viewer for size took 3.17/13.68 ms, versus the
+//! host-dev baseline below. Neither establishes the cause of the old 7.5 ms.
 //!
-//! Web parsing blocks the page once; camera preparation blocks it afterwards.
+//! Amended 2026-11-18: D11's trigger is met. Picking and occlusion now share a
+//! triangle BVH per primitive, built with the world-transformed geometry on the
+//! parser's executor. Changing visibility, opacity or clipping filters queries;
+//! replacing geometry rebuilds the tree. A pending source no longer invalidates
+//! the retained picture's occlusion: a replacement with unchanged camera and
+//! styles tests only the new picture. Geometry changes still force a retest.
+//!
+//! Fresh before/after runs use the same sphere construction and optimization
+//! settings above: 1,227,964 bytes, SHA-256
+//! 512ee0b92911723aa752bff4de0329b6f473994e1c6377de8d43357b026e184a.
+//! Native rows are macOS CPU surface tests, host-dev, 25 operations after one
+//! warm-up; values are median/max. Web rows use the production web profile in
+//! pinned full Chromium/WebGPU, eight picks and eight 20-label updates; the
+//! seven warm updates move the camera by 0.001 degrees with decay zero.
+//! Native canvas: 400 x 400; web: 320 x 320. Every centre pick is Impeller.
+//!
+//! | Target | Load 1/5/15 | Pick before | Pick BVH | 20 labels before | 20 labels BVH |
+//! |---|---|---:|---:|---:|---:|
+//! | macOS A | 46.37/50.98/55.83 before; 45.62/50.18/53.70 after | 1.2638/1.5160 | 0.0010/0.0385 | 4.9225/5.5839 | 0.0030/0.0046 |
+//! | macOS B | 50.79/58.46/57.05 | — | 0.0011/0.0044 | — | 0.0030/0.0045 |
+//! | macOS C | 50.79/58.46/57.05 | — | 0.0011/0.0039 | — | 0.0031/0.0045 |
+//! | macOS D | 40.36/41.67/49.31 | — | 0.0010/0.0025 | — | 0.0031/0.0046 |
+//! | macOS E | 42.88/42.91/48.27 | — | 0.0015/0.0088 | — | 0.0045/0.0064 |
+//! | macOS F | 138.33/98.26/73.44 | — | 0.0033/0.0102 | — | 0.0091/0.0113 |
+//! | macOS G | 141.16/101.76/75.39 | — | 0.0036/0.0111 | — | 0.0094/0.0118 |
+//! | web cold | 95.32/65.64/59.23 before; 58.22/60.30/57.63 after | 8.0 | <0.1 | 52.4 | <0.1 |
+//! | web warm range | same | 4.4–4.7 | <0.1 | 13.0–13.6 | <0.1–0.2 |
+//! | web recheck cold | 109.18/98.60/75.33 | — | 0.1 | — | 0.4 |
+//! | web recheck warm | same | — | ≤0.1 | — | ≤0.1 |
+//!
+//! F, G and the web recheck use bounds expanded for floating-point rounding
+//! so triangle-edge hits reach the unchanged triangle test.
+//!
+//! A second browser run at load 33.98/50.15/53.98 measured 0.2 ms for its
+//! cold pick and at most 0.1 ms for subsequent picks and label updates.
+//! Repeating the conservative-bounds recheck at load 84.00/92.33/75.99 gave
+//! the same ray timings, with parse/build 187.40 ms and submission at 287.00 ms.
+//!
+//! BVH heap bytes: 6,194,336 native, 6,194,288 wasm32. Partition scratch is
+//! released before the parser delivers the result. Native parse plus build:
+//! 62.32, 53.70, 54.34, 57.20, 60.35, 91.00 and 218.89 ms. Web cold parse plus build: 187.70 ms, versus
+//! 78.30 ms parsing before; load-to-submit was 285.10 versus 227.30 ms.
+//! The web recheck parsed and built in 222.50 ms and submitted at 343.70 ms.
+//! Both ray budgets pass. These results do not qualify the simulator's cold
+//! first-frame budget, and no budget has been raised. The web still parses
+//! and builds inline; moving that work to a worker remains outside this change.
+//!
+//! Piece 8's pre-BVH web parsing blocks the page once; camera preparation
+//! blocks it afterwards.
 //! The first trial includes cold Wasm/JIT paths; the seven replacements warm
 //! those paths. GPU setup and hotspot work also block, outside these parse rows.
 //!
@@ -88,7 +143,7 @@
 //! | 6 | 60.18/77.66/69.40 | 43.50 | 9.90 |
 //! | 7 | 60.18/77.66/69.40 | 43.80 | 10.30 |
 //!
-//! Package module bytes (shared host code and model assets excluded):
+//! Piece 8's pre-BVH module bytes (shared host code and model assets excluded):
 //!
 //! | Artifact | Raw | Gzip-9 | Brotli-11 |
 //! |---|---:|---:|---:|

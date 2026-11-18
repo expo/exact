@@ -10,6 +10,14 @@ test('a connected registered publisher keeps the name even before the GPU gives 
   assert.deepEqual(f.diagnostics, []);
 });
 
+test('the clock uses the earliest tick across worlds', async () => {
+  const f = await fixture();
+  f.create(1); f.create(2, 'other');
+  f.gpu.gpu_agent = id => JSON.stringify({ quiescent: false, settleAt: id * 100, nextTickAt: id === 1 ? 25 : 12.5 });
+  assert.equal(f.exact.gpu.clock(false).nextTickAt, 12.5);
+  assert.equal(f.exact.gpu.clock(true).settleAt, 200);
+});
+
 test('player restore flushes its public record before reporting success', async () => {
   const f=await fixture();f.create(1);
   f.gpu.gpu_restore=id=>{f.publish(id,{restored:true});return true;};

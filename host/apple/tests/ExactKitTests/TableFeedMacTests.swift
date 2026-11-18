@@ -8,6 +8,8 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
 
 /// One session whose page is a list of `count` rows, in a window, with the
 /// list's rows in a table.

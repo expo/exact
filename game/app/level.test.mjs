@@ -1,8 +1,8 @@
-import {test, expect} from 'bun:test';
+import {test, expect, spyOn} from 'bun:test';
 import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
-import {gameDefaults, gameShells, sharesAppleEntry} from './shells.mjs';
+import {gameDefaults, gameShells, renderGraph, sharesAppleEntry} from './shells.mjs';
 
 test('external shells use the SDK toolchain and refresh stale generated pins', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-shell-toolchain-'));
@@ -290,3 +290,38 @@ test('a lock captured before the shared Apple host keeps the game on its own hos
     expect(sharesHost()).toBe(true);
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
+
+test('the bake warns when logic can enable a renderer dependency', () => {
+  const logic = { id: 'logic', name: 'sample-logic', dependencies: [] };
+  const metadata = { packages: [logic], workspace_members: ['logic'], resolve: { nodes: [] } };
+  const game = { crate: logic.name };
+  const warn = spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    renderGraph(metadata, game);
+    expect(warn).not.toHaveBeenCalled();
+    logic.dependencies.push({ name: 'exact-game-render', rename: 'renderer', optional: true, kind: null });
+    renderGraph(metadata, game);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('warning: hook code in the logic crate: its optional features are outside the determinism lint run, and the logic crate can name renderer types; move it to render/');
+    warn.mockClear();
+    logic.dependencies = [{ name: 'exact-game-render', optional: false, kind: null, target: 'cfg(unix)' }];
+    renderGraph(metadata, game);
+    expect(warn).toHaveBeenCalledTimes(1);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+for (const kind of ['dev', 'build']) {
+  test(`the bake does not warn about a ${kind} dependency on the renderer`, () => {
+    const logic = { id: 'logic', name: 'sample-logic', dependencies: [{ name: 'exact-game-render', kind }] };
+    const metadata = { packages: [logic], workspace_members: ['logic'], resolve: { nodes: [] } };
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      renderGraph(metadata, { crate: logic.name });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+}

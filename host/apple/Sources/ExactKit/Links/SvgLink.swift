@@ -1,11 +1,11 @@
 // @ref LLP 1047.001 D10 — SVG is a family the composition selects: an
 // `svg`'s scene, an SVG document an image or an icon draws, and the island
 // and filter modules. The core reaches it only through what this file
-// declares. Each slot's default is today's implementation, so every app still
-// links SVG; the family's own target will install them instead. Box
+// declares, and `ExactSvg.install()` sets its slots; without it no file reads
+// as SVG, and a plan with an `svg` is refused at boot (`Unlinked("effects, svg")`). Box
 // animations are the core's (`BoxAnimations`). SVG's filters run on box
 // effects' filter engine (`BoxFilterLink`), so the SVG product depends on
-// that one, never the other way.
+// that one, never the other way, and a composition that links SVG links it.
 import CoreGraphics
 import CoreText
 import Foundation
@@ -56,24 +56,19 @@ package protocol SvgDocuments: AnyObject {
 /// The slots are set before any session is made, and read from any thread.
 package enum SvgLink {
     /// A presenter's scenes.
-    package static var make: (() -> any SvgScenes)? = { SvgHost() }
+    package static var make: (() -> any SvgScenes)?
     /// SVG documents.
-    package static var documents: (any SvgDocuments)? = SvgFiles()
+    package static var documents: (any SvgDocuments)?
     /// An `svg` op's scene prepared on the owner as the batch is decoded.
-    package static var prepare: ((inout [String: Any]) -> Void)? = SvgPrepare.scene
+    package static var prepare: ((inout [String: Any]) -> Void)?
     /// A plan that can show an island (bit 1) or a filter (bit 2) opens their
     /// modules off the main thread before its first draw needs them.
-    package static var prewarm: ((UInt8) -> Void)? = { svg in
-        if svg & 1 != 0 { SvgRasterModule.prewarm() }
-        #if os(iOS) || os(tvOS)
-        if svg & 2 != 0 { BoxFilterLink.prewarm?() }
-        #endif
-    }
+    package static var prewarm: ((UInt8) -> Void)?
     /// How many SVG pictures are still drawing, which a settle waits for.
-    package static var drawing: (() -> Int)? = { SvgFilterLive.inFlight }
+    package static var drawing: (() -> Int)?
     /// On the main thread: wait at most the interval for those pictures to
     /// show.
-    package static var waitForDrawing: ((TimeInterval) -> Void)? = { SvgFilterLive.waitForDraws(timeout: $0) }
+    package static var waitForDrawing: ((TimeInterval) -> Void)?
     /// A scene's root layer's name, by which its node re-asks its range
     /// (LLP 1100 D8).
     package static let rootName = "exact-svg"

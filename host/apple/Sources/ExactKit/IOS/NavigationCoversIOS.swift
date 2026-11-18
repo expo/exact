@@ -411,13 +411,28 @@ extension NavigationHost {
         session.whenIdle(bound: true, write, cancelled: answered)
     }
 
+    /// The side insets of a route in a sheet still being presented, as they are where the sheet lands
+    /// (`UIPresentationController.frameOfPresentedViewInContainerView`). The sheet's own safe area during the
+    /// transition is not that: on the iPhone Duo the side by the button strip read 8 points wider.
+    static func landingSides(_ c: RouteController) -> (left: CGFloat, right: CGFloat)? {
+        var top: UIViewController = c
+        while let parent = top.parent { top = parent }
+        guard top.isBeingPresented, let sheet = top.presentationController, let container = sheet.containerView else { return nil }
+        let landed = sheet.frameOfPresentedViewInContainerView
+        let box = c.node.convert(c.node.bounds, to: top.view)
+        let safe = container.safeAreaInsets
+        let minX = landed.minX + max(0, box.minX), maxX = landed.maxX - max(0, top.view.bounds.maxX - box.maxX)
+        return (max(0, safe.left - minX), max(0, safe.right - (container.bounds.maxX - maxX)))
+    }
+
     /// @ref LLP 1123 D9 — each route's own safe area, which its content reads
     /// as `var(--exact-safe-area-inset-*)`: its controller's view's, the bars,
     /// the status bar and the home indicator in it, on the sides only as far
     /// as the route's box reaches them, as its covers are. A route out of a
     /// window keeps the last it had, UIKit's zero there being no measurement,
     /// and so does one while its stack's transition runs, as its cover does;
-    /// one that has none yet takes what it has from its first frame. And the
+    /// one that has none yet takes what it has from its first frame, its sides
+    /// from where a sheet being presented lands (`landingSides`). And the
     /// session root's while the containers take the whole view, where `env()`
     /// is 0 but the screen's insets are not. Whether any changed.
     func reportLocalInsets() -> Bool {
@@ -432,8 +447,9 @@ extension NavigationHost {
             }
             let box = c.node.convert(c.node.bounds, to: view)
             let safe = view.safeAreaInsets
-            wanted[c.node.id] = [safe.top, max(0, safe.right - max(0, view.bounds.maxX - box.maxX)),
-                                 safe.bottom, max(0, safe.left - max(0, box.minX))]
+            var sides = (left: max(0, safe.left - max(0, box.minX)), right: max(0, safe.right - max(0, view.bounds.maxX - box.maxX)))
+            if last == nil, let landing = Self.landingSides(c) { sides = landing }
+            wanted[c.node.id] = [safe.top, sides.right, safe.bottom, sides.left]
         }
         if wantsWholeView, let view = presenter.session?.view, view.window != nil {
             let safe = view.safeAreaInsets

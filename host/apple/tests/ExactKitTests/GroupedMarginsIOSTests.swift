@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactGroupedLists
 
 final class GroupedPaddingIOSTests: GroupedListFixture {

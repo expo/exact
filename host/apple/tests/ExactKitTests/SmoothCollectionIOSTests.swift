@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1070.000 §6.2, LLP 1010 §6.8: a correction marked smooth (a smooth
 /// `scrollIntoView`, or a `scroll-behavior: smooth` list following its end)

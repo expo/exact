@@ -10,8 +10,7 @@ extension Presenter {
         let current = container.subviews
         var ordered: [NSView] = children.compactMap { child in
             if child.superview === container { return child }
-            guard let flight = flights[child.id], flight.view === child,
-                  let slot = flight.slot, slot.superview === container else { return nil }
+            guard let slot = flightHost.slot(of: child), slot.superview === container else { return nil }
             return slot
         }
         let placed = Set(ordered.map(ObjectIdentifier.init))

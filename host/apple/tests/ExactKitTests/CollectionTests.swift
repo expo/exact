@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 #if canImport(AppKit)
 import AppKit
 #endif

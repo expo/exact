@@ -72,13 +72,18 @@ impl Painter {
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
         let ts = self.zoom_children(walk.scene.kernel, node, ts, child_offset);
+        let space = ts.pre_translate(node.frame.x - child_offset.0, node.frame.y - child_offset.1);
+        self.kept.push_space(node.id, space);
         let rows = self.has_rows(walk, node);
         let group = rows && !self.rows_wrapper(node.key);
         let wrap = group && self.wraps_rows(walk, &children);
         if group {
             self.group_begin(walk, node.id);
         }
-        for child in children {
+        let kept = self.kept_places(walk, Some(node), &children);
+        let (last, count) = (self.stage_after(&children), children.len());
+        for (at, child) in children.into_iter().enumerate() {
+            self.replay_kept(walk.scene, &kept, at, space);
             if wrap {
                 self.wrapped(walk, child, ts, child_offset, child_rect);
             } else if rows {
@@ -86,14 +91,16 @@ impl Painter {
             } else {
                 self.node(walk, child, ts, child_offset, child_rect);
             }
-            self.paint_stage(walk, child);
+            self.paint_stage(walk, child, Some(child) == last);
         }
+        self.replay_kept(walk.scene, &kept, count, space);
         if group {
             self.group_end(walk);
         }
         if let Some(child) = lift {
             self.node(walk, child, ts, child_offset, child_rect);
         }
+        self.kept.pop_space();
     }
 
     /// The row a list carries within itself, painted after its siblings.

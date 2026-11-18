@@ -157,7 +157,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             size.0.div_ceil(64).max(self.targets.size.0 / 64) * 64,
             size.1.div_ceil(64).max(self.targets.size.1 / 64) * 64,
         );
-        let view = crate::FrameView {
+        let mut view = crate::FrameView {
             frame,
             time,
             pixels: size,
@@ -171,7 +171,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         let measure = cpu.is_some();
         let needs = if H::ENABLED {
             *ran_hook_stage = world.is_some();
-            self.prepare_hooks(hooks, world, &view, &mut times, measure)?;
+            self.prepare_hooks(hooks, world, &mut view, &mut times, measure)?;
             hooks.needs()
         } else {
             crate::Needs::NONE
@@ -594,7 +594,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         &mut self,
         hooks: &mut H,
         world: Option<&exact_game::World>,
-        view: &crate::FrameView<'_>,
+        view: &mut crate::FrameView<'_>,
         times: &mut [Option<f64>; 6],
         measure: bool,
     ) -> Result<(), RenderError> {
@@ -626,12 +626,28 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             frame_binding: &binding.bind,
             frame_layout: &binding.layout,
         };
-        let start = measure.then(crate::perf::Stamp::now);
-        hooks
-            .prepare(&gpu, view, &crate::RenderWorld(world))
-            .map_err(|e| hook_error("prepare", e))?;
-        times[0] = start.map(|s| s.elapsed());
-        Ok(())
+        let deadline = view.time.deadline;
+        let start = (measure || deadline.is_some()).then(crate::perf::Stamp::now);
+        if let Some((deadline, start)) = deadline.zip(start) {
+            view.time.allowance = crate::hooks::budget::entry_allowance(
+                view.time.allowance,
+                deadline.remaining_at(start),
+            );
+        }
+        let result = hooks.prepare(&gpu, view, &crate::RenderWorld(world));
+        if let Some((deadline, start)) = deadline.zip(start) {
+            let end = crate::perf::Stamp::now();
+            let duration_ms = start.elapsed_at(end);
+            self.hook_metrics.as_mut().unwrap().prepare_budget =
+                Some(crate::hooks::budget::PrepareSample {
+                    remaining_ms: deadline.remaining_at(end),
+                    end,
+                });
+            times[0] = Some(duration_ms);
+        } else if result.is_ok() {
+            times[0] = start.map(|start| start.elapsed());
+        }
+        result.map_err(|e| hook_error("prepare", e))
     }
 
     fn check_custom_materials(

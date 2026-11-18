@@ -9,7 +9,7 @@ export { launchModules };
  * and a registry of their `ExactLaunchPart` types, in `launch` order. SwiftPM
  * needs it inside the package. Returns its directory, or null if there are none. */
 export function writeLaunchParts(pkg, app) {
-  const modules = launchModules(app.dir, app.manifest);
+  const modules = launchModules(app.dir, app.manifest, ['apple']);
   if (!modules.some(m => m.launch.length)) return null;
   const dir = resolve(pkg, '.launch-parts', app.id);
   mkdirSync(dir, { recursive: true });

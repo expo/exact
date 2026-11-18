@@ -1,5 +1,6 @@
 //! World advancement and GPU frame ownership.
 use super::*;
+use crate::hooks::budget::{preparing, FramePeriod};
 
 pub(super) fn retain_primes<const ASSETS: bool>(
     render: &mut Option<(crate::renderer::RendererWithAssets<ASSETS>, Feed)>,
@@ -61,6 +62,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             idle_tick: None,
             samples: None,
             timing: Default::default(),
+            scheduled_cap: Default::default(),
             waiting: Default::default(),
             held_back: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -387,6 +389,16 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) -> bool {
+        let period = if H::ENABLED && H::ALLOWANCE > 0 && !frame.seekable {
+            FramePeriod::new(
+                frame.period_ms,
+                self.timing.interval_ms,
+                self.scheduled_cap.get(),
+            )
+        } else {
+            None
+        };
+        let frame_start = period.map(|_| Stamp::now());
         let measure = self.perf.measure_frame;
         self.frame_ready = false;
         if !self.storage_fits(device) {
@@ -625,7 +637,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let start = measure.then(Stamp::now);
         self.hook_poses.track(self.hooks.entities(), sim.world());
         self.hook_poses.sync(sim.world());
-        let hook_time = if H::ENABLED {
+        let mut hook_time = if H::ENABLED {
             self.hook_clock.frame(
                 frame,
                 &self.timing,
@@ -635,6 +647,18 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         } else {
             crate::HookTime::default()
         };
+        if H::ENABLED && H::ALLOWANCE > 0 {
+            self.hook_clock
+                .budget
+                .get_or_insert_with(Box::default)
+                .frame(
+                    &mut hook_time,
+                    frame.now_ms,
+                    H::ALLOWANCE,
+                    period,
+                    frame_start,
+                );
+        }
         // The agent's armed timing keeps samples a snapshot's does not: arming
         // replaces the snapshot's, and with neither there is none.
         let armed = self.perf.armed();
@@ -699,7 +723,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             .quads
             .children(&renderer.device, &renderer.queue, &self.placed);
         let direct_frames = renderer.direct_frames;
-        self.perf.stats = match renderer.encode_hooked(
+        let encoded = renderer.encode_hooked(
             encoder,
             target,
             frame.pixels(),
@@ -709,7 +733,21 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             hook_time,
             &self.hook_poses,
             measure.then_some((&mut self.perf, frame.seekable)),
-        ) {
+        );
+        if let Some(end) = hook_time.deadline.map(|_| Stamp::now()) {
+            if let Some(prepare) = renderer
+                .hook_metrics
+                .as_mut()
+                .and_then(|m| m.prepare_budget.take())
+            {
+                let budget = self.hook_clock.budget.as_mut().unwrap();
+                budget.record(prepare.remaining_ms);
+                if encoded.is_ok() {
+                    budget.finish(prepare.end.elapsed_at(end));
+                }
+            }
+        }
+        self.perf.stats = match encoded {
             Ok(stats) => stats,
             Err(error) => {
                 self.error = Some(SurfaceError(error.to_string()));
@@ -797,8 +835,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             self.idle_tick = None;
             false
         };
-        let hooks = self.hooks.needs().contains(crate::Needs::ANIMATE)
-            || self.hooks.needs().contains(crate::Needs::PENDING);
+        let needs = self.hooks.needs();
+        let hooks = needs.contains(crate::Needs::ANIMATE) || preparing(needs, frame.seekable);
         self.resting = rests && !hooks && !asset_work;
         if self.resting {
             self.perf.submitted_live = None;

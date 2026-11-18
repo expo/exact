@@ -3,8 +3,7 @@
 // The core reaches it only through what this file declares. The presenter
 // always holds an object: without the family it holds `NoLists`, which owns
 // no list and asks for nothing, so a plan with no list pays one call per
-// hook. The slot's default is today's `CollectionHost`, so every app still
-// links the family; its own target will install it instead. Drag
+// hook. The family's target, `ExactCollections`, installs its host. Drag
 // (`ExactDrag`) holds a list's pointer through the same protocol. ExactCore
 // reaches the family's feedback export through `CoreExports`.
 #if os(macOS)
@@ -169,8 +168,26 @@ final class NoLists: ListHosting {
     #endif
 }
 
+#if os(iOS) || os(tvOS)
+/// What the family asks of the presenter's scroll pump and element reveals.
+extension Presenter {
+    /// List `id`'s travel is over: the pump stops leading it.
+    package func forgetTravel(_ id: UInt32) { scrollPump.forgetTravel(id) }
+    /// How far ahead, in seconds, list `id`'s window builds while it moves.
+    package func leadTime(_ id: UInt32) -> Double { scrollPump.leadTime(id) }
+    /// A correction moved list `id`'s port by `delta`.
+    package func shifted(_ id: UInt32, by delta: CGFloat) { scrollPump.shifted(id, by: delta) }
+    /// Whether an element reveal moves `scroll`; if so it heads for where its target now is.
+    package func retargetReveal(_ scroll: UIScrollView) -> Bool {
+        guard elementScrolls.revealing(scroll) != nil else { return false }
+        elementScrolls.retarget(scroll)
+        return true
+    }
+}
+#endif
+
 /// The slots are set before any session is made, and read on the main thread.
 package enum ListLink {
     /// A presenter's windowed lists.
-    package static var make: ((Presenter) -> any ListHosting)? = { CollectionHost($0) }
+    package static var make: ((Presenter) -> any ListHosting)?
 }

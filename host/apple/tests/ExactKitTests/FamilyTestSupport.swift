@@ -1,10 +1,12 @@
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
 
 // The built-in family implementations behind the core's link slots (LLP 1047.001 D10), for tests that read their internals.
 
 extension ExactSession {
     /// The session's image loader as the built-in implementation, for tests
-    /// that read its internals (`ImageLink.makeLoader`'s default).
+    /// that read its internals (`ExactImages` installs it).
     var loader: RasterLoader { rasters as! RasterLoader }
 }
 
@@ -20,3 +22,25 @@ extension Presenter {
     var rowCellsHost: RowCells { rowCells as! RowCells }
 }
 #endif
+
+extension Presenter {
+    /// The built-in segment host (`ControlLink.makeSegments`' default).
+    var segmentHost: SegmentHost { segments as! SegmentHost }
+}
+
+#if os(macOS)
+extension ExactSession {
+    /// The built-in content regions (`ContentRegionLink.make`'s default).
+    var regionHost: RegionController { regions as! RegionController }
+}
+#endif
+
+extension ExactSession {
+    /// The built-in web views (`MediaLink.makeWeb`'s default).
+    var webHost: WebViews { webviews as! WebViews }
+}
+
+extension ExactSession {
+    /// The built-in pickers (`PickerLink.make`'s default).
+    var pickerHost: Picker { picker as! Picker }
+}

@@ -8,6 +8,9 @@ use exact_model_gltf::{
 use std::sync::Arc;
 use styles::{NodeStyle, Occlusion};
 
+#[path = "rays_tests.rs"]
+mod rays;
+
 #[path = "hotspots_tests.rs"]
 mod hotspots;
 
@@ -70,7 +73,10 @@ fn native_parse_waits_for_poll_and_reports_only_the_current_source() {
     assert!(s.model().is_none());
     assert!(!s.frame_ready());
     let result = s.receiver.recv().unwrap();
-    assert!(result.scene.is_ok());
+    assert!(
+        result.scene.as_ref().unwrap().1.bytes() > 0,
+        "the worker built the BVH"
+    );
     assert!(result.parse_ms.is_some());
     a[0] = text("assets/other.glb");
     s.bind(&a, None).unwrap();
@@ -272,6 +278,7 @@ fn picking_follows_the_four_passes_visibility_and_clip() {
         let cast = |m: &Model, x: f32, y: f32| {
             pick::pick(
                 &m.scene,
+                &m.bvh,
                 &m.effective,
                 m.clip,
                 [x, y, 5.],
@@ -377,7 +384,10 @@ fn lifecycle_retains_pending_drops_stale_clears_failures_and_reloads() {
         parse_ms: None,
         sequence: stale,
         name: "other.glb".into(),
-        scene: glb::parse(MESHOPT),
+        scene: glb::parse(MESHOPT).map(|s| {
+            let b = crate::bvh::Bvh::new(&s);
+            (s, b)
+        }),
     });
     assert!(s.preparing());
     assert_eq!(s.model().unwrap().camera.pose, camera);
@@ -731,6 +741,7 @@ fn a_farther_revealed_triangle_still_takes_the_faded_pick() {
     assert_eq!(
         pick::pick(
             &scene,
+            &crate::bvh::Bvh::new(&scene),
             &effective,
             Clip::default(),
             [0., 0., 5.],
@@ -748,6 +759,7 @@ fn translucent_revealed_back_faces_are_picked_only_when_drawn_faded() {
         assert_eq!(
             pick::pick(
                 &scene,
+                &crate::bvh::Bvh::new(&scene),
                 &effective,
                 Clip::default(),
                 [0., 0., 5.],
@@ -821,6 +833,7 @@ fn gpu_mirrored_translucent_nodes_keep_their_front_faces_and_picks() {
             let a = s.arguments.clone();
             let m = s.model_mut().unwrap();
             m.scene = glb::parse(&gltf_support::glb(&json, &bin)).unwrap();
+            m.bvh = crate::bvh::Bvh::new(&m.scene);
             m.style(&a);
             let pixels = render_srgb(&gpu, &mut s);
             assert!(
@@ -1039,7 +1052,10 @@ fn source_lifecycle_table_keeps_subscriptions_and_the_latest_delivery() {
                         parse_ms: None,
                         sequence,
                         name: "assembly.glb".into(),
-                        scene: glb::parse(GLB),
+                        scene: glb::parse(GLB).map(|s| {
+                            let b = crate::bvh::Bvh::new(&s);
+                            (s, b)
+                        }),
                     });
                     assert!(s.jobs.is_empty());
                     match s.arguments.src.as_str() {
@@ -1287,6 +1303,7 @@ fn picks_reject_geometry_outside_the_camera_depth_range() {
         for p in &mut m.scene.vertices[3..] {
             p.p[2] = z;
         }
+        m.bvh = crate::bvh::Bvh::new(&m.scene);
         message(&mut s, &format!("pick {x} 200"), 0.);
         assert_eq!(s.messages(), ["Impeller"]);
         if let Some(gpu) = &gpu {
@@ -1302,6 +1319,7 @@ fn picks_reject_geometry_outside_the_camera_depth_range() {
     for p in &mut m.scene.vertices[..3] {
         p.p[2] = -1000.;
     }
+    m.bvh = crate::bvh::Bvh::new(&m.scene);
     message(&mut s, "pick 200 200", 0.);
     assert_eq!(s.messages(), [""]);
     if let Some(gpu) = &gpu {

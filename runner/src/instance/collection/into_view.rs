@@ -3,54 +3,6 @@
 //! destination before any host moves, corrected until it lands.
 use super::*;
 
-/// How a row aligns in a port along one axis, CSS's `ScrollLogicalPosition`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Align {
-    /// Its start at the port's start (the web's `block` default).
-    Start,
-    /// Its middle at the port's middle.
-    Center,
-    /// Its end at the port's end.
-    End,
-    /// The least movement that shows it whole (the web's `inline` default).
-    Nearest,
-}
-impl Align {
-    /// CSS's name, or none.
-    pub fn parse(name: &str) -> Option<Align> {
-        Some(match name {
-            "start" => Align::Start,
-            "center" => Align::Center,
-            "end" => Align::End,
-            "nearest" => Align::Nearest,
-            _ => return None,
-        })
-    }
-}
-
-/// One request, as the command or the agent's `tap … into` states it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IntoView {
-    /// The virtualized list's `id`.
-    pub list: String,
-    /// The row's key.
-    pub key: Value,
-    /// Alignment in vertical ports.
-    pub block: Align,
-    /// Alignment in horizontal ports.
-    pub inline: Align,
-    /// For an inner list, its outer row's key.
-    pub row: Option<Value>,
-    /// The list by its view instead of its `id`: the agent's `tap <list>
-    /// into <key>`, whose target is a mounted list.
-    pub view: Option<ViewId>,
-    /// `behavior="smooth"` (LLP 1070.000 §6.2): the host animates to the
-    /// destination; the window is built there at once, as for `auto`.
-    pub smooth: bool,
-    /// Explicit pixels into the row wrapper; overrides main-axis alignment.
-    pub offset: Option<f64>,
-}
-
 /// Correcting reports a request may take before it ends `unconverged`.
 const CORRECTIONS: u8 = 6;
 
@@ -70,38 +22,6 @@ pub(super) struct Target {
     inner: Option<IntoView>,
     /// It has been admitted: when it was made, or where its wait ended.
     moved: bool,
-}
-
-/// How a request ended, for `state`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum IntoViewStatus {
-    /// Aligned within half a pixel.
-    Done,
-    /// Still correcting.
-    Pending,
-    /// Its corrections (`CORRECTIONS`) did not land it.
-    Unconverged,
-    /// The reader scrolled, a newer request came, or the key left.
-    Cancelled,
-    /// Refused before anything moved.
-    Refused(String),
-}
-impl IntoViewStatus {
-    pub(crate) fn json(&self, out: &mut String) {
-        let name = match self {
-            IntoViewStatus::Done => "done",
-            IntoViewStatus::Pending => "pending",
-            IntoViewStatus::Unconverged => "unconverged",
-            IntoViewStatus::Cancelled => "cancelled",
-            IntoViewStatus::Refused(why) => {
-                crate::json::quote(&format!("refused: {why}"), out);
-                return;
-            }
-        };
-        out.push('"');
-        out.push_str(name);
-        out.push('"');
-    }
 }
 
 impl Collection {

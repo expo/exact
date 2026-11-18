@@ -88,7 +88,7 @@ private final class ExactSegmentedControl: NSSegmentedControl {
     override func accessibilityRole() -> NSAccessibility.Role? { .radioGroup }
 }
 
-final class SegmentHost {
+final class SegmentHost: SegmentHosting {
     unowned let presenter: Presenter
     private var controls: [UInt32: ExactSegmentedControl] = [:]
     /// The segmented control a tablist or radio group projects to, if any:

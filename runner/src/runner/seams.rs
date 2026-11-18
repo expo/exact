@@ -1,19 +1,23 @@
 //! What the core composes from the runner's optional parts (LLP 1047.001
-//! D11): the native modules, tool calls and presence secrets each answer
-//! their own part, and the core joins them, so that a part can be absent.
+//! D11): the native modules, tool calls, presence secrets and font-axis
+//! motion each answer their own part, and the core joins them, so that a
+//! part can be absent.
 //!
 //! Each part is a seam: a trait whose methods take the runner, implemented
 //! by a unit struct of the part (`LinkedTools`), which only an entry's
 //! [`ModuleLinks`] names, so a binary that does not link the part holds
 //! none of its code. A seam's provided methods are what the core does
 //! without the part, which is what an empty table did before: the boot
-//! uses them whenever the plan has none of the part's rows.
+//! uses them whenever the plan has none of the part's rows. Font-axis
+//! motion is chosen by the host alone, by whether it plays transitions and
+//! animations.
 
 use super::calls::{CallHow, LinkedTools};
 use super::module_seam::{Modules, NoModules};
 use super::modules::LinkedModules;
 use super::presence_secrets::{presence_body, LinkedPresence, PresenceAnswer, PresenceAsk};
 use super::reply::response;
+use super::text_axes::LinkedTextAxes;
 use super::{CommitReceipt, DataSource, Runner, RunnerError};
 use crate::presence::{Backend, Occupancy};
 use crate::request::{Dispatch, Work};
@@ -33,6 +37,10 @@ pub struct ModuleLinks<D: DataSource> {
     pub tools: &'static dyn Tools<D>,
     /// Locked secrets (LLP 1133.010), for grants with a presence policy.
     pub presence: &'static dyn PresenceSecrets<D>,
+    /// The font rows the runner moves itself (LLP 1019 §13 D10), for a
+    /// host that plays transitions and animations; they run only where
+    /// [`super::RunnerLinks::text_axes`] makes their engine too.
+    pub text_axes: &'static dyn TextAxes<D>,
 }
 
 impl<D: DataSource> Clone for ModuleLinks<D> {
@@ -49,6 +57,7 @@ impl<D: DataSource> ModuleLinks<D> {
         modules: &LinkedModules,
         tools: &LinkedTools,
         presence: &LinkedPresence,
+        text_axes: &LinkedTextAxes,
     };
 
     /// No part: the core alone.
@@ -56,11 +65,13 @@ impl<D: DataSource> ModuleLinks<D> {
         modules: &NoModules,
         tools: &NoTools,
         presence: &NoPresence,
+        text_axes: &NoTextAxes,
     };
 
     /// The parts `plan` uses of these, `presence` whether its store keeps a
     /// name with a presence policy: a part the plan does not use is left
     /// out, so the core answers as it would with the part's table empty.
+    /// Font-axis motion is the host's choice alone, kept as it is.
     pub(in crate::runner) fn for_plan(self, plan: &exact_plan::Plan, presence: bool) -> Self {
         let modules =
             plan.modules.is_empty() && plan.views.is_empty() && plan.module_events.is_empty();
@@ -77,6 +88,7 @@ impl<D: DataSource> ModuleLinks<D> {
                 true => self.presence,
                 false => &NoPresence,
             },
+            text_axes: self.text_axes,
         }
     }
 }
@@ -129,6 +141,113 @@ pub trait Tools<D: DataSource> {
 struct NoTools;
 
 impl<D: DataSource> Tools<D> for NoTools {}
+
+/// The font-axis seam's state, owned by the runner as the native modules'
+/// is ([`super::module_seam::ModuleState`]): made by the linked seam
+/// ([`TextAxes::state`]) and reached only by its code (`text_axes.rs`).
+pub(in crate::runner) struct TextAxesState(pub(in crate::runner) Box<dyn Any>);
+
+/// The font-axis seam (LLP 1019 §13 D10, `text_axes.rs`): the runner's own
+/// engine for `font-weight`, `font-stretch` and `font-variation-settings`
+/// transitions and animations. Each provided method is the answer with
+/// none: nothing moves. What a commit's ops change is read before they
+/// apply ([`TextAxes::prepare`]) as a value only the seam reads.
+pub trait TextAxes<D: DataSource> {
+    /// The state for a new runner, which it keeps: none here. A seam's other
+    /// methods run on the state its own `state` made, so an implementation
+    /// that delegates them delegates this too.
+    fn state(&self) -> Box<dyn Any> {
+        Box::new(())
+    }
+    /// Whether a font axis is moving.
+    fn running(&self, _: &Runner<D>) -> bool {
+        false
+    }
+    /// When the last one ends, milliseconds.
+    fn settle_ms(&self, _: &Runner<D>) -> Option<f64> {
+        None
+    }
+    /// Before `ops` apply: what they change.
+    fn prepare(&self, _: &Runner<D>, _: &[exact_kernel::Op]) -> Option<Box<dyn Any>> {
+        None
+    }
+    /// Two phases' [`TextAxes::prepare`]s of one commit, joined; `created`
+    /// are the views an earlier phase created.
+    fn join(
+        &self,
+        first: Option<Box<dyn Any>>,
+        later: Option<Box<dyn Any>>,
+        _created: &std::collections::BTreeSet<exact_kernel::ViewId>,
+    ) -> Option<Box<dyn Any>> {
+        first.or(later)
+    }
+    /// After a commit applied: what it moves, written as one more commit.
+    fn settle(
+        &self,
+        _: &mut Runner<D>,
+        _before: Option<Box<dyn Any>>,
+        _: &CommitReceipt,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        Ok(None)
+    }
+    /// Each moving font row at the clock, one commit for all of them.
+    fn tick(&self, _: &mut Runner<D>) -> Result<Option<CommitReceipt>, RunnerError> {
+        Ok(None)
+    }
+}
+
+/// No font-axis motion: [`TextAxes`]' provided methods.
+pub struct NoTextAxes;
+impl<D: DataSource> TextAxes<D> for NoTextAxes {}
+
+impl<D: DataSource> Runner<D> {
+    pub(in crate::runner) fn text_axes_running(&self) -> bool {
+        let t = self.seams.text_axes;
+        t.running(self)
+    }
+
+    /// When the last font-axis transition or finite animation ends,
+    /// milliseconds; a host's `settle` takes the later of this and its own
+    /// engine's.
+    pub fn text_axes_settle_ms(&self) -> Option<f64> {
+        let t = self.seams.text_axes;
+        t.settle_ms(self)
+    }
+
+    pub(in crate::runner) fn prepare_text_axes(
+        &self,
+        ops: &[exact_kernel::Op],
+    ) -> Option<Box<dyn Any>> {
+        let t = self.seams.text_axes;
+        t.prepare(self, ops)
+    }
+
+    pub(in crate::runner) fn join_text_axes(
+        &self,
+        first: Option<Box<dyn Any>>,
+        later: Option<Box<dyn Any>>,
+        created: &std::collections::BTreeSet<exact_kernel::ViewId>,
+    ) -> Option<Box<dyn Any>> {
+        let t = self.seams.text_axes;
+        t.join(first, later, created)
+    }
+
+    pub(in crate::runner) fn settle_text_axes(
+        &mut self,
+        before: Option<Box<dyn Any>>,
+        receipt: &CommitReceipt,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let t = self.seams.text_axes;
+        t.settle(self, before, receipt)
+    }
+
+    pub(in crate::runner) fn tick_text_axes(
+        &mut self,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let t = self.seams.text_axes;
+        t.tick(self)
+    }
+}
 
 /// The presence seam's state, owned by the runner as the native modules'
 /// is ([`super::module_seam::ModuleState`]): its type is the presence

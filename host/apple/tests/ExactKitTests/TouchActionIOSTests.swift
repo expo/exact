@@ -3,6 +3,7 @@ import Network
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import ExactDrag
 
 final class TouchActionIOSTests: XCTestCase {

@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
+@testable import ExactNativeViews
 
 /// LLP 1123 D2: every route is a content owner. Its root is laid out in its
 /// controller's view, its host block (LLP 1115.002 D8.2), and the runner is

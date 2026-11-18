@@ -1369,6 +1369,22 @@ impl<G: Game> Sim<G> {
         }
         reasons
     }
+    /// The next tick in the host's clock, for interleaving surface delivery
+    /// with Contract timers during a seek (LLP 1012, LLP 1046.003).
+    pub(crate) fn next_tick_at(&self) -> f64 {
+        self.check_epoch();
+        let tick = ((self.world.tick() as u128 + 1) * 1_000_000).div_ceil(G::HZ as u128);
+        let next = i64::try_from(tick).unwrap_or(i64::MAX);
+        let base = if self.live_time.is_some() {
+            self.exact_world_us()
+        } else {
+            self.world_us
+        };
+        self.last_us
+            .unwrap_or(0)
+            .saturating_add(next.saturating_sub(base)) as f64
+            / 1000.0
+    }
     pub(crate) fn settle_at(&self, settle: bool) -> f64 {
         self.check_epoch();
         let now = self.last_us.unwrap_or(0);

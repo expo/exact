@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// Press feedback on AppKit (LLP 1061 D2): the mouse button held down inside
 /// a pressable node shows its `press_scale`; dragging out releases the

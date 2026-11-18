@@ -19,6 +19,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class ScrollRoutingTests: XCTestCase {
     func testAScrollNodeStartingHiddenChangesOverflowWithoutLosingChildren() throws {

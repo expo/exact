@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactDrag
 
 /// A mouse drag on a `reorderFor` handle, through AppKit's own mouse methods,

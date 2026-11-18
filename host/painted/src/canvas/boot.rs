@@ -25,6 +25,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         updates: Option<(Opener, &Path)>,
     ) -> Result<CanvasHost<D>, String> {
         let started = std::time::Instant::now();
+        let mut launch = crate::launch_marks::LaunchMarks::new();
+        launch.launch_end();
         let origin_ns = monotonic_ns();
         // Eleven viewports of decoded pictures: the reader's copy is a GPU
         // buffer (no heap copy, no upload), a picture decoded again costs
@@ -144,6 +146,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
             feed: None,
             tracks_epoch: 0,
             presents: Default::default(),
+            launch,
             lead: false,
             painted_once: false,
             gpu_waiting: false,

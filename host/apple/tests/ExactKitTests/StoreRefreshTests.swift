@@ -1,6 +1,7 @@
 import XCTest
 import ExactCore
 @testable import ExactKit
+@testable import ExactCollections
 #if canImport(UIKit)
 import UIKit
 #else

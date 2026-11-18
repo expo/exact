@@ -164,6 +164,13 @@ fn each_native_entry_is_selected_by_the_rows_that_reach_its_family() {
             Collections,
             true,
         ),
+        // A list whose rows are cells; the author's own rows are not.
+        ("list\n      row\n        text \"a\"", Collections, true),
+        (
+            "list appearance=\"none\"\n      row\n        text \"a\"",
+            Collections,
+            false,
+        ),
     ] {
         let plan = plan(view);
         assert_eq!(

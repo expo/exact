@@ -70,8 +70,25 @@ fn anchored(records: &str) -> (ModelViewer, Vec<Value>) {
 }
 fn update(s: &mut ModelViewer, now: f64) {
     let mut h = std::mem::take(&mut s.hotspots);
-    h.update(s.model(), &s.arguments, &frame(now), s.generation);
+    h.update(s.model(), &s.arguments, &frame(now));
     s.hotspots = h;
+}
+
+#[test]
+fn a_pending_source_does_not_retest_the_unchanged_displayed_model() {
+    let (mut s, mut a) = anchored(r#"[[["label","Impeller","0m 0m 0m"]]]"#);
+    s.set_performance_reporting(true);
+    update(&mut s, 0.);
+    assert_eq!(s.hotspots.occlusion_updates, 1);
+    let opacity = s.placement_opacity(0);
+    a[0] = text("assets/replacement.glb");
+    s.bind(&a, None).unwrap();
+    update(&mut s, 0.);
+    assert_eq!(s.hotspots.occlusion_updates, 0);
+    assert_eq!(s.placement_opacity(0), opacity);
+    s.asset("replacement.glb", Ok(MESHOPT));
+    update(&mut s, 0.);
+    assert_eq!(s.hotspots.occlusion_updates, 1);
 }
 
 #[test]
@@ -187,7 +204,7 @@ fn hotspot_placements_track_the_camera_round_to_device_pixels_and_retire_childre
     let mut f = frame(0.);
     f.scale = 2.;
     let mut h = std::mem::take(&mut s.hotspots);
-    h.update(s.model(), &s.arguments, &f, s.generation);
+    h.update(s.model(), &s.arguments, &f);
     s.hotspots = h;
     let p = s.placement(0).unwrap();
     assert_eq!(p.homography, [1., 0., 220.5, 0., 1., 188.5, 0., 0., 1.]);

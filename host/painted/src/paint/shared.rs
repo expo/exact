@@ -110,7 +110,9 @@ impl Painter {
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
-        self.node_at_inner(walk, id, ts, offset, clip);
+        self.record_sticky(walk, id, ts, |painter, walk| {
+            painter.node_at_inner(walk, id, ts, offset, clip);
+        });
         walk.hit_space = hit_space;
     }
 

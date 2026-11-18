@@ -849,9 +849,15 @@ package final class Runtime {
         on { read(exact_build_tabs(rt, write(panels.map(String.init).joined(separator: ",")), now)) }
     }
     /// A received share, `{"root", "target", "share", "inbox"?}` (LLP 1133.024 D2–D4).
-    package func share(_ json: String, now: Double) -> Batch { on { read(exact_share(rt, write(json), now)) } }
+    package func share(_ json: String, now: Double) -> Batch {
+        guard let share = CoreExports.share else { return Runtime.noShare }
+        return on { read(share(rt, write(json), now)) }
+    }
     /// The files of a share claimed before the boot, once storage is configured.
-    package func landShare() -> Batch { on { read(exact_share_land(rt)) } }
+    package func landShare() -> Batch {
+        guard let land = CoreExports.shareLand else { return Runtime.noShare }
+        return on { read(land(rt)) }
+    }
     /// A package's call of the app's handler (LLP 1133.016 D15 item 1),
     /// `{"extension", "handle", "handler", "args"}`: the runner's answer,
     /// JSON, goes to `reply(ctx, …)` once, now or when the handler's work lands.
@@ -938,14 +944,20 @@ package final class Runtime {
             return len == 0 ? nil : String(decoding: Data(bytes: exact_out(rt), count: Int(len)), as: UTF8.self)
         }
     }
-    package func linkActivities() { on { exact_link_activities(rt) } }
+    package func linkActivities() { guard let link = CoreExports.linkActivities else { return }; on { link(rt) } }
     /// Activity snapshots or a send completion from the demand-loaded arm.
-    package func activities(_ json: String) -> Batch { on { read(exact_activities(rt, write(json))) } }
+    package func activities(_ json: String) -> Batch {
+        guard let activities = CoreExports.activities else { return Runtime.noFeedback }
+        return on { read(activities(rt, write(json))) }
+    }
     /// A MIDI message (LLP 1125 D6–D8): the arm's ports or inputs, or the agent's `prefer midi` and `tap midi`.
     package func midi(_ json: String) -> Batch { on { read(exact_midi(rt, write(json))) } }
     package func preferExtension(_ json: String) -> Batch { on { read(exact_extension(rt, write(json))) } }
     /// A module event the platform reported (LLP 1133.004 D6), heard now.
-    package func moduleEvent(_ json: String) -> Batch { on { read(exact_module_event(rt, write(json))) } }
+    package func moduleEvent(_ json: String) -> Batch {
+        guard let event = CoreExports.moduleEvent else { return Runtime.noFeedback }
+        return on { read(event(rt, write(json))) }
+    }
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.

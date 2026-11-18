@@ -1,41 +1,7 @@
 //! `scrollIntoView` (LLP 1070.000): the command an action states, and the
 //! agent's `tap … into`, both run here, never by a host.
-use super::text_axes::AxesBefore;
 use super::*;
-use crate::instance::collection::{Align, IntoView, IntoViewStatus};
-
-impl IntoView {
-    /// The command's arguments as the compiler orders them: the list's id,
-    /// the key, then `block`, `inline`, `behavior`, `row` and `offset`, each `none`
-    /// where the author left the default.
-    pub(super) fn from_command(args: &[Value]) -> Result<IntoView, String> {
-        let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
-        let align = |v: Option<&Value>, default| match text(v) {
-            None => Ok(default),
-            Some(name) => Align::parse(&name).ok_or(format!("no alignment {name}")),
-        };
-        let list = text(args.first()).ok_or("the list is named by its id")?;
-        let key = args.get(1).cloned().ok_or("a key")?;
-        let offset = match args.get(6) {
-            None | Some(Value::Option(None) | Value::Unit) => None,
-            Some(Value::Number(n)) if n.is_finite() => Some(*n),
-            _ => return Err("offset must be a finite number of CSS pixels".into()),
-        };
-        Ok(IntoView {
-            list,
-            key,
-            offset,
-            block: align(args.get(2), Align::Start)?,
-            inline: align(args.get(3), Align::Nearest)?,
-            row: args
-                .get(5)
-                .filter(|v| !matches!(v, Value::Option(None) | Value::Unit))
-                .cloned(),
-            view: None,
-            smooth: text(args.get(4)).as_deref() == Some("smooth"),
-        })
-    }
-}
+use crate::list_api::{Align, IntoView, IntoViewStatus};
 
 impl<D: DataSource> Runner<D> {
     /// Materialize a logical row for a host's keyboard focus traversal, using
@@ -229,7 +195,7 @@ impl<D: DataSource> Runner<D> {
                     Ok(())
                 })?;
                 self.prepare_live_times(&mut phase);
-                axes = AxesBefore::join(axes, self.prepare_text_axes(&phase), &created);
+                axes = self.join_text_axes(axes, self.prepare_text_axes(&phase), &created);
                 created.extend(created_views(&phase));
                 self.kernel.continue_document_commit(&phase)?;
                 self.settle_into_view_phase(&mut effects);
@@ -252,7 +218,7 @@ impl<D: DataSource> Runner<D> {
         let mut cleanup = self.reconcile_reorder()?;
         if !cleanup.is_empty() {
             self.prepare_live_times(&mut cleanup);
-            axes = AxesBefore::join(axes, self.prepare_text_axes(&cleanup), &created);
+            axes = self.join_text_axes(axes, self.prepare_text_axes(&cleanup), &created);
             self.kernel.continue_document_commit(&cleanup)?;
             ops.extend(cleanup);
         }

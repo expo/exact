@@ -5,6 +5,7 @@ import CoreGraphics
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactImages
 
 /// LLP 1011.000: Chrome's schedule for an animated image, its clock across
 /// visibility, and the frames decoded at the display size.

@@ -788,7 +788,7 @@ impl<D: DataSource> Runner<D> {
                 self.commands.push(command);
                 continue;
             }
-            match crate::instance::collection::IntoView::from_command(&command.args) {
+            match crate::list_api::IntoView::from_command(&command.args) {
                 Ok(request) => self.into_view.push(request),
                 Err(why) => self.log(format!("scrollIntoView refused: {why}")),
             }

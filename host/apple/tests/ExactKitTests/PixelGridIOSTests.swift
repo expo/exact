@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// Boxes drawn on the device's pixel grid (`PixelGridIOS.swift`): each edge
 /// at its absolute position rounded to a device pixel, a half up, as

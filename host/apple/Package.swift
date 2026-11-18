@@ -34,6 +34,7 @@ func links(_ capability: String) -> Bool {
 let allCapabilities: [(name: String, target: String)] = [
     ("grouped_lists", "ExactGroupedLists"),
     ("markdown", "ExactMarkdown"),
+    ("collections", "ExactCollections"),
     ("surfaces", "ExactSurfaces"),
     ("drag", "ExactDrag"),
     ("media_picker", "ExactMediaPicker"),
@@ -42,7 +43,15 @@ let allCapabilities: [(name: String, target: String)] = [
     ("tips", "ExactTips"),
     ("presence", "ExactPresence"),
     ("effects", "ExactEffects"),
+    ("svg", "ExactSvg"),
+    ("images", "ExactImages"),
+    ("native_views", "ExactNativeViews"),
 ]
+// What a family imports beyond ExactKit and CExact: another family's product,
+// which the roster links with it, or ExactCore's package API. Surfaces' Canvas
+// 2D images fetch and decode through the images family's static API, which
+// needs no install.
+let capabilityNeeds: [String: [Target.Dependency]] = ["ExactCollections": ["ExactCore"], "ExactSvg": ["ExactCore", "ExactEffects"], "ExactSurfaces": ["ExactImages"]]
 let capabilities = allCapabilities.filter { links($0.name) }
 
 // `swift test` builds every target a package declares, and the two UIKit
@@ -125,7 +134,7 @@ let core: [Target] = [
     .target(name: "ExactWatchSync", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactWatchSync"),
     .target(name: "ExactUpdates", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactUpdates"),
 ] + allCapabilities.map {
-    .target(name: $0.target, dependencies: ["ExactKit", "CExact"], path: "Sources/\($0.target)", swiftSettings: devTools)
+    .target(name: $0.target, dependencies: ["ExactKit", "CExact"] + (capabilityNeeds[$0.target] ?? []), path: "Sources/\($0.target)", swiftSettings: devTools)
 } + [
     .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts,
             swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),

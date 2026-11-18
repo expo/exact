@@ -4,6 +4,7 @@ import ImageIO
 import XCTest
 import Darwin
 @testable import ExactKit
+@testable import ExactImages
 
 /// A remote picture whose download failed in a way asking again may mend is
 /// asked again while it is on screen (LLP 1011 §4, the Linux host's rules):

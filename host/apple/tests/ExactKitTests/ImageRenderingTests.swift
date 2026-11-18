@@ -7,6 +7,7 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactImages
 
 final class ImageRenderingTests: XCTestCase {
     private func sprite() throws -> CGImage {
@@ -145,8 +146,12 @@ final class ImageRenderingTests: XCTestCase {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 40, height: 40), styleMask: [], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        // Light, whatever the machine's appearance: the sampled row is found as the darkest one, which a dark
+        // window's background outweighs.
+        window.appearance = NSAppearance(named: .aqua)
         #else
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 40, height: 40))
+        window.overrideUserInterfaceStyle = .light
         #endif
         let p = Presenter()
         p.viewport.frame = CGRect(x: 0, y: 0, width: 40, height: 40)

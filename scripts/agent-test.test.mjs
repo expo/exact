@@ -1214,15 +1214,15 @@ test('a native run resolves a fetch fault under the API a setting names', async 
     const dir = join(parent, 'site'), env = { EXACT_BUN_LOADED: '' };
     createApp(dir);
     applyPattern(dir, 'site');
-    expect(nativeFetchOrigins(dir, env)).toEqual(['http://127.0.0.1:8787']);
+    expect(await nativeFetchOrigins(dir, env)).toEqual(['http://127.0.0.1:8787']);
     writeFileSync(join(dir, '.env.local'), 'API_BASE_URL=http://127.0.0.1:9123\n');
     const faults = () => [{ steps: [{ op: 'fail-fetch', prefix: '/planets' }, { op: 'pass-fetch', prefix: '/planets' }] }];
-    expect(backendFetchPrefixes(faults(), nativeFetchOrigins(dir, env))[0].steps.map((s) => s.prefix)).toEqual(['http://127.0.0.1:9123/planets', 'http://127.0.0.1:9123/planets']);
-    expect(nativeFetchOrigins(dir, { ...env, API_BASE_URL: 'http://127.0.0.1:7000' })).toEqual(['http://127.0.0.1:7000']);
+    expect(backendFetchPrefixes(faults(), await nativeFetchOrigins(dir, env))[0].steps.map((s) => s.prefix)).toEqual(['http://127.0.0.1:9123/planets', 'http://127.0.0.1:9123/planets']);
+    expect(await nativeFetchOrigins(dir, { ...env, API_BASE_URL: 'http://127.0.0.1:7000' })).toEqual(['http://127.0.0.1:7000']);
     // The backend a build selected, and a scaffold's literal origin, still come first.
-    expect(nativeFetchOrigins(dir, { ...env, EXACT_BACKEND_ORIGIN: 'http://127.0.0.1:4411' })).toEqual(['http://127.0.0.1:4411']);
+    expect(await nativeFetchOrigins(dir, { ...env, EXACT_BACKEND_ORIGIN: 'http://127.0.0.1:4411' })).toEqual(['http://127.0.0.1:4411']);
     writeFileSync(join(dir, 'app.ts'), "// const origin = 'http://comment.invalid';\nexport const origin = ('http://127.0.0.1:4410' satisfies string);\n");
-    expect(nativeFetchOrigins(dir, env)).toEqual(['http://127.0.0.1:4410']);
+    expect(await nativeFetchOrigins(dir, env)).toEqual(['http://127.0.0.1:4410']);
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });
 

@@ -1,6 +1,7 @@
 // The CSS filter family (LLP 1047.001 D10, the roster's `effects`): a box's
-// filtered picture and a presenter's filtered boxes, installed into
-// `BoxFilterLink` by an app whose composition links it.
+// filtered picture, a presenter's filtered boxes, and the filter engine SVG's
+// filters run on too, installed into `BoxFilterLink` by an app whose
+// composition links it.
 import ExactKit
 
 public enum ExactEffects {
@@ -8,5 +9,6 @@ public enum ExactEffects {
     public static func install() {
         BoxFilterLink.make = { BoxFilter() }
         BoxFilterLink.makeSet = { BoxFilters() }
+        BoxFilterLink.prewarm = { SvgFilterMetal.prewarm() }
     }
 }

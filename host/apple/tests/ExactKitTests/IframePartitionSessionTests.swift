@@ -34,7 +34,7 @@ final class IframePartitionSessionTests: XCTestCase {
         if Self.server == nil { Self.server = try FramePages() }
         let origin = "http://127.0.0.1:\(Self.server!.port)"
         let session = ExactApp.shared.makeSession(label: "iframe-partition")
-        session.webviews.moduleLocation = { module }
+        session.webHost.moduleLocation = { module }
         defer { session.destroy() }
         XCTAssertTrue(session.openIncoming("/?origin=\(origin)"))
         XCTAssertNil(session.boot(plan: try fixturePlan("IFRAME_PARTITION"), size: CGSize(width: 640, height: 500)).error)
@@ -105,7 +105,7 @@ final class IframeWindowsSessionTests: XCTestCase {
         if Self.server == nil { Self.server = try WindowPages() }
         let origin = "http://127.0.0.1:\(Self.server!.port)"
         let session = ExactApp.shared.makeSession(label: "iframe-windows")
-        session.webviews.moduleLocation = { module }
+        session.webHost.moduleLocation = { module }
         defer { session.destroy() }
         XCTAssertTrue(session.openIncoming("/?origin=\(origin)"))
         XCTAssertNil(session.boot(plan: try fixturePlan("IFRAME_WINDOWS"), size: CGSize(width: 640, height: 500)).error)

@@ -1,15 +1,15 @@
 // @ref LLP 1047.001 D10 — the app's native module, its native views and its
-// hatches are a family the composition selects (the roster's `Hatches`, with
-// the module seam's views). The core reaches it only through what this file
-// declares. The session and the presenter always hold an object: without the
-// family they hold `NoNativeModule` and `NoElementHatches`, which own no view
-// and call no hatch. The slots' defaults are today's `NativeViews` and
-// `ElementHatches`, so every app still links the family; its own target will
-// install them instead. Images' package pictures ask the module for its image
-// entry, and video and web views tell element hatches of their platform
-// objects, through these protocols. The protocols are internal while the
-// family is in ExactKit: they name the core's internal `FocusWindow` and
-// `HatchDiagnosing`, which the family's move widens with them.
+// hatches are a family the composition selects (the roster's
+// `native_views`). The core reaches it only through what this file
+// declares. `ExactNativeViews.install()` sets the slots; until it runs the
+// session and the presenter hold `NoNativeModule` and `NoElementHatches`,
+// which own no view and call no hatch. A binary whose linked set lacks
+// `native_views` refuses a plan with a module tag or a hatch at boot
+// (`Unlinked("native_views")`), and one with a package view, which needs the
+// runner's module seam too, as `Unlinked("modules, native_views")`.
+// Images' package pictures ask the module for its image entry, and video and
+// web views tell element hatches of their platform objects, through these
+// protocols.
 #if os(macOS)
 import AppKit
 #else
@@ -36,7 +36,7 @@ package enum RouteHatchEvent: UInt32 {
 }
 
 /// What the core asks of a session's native module and its views.
-protocol NativeModuleHosting: AnyObject {
+package protocol NativeModuleHosting: AnyObject {
     var session: ExactSession? { get set }
     /// What Exact times of each hatch call (development only).
     var diagnostics: (any HatchDiagnosing)? { get }
@@ -123,7 +123,7 @@ protocol NativeModuleHosting: AnyObject {
 }
 
 extension NativeModuleHosting {
-    func tabsHatch(_ controller: AnyObject?, event: UInt32) { tabsHatch(controller, event: event, index: 0) }
+    package func tabsHatch(_ controller: AnyObject?, event: UInt32) { tabsHatch(controller, event: event, index: 0) }
 }
 
 /// No native module: no view, no hatch, nothing in flight.
@@ -198,7 +198,7 @@ final class NoNativeModule: NativeModuleHosting {
 }
 
 /// What the core asks of a presenter's element hatches (LLP 1075.003.000).
-protocol ElementHatching: AnyObject {
+package protocol ElementHatching: AnyObject {
     // A batch's moments.
     func begin(_ batch: Batch)
     func created(_ node: NodeView)
@@ -229,8 +229,8 @@ protocol ElementHatching: AnyObject {
 }
 
 extension ElementHatching {
-    @discardableResult func later(_ id: UInt32, _ name: String, _ work: @escaping () -> Void) -> Bool { later(id, name, bytes: 0, work) }
-    @discardableResult func later(_ what: String, _ name: String, _ work: @escaping () -> Void) -> Bool { later(what, name, bytes: 0, work) }
+    @discardableResult package func later(_ id: UInt32, _ name: String, _ work: @escaping () -> Void) -> Bool { later(id, name, bytes: 0, work) }
+    @discardableResult package func later(_ what: String, _ name: String, _ work: @escaping () -> Void) -> Bool { later(what, name, bytes: 0, work) }
 }
 
 /// No element hatches: nothing waits, nothing is told, no act is queued.
@@ -260,10 +260,84 @@ final class NoElementHatches: ElementHatching {
     func regionCoverage(joined: Set<String>) -> [[String: Any]] { [] }
 }
 
+extension ExactSession {
+    /// An iframe's element hatch connected to its web view.
+    package func webViewHatched(_ id: UInt32) { webviews.hatched(id) }
+}
+
+extension NodeView {
+    /// A video's player, which its element hatch is handed (LLP 1133 D3).
+    package var videoPlatform: AnyObject? { video?.platform }
+    /// Lay a video's view out again after its element hatch changed it.
+    package func videoUpdate() { video?.update() }
+}
+
+/// What element and toolbar hatches reach of a presenter's own hosts.
+extension Presenter {
+    /// A node's control or segmented control.
+    package func control(of id: UInt32) -> AnyObject? { controls.controls[id] ?? segments.control(of: id) }
+    /// Tell the app the text an element hatch wrote into `node`'s field,
+    /// which is the text it knows from here.
+    package func hatchWrote(_ node: NodeView, _ value: String) {
+        node.toldText = value
+        if FieldSelections.tracks(node) {
+            let end = value.utf16.count, selection = FieldSelection(start: end, end: end)
+            fieldSelections.set(node, selection, notify: false)
+            typed(node.id, value, input: false)
+            fieldSelections.replacementInput(node, value, selection, data: value)
+        } else {
+            typed(node.id, value, input: node.handlers.contains("input"))
+        }
+    }
+    /// Heavy leaves after a batch that moved views.
+    package func leavesMoved() { leaves.batchApplied(moved: true) }
+    #if os(macOS)
+    /// The window's toolbar, which toolbar hatches add to.
+    package var windowToolbar: NSToolbar? { toolbar.toolbar }
+    package func setToolbarAppDelegate(_ delegate: NSToolbarDelegate?) { toolbar.setAppDelegate(delegate) }
+    package func addToolbarAppItem(_ item: NSToolbarItem) { toolbar.addAppItem(item) }
+    #endif
+}
+
+#if os(iOS) || os(tvOS)
+/// What route, tab, arrangement and element hatches reach of a presenter's
+/// navigation and pool.
+extension Presenter {
+    /// Whether a development build journals what a hatch changed of a view
+    /// Exact owns (LLP 1075.003 §3.5).
+    package static var checksHatchOwnership: Bool { NavigationHost.checksOwnership }
+    /// What of `node`'s scroll view changed outside Exact, which owns it.
+    package func scrollOwnedChanges(_ node: NodeView) -> [String] {
+        guard let scroll = node.scrollView else { return [] }
+        return NavigationHost.ownedChanges(scroll, of: node, insetByUIKit: node.scrollOrigin > 0 || navigation.insetByUIKit(node))
+    }
+    /// Whether a native list is making `id`'s row now.
+    package func listCreating(_ id: UInt32) -> Bool { pool.list(creating: id) != nil }
+    package func navigationAct(_ id: UInt32, _ action: UInt32) -> Bool { navigation.act(id, action) }
+    /// The node a route hatch names by its route key and id, or nil.
+    package func resolveRoute(_ key: String, id: String) -> UInt32? { navigation.resolve(route: key, id: id)?.id }
+    package func tabIntent(_ kind: UInt32, _ text: String) -> Bool { navigation.tabIntent(kind, text) }
+    package func setNavigationAppDelegate(_ controller: AnyObject, _ delegate: AnyObject?) { navigation.setAppDelegate(controller, delegate) }
+    #if os(iOS)
+    @available(iOS 27.1, *)
+    package func setArrangement(_ node: UInt32, controller: UIArrangementViewController?) -> Bool {
+        arrangements.set(node, controller: controller)
+    }
+    #endif
+}
+
+extension NodeView {
+    /// `found` when it is this route's own controller, else nil.
+    package func routeController(in found: UIViewController?) -> UIViewController? {
+        (found as? RouteController).flatMap { $0.node === self ? $0 : nil }
+    }
+}
+#endif
+
 /// The slots are set before any session is made, and read on the main thread.
-enum NativeModuleLink {
+package enum NativeModuleLink {
     /// A session's native module and its views.
-    static var make: (() -> any NativeModuleHosting)? = { NativeViews() }
+    package static var make: (() -> any NativeModuleHosting)?
     /// A presenter's element hatches.
-    static var makeElements: ((Presenter) -> any ElementHatching)? = { ElementHatches($0) }
+    package static var makeElements: ((Presenter) -> any ElementHatching)?
 }

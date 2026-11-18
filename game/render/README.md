@@ -56,6 +56,50 @@ entities through `entities()` to get tick-interpolated `FrameView::pose`. Use
 `Pipelines<T>` for asynchronous candidate validation, `Needs::PENDING` until ready,
 and `error()` for a named rejected replacement. Never step or mutate the simulation.
 
+For incremental preparation, set `Hooks::ALLOWANCE` to the maximum number of
+bounded units one call may complete (LLP 1182.000 D6). Keep an ordered queue
+and check the deadline after each unit.
+
+```rust,ignore
+for _ in 0..view.time.allowance {
+    let Some(unit) = self.todo.pop_first() else { break };
+    self.run(unit, gpu);
+    if view.time.deadline.is_some_and(|deadline| deadline.passed()) { break; }
+}
+```
+
+In each clock mode, timestamps must move past the latest one the budget has
+seen to grant allowance. A timed bind can supply the starting timestamp. With
+no starting timestamp, the first live frame grants the allowance and the first
+agent frame grants zero. Look frames always grant zero.
+The device-free Linux agent draws only look frames, so a budgeted hook's
+window never fills there.
+
+Use `Needs::PENDING` for work a redraw can finish, such as validating a pipeline.
+Add `Needs::STARVED` when all remaining work requires allowance. Under the
+agent's clock, pending work requests another frame until it finishes or becomes
+starved. `Needs::ANIMATE` still requests frames. Live rendering continues while
+either kind of work is pending. `STARVED` alone has no effect.
+
+The live deadline uses the display period as its target. When the last canvas
+interval is at least one and a half display periods and the scheduler has read a
+nonzero cap, the target is the cap's period. An unknown interval uses the display
+period. An unknown display period leaves the call with allowance alone.
+
+The deadline reserves the longest tail from the last eight frames, timed from
+the end of `prepare` to the end of encode. With fewer than eight samples it
+reserves half the target. A display period change clears the history. The
+deadline includes ticks run within the frame. A timed bind can run ticks before
+`frame_start`, outside the deadline. If the deadline has passed on entry to
+`prepare`, a frame with allowance still grants one unit. Keep units short, since
+a started unit runs to completion.
+
+`renderHooks.budget` reports the declared `allowance`, the number of calls
+that ended past the deadline (`overFrames`), and how many milliseconds late
+they ended in total (`overMs`). That total includes time lost before
+`prepare` began. `perf_reset`, a restore and a restart clear both counters.
+The budget report is `null` when the hook leaves `ALLOWANCE` at zero.
+
 Stages are compute before shadows, opaque, `background` after sky for blended
 geometry that draws without sampling the scene, `surface` for geometry that
 samples the scene copy, and optional HDR post before bloom/tone. Geometry uses
@@ -82,6 +126,9 @@ vertex shader may move them.
 the assembled sources, rejects duplicate stems/symlinks and ships ordinary shader
 assets. Compose the corresponding reflected slices with `exact_gpu::shader_packs!`.
 No manual copy or private game dependency is needed in public engine code.
+
+A hook's optional `report()` supplies a JSON object at `state.world.renderHooks.game`,
+with refusals for invalid reports in `gameError`.
 
 Implement `frame_work()` to report cumulative `FrameWork` since the hook was
 made (LLP 1182.000 D1). Count draw calls the hook issues in opaque, background,

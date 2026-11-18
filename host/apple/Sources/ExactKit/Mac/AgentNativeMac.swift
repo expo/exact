@@ -96,7 +96,7 @@ extension Presenter {
         }
         // A content region's surface (`RegionController.flush`): this
         // session's, by its controller; its interior is the region's own.
-        if let surface = sub as? RegionSurfaceMac, let regions = session?.regions, surface.owner === regions { return ("region", owner?.id) }
+        if session?.regions.ownsSurface(sub) == true { return ("region", owner?.id) }
         if menus.inspectionOwns(sub) { return ("menu", owner?.id) }
         if dialogs.inspectionOwns(sub) { return ("dialog", owner?.id) }
         if navigation.inspectionOwns(sub) { return ("ground", owner?.id) }

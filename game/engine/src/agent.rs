@@ -365,8 +365,9 @@ impl<G: Game> Sim<G> {
             "clock" => {
                 let quiescent = self.quiescent();
                 let deadline = if quiescent { String::new() } else { format!(",\"settleAt\":{}", crate::data::text::Float(self.settle_at(q.settle))) };
+                let next = if quiescent || G::paused(&self.args) { String::new() } else { format!(",\"nextTickAt\":{}", crate::data::text::Float(self.next_tick_at())) };
                 let changing = encode(&self.changing(quiescent))?;
-                Ok(format!("{{\"tick\":{tick},\"hash\":\"0x{:016x}\",\"quiescent\":{quiescent},\"changing\":{changing}{deadline}}}", w.hash()))
+                Ok(format!("{{\"tick\":{tick},\"hash\":\"0x{:016x}\",\"quiescent\":{quiescent},\"changing\":{changing}{deadline}{next}}}", w.hash()))
             },
             "logs" => Ok(w.journal_json(q.since)),
             "type" | "tap" => self.synthesize_pad(&q),

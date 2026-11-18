@@ -7,6 +7,7 @@ import AppKit
 import XCTest
 import ExactCore
 @testable import ExactKit
+@testable import ExactCollections
 
 /// A list's report that reaches the runner after the runner has moved its snapshot on (a commit from elsewhere: a
 /// reply, a timer, an action, another report) is turned away by the runner's own revision check, silently (runner

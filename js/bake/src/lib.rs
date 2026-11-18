@@ -36,10 +36,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Why a bake failed, as its build script says it. Every app's build script
-/// ends in `.expect("bake …")`, which prints an error's `Debug`: a `String`'s
-/// quotes and escaped newlines put tsc's diagnostics on one line, so `Debug`
-/// is the text as written.
+/// Why a bake failed, as its build script says it. Every app's build script ends in `.expect("bake
+/// …")`, which prints an error's `Debug`: a `String`'s quotes and escaped newlines put tsc's
+/// diagnostics on one line, so `Debug` is the text as written.
 pub struct BakeError(pub String);
 
 impl std::fmt::Debug for BakeError {
@@ -56,20 +55,17 @@ impl std::fmt::Display for BakeError {
 
 impl std::error::Error for BakeError {}
 
-/// An app's Cargo build-script entrypoint. Write the paired artifacts and
-/// actual target/grants receipt to OUT_DIR. A mixed bake also writes its
-/// generated declarations beside app.ts, before checking it.
-/// This development slice requires an updater-free composition (store L=0).
+/// An app's Cargo build-script entrypoint. Write the paired artifacts and actual target/grants
+/// receipt to OUT_DIR. A mixed bake also writes its generated declarations beside app.ts, before
+/// checking it. This development slice requires an updater-free composition (store L=0).
 ///
-/// With `EXACT_BAKED` naming a directory `exact-js-bake --cargo` filled (an
-/// Apple build, `host/apple/build.mjs`), the bake has run outside Cargo: the
-/// script takes the files Rust compiles from it and watches only those, so
-/// an edit that changes the plan alone leaves the archive as it was, and the
-/// link carries the plan (`exact_apple::baked`).
+/// With `EXACT_BAKED` naming a directory `exact-js-bake --cargo` filled (an Apple build,
+/// `host/apple/build.mjs`), the bake has run outside Cargo: the script takes the files Rust
+/// compiles from it and watches only those, so an edit that changes the plan alone leaves the
+/// archive as it was, and the link carries the plan (`exact_apple::baked`).
 ///
-/// Either way it links the library a package the app depends on declares
-/// (`library`), which the native build fetched before Cargo ran, as the
-/// mixed entries below do.
+/// Either way it links the library a package the app depends on declares (`library`), which the
+/// native build fetched before Cargo ran, as the mixed entries below do.
 pub fn build(app: &Path, platform: &str) -> Result<(), BakeError> {
     println!("cargo:rerun-if-env-changed=EXACT_BAKED");
     println!("cargo:rerun-if-env-changed=EXACT_WEB_TYPES");
@@ -132,11 +128,10 @@ fn mixed_grants<'a>(
     .transpose()
 }
 
-/// compat.json with the module's identity beside its id (`"module"`: the
-/// app, its grants and its Canvas 2D roster), outside the inputs the id
-/// digests: what a linked archive reads where it reads the plan
-/// (`exact_apple::baked::identity`), so its Rust need not name them. The
-/// link carries compat.json in the signed executable, as it does the plan.
+/// compat.json with the module's identity beside its id (`"module"`: the app, its grants and its
+/// Canvas 2D roster), outside the inputs the id digests: what a linked archive reads where it reads
+/// the plan (`exact_apple::baked::identity`), so its Rust need not name them. The link carries
+/// compat.json in the signed executable, as it does the plan.
 fn with_module_identity(compat: &str, meta: &serde_json::Value) -> Result<String, String> {
     let surfaces: Vec<serde_json::Value> = meta["surfaces"]
         .as_object()
@@ -1084,6 +1079,8 @@ fn bake_in(
         "__exact_binding.mjs",
         "__exact_env.mjs",
         "__exact_launch_setting.mjs",
+        "__exact_facts.mjs",
+        "__exact_grants.json",
         "__exact_portable.mjs",
         "__exact_env.json",
         "__exact_paths.json",
@@ -1284,6 +1281,7 @@ fn bake_in(
     let mut receipt = serde_json::json!({
         "version": 1, "appId": app_id, "grants": grants, "abi": abi,
         "backendOrigin": backend["origin"],
+        "grantSources": launch::grant_sources(stage, &grants)?,
         // The prelude runtime it needs, which a push to an older binary checks (LLP 1016.000 D10).
         "typescriptRuntime": exact_bake::compat::typescript_runtime_of(&script, &grants),
         "typescriptHostWork": exact_bake::compat::typescript_host_work(&script),
@@ -1400,8 +1398,9 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 const [tsc, root] = process.argv.slice(1);
 const {parseSync}=await import(createRequire(resolve(root, 'package.json')).resolve('rolldown/utils'));
+const {rolldown}=await import(createRequire(resolve(root, 'package.json')).resolve('rolldown'));
 const libraries = resolve(dirname(createRequire(resolve(root, 'package.json')).resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`)), 'lib');
-try { configure(process.cwd(),false,parseSync); await prepareCanvas(process.cwd(), libraries); await check(process.cwd(), tsc, libraries); }
+try { await configure(process.cwd(),false,parseSync,false,rolldown); await prepareCanvas(process.cwd(), libraries); await check(process.cwd(), tsc, libraries); }
 catch (error) { process.stderr.write(String(error?.message ?? error)); process.exit(3); }
 "#;
 

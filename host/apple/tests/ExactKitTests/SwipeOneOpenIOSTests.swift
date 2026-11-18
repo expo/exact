@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactGroupedLists
 
 /// One swipe row open on a screen (`SwipeActionsHost.opening`), whatever

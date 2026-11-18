@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactGroupedLists
 /// LLP 1084 on UIKit: a grouped list (`listStyle`) is a UICollectionView
 /// with a list layout as the list's only scroller;

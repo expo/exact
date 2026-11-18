@@ -7,7 +7,7 @@ import UIKit
 
 extension NodeView {
     /// A list whose rows are cells: Contract's mark (RowCellsIOS.swift).
-    var hasRowCells: Bool { kind == "list" && props["listRows"] == "true" }
+    package var hasRowCells: Bool { kind == "list" && props["listRows"] == "true" }
 }
 
 /// Stable projection inputs survive row fills; a batch that can change them

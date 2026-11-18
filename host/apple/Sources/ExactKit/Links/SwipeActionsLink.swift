@@ -1,12 +1,12 @@
 // @ref LLP 1047.001 D10 — a row's swipe actions and a list's native row
 // cells are a family the composition selects (the roster's `Collections`,
-// which a standalone swipe row selects too). The core reaches it only through
-// what this file declares. The presenter always holds an object: without the
-// family it holds `NoSwipeActions` and `NoRowCells`, which do nothing and own
-// nothing, so a plan with no list pays one call per hook. The slots' defaults
-// are today's implementations, so every app still links the family; its own
-// target will install them instead. Grouped lists (`ExactGroupedLists`) read
-// swipe configurations through the same protocol.
+// which a standalone swipe row and a list of cells select too). The core
+// reaches it only through what this file declares. The presenter always
+// holds an object: without the family it holds `NoSwipeActions` and
+// `NoRowCells`, which do nothing and own nothing, so a plan with no list pays
+// one call per hook. The family's target, `ExactCollections`, installs the
+// hosts. Grouped lists (`ExactGroupedLists`) read swipe configurations
+// through the same protocol.
 #if os(iOS) || os(tvOS)
 import UIKit
 
@@ -66,6 +66,8 @@ package protocol RowCellsHosting: AnyObject {
     func appearing(_ route: NodeView, alongside coordinator: UIViewControllerTransitionCoordinator?)
     /// The plan restarted.
     func reset()
+    /// Whether `view` is a list's separators or a row's pressed ground (the inspection walk's accounting).
+    func inspectionOwns(_ view: UIView) -> Bool
 }
 
 /// No swipe actions: nothing is owned, nothing happens.
@@ -103,13 +105,25 @@ final class NoRowCells: RowCellsHosting {
     func sync(changed: Set<UInt32>?) {}
     func appearing(_ route: NodeView, alongside coordinator: UIViewControllerTransitionCoordinator?) {}
     func reset() {}
+    func inspectionOwns(_ view: UIView) -> Bool { false }
+}
+
+/// What the family asks of the presenter's navigation.
+extension Presenter {
+    /// Whether `view` is on a route a pushed screen covers.
+    package func isInactiveRoute(containing view: UIView) -> Bool { navigation.isInactiveRoute(containing: view) }
+}
+
+extension UIView {
+    /// Whether this is a native button, whose touch a scroll may take.
+    package var isNativeButtonView: Bool { self is NativeButtonIOS }
 }
 
 /// The slots are set before any session is made, and read on the main thread.
 package enum SwipeActionsLink {
     /// A presenter's swipe actions.
-    package static var make: ((Presenter) -> any SwipeActionsHosting)? = { SwipeActionsHost($0) }
+    package static var make: ((Presenter) -> any SwipeActionsHosting)?
     /// A presenter's native row cells.
-    package static var makeRowCells: ((Presenter) -> any RowCellsHosting)? = { RowCells($0) }
+    package static var makeRowCells: ((Presenter) -> any RowCellsHosting)?
 }
 #endif

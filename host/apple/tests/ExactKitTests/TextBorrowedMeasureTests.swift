@@ -2,6 +2,7 @@ import XCTest
 import CoreText
 import CExact
 @testable import ExactKit
+@testable import ExactImages
 
 extension TextGeometryTests {
     func withBorrowedRequest(_ value: Spec, width: Float = 160, height: Float = -1,

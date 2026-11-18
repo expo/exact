@@ -3,6 +3,7 @@ use std::fmt::Write;
 #[cfg(test)]
 thread_local! { pub(crate) static CLOCK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Stamp {
     #[cfg(not(target_arch = "wasm32"))]
     time: std::time::Instant,
@@ -20,6 +21,17 @@ impl Stamp {
             time: performance_now(),
         }
     }
+    pub fn elapsed_at(&self, end: Self) -> f64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            end.time.duration_since(self.time).as_secs_f64() * 1000.0
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            end.time - self.time
+        }
+    }
+
     pub fn wall_ms(&self) -> f64 {
         #[cfg(target_arch = "wasm32")]
         {

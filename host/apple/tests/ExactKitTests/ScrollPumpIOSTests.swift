@@ -3,6 +3,8 @@ import UIKit
 import XCTest
 import ExactSurfaces
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
 
 /// A scroll asks the pump for work only when work is owed: a paragraph
 /// without all its pixels, or a list's rows. A screen whose text is all

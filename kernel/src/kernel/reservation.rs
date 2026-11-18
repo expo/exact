@@ -20,7 +20,17 @@ impl Reserved {
     /// edge, where it observes `observed` there: the additional inset taken
     /// from or added to the observation, clamped at 0, then the padding.
     pub(crate) fn inside(&self, observed: [f32; 4]) -> [f32; 4] {
-        std::array::from_fn(|e| (observed[e] + self.added[e]).max(0.0) + self.padding[e])
+        self.inside_covered(observed, [0.0; 4])
+    }
+
+    /// [`Self::inside`] where a keyboard covers `cover` of each edge (D3,
+    /// D7): it covers the observation and the additional inset where it is
+    /// deeper, as UIKit's keyboard guide covers a controller's
+    /// `additionalSafeAreaInsets`, and the padding stacks on it.
+    pub(crate) fn inside_covered(&self, observed: [f32; 4], cover: [f32; 4]) -> [f32; 4] {
+        std::array::from_fn(|e| {
+            (observed[e] + self.added[e]).max(0.0).max(cover[e]) + self.padding[e]
+        })
     }
 }
 

@@ -498,6 +498,22 @@ fn an_elements_attributes_continue_on_deeper_lines_that_begin_with_name_equals()
 }
 
 #[test]
+fn an_expression_broken_after_an_operator_is_told_to_wrap_it() {
+    let e = parse("fn pick(n: number): string = n > 1 ?\n  \"many\" : \"one\"\n").unwrap_err();
+    assert_eq!(e.id, "syntax-expected-expression");
+    assert!(
+        e.message
+            .contains("wrap the whole expression in parentheses"),
+        "{e}"
+    );
+    // A missing value is not told to wrap.
+    let e = parse("component A\n  view\n    text \"a\" width=\n").unwrap_err();
+    assert!(!e.message.contains("parentheses"), "{e}");
+    // The form it names parses.
+    parse("fn pick(n: number): string = (n > 1 ?\n  \"many\" : \"one\")\n").unwrap();
+}
+
+#[test]
 fn a_component_uses_arguments_may_span_lines_inside_its_parentheses() {
     let src = "component A\n  view\n    Row(\n      a=1,\n      b=\"x\",\n    )\n      text \"filled\"\ncomponent Row\n  props\n    a: number\n    b: string\n  slot\n  view\n    children\n";
     let file = parse(src).unwrap();

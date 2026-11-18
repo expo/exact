@@ -651,3 +651,19 @@ struct TextRasterJob {
     }
     #endif
 }
+
+/// The text workers: text rasters, and content regions' preparation, whose
+/// per-region dependencies preserve CoreText confinement without a second
+/// worker pool.
+package enum RegionTextExecutor {
+    package static let queue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "exact.text"; q.qualityOfService = .userInitiated
+        #if os(iOS) || os(tvOS)
+        q.maxConcurrentOperationCount = TextRasterizer.concurrency
+        #else
+        q.maxConcurrentOperationCount = 2
+        #endif
+        return q
+    }()
+}

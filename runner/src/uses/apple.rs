@@ -15,8 +15,8 @@ use exact_plan::{BindingKind, BindingsRow, Plan};
 
 /// What `plan` uses on Apple: [`uses`], with [`Capability::Grid`] the grid
 /// algorithm, which Apple links by use, for a plan whose layout can reach it
-/// ([`lays_out_grid`]), [`Capability::Effects`] a box's `filter` alone, and
-/// the native roster's entries. A native host
+/// ([`lays_out_grid`]), [`Capability::Effects`] a box's `filter` or what
+/// SVG uses, and the native roster's entries. A native host
 /// parses the grid rows whatever it links, so a grid row alone does not need
 /// the algorithm. The browser lays out a grid itself, and the other native
 /// hosts link the algorithm whole, so for them the capability is the rows'
@@ -46,11 +46,11 @@ pub fn apple_uses(plan: &Plan) -> Uses {
     add(Capability::Tools, !plan.tools.is_empty());
     let images = image_sources(plan);
     add(Capability::Images, !images.is_empty());
-    add(
-        Capability::Svg,
-        images.iter().any(ImageSource::can_be_svg)
-            || has_node(plan, |t| t == NodeType::Svg || t.is_svg_element()),
-    );
+    let svg = images.iter().any(ImageSource::can_be_svg)
+        || has_node(plan, |t| t == NodeType::Svg || t.is_svg_element());
+    add(Capability::Svg, svg);
+    // SVG's filters run on box effects' engine.
+    add(Capability::Effects, svg);
     add(
         Capability::NativeViews,
         !plan.views.is_empty()
@@ -62,14 +62,16 @@ pub fn apple_uses(plan: &Plan) -> Uses {
         runs_command(plan, &["startTrace_EXPERIMENTAL", "stopTrace_EXPERIMENTAL"]),
     );
     add(Capability::Controls, uses_controls(plan));
-    // A swipe row, a reorder group and a reorder grip reach the collection
-    // host without a windowed list.
+    // A swipe row, a reorder group, a reorder grip and a list whose rows
+    // are cells (iOS draws them, LLP 1115.000 D16) reach the family without
+    // a windowed list.
     add(
         Capability::Collections,
         [
             PropId::SwipeContent,
             PropId::ReorderGroup,
             PropId::ReorderFor,
+            PropId::ListRows,
         ]
         .into_iter()
         .any(|id| binds(plan, BindingKind::Prop, id as u16)),
@@ -210,3 +212,27 @@ fn binds(plan: &Plan, kind: BindingKind, id: u16) -> bool {
 #[cfg(test)]
 #[path = "apple_tests.rs"]
 mod tests;
+
+/// A `data:` URL's bytes after `data:` (RFC 2397): base64 after `;base64`,
+/// else percent-decoded.
+pub fn data_url(url: &str) -> Option<Vec<u8>> {
+    let (meta, body) = url.split_once(',')?;
+    if meta.to_ascii_lowercase().ends_with(";base64") {
+        let body: String = body.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+        return crate::agent::unbase64(&body);
+    }
+    let (body, mut bytes, mut i) = (body.as_bytes(), Vec::new(), 0);
+    while i < body.len() {
+        let hex = body
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        match hex
+            .filter(|_| body[i] == b'%')
+            .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            Some(byte) => (bytes.push(byte), i += 3),
+            None => (bytes.push(body[i]), i += 1),
+        };
+    }
+    Some(bytes)
+}

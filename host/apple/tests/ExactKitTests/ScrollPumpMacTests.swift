@@ -3,6 +3,7 @@ import AppKit
 import IOSurface
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class ScrollPumpMacTests: XCTestCase {
     private var session: ExactSession!

@@ -16,7 +16,7 @@ import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { onThisMachine, serverUrl } from './app-server.mjs';
-import { backendOrigin, backendOriginSelection, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
+import { backendOrigin, backendOriginSelection, bundleOptions, capturedConstants, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, inlineSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
 import { createRequire } from 'node:module';
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
@@ -204,7 +204,7 @@ export function fetchOrigins(dist) {
 /** The loopback ones: a backend on this machine the tests talk to. */
 export const loopbackOrigins = (dist) => fetchOrigins(dist).filter((o) => /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(o));
 /** The source that selected the built backend, with a stale build stated explicitly. */
-export function backendOriginSource(app, origin, env=process.env) {
+export async function backendOriginSource(app, origin, env=process.env) {
   const dir=typeof app==='string' ? app : app.dir;
   if (!dir) return 'built net.fetch grant';
   const selected=backendOriginSelection(dir,env);
@@ -217,7 +217,12 @@ export function backendOriginSource(app, origin, env=process.env) {
   const at=value=>{ try { return new URL(value).origin; } catch { return null; } };
   const names=declaredSettings(dir), placeholder=name=>`http://${name.toLowerCase().replaceAll('_','-')}.setting.invalid`;
   let grants='';
-  try { const parse=createRequire(import.meta.url)('rolldown/utils').parseSync; grants=staticFacts(inlineSettings(code,dir,parse,Object.fromEntries(names.map(name=>[name,placeholder(name)]))).code,parse).grants ?? ''; }
+  try {
+    const require=createRequire(import.meta.url), parse=require('rolldown/utils').parseSync;
+    const load=await capturedConstants(dir,require('rolldown').rolldown,bundleOptions,parse);
+    const settings=inlineSettings(code,dir,parse,Object.fromEntries(names.map(name=>[name,placeholder(name)])));
+    grants=staticFacts(settings.code,parse,{load}).grants ?? '';
+  }
   catch { /* an app.ts the bake refuses: no setting is named */ }
   const fetched=new Set(grants.split('\n').map(line=>/^\s*(?:development\s+)?net\.fetch\s+(\S+)/.exec(line)?.[1]).filter(Boolean).map(at));
   const setting=Object.entries(settingValues(dir,names,env)).find(([name,s])=>s && at(s.value)===origin && fetched.has(at(placeholder(name))));
@@ -236,7 +241,7 @@ export async function backendPreflight(app, dist, say = console.error) {
   const down = [];
   for (const origin of loopbackOrigins(dist)) if (!(await listening(origin))) down.push(origin);
   if (!down.length) return snapbackDevice?.devicePreflight(app, fetchOrigins(dist));
-  const what = `no backend at ${down.map(origin=>`${origin} (source: ${backendOriginSource(app,origin)})`).join(', ')}: nothing listens there, and app.ts fetches it (a net.fetch grant)`;
+  const what = `no backend at ${(await Promise.all(down.map(async origin=>`${origin} (source: ${await backendOriginSource(app,origin)})`))).join(', ')}: nothing listens there, and app.ts fetches it (a net.fetch grant)`;
   if (!snapbackDevice?.mountsSnapback(app)) return say(`note: ${what}; a test that loads from it fails`);
   throw new Error(`${what}. The app's Snapback client cannot open data that has never synced, so every test would fail. Start the server first, from the backend's directory (\`npx snapback4 dev --port ${new URL(down[0]).port || 80}\`, seeded if the tests read seeded rows), then run the tests again.`);
 }
@@ -287,7 +292,7 @@ export async function resetBackends(origins, rows = null, ms = 10000, app = null
       status = r.ok ? body : null;
       closed = r.status === 403 && /development doors are closed/.test(body?.denied?.message ?? '');
     }
-    catch (e) { throw new Error(`fresh: nothing answered at ${origin}${app ? ` (source: ${backendOriginSource(app,origin)})` : ''} (${e.cause?.code ?? e.message}): start \`snapback4 dev --port ${new URL(origin).port || 80}\` there first`); }
+    catch (e) { throw new Error(`fresh: nothing answered at ${origin}${app ? ` (source: ${await backendOriginSource(app,origin)})` : ''} (${e.cause?.code ?? e.message}): start \`snapback4 dev --port ${new URL(origin).port || 80}\` there first`); }
     // Since 0.4.33 a password-only app's `dev` keeps /dev/* closed unless started with --unsafe-dev-doors.
     if (closed) throw new Error(`fresh: the snapback4 dev server at ${origin} keeps its development doors closed (a password-only app's \`dev\` does unless asked): restart it with \`snapback4 dev --unsafe-dev-doors --port ${new URL(origin).port || 80}\` (\`bun exact.mjs backend dev --unsafe-dev-doors\`)`);
     if (typeof status?.storeId !== 'string') continue;
@@ -684,7 +689,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   if (c.status !== 0) throw new Error(c.stderr?.trim() || c.error?.message || 'contract test compiler failed');
   // Native runs use the origin their build selected (LLP 1142 D13), else the scaffold's declared one, else the grants
   // app.ts names as the build evaluates them, when no web admission file exists.
-  const appOrigins = host !== 'web' ? nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : [];
+  const appOrigins = host !== 'web' ? await nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : [];
   const authored = JSON.parse(c.stdout), properties = authored.properties.filter(p => p.kind === 'always');
   const unchecked = authored.properties.filter(p => p.kind !== 'always').reduce((n, p) => n + Math.max(1, p.lines.length), 0);
   if (unchecked) console.error(`properties on ${host}: ${unchecked} lines not checked (after, its frames and commands, and never refuses); the driver exposes no commit trace`);
@@ -1228,7 +1233,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
 /** The origins a native run's fetch faults resolve against, with no web build's admission data to read: the backend its
  * build selected (LLP 1142 D13), else app.ts's literal `const origin`, else the origins its `net.fetch` grants name as the
  * build evaluates them, a setting's value (`import.meta.env.API_BASE_URL`, LLP 1153 D4) in place of its read. */
-export function nativeFetchOrigins(dir, env = process.env) {
+export async function nativeFetchOrigins(dir, env = process.env) {
   // A source declared in app.contract names its origin in its `url` line (LLP 1162.001 D3).
   let contract = ''; try { contract = readFileSync(resolve(dir, 'app.contract'), 'utf8'); } catch { /* none */ }
   const declared = [...contract.matchAll(/^\s+url\s+"(https?:\/\/[^/?#{"\s]+)/gm)].map(m => m[1]);
@@ -1237,7 +1242,10 @@ export function nativeFetchOrigins(dir, env = process.env) {
   const origin = backendOrigin(dir, env) ?? literalBackendOrigin(code, parse);
   if (origin) return [origin];
   let grants = '';
-  try { grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse).grants ?? ''; }
+  try {
+    const load = await capturedConstants(dir, createRequire(import.meta.url)('rolldown').rolldown,bundleOptions,parse);
+    grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse, { load }).grants ?? '';
+  }
   catch { return []; } // the bake refuses it, and says why when it builds
   return [...new Set([...declared, ...grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean)])];
 }

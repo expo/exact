@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1070.000 §6.2 on AppKit, as on UIKit: a smooth correction is the
 /// clip view's animated scroll; while it runs the list reports where it is

@@ -543,8 +543,8 @@ impl<D: DataSource> Runner<D> {
             receipts.push(self.scroll_into_view(IntoView {
                 list: format!("#{view}"),
                 key: exact_plan::Value::str(&key),
-                block: crate::instance::collection::Align::Nearest,
-                inline: crate::instance::collection::Align::Nearest,
+                block: crate::list_api::Align::Nearest,
+                inline: crate::list_api::Align::Nearest,
                 row: None,
                 view: Some(view),
                 smooth: false,

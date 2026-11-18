@@ -99,6 +99,7 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
         40 => i + 27, // SHADOW
         ROW_BEGIN => i + 6 + at(5)?,
         ROW_DRAW => i + 4,
+        ROW_DRAW_THROUGH => i + 8,
         RING => i + 26,
         SLOT_SET | LAYER_SET | TRACKS => i + 3 + at(2)?,
         CLOCK => i + 3,

@@ -1,5 +1,7 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 class SvgHitTests: XCTestCase {
     private let identity = [1, 0, 0, 1, 0, 0]

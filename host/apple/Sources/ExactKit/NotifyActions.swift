@@ -481,3 +481,14 @@ extension ExactSession {
     func endBackgroundActions() {}
 }
 #endif
+
+/// The built-in notifications behind `ModuleSeamLink.notifications`: the
+/// session's extensions above (their tvOS forms answer as none).
+final class BuiltInNotifications: NotificationHosting {
+    func declareCategories(_ session: ExactSession, ready: @escaping () -> Void) { session.declareNotificationCategories(ready: ready) }
+    func replaceBackgroundActions(_ session: ExactSession) { session.replaceBackgroundActions() }
+    func deliverResponses(_ session: ExactSession) { session.deliverNotificationResponses() }
+    func beginBackgroundAction(_ session: ExactSession, _ id: String) -> Bool { session.beginBackgroundAction(id) }
+    func backgroundActionsApplied(_ session: ExactSession) { session.backgroundActionsApplied() }
+    func endBackgroundActions(_ session: ExactSession) { session.endBackgroundActions() }
+}

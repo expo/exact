@@ -2,6 +2,35 @@
 use super::*;
 
 impl<D: DataSource> Host<D> {
+    /// [`crate::link::MotionLowering`]'s commit: what Core Animation can play
+    /// of the motion a commit's sync started, and the rest resampled.
+    pub(crate) fn lower_committed_motion(&mut self, sync: &MotionSync) {
+        let runner = &self.runner;
+        svg_lower::eligibility(
+            runner.kernel(),
+            &mut self.engine,
+            sync,
+            self.svg.box_motion,
+            self.svg.live_filters,
+            &|v| !runner.handlers_of(v).is_empty(),
+        );
+        svg_lower::hand_over_paths(runner.kernel(), &mut self.engine, self.svg.live_filters);
+        // A reveal changes a held play without changing its style row.
+        for (key, _) in &sync.animations {
+            if let Some(view) = self.keys.get(&node_key(*key)).copied() {
+                self.svg.element(runner.kernel(), view);
+            }
+        }
+        for view in svg_lower::resample(
+            runner.kernel(),
+            &mut self.engine,
+            self.svg.live_filters,
+            &|v| !runner.handlers_of(v).is_empty(),
+        ) {
+            self.svg.element(self.runner.kernel(), view);
+        }
+    }
+
     pub(super) fn commit(&mut self, receipts: &[Timed], error: Option<String>) -> String {
         self.commit_into(receipts, error, Batch::new())
     }
@@ -127,29 +156,8 @@ impl<D: DataSource> Host<D> {
             self.spare_exits(&mut sync);
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
-            let runner = &self.runner;
-            svg_lower::eligibility(
-                runner.kernel(),
-                &mut self.engine,
-                &sync,
-                self.svg.box_motion,
-                self.svg.live_filters,
-                &|v| !runner.handlers_of(v).is_empty(),
-            );
-            svg_lower::hand_over_paths(runner.kernel(), &mut self.engine, self.svg.live_filters);
-            // A reveal changes a held play without changing its style row.
-            for (key, _) in &sync.animations {
-                if let Some(view) = self.keys.get(&node_key(*key)).copied() {
-                    self.svg.element(runner.kernel(), view);
-                }
-            }
-            for view in svg_lower::resample(
-                runner.kernel(),
-                &mut self.engine,
-                self.svg.live_filters,
-                &|v| !runner.handlers_of(v).is_empty(),
-            ) {
-                self.svg.element(self.runner.kernel(), view);
+            if let Some(motion) = self.turn.motion {
+                (motion.commit)(self, &sync);
             }
             self.play_exits(&mut batch);
             self.start_flights(&t.receipt);

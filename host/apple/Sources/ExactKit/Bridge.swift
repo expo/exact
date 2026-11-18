@@ -3,7 +3,7 @@ import CExact
 import Foundation
 
 extension Runtime {
-    func collectionFixedSizes(_ view: UInt32, lead: Int, trail: Int) -> [Double]? {
+    package func collectionFixedSizes(_ view: UInt32, lead: Int, trail: Int) -> [Double]? {
         guard let fixedSize = CoreExports.collectionFixedSize else { return nil }
         return on(busy: nil) {
             let sizes = (0..<2).map { fixedSize(rt, view, UInt32(lead), UInt32(trail), UInt32($0)) }
@@ -217,19 +217,5 @@ extension Runtime {
             }
             return read(exact_host_covers(rt, write(bytes)))
         }
-    }
-    func regionComplete(_ artifact: RegionArtifact) -> Batch {
-        return on {
-            let p = artifact.metadata
-            let retained = Unmanaged.passRetained(artifact).toOpaque()
-            return read(exact_region_complete(rt, artifact.id,
-                ExactMetrics(width: Float(p.width), height: Float(p.height), baseline: Float(p.firstBaseline)),
-                retained, { pointer in
-                    if let pointer { Unmanaged<RegionArtifact>.fromOpaque(pointer).release() }
-                }))
-        }
-    }
-    func regionFallback(_ request: UInt64) -> Batch {
-        on { read(exact_region_fallback(rt, request)) }
     }
 }
