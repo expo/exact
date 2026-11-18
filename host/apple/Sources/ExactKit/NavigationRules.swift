@@ -61,6 +61,35 @@ package enum NavigationRules {
         !modalActive && shownKey != rootKey && (sourceKey == rootKey || sourceReplaced)
     }
 
+    /// LLP 1127 D14: the key of the route a native pop of the stack's top
+    /// takes away. It is the selected route's, except while the split's
+    /// inspector column shows the selected route (`inspecting`): that route
+    /// is above the detail's top in the app's stack (`shownKeys`), so a pop
+    /// of the detail's top takes it too, and the route the pop takes away is
+    /// the detail's top, the one beneath the inspector's (`poppedKeys`).
+    package static func poppedTop(selected: String, inspecting: String?, shownKeys: [String]) -> String {
+        guard inspecting == selected, let at = shownKeys.firstIndex(of: selected), at > 0 else { return selected }
+        return shownKeys[at - 1]
+    }
+
+    /// The keys of the routes a pop UIKit committed takes from the app's stack (`popped`, `backTarget`): with the
+    /// selected route's too when the inspector's column shows it and the pop took the detail's top beneath it
+    /// (`poppedTop`).
+    package static func poppedKeys(_ popped: Set<String>, selected: String, inspecting: String?, shownKeys: [String]) -> Set<String> {
+        let top = poppedTop(selected: selected, inspecting: inspecting, shownKeys: shownKeys)
+        return top != selected && popped.contains(top) ? popped.union([selected]) : popped
+    }
+
+    /// Where Back from the selected route goes when a pop takes the
+    /// inspector's route with the route it is above (`poppedTop`): the route
+    /// beneath that one. nil when the selected route is not the inspector's,
+    /// or nothing is beneath.
+    package static func beneathPoppedTop(selected: String, inspecting: String?, shownKeys: [String]) -> String? {
+        let top = poppedTop(selected: selected, inspecting: inspecting, shownKeys: shownKeys)
+        guard top != selected, let at = shownKeys.firstIndex(of: top), at > 0 else { return nil }
+        return shownKeys[at - 1]
+    }
+
     /// D2: where a pop UIKit committed takes the router, from the keys of the
     /// stack it shows and those of the routes UIKit took out: to the deepest
     /// route beneath the selected one that UIKit kept, and how many steps

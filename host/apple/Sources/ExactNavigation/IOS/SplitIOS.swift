@@ -33,6 +33,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     let empty = UIViewController()
     /// What UIKit shows changed: it collapsed or expanded, or showed or hid the list.
     var changed: () -> Void = {}
+    var columnsWillChange: () -> Void = {}
+    var columnsDidChange: () -> Void = {}
+    var left: String?
+    var returnTo: (String) -> Void = { _ in }
     /// The inspector's column (iOS 26), made when a route first goes there.
     private(set) var inspector: UINavigationController?
     /// The person closed the inspector's column; the router has yet to hear it.
@@ -202,14 +206,38 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         closing = close
         controller.hide(.inspector)
         moveAlong()
-        let finish = { [weak self, weak nav] in
+        let finish = { [weak self, weak nav] (cancelled: Bool) in
             guard let self, let nav, closing == close else { return }
             closing = nil
+            guard !cancelled else { return }
             empty(nav)
             endSlide()
         }
-        if let coordinator = controller.transitionCoordinator { coordinator.animate(alongsideTransition: nil) { _ in finish() } } else { finish() }
+        if let coordinator = controller.transitionCoordinator { coordinator.animate(alongsideTransition: nil) { finish($0.isCancelled) } } else { finish(false) }
         #endif
+    }
+
+    /// UIKit pops the route the inspector's route is above, which takes the
+    /// inspector's route too (`NavigationRules.poppedTop`): the column closes
+    /// as the pop begins. UIKit's Back slides it away on the split's own
+    /// clock. A swipe's pop carries the column's transition (iOS 27.1): the
+    /// column follows the finger, leaves with the page when the swipe goes
+    /// back, and comes back with the page when it is let go. Closed only as
+    /// the finger lifts or as the pop ends, it would stay until the page had
+    /// gone, as UIKit holds a split's change while a swipe's pop finishes.
+    /// Let go, UIKit still lays the split out as last asked, without the
+    /// column, so the column is shown again at once as the pop ends; asked
+    /// for later, it would vanish and slide in again. `inspect(nil)` keeps the
+    /// route in the column until the column has gone.
+    func closeInspector(along pop: UIViewControllerTransitionCoordinator) {
+        if pop.isInteractive, let nav = inspector, let route = nav.viewControllers.first as? RouteController {
+            pop.animate(alongsideTransition: nil) { [weak self, weak nav, weak route] context in
+                // A batch that took the route while the finger was down left it sliding out: the deferred sync decides
+                guard context.isCancelled, let self, let nav, let route, sliding == nil, nav.viewControllers.first === route else { return }
+                inspect(route, in: nav, animated: false)
+            }
+        }
+        inspect(nil, in: nil)
     }
 
     /// UIKit animates the columns into place from a show or hide: what the
@@ -394,9 +422,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
 
     /// UIKit expanded or collapsed: the stack shows as the columns now are.
     private func settle() {
+        let expanded = !controller.isCollapsed && move == .expanding
         move = nil
         show(stack, animated: false)
-        DispatchQueue.main.async { [weak self] in self?.changed() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            changed()
+            columnsDidChange()
+            if expanded, stack.count == 1, let location = left { returnTo(location) }
+        }
     }
 
     // Collapsed, the detail is on top while N1 holds a route (LLP 1127 D3's
@@ -404,6 +438,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     func splitViewController(_ svc: UISplitViewController,
                              topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column) -> UISplitViewController.Column {
         move = .collapsing
+        columnsWillChange()
         #if os(iOS)
         if #available(iOS 26.0, *), let inspector, svc.viewController(for: .inspector) === inspector {
             svc.setViewController(nil, for: .inspector)
@@ -414,12 +449,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     func splitViewController(_ svc: UISplitViewController,
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
         move = .expanding
+        columnsWillChange()
         return proposedDisplayMode
     }
     func splitViewController(_ svc: UISplitViewController, didHide column: UISplitViewController.Column) {
         #if os(iOS)
         guard #available(iOS 26.0, *), column == .inspector, closing == nil, !svc.isCollapsed else { return }
-        DispatchQueue.main.async { self.inspectorClosed() }
+        DispatchQueue.main.async { if !svc.isShowing(.inspector) { self.inspectorClosed() } }
         #endif
     }
 

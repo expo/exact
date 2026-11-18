@@ -219,6 +219,31 @@ final class NavigationRulesTests: XCTestCase {
         XCTAssertFalse(NavigationRules.dispatchesBack(shownKey: "journal", rootKey: "day", sourceKey: nil, sourceReplaced: true, modalActive: true))
     }
 
+    /// LLP 1127 D14: the inspector's column shows the selected route, above
+    /// the detail's top in the app's stack, so a pop of the detail's top is
+    /// judged against the route beneath the inspector's.
+    func testAPopUnderTheInspectorIsJudgedAgainstTheRouteBeneathIt() {
+        let shown = ["home", "landmarks", "landmark", "info"]
+        XCTAssertEqual(NavigationRules.poppedTop(selected: "info", inspecting: "info", shownKeys: shown), "landmark")
+        // No inspector's column (a collapsed split shows the route as a sheet), or no inspector at all
+        XCTAssertEqual(NavigationRules.poppedTop(selected: "info", inspecting: nil, shownKeys: shown), "info")
+        XCTAssertEqual(NavigationRules.poppedTop(selected: "landmark", inspecting: nil, shownKeys: Array(shown.prefix(3))), "landmark")
+        // Nothing beneath the inspector's route
+        XCTAssertEqual(NavigationRules.poppedTop(selected: "info", inspecting: "info", shownKeys: ["info"]), "info")
+        // Back goes past the inspector's route and the route it is above, to the one beneath that
+        XCTAssertEqual(NavigationRules.beneathPoppedTop(selected: "info", inspecting: "info", shownKeys: shown), "landmarks")
+        XCTAssertNil(NavigationRules.beneathPoppedTop(selected: "info", inspecting: nil, shownKeys: shown))
+        XCTAssertNil(NavigationRules.beneathPoppedTop(selected: "info", inspecting: "info", shownKeys: ["landmark", "info"]))
+        // A pop UIKit committed of the detail's top takes the inspector's route too, and the router goes two routes down
+        let popped = NavigationRules.poppedKeys(["landmark"], selected: "info", inspecting: "info", shownKeys: shown)
+        XCTAssertEqual(popped, ["landmark", "info"])
+        XCTAssertEqual(NavigationRules.backTarget(shownKeys: shown, popped: popped, selected: "info")?.to, "landmarks")
+        XCTAssertEqual(NavigationRules.backTarget(shownKeys: shown, popped: popped, selected: "info")?.steps, 2)
+        // A pop of routes under the detail's top, or with no inspector's column, takes what it took
+        XCTAssertEqual(NavigationRules.poppedKeys(["landmarks"], selected: "info", inspecting: "info", shownKeys: shown), ["landmarks"])
+        XCTAssertEqual(NavigationRules.poppedKeys(["landmark"], selected: "info", inspecting: nil, shownKeys: shown), ["landmark"])
+    }
+
     /// D1: the Back control is resolved by id among enabled, pressable, live
     /// controls, lowest view id first; a disabled one blocks nothing but
     /// resolves to nothing.

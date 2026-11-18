@@ -32,7 +32,12 @@ extension NavigationHost {
         let depth = modalNavigation == nil ? split?.shown.count : nil
         guard (depth ?? navigation?.viewControllers.count ?? 0) > 1 else { return nil }
         guard back != nil else { return backRefusal }
-        goBack()
+        // The detail's Back pops the detail's top, and the inspector's route above it with it (LLP 1127 D14)
+        if let selected = selectedKey, let to = NavigationRules.beneathPoppedTop(selected: selected, inspecting: inspectorKey, shownKeys: shownKeys) {
+            goBack(from: selected, to: to)
+        } else {
+            goBack()
+        }
         return ""
     }
 

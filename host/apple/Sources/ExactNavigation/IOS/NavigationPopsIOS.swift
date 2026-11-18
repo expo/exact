@@ -79,7 +79,8 @@ extension NavigationHost {
         for route in popped where route.search?.endEditing(completion: { [weak self] in self?.followPops() }) == true { return false }
         for shown in popped.compactMap({ $0.lastStack?.topViewController }) { followSelection(showing: shown) }
         for route in popped { route.held = false }
-        guard let top = selectedKey, let target = NavigationRules.backTarget(shownKeys: shownKeys, popped: Set(popped.map(\.key)), selected: top) else {
+        guard let top = selectedKey,
+              let target = NavigationRules.backTarget(shownKeys: shownKeys, popped: NavigationRules.poppedKeys(Set(popped.map(\.key)), selected: top, inspecting: inspectorKey, shownKeys: shownKeys), selected: top) else {
             presenter.session?.log("navigation: UIKit popped \(popped.map(\.key).joined(separator: ", ")), which leaves the router's selected route \(selectedKey ?? "none") in place; the router's stacks are written back")
             return false
         }
