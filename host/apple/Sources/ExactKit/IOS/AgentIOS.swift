@@ -616,33 +616,49 @@ extension Agent {
         }
         let flat = flatBoxForRequest(req)
         guard let v = view(req) ?? flat?.host, let win = v.window else { return miss(req) }
-        var b = flat.map { box($0.host.container, region: $0.rect) } ?? v.tapBox(box(v))
-        let flatBounds = flat == nil ? nil : b
-        // A run is touched on a fragment it paints (the web's driver taps
-        // the span's), not at its paragraph's middle.
-        if ["at", "x", "y"].allSatisfy({ req[$0] == nil }), (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) != nil }) == true,
-           let q = tapPoint(req, node: v) { b = CGRect(origin: q, size: .zero) }
         // A plain press: `at` is a point in the target, the press whatever a
         // finger there reaches; without one, the target's own press
         // (`AgentAddressedTap.swift`).
         let plain = ["wheel", "hover", "contextmenu", "dblclick", "pinch", "x", "y"].allSatisfy { req[$0] == nil } && v.kind != "iframe"
-        // A long press or a double tap at a point too: where its word is (LLP 1115.000 D11.6).
-        if req["x"] != nil || req["y"] != nil || req["at"] != nil && (plain || req["contextmenu"] as? Bool == true || req["dblclick"] as? Bool == true) {
-            if req["at"] != nil {
-                guard let at = req["at"] as? [Double], at.count == 2, at.allSatisfy(\.isFinite) else { return ["error": "tap at needs two finite numbers"] }
+        // The target's box as it is seen now, or the refusal.
+        func aimed() -> (box: CGRect, refusal: [String: Any]?) {
+            var b = flat.map { box($0.host.container, region: $0.rect) } ?? v.tapBox(box(v))
+            let flatBounds = flat == nil ? nil : b
+            // A run is touched on a fragment it paints (the web's driver taps
+            // the span's), not at its paragraph's middle.
+            if ["at", "x", "y"].allSatisfy({ req[$0] == nil }), (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) != nil }) == true,
+               let q = tapPoint(req, node: v) { b = CGRect(origin: q, size: .zero) }
+            // A long press or a double tap at a point too: where its word is (LLP 1115.000 D11.6).
+            if req["x"] != nil || req["y"] != nil || req["at"] != nil && (plain || req["contextmenu"] as? Bool == true || req["dblclick"] as? Bool == true) {
+                if req["at"] != nil {
+                    guard let at = req["at"] as? [Double], at.count == 2, at.allSatisfy(\.isFinite) else { return (b, ["error": "tap at needs two finite numbers"]) }
+                }
+                guard let point = tapPoint(req, node: v, drawn: flatBounds), point.x.isFinite, point.y.isFinite else { return (b, ["error": "tap needs finite coordinates"]) }
+                let whole = flatBounds ?? box(v)
+                guard whole.contains(point) else { return (b, ["error": "tap #\(v.id) at: (\(Agent.r2(point.x - whole.minX)), \(Agent.r2(point.y - whole.minY))) is outside its \(Agent.r2(whole.width))×\(Agent.r2(whole.height)) box"]) }
+                b = CGRect(x: point.x, y: point.y, width: 0, height: 0)
             }
-            guard let point = tapPoint(req, node: v, drawn: flatBounds), point.x.isFinite, point.y.isFinite else { return ["error": "tap needs finite coordinates"] }
-            let whole = flatBounds ?? box(v)
-            guard whole.contains(point) else { return ["error": "tap #\(v.id) at: (\(Agent.r2(point.x - whole.minX)), \(Agent.r2(point.y - whole.minY))) is outside its \(Agent.r2(whole.width))×\(Agent.r2(whole.height)) box"] }
-            b = CGRect(x: point.x, y: point.y, width: 0, height: 0)
+            return (b, nil)
         }
+        var aim = aimed()
+        if let refusal = aim.refusal { return refusal }
+        var b = aim.box
         // The middle of the box as seen — through a surface's placement when
         // there is one (LLP 1014 D5) — as a point in the window.
         let vp = presenter.viewport
         let window = { (q: CGPoint) in vp.convert(CGPoint(x: q.x + vp.pageOrigin.x, y: q.y + vp.pageOrigin.y), to: nil) }
         var p = window(CGPoint(x: b.midX, y: b.midY))
         var at = [Agent.r2(b.midX), Agent.r2(b.midY)]
-        if req["wheel"] == nil, req["hover"] == nil { awaitAppOverlay(at: p, in: win) }
+        // The wait runs the run loop, and what was pending there may move the
+        // target (a bar settling in a container the app took): it is aimed at
+        // again where it is after the wait, not where it was before it.
+        if req["wheel"] == nil, req["hover"] == nil, awaitAppOverlay(at: p, in: win) {
+            aim = aimed()
+            if let refusal = aim.refusal { return refusal }
+            b = aim.box
+            p = window(CGPoint(x: b.midX, y: b.midY))
+            at = [Agent.r2(b.midX), Agent.r2(b.midY)]
+        }
         let seen = win.hitTest(p, with: nil)
         // A finger lands only where the target is seen (LLP 1035.003: action
         // dispatch is never substituted for a contact), so a press, a menu or
