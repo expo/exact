@@ -573,7 +573,8 @@ macro_rules! module {
             $crate::web::render(id, width, height, scale, now_ms)
         }
 
-        /// The instance's presentation policy, an explicitly empty picture included.
+        /// Instance policy: bit 0 promises alpha one, bit 1 requests SDR, bit 2 says the canvas
+        /// is empty, so the host shows its styles and children instead of any retained picture.
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_presentation_flags(id: u32) -> u32 {
             $crate::web::presentation_flags(id)
@@ -662,7 +663,7 @@ macro_rules! module {
 
         /// Capture state, or undefined when this surface carries nothing.
         #[::wasm_bindgen::prelude::wasm_bindgen]
-        pub fn gpu_carry(id: u32) -> Result<Option<Vec<u8>>, wasm_bindgen::JsValue> {
+        pub fn gpu_carry(id: u32) -> Result<Option<Vec<u8>>, ::wasm_bindgen::JsValue> {
             $crate::web::carry(id)
         }
 

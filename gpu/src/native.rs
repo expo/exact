@@ -1076,7 +1076,7 @@ macro_rules! module {
             match $crate::native::placement(id, index) {
                 Some(p) if p.hidden => 2,
                 Some(p) => {
-                    for (i, v) in p.homography.iter().chain(std::iter::once(&p.depth)).enumerate() {
+                    for (i, v) in p.homography.iter().chain(::std::iter::once(&p.depth)).enumerate() {
                         // SAFETY: the caller's contract — `len` ≥ 10 floats at `out`, checked above.
                         unsafe { out.add(i).write_unaligned(*v) }
                     }
@@ -1162,7 +1162,7 @@ macro_rules! module {
         /// Whether a canvas reads gamepads: 1 or 0.
         #[no_mangle]
         pub extern "C" fn gpu_wants_pads(id: u32) -> u32 { u32::from($crate::native::wants_pads(id)) }
-        /// Instance policy: bit 0 promises alpha one, bit 1 requests SDR.
+        /// Instance policy: bit 0 promises alpha one, bit 1 requests SDR, bit 2 says the canvas is empty, so the host shows its styles and children instead of any retained picture.
         #[no_mangle]
         pub extern "C" fn gpu_presentation_flags(id: u32) -> u32 { $crate::native::presentation_flags(id) }
 
