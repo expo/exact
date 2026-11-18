@@ -417,7 +417,10 @@ impl Kernel {
             if moved.is_empty() && taking.is_empty() {
                 break;
             }
+            // A capture's readers take its declarations' values anew (D5)
+            let captured = super::readers::Readers::captured(&mut self.arena, &moved);
             self.restyle_readers(&moved);
+            self.restyle_readers(&captured);
             self.restyle_taken(&taking);
             let laid = relayout(self)?;
             self.check_spaces(&laid);
@@ -493,7 +496,10 @@ impl Kernel {
                 changed.push(s);
             }
         }
+        // A withheld capture is invalid, so its readers take their fallbacks (D5)
+        let captured = super::readers::Readers::captured(&mut self.arena, &changed);
         self.restyle_readers(&changed);
+        self.restyle_readers(&captured);
         withheld
     }
 

@@ -324,15 +324,20 @@ pub(crate) type Key = (u32, Arc<str>);
 pub(crate) struct Depends<'a> {
     arena: &'a NodeArena,
     changed: Vec<Key>,
+    /// Whether the change can make a declaration valid or invalid, as an
+    /// observation that becomes unavailable can (D5, D9), where an inset
+    /// cannot.
+    validity: bool,
     known: std::collections::HashMap<Key, bool>,
 }
 
 impl<'a> Depends<'a> {
-    pub(crate) fn new(arena: &'a NodeArena, mut changed: Vec<Key>) -> Self {
+    pub(crate) fn new(arena: &'a NodeArena, mut changed: Vec<Key>, validity: bool) -> Self {
         changed.sort_unstable();
         Depends {
             arena,
             changed,
+            validity,
             known: Default::default(),
         }
     }
@@ -388,9 +393,10 @@ impl<'a> Depends<'a> {
                 tree.is_some_and(|t| self.takes(key.0, &t))
             }
         };
-        // An invalid declaration moves nothing, its reader taking a fallback:
-        // no inset makes a declaration valid or invalid
-        let depends = reads && defined_at(self.arena, key.0, &key.1);
+        // An invalid declaration moves nothing, its reader taking a fallback,
+        // where the change cannot make it valid or invalid; an observation
+        // that becomes unavailable makes a capture invalid
+        let depends = reads && (self.validity || defined_at(self.arena, key.0, &key.1));
         self.known.insert(key.clone(), depends);
         depends
     }
@@ -423,8 +429,8 @@ pub(crate) fn defined_at(arena: &NodeArena, slot: u32, name: &str) -> bool {
 /// §2.3). It first finds every declaration a reader depends on, fallbacks
 /// included, and the cycles among them (§2.3, by Tarjan's algorithm), whose
 /// every member is invalid; then it substitutes the rest, each `var()` in a
-/// declaration reading the declaring node's own values and a capture its
-/// local inset.
+/// declaration reading the declaring node's own values, and a capture its
+/// local inset or its own observation (LLP 1123 D5).
 struct Resolver<'a> {
     arena: &'a NodeArena,
     found: BTreeMap<Key, Declared>,
@@ -553,12 +559,17 @@ impl<'a> Resolver<'a> {
         let local = local_at(self.arena, key.0);
         let value = tree
             .and_then(|tree| {
-                // A declaration holds no observation until captures are built
-                // (LLP 1123 D5): one here, a keyboard reading included, takes
-                // its fallback
+                // A capture holds its declaring box's own observation, as the
+                // solve gives it (LLP 1123 D5, D9); a native target's raw
+                // insets are not read from a declaration yet
+                let input = self.arena.observations.input(key.0);
+                let observed = |leaf: &calc::Observe| match leaf.target {
+                    crate::style::targets::Target::Box => input[leaf.component()],
+                    _ => None,
+                };
                 let leaves = calc::Leaves {
                     local: &|edge| local[edge as usize],
-                    observed: &|_| None,
+                    observed: &observed,
                 };
                 calc::substitute(&tree, &leaves, &mut |name| {
                     let dep = self.reach(key.0, name)?;

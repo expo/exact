@@ -710,8 +710,22 @@ fn a_popover_its_host_places_reads_no_keyboard() {
             }
         }),
     )];
-    ops.extend([style(3, pad, &[(StyleId::Height, "10")]), popover(3)]);
-    ops.extend([children(1, &[2]), children(2, &[3])]);
+    // Its capture of the reading is invalid too, so 4's fallback applies
+    let rows = [
+        (StyleId::Height, "10"),
+        (
+            StyleId::SafeAreaProperties,
+            "--kb: var(--exact-keyboard-inset-bottom)",
+        ),
+    ];
+    ops.extend([style(3, pad, &rows), popover(3)]);
+    ops.extend(create(4..=4));
+    ops.push(style(
+        4,
+        vec![],
+        &[(StyleId::PaddingLeft, "var(--kb, 7px)")],
+    ));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
     let mut k = owner(390.0, 844.0, ops);
     let block = block(BlockAxis::Is(200.0), BlockAxis::Is(100.0));
     k.set_host_block(3, Some(block)).unwrap();
@@ -720,6 +734,7 @@ fn a_popover_its_host_places_reads_no_keyboard() {
     assert!(k.is_top_layer(3));
     assert_eq!(reading(&k, 3, calc::Family::Keyboard), [None; 4]);
     assert_eq!(padding(&k, 3)[0], 7.0, "the fallback");
+    assert_eq!(padding(&k, 4)[3], 7.0, "the capture's reader's fallback");
 }
 
 #[test]
@@ -761,4 +776,108 @@ fn a_keyboard_leaf_crosses_the_wire_where_the_parser_reads_it() {
     let text = decoded(leaf(Target::Box)).unwrap();
     assert_eq!(text, "var(--exact-keyboard-inset-bottom, 3px)");
     assert!(decoded(leaf(Target::Chain(2))).is_err());
+}
+
+#[test]
+fn a_capture_holds_its_declaring_boxs_reading() {
+    // 3 fills the content root and declares `--kb` as its own docked
+    // reading; its child 4 pads by it, with a fallback that never applies:
+    // the keyboard's top at 516 lies 294 points above 3's bottom at 810,
+    // and dismissed 3 reads 0 (LLP 1123 D5). 5 declares `--pad` from it and
+    // its child 6 pads by that, through the two declarations; 7 declares
+    // `--kb` itself, which its own padding reads, nearer than 3's
+    let mut ops = create(3..=7);
+    let column = [(StyleId::SafeAreaIgnore, "none"), (StyleId::Height, "100%")];
+    ops.push(style(2, vec![], &column));
+    let declares = [
+        (StyleId::Height, "100%"),
+        (
+            StyleId::SafeAreaProperties,
+            "--kb: var(--exact-keyboard-inset-bottom)",
+        ),
+    ];
+    ops.push(style(3, vec![], &declares));
+    ops.push(style(
+        4,
+        vec![],
+        &[(StyleId::PaddingLeft, "var(--kb, 7px)")],
+    ));
+    ops.push(style(
+        5,
+        vec![],
+        &[(StyleId::SafeAreaProperties, "--pad: calc(var(--kb) + 8px)")],
+    ));
+    ops.push(style(6, vec![], &[(StyleId::PaddingLeft, "var(--pad)")]));
+    let nearer = [
+        (StyleId::SafeAreaProperties, "--kb: 5px"),
+        (StyleId::PaddingLeft, "var(--kb)"),
+    ];
+    ops.push(style(7, vec![], &nearer));
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[3]),
+        children(3, &[4, 5, 7]),
+        children(5, &[6]),
+    ]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_band(2, Some([0.0, 0.0, 34.0, 0.0]), &[])
+        .unwrap();
+    k.set_keyboard_policy(Some(KeyboardPolicy::OverlaysContent));
+    lay_out(&mut k);
+    let left = |k: &Kernel| [4, 6, 7].map(|id| padding(k, id)[3]);
+    assert_eq!(left(&k), [0.0, 8.0, 5.0]);
+    assert!(k.set_owner_keyboard(2, docked(UP)).unwrap());
+    lay_out(&mut k);
+    assert_eq!(left(&k), [810.0 - UP, 810.0 - UP + 8.0, 5.0]);
+    assert!(k.set_owner_keyboard(2, None).unwrap());
+    lay_out(&mut k);
+    assert_eq!(left(&k), [0.0, 8.0, 5.0]);
+}
+
+#[test]
+fn a_capture_a_content_region_withholds_is_invalid() {
+    // The content region's owner 2 holds the content 3, where 7 declares
+    // `--kb` as its own reading and its child 10 pads by it with a 5-point
+    // fallback: the region withholds 7's observations, so its capture is
+    // invalid and 10 takes the fallback (LLP 1123 D5)
+    let mut k = Kernel::with_monospace();
+    let mut ops = create([1, 2, 3, 7, 10]);
+    for id in [4, 5] {
+        ops.push(Op::CreateView {
+            id,
+            node_type: NodeType::Text,
+        });
+        ops.push(Op::SetProp {
+            id,
+            prop: crate::PropId::Text,
+            value: "word".into(),
+        });
+    }
+    ops.push(style(1, vec![], &[(StyleId::Height, "300")]));
+    ops.push(style(2, vec![], &REGION));
+    ops.push(style(5, vec![], &[(StyleId::PositionType, "absolute")]));
+    let declares = [
+        (StyleId::Height, "10"),
+        (
+            StyleId::SafeAreaProperties,
+            "--kb: var(--exact-keyboard-inset-bottom)",
+        ),
+    ];
+    ops.push(style(7, vec![], &declares));
+    ops.push(style(
+        10,
+        vec![],
+        &[(StyleId::PaddingLeft, "var(--kb, 5px)")],
+    ));
+    ops.extend([
+        children(7, &[10]),
+        children(3, &[4, 7]),
+        children(2, &[3, 5]),
+        children(1, &[2]),
+    ]);
+    ops.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &ops).unwrap();
+    lay_out_region(&mut k, Default::default());
+    let reader = &k.arena.style(slot(&k, 10)).padding_left;
+    assert_eq!(reader.at_basis(&k.env_of(10), 0.0), 5.0);
 }

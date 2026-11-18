@@ -13,8 +13,9 @@
 //! reader of it shares, since a value is resolved where it is declared and
 //! not where it is read (D5). They are all dropped at any change a value
 //! can depend on: a declaration or an inset override, a move while any node
-//! declares, an owner's insets while a capture reads them, and the
-//! document's environment. A slot a declaring node leaves keeps its values
+//! declares, an owner's insets while a capture reads them, a capture's
+//! observation when the solve moves it or a content region withholds it,
+//! and the document's environment. A slot a declaring node leaves keeps its values
 //! until the next node there declares, which drops them.
 
 use super::owner::{self, OVERRIDES};
@@ -51,6 +52,10 @@ pub(crate) struct Readers {
     declaring: SlotSet,
     /// Nodes that declare one whose value reads a local inset: captures.
     captures: SlotSet,
+    /// Nodes that declare one whose value reads the node's own observation,
+    /// today a keyboard reading (LLP 1123 D5): captures that the readers'
+    /// solve measures, as it measures a length that reads one.
+    observing: SlotSet,
     /// Nodes that override a local inset.
     overriding: SlotSet,
     /// Each declaration's value, by its node and name, as
@@ -86,6 +91,10 @@ impl Readers {
         }
         let own = owner::declarations(style);
         let captures = own.iter().any(|(_, value)| reads_local(value));
+        let capture_components = own
+            .iter()
+            .fold(0, |c, (_, value)| c | observed_components(value));
+        observes |= capture_components;
         put(&mut self.local, slot, local);
         put(&mut self.properties, slot, properties);
         put(&mut self.observers, slot, observes != 0);
@@ -99,6 +108,7 @@ impl Readers {
         };
         put(&mut self.declaring, slot, own.iter().next().is_some());
         put(&mut self.captures, slot, captures);
+        put(&mut self.observing, slot, capture_components != 0);
         let overrides = OVERRIDES.iter().any(|&id| style.mask.has(id));
         put(&mut self.overriding, slot, overrides);
     }
@@ -110,6 +120,7 @@ impl Readers {
             &mut self.observers,
             &mut self.declaring,
             &mut self.captures,
+            &mut self.observing,
             &mut self.overriding,
         ] {
             set.remove(slot);
@@ -146,6 +157,37 @@ impl Readers {
         }
     }
 
+    /// The nodes to derive again after the solve, or a content region, gave
+    /// the readers `moved` new inputs: below each of `moved` that captures an
+    /// observation, each node whose lengths take a value that depends on a
+    /// declaration of the capture that reads one ([`owner::Depends`]). Drops
+    /// every kept value when any of `moved` is such a capture.
+    pub(crate) fn captured(arena: &mut NodeArena, moved: &[u32]) -> Vec<u32> {
+        let readers = &arena.readers;
+        let captures: Vec<u32> = (moved.iter().copied())
+            .filter(|&s| readers.observing.contains(s))
+            .collect();
+        if captures.is_empty() {
+            return Vec::new();
+        }
+        arena.readers.invalidate();
+        let arena = &*arena;
+        let mut out = Vec::new();
+        for capture in captures {
+            let own = owner::own_declarations(arena, capture);
+            let changed: Vec<owner::Key> = (own.iter())
+                .filter(|(_, value)| observed_components(value) != 0)
+                .map(|(name, _)| (capture, name.into()))
+                .collect();
+            let mut depends = owner::Depends::new(arena, changed, true);
+            let readers = below(arena, capture, &arena.readers.properties);
+            out.extend(readers.into_iter().filter(|&s| depends.reader(s)));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// Drop every kept value.
     pub(crate) fn invalidate(&mut self) {
         self.values.get_mut().clear();
@@ -166,6 +208,15 @@ fn put(set: &mut SlotSet, slot: u32, member: bool) {
         true => set.insert(slot),
         false => set.remove(slot),
     };
+}
+
+/// The components of its node's own observations a declared value reads
+/// (LLP 1123 D5): a capture of them.
+fn observed_components(value: &Dimension) -> u16 {
+    match value {
+        Dimension::Compare(c) => c.observed_components(),
+        _ => 0,
+    }
 }
 
 /// Whether a declared value reads a local inset.
@@ -259,7 +310,7 @@ impl InsetReaders {
             }
         }
         if !moved.is_empty() {
-            let mut depends = owner::Depends::new(arena, moved);
+            let mut depends = owner::Depends::new(arena, moved, false);
             let readers = below(arena, self.top, &arena.readers.properties);
             out.extend(readers.into_iter().filter(|&s| depends.reader(s)));
         }
