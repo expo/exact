@@ -155,7 +155,22 @@ fn scalar_viewport_lengths_resolve_on_resize_and_keep_inherited_fonts() {
 #[test]
 fn scalar_viewport_units_round_trip_and_follow_the_window_outside_a_smaller_sheet() {
     use exact_kernel::{wire, Env, ViewportUnit};
-    for unit in ViewportUnit::ALL {
+    // A container unit is a box's length, not yet a scalar row's, which
+    // refuses each of them (LLP 1123 D16)
+    for unit in ViewportUnit::ALL.into_iter().filter(|u| u.is_container()) {
+        let text = format!("2{}", unit.name());
+        let mut style = exact_kernel::StyleProps::default();
+        assert!(
+            style
+                .set_dynamic(
+                    StyleId::FontSize,
+                    &exact_kernel::StyleValue::Text(text.as_str().into())
+                )
+                .is_err(),
+            "{text}"
+        );
+    }
+    for unit in ViewportUnit::ALL.into_iter().filter(|u| !u.is_container()) {
         let text = format!("2{}", unit.name());
         let rows = [
             StyleId::FontSize,

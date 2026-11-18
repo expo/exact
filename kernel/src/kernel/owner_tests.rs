@@ -248,6 +248,22 @@ fn a_box_moved_or_mounted_into_an_owner_reads_its_insets() {
     assert_eq!(k.node(7).unwrap().frame.height, 83.0);
 }
 
+/// An inset override resolves where the subtree's insets are made, which
+/// knows no box's query containers, so it refuses a container unit alone or
+/// in a math function (D16), and keeps a viewport unit.
+#[test]
+fn an_override_refuses_a_container_unit() {
+    for text in ["10cqw", "calc(10px + 2cqmin)"] {
+        let mut patch = StyleProps::default();
+        let refused = patch.set_dynamic(OVERRIDES[0], &StyleValue::Text(text.into()));
+        assert!(refused.is_err(), "{text}");
+    }
+    let mut patch = StyleProps::default();
+    assert!(patch
+        .set_dynamic(OVERRIDES[0], &StyleValue::Text("10vw".into()))
+        .is_ok());
+}
+
 /// D9: overrides on one node that read one another resolve in dependency
 /// order, a chain through two edges included; a cycle across edges is
 /// invalid, so its members are unset, and an override that reads a member

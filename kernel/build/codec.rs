@@ -1,4 +1,4 @@
-const CODEC_PATHS: [&str; 11] = [
+const CODEC_PATHS: [&str; 12] = [
     "../vendor/taffy/src/style/grid.rs",
     "build.rs",
     "build/codec.rs",
@@ -6,6 +6,7 @@ const CODEC_PATHS: [&str; 11] = [
     "src/style/calc/parse.rs",
     "src/style/relative.rs",
     "src/style/relative/wire.rs",
+    "src/style/viewport.rs",
     "src/style/grid.rs",
     "src/style/grid/parse.rs",
     "src/wire/codec.rs",

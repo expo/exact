@@ -202,16 +202,20 @@ fn size_of(value: &Expr) -> Size {
 }
 
 fn size_of_text(text: &str) -> Size {
-    const UNITS: [&str; 13] = [
-        "px", "rem", "em", "vh", "dvh", "svh", "lvh", "vw", "dvw", "svw", "lvw", "vmin", "vmax",
-    ];
+    // A viewport or container unit's length is definite, as a pixel's is
+    let units = ["px", "rem", "em"]
+        .into_iter()
+        .chain(exact_kernel::ViewportUnit::ALL.map(|u| u.name()));
     let v = text.trim();
     let number = |s: &str| s.trim().parse::<f64>().is_ok();
     if number(v) {
         Size::Length
     } else if v.strip_suffix('%').is_some_and(number) {
         Size::Percent
-    } else if UNITS.iter().any(|u| v.strip_suffix(u).is_some_and(number)) {
+    } else if units
+        .into_iter()
+        .any(|u| v.strip_suffix(u).is_some_and(number))
+    {
         Size::Length
     } else {
         Size::Other

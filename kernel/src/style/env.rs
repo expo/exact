@@ -320,6 +320,12 @@ pub struct Env {
     /// viewport and never a dialog, so no length follows a sheet's size.
     /// `None`: the layout viewport.
     pub screen: Option<(f32, f32)>,
+    /// The width and height of one node's query containers (LLP 1123 D16):
+    /// on each axis its nearest owner's content root whose host fixes that
+    /// axis, else the small viewport's; set only in an environment made for
+    /// a node whose lengths read a container unit. `None`: the small
+    /// viewport's on both axes.
+    pub container: Option<(f32, f32)>,
     /// The layout regions' insets (LLP 1123 D10), indexed by [`Region`],
     /// each top right bottom left, from the layout viewport. `None` on a
     /// host that reports none: every region is then the safe area.
@@ -393,6 +399,7 @@ impl Env {
             control_text_styles: None,
             button_fonts: None,
             screen: None,
+            container: None,
             regions: None,
             default_padding: None,
             titlebar_area: None,

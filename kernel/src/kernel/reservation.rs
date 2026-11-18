@@ -40,9 +40,13 @@ pub(crate) fn reserved(arena: &NodeArena, slot: u32) -> Option<Reserved> {
         return None;
     }
     // A reservation row has no structural default, so the box's own style
-    // is the one it takes
+    // is the one it takes; it reads the containers outside the box, whose
+    // content root it sizes where the box is an owner's root (LLP 1123 D16)
     let style = arena.style(slot);
-    resolve(style, &crate::kernel::owner::env_for(arena, slot, style))
+    resolve(
+        style,
+        &crate::kernel::owner::env_for_reservations(arena, slot, style),
+    )
 }
 
 /// What `style` reserves with its lengths resolved against `env`, or `None`

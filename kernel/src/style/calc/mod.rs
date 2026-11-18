@@ -189,13 +189,17 @@ impl Observe {
     }
 }
 
-/// `node` with every local inset (`EnvTerm::Local`) replaced by its points
-/// under `env`, and every custom property by its value there (LLP 1123 D5);
+/// `node` with every local inset (`EnvTerm::Local`) and container unit (LLP
+/// 1123 D16) replaced by its points under `env`, and every custom property
+/// by its value there (D5);
 /// `None` where a property has neither a value nor a fallback.
 fn localize(node: &Node, env: &Env) -> Option<Node> {
     let leaves = Leaves {
         local: &|edge| env.local_inset(edge),
         observed: &|leaf| env.observation(leaf),
+        // Replace every container leaf, so `localized` leaves none it fires on: the basis
+        // is the small viewport's where `env` has no container
+        container: &|unit| Some(unit.basis(env)),
     };
     substitute(node, &leaves, &mut |name| env.property(name).cloned())
 }
@@ -506,6 +510,9 @@ pub(crate) fn length_css(d: &Dimension, out: &mut String) {
 pub(crate) struct Leaves<'a> {
     pub(crate) local: &'a dyn Fn(Edge) -> f32,
     pub(crate) observed: &'a dyn Fn(&Observe) -> Option<f32>,
+    /// A container unit's basis in points (LLP 1123 D16); `None` keeps the
+    /// leaf, where no node's containers are known.
+    pub(crate) container: &'a dyn Fn(ViewportUnit) -> Option<f32>,
 }
 
 /// `node` with each local inset and observation as `leaves` gives it and
@@ -531,6 +538,12 @@ pub(crate) fn substitute(
             Some(points) => Node::Value(f64::from(points), Unit::Px),
             None => substitute(o.fallback.as_ref()?, leaves, property)?,
         },
+        Node::Value(v, Unit::Viewport(unit)) if unit.is_container() => {
+            match (leaves.container)(*unit) {
+                Some(basis) => Node::Value(v * f64::from(basis) / 100.0, Unit::Px),
+                None => node.clone(),
+            }
+        }
         Node::Value(..) | Node::Env(..) => node.clone(),
         Node::Sum(c) => Node::Sum(all(c, property)?),
         Node::Product(c) => Node::Product(all(c, property)?),
@@ -853,6 +866,22 @@ impl Comparison {
         targets.into_inner()
     }
 
+    /// Whether it reads a container unit (LLP 1123 D16), which resolves per
+    /// node: in a tree, at a leaf; a text whose `env()` has a fallback,
+    /// wherever it may name one.
+    pub(crate) fn reads_container(&self) -> bool {
+        match &self.0.value {
+            Entry::Tree(t) => {
+                t.any(&|n| matches!(n, Node::Value(_, Unit::Viewport(u)) if u.is_container()))
+            }
+            // An escape may spell the unit (`c\71 w`), so a text with one may read it
+            Entry::Text { text, .. } => {
+                let text = text.to_ascii_lowercase();
+                text.contains("cq") || text.contains('\\')
+            }
+        }
+    }
+
     /// Whether it reads an author's custom property (LLP 1123 D5), which
     /// resolves per node: in a tree, at a leaf; a text whose `env()` has a
     /// fallback, wherever it names one.
@@ -887,18 +916,18 @@ impl Comparison {
         })
     }
 
-    /// The tree with its local insets and custom properties as `env` has
-    /// them, as the dimension that holds it, `Auto` (the row's initial
-    /// value) where a property is invalid; `None` when it reads neither. A
-    /// tree handed to layout, where only the window's environment is known,
-    /// is localized first (LLP 1123 D5).
+    /// The tree with its local insets, custom properties, observations and
+    /// container units as `env` has them, as the dimension that holds it,
+    /// `Auto` (the row's initial value) where a property is invalid; `None`
+    /// when it reads none of them. A tree handed to layout, where only the
+    /// window's environment is known, is localized first (LLP 1123 D5, D16).
     pub(crate) fn localized(&self, env: &Env) -> Option<Dimension> {
         self.tree(|t| {
             t.any(&|n| {
                 matches!(
                     n,
                     Node::Env(EnvTerm::Local(_)) | Node::Var(_) | Node::Observe(_)
-                )
+                ) || matches!(n, Node::Value(_, Unit::Viewport(u)) if u.is_container())
             })
             .then(|| {
                 let t = localize(t, env).map(simplify::simplify);

@@ -105,11 +105,14 @@ fn number(text: &str) -> Option<f64> {
     }
     let (n, unit) = t.split_at(i);
     let unit = unit.to_ascii_lowercase();
+    let viewport = exact_kernel::ViewportUnit::ALL
+        .iter()
+        .any(|u| u.name() == unit);
     let known = unit.is_empty()
         || unit == "%"
+        || viewport
         || [
-            "px", "em", "rem", "ch", "lh", "vw", "vh", "vmin", "vmax", "svh", "lvh", "dvh", "svw",
-            "lvw", "dvw", "pt", "pc", "in", "cm", "mm", "q",
+            "px", "em", "rem", "ch", "lh", "pt", "pc", "in", "cm", "mm", "q",
         ]
         .contains(&unit.as_str());
     known.then(|| n.parse().ok()).flatten()

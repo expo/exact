@@ -37,7 +37,7 @@ pub(crate) fn merged(
             errors.push(LowerError {
                 id: "lower-attr-value",
                 message: format!(
-                    "`{}=\"{literal}\"`: a custom property's value is one length: px, rem, a percentage, a viewport unit, env() without a fallback, var(), or calc(), min(), max() or clamp() of these",
+                    "`{}=\"{literal}\"`: a custom property's value is one length: px, rem, a percentage, a viewport unit, env() without a fallback, var(), or calc(), min(), max() or clamp() of these; a container unit (cqw, cqh, cqi, cqb, cqmin, cqmax) is not built in one yet",
                     a.name
                 ),
                 span,

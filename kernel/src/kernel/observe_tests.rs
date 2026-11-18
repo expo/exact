@@ -1468,6 +1468,9 @@ mod keyboard;
 #[path = "bar_tests.rs"]
 mod bar;
 
+#[path = "container_tests.rs"]
+mod container;
+
 #[path = "reservation_tests.rs"]
 mod reservation;
 

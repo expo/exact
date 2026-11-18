@@ -35,6 +35,10 @@ fn declarations_are_authors_names_and_lengths() {
         "--a: red env(safe-area-inset-top, 0px)",
         // Outside a math function a fallback stands alone
         "--a: var(--b, 10% + 2px)",
+        // A container unit resolves against a box's query containers, which a value resolved
+        // where it is declared does not know yet (LLP 1123 D16)
+        "--a: 50cqw",
+        "--a: calc(100% - 10cqmin)",
     ] {
         assert_eq!(SafeAreaProperties::parse(bad), None, "{bad:?}");
     }

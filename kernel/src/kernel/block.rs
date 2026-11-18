@@ -17,7 +17,10 @@
 //! sized as a modal `dialog` is (`apply`). Viewport units, `env()`, `rem`
 //! and a hairline's device pixel stay the window's: no block reaches the
 //! environment, the root font size or the display's scale, which are
-//! resolved into rows at a commit while a block never touches a row.
+//! resolved into rows at a commit while a block never touches a row. Only
+//! container units read the block, through the content root it sizes
+//! (`owner::container_at`, LLP 1123 D16): what is derived from them is
+//! derived again when its fixed lengths move (`clear_block`).
 //! Authored rows never change, and a host that gives no block lays out
 //! exactly as before.
 //!
@@ -131,6 +134,35 @@ fn cleared(arena: &NodeArena, held: &Held) -> [f32; 4] {
     }
 }
 
+/// `held`'s content root's width and height where its host fixes them, the
+/// block less `clear`, which its band, the keyboard, the root's reservations
+/// and its ignore size (LLP 1123 D16); neither for a box that is no owner,
+/// whose block fixes no container (D2).
+fn fixed_lengths(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [Option<f32>; 2] {
+    let given = held.given.filter(|_| is_owner(arena, held));
+    let fixed = |axis: Option<BlockAxis>, by: f32| match axis {
+        Some(BlockAxis::Is(length)) => Some((length - by).max(0.0)),
+        _ => None,
+    };
+    [
+        fixed(given.map(|b| b.width), clear[1] + clear[3]),
+        fixed(given.map(|b| b.height), clear[0] + clear[2]),
+    ]
+}
+
+/// [`fixed_lengths`] of `slot`'s block as it stands, for a length in a
+/// container unit (`owner::container_at`); a read of lengths other than those
+/// the block was last laid out with marks it, so that its next layout derives
+/// the readers again whatever the lengths are by then.
+pub(crate) fn container_lengths(arena: &NodeArena, slot: u32) -> Option<[Option<f32>; 2]> {
+    let held = arena.blocks.held(slot)?;
+    let lengths = fixed_lengths(arena, held, cleared(arena, held));
+    if lengths != held.content {
+        held.read_off.set(true);
+    }
+    Some(lengths)
+}
+
 /// Whether `slot` is a content owner's root: a box its host gave a block
 /// that is no top-layer box, which is no owner whatever block it has (D2).
 pub(crate) fn owns(arena: &NodeArena, slot: u32) -> bool {
@@ -170,6 +202,13 @@ pub(crate) struct Held {
     /// What the host cleared of it for its content root when it was last
     /// laid out (`clearance`).
     cleared: [f32; 4],
+    /// Its content root's width and height where its host fixes them, as
+    /// they were when it was last laid out: what container units below read
+    /// (`owner::container_at`, LLP 1123 D16).
+    content: [Option<f32>; 2],
+    /// Whether a length was derived since its last layout against a content
+    /// root other than `content`, which its next layout derives again.
+    read_off: std::cell::Cell<bool>,
 }
 
 impl Blocks {
@@ -278,6 +317,8 @@ impl Blocks {
                 implied,
                 buried: false,
                 cleared: [0.0; 4],
+                content: [None; 2],
+                read_off: Default::default(),
             }),
             (None, None) => {}
         }
@@ -518,6 +559,14 @@ impl Kernel {
             .is_some_and(|s| crate::style::top_layer::is_box(&self.arena, s))
     }
 
+    /// Derive again the lengths in container units below `slot`, a block's
+    /// root whose content root, which they read, may have resized, or whose
+    /// box joined or left the top layer, where it is no owner (LLP 1123 D16).
+    fn resize_content_root(&mut self, slot: u32) {
+        let sized = super::readers::container_readers(&self.arena, slot);
+        self.restyle_readers(&sized);
+    }
+
     /// `slot`'s block root styled again, as its block or what is above it
     /// now says.
     fn restyle_block(&mut self, slot: u32) {
@@ -539,6 +588,11 @@ impl Kernel {
             return;
         }
         self.restyle_block(slot);
+        // A block taken back is laid out no more, so its readers are derived here, and
+        // a given one's when it is laid out (`clear_block`)
+        if block.is_none() {
+            self.resize_content_root(slot);
+        }
         if before.is_some() == block.is_some() {
             return;
         }
@@ -727,11 +781,19 @@ impl Kernel {
     /// restyles the block, and one that moved the content root's corner
     /// publishes it whole.
     fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
+        let content = fixed_lengths(&self.arena, &self.arena.blocks.0[i], clear);
         let held = &mut self.arena.blocks.0[i];
         let (slot, inner) = (held.slot, held.block.less(clear));
         let was = std::mem::replace(&mut held.cleared, clear);
+        // Derive the container readers again where the content root's fixed lengths
+        // moved, or where one was derived against others since the last layout
+        let moved = std::mem::replace(&mut held.content, content) != content;
+        let resized = held.read_off.replace(false) || moved;
         if was != clear {
             self.restyle_block(slot);
+        }
+        if resized {
+            self.resize_content_root(slot);
         }
         if (was[0], was[3]) != (clear[0], clear[3]) {
             self.arena.flags_mut(slot).insert(NodeFlags::ATTACHED);

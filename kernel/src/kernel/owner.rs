@@ -43,24 +43,51 @@ pub(crate) const OVERRIDES: [StyleId; 4] = [
 ];
 
 /// Whether a style's lengths read what only the node's own environment
-/// has: a local inset or an author's custom property (LLP 1123 D5, D9).
+/// has: a local inset, an author's custom property, an observation or a
+/// container unit (LLP 1123 D5, D9, D16).
 pub(crate) fn reads_node(style: &StyleProps) -> bool {
     !node_rows(style).is_empty()
 }
 
-/// The rows of `style` whose lengths read a local inset, its own overrides
-/// aside (they read their parent's, [`local_at`]), or an author's custom
-/// property.
-fn node_rows(style: &StyleProps) -> StyleMask {
-    rows_where(style, |c| {
-        c.reads_local() || c.reads_custom() || c.reads_observed()
-    })
+/// The width and height of the query containers from `slot` outward (LLP
+/// 1123 D16): on each axis the content root of the nearest owner whose host
+/// fixes that axis, `slot` itself included, the allocation less what the host
+/// clears; else the small viewport's, which a native window has as its only
+/// viewport. An owner's authored root is laid out in its content root and
+/// reads it (D3), but for its reservations, which size the content root and
+/// read the containers outside it ([`env_for_reservations`]).
+pub(crate) fn container_at(arena: &NodeArena, slot: u32) -> (f32, f32) {
+    let env = arena.env();
+    let (mut width, mut height) = (None, None);
+    let mut at = Some(slot);
+    while let Some(s) = at.filter(|_| width.is_none() || height.is_none()) {
+        if let Some([w, h]) = super::block::container_lengths(arena, s) {
+            (width, height) = (width.or(w), height.or(h));
+        }
+        at = arena.parent(s);
+    }
+    let (w, h) = env
+        .screen
+        .unwrap_or((env.viewport_width, env.viewport_height));
+    (width.unwrap_or(w), height.unwrap_or(h))
 }
 
-fn rows_where(style: &StyleProps, reads: impl Fn(&calc::Comparison) -> bool) -> StyleMask {
+/// The rows of `style` whose lengths read a local inset, its own overrides
+/// aside (they read their parent's, [`local_at`]), an author's custom
+/// property, an observation or a container unit (LLP 1123 D16).
+fn node_rows(style: &StyleProps) -> StyleMask {
     let mut rows = StyleMask::EMPTY;
     for id in style.mask.iter().filter(|id| !OVERRIDES.contains(id)) {
-        if matches!(style.get(id), RowValue::Dimension(Dimension::Compare(c)) if reads(&c)) {
+        let RowValue::Dimension(d) = style.get(id) else {
+            continue;
+        };
+        let reads = match &d {
+            Dimension::Compare(c) => {
+                c.reads_local() || c.reads_custom() || c.reads_observed() || c.reads_container()
+            }
+            d => d.reads_container(),
+        };
+        if reads {
             rows.set(id);
         }
     }
@@ -261,14 +288,43 @@ pub(crate) fn env_for<'a>(arena: &'a NodeArena, slot: u32, style: &StyleProps) -
 }
 
 /// The environment `slot`'s lengths resolve against: the arena's, with the
-/// local insets `slot` inherits ([`local_at`]) and the custom properties its
-/// lengths read ([`properties_at`]).
+/// local insets `slot` inherits ([`local_at`]), the custom properties its
+/// lengths read ([`properties_at`]), its observations, and its query
+/// containers where it reads them ([`container_at`]).
 pub(crate) fn env_at(arena: &NodeArena, slot: u32) -> Cow<'_, Env> {
+    env_with_containers(arena, slot, Some(slot))
+}
+
+/// The environment `slot`'s reservation lengths, `style`, resolve against:
+/// [`env_for`]'s, but with the containers outside `slot`, since an owner's
+/// root's reservations size its own content root (LLP 1123 D3, D16).
+pub(crate) fn env_for_reservations<'a>(
+    arena: &'a NodeArena,
+    slot: u32,
+    style: &StyleProps,
+) -> Cow<'a, Env> {
+    match reads_node(style) {
+        true => env_with_containers(arena, slot, arena.parent(slot)),
+        false => Cow::Borrowed(arena.env()),
+    }
+}
+
+/// [`env_at`] with the containers from `from` outward, or the small
+/// viewport's where it is `None`.
+fn env_with_containers(arena: &NodeArena, slot: u32, from: Option<u32>) -> Cow<'_, Env> {
     let mut env = arena.env().clone();
     env.local = Some(local_at(arena, slot));
     env.properties = Some(properties_at(arena, slot, &arena.effective_style(slot)));
     env.observed = Some(arena.observations.input(slot));
     env.targets = arena.observations.targets.scope(arena, slot);
+    if arena.readers.container.contains(slot) {
+        env.container = Some(match from {
+            Some(from) => container_at(arena, from),
+            None => env
+                .screen
+                .unwrap_or((env.viewport_width, env.viewport_height)),
+        });
+    }
     Cow::Owned(env)
 }
 
@@ -570,6 +626,8 @@ impl<'a> Resolver<'a> {
                 let leaves = calc::Leaves {
                     local: &|edge| local[edge as usize],
                     observed: &observed,
+                    // A declaration holds no container unit (`SafeAreaProperties::value`)
+                    container: &|_| None,
                 };
                 calc::substitute(&tree, &leaves, &mut |name| {
                     let dep = self.reach(key.0, name)?;
@@ -732,7 +790,8 @@ fn resolve(
 
 /// A box moved to another parent, created ones included, may be in another
 /// owner, and below other declarations, now: what in its subtree reads a
-/// local inset or a custom property is derived again. Whether anything was.
+/// local inset, a custom property, a native target or a container unit is
+/// derived again. Whether anything was.
 pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: u32) -> bool {
     let readers = &arena.readers;
     // A host's insets or an override make insets differ from place to place
@@ -742,7 +801,9 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
     let properties = !readers.properties.is_empty() && readers.declares();
     // With no owner's or session's targets, a raw reader reads none anywhere
     let targets = !readers.targets.is_empty() && arena.observations.targets.placed_any();
-    if !local && !properties && !targets {
+    // With no owner's block, a container unit reads the small viewport anywhere
+    let container = !readers.container.is_empty() && arena.blocks.any_given();
+    if !local && !properties && !targets && !container {
         return false;
     }
     let mut receipt = crate::CommitReceipt::default();
@@ -750,7 +811,8 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
     for s in arena.subtree(slot) {
         let reads = local && arena.readers.local.contains(s)
             || properties && arena.readers.properties.contains(s)
-            || targets && arena.readers.targets.contains_key(&s);
+            || targets && arena.readers.targets.contains_key(&s)
+            || container && arena.readers.container.contains(s);
         if reads {
             rederive(arena, layout, s, false, &mut receipt);
             any = true;

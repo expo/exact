@@ -256,6 +256,13 @@ impl<D: DataSource> Forma<'_, D> {
         }
         let (root, reference) = self.font_sizes(place);
         match exact_kernel::style::relative::parse(text) {
+            // A container unit is a box's (LLP 1123 D16), so no place resolves it and the
+            // caller keeps its fallback
+            Some((exact_kernel::style::relative::Unit::Viewport(unit), _))
+                if unit.is_container() =>
+            {
+                None
+            }
             Some((unit, n)) => {
                 let device = self.runner.kernel().device_pixel();
                 Some(f64::from(

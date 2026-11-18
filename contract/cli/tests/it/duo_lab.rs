@@ -193,6 +193,34 @@ fn a_bar_names_one_edge_then_its_options() {
 }
 
 #[test]
+fn a_box_in_container_units_is_a_share_of_its_content_root() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/duo-lab/fixtures/container-units.contract");
+    let mut r = plan(&std::fs::read_to_string(&path).unwrap());
+    let k = r.kernel_mut();
+    let (root, route) = (id_of(k, "root"), id_of(k, "route"));
+    let report = |k: &mut Kernel, width: f32| {
+        let block = HostBlock {
+            tactic: Default::default(),
+            width: BlockAxis::Is(width),
+            height: BlockAxis::Is(SIZE.1),
+        };
+        k.set_host_block(route, Some(block)).unwrap();
+        k.set_owner_band(route, Some(BAND), &[]).unwrap();
+        // The screen keeps its size, so a share of the viewport stays as it was
+        k.compute_layout(root, Offer::definite(SIZE.0, SIZE.1))
+            .unwrap();
+        let f = k.node(id_of(k, "half")).unwrap().frame;
+        (f.width, (f.height * 100.0).round() / 100.0)
+    };
+    // The content root is the screen less the two bands: half of its width, a tenth of its height
+    let tall = SIZE.1 - BAND[0] - BAND[2];
+    assert_eq!(report(k, SIZE.0), (SIZE.0 / 2.0, tall / 10.0));
+    // A block of another width resizes it, as a viewport unit would not
+    assert_eq!(report(k, 300.0).0, 150.0);
+}
+
+#[test]
 fn the_safe_area_attributes_lower_to_their_rows() {
     let source = "component A\n  view\n    column\n      column testId=\"a\" -exact-safe-area-ignore=\"keyboard bottom align top\" -exact-additional-safe-area=\"0 0 20 0\" -exact-safe-area-padding=\"auto 0\"\n      column testId=\"b\" -exact-safe-area-ignore=\"align center\"\n";
     let mut r = plan(source);

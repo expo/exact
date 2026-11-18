@@ -556,7 +556,7 @@ impl StyleValue<'_> {
                 .or_else(|| absolute_length(t.trim_matches(['\t', '\n', '\u{c}', '\r', ' '])))
                 .ok_or(StyleValueError::WrongKind {
                     style,
-                    expected: "number, px, rem or em length, viewport length (vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh), percent, auto, env(safe-area-inset-*), env(viewport-segment-* x y), a calc() of these (+ and - between lengths, * and / by a number), or min()/max()/clamp() of these",
+                    expected: "number, px, rem or em length, viewport length (vw/vh/vmin/vmax/svw/svh/lvw/lvh/dvw/dvh), container length (cqw/cqh/cqi/cqb/cqmin/cqmax), percent, auto, env(safe-area-inset-*), env(viewport-segment-* x y), a calc() of these (+ and - between lengths, * and / by a number), or min()/max()/clamp() of these",
                 }),
             _ => Err(StyleValueError::WrongKind {
                 style,
@@ -569,6 +569,14 @@ impl StyleValue<'_> {
             return Err(StyleValueError::WrongKind {
                 style,
                 expected: "a length or auto: CSS takes no percentage here, nor one inside calc(), min(), max() or clamp()",
+            });
+        }
+        // An inset override resolves where the subtree's insets are made, which
+        // knows no box's query containers (LLP 1123 D16)
+        if value.reads_container() && crate::kernel::owner::OVERRIDES.contains(&style) {
+            return Err(StyleValueError::WrongKind {
+                style,
+                expected: "a length here: a container unit (cqw, cqh, cqi, cqb, cqmin, cqmax) is not built in an inset override; write a viewport unit, px, rem or env()",
             });
         }
         // CSS clamps a math function to the row's range (CSS Values 4 §9.1)

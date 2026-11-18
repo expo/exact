@@ -1,0 +1,16 @@
+// Duo Lab's container units (LLP 1123 D16): on a route, `cqw` and `cqh` are
+// hundredths of its content root, the screen less what the host clears there,
+// on each axis the host fixes. The box below is half the content root wide and
+// a tenth of it tall, whatever the screen or its bars. It joins Duo Lab's
+// stack when hosts report their bands (LLP 1123 stage 5); until then
+// `contract/cli/tests/it/duo_lab.rs` lays it out with what a host would report.
+routes nav
+  home "/"
+
+component ContainerUnits
+  view
+    main testId="root" navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column" align-items="center" justify-content="center"
+          column testId="half" width="50cqw" height="10cqh" background-color="-exact-secondary-fill" justify-content="center" align-items="center"
+            text "Half wide, a tenth tall"

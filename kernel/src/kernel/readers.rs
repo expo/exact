@@ -1,13 +1,13 @@
 //! The reader index (@ref LLP 1123 D9 "Cost", D5 "Captures"): which nodes
 //! read what only their own environment has, so a change of an owner's
-//! insets, an inset override or a declaration derives again the boxes whose
-//! inputs it moves, found from these sets rather than from a walk of every
-//! node it might reach.
+//! insets, an inset override, a declaration or a content root derives again
+//! the boxes whose inputs it moves, found from these sets rather than from a
+//! walk of every node it might reach.
 //!
 //! The sets follow each node's own style. A platform default never reads a
-//! local inset or a custom property (`arena/defaults.rs` builds each from
-//! the schema's metrics), so a node's effective style reads one exactly
-//! where its own does.
+//! local inset, a custom property or a container unit (`arena/defaults.rs`
+//! builds each from the schema's metrics), so a node's effective style reads
+//! one exactly where its own does.
 //!
 //! The index also keeps each declaration's substituted value, which every
 //! reader of it shares, since a value is resolved where it is declared and
@@ -48,6 +48,9 @@ pub(crate) struct Readers {
     /// the targets each reads, each with the edges it reads as bits (LLP
     /// 1123 D9, "The native chain").
     pub(crate) targets: crate::id::IdMap<u32, Vec<(Target, u8)>>,
+    /// Nodes with a length that reads a container unit (LLP 1123 D16), which
+    /// a content root they read moves (`block::clear_block`).
+    pub(crate) container: SlotSet,
     /// Nodes that declare a custom property.
     declaring: SlotSet,
     /// Nodes that declare one whose value reads a local inset: captures.
@@ -74,7 +77,7 @@ impl Readers {
         if differs(StyleId::SafeAreaProperties) || OVERRIDES.into_iter().any(differs) {
             self.invalidate();
         }
-        let (mut local, mut properties, mut observes) = (false, false, 0);
+        let (mut local, mut properties, mut container, mut observes) = (false, false, false, 0);
         let mut targets = Vec::new();
         for id in style.mask.iter() {
             // Skip the inset overrides: `local_at` resolves them for the subtree,
@@ -82,7 +85,11 @@ impl Readers {
             if id.codec() != StyleCodec::Dimension || OVERRIDES.contains(&id) {
                 continue;
             }
-            if let RowValue::Dimension(Dimension::Compare(c)) = style.get(id) {
+            let RowValue::Dimension(d) = style.get(id) else {
+                continue;
+            };
+            container |= d.reads_container();
+            if let Dimension::Compare(c) = d {
                 local |= c.reads_local();
                 properties |= c.reads_custom();
                 observes |= c.observed_components();
@@ -97,6 +104,7 @@ impl Readers {
         observes |= capture_components;
         put(&mut self.local, slot, local);
         put(&mut self.properties, slot, properties);
+        put(&mut self.container, slot, container);
         put(&mut self.observers, slot, observes != 0);
         match observes {
             0 => self.observed.remove(&slot),
@@ -117,6 +125,7 @@ impl Readers {
         for set in [
             &mut self.local,
             &mut self.properties,
+            &mut self.container,
             &mut self.observers,
             &mut self.declaring,
             &mut self.captures,
@@ -365,6 +374,15 @@ fn read_where_taken(node: &Node, edges: [bool; 4], defined: &dyn Fn(&str) -> boo
         Node::Var(v) if defined(&v.name) => false,
         n if reads_edge(n, edges) => true,
         n => n.children().any(|c| read_where_taken(c, edges, defined)),
+    }
+}
+
+/// The nodes in `top`'s subtree whose lengths read a container unit, which a
+/// change to `top`'s content root moves.
+pub(crate) fn container_readers(arena: &NodeArena, top: u32) -> Vec<u32> {
+    match arena.readers.container.is_empty() {
+        true => Vec::new(),
+        false => below(arena, top, &arena.readers.container),
     }
 }
 

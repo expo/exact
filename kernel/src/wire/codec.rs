@@ -161,7 +161,8 @@ impl<'a> Reader<'a> {
     /// `env()` length at the top/right/bottom/left safe-area inset, 7 a
     /// `calc()` of a percent and points, 8–13 a viewport segment's
     /// width/height/top/left/bottom/right, 14–23 a viewport length, 24 a
-    /// calculation tree) then `f32` (the points added to an inset or a
+    /// calculation tree, 30–35 a container length, LLP 1123 D16) then `f32`
+    /// (a viewport or container length's percentage, the points added to an inset or a
     /// segment length); a `calc()` carries its percent first and a second
     /// `f32`; a segment length carries its two index bytes, `x` then `y`,
     /// after the `f32` (LLP 1078 D3); a calculation tree the other forms do
@@ -191,9 +192,10 @@ impl<'a> Reader<'a> {
                 crate::style::env::decode(kind, value, x, y)
                     .ok_or(DecodeError::UnknownDimensionKind(kind))?
             }
-            14..=23 => {
-                Dimension::Viewport(crate::style::ViewportUnit::ALL[(kind - 14) as usize], value)
-            }
+            14..=23 | 30..=35 => Dimension::Viewport(
+                crate::style::ViewportUnit::from_kind(kind).expect("a unit's kind"),
+                value,
+            ),
             // A layout region's inset (LLP 1123 D10): its region and edge follow.
             25 => {
                 let (region, edge) = (self.u8()?, self.u8()?);
@@ -538,7 +540,7 @@ impl Writer {
                 self.f32(0.0);
             }
             Dimension::Viewport(unit, v) => {
-                self.u8(14 + unit as u8);
+                self.u8(unit.kind());
                 self.f32(v);
             }
             Dimension::Points(v) => {
@@ -753,7 +755,7 @@ mod tests {
         // Recomputed when the schema changes; the digest test prints the value.
         // Apple JSON record and inline style declarations participate (LLP 1172.001 E4),
         // even when the EXWF codec bytes above stay unchanged.
-        assert_eq!(SCHEMA_DIGEST, 0x38421b5f3b2bb184);
+        assert_eq!(SCHEMA_DIGEST, 0x7956ad586e5233f);
     }
 
     #[test]
@@ -809,10 +811,11 @@ mod tests {
                 Ok(Dimension::Env(*edge, i as f32 * 1.5))
             );
         }
-        let mut r = Reader::new(&[30u8, 0, 0, 0, 0]);
+        // Past the container units' kinds, 30 to 35
+        let mut r = Reader::new(&[36u8, 0, 0, 0, 0]);
         assert_eq!(
             r.dimension(StyleId::Width, true),
-            Err(DecodeError::UnknownDimensionKind(30))
+            Err(DecodeError::UnknownDimensionKind(36))
         );
     }
 

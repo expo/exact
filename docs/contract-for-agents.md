@@ -6728,6 +6728,13 @@ border radii) accept `vw`, `vh`, `vmin`, `vmax`, and `svw/svh/lvw/lvh/dvw/dvh`.
 On native, all viewport variants follow the window; on web, CSS resolves
 small/large/dynamic viewports. Font size, line height, letter spacing, text indent,
 gaps, border widths, border spacing and shape margin accept these units too.
+Dimension rows also accept the container units `cqw`, `cqh`, `cqi`, `cqb`,
+`cqmin` and `cqmax`, alone or in a math function: a share of the nearest
+content owner's content root on each axis its host fixes, else of the small
+viewport (LLP 1123 D16). The scalar rows above, custom properties and inset
+overrides refuse them. The web writes them as CSS's, which resolve against the
+small viewport until a content root declares a container there, and leaves an
+SVG attribute in one unwritten.
 Inherited font sizes and lengths in `em` follow the resolved font on resize.
 
 Dimension rows also take `env(safe-area-inset-top|right|bottom|left)` and CSS's

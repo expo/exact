@@ -73,10 +73,13 @@ impl SafeAreaProperties {
     /// the absolute units, `rem`, a percentage, a viewport unit, `env()`
     /// without a fallback, `var()`, or a math function of these; `None`
     /// otherwise. An `env()` with a fallback is held as text a row
-    /// substitutes, so a declaration refuses it.
+    /// substitutes, so a declaration refuses it, and a container unit, which
+    /// a value resolved where it is declared does not resolve yet (LLP 1123
+    /// D5, D16).
     pub fn value(text: &str) -> Option<Dimension> {
         match length(text)? {
             Dimension::Compare(c) if !c.is_tree() => None,
+            d if d.reads_container() => None,
             d => Some(d),
         }
     }

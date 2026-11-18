@@ -403,6 +403,14 @@ pub(crate) fn of(id: StyleId, value: &StyleValue) -> Result<Option<(Unit, f32)>,
             },
         });
     }
+    // A row's relative length resolves against the document's environment,
+    // where no box's containers are known (LLP 1123 D16)
+    if matches!(unit, Unit::Viewport(u) if u.is_container()) {
+        return Err(StyleValueError::WrongKind {
+            style: id,
+            expected: "a length here: a container unit (cqw, cqh, cqi, cqb, cqmin, cqmax) is not built on this row; write a viewport unit, px, rem or em",
+        });
+    }
     if n < 0.0 && nonnegative_row(id) {
         return Err(StyleValueError::WrongKind {
             style: id,
@@ -490,7 +498,8 @@ pub(crate) fn prepare(id: StyleId, value: &StyleValue) -> Result<PreparedLength,
         _ => None,
     };
     match last {
-        Some(b'm' | b'M' | b'w' | b'W' | b'n' | b'N') => {
+        // `i` and `b` end `cqi` and `cqb`, which `of` refuses on these rows
+        Some(b'm' | b'M' | b'w' | b'W' | b'n' | b'N' | b'i' | b'I' | b'b' | b'B') => {
             let relative = of(id, value)?;
             Ok((relative, relative.map(|r| provisional(id, r))))
         }
@@ -743,11 +752,21 @@ mod tests {
             for id in [StyleId::FontSize, StyleId::RowGap, StyleId::BorderWidthTop] {
                 assert!(of(id, &StyleValue::Text(format!("-1{}", unit.name()).into())).is_err());
             }
-            assert!(of(
+            // A row that takes no length says so before it refuses a container unit
+            let opacity = of(
+                StyleId::Opacity,
+                &StyleValue::Text(format!("5{}", unit.name()).into()),
+            );
+            assert!(
+                matches!(opacity, Err(StyleValueError::WrongKind { expected, .. }) if expected.starts_with("no length")),
+                "{unit:?}"
+            );
+            // A container unit is not built on a row that takes relative lengths
+            let spacing = of(
                 StyleId::LetterSpacing,
-                &StyleValue::Text(format!("-1{}", unit.name()).into())
-            )
-            .is_ok());
+                &StyleValue::Text(format!("-1{}", unit.name()).into()),
+            );
+            assert_eq!(spacing.is_ok(), !unit.is_container(), "{unit:?}");
         }
         for text in [
             "vw",
