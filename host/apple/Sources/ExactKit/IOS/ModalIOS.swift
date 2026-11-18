@@ -286,6 +286,8 @@ final class ZoomLanding {
 final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     unowned let presenter: Presenter
     private var layers: [Presentation] = []
+    /// Each presentation's controller, bottom first.
+    var controllers: [UIViewController] { layers.map(\.controller) }
     // Native dismissal outlives logical removal and reload. Retire from the
     // top down, without letting an old completion touch a new owner.
     private var retiring: [Presentation] = []
@@ -699,6 +701,8 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         }
         layers.append(layer)
         controller.isModalInPresentation = refusesDismissal(of: route)
+        // Presented from the embedder's controller, it inherits none of the navigation owner's direction.
+        presenter.turnChrome(controller)
         controller.loadViewIfNeeded()
         // What it inherits, from its first frame: a sheet a deferred sync
         // presents (the second of two, after the first is up) waits for the next batch otherwise.

@@ -5,8 +5,9 @@
 //!
 //! The waiting sends and the stalls are in the commit's checkpoint, so a
 //! refused action queues nothing and a refused `next` puts its head back.
-//! `next_due` is not: like `then_due` it is cleared before its commit, and
-//! armed only by the scan ([`Runner::arm_next`]) after a commit concludes.
+//! A due `next` or `then` is cleared before its commit's checkpoint, so a
+//! refusal does not retry it. Reconciliation can cancel other instances'
+//! deadlines, which the checkpoint restores when that commit refuses.
 
 use super::modules::{CallOrigin, Causes};
 use super::*;
@@ -21,6 +22,7 @@ pub const QUEUE_BOUND: usize = 64;
 
 /// A send that waits: the source it names and its send-time arguments.
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct Waiting {
     source: String,
     args: Vec<Value>,
@@ -38,6 +40,7 @@ pub(super) struct Waiting {
 /// a resource or a derive value from it clears the stall (D3); one that
 /// changes none of them leaves the send waiting, so a permanently failing
 /// ask is not retried every frame.
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct Basis {
     slots: Vec<Value>,
     derives: Vec<Option<Value>>,
@@ -65,10 +68,12 @@ pub(super) struct Queues {
 }
 
 /// What a commit's checkpoint keeps of the queues.
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct Saved {
     waiting: Vec<VecDeque<Waiting>>,
     stalled: Vec<Option<Rc<Basis>>>,
     concluded: Vec<u64>,
+    next_due: Vec<f64>,
 }
 
 /// How a `next` commit was refused: by its own ask (the source erred, or
@@ -96,6 +101,7 @@ impl Queues {
             waiting: self.waiting.clone(),
             stalled: self.stalled.clone(),
             concluded: self.concluded.clone(),
+            next_due: self.next_due.clone(),
         }
     }
 
@@ -103,6 +109,7 @@ impl Queues {
         self.waiting = s.waiting;
         self.stalled = s.stalled;
         self.concluded = s.concluded;
+        self.next_due = s.next_due;
     }
 
     /// Room for `n` mutation rows (LLP 1035.005.004 D6: a child's sends
@@ -458,6 +465,30 @@ pub(super) enum Asked {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// What answers one send, by what owns `source`. A send asked at once
+    /// and one kept until the data source was ready (`send_one`) both come
+    /// here, so a kept send reaches the same owner.
+    pub(super) fn route_send(
+        &mut self,
+        target: Target,
+        source: &str,
+        args: &[Value],
+    ) -> Result<super::Answer, DataError> {
+        if Self::activity_send(source) {
+            self.activity_request(source, args)
+        } else if self.plan.module_named(source).is_some() {
+            // A native module's send (LLP 1133.002 D13): the runner's substitute.
+            self.module_send(target, source, args)
+        } else if self.plan.fetch_named(source).is_some() {
+            // A source declared in Contract (LLP 1162.001 D6).
+            self.fetch_answer(source, args)
+        } else {
+            let answer = self.answer_mutation(target, source, args);
+            let answer = self.single_answer(target, answer);
+            self.refuse_locked(answer)
+        }
+    }
+
     /// Ask the source for one send (`target`, a mutation's or one of a
     /// parallel mutation's sends; LLP 1016 §4): an answer now must conform
     /// to the mutation's shape.
@@ -478,19 +509,7 @@ impl<D: DataSource> Runner<D> {
         self.snapshot_sockets();
         self.store.set_clock_ms(self.now_ms);
         self.mutation_requests += 1;
-        let answer = if Self::activity_send(source) {
-            self.activity_request(source, args)
-        } else if self.plan.module_named(source).is_some() {
-            // A native module's send (LLP 1133.002 D13): the runner's substitute.
-            self.module_send(target, source, args)
-        } else if self.plan.fetch_named(source).is_some() {
-            // A source declared in Contract (LLP 1162.001 D6).
-            self.fetch_answer(source, args)
-        } else {
-            let answer = self.answer_mutation(target, source, args);
-            let answer = self.single_answer(target, answer);
-            self.refuse_locked(answer)
-        };
+        let answer = self.route_send(target, source, args);
         // What its source staged on sockets goes out only with an answer
         // now that conforms (LLP 1016.000 D7); what the turns after its
         // source sent goes whatever it answers (the amendment of 2026-10-18).

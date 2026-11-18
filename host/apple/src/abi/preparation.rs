@@ -40,6 +40,9 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         Carried,
     };
     let Carried {
+        generation,
+        epoch,
+        fresh_state,
         router,
         data_revision,
         picked_count,
@@ -60,7 +63,10 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         modes,
         uploads,
     } = a;
-    router == &b.router
+    generation == &b.generation
+        && epoch == &b.epoch
+        && fresh_state == &b.fresh_state
+        && router == &b.router
         && data_revision == &b.data_revision
         && picked_count == &b.picked_count
         && keeps_answers == &b.keeps_answers

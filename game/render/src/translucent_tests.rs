@@ -92,7 +92,7 @@ fn frame() -> Frame {
 }
 fn surface(args: &[Value]) -> WorldSurface<Halos> {
     let mut s = WorldSurface::default();
-    s.device_ready(wgpu::Features::empty());
+    s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     s.bind(args, None).unwrap();
     s
 }

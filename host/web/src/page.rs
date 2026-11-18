@@ -563,6 +563,7 @@ impl<D: DataSource> crate::Host<D> {
             data,
             page,
             page_digest,
+            None,
             snapshot,
             compat,
             viewport,
@@ -579,6 +580,7 @@ impl<D: DataSource> crate::Host<D> {
         data: D,
         page: &str,
         page_digest: &str,
+        sequence: Option<&exact_runner::Carried>,
         snapshot: Vec<(String, Vec<u8>)>,
         compat: Option<&str>,
         viewport: exact_runner::Viewport,
@@ -600,7 +602,7 @@ impl<D: DataSource> crate::Host<D> {
             Ok(checkpoint) => checkpoint,
             Err(error) => {
                 let (mut host, batch) = crate::Host::boot_linked(
-                    links, plan_bytes, data, None, snapshot, compat, viewport, launch,
+                    links, plan_bytes, data, sequence, snapshot, compat, viewport, launch,
                 )?;
                 host.log(&format!("document: the checkpoint doesn't read ({error})"));
                 return Ok((host, batch));
@@ -625,7 +627,7 @@ impl<D: DataSource> crate::Host<D> {
         // fallback to `/`) isn't this location's document: render fresh.
         let Some(launch) = page_launch(launch, &checkpoint.location) else {
             let (mut host, batch) = crate::Host::boot_linked(
-                links, plan_bytes, data, None, snapshot, compat, viewport, launch,
+                links, plan_bytes, data, sequence, snapshot, compat, viewport, launch,
             )?;
             host.log(&format!(
                 "document: rendered at {}, not {launch}; rendering fresh",
@@ -646,6 +648,7 @@ impl<D: DataSource> crate::Host<D> {
                 data,
                 crate::host::browser_kernel(),
                 &checkpoint,
+                sequence,
                 snapshot,
                 delivery,
                 viewport,

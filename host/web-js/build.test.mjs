@@ -642,7 +642,7 @@ test('web-build --out refuses a directory it would destroy', () => {
 
 // A canvas whose surface no GPU module registers is a Canvas 2D surface, which a data source draws; with none that can,
 // the build refuses, naming the surface, rather than ship a canvas that stays blank.
-test('the web build refuses, by name, a canvas surface that nothing draws and a declared GPU module it cannot run', () => {
+test('the web build refuses undrawn surfaces and routes primary and declared GPU surfaces', () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const dir = pinned(realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-undrawn-'))));
   try {
@@ -654,9 +654,7 @@ test('the web build refuses, by name, a canvas surface that nothing draws and a 
     writeFileSync(resolve(dir, 'app.ts'), "export const appId = 'test.exact.spark';\nexport const grants = '';\n");
     r = build();
     expect([r.status, r.stderr.includes('spark: nothing draws the canvas surface spark: the app has no GPU module, and app.ts exports no `draw`')], r.stderr).toEqual([1, true]);
-    // An app with a declared GPU module (`gpu.modules`), over a fresh GPU cache whose stand-in primary registers `repel`:
-    // a page whose canvases are all the primary's builds; one that names the declared module's surface is refused,
-    // since only the wasm target routes a surface to a declared module.
+    // The cached stand-ins register the primary and the declared module without a GPU toolchain build.
     const cache = resolve(dir, 'target/web-js-gpu/spark'), deps = resolve(dir, 'target/wasm32-unknown-unknown/web');
     for (const d of [resolve(dir, 'gpu/src'), resolve(cache, 'gpu'), deps]) mkdirSync(d, { recursive: true });
     writeFileSync(resolve(dir, 'gpu/src/lib.rs'), '');
@@ -670,7 +668,11 @@ test('the web build refuses, by name, a canvas surface that nothing draws and a 
     expect(locked.status, locked.stderr).toBe(0);
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Spark', app: { id: 'test.exact.spark', name: 'Spark' }, rust: false, gpu: { modules: { world: ['spark'] } } }));
     const glue = "export function initSync() {}\nexport function gpu_surfaces() { return '[\"repel\"]'; }\n";
-    for (const stem of ['gpu', 'gpu/world']) { writeFileSync(resolve(cache, `${stem}.js`), glue); writeFileSync(resolve(cache, `${stem}_bg.wasm`), ''); }
+    for (const stem of ['gpu', 'gpu/world']) {
+      writeFileSync(resolve(cache, `${stem}.js`), stem === 'gpu' ? glue : glue.replace('repel', 'spark'));
+      writeFileSync(resolve(cache, `${stem}_bg.wasm`), '');
+    }
+    writeFileSync(resolve(cache, '.modules.json'), JSON.stringify([['gpu', 'spark-gpu'], ['gpu/world', 'spark-gpu-world']]));
     for (const crate of ['spark_gpu', 'spark_gpu_world']) writeFileSync(resolve(deps, `${crate}.d`), `${crate}: ${resolve(dir, 'app.json')}\n`);
     utimesSync(resolve(dir, 'app.json'), 0, 0);
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    canvas surface=repel(1) width=10 height=10\n');
@@ -680,7 +682,9 @@ test('the web build refuses, by name, a canvas surface that nothing draws and a 
     expect([r.status, /gs\(e\d+,"repel"/.test(readFileSync(resolve(dir, 'dist/.gen/app.js'), 'utf8'))], r.stderr).toEqual([0, true]);
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    column\n      canvas surface=repel(1) width=10 height=10\n      canvas surface=spark(1) width=10 height=10\n');
     r = build();
-    expect([r.status, r.stderr.includes("spark: the web's JS target does not run a declared GPU module's surfaces yet, only the gpu crate's, and a canvas names spark (gpu.modules.world)")], r.stderr).toEqual([1, true]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(resolve(dir, 'dist/.gen/app.js'), 'utf8')).toMatch(/gs\(e\d+,"spark"/);
+    expect(readFileSync(resolve(dir, 'dist/.gen/main.js'), 'utf8')).toContain('gpuModules: {"world":["spark"]}');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

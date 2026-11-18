@@ -65,6 +65,33 @@ fn plan_covers_viewport_reads_only_the_first_roots_literal_without_booting() {
 }
 
 #[test]
+fn boots_and_replacements_share_the_session_generation() {
+    let mut bridge = Bridge::new();
+    let bytes = plan(None);
+    let mut epoch = 0;
+    for generation in 1..=4 {
+        let count = if generation == 2 || generation == 3 {
+            bridge.input_write(&bytes);
+            bridge.boot_plan(
+                bytes.len(),
+                StorageModule::default(),
+                Hooks::none(),
+                400.,
+                400.,
+            )
+        } else {
+            bridge.boot(&bytes, StorageModule::default(), Hooks::none(), 400., 400.)
+        };
+        let batch = String::from_utf8_lossy(bridge.output_bytes(count as usize));
+        assert!(!batch.contains("\"error\":\""), "{batch}");
+        let runner = bridge.host.as_ref().unwrap().runner();
+        assert_eq!(runner.generation(), generation);
+        assert!(runner.kernel().epoch() > epoch);
+        epoch = runner.kernel().epoch();
+    }
+}
+
+#[test]
 fn the_first_preboot_launch_location_is_the_boot_fact() {
     let mut bridge = Bridge::<StorageModule>::new();
     bridge.input_write(b"/first");

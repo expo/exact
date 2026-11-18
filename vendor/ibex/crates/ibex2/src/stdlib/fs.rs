@@ -492,152 +492,19 @@ pub enum FsResult {
     Stat(Stat),
 }
 
-/// The host's directories behind `home:/` and `bundle:/` (Exact patch 24:
-/// exact2 LLP 1133.007 D6): the person's home directory and the app's
-/// installed bundle, read only. A host that has neither leaves them unset,
-/// and those paths refuse as unsupported.
-#[derive(Debug, Clone, Default)]
-pub struct Roots {
-    pub home: Option<PathBuf>,
-    pub bundle: Option<PathBuf>,
-}
-
-static ROOTS: std::sync::RwLock<Roots> = std::sync::RwLock::new(Roots {
-    home: None,
-    bundle: None,
-});
-
-/// Name the host's `home:/` and `bundle:/` directories, once a process.
-pub fn set_roots(roots: Roots) {
-    *ROOTS.write().unwrap_or_else(|e| e.into_inner()) = roots;
-}
-
-/// A namespace's name, its root as the host named it, and a path's
-/// components below that root.
+#[path = "fs_roots.rs"]
+mod roots;
+#[cfg(windows)]
+pub use super::fs_known_windows::WindowsAgentFolders;
+use roots::run_namespaced;
 #[cfg(unix)]
-type Namespaced = (&'static str, PathBuf, Vec<String>);
-
-/// A `home:` or `bundle:` path's root and its components below it; `None`
-/// for any other path. A `.` or `..` component is refused.
+pub use roots::KnownFolderGuard;
 #[cfg(unix)]
-fn namespaced(path: &str) -> Option<Result<Namespaced, HostError>> {
-    let (namespace, rest) = match path.strip_prefix("home:/") {
-        Some(rest) => ("home", rest),
-        None => ("bundle", path.strip_prefix("bundle:/")?),
-    };
-    let roots = ROOTS.read().unwrap_or_else(|e| e.into_inner());
-    let root = match namespace {
-        "home" => roots.home.clone(),
-        _ => roots.bundle.clone(),
-    };
-    Some((|| {
-        let root = root.ok_or_else(|| {
-            HostError::Failed(format!("unsupported: no {namespace}: directory here"))
-        })?;
-        let parts: Vec<String> = (rest.split('/').filter(|part| !part.is_empty()))
-            .map(str::to_owned)
-            .collect();
-        if parts
-            .iter()
-            .any(|part| part == ".." || part == "." || part.contains('\0'))
-        {
-            return Err(HostError::Failed(format!(
-                "TypeError: path has a . or .. part: {path}"
-            )));
-        }
-        Ok((namespace, root, parts))
-    })())
-}
-
-/// `path` below its root's retained descriptor, each component to be opened
-/// `O_NOFOLLOW` (`app_fs::run_below`).
-#[cfg(unix)]
-fn below(path: &str) -> Result<(super::app_fs::Below, PathBuf), HostError> {
-    let (name, root, parts) = namespaced(path).ok_or_else(|| {
-        HostError::Failed(format!("unsupported: not a home: or bundle: path: {path}"))
-    })??;
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC);
-    }
-    let failed = |e: std::io::Error| HostError::Failed(format!("{path}: {e}"));
-    // The root is the host's (the account's home, the app's bundle), opened
-    // as named; nothing below it is followed.
-    let opened = options.open(&root).map_err(failed)?;
-    let native = std::fs::canonicalize(&root)
-        .map_err(failed)?
-        .join(parts.join("/"));
-    Ok((
-        super::app_fs::Below {
-            root: opened,
-            parts,
-            name,
-        },
-        native,
-    ))
-}
-
-/// A `home:` or `bundle:` operation (exact2 LLP 1133.007 D6, Exact patch 24):
-/// admitted as spelt, a `bundle:` path read only, then run below its root's
-/// retained descriptor with every component opened `O_NOFOLLOW`, as an
-/// `app:/` path is. A link anywhere below the root, one a grant's holder
-/// planted included, is refused rather than followed, so the spelt path is
-/// the one the operation reaches and admission needs no realized pass.
-fn run_namespaced(
-    grants: &GrantSet,
-    op: FsOp,
-    path: &str,
-    destination: Option<&str>,
-    data: Option<&[u8]>,
-) -> Result<FsResult, HostError> {
-    let namespace = |p: &str| p.starts_with("home:") || p.starts_with("bundle:");
-    if !namespace(path) || destination.is_some_and(|d| !namespace(d)) {
-        return Err(HostError::Failed(
-            "unsupported: a home: or bundle: path pairs only with another".into(),
-        ));
-    }
-    // A `.` or `..` part is refused before any grant is read.
-    #[cfg(unix)]
-    for p in [Some(path), destination].into_iter().flatten() {
-        if let Some(Err(e)) = namespaced(p) {
-            return Err(e);
-        }
-    }
-    let (needs_read, needs_write) = op.required();
-    // What is written: a one-path operation's path, a two-path one's
-    // destination, and a rename's source, which it removes.
-    let written = match destination {
-        Some(to) => [Some(to), (op == FsOp::Rename).then_some(path)],
-        None => [(needs_write && !needs_read).then_some(path), None],
-    };
-    if let Some(spelled) = written
-        .into_iter()
-        .flatten()
-        .find(|p| p.starts_with("bundle:"))
-    {
-        return Err(HostError::Failed(format!(
-            "denied: bundle: is read only: {spelled}"
-        )));
-    }
-    admit_as(grants, op, Path::new(path), destination.map(Path::new))?;
-    #[cfg(unix)]
-    {
-        let (source, native) = below(path)?;
-        if op == FsOp::Realpath {
-            source.open()?;
-            return Ok(FsResult::Text(native.display().to_string()));
-        }
-        let target = destination.map(below).transpose()?.map(|(b, _)| b);
-        super::app_fs::run_below(op, source, target, data.unwrap_or(&[]))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = data;
-        Err(HostError::Failed(format!("unsupported: no {path} here")))
-    }
-}
+use roots::{below, line_native};
+pub use roots::{
+    copy_io_error, is_known_folder, resolve_known_folder, set_roots, KnownFolder,
+    KnownFolderResolver, Roots,
+};
 
 /// Open `path` to read it, admitted under `fs.read` as `storage.fs` admits
 /// it: an `app:/` path through the app's directories, a `home:` or `bundle:`
@@ -649,18 +516,23 @@ pub fn open_read(
     directories: Option<&super::app_fs::AppDirectories>,
     path: &str,
 ) -> Result<std::fs::File, HostError> {
+    if is_known_folder(path) {
+        return Err(HostError::Failed(
+            "denied: well-known folders only create files".into(),
+        ));
+    }
     let regular = |file: std::fs::File| -> Result<std::fs::File, HostError> {
         match file.metadata() {
             Ok(m) if m.is_file() => Ok(file),
             _ => Err(HostError::Failed(format!("{path}: not a regular file"))),
         }
     };
-    if path.starts_with("app:") {
+    if path.starts_with("app:/") {
         let directories = directories
             .ok_or_else(|| HostError::Failed("app directories are not configured".into()))?;
         return directories.open_file(grants, path);
     }
-    if path.starts_with("home:") || path.starts_with("bundle:") {
+    if path.starts_with("home:/") || path.starts_with("bundle:/") {
         admit_as(grants, FsOp::ReadFile, Path::new(path), None)?;
         #[cfg(unix)]
         return regular(below(path)?.0.open()?);
@@ -744,7 +616,8 @@ fn native_below(
         .ok_or(denied.clone())?;
     let failed = |e: std::io::Error| HostError::Failed(format!("{}: {e}", path.display()));
     let line_path = line_native(line).ok_or(denied)?;
-    let (root, at, mut parts) = reach(&line_path, &written(grants, directories)).map_err(|e| {
+    let reached = reach(&line_path, &written(grants, directories), None);
+    let (root, at, mut parts) = reached.map_err(|e| {
         let Some(NamesAFile(file, as_spelt)) =
             e.get_ref().and_then(|e| e.downcast_ref::<NamesAFile>())
         else {
@@ -793,19 +666,6 @@ fn native_below(
     ))
 }
 
-/// A grant line's directory as a native path: a native line as spelt, a
-/// `home:` one below the host's home as named; `None` for any other.
-#[cfg(unix)]
-fn line_native(line: &PathPrefix) -> Option<PathBuf> {
-    let (namespace, parts) = line.components().split_first()?;
-    let root = match namespace.as_str() {
-        "" => PathBuf::from("/"),
-        "home:" => (ROOTS.read().unwrap_or_else(|e| e.into_inner()).home.clone())?,
-        _ => return None,
-    };
-    Some(parts.iter().fold(root, |at, part| at.join(part)))
-}
-
 /// The directories the app may write natively, by identity (device and
 /// inode): each native and `home:` `fs.write` line's, as named now, and the
 /// app's own directories. A line below another that the app replaced with a
@@ -836,10 +696,13 @@ fn written(
 /// is refused, naming it. So no grants the app held before, in this launch,
 /// an earlier one or another session, can have put a link on the way, and
 /// a line spelt through the person's own link (`~/Dropbox`) is refused.
+/// Known folders supply `replaceable` instead: they follow the person's
+/// links unless an app write grant covers the entry.
 #[cfg(unix)]
 fn reach(
     line: &Path,
     stops: &[(u64, u64)],
+    replaceable: Option<&[PathBuf]>,
 ) -> std::io::Result<(std::fs::File, PathBuf, Vec<String>)> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
@@ -907,12 +770,32 @@ fn reach(
             }
             Err(_) => return Err(error),
         };
-        if made_by_this_user(&dir, &part)? {
+        let refused = match replaceable {
+            Some(entries) => {
+                let link = at.join(&part);
+                let identity = std::fs::symlink_metadata(&link)
+                    .ok()
+                    .map(|m| (m.dev(), m.ino()));
+                entries.iter().any(|entry| {
+                    link.starts_with(entry)
+                        || identity.is_some_and(|id| {
+                            std::fs::symlink_metadata(entry).is_ok_and(|m| (m.dev(), m.ino()) == id)
+                        })
+                })
+            }
+            None => made_by_this_user(&dir, &part)?,
+        };
+        if refused {
             let link = at.join(&part);
+            let who = if replaceable.is_some() {
+                "the app can replace"
+            } else {
+                "this user could have made"
+            };
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 format!(
-                    "{} is a link this user could have made, not followed to a grant line; \
+                    "{} is a link {who}, not followed to a grant line; \
                      grant the directory it points to",
                     link.display()
                 ),
@@ -930,6 +813,30 @@ fn reach(
             todo.push_front(part);
         }
     }
+}
+
+/// Known folders follow the person's links only outside entries the app
+/// can replace. Below a writable directory the existing anchored walk applies.
+#[cfg(unix)]
+fn known_directory(path: &Path, entries: &[PathBuf]) -> std::io::Result<(std::fs::File, PathBuf)> {
+    use std::os::unix::fs::MetadataExt;
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "folder path is relative",
+        ));
+    }
+    let stops: Vec<_> = entries
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| (m.dev(), m.ino()))
+        .collect();
+    let (mut root, mut at, parts) = reach(path, &stops, Some(entries))?;
+    for part in parts {
+        root = super::app_fs::directory_at(&root, std::ffi::OsStr::new(&part))?;
+        at.push(part);
+    }
+    Ok((root, at))
 }
 
 /// The regular file a grant line's last name reached (`reach`), and whether
@@ -1034,18 +941,21 @@ pub fn run(
     destination: Option<&str>,
     data: Option<&[u8]>,
 ) -> Result<FsResult, HostError> {
-    if path.starts_with("app:") || destination.is_some_and(|p| p.starts_with("app:")) {
+    if is_known_folder(path) || destination.is_some_and(is_known_folder) {
+        return roots::run_known(grants, directories, op, path, destination, data);
+    }
+    if path.starts_with("app:/") || destination.is_some_and(|p| p.starts_with("app:/")) {
         let directories = directories
             .ok_or_else(|| HostError::Failed("app directories are not configured".into()))?;
         return directories.run(grants, op, path, destination, data);
     }
-    if path.starts_with("doc:") || destination.is_some_and(|p| p.starts_with("doc:")) {
+    if path.starts_with("doc:/") || destination.is_some_and(|p| p.starts_with("doc:/")) {
         return Err(HostError::Failed("unsupported: no document service".into()));
     }
     if op == FsOp::Unlock {
         return super::fs_more::perform(op, Path::new(path), data);
     }
-    let namespace = |p: &str| p.starts_with("home:") || p.starts_with("bundle:");
+    let namespace = |p: &str| p.starts_with("home:/") || p.starts_with("bundle:/");
     if namespace(path) || destination.is_some_and(namespace) {
         return run_namespaced(grants, op, path, destination, data);
     }
@@ -1209,9 +1119,12 @@ pub fn run_with_documents(
     destination: Option<&str>,
     data: Option<&[u8]>,
 ) -> Result<FsResult, HostError> {
-    if path.starts_with("doc:") || destination.is_some_and(|p| p.starts_with("doc:")) {
-        if let (FsOp::CopyFile, true, Some(to)) = (op, path.starts_with("doc:"), destination) {
-            if to.starts_with("app:") {
+    if is_known_folder(path) || destination.is_some_and(is_known_folder) {
+        return run(grants, directories, op, path, destination, data);
+    }
+    if path.starts_with("doc:/") || destination.is_some_and(|p| p.starts_with("doc:/")) {
+        if let (FsOp::CopyFile, true, Some(to)) = (op, path.starts_with("doc:/"), destination) {
+            if to.starts_with("app:/") {
                 return copy_document(grants, directories, documents, path, to);
             }
         }

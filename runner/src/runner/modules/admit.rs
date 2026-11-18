@@ -794,6 +794,12 @@ impl<D: DataSource> Runner<D> {
             {
                 Decision::Now(self.pin_shortcut(row, args))
             }
+            // The app's icon (LLP 1163.000 D4, `declared/app_icon.rs`).
+            Route::Substitute
+                if self.substitute(row)["appIcon"] == "set" && !self.unsupported_here(row) =>
+            {
+                self.app_icon_decide(row, args)
+            }
             // A login item's registration and a global shortcut's (LLP
             // 1133.025 §11, `declared/desktop.rs`).
             Route::Substitute if self.desktop_form(row) => {
@@ -1121,7 +1127,8 @@ impl<D: DataSource> Runner<D> {
         // `fs.read` or `fs.write` lines (LLP 1133.009 D10 item 4); each of a
         // list's (LLP 1133.024 D16); a keyed shape's path keys (`keys`),
         // each item's, an item being the option or each of its list (LLP
-        // 1133.006 D8 item 3).
+        // 1133.006 D8 item 3). One declared a `directory` names a directory,
+        // an app root itself included.
         for (option, path) in sub["paths"].as_object().into_iter().flatten() {
             let given: Vec<&str> = match (&args[option], path["keys"].as_array()) {
                 (Json::Array(items), Some(keys)) => (items.iter())
@@ -1136,9 +1143,16 @@ impl<D: DataSource> Runner<D> {
                 _ => continue,
             };
             let capability = format!("fs.{}", path["access"].as_str().unwrap_or("read"));
+            let directory = path["directory"] == true;
             if let Some(given) = given.into_iter().find(|given| {
-                !crate::save_file::plain_app_path(given)
-                    || !crate::save_file::covered(self.data.grants(), &capability, given)
+                let (plain, at) = match directory {
+                    true => (
+                        crate::save_file::plain_app_directory(given),
+                        given.strip_suffix('/').unwrap_or(given),
+                    ),
+                    false => (crate::save_file::plain_app_path(given), *given),
+                };
+                !plain || !crate::save_file::covered(self.data.grants(), &capability, at)
             }) {
                 return Err(format!(
                     "grant-missing ({option}={given} needs {capability})"

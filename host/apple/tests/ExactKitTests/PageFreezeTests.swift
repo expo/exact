@@ -306,7 +306,7 @@ final class PageFreezeIOSTests: XCTestCase {
         // Register the page observer first: notification registration order cannot grant stale eligibility.
         XCTAssertNil(session.boot(plan: try fixturePlan("PAGE_FREEZE"), size: CGSize(width: 390, height: 844)).error)
         let view = NodeView(id: 100, kind: "canvas", presenter: session.presenter)
-        let entry = CanvasesHost.Entry(view: view, name: "fixture", values: [])
+        let entry = CanvasesHost.Entry(view: view, name: "fixture", values: Data("[]".utf8))
         entry.id = 1
         session.surfaceHost.entries[100] = entry
         let lifecycle = session.surfaceHost.lifecycle

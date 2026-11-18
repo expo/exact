@@ -14,11 +14,284 @@ import { receiptChanges } from '../../scripts/agent-launch.mjs';
 import { need, notApplicable } from '../../scripts/coverage.mjs';
 import { appleArtifacts } from './build.mjs';
 import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs, recordMinimumOS } from './link.mjs';
-import { composedModule, moduleSeam, moduleLibraryLinkArgs, systemFrameworks, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
+import { composedModule, moduleSeam, moduleLibraryLinkArgs, systemFrameworks, packageCompiler, rosterProbe, rosterProbeMain, lockSwiftPackages } from './compose.mjs';
 import { placeMacDylibs } from './bundle.mjs';
 import { keepRoster, keptRoster, probeDigest } from './arms.mjs';
 import { writeDataKeys } from './data-keys.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
+
+test.skipIf(process.platform !== 'darwin')('static SwiftPM XCFrameworks have one owner across app Swift and implementations', () => {
+  useXcode();
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/swift-static-')), vendor = resolve(dir, 'vendor');
+  const execute = appleToolchain.spawnSync;
+  const run = (command, args, options = {}) => {
+    const result = execute(command, args, { encoding: 'utf8', ...options });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    return result.stdout;
+  };
+  const write = (name, contents) => { const file = resolve(dir, name); writeFileSync(file, contents); return file; };
+  let swift;
+  try {
+    mkdirSync(vendor);
+    const source = write('Vendor.c', 'static int value; int vendor_get(void) { return value; } void vendor_set(int next) { value = next; }\n');
+    const extra = write('Extra.c', 'int vendor_unreferenced(void) { return 751; }\n');
+    const slices = [];
+    for (const [sdk, triple] of [['macosx', 'macos14.0'], ['iphonesimulator', 'ios17.0-simulator']]) {
+      const framework = resolve(dir, sdk, 'Vendor.framework'); slices.push(framework);
+      mkdirSync(resolve(framework, 'Headers'), { recursive: true }); mkdirSync(resolve(framework, 'Modules'));
+      writeFileSync(resolve(framework, 'Headers/Vendor.h'), 'int vendor_get(void); void vendor_set(int); int vendor_unreferenced(void);\n');
+      writeFileSync(resolve(framework, 'Modules/module.modulemap'), 'framework module Vendor { header "Vendor.h" export * }\n');
+      const target = ['-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-${triple}`, '-isysroot', run('xcrun', ['--sdk', sdk, '--show-sdk-path']).trim()];
+      const objects = [source, extra].map((file, i) => {
+        const object = resolve(dir, sdk, `${i}.o`); run('xcrun', ['clang', ...target, '-c', file, '-o', object]); return object;
+      });
+      run('xcrun', ['libtool', '-static', ...objects, '-o', resolve(framework, 'Vendor')]);
+    }
+    run('xcrun', ['xcodebuild', '-create-xcframework', ...slices.flatMap(path => ['-framework', path]), '-output', resolve(vendor, 'Vendor.xcframework')]);
+    writeFileSync(resolve(vendor, 'Package.swift'), `// swift-tools-version:5.9
+import PackageDescription
+let package = Package(name: "Vendor", products: [.library(name: "Vendor", targets: ["Vendor"])],
+  targets: [.binaryTarget(name: "Vendor", path: "Vendor.xcframework")])
+`);
+    // The remote declaration resolves to a versioned local fixture; compilation and linking use real SwiftPM.
+    const git = args => run('git', args, { cwd: vendor });
+    git(['init', '-q']); git(['add', '.']);
+    git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Vendor']);
+    git(['tag', '1.0.0']);
+    const swiftPackages = [{ url: 'https://fixture.invalid/vendor.git', exactVersion: '1.0.0', products: ['Vendor'] }];
+    swift = spyOn(appleToolchain, 'spawnSync').mockImplementation((command, args, opts) => {
+      if (command === 'swift') run('swift', ['package', 'config', 'set-mirror', '--original', swiftPackages[0].url, '--mirror', `file://${vendor}`], opts);
+      return execute(command, args, opts);
+    });
+    const app = { dir, target: dir, manifest: { host: { macos: { swiftPackages }, ios: { swiftPackages } } } };
+    lockSwiftPackages(app);
+    const implementation = write('Implementation.swift', `import ExactPackage
+import Vendor
+public final class Implementation: ExactPackage {
+    public init(context: ExactPackageContext) {}
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply([:]) }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+}
+@_cdecl("implementation_value") public func implementationValue() -> Int32 { let value = vendor_get(); vendor_set(99); return value }
+`);
+    const own = write('Own.swift', `import Vendor
+@_cdecl("app_value") public func appValue() -> Int32 { let value = vendor_get(); vendor_set(42); return value }
+`);
+    const main = write('main.swift', `import Foundation
+func load(_ path: String, _ name: String) -> @convention(c) () -> Int32 {
+    guard let image = dlopen(path, RTLD_NOW | RTLD_GLOBAL), let entry = dlsym(image, name) else { fatalError(String(cString: dlerror())) }
+    return unsafeBitCast(entry, to: (@convention(c) () -> Int32).self)
+}
+let app = load(CommandLine.arguments[1], "app_value"), implementation = load(CommandLine.arguments[2], "implementation_value")
+precondition(app() == 0 && implementation() == 42 && app() == 99)
+print("shared static SDK state")
+`);
+    for (const ios of [false, true]) {
+      const destination = resolve(dir, ios ? 'ios' : 'mac'); mkdirSync(destination);
+      const sdkName = ios ? 'iphonesimulator' : 'macosx';
+      const target = ['-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-${ios ? 'ios17.0-simulator' : 'macos14.0'}`,
+        '-sdk', run('xcrun', ['--sdk', sdkName, '--show-sdk-path']).trim()];
+      const p = { module: 'ExactPkg_vendor', className: 'Implementation', extension: 'vendor', sources: [implementation], swiftPackages };
+      const compiler = packageCompiler({ app, packages: [p], extensions: {}, packageDir: destination,
+        packageTargets: new Map([[destination, [sdkName, target]]]), packageCopies: [[implementation]],
+        seam: resolve(root, 'host/apple/modules/ExactPackage.swift'), packagesRoot: dir, swiftc: 'fixture', production: ios, ios });
+      compiler.place(destination);
+      const core = resolve(destination, 'libexact_modules.dylib');
+      run('xcrun', ['swiftc', ...target, '-parse-as-library', '-emit-library', own, resolve(destination, 'ExactPackage.o'),
+        ...compiler.imports(destination), ...compiler.link(destination), ...moduleLibraryLinkArgs({ wrapped: ios }), '-o', core]);
+      assert.equal(compiler.frameworks.length, 0, 'static frameworks are owned by the shared library');
+      const shared = compiler.libraries.find(lib => lib.framework === 'ExactSwiftDependencies');
+      assert.match(run('xcrun', ['nm', '-gU', shared.built]), /_vendor_unreferenced/);
+      for (const file of [core, resolve(destination, 'ExactPkg_vendor.dylib')]) {
+        assert.doesNotMatch(run('xcrun', ['nm', '-gU', file]), /_vendor_(get|set|unreferenced)/);
+      }
+      if (!ios) {
+        const macos = resolve(dir, 'Relocated.app/Contents/MacOS'); mkdirSync(macos, { recursive: true });
+        placeMacDylibs(macos, [...compiler.libraries, { built: core, load: 'libexact_modules.dylib' }]);
+        const binary = resolve(macos, 'Probe'); run('xcrun', ['swiftc', main, '-o', binary]);
+        assert.match(run(binary, [resolve(macos, 'libexact_modules.dylib'), resolve(macos, 'libExactPkg_vendor.dylib')]), /shared static SDK state/);
+      }
+    }
+  } finally { swift?.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+}, 120_000);
+
+test.skipIf(process.platform !== 'darwin')('SwiftPM frameworks load from a relocated Mac app without a host run path', () => {
+  useXcode();
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/swift-frameworks-'));
+  const execute = appleToolchain.spawnSync;
+  const run = (command, args) => {
+    const result = execute(command, args, { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  const write = (name, contents) => { const file = resolve(dir, name); writeFileSync(file, contents); return file; };
+  let swift;
+  try {
+    const bin = resolve(dir, 'swiftpm'), destination = resolve(dir, 'modules');
+    mkdirSync(bin); mkdirSync(destination);
+    for (const [name, parent, value] of [['Vendor', bin, 751], ['OtherVendor', resolve(bin, 'PackageFrameworks'), 752]]) {
+      const framework = resolve(parent, `${name}.framework`);
+      mkdirSync(resolve(framework, 'Headers'), { recursive: true });
+      mkdirSync(resolve(framework, 'Modules'));
+      writeFileSync(resolve(framework, 'Headers', `${name}.h`), `int ${name}_value(void);\n`);
+      writeFileSync(resolve(framework, 'Modules/module.modulemap'), `framework module ${name} { header "${name}.h" export * }\n`);
+      const source = write(`${name}.c`, `int ${name}_value(void) { return ${value}; }\n`);
+      run('xcrun', ['clang', '-dynamiclib', source, '-install_name', `@rpath/${name}.framework/${name}`, '-o', resolve(framework, name)]);
+    }
+    const shared = write('Dependencies.c', 'extern int Vendor_value(void), OtherVendor_value(void);\nint fixture_dependencies(void) { return Vendor_value() + OtherVendor_value(); }\n');
+    run('xcrun', ['clang', '-dynamiclib', shared, '-F', bin, '-framework', 'Vendor', '-F', resolve(bin, 'PackageFrameworks'),
+      '-framework', 'OtherVendor', '-o', resolve(bin, 'libExactSwiftDependencies.dylib')]);
+    writeFileSync(resolve(bin, 'description.json'), JSON.stringify({ swiftCommands: {
+      dependencies: { moduleName: 'ExactSwiftDependencies', otherArguments: ['-F', bin, '-F', resolve(bin, 'PackageFrameworks')] },
+    } }));
+    const swiftPackages = [{ url: 'https://fixture.invalid/vendor.git', exactVersion: '1.0.0', products: ['Vendor', 'OtherVendor'] }];
+    const app = { dir, target: dir, manifest: { host: { macos: { swiftPackages } } } };
+    write('Package.resolved', JSON.stringify({ version: 3, pins: [{ identity: 'vendor', location: swiftPackages[0].url,
+      state: { version: '1.0.0', revision: 'a'.repeat(40) } }] }));
+    // Supply SwiftPM's artifact layout; Exact still discovers, compiles, links and places every consumer.
+    swift = spyOn(appleToolchain, 'spawnSync').mockImplementation((command, args, opts) => {
+      if (command === 'swift') return { status: 0, stdout: args.includes('--show-bin-path') ? `${bin}\n` : '', stderr: '' };
+      return execute(command, args, opts);
+    });
+    const source = write('Implementation.swift', `import ExactPackage
+import OtherVendor
+public final class Implementation: ExactPackage {
+    public init(context: ExactPackageContext) {}
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply([:]) }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+}
+@_cdecl("implementation_value") public func implementationValue() -> Int32 { OtherVendor_value() }
+`);
+    const p = { module: 'ExactPkg_vendor', className: 'Implementation', extension: 'vendor', sources: [source], swiftPackages };
+    const compiler = packageCompiler({ app, packages: [p], extensions: {}, packageDir: destination,
+      packageTargets: new Map([[destination, ['macosx', []]]]), packageCopies: [[source]],
+      seam: resolve(root, 'host/apple/modules/ExactPackage.swift'), packagesRoot: dir, swiftc: 'fixture' });
+    compiler.place(destination);
+    const own = write('Own.swift', `import Vendor
+@_cdecl("app_value") public func appValue() -> Int32 { Vendor_value() }
+`);
+    const core = resolve(destination, 'libexact_modules.dylib');
+    run('xcrun', ['swiftc', '-parse-as-library', '-emit-library', own, resolve(destination, 'ExactPackage.o'),
+      ...compiler.imports(destination), ...compiler.link(destination), ...moduleLibraryLinkArgs(), '-o', core]);
+    const main = write('main.swift', `import Foundation
+guard let image = dlopen(CommandLine.arguments[1], RTLD_NOW | RTLD_GLOBAL), let entry = dlsym(image, CommandLine.arguments[2]) else {
+    fputs(String(cString: dlerror()), stderr)
+    exit(1)
+}
+print(unsafeBitCast(entry, to: (@convention(c) () -> Int32).self)())
+`);
+    const macos = resolve(dir, 'Relocated.app/Contents/MacOS'), frameworks = resolve(dir, 'Relocated.app/Contents/Frameworks');
+    mkdirSync(macos, { recursive: true }); mkdirSync(frameworks);
+    placeMacDylibs(macos, [...compiler.libraries, { built: core, load: 'libexact_modules.dylib' }]);
+    assert.equal(compiler.frameworks.length, 2);
+    for (const fw of compiler.frameworks) cpSync(fw.placed, resolve(frameworks, `${fw.link}.framework`), { recursive: true });
+    const binary = resolve(macos, 'FrameworkProbe');
+    run('xcrun', ['swiftc', main, '-o', binary]);
+    rmSync(bin, { recursive: true });
+    assert.equal(run(binary, [resolve(macos, 'libexact_modules.dylib'), 'app_value']).trim(), '751');
+    // A fresh process and a seam-only app module keep the implementation's framework lookup independent.
+    const seam = resolve(destination, 'seam.dylib');
+    run('xcrun', ['swiftc', '-emit-library', resolve(destination, 'ExactPackage.o'), ...moduleLibraryLinkArgs(), '-o', seam]);
+    placeMacDylibs(macos, [{ built: seam, load: 'libexact_modules.dylib' }]);
+    assert.equal(run(binary, [resolve(macos, 'libExactPkg_vendor.dylib'), 'implementation_value']).trim(), '752');
+  } finally { swift?.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test.skipIf(process.platform !== 'darwin')('app Swift and a package share pinned Swift product state', async () => {
+  useXcode();
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/swift-products-'));
+  try {
+    const source = resolve(dir, 'Queue.swift');
+    writeFileSync(source, `import ExactPackage
+import DequeModule
+import RxSwift
+public final class Queue: ExactPackage {
+    public init(context: ExactPackageContext) {}
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply([:]) }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
+        var queue: Deque<Int> = [1, 2, 3]
+        let configured = Hooks.recordCallStackOnError
+        Hooks.recordCallStackOnError = false
+        return ["first": queue.popFirst()!, "configured": configured]
+    }
+}
+`);
+    const dependencies = [
+      { url: 'https://github.com/apple/swift-collections.git', exactVersion: '1.1.4', products: ['DequeModule'] },
+      { url: 'https://github.com/ReactiveX/RxSwift.git', exactVersion: '6.9.0', products: ['RxSwift'] },
+    ];
+    const fixture = resolve(dir, 'node_modules/@fixture/queue'); mkdirSync(resolve(fixture, 'apple'), { recursive: true });
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { '@fixture/queue': '1.0.0' } }));
+    writeFileSync(resolve(fixture, 'package.json'), JSON.stringify({ name: '@fixture/queue', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+    writeFileSync(resolve(fixture, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/queue', names: [], views: ['queue-view'] }));
+    writeFileSync(resolve(fixture, 'apple/exact.json'), JSON.stringify({ kind: 'implementation', implements: '@fixture/queue@1.0.0',
+      platform: 'apple', targets: ['macos', 'ios'], sources: { swift: ['Queue.swift'] }, class: 'Queue', swiftPackages: dependencies }));
+    copyFileSync(source, resolve(fixture, 'apple/Queue.swift'));
+    const app = { dir, target: dir, manifest: { name: 'Queue', app: { id: 'dev.exact.queue', name: 'Queue' },
+      host: { macos: { swiftPackages: dependencies }, ios: { swiftPackages: dependencies } } } };
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(app.manifest));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    queue-view\n');
+    const [p] = appleImplementations(dir, 'macos', { queue: '@fixture/queue' });
+    assert.deepEqual(p.swiftPackages, dependencies);
+    assert.equal(p.swiftPackagesSource, resolve(fixture, 'apple/exact.json'));
+    const lock = resolve(dir, 'Package.resolved');
+    assert.throws(() => packageCompiler({ app, packages: [p] }), /exact.mjs lock/);
+    const { lockApp } = await import('../../scripts/app-cli.mjs');
+    assert.match(await lockApp(dir), /Package.resolved: resolved/);
+    const locked = readFileSync(lock);
+    const own = resolve(dir, 'Own.swift');
+    writeFileSync(own, `import DequeModule
+import RxSwift
+import ExactPackage
+import ExactPkg_queue
+@_cdecl("own_first") public func ownFirst() -> Int32 {
+    let context = ExactPackageContext(agent: false, session: "fixture", changed: { _ in }, log: { _ in }, now: { 0 })
+    Hooks.recordCallStackOnError = true
+    let result = try! Queue(context: context).call("", [:])
+    guard result["configured"] as! Bool else { return -1 }
+    guard !Hooks.recordCallStackOnError else { return -2 }
+    var queue: Deque<Int32> = [Int32(result["first"] as! Int), 4]
+    return queue.removeFirst() + 3
+}
+`);
+    for (const ios of [false, true]) {
+      const destination = resolve(dir, ios ? 'ios' : 'mac'); mkdirSync(destination);
+      const sdkName = ios ? 'iphonesimulator' : 'macosx';
+      const sdk = spawnSync('xcrun', ['--sdk', sdkName, '--show-sdk-path'], { encoding: 'utf8' });
+      assert.equal(sdk.status, 0, sdk.stderr);
+      const target = ['-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-${ios ? 'ios17.0-simulator' : 'macos14.0'}`, '-sdk', sdk.stdout.trim()];
+      const compiler = packageCompiler({ packages: [p], packageDir: destination, packageTargets: new Map([[destination, [sdkName, target]]]),
+        packageCopies: [p.sources], seam: resolve(root, 'host/apple/modules/ExactPackage.swift'), packagesRoot: dir,
+        swiftc: 'fixture', production: ios, distribution: false, ios, tv: false, app });
+      compiler.place(destination);
+      assert.ok(existsSync(resolve(destination, 'ExactPkg_queue.dylib')));
+      const output = resolve(destination, 'libexact_modules.dylib');
+      const compiled = spawnSync('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-emit-library', '-module-name', 'ExactAppModules',
+        own, '-I', destination, '-L', destination, ...compiler.imports(destination), ...compiler.link(destination), resolve(destination, 'ExactPackage.o'),
+        ...moduleLibraryLinkArgs({ wrapped: ios }), '-o', output, ...target], { encoding: 'utf8' });
+      assert.equal(compiled.status, 0, compiled.stderr);
+      assert.ok(existsSync(output));
+      const linked = spawnSync('xcrun', ['otool', '-L', output], { encoding: 'utf8' });
+      assert.equal(linked.status, 0, linked.stderr);
+      assert.ok(linked.stdout.includes(ios ? '@rpath/ExactPkg_queue.framework/ExactPkg_queue' : '@rpath/libExactPkg_queue.dylib'), linked.stdout);
+      if (!ios) {
+        const { dlopen, FFIType } = await import('bun:ffi');
+        const loaded = dlopen(output, { own_first: { returns: FFIType.i32, args: [] } });
+        try { assert.equal(loaded.symbols.own_first(), 4); } finally { loaded.close(); }
+      }
+      assert.ok(readFileSync(lock).equals(locked));
+    }
+    const changed = JSON.parse(locked); changed.pins[0].state.version = '1.1.3';
+    writeFileSync(lock, JSON.stringify(changed));
+    assert.throws(() => packageCompiler({ app, packages: [p] }), /differs from the lock/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 180_000);
 
 test.skipIf(process.platform !== 'darwin')('package images load on use, replay facts and keep credential members in their session', async () => {
   useXcode();
@@ -1044,6 +1317,8 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
     const icon = resolve(dir, 'icon.png');
     writeFileSync(icon, encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
     const app = { dir, id: 'com.exact.fixture', name: 'Fixture', manifest: {} };
+    const packageResource = resolve(dir, 'Vendor_Vendor.bundle'); mkdirSync(packageResource);
+    writeFileSync(resolve(packageResource, 'value.txt'), 'vendor resource');
     const api = (name, reasons) => ({ NSPrivacyAccessedAPIType: `NSPrivacyAccessedAPICategory${name}`, NSPrivacyAccessedAPITypeReasons: reasons });
     const declarations = { NSPrivacyAccessedAPITypes: [api('DiskSpace', ['E174.1'])], NSPrivacyTracking: true,
       NSPrivacyTrackingDomains: ['ads.example.com'], NSPrivacyCollectedDataTypes: [{ NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeEmailAddress',
@@ -1068,6 +1343,7 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
       const binDir = resolve(dir, `${production}-${device}-${archived}`); mkdirSync(binDir);
       const bin = resolve(binDir, 'ExactClip');
       copyFileSync(executable, bin);
+      copyFileSync(executable, resolve(binDir, 'ExactHostIOS'));
       const capture = resolve(binDir, 'capture'); mkdirSync(capture);
       const gpu = { built: 'gpu.dylib', load: 'libgpu.dylib', framework: 'ExactGpu' };
       copyFileSync(dylib, resolve(capture, gpu.built));
@@ -1089,7 +1365,7 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
         libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
         modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
         canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: service, load: pairs[4][0], framework: pairs[4][1] }],
-        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos', appleReach };
+        packageResources: [packageResource], args: ['--host'], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos', appleReach };
       const helpers = {
         runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
         copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
@@ -1124,6 +1400,7 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
       assert.match(signed, new RegExp(`<string>iCloud\\.${app.id}</string>`));
       assert.doesNotMatch(signed, /aps-environment|ubiquity-/);
       assert.doesNotMatch(run('codesign', ['-d', '--entitlements', '-', '--xml', resolve(bundle, 'AppClips/Clip.app')]).stdout, /com.apple.developer.icloud-/);
+      for (const [assembled] of result.bundles) assert.equal(readFileSync(resolve(assembled, 'Vendor_Vendor.bundle/value.txt'), 'utf8'), 'vendor resource');
       for (const owner of [bundle, resolve(bundle, 'AppClips/Clip.app'), ...(production ? [...pairs, [null, 'ExactGpu']].map(([, name]) => resolve(bundle, 'Frameworks', `${name}.framework`)) : [])]) {
         const privacy = resolve(owner, 'PrivacyInfo.xcprivacy'); assert.equal(run('plutil', ['-lint', privacy]).status, 0);
         const usesDisk = diskService && (owner.endsWith('/ExactService.framework') || (!production && owner.endsWith('.app')));

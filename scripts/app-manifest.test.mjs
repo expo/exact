@@ -1,9 +1,99 @@
 // app.json keys the web manifest standard defines (scripts/app.schema.json).
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+
+test('Apple Swift products require a URL, exact semantic version and named products', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const { swiftPackageGraph, assertSwiftLock } = await import('../host/apple/compose.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-swift-products-'));
+  const dependency = { url: 'https://github.com/apple/swift-collections.git', exactVersion: '1.1.4', products: ['DequeModule'] };
+  const bound = value => [{ extension: 'queue', swiftPackagesSource: '/packages/queue/apple/exact.json', swiftPackages: value }];
+  const app = value => ({ dir, manifest: { host: { macos: { swiftPackages: value } } } });
+  const read = value => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Swift', app: { id: 'dev.exact.swift', name: 'Swift' },
+      host: { macos: { swiftPackages: value }, ios: { swiftPackages: value } } }));
+    return readManifest(dir, 'swift');
+  };
+  try {
+    assert.deepEqual(read([dependency]).host.ios.swiftPackages, [dependency]);
+    for (const value of [null, {}, [null], [{ ...dependency, exactVersion: '^1.1.4' }], [{ ...dependency, exactVersion: '1.1' }],
+      [{ ...dependency, url: 'file:///tmp/package' }], [{ ...dependency, products: [] }], [{ ...dependency, products: [12] }],
+      [{ ...dependency, products: [''] }], [{ ...dependency, branch: 'main' }], [{ url: dependency.url }]]) {
+      assert.throws(() => read(value), /swiftPackages/);
+      assert.throws(() => swiftPackageGraph(app(undefined), bound(value)), /queue.*exact.json.*swiftPackages/);
+    }
+    const graph = swiftPackageGraph(app([dependency]), bound([{ ...dependency, products: ['OrderedCollections', 'DequeModule'] }]));
+    assert.equal(graph.length, 1);
+    assert.deepEqual(graph[0].products, ['DequeModule', 'OrderedCollections']);
+    assert.throws(() => swiftPackageGraph(app([dependency]), bound([{ ...dependency, exactVersion: '1.2.0' }])), /app.json.*1.1.4.*queue.*1.2.0/);
+    assert.throws(() => swiftPackageGraph(app([dependency]), bound([{ ...dependency, url: 'https://example.com/swift-collections.git' }])), /app.json.*queue/);
+    assert.throws(() => assertSwiftLock(app([dependency]), graph), /exact.mjs lock/);
+    const lock = { version: 3, pins: [{ identity: 'swift-collections', location: dependency.url,
+      state: { version: '1.1.3', revision: 'a'.repeat(40) } }] };
+    writeFileSync(resolve(dir, 'Package.resolved'), JSON.stringify(lock));
+    assert.throws(() => assertSwiftLock(app([dependency]), graph), /differs from the lock/);
+    lock.pins[0].state.version = '1.1.4';
+    writeFileSync(resolve(dir, 'Package.resolved'), JSON.stringify(lock));
+    assert.ok(assertSwiftLock(app([dependency]), graph).length);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Swift lock discovery follows reachable interfaces and inherited dependencies', async () => {
+  const { appSwiftPackageGraph } = await import('../host/apple/compose.mjs');
+  const root = mkdtempSync(resolve(tmpdir(), 'swift-workspace-')), dir = resolve(root, 'apps/fixture');
+  const put = (file, value) => {
+    const path = resolve(root, file); mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value));
+  };
+  const dependency = { url: 'https://github.com/apple/swift-collections.git', exactVersion: '1.1.4', products: ['DequeModule'] };
+  const implementation = { kind: 'implementation', implements: '@fixture/queue@1.0.0', platform: 'apple',
+    targets: ['macos', 'ios'], sources: { swift: ['Queue.swift'] }, class: 'Queue', swiftPackages: [dependency] };
+  const app = { dir, target: resolve(root, 'target'), manifest: { name: 'Queue', app: { id: 'dev.exact.queue', name: 'Queue' } } };
+  try {
+    put('package.json', { dependencies: { '@fixture/queue': '1.0.0', '@fixture/parent': '1.0.0' } });
+    put('apps/fixture/app.json', app.manifest);
+    put('apps/fixture/app.contract', 'component App\n  view\n    queue-view\n');
+    put('node_modules/@fixture/queue/package.json', { name: '@fixture/queue', version: '1.0.0',
+      exports: { '.': './exact.json', './apple': './apple/exact.json' } });
+    put('node_modules/@fixture/queue/exact.json', { kind: 'interface', name: '@fixture/queue', names: [], views: ['queue-view'] });
+    put('node_modules/@fixture/queue/apple/exact.json', implementation);
+    const { lockSwiftPackages } = await import('../host/apple/compose.mjs');
+    const game = { ...app, manifest: { name: 'Queue game', game: { audio: true } } };
+    put('apps/fixture/app.json', game.manifest);
+    assert.equal(lockSwiftPackages(game), null);
+    put('apps/fixture/app.json', app.manifest);
+    assert.deepEqual(appSwiftPackageGraph(app).map(p => p.identity), ['swift-collections']);
+    put('node_modules/@fixture/parent/package.json', { name: '@fixture/parent', version: '1.0.0', exports: './exact.json' });
+    put('node_modules/@fixture/parent/exact.json', { ...implementation, targets: ['macos'],
+      swiftPackages: [{ ...dependency, products: ['OrderedCollections'] }] });
+    assert.deepEqual(appSwiftPackageGraph(app).at(0).products, ['DequeModule', 'OrderedCollections']);
+    put('apps/fixture/package.json', { dependencies: { '@fixture/queue': '1.0.0', '@fixture/one': '1.0.0', '@fixture/two': '1.0.0' } });
+    for (const name of ['one', 'two']) {
+      put(`apps/fixture/node_modules/@fixture/${name}/package.json`, { name: `@fixture/${name}`, version: '1.0.0', exports: './exact.json' });
+      put(`apps/fixture/node_modules/@fixture/${name}/exact.json`, { ...implementation, targets: ['ios'] });
+    }
+    put('apps/fixture/app.contract', 'component App\n  view\n    text "No package views"\n');
+    assert.deepEqual(appSwiftPackageGraph(app), []);
+    put('node_modules/@fixture/library/package.json', { name: '@fixture/library', version: '1.0.0', exports: './index.contract' });
+    put('node_modules/@fixture/library/index.contract', 'component Tile\n  view\n    queue-view\n');
+    put('apps/fixture/app.contract', 'use Tile from "@fixture/library"\ncomponent App\n  view\n    text "Unused Tile"\n');
+    assert.deepEqual(appSwiftPackageGraph(app), []);
+    put('apps/fixture/app.contract', 'use Tile from "@fixture/library"\ncomponent App\n  view\n    Tile()\n');
+    assert.throws(() => appSwiftPackageGraph(app), /one.*two.*queue.*ios/);
+    put('apps/fixture/app.json', { ...app.manifest, implementations: { '@fixture/queue': { ios: '@fixture/one' } } });
+    assert.deepEqual(appSwiftPackageGraph(app).map(p => p.identity), ['swift-collections']);
+    put('apps/fixture/app.json', app.manifest);
+    const plain = { ...implementation }; delete plain.swiftPackages;
+    put('node_modules/@fixture/queue/apple/exact.json', plain);
+    for (const name of ['one', 'two']) put(`apps/fixture/node_modules/@fixture/${name}/exact.json`, { ...plain, targets: ['ios'] });
+    const { appleImplementations } = await import('../js/bake/src/typescript.mjs');
+    const extensions = { queue: '@fixture/queue' }, mac = appleImplementations(dir, 'macos', extensions);
+    assert.deepEqual(appSwiftPackageGraph(app, mac, extensions), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 120000);
 
 test('Apple metadata dictionaries refuse every key together with grant or generic advice', async () => {
   const { readManifest } = await import('./app.mjs');

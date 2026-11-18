@@ -131,6 +131,9 @@ impl Module {
     /// device/target. Nothing happens before the first bind. Nothing reaches
     /// the screen until [`Module::flush`].
     pub fn render(&mut self, id: u32, frame: &Frame) -> Option<bool> {
+        if let Some(error) = self.refused_instance(id) {
+            return self.fail(error);
+        }
         self.check_device();
         // A canvas renders once per frame: a second render submits the first.
         self.settle(id);

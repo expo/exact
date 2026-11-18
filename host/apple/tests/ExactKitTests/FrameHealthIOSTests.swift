@@ -81,7 +81,6 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertTrue(card.compact)
         XCTAssertEqual(card.bounds.height, FrameHealthCardFace.compactHeight)
         XCTAssertTrue(card.bounds.contains(try XCTUnwrap(card.minimizeElement).accessibilityFrameInContainerSpace))
-        XCTAssertFalse(card.layout.pacingArea.intersects(card.layout.minimize))
         let start = CACurrentMediaTime(), generation = health.snapshot().generation
         func sample(_ first: Int, through last: Int) {
             for i in first...last {
@@ -147,8 +146,8 @@ final class FrameHealthIOSTests: XCTestCase {
         tap(CGPoint(x: minimize.midX * card.scale, y: minimize.midY * card.scale))
         XCTAssertTrue(card.minimized, "the visible Minimize control takes a tap")
         let bar = scene.statusBarManager?.statusBarFrame ?? .zero
-        XCTAssertEqual(card.frame.origin, CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY)),
-            "at the same edge, below the status bar")
+        XCTAssertEqual(card.frame.origin, CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY + 8)),
+            "at the same edge, 8 points below the status bar")
         let free = CGPoint(x: full.midX, y: full.maxY - 60)
         let button = UIButton(type: .system)
         button.frame = CGRect(x: free.x - 40, y: free.y - 22, width: 80, height: 44)
@@ -172,7 +171,8 @@ final class FrameHealthIOSTests: XCTestCase {
         waitFor("the minimized drag settles") { !overlay.isSettling }
         overlay.layoutIfNeeded()
         XCTAssertTrue(card.minimized, "a drag is not a restore tap")
-        XCTAssertEqual(card.frame.maxX, overlay.bounds.maxX - 8, accuracy: 0.5)
+        XCTAssertEqual(card.frame.maxX, overlay.bounds.maxX - max(8, overlay.screenRadius - card.frame.height / 2), accuracy: 0.5,
+            "along the bottom edge, clear of the screen's rounded corner")
         XCTAssertEqual(card.frame.maxY, overlay.bounds.maxY - 8, accuracy: 0.5)
         let restore = try XCTUnwrap(card.minimizeElement)
         XCTAssertTrue(card.bounds.contains(restore.accessibilityFrameInContainerSpace))
@@ -242,7 +242,7 @@ final class FrameHealthIOSTests: XCTestCase {
         // rests below it, and restored, the card returns to its edge
         card.activate?(.minimize)
         overlay.layoutIfNeeded()
-        XCTAssertGreaterThanOrEqual(card.frame.minY, overlay.convert(bar, from: nil).maxY)
+        XCTAssertEqual(card.frame.minY, overlay.convert(bar, from: nil).maxY + 8, accuracy: 0.5, "8 points below it, as from the side")
         XCTAssertEqual(card.frame.minX, 8, accuracy: 0.5)
         card.activate?(.minimize)
         overlay.layoutIfNeeded()
@@ -271,7 +271,8 @@ final class FrameHealthIOSTests: XCTestCase {
             overlay.layoutIfNeeded()
             XCTAssertTrue(overlay.card.minimized)
             XCTAssertTrue(overlay.bounds.contains(overlay.card.frame))
-            XCTAssertEqual(overlay.card.frame.maxX, overlay.bounds.maxX - 8, accuracy: 0.5)
+            XCTAssertEqual(overlay.card.frame.maxX, overlay.bounds.maxX - max(8, overlay.screenRadius - overlay.card.frame.height / 2),
+                accuracy: 0.5)
             XCTAssertEqual(overlay.card.frame.maxY, overlay.bounds.maxY - 8, accuracy: 0.5)
         }
         overlay.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
@@ -546,10 +547,10 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertNil(overlay.hitTest(outside, with: nil), "outside the card, touches reach the app")
         let layout = FrameHealthCardFace.Layout(width: overlay.card.bounds.width)
         for (control, rect) in [(FrameHealthCardFace.Control.close, layout.close), (.title, layout.title), (.status, layout.status),
-                                (.details, layout.details), (.share, layout.share)] {
+                                (.share, layout.share), (.details, layout.details)] {
             // Each button's touch target is 44 points tall and at least as wide, out to the card's edge or
             // halfway to the next button
-            XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX, y: rect.midY - 21)), control)
+            XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX, y: rect.midY + (control == .details ? 21 : -21))), control)
             XCTAssertEqual(layout.control(at: CGPoint(x: rect.midX + (control == .share ? 18 : -18), y: rect.midY)), control)
         }
         // The card measures the screen while it shows, so it is live from the start

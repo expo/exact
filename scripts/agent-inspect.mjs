@@ -158,7 +158,7 @@ export function identifyResources(reply, maps) {
 /** LLP 1104 D2 / 1035.002 D3: list reasons only when geometry and tree
  * describe the same settlement; a target read already owns its identity. */
 export function identifyLayoutNodes(layout, tree, maps) {
-  const same = layout.epoch === tree.epoch && layout.incarnation === tree.incarnation;
+  const same = layout.generation === tree.generation && layout.epoch === tree.epoch && layout.incarnation === tree.incarnation;
   const by = new Map(tree.nodes.map(n => [n.id, n]));
   for (const node of layout.nodes) {
     const record = by.get(node.id);
@@ -205,7 +205,7 @@ const TABLE_ELEMENTS = /^(table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd)$/;
  * `scripts/fixtures/transcript.txt` pins it. A part in [brackets] appears
  * only when its field is present (not null); strings are JSON-quoted.
  *
- *   tree    epoch E · incarnation I · clock C ms · N nodes
+ *   tree    generation G · epoch E · incarnation I · clock C ms · N nodes
  *           {"  " × depth}{Type}#{id} [<{element}>, a table's or a description list's] [{testId}] hatch="…" "{text}" value="…" label="…" checked=true|false [focused] [hidden]|[inactive] ({handlers, comma-separated})
  *           `[hidden]` under a route the host does not show (inactive too), `[inactive]` under one only a sheet covers
  *           an iframe adds url="…" loading=true|false, a partitioned one partition="…", one that
@@ -216,7 +216,7 @@ const TABLE_ELEMENTS = /^(table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd)$/;
  *           the host's lines indented two spaces; on an iOS simulator, the newest crash report of the build
  *           on that simulator since the last `logs` (its path, how it ended, the crashing thread's top
  *           frames); "(nothing new)" when there is nothing
- *   state   [epoch E · incarnation I · clock C ms], then one line per other section: `{name} {JSON on one line}`;
+ *   state   [generation G · epoch E · incarnation I · clock C ms], then one line per other section: `{name} {JSON on one line}`;
  *           an app's state (a reply with `slots`) without its empty sections (`emptySection`), a world's whole;
  *           over STATE_CAP its small sections and the others' sizes instead (`stateCap`)
  *   tap, type  [ERROR {error} · ]tapped|typed #{id} "{target}" [· at X,Y, a contact's phase or a drag] · delivery D · epoch E
@@ -245,8 +245,8 @@ export function render(op, r, how = {}) {
     case 'screenshot': return r?.compare ? r.text : renderLine(op, r); // `compare`: the comparison with a reference (agent-compare.mjs)
     case 'tree': {
       const entities = Array.isArray(r.entities) ? r.entities : r.nodes?.some((n) => n.components) ? r.nodes : null;
-      if (entities) return [`epoch ${r.epoch} · incarnation ${r.incarnation} · clock ${r.clock} ms · tick ${r.tick} · ${entities.length} entities`, ...entities.map((e) => `${'  '.repeat(e.depth ?? 0)}${e.name ?? ''}#${e.id} (${(e.components ?? []).join(', ')})${e.tags?.length ? ' ' + e.tags.join(' ') : ''}`), ...(r.truncated ? ['(truncated)'] : [])].join('\n');
-      const lines = [`epoch ${r.epoch} · incarnation ${r.incarnation} · clock ${r.clock} ms · ${r.nodes.length} nodes`];
+      if (entities) return [`${r.generation != null ? `generation ${r.generation} · ` : ''}epoch ${r.epoch} · incarnation ${r.incarnation} · clock ${r.clock} ms · tick ${r.tick} · ${entities.length} entities`, ...entities.map((e) => `${'  '.repeat(e.depth ?? 0)}${e.name ?? ''}#${e.id} (${(e.components ?? []).join(', ')})${e.tags?.length ? ' ' + e.tags.join(' ') : ''}`), ...(r.truncated ? ['(truncated)'] : [])].join('\n');
+      const lines = [`${r.generation != null ? `generation ${r.generation} · ` : ''}epoch ${r.epoch} · incarnation ${r.incarnation} · clock ${r.clock} ms · ${r.nodes.length} nodes`];
       const rootDepth = r.nodes[0]?.depth ?? 0;
       for (const n of r.nodes) {
         const depth = Math.max(0, n.depth - rootDepth);
@@ -289,8 +289,8 @@ export function render(op, r, how = {}) {
       // Routed by what was asked: a world's `perf` has a `draws` (the last frame's count) and a `look` too.
       if (how.look) return renderLook(r);
       // One line a section: pretty-printing cost an app's state more than half again its JSON (Caltrain, 2026-10-09).
-      const { epoch, incarnation, clock, ...rest } = r, app = 'slots' in r;
-      const head = [epoch != null && `epoch ${epoch}`, incarnation != null && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`].filter(Boolean).join(' · ');
+      const { generation, epoch, incarnation, clock, ...rest } = r, app = 'slots' in r;
+      const head = [generation != null && `generation ${generation}`, epoch != null && `epoch ${epoch}`, incarnation != null && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`].filter(Boolean).join(' · ');
       const sections = Object.entries(rest).filter(([, v]) => !(app && emptySection(v)));
       return stateCap([head, ...sections.map(([k, v]) => `${k} ${q(v)}`)].filter(Boolean).join('\n'), r, how, head, sections);
     }
@@ -303,7 +303,7 @@ export function render(op, r, how = {}) {
       if (!r || typeof r !== 'object') return q(r);
       // `carrier` and `mode` are the drive's own (its host, its timing): the JSON keeps them. So does a press's `at`, a
       // point only a hit-test diagnosis reads; a contact's phase and a drag answer with where the finger is, so theirs shows.
-      const { tapped, typed, target, phase, delivery, epoch, incarnation, clock, at, carrier, mode, error, landError, answered, ticket, ...rest } = r, id = tapped ?? typed;
+      const { tapped, typed, target, phase, delivery, generation, epoch, incarnation, clock, at, carrier, mode, error, landError, answered, ticket, ...rest } = r, id = tapped ?? typed;
       // An input that did not happen (a failure, a form the carrier cannot deliver) never reads in the past tense, and a
       // failure says so first; a phase names itself (`tap down`), held or not.
       // A held request's answer (`tap @3 cancel`) was given: `answered @3 "cancel"`.
@@ -311,7 +311,7 @@ export function render(op, r, how = {}) {
       const head = `${error != null ? `ERROR ${error} · ` : ''}${verb}${ticket != null ? ` @${ticket}` : ''}${answered != null ? ` ${q(answered)}` : ''}${id != null ? ` #${id}` : ''}${target != null ? ` ${q(target)}` : ''}`;
       const where = (phase != null || r.drag != null) && at != null ? (Array.isArray(at) ? `at ${at.join(',')}` : `at=${q(at)}`) : null;
       // Delivered, but what it started did not land (`landed`): said next to the verb, which stays `tapped`.
-      return [head, landError != null && `landing failed: ${landError}`, where, delivery != null && `delivery ${delivery}`, epoch != null && `epoch ${epoch}`, incarnation != null && incarnation !== 1 && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`,
+      return [head, landError != null && `landing failed: ${landError}`, where, delivery != null && `delivery ${delivery}`, generation != null && `generation ${generation}`, epoch != null && `epoch ${epoch}`, incarnation != null && incarnation !== 1 && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`,
         ...Object.entries(rest).map(([k, v]) => `${k}=${q(v)}`)].filter(Boolean).join(' · ');
     }
     default:
@@ -324,7 +324,7 @@ export function render(op, r, how = {}) {
  * it settled, `screenshot` with its file and size. */
 function renderLine(op, r) {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return JSON.stringify(r);
-  const { epoch, incarnation, clock, carrier, mode, ...rest } = r;
+  const { generation, epoch, incarnation, clock, carrier, mode, ...rest } = r;
   const lead = [op];
   if (op === 'clock') {
     if (clock != null) lead[0] = `clock ${clock} ms`;
@@ -339,7 +339,7 @@ function renderLine(op, r) {
   const notes = op === 'screenshot' ? ['paintedNote', 'chromeNote', 'unshownNote', 'note'].filter((k) => typeof rest[k] === 'string').map((k) => {
     const said = rest[k]; delete rest[k]; return `\n  NOTE: ${said}`;
   }) : [];
-  return [...lead, epoch != null && `epoch ${epoch}`, incarnation != null && incarnation !== 1 && `incarnation ${incarnation}`, op !== 'clock' && clock != null && `clock ${clock} ms`,
+  return [...lead, generation != null && `generation ${generation}`, epoch != null && `epoch ${epoch}`, incarnation != null && incarnation !== 1 && `incarnation ${incarnation}`, op !== 'clock' && clock != null && `clock ${clock} ms`,
     ...Object.entries(rest).map(([k, v]) => `${k}=${JSON.stringify(v)}`)].filter(Boolean).join(' · ') + notes.join('');
 }
 
@@ -393,7 +393,7 @@ function rangeAndPort(scroller) {
  * part appears only when the host reported it — a space a host cannot
  * observe is absent, never a zero.
  *
- *   node #{id} [{testId}] {Type} · site {n} · instance {keys} · epoch E · incarnation I
+ *   node #{id} [{testId}] {Type} · site {n} · instance {keys} · generation G · epoch E · incarnation I
  *     {row} = {value} ({authored | inherited from #id | initial}[, applied {…}])
  *     space viewport X,Y W×H · frame X,Y W×H (kernel, in the parent or containing block) · window X,Y W×H · screen X,Y W×H · scale S
  *     scroll [viewport | #id] sx,sy of rx,ry · … (outermost first)   clip #id overflow|clip-path · …
@@ -404,7 +404,7 @@ function renderNode(n) {
   const q = JSON.stringify;
   const box = (b) => (b ? `${b.x},${b.y} ${b.w}×${b.h}` : '—');
   const instance = (n.instance ?? []).map((i) => (i.key !== undefined ? q(i.key) : `arm ${i.arm}`)).join(' / ');
-  const out = [`node #${n.id}${n.testId != null ? ` [${n.testId}]` : ''} ${n.type}${n.site != null ? ` · site ${n.site}` : ''}${instance ? ` · instance ${instance}` : ''} · epoch ${n.epoch} · incarnation ${n.incarnation}`];
+  const out = [`node #${n.id}${n.testId != null ? ` [${n.testId}]` : ''} ${n.type}${n.site != null ? ` · site ${n.site}` : ''}${instance ? ` · instance ${instance}` : ''} ${n.generation != null ? `· generation ${n.generation} ` : ''}· epoch ${n.epoch} · incarnation ${n.incarnation}`];
   if (n.bare_reason) out.push(`  bare: \`${n.bare_reason}\``);
   const source = n.sourceMap;
   if (source?.status === 'compatible') {
@@ -642,6 +642,7 @@ export function perfDelta(a, b) {
   // A bounded first read leaves sites out: their whole lifetime would read as new work.
   if (a.truncated) throw Error(`perf: the first read was partial (${a.walked} walked); name a narrower target`);
   if (a.plan !== b.plan) throw Error(`perf: the plan changed between the reads (${a.plan?.slice(0, 12)} → ${b.plan?.slice(0, 12)}); no difference is defined`);
+  if (a.generation !== b.generation) throw Error(`perf: generation ${a.generation} → ${b.generation} between the reads; no difference is defined`);
   if (a.incarnation !== b.incarnation) throw Error(`perf: incarnation ${a.incarnation} → ${b.incarnation} between the reads; no difference is defined`);
   if (b.seq < a.seq) throw Error(`perf: seq went back (${a.seq} → ${b.seq}): the runner restarted between the reads`);
   const before = new Map(a.sites.map(x => [x.site, x]));
@@ -698,6 +699,7 @@ export function hatchDelta(a, b) {
   if (!a.plan || !b.plan) throw Error('perf hatches: a read names no plan; no difference is defined');
   if (a.truncated) throw Error('perf hatches: the first read was partial; no difference is defined');
   if (a.plan !== b.plan) throw Error(`perf hatches: the plan changed between the reads (${a.plan?.slice(0, 12)} → ${b.plan?.slice(0, 12)}); no difference is defined`);
+  if (a.generation !== b.generation) throw Error(`perf hatches: generation ${a.generation} → ${b.generation} between the reads; no difference is defined`);
   if (a.incarnation !== b.incarnation) throw Error(`perf hatches: incarnation ${a.incarnation} → ${b.incarnation} between the reads; no difference is defined`);
   const less = (x, was, keys) => { const d = { ...x }; for (const k of keys) if (typeof x[k] === 'number') d[k] = x[k] - (was?.[k] ?? 0); return d; };
   const key = c => `${c.hatch}\n${c.site ?? ''}\n${c.moment}`, before = new Map(a.calls.map(c => [key(c), c]));

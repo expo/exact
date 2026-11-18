@@ -14,8 +14,8 @@ impl<D: DataSource + Default + 'static> App<D> {
 
     pub(super) fn queue_file_dialogs(&mut self) {
         let Some(p) = &mut self.presenter else { return };
-        for (id, request) in p.take_file_dialogs() {
-            self.dialogs.queue(id, request);
+        for (id, request, live) in p.take_file_dialogs() {
+            self.dialogs.queue(id, request, live);
         }
     }
 }

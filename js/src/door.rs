@@ -84,7 +84,8 @@ pub(crate) unsafe extern "C" fn host_door(
                     // `home:` or `bundle:` path (LLP 1133.007 D6).
                     let document = (state.documents && a.starts_with("doc:/"))
                         || a.starts_with("home:/")
-                        || a.starts_with("bundle:/");
+                        || a.starts_with("bundle:/")
+                        || ibex2::stdlib::fs::is_known_folder(&a);
                     super::storage::refusal(true, state.storage || document, state.agent.is_some())
                 }
             }
@@ -94,7 +95,8 @@ pub(crate) unsafe extern "C" fn host_door(
             None if state.between_answers => {
                 let document = (state.documents && a.starts_with("doc:/"))
                     || a.starts_with("home:/")
-                    || a.starts_with("bundle:/");
+                    || a.starts_with("bundle:/")
+                    || ibex2::stdlib::fs::is_known_folder(&a);
                 super::storage::refusal(
                     !state.deferring(),
                     state.storage || document,

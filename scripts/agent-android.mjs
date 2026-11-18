@@ -60,7 +60,7 @@ const API = ANDROID_MIN_API;
  * EXACT_ANDROID_READER decides) its APK. */
 export const androidBinary = (app, bin, reader = !!process.env.EXACT_ANDROID_READER) => reader ? readerApk(app)
   : resolve(app.target, ANDROID_TARGET, HOST_DEV, bin ?? app.crate('linux'));
-export const androidBuild = (app, bin = null) => [...linuxBuild(app, bin), '--target', ANDROID_TARGET];
+export const androidBuild = (app, bin = null) => linuxBuild(app, bin, ANDROID_TARGET);
 
 /** SDK packages from the APK's Gradle declaration, also used by `exact setup`. */
 export function androidSdkPackages(gradle = readFileSync(resolve(import.meta.dir, '../host/android/app/build.gradle.kts'), 'utf8')) {
@@ -243,11 +243,11 @@ export function androidDeploy(app, bin, env) {
 }
 
 /** The app's `kind` crate's Cargo.toml, beside app.json or in the workspace generated for it (scripts/app-shells.mjs). */
-const crateManifest = (app, kind) => [resolve(app.dir, kind, 'Cargo.toml'), resolve(app.workspace, kind, 'Cargo.toml')].find(existsSync);
+export const crateManifest = (app, kind) => [resolve(app.dir, kind, 'Cargo.toml'), resolve(app.workspace, kind, 'Cargo.toml')].find(existsSync);
 
-/** Only the selected package's Android runtime graph links Hermes. Other workspace members and host
- * procedural macros must not raise this binary's minimum API or require an Android bundle. */
-export function androidUsesHermes(app, kind, target = ANDROID_TARGET) {
+/** Only the selected package's runtime graph for `target` links Hermes. Other workspace members and host
+ * procedural macros must not raise this binary's minimum API or require a bundle. */
+export function usesHermes(app, kind, target = ANDROID_TARGET) {
   const env = cargoEnvironment();
   const options = { cwd: app.workspace, env, encoding: 'utf8', maxBuffer: 1 << 26 };
   let fetched = false;
@@ -268,7 +268,7 @@ export function androidUsesHermes(app, kind, target = ANDROID_TARGET) {
     '--prefix', 'none', '--format', '{p}', '--locked', '--offline'];
   let result = spawnSync('cargo', args, options);
   if (result.status !== 0 && fetchMissing(result.stderr)) result = spawnSync('cargo', args, options);
-  if (result.status !== 0) throw new Error(`cargo tree for Android: ${result.stderr || result.error?.message}`);
+  if (result.status !== 0) throw new Error(`cargo tree for ${target}: ${result.stderr || result.error?.message}`);
   return /^exact-js v/m.test(result.stdout);
 }
 
@@ -1297,7 +1297,7 @@ function extensionArgs(app, out, config, bound, firebase, development) {
   const handlers = androidProtocolHandlers(app.manifest, !development);
   // The App Links `handle_links` claims (LLP 1038 D8), its https auth callbacks excluded.
   const links = androidLinkFilters(app.manifest, callbacks);
-  for (const note of androidLinkNotes(app.manifest, links, { signsIn: !!reach?.auth?.sessions || callbacks.some((c) => c.startsWith('https:')) })) console.warn(`${app.name}: ${note}`);
+  for (const note of androidLinkNotes(app.manifest, links, { callbacks, signsIn: !!reach?.auth?.sessions || callbacks.some((c) => c.startsWith('https:')) })) console.warn(`${app.name}: ${note}`);
   const fragment = withAuthCallbacks(withAppLinks(withProtocolHandlers(withMetaData(manifestFragment(bound, { privacyPolicy: app.manifest?.privacy_policy ?? null }), [...configMetaData(config), ...(androidShareActivity(app.manifest?.share_target) ?? []), ...(notify ? CHANNELS_RECEIVER : [])]), handlers), links), callbacks), fragmentFile = resolve(apkDirs(app).app, 'manifest-fragment.xml');
   rmSync(fragmentFile, { force: true });
   if (fragment) { mkdirSync(dirname(fragmentFile), { recursive: true }); writeFileSync(fragmentFile, fragment); }
@@ -1418,13 +1418,14 @@ if (import.meta.main && process.argv[2] === 'reverse') {
   }
   const app = resolveApp(name);
   // A TypeScript app's library links the Android Hermes bundle: said before minutes of compiling, not at the link.
-  const typescript = new Map(targets.map(target => [target, androidUsesHermes(app, apkWanted ? 'android' : 'linux', target)]));
-  for (const [target, needed] of typescript) if (needed && target !== ANDROID_TARGET) {
-    console.error(`${app.name}'s TypeScript cannot build for ${target}: the vendored Hermes resolver does not support Android x86_64 ICU, and the pinned release has no bundle. Use --abis arm64-v8a on an ARM device or an emulator with ARM translation.`);
-    process.exit(1);
-  }
+  const typescript = new Map(targets.map(target => [target, usesHermes(app, apkWanted ? 'android' : 'linux', target)]));
   for (const [target, needed] of typescript) if (needed && !androidHermesDir(process.env, undefined, target)) {
-    const fix = hermesBundle(target).fix;
+    let fix;
+    try { fix = hermesBundle(target).fix; }
+    catch (error) {
+      if (error.message !== `hermes-lean-sys has no pinned bundle for ${target}`) throw error;
+      fix = `set HERMES_LEAN_SYS_DIR_${target.replaceAll('-', '_')} to a validated bundle directory`;
+    }
     console.error(`${app.name}'s TypeScript needs the ${target} Hermes bundle: ${fix}`);
     process.exit(1);
   }

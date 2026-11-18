@@ -607,13 +607,13 @@ fn settle_names_a_hook_whose_shader_was_never_registered() {
     let cs = "@compute @workgroup_size(1) fn cs() {}";
     exact_gpu::shaders::set_shader("settle_cs", cs.into(), None).unwrap();
     let mut registered = WorldSurface::<TestGame, (), false, Named<true>>::default();
-    registered.device_ready(wgpu::Features::empty());
+    registered.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     registered.bind(&[], None).unwrap();
     registered.settle(&gpu, &frame(), 8).unwrap();
     // The trial's case: a fixture that never registered the hook's shader
     // renders without it, and the surface's own error stays empty.
     let mut unregistered = WorldSurface::<TestGame, (), false, Named<false>>::default();
-    unregistered.device_ready(wgpu::Features::empty());
+    unregistered.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     unregistered.bind(&[], None).unwrap();
     let refused = unregistered.settle(&gpu, &frame(), 8).unwrap_err();
     assert!(refused.contains("render hook:"), "{refused}");
@@ -784,7 +784,10 @@ fn custom_material_samples<const SINGLE: bool>() {
         true,
         MaterialHooks,
     >::default();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.bind(&[Value::Bool(false)], None).unwrap();
     let hash = surface.sim().unwrap().world().hash();
     let save = surface.sim().unwrap().world().save();
@@ -816,7 +819,10 @@ fn custom_material_forward_shaders_sample_the_engine_shadow_maps() {
             true,
             MaterialHooks<true>,
         >::default();
-        surface.device_ready(exact_gpu::wgpu::Features::empty());
+        surface.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         surface.bind(&[Value::Bool(caster)], None).unwrap();
         let (image, _) = fixture::render(&gpu, &mut surface, &frame()).unwrap();
         assert!(surface.error().is_none(), "{:?}", surface.error());
@@ -851,7 +857,7 @@ fn custom_material_refuses_an_outlined_model_by_name() {
         true,
         MaterialHooks,
     >::default();
-    surface.device_ready(wgpu::Features::empty());
+    surface.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     surface.bind(&[Value::Bool(false)], None).unwrap();
     let _ = fixture::render(&gpu, &mut surface, &frame());
     let error = &surface.error().unwrap().0;
@@ -920,7 +926,7 @@ fn coplanar<const PREPASS: bool, const FIRST: bool>(gpu: &exact_gpu::Gpu) -> fix
         true,
         MaterialHooks,
     >::default();
-    surface.device_ready(wgpu::Features::empty());
+    surface.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     surface.bind(&[], None).unwrap();
     let (image, _) = fixture::render(gpu, &mut surface, &frame()).unwrap();
     assert!(surface.error().is_none(), "{:?}", surface.error());

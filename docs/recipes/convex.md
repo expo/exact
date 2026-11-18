@@ -1,7 +1,7 @@
 # Recipe: a Convex backend (live queries, mutations)
 
-`@exact/convex` keeps Convex queries live over one socket: a write anyone makes
-shows in every query it changes, in one commit, with nothing polled. Install:
+`@exact/convex` keeps queries live over one socket: a write updates every query
+it changes, in one commit. Install:
 `EXACT_APP_DIR=$PWD bun <exact2>/scripts/exact.mjs add convex`, `bun add convex`,
 then `npx convex dev`, Convex's own. The rest (errors, tokens, tests, the HTTP
 client): `bun exact.mjs docs convex live queries`. A whole app: `apps/mosaic`.
@@ -33,8 +33,6 @@ component Chat
   resource live = live() as shape ConvexLive else empty(status="connecting")
   resource messages = messages(channel, live.rev) as shape Message[] else empty()
   mutation sent as shape Reply then afterSend
-  // A closed socket is opened again after 1, 2, 4, 8, then every 16 seconds.
-  // The host closes one that carries nothing for a minute.
   state waited = 0
   state wait = 1
   task reconnect when live.status == "closed"
@@ -66,4 +64,10 @@ component Chat
   a source that does both before its first `await` is refused.
 - **A drive against a real deployment** takes a new `--seed` each
   launch, or Convex answers the second launch's writes without running them.
-- **Convex Auth** signs in through three of the deployment's mutations: `bun exact.mjs docs convex auth`.
+
+## Convex Auth v2
+
+Call the deployment's mutations and use `openAuthSession` for the browser step.
+State in `redirectTo`, `convexAuthCode`, resuming, renewing and signing out:
+`bun exact.mjs docs convex auth`. Native setup:
+[HTTPS callbacks](../contract-for-agents.md#https-callbacks).

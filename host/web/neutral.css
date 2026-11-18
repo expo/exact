@@ -11,7 +11,8 @@
        The accent is the browser's own hue, and a destructive control's the system red, at a lightness that reads as
        text on the page (an author's `accent-color` is drawn as written); ink on the accent is white or black,
        whichever reads; a switch's thumb is white.
-     - Shape: 8 px corners on a control, 12 px on a surface that floats or groups, 4 px on a mark.
+     - Shape: 8 px corners on a control, 12 px on a surface that floats or groups, 4 px on a mark;
+       a wide sheet has iPad's 32 px corners.
      - Size: a control is 36 px tall at the body size, and 44 px on a touch device (`any-pointer: coarse`: any
        coarse input, normally a touch screen, whichever pointer it uses now, so nothing resizes as a mouse comes or
        goes), except a mini or small button, which keeps its own height there as UIKit's does; a checkbox, a radio
@@ -409,15 +410,16 @@
      stays a bar. The header spans the frame's grid, under the content, and lays its children
      on the grid's rows (a subgrid); it comes after the content in the order a keyboard reaches them where the browser
      can (`reading-order`; elsewhere the document's order, the buttons first). A header drawn as written, a site's
-     or one that says `appearance: none`, is no bar (LLP 1153 D8). A wide window's dialog is as tall as its content,
-     up to the form sheet's height (below). */
+     or one that says `appearance: none`, is no bar (LLP 1153 D8). The buttons' row is the frame's last. A wide
+     window's dialog is as tall as its content and the room a sheet over a sheet gives up, a row above its buttons
+     (below), up to the form sheet's height. */
   #exact-root :is([navigationPresentation="modal"], [navigationPresentation="modal"] > :first-child:where(:not([data-exact-list-item])), [navigationPresentation="modal"] > :where([data-exact-list-item]:first-child) > :first-child):has(> header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> header:first-child > button, > :where([data-exact-list-item]):first-child > header > button):not(:has(> header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"]))) {
     display: grid !important; grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr) repeat(6, auto); reading-flow: source-order;
     :is(& > header, & > :where([data-exact-list-item]) > header) { grid-area: 1 / 1 / -1 / -1; display: grid !important; grid-template: subgrid / subgrid !important; reading-order: 1; position: static !important; min-height: 0 !important; padding: 0 !important; gap: 0 !important; border: none; background: none; box-shadow: none; }
-    :is(& > header, & > :where([data-exact-list-item]) > header)::before { content: ""; grid-area: 3 / 1; }
+    :is(& > header, & > :where([data-exact-list-item]) > header)::before { content: ""; grid-area: -2 / 1; }
     :is(& > header, & > :where([data-exact-list-item]) > header) > :is(h1, h2, h3, h4, h5, h6, [role="heading"]) { grid-area: 1 / 1 / 2 / -1; padding: 24px 24px 12px; }
     :is(& > :not(header:first-child, dialog, [popover], [data-exact-list-item]), & > :where([data-exact-list-item]):where(:not(:first-child)) > :not(dialog, [popover]), & > :where([data-exact-list-item]):where(:first-child) > :not(header, dialog, [popover])) { grid-area: 2 / 1 / 3 / -1; min-height: 0; }
-    :is(& > header, & > :where([data-exact-list-item]) > header) > button:not(:is(h1, h2, h3, h4, h5, h6, [role="heading"]) ~ button:has(> img[data-symbol-source="symbol:close"]):not(:has(> :not(img, [data-exact-text]:empty)))) { grid-row: 3; align-self: center; margin: 12px 0 24px 8px; }
+    :is(& > header, & > :where([data-exact-list-item]) > header) > button:not(:is(h1, h2, h3, h4, h5, h6, [role="heading"]) ~ button:has(> img[data-symbol-source="symbol:close"]):not(:has(> :not(img, [data-exact-text]:empty)))) { grid-row: -2; align-self: center; margin: 12px 0 24px 8px; }
     :is(& > header, & > :where([data-exact-list-item]) > header) > button:not(:is(h1, h2, h3, h4, h5, h6, [role="heading"]) ~ button:has(> img[data-symbol-source="symbol:close"]):not(:has(> :not(img, [data-exact-text]:empty)))):last-of-type { margin-inline-end: 24px; }
     :is(& > header, & > :where([data-exact-list-item]) > header) > button[data-button-style="bordered"]:not(:is(h1, h2, h3, h4, h5, h6, [role="heading"]) ~ button:has(> img[data-symbol-source="symbol:close"]):not(:has(> :not(img, [data-exact-text]:empty)))) { border-color: var(--exact-line); }
     :is(& > header, & > :where([data-exact-list-item]) > header) > button[data-button-style] { border-radius: var(--exact-control-radius, calc(8px * var(--exact-curve-reach))); corner-shape: var(--exact-control-curve, var(--exact-curve)); }
@@ -552,10 +554,11 @@
      WebKit paints a sidebar that scrolls over the scrim otherwise). Narrow, it is iOS's sheet, from 12 px below the
      window's safe area at the top to its bottom, its top corners rounded; wide (900 px, the navigation glue's
      `WIDE`), a card as tall as iPad's form sheet (45rem, less with its 64 px margin in a short window), or, when it
-     is a dialog (above), as tall as its content up to that. It slides up as it opens and back down as it closes
-     (navigation.js `sheetLeaves`), unless the person asks for less motion. The slide moves only `translate`, which
-     the compositor runs whatever the page's script is doing; the scrim is a box of its own (below). The layout is
-     the platform's, as the sidebar's is; a colour the author wrote still wins. */
+     is a dialog (above), as tall as its content and the 20 px a sheet over a sheet gives up, up to that. It slides
+     up as it opens and back down as it closes (navigation.js `sheetLeaves`), unless the person asks for less motion.
+     The slide moves only `translate`, which the compositor runs whatever the page's script is doing; the scrim is a
+     box of its own (below). The layout is the platform's, as the sidebar's is; a colour the author wrote still
+     wins. */
   :where(#exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])) { color: var(--exact-label); }
   /* Every browser uses the same sheet ground; an authored ground still wins. */
   #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { background-color: var(--exact-background); position: fixed !important; inset: calc(env(safe-area-inset-top, 0px) + 12px) 0 0 !important; margin: 0 !important; box-sizing: border-box !important; width: auto !important; height: auto !important; max-height: none !important; z-index: 1; border-radius: calc(12px * var(--exact-curve-reach)) calc(12px * var(--exact-curve-reach)) 0 0; corner-shape: var(--exact-curve); overflow: clip; transition: translate .4s cubic-bezier(.32, .72, 0, 1), scale .4s cubic-bezier(.32, .72, 0, 1); }
@@ -568,10 +571,12 @@
      `project` marks `data-exact-scrim` while a sheet is presented (a sheet's own would slide with it, inside its
      clip). It fades by `opacity` as the first sheet rises and the last leaves. A presented route beneath the top
      sheet stands on the sheets' level, above the scrim, so it carries a shade of its own that fades the same way, as
-     UIKit dims what a sheet is presented from: each thing beneath is dimmed once, so the page is no lighter while a
-     second sheet comes or goes. A covered sheet's shade is lighter than the scrim, by iOS 27's share (a sheet under
-     another is dimmed 0.12 over a page dimmed 0.2), so its top edge reads above the sheet over it. A full-screen
-     route isolates, so its shade stays on its level whatever its author wrote. */
+     UIKit dims what a sheet is presented from. Under a sheet of its own size, and under any sheet in a narrow
+     window, each thing beneath is dimmed once, so the page is no lighter while a second sheet comes or goes; a wide
+     sheet of another size dims again all that is beneath the sheet it covers (the rule after these). A covered
+     sheet's shade is lighter than the scrim, by iOS 27's share (a sheet under another is dimmed 0.12 over a page
+     dimmed 0.2), so its top edge reads above the sheet over it. A full-screen route isolates, so its shade stays on
+     its level whatever its author wrote. */
   #exact-root [data-exact-scrim]::before { content: ""; position: fixed; inset: 0; z-index: 1; pointer-events: none; background-color: var(--exact-scrim); opacity: 0; transition: opacity .4s cubic-bezier(.32, .72, 0, 1); }
   #exact-root [data-exact-scrim="on"]::before { opacity: 1; }
   @starting-style { #exact-root [data-exact-scrim="on"]::before { opacity: 0; } }
@@ -580,14 +585,27 @@
   #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::after { content: ""; position: absolute; inset: 0; z-index: 2147483647; pointer-events: none; background-color: var(--exact-scrim); opacity: 0; transition: opacity .4s cubic-bezier(.32, .72, 0, 1); }
   #exact-root [data-exact-scrim="on"] > [navigationPresentation="fullscreen"][data-exact-covered]::after, #exact-root [data-exact-scrim="on"] > :where([data-exact-list-item]) > [navigationPresentation="fullscreen"][data-exact-covered]::after { opacity: 1; }
   #exact-root [data-exact-scrim="on"] > :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-covered]::after, #exact-root [data-exact-scrim="on"] > :where([data-exact-list-item]) > :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-covered]::after { opacity: .6; }
+  /* Wide, a sheet over a sheet of another size lays the page's dim again over all that is beneath the sheet it covers,
+     as UIKit's form sheet does (below): the page, under a second box of the parent's that stands under the scrim, and
+     each presented route there, which stands above both, under a second shade of its own. navigation.js `sheetStack`
+     counts the sheets that dim each (`--exact-sheet-stack-page-dims` on the parent, `-dims` on a route), and a box
+     is as dark as that many dims laid one over another, or as one where a browser cannot count them. */
+  @media (min-width: 900px) {
+    #exact-root [data-exact-scrim]::after { content: ""; position: fixed; inset: 0; z-index: 0; --exact-sheet-stack-dims: var(--exact-sheet-stack-page-dims, 0); }
+    #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::before { content: ""; position: absolute; inset: 0; z-index: 2147483647; }
+    #exact-root [data-exact-scrim]::after, #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::before { pointer-events: none; background-color: var(--exact-scrim); opacity: min(1, var(--exact-sheet-stack-dims, 0)); transition: opacity .4s cubic-bezier(.32, .72, 0, 1), background-color .4s cubic-bezier(.32, .72, 0, 1); }
+    @supports (color: rgb(from red r g b / calc(1 - pow(1 - alpha, 2)))) {
+      #exact-root [data-exact-scrim]::after, #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::before { background-color: rgb(from var(--exact-scrim) r g b / calc(1 - pow(1 - alpha, max(1, var(--exact-sheet-stack-dims, 1))))); }
+    }
+  }
   /* Narrow, a sheet another covers steps back, as UIKit's does on an iPhone (iOS 27): narrower about its top, which
      stays where it was, so its top edge shows above the tallest sheet over it, which stands lower by the stack's
      offset. */
   @media (width < 900px) {
     #exact-root [data-exact-scrim="on"] > :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-covered], #exact-root [data-exact-scrim="on"] > :where([data-exact-list-item]) > :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-covered] { scale: .93; transform-origin: 50% 0; }
-    #exact-root [data-exact-scrim="on"]:has(> [navigationPresentation="modal"][data-exact-covered], > :where([data-exact-list-item]) > [navigationPresentation="modal"][data-exact-covered]) > :is([navigationPresentation="modal"], [data-exact-in-sheet]):not([data-exact-covered], [data-exact-detent], [data-exiting]), #exact-root [data-exact-scrim="on"]:has(> [navigationPresentation="modal"][data-exact-covered], > :where([data-exact-list-item]) > [navigationPresentation="modal"][data-exact-covered]) > :where([data-exact-list-item]) > :is([navigationPresentation="modal"], [data-exact-in-sheet]):not([data-exact-covered], [data-exact-detent], [data-exiting]) { top: calc(env(safe-area-inset-top, 0px) + 12px + 10px) !important; }
+    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-sheet-stacked]:not([data-exact-covered], [data-exact-detent], [data-exiting]) { top: calc(env(safe-area-inset-top, 0px) + 12px + 10px) !important; }
   }
-  @media (prefers-reduced-motion: reduce) { #exact-root [navigationPresentation="modal"], #exact-root [data-exact-scrim]::before, #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::after { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]), #exact-root [data-exact-scrim]::before, #exact-root [data-exact-scrim]::after, #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::before, #exact-root :is([navigationPresentation="modal"], [navigationPresentation="fullscreen"], [data-exact-in-sheet])::after { transition: none; } }
   /* A route pushed inside a sheet (`data-exact-in-sheet`, navigation.js `sheetAt`) takes the sheet's frame, as a
      push in UIKit's presented sheet does. A narrow sheet opens at its detent (navigation.js `selectedDetent`), its
      foot on the window's: the detent's height above the bottom safe area, which it adds below as UIKit does, up to
@@ -609,8 +627,58 @@
      drawn above another, as UIKit presents each above the one it is presented from. */
   #exact-root [navigationPresentation="fullscreen"] { background-color: rgb(1 2 3 / 0); z-index: 1; }
   @media (min-width: 900px) {
-    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { inset: 0 !important; margin: auto !important; width: min(35rem, calc(100vw - 64px)) !important; height: min(45rem, calc(100vh - 64px)) !important; border-radius: calc(12px * var(--exact-curve-reach)); corner-shape: var(--exact-curve); box-shadow: var(--exact-modal); }
-    #exact-root [navigationPresentation="modal"]:is(:has(> header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> header:first-child > button, > :where([data-exact-list-item]):first-child > header > button):not(:has(> header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"]))), :has(> :first-child:where(:not([data-exact-list-item])) > header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> :first-child:where(:not([data-exact-list-item])) > header:first-child > button, > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header > button):not(:has(> :first-child:where(:not([data-exact-list-item])) > header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> :first-child:where(:not([data-exact-list-item])) > header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :first-child:where(:not([data-exact-list-item])) > :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"]))), :has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child > button, > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header > button):not(:has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :where([data-exact-list-item]:first-child) > :first-child > :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"])))) { height: fit-content !important; max-height: min(45rem, calc(100vh - 64px)) !important; }
+    /* iPadOS 27 form sheets. A sheet presented over another is 20 pt shorter about its centre than it is alone,
+       which for one with a preferred content size is that size: alone it is 20 pt taller. So a card here is 20 px
+       shorter over a sheet, and a dialog, whose content's height is its preferred one, is as tall as its content
+       and 20 px alone and as tall as its content over a sheet: the room is a row of its frame above its buttons
+       (below), which the sheet gives up, so its content keeps its box. Either gives up only what its author's
+       `min-height`, or what its author wrote on a component's box, lets it. Where the two are one size alone
+       (`same`, navigation.js `sheetStack`), the covered sheet steps back: it loses 16 pt per side and rises 10 pt,
+       or as far as the 32 pt a sheet keeps from its window's top lets it (`-room`), and the upper sheet's top
+       stands 20 pt below the covered one's, so 20 pt of it show and two sheets that fill the window's height
+       stand on one foot. Under a sheet of another size the covered one keeps its frame, the upper one's top is
+       no higher than a sheet's over its own size would be, and UIKit lays the page's dim again over the covered
+       one and all beneath it: the whole scrim on the sheet, and the second boxes above on the rest. A sheet
+       keeps its frame when a third covers it, as UIKit's keeps its bounds, and rises from where it stood to
+       where a covered sheet stands.
+       The step is cut from each sheet as layout made it, whatever its author's `min-width`, `max-width` or
+       `min-height` made of the look's size. `sheetStack` reads each sheet's used box and gives it lengths: how
+       tall it is alone (`--exact-sheet-stack-alone`), what the stack took from its height (`-took`) and, for a
+       sheet it steps, its width and height (`-width`, `-height`). `-fall` is how far a stacked sheet's top
+       stands below its place alone: 10 px under its own size, whatever its height gave, and under another what
+       its height gave on that side; more, up to 20 px, where the margin stops the sheet under it short of its
+       rise. Its own rise adds it when it is covered in turn. A card's `max-height` is the height the look gives
+       one, which says how tall a cut card is alone; a dialog says where its frame is (`-fits`), which says
+       whether its height alone can be told or is measured (`sheetBox`). The lengths are in a sheet of the host's
+       own, not the route's inline style, which a host writes whole.
+       The step (`data-exact-sheet-step`) is a scale about the sheet's centre, where a transform of the author's
+       turns too, and a translation up by the rise and by half the height the scale takes. The width divides the
+       scale that loses 16 px per side (tan(atan2(a, b)) divides lengths in every engine). The look moves no
+       origin, so nothing of the author's is ever turned about the step's. A sheet with a transform of its
+       author's is not stepped, and one that gets one gives the step up, each property going back by its own
+       transition (navigation.js `ownTransform`, which reads what the registered `--exact-sheet-step-scale` and
+       `-rise` come to). */
+    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { --exact-sheet-stack-offset: 0px; --exact-sheet-stack-fall: 0px; --exact-sheet-stack-room: calc((100vh - 64px - var(--exact-sheet-stack-alone, 0px)) / 2); inset: 0 !important; margin: auto !important; width: min(35rem, calc(100vw - 64px)) !important; height: calc(min(45rem, calc(100vh - 64px)) - 2 * var(--exact-sheet-stack-offset)) !important; max-height: min(45rem, calc(100vh - 64px)) !important; border-radius: calc(32px * var(--exact-curve-reach)); corner-shape: var(--exact-curve); box-shadow: var(--exact-modal); }
+    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-sheet-step] { --exact-sheet-step-scale: tan(atan2(calc(var(--exact-sheet-stack-width) - 2 * 16px), var(--exact-sheet-stack-width))); --exact-sheet-step-rise: calc(clamp(0px, var(--exact-sheet-stack-room), 10px) + var(--exact-sheet-stack-fall) + (1 - var(--exact-sheet-step-scale)) * var(--exact-sheet-stack-height) / 2); scale: var(--exact-sheet-step-scale); translate: 0 calc(-1 * var(--exact-sheet-step-rise)); }
+    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-covered][data-exact-under-sheet="other"]::after { opacity: 1; }
+    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-sheet-stacked] { --exact-sheet-stack-offset: 10px; --exact-sheet-stack-fall: clamp(calc(var(--exact-sheet-stack-took, 0px) / 2), calc(2 * var(--exact-sheet-stack-offset) - var(--exact-sheet-stack-room)), calc(2 * var(--exact-sheet-stack-offset))); top: calc(2 * var(--exact-sheet-stack-fall) - var(--exact-sheet-stack-took, 0px)) !important; }
+    #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])[data-exact-sheet-stacked="same"] { --exact-sheet-stack-fall: clamp(var(--exact-sheet-stack-offset), calc(2 * var(--exact-sheet-stack-offset) - var(--exact-sheet-stack-room)), calc(2 * var(--exact-sheet-stack-offset))); }
+    #exact-root [navigationPresentation="modal"]:is(:has(> header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> header:first-child > button, > :where([data-exact-list-item]):first-child > header > button):not(:has(> header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"]))), :has(> :first-child:where(:not([data-exact-list-item])) > header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> :first-child:where(:not([data-exact-list-item])) > header:first-child > button, > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header > button):not(:has(> :first-child:where(:not([data-exact-list-item])) > header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> :first-child:where(:not([data-exact-list-item])) > header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :first-child:where(:not([data-exact-list-item])) > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :first-child:where(:not([data-exact-list-item])) > :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"]))), :has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child > :is(h1, h2, h3, h4, h5, h6, [role="heading"]), > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header > :is(h1, h2, h3, h4, h5, h6, [role="heading"])):has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child > button, > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header > button):not(:has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button), > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header > :not(h1, h2, h3, h4, h5, h6, [role="heading"], button)), :has(> :where([data-exact-list-item]:first-child) > :first-child > header:first-child:is([data-exact-site], [data-exact-said~="appearance"]), > :where([data-exact-list-item]:first-child) > :first-child > :where([data-exact-list-item]):first-child > header:is([data-exact-site], [data-exact-said~="appearance"])), :has(> :where([data-exact-list-item]:first-child) > :first-child > :is(header:first-child, :where([data-exact-list-item]):first-child) ~ :not(dialog, [popover], [data-exact-list-item="layer"]) ~ :not(dialog, [popover], [data-exact-list-item="layer"])))) { --exact-sheet-stack-fits: route; height: fit-content !important; max-height: calc(min(45rem, calc(100vh - 64px)) - 2 * var(--exact-sheet-stack-offset)) !important;
+      /* The frame's rows: its title, its content, the room, its buttons. */
+      &:has(> header, > :where([data-exact-list-item]) > header), &:not(:has(> header, > :where([data-exact-list-item]) > header)) > :first-child:where(:not([data-exact-list-item])), &:not(:has(> header, > :where([data-exact-list-item]) > header)) > :where([data-exact-list-item]:first-child) > :first-child { grid-template-rows: auto minmax(0, 1fr) calc(2 * (10px - var(--exact-sheet-stack-offset))) auto; }
+      /* Where a component's box is the dialog's frame, its route gives that box one row no taller than the card: the
+         box's body takes what its title and buttons leave, and the buttons stay in the card. */
+      &:not(:has(> header, > :where([data-exact-list-item]) > header)) { --exact-sheet-stack-fits: box; display: grid !important; grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+        & > :first-child:where(:not([data-exact-list-item])), & > :where([data-exact-list-item]:first-child) > :first-child { min-height: 0; }
+      }
+      /* `sheetAlone` reads how tall a sheet over a sheet is alone where it cannot tell: for the read the route, and
+         a frame that is not the route, are laid out with the room (the mark is on each, so nothing under them is
+         styled again). A transition that would start on that change or the one back takes no time, so none of
+         the author's delays the read, and one under way, the sheet's slide among them, runs on. */
+      &[data-exact-sheet-alone=""] { max-height: min(45rem, calc(100vh - 64px)) !important; }
+      &[data-exact-sheet-alone=""]:has(> header, > :where([data-exact-list-item]) > header), &:not(:has(> header, > :where([data-exact-list-item]) > header)) > [data-exact-sheet-alone=""]:first-child, &:not(:has(> header, > :where([data-exact-list-item]) > header)) > :where([data-exact-list-item]) > [data-exact-sheet-alone=""]:first-child { grid-template-rows: auto minmax(0, 1fr) calc(2 * 10px) auto; }
+      &[data-exact-sheet-alone], & > [data-exact-sheet-alone], & > :where([data-exact-list-item]) > [data-exact-sheet-alone] { transition-duration: 0s !important; transition-delay: 0s !important; }
+    }
   }
 
   /* A grouped list's card takes the look's surface corners and curve (D4.16): the grouped sheet is the compiler's

@@ -90,8 +90,8 @@ impl Executor {
         );
         core.enable_http_cache();
         // Linux starts programs for data code, and so does this host where it
-        // runs on a Mac; Android and Windows do not yet (LLP 1133.007 §8).
-        if cfg!(any(target_os = "linux", target_os = "macos")) {
+        // runs on a Mac. Windows only installs storage roots (LLP 1173 D4).
+        if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
             core.allow_processes();
         }
         Self { core, wake, note }

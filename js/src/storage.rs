@@ -411,7 +411,7 @@ pub(crate) fn reaches_documents(grants: &str) -> bool {
     grants.lines().any(|line| {
         let mut words = line.split_whitespace();
         matches!(words.next(), Some("fs.read" | "fs.write"))
-            && words.next().is_some_and(|p| p.starts_with("doc:"))
+            && words.next().is_some_and(|p| p.starts_with("doc:/"))
     })
 }
 

@@ -73,7 +73,10 @@ fn procedural_rigs_render_skinned_and_their_limbs_move() {
     };
     let mut surface = WorldSurface::<Walkers, ModelExecutor, true>::default();
     surface.bind(&[], None).unwrap();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert!(
         surface.assets().requests.is_empty(),
         "generated models need no delivery"
@@ -152,8 +155,14 @@ fn camera_depth_matches_perspective_skinning_and_socket_poses() {
     let mut depth = WorldSurface::<DepthWalkers<true>, ModelExecutor, true>::default();
     plain.bind(&[], None).unwrap();
     depth.bind(&[], None).unwrap();
-    plain.device_ready(exact_gpu::wgpu::Features::empty());
-    depth.device_ready(exact_gpu::wgpu::Features::empty());
+    plain.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
+    depth.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     let mut frame = Frame {
         width: 240.,
         height: 135.,
@@ -267,7 +276,10 @@ fn posed_model_pixels_match_cpu_hierarchy_and_move() {
     fn shot<const CPU: bool>(gpu: &exact_gpu::Gpu, x: f64) -> fixture::Pixels {
         let mut surface = WorldSurface::<Posed<CPU>, ModelExecutor, true>::default();
         surface.bind(&[exact_gpu::Value::Number(x)], None).unwrap();
-        surface.device_ready(exact_gpu::wgpu::Features::empty());
+        surface.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         let frame = Frame {
             width: 160.,
             height: 96.,

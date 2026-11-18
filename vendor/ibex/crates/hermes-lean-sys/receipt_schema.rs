@@ -178,7 +178,7 @@ pub(crate) fn validate(
         None => None,
     };
 
-    if target == "aarch64-linux-android"
+    if target.ends_with("-linux-android")
         && flags
             .iter()
             .any(|flag| flag.as_str() == Some("-DHERMES_ENABLE_INTL=true"))
@@ -215,7 +215,7 @@ fn validate_icu(
     target: &str,
     archives: &[(String, String)],
 ) -> Result<CanonicalIcuReceipt, String> {
-    if !target.ends_with("-unknown-linux-gnu") && target != "aarch64-linux-android" {
+    if !target.ends_with("-unknown-linux-gnu") && !target.ends_with("-linux-android") {
         return Err(
             "v2 receipt carries bundled ICU metadata for a target other than Linux or Android"
                 .into(),

@@ -131,3 +131,101 @@ test('an input runs after the change action and the timers due before it', async
     expect(order).toEqual(['timer', 'change', 'after', 'input']);
   } finally { await page.close(); await browser.close(); server.stop(true); }
 }, 60_000);
+
+test('a new child change waits until its prepared view is published', async () => {
+  const server = serve(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href + '?agent');
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const shown = rt.sig(false), seen = [];
+      let panel;
+      rt.ownedTasks();
+      const label = text => parent => {
+        const el = document.createElement('div'); el.textContent = text; el.dataset.sharedElement = 'panel';
+        el.style.setProperty('--exact-layout-transition', '20 0 linear'); parent.append(el); rt.pr(el);
+        if (text === 'new') rt.gated(0, () => rt.commit(() => seen.push(panel.textContent)),
+          true, false, () => true, () => 1, 'changed', 0, 0, 0, true, 0, '/child');
+      };
+      rt.mount(root => { panel = document.createElement('div'); root.append(panel); rt.when(panel, shown, label('new'), label('old')); });
+      await rt.pieces();
+      const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+      let transition;
+      document.startViewTransition = update => transition = start(async () => { await gate.promise; return update(); });
+      rt.commit(() => rt.W(shown, true));
+      rt.advance(0, false, undefined, false);
+      const waiting = seen.slice(), deferred = !!transition;
+      gate.resolve();
+      if (transition) { await transition.updateCallbackDone; await transition.finished; }
+      rt.advance(0, false, undefined, false);
+      return { waiting, deferred, seen };
+    });
+    expect(result).toEqual({ waiting: [], deferred: true, seen: ['new'] });
+  } finally { await page.close(); await browser.close(); server.stop(true); }
+}, 60_000);
+
+test('an instance owns its gated task and destruction cancels its pending change', async () => {
+  const server = serve(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href + '?agent');
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const shown = rt.sig(true), active = rt.sig(true), key = rt.sig(0), seen = [];
+      let generation = 0;
+      rt.mount(root => rt.when(root, shown, () => {
+        const instance = ++generation;
+        rt.gated(10, () => rt.commit(() => seen.push(instance)), false, false,
+          active, key, 'tick', 0, 0, 0, false, 0, '/instance');
+        rt.gated(0, () => rt.commit(() => seen.push(-instance)), true, false,
+          active, key, 'changed', 0, 0, 0, true, 1, '/instance');
+      }, () => {}));
+      rt.advance(0, false, undefined, false);
+      rt.advance(10, false);
+      rt.commit(() => rt.W(key, 1));
+      rt.commit(() => rt.W(shown, false));
+      rt.advance(100, false, undefined, false);
+      const destroyed = rt.clock.timers.length;
+      rt.commit(() => rt.W(shown, true));
+      rt.advance(100, false, undefined, false);
+      rt.advance(110, false);
+      rt.commit(() => rt.W(active, false));
+      rt.advance(150, false);
+      return { seen, destroyed, armed: rt.clock.timers.length };
+    });
+    expect(result).toEqual({ seen: [-1, 1, -2, 2], destroyed: 0, armed: 0 });
+  } finally { await page.close(); await browser.close(); server.stop(true); }
+}, 60_000);
+
+test.each([false, true])('a superseded prepared child stops its timer before publication (row: %s)', async row => {
+  const server = serve(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href + '?agent');
+    const result = await page.evaluate(async row => {
+      const rt = await import('/host/web-js/rt.js');
+      const shown = rt.sig(false), seen = [];
+      let panel;
+      rt.ownedTasks();
+      const label = text => parent => {
+        const el = document.createElement('div'); el.textContent = text; el.dataset.sharedElement = 'panel';
+        el.style.setProperty('--exact-layout-transition', '20 0 linear'); parent.append(el); rt.pr(el);
+        if (text === 'new') rt.gated(10, () => rt.commit(() => seen.push(panel.textContent)),
+          false, false, () => true, () => 1, 'tick', 0, 0, 0, false, 0, '/child');
+      };
+      rt.mount(root => { panel = document.createElement('div'); root.append(panel); if (row) rt.each(panel, () => shown() ? ['new'] : ['old'], v => v(), (p, v) => label(v())(p), true);
+        else rt.when(panel, shown, label('new'), label('old')); });
+      await rt.pieces();
+      const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+      let transition;
+      document.startViewTransition = update => transition = start(async () => { await gate.promise; return update(); });
+      rt.commit(() => rt.W(shown, true));
+      rt.commit(() => rt.W(shown, false));
+      rt.advance(rt.clock.now + 10, false, undefined, false);
+      const waiting = seen.slice(), deferred = !!transition;
+      gate.resolve();
+      if (transition) { await transition.updateCallbackDone; await transition.finished; }
+      rt.advance(rt.clock.now + 10, false, undefined, false);
+      return { waiting, deferred, seen, timers: rt.clock.timers.length, tasks: rt.Tasks.length };
+    }, row);
+    expect(result).toEqual({ waiting: [], deferred: true, seen: [], timers: 0, tasks: 0 });
+  } finally { await page.close(); await browser.close(); server.stop(true); }
+}, 60_000);

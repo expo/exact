@@ -238,7 +238,7 @@
       "type": "string"
     },
     "handle_links": {
-      "description": "Whether the app's web addresses open the installed app (LLP 1038 D8; the WICG handle_links explainer's values). `preferred`: links to app.origin within `scope`, and to each `scope_extensions` origin, open the app on iOS, iPadOS, macOS and Android, which the build signs and registers; the web build writes app.origin's association files and prints every other origin's. `not-preferred` and `auto` (what an absent member means) claim nothing natively. Exact's /.exact/ paths and an https auth.callback are never claimed.",
+      "description": "Whether the app's web addresses open the installed app (LLP 1038 D8; the WICG handle_links explainer's values). `preferred`: links to app.origin within `scope`, and to each `scope_extensions` origin, open the app on iOS, iPadOS, macOS and Android, which the build signs and registers; the web build writes app.origin's association files and prints every other origin's. `not-preferred` and `auto` (what an absent member means) claim nothing natively. These navigation claims exclude Exact's /.exact/ paths and https auth callbacks. Android registers native auth callbacks separately for the browser return; the web popup's /.exact/auth/callback stays in the browser.",
       "enum": ["auto", "preferred", "not-preferred"]
     },
     "scope": {
@@ -337,6 +337,47 @@
       "description": "The app's icons, as the web manifest spells them: PNG, SVG or ICO files under assets/. Each host picks the file a slot takes by purpose, then shape and size (LLP 1163 D5): iOS and macOS a square maskable, else any, of at least 1024 px, unless host.ios.icon or host.macos.icon selects an Icon Composer project; iOS's tinted icon a square monochrome PNG; the web's favicons the smallest square raster of at least 32 px and an SVG, and its Apple touch icon the smallest opaque square PNG of at least 180 px, else the largest. An iOS distribution build requires the iOS icon.",
       "type": "array",
       "items": { "$ref": "#/$defs/icon" }
+    },
+    "alternate_icons": {
+      "description": "Icons the person may choose for the Home Screen instead of the app's own, in the order a picker shows them (LLP 1163.000 D1): each a name and the icons it is made from, picked and checked slot by slot as the app's own are. iOS and iPadOS build each as an alternate app icon, from its host.ios.icon project, else an .appiconset of its name in the app's catalogs, else its icons; @exact/app-icon reads and sets the choice. The only roster: a catalog .appiconset no entry names, other than the primary's, is refused. Other hosts build none. manifest.json leaves it out.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "icons"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "What setAppIcon takes and appIcon answers: ASCII letters and digits, starting with a letter, at most 32, unique regardless of case. Not AppIcon, the primary's Icon Composer project's name, or another asset's in the app's catalogs.",
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+          },
+          "icons": {
+            "description": "This icon's files, as the app's icons: at least one square any or maskable. iOS takes a square maskable, else any, opaque and at least 1024 px, and the tinted icon from a square monochrome PNG.",
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/icon" }
+          },
+          "color_scheme_dark": {
+            "description": "Its dark icons, as the app's color_scheme_dark.icons: \"any\" only.",
+            "type": "object",
+            "properties": { "icons": { "type": "array", "items": { "$ref": "#/$defs/icon" } } },
+            "additionalProperties": false
+          },
+          "host": {
+            "type": "object",
+            "properties": {
+              "ios": {
+                "type": "object",
+                "properties": {
+                  "icon": { "type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app that draws this icon on iOS in place of its icons, compiled under the alternate's name." }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
     },
     "live_activities": {
       "type": "array",
@@ -781,6 +822,7 @@
           "description": "iOS: `minimumOS` (default 17.0), `deviceFamily` (iphone, ipad), and the keys below.",
           "type": "object",
           "properties": {
+            "swiftPackages": { "$ref": "#/$defs/swiftPackages" },
             "infoPlist": {
               "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
               "type": "object",
@@ -953,6 +995,7 @@
           "description": "macOS: `minimumOS` (default 14.0), the first window's size, and the keys below.",
           "type": "object",
           "properties": {
+            "swiftPackages": { "$ref": "#/$defs/swiftPackages" },
             "infoPlist": {
               "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
               "type": "object",
@@ -1617,6 +1660,18 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "swiftPackages": {
+      "description": "Swift Package Manager products for native Swift, with exact versions. The app keeps Package.resolved; exact lock refreshes it (LLP 1133.001 D9, expo/exact#751).",
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["url", "exactVersion", "products"], "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string", "pattern": "^https://[^/?#@\\s]+/[^?#\\s]+$" },
+          "exactVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$" },
+          "products": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$" } }
+        }
+      }
+    },
     "alternativeNames": {
       "description": "Other names Siri and App Shortcuts answer to for the app, such as its name before a rename (Info.plist's INAlternativeAppNames): each a `name` and an optional `pronunciationHint`, written as it sounds. At most three. A watch app gets the iPhone app's. Apple admits names based on the app's own or ones its users commonly call it, never another app's.",
       "type": "array",

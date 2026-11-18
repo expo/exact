@@ -69,6 +69,13 @@ enums emit as strings.
 The plain embedding used to compare component expansion keeps the view
 before this lowering step.
 
+Observe commands carry the host's positional arguments: `observe` emits
+the event name, severity (`"info"` when omitted), then each attribute's
+name and value; `observeAttributes` emits only those pairs. Fields go in
+the order the call names them; the lowerer and the embedding share
+`contract_lower::expr::observe_args`. An attribute value, including a
+nested record, remains one expression.
+
 **Differential testing.** For each case, `difftest` compiles the program to a
 plan and boots it on the runner, delivers the script's events, and prints a
 canonical observation after every step: the outcome, the commits attempted, every root slot, derive
@@ -877,8 +884,7 @@ All without `sorry` or axioms beyond Lean's own (`propext`,
   gives: a callee runs as the action it is.
 - `check_sound`: `check p = true → WellTyped p`. Beyond types, both ask
   what the Rust analyzer asks of a task (`analyze-unknown-action`,
-  `analyze-handler-arity`): it names an action of no parameters, else a
-  timer would fire an unbound name; and what the compiler asks of a
+  `analyze-handler-arity`): it names an action whose parameters match its captured props (none at the root); and what the compiler asks of a
   task's interval (`lower-timer-literal`: a number literal). A derive's
   body and a resource's arguments are typed in `settleScope`, the
   component scope without the states lifted from children (`lifted`: late
@@ -1217,6 +1223,28 @@ What it does not carry:
 - The component-level semantics (`Contract.CompSem`) refuses a child's
   mutations, so `difftest expansion` compares such a file's expansion
   (`Contract.Expand` lifts them as inline.rs does) but not its meaning.
+
+## A child's tasks (LLP 1035.005.004 D6)
+
+Expansion lifts each task with its owning arm and its action's captured props.
+A declared timer holds the schedule of each live owning instance; the clock
+selects its earliest deadline, breaking ties by instance creation order after
+declaration order. Gates and keys preserve this order; a recreated instance
+follows surviving instances. Rendering removes the schedules of destroyed
+instances and starts those of new ones. Gates and keys read the instance's
+frame, and a firing evaluates its captures there before running its action.
+Consuming a firing selects the next due instance even if the action refuses,
+so a refusing instance cannot starve its siblings on subsequent advances.
+The corpus's `timers/owned` checks separate instances, gates, rekeys and
+removal, including a sibling firing after repeated refusals;
+`timers/owned-order` checks ties after recreation and rearming.
+The runner also checks native callbacks, frame and change tasks,
+wait admission and carry.
+
+As with child mutations, `Contract.CompSem` refuses child tasks; expansion
+comparison still checks their lifted declarations. The flat semantics models
+their execution. The runtime's native timing and browser scheduling tests cover
+host admission; the semantics uses the deterministic clock.
 
 ## Persisted state (LLP 1116 D5)
 

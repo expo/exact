@@ -1,11 +1,16 @@
 import { test, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { intentsMetadata as emit } from './intents-metadata.mjs';
 import { buildIntents, nativeIntentModule, intentsMetadata, mergeIntentsMetadata, launchIntentModule } from './intents.mjs';
-import { moduleLibraryLinkArgs } from './compose.mjs';
+import { lockSwiftPackages, moduleLibraryLinkArgs } from './compose.mjs';
+import { resolveApp } from '../../scripts/app.mjs';
+import { appleArtifacts } from './build.mjs';
+import { useXcode } from './devices.mjs';
+import { readPrivacyManifest } from './privacy.mjs';
+import { plistFile } from './assets.mjs';
 
 const fixture = name => readFileSync(new URL(`./fixtures/native-intents.${name}`, import.meta.url), 'utf8');
 const constants = () => JSON.parse(fixture('swiftconstvalues'));
@@ -17,6 +22,165 @@ const canonical = data => {
   if (out.resolvableInputTypes) out.resolvableInputTypes.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   return out;
 };
+
+test.skipIf(process.platform !== 'darwin')('app Swift products reach the roster probe and App Intents typecheck', () => {
+  useXcode();
+  const dir = resolve(import.meta.dir, '../../target/swift-app-build');
+  mkdirSync(resolve(dir, 'modules/apple'), { recursive: true });
+  const swiftPackages = [
+    { url: 'https://github.com/apple/swift-collections.git', exactVersion: '1.1.4', products: ['DequeModule'] },
+    { url: 'https://github.com/ReactiveX/RxSwift.git', exactVersion: '6.9.0', products: ['RxCocoa-Dynamic'] },
+  ];
+  const implementation = resolve(dir, 'node_modules/@fixture/reactive');
+  mkdirSync(resolve(implementation, 'apple'), { recursive: true });
+  writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { '@fixture/reactive': '1.0.0' } }));
+  writeFileSync(resolve(implementation, 'package.json'), JSON.stringify({ name: '@fixture/reactive', version: '1.0.0',
+    exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+  writeFileSync(resolve(implementation, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/reactive', names: [], views: ['reactive-view'] }));
+  writeFileSync(resolve(implementation, 'apple/exact.json'), JSON.stringify({ kind: 'implementation', implements: '@fixture/reactive@1.0.0',
+    platform: 'apple', targets: ['macos', 'ios'], sources: { swift: ['Reactive.swift'] }, class: 'Reactive',
+    swiftPackages }));
+  const implementationPrivacy = {
+    NSPrivacyAccessedAPITypes: [{ NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults', NSPrivacyAccessedAPITypeReasons: ['CA92.1'] }],
+    NSPrivacyCollectedDataTypes: [{ NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeOtherDiagnosticData', NSPrivacyCollectedDataTypeLinked: false,
+      NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] }],
+  };
+  writeFileSync(resolve(implementation, 'apple/PrivacyInfo.xcprivacy'), plistFile(implementationPrivacy));
+  writeFileSync(resolve(implementation, 'apple/Reactive.swift'), `import Foundation
+import ExactPackage
+import RxCocoa
+import RxSwift
+public final class Reactive: ExactPackage {
+    public init(context: ExactPackageContext) {}
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) { reply([:]) }
+    public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] { [:] }
+    public static var count: Int {
+        UserDefaults.standard.set(3, forKey: "exact-reactive-fixture")
+        return UserDefaults.standard.integer(forKey: "exact-reactive-fixture")
+    }
+    public static var configured: Bool {
+        get { Hooks.recordCallStackOnError }
+        set { Hooks.recordCallStackOnError = newValue }
+    }
+}
+`);
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Swift Products', app: { id: 'com.exact.swiftproducts', name: 'Swift Products' },
+    rust: false, modules: ['exact-probe'], host: { macos: { minimumOS: '15.0', swiftPackages }, ios: { minimumOS: '18.0', swiftPackages } },
+    deploy: { store: { macos: '0', ios: '0' } } }));
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    reactive-view\n');
+  writeFileSync(resolve(dir, 'app.ts'), 'export const grants = "";\nexport const answer = () => { throw new Error("No sources"); };\n');
+  writeFileSync(resolve(dir, 'modules/apple/Own.swift'), `import AppIntents
+import ExactPkg_reactive
+#if SWIFT_PACKAGE
+import DequeModule
+import RxSwift
+#endif
+final class ProbeModule: ExactModule {
+    override class var views: [String: ExactNativeFactory] {
+        precondition(Reactive.count == 3)
+#if SWIFT_PACKAGE
+        precondition(Deque([1, 2, 3]).count == Reactive.count)
+        Hooks.recordCallStackOnError = true
+        precondition(Reactive.configured, "app configuration must reach the implementation")
+        Reactive.configured = false
+        precondition(!Hooks.recordCallStackOnError, "implementation configuration must reach app Swift")
+#endif
+        let resources = Bundle(url: Bundle.main.resourceURL!.appendingPathComponent("RxSwift_RxSwift.bundle"))
+        precondition(resources?.url(forResource: "PrivacyInfo", withExtension: "xcprivacy") != nil, "SwiftPM resources missing from roster probe")
+        return ["exact-probe": ExactNativeFactory(firstFrame: true) { _, _ in throw ExactNativeRefusal("probe only") }]
+    }
+}
+let exactModule: ExactModule.Type = ProbeModule.self
+struct ProductIntent: AppIntent {
+    static let title: LocalizedStringResource = "Product intent"
+    func perform() async throws -> some IntentResult { .result() }
+}
+`);
+  const app = resolveApp(dir);
+  lockSwiftPackages(app);
+  const locked = readFileSync(resolve(dir, 'Package.resolved'));
+  for (const [destination, selection, trust] of [
+    ['macos', 'none', 'development'], ['macos', 'all', 'development'],
+    ['ios-simulator', 'all', 'development'], ['ios-simulator', 'all', 'production'],
+  ]) {
+    const manifest = structuredClone(app.manifest);
+    if (selection === 'none') for (const os of ['macos', 'ios']) delete manifest.host[os].swiftPackages;
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    const result = spawnSync(process.execPath, [resolve(import.meta.dir, 'build.mjs'),
+      ...(destination === 'macos' ? ['--bundle'] : ['--ios', '--no-install']), '--extensions', selection], {
+      encoding: 'utf8', timeout: 600000, env: { ...process.env, EXACT_APP_DIR: dir, EXACT_IDENTITY: '-', EXACT_UPDATE_TRUST: trust, EXACT_UPDATE_GENESIS: '1' },
+    });
+    const log = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    writeFileSync(resolve(dir, `${destination}-${selection}-${trust}.log`), log);
+    expect(result.status, log).toBe(0);
+    expect(log).not.toContain('cannot qualify');
+    const paths = appleArtifacts(app, { destination, trust });
+    if (trust === 'production') {
+      const signature = spawnSync('codesign', ['--verify', '--deep', '--strict', paths.bundle], { encoding: 'utf8' });
+      expect(signature.status, signature.stderr).toBe(0);
+      for (const name of ['ExactModules', 'ExactPkg_reactive', 'ExactSwiftDependencies']) {
+        const binary = resolve(paths.bundle, 'Frameworks', `${name}.framework`, name);
+        const linked = spawnSync('xcrun', ['otool', '-L', binary], { encoding: 'utf8' });
+        expect(linked.status, linked.stderr).toBe(0);
+        expect(linked.stdout).toContain('@rpath/RxCocoa-Dynamic.framework/RxCocoa-Dynamic');
+        expect(linked.stdout).not.toContain('@rpath/libRxCocoa-Dynamic.dylib');
+      }
+      for (const name of ['ExactSwiftDependencies', 'RxCocoa-Dynamic']) {
+        const privacy = readPrivacyManifest(resolve(paths.bundle, 'Frameworks', `${name}.framework/PrivacyInfo.xcprivacy`));
+        expect(privacy.NSPrivacyTracking).toBe(false);
+        expect(privacy.NSPrivacyCollectedDataTypes).toEqual(implementationPrivacy.NSPrivacyCollectedDataTypes);
+      }
+      const privacy = readPrivacyManifest(resolve(paths.bundle, 'Frameworks/ExactPkg_reactive.framework/PrivacyInfo.xcprivacy'));
+      expect(privacy.NSPrivacyAccessedAPITypes).toEqual(implementationPrivacy.NSPrivacyAccessedAPITypes);
+    }
+    const resources = destination === 'macos' ? resolve(paths.bundle, 'Contents/Resources') : paths.bundle;
+    if (trust !== 'production') {
+      const privacy = readPrivacyManifest(resolve(resources, 'PrivacyInfo.xcprivacy'));
+      expect(privacy.NSPrivacyTracking).toBe(false);
+      expect(privacy.NSPrivacyCollectedDataTypes).toEqual(implementationPrivacy.NSPrivacyCollectedDataTypes);
+    }
+    const plist = spawnSync('plutil', ['-convert', 'json', '-o', '-', resolve(paths.bundle, destination === 'macos' ? 'Contents/Info.plist' : 'Info.plist')], { encoding: 'utf8' });
+    expect(plist.status, plist.stderr).toBe(0);
+    expect(JSON.parse(plist.stdout).ExactFirstFrameModules).toEqual(['exact-probe']);
+    const metadata = resolve(resources, 'Metadata.appintents/extract.actionsdata');
+    if (selection === 'all') expect(JSON.parse(readFileSync(metadata, 'utf8')).actions.ProductIntent).toBeDefined();
+    else expect(existsSync(metadata)).toBe(false);
+    expect(readFileSync(resolve(dir, 'Package.resolved')).equals(locked)).toBe(true);
+    if (destination === 'macos') {
+      const packages = resolve(app.target, 'swift-packages');
+      const accessor = resolve(packages, readdirSync(packages, { recursive: true }).find(file =>
+        file.includes('/build/') && file.endsWith('apple-macosx/release/RxSwift.build/DerivedSources/resource_bundle_accessor.swift')));
+      const buildPath = JSON.parse(readFileSync(accessor, 'utf8').match(/let buildPath = (".*")/)[1]);
+      const description = JSON.parse(readFileSync(resolve(accessor, '../../../description.json'), 'utf8'));
+      const args = Object.values(description.swiftCommands).find(command => command.moduleName === 'RxSwift').otherArguments;
+      const overlays = args.flatMap((arg, i) => arg === '-vfsoverlay' ? [arg, args[i + 1]] : []);
+      const relocated = mkdtempSync(resolve(dir, 'relocated-')), bundle = resolve(relocated, 'Products.app');
+      try {
+        cpSync(paths.bundle, bundle, { recursive: true });
+        const binary = resolve(bundle, 'Contents/MacOS', paths.executable), main = resolve(relocated, 'main.swift');
+        writeFileSync(main, `import Foundation
+let resource = Bundle.module.url(forResource: "PrivacyInfo", withExtension: "xcprivacy")!
+precondition(!((try! Data(contentsOf: resource)).isEmpty))
+print(resource.path)
+`);
+        rmSync(binary);
+        // The SDK's accessor is internal; compile it with its build settings to exercise Bundle.module.
+        const compiled = spawnSync('xcrun', ['swiftc', ...overlays, accessor, main, '-o', binary], { encoding: 'utf8' });
+        expect(compiled.status, compiled.stderr).toBe(0);
+        const signed = spawnSync('codesign', ['--force', '--sign', '-', '--timestamp=none', bundle], { encoding: 'utf8' });
+        expect(signed.status, signed.stderr).toBe(0);
+        const verified = spawnSync('codesign', ['--verify', '--deep', '--strict', bundle], { encoding: 'utf8' });
+        expect(verified.status, verified.stderr).toBe(0);
+        renameSync(buildPath, `${buildPath}-unavailable`);
+        try {
+          const read = spawnSync(binary, [], { encoding: 'utf8' });
+          expect(read.status, read.stderr).toBe(0);
+          expect(read.stdout.trim()).toBe(resolve(bundle, 'Contents/Resources/RxSwift_RxSwift.bundle/PrivacyInfo.xcprivacy'));
+        } finally { renameSync(`${buildPath}-unavailable`, buildPath); }
+      } finally { rmSync(relocated, { recursive: true, force: true }); }
+    }
+  }
+}, 900000);
 
 test('native intent properties and availability match the Xcode fixture', () => {
   const output = emit(constants(), 27, { module: 'ExactAppModules' });

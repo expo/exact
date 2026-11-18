@@ -290,6 +290,11 @@ impl Marker {
             .0
             .iter()
             .filter_map(|slot| {
+                // A slot never written (the first save writes slot 1) is
+                // zeros: the empty marker, should that first save tear.
+                if slot.iter().all(|&b| b == 0) {
+                    return Some(Self::default());
+                }
                 if Sha256::digest(&slot[..17])[..15] != slot[17..] || slot[16] > 3 {
                     return None;
                 }

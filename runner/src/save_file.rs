@@ -144,6 +144,12 @@ pub(crate) fn plain_app_path(path: &str) -> bool {
             .all(|p| !p.is_empty() && *p != "." && *p != ".." && !p.contains('\0'))
 }
 
+/// An `app:/` directory, `app:/<root>` or one below it: one whose files
+/// [`plain_app_path`] admits. One trailing `/` names the same directory.
+pub(crate) fn plain_app_directory(path: &str) -> bool {
+    plain_app_path(&format!("{}/f", path.strip_suffix('/').unwrap_or(path)))
+}
+
 /// Whether an `fs.read` or `fs.write` line of `grants` admits `path`, as
 /// the grant parser reads it (a quoted target such as `fs.read
 /// "app:/data/a b"` included) and `PathPrefix::covers` matches it, a
@@ -296,6 +302,9 @@ mod tests {
         assert!(!plain_app_path("app:/data/../x"));
         assert!(!plain_app_path("app:/data"));
         assert!(!plain_app_path("/etc/passwd"));
+        assert!(plain_app_directory("app:/tmp") && plain_app_directory("app:/tmp/a/"));
+        assert!(!plain_app_directory("app:/") && !plain_app_directory("app:/tmp//"));
+        assert!(!plain_app_directory("app:/tmp/../data"));
         assert_eq!(chosen_name("/tmp/out/fieldnotes.json"), "fieldnotes.json");
     }
 

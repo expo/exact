@@ -124,3 +124,52 @@ test('HTTPS refusals name the configuration option and allow loopback developmen
     expect(() => oauth({ ...config, issuer: origin, endpoints: { authorization: `${origin}/authorize`, token: `${origin}/token`, revocation: `${origin}/revoke` }, apis: [origin] })).not.toThrow();
   }
 });
+
+test.each(['browser', 'authorize'])('%s sends and validates a nonce chosen for this sign-in', async path => {
+  const nonce = 'key-bound + / nonce';
+  for (const echoed of [nonce, 'wrong', undefined]) {
+    let sent: string | null = null;
+    const authorize = async (url: string) => {
+      const q = new URL(url).searchParams;
+      sent = q.get('nonce');
+      return `${callback}?state=${q.get('state')}&code=one`;
+    };
+    globals.openAuthSession = authorize;
+    const provider = oauth({ ...config, scopes: ['openid'], fetch: async () => {
+      const claims = { iss: config.issuer, sub: 'ada', aud: config.clientId, exp: 4000000000, iat: 1, nonce: echoed };
+      const token = `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+      return Response.json({ access_token: 'access', token_type: 'Bearer', id_token: token });
+    } }), store = memory();
+    await provider.session(store);
+    const result = await provider.signIn(store, { nonce, ...(path === 'authorize' ? { authorize: (asked: OAuthAuthorization) => authorize(asked.url) } : {}) });
+    expect(sent).toBe(nonce);
+    expect(result.ok).toBe(echoed === nonce);
+    expect(provider.idToken(store) !== null).toBe(echoed === nonce);
+    if (echoed !== nonce) expect(result.code).toBe('invalid_response');
+  }
+});
+
+test('a supplied nonce is per press, validated before consumption, and opens a prepared browser synchronously', async () => {
+  const opened: URL[] = [];
+  globals.openAuthSession = (url: string) => {
+    opened.push(new URL(url));
+    return Promise.reject(Object.assign(new Error('cancelled'), { status: 499 }));
+  };
+  const provider = oauth({ ...config, scopes: ['openid'] }), store = memory();
+  await provider.session(store);
+  for (const nonce of ['', null, 7]) {
+    await expect(provider.signIn(store, { nonce: nonce as string })).rejects.toThrow('nonce');
+  }
+  const options = { nonce: 'first' };
+  const first = provider.signIn(store, options);
+  options.nonce = 'changed';
+  expect(opened).toHaveLength(1);
+  expect(opened[0].searchParams.get('nonce')).toBe('first');
+  await first;
+  await provider.session(store);
+  await provider.signIn(store);
+  const generated = opened[1].searchParams.get('nonce');
+  expect(generated).toBeTruthy();
+  expect(generated).not.toBe('first');
+  await expect(oauth(config).signIn(store, { nonce: 'no-openid' })).rejects.toThrow('openid');
+});

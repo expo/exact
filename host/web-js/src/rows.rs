@@ -405,6 +405,7 @@ impl Em<'_> {
             | StyleId::PressOpacityTo
             | StyleId::PressBackgroundColor
             | StyleId::PressColor => {
+                self.press_paint = true;
                 let press = self.uses.rt("pressFeedback");
                 let _ = write!(self.out, "{press}();");
                 let name = match id {

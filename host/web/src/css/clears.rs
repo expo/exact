@@ -23,8 +23,16 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         // A clear is unsaid, as `auto` is (selection.rs): no declaration, so the
         // page's sheet decides.
         UserSelect => {}
-        // Its value writes nothing (css.rs, LLP 1123 D4), so neither does a clear.
-        SafeAreaIgnore => {}
+        // Their values write nothing (css.rs, LLP 1123 D4, D11), so neither does a clear.
+        SafeAreaIgnore
+        | AdditionalSafeAreaTop
+        | AdditionalSafeAreaRight
+        | AdditionalSafeAreaBottom
+        | AdditionalSafeAreaLeft
+        | SafeAreaPaddingTop
+        | SafeAreaPaddingRight
+        | SafeAreaPaddingBottom
+        | SafeAreaPaddingLeft => {}
         // The absent part uses the shell's platform placeholder fallback.
         PlaceholderColor => out.push_str("--exact-placeholder-color:initial;"),
         // And the platform's dim beneath a dialog.

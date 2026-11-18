@@ -1,0 +1,72 @@
+routes nav
+  tab a "/"
+  tab b "/b"
+
+component App
+  state total = 0
+  state shown = true
+  state active = true
+  state version = 0
+  action pick(name: string)
+    nav = select(nav, name)
+  action toggle
+    shown = not shown
+  action gate
+    active = not active
+  action rekey
+    version = version + 1
+  action add(digit: number)
+    total = total * 10 + digit
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back"
+      for t in nav.tabs key=t.name
+        column role="tabpanel" id=`panel-${t.name}`
+          for e in t.stack key=e.id
+            column navigationKey=`${e.id}`
+              if t.name != "a" or shown
+                Clock(digit=t.name == "a" ? 1 : 2, active=t.name != "a" or active, version=t.name == "a" ? version : 0, add=add)
+      row role="tablist"
+        button press=pick("a") testId="a" role="tab" aria-controls="panel-a" aria-selected=(nav.tab == "a")
+          text "A"
+        button press=pick("b") testId="b" role="tab" aria-controls="panel-b" aria-selected=(nav.tab == "b")
+          text "B"
+      button press=toggle testId="toggle"
+        text "Toggle A"
+      button press=gate testId="gate"
+        text "Gate A"
+      button press=rekey testId="rekey"
+        text "Rekey A"
+      text `${total}` testId="total"
+
+component Clock
+  props
+    digit: number
+    active: bool
+    version: number
+    add: action
+  task tick when active key=version
+    every(10, bump)
+  action bump
+    add(digit)
+  view
+    text `${digit}`
+
+test "recreating an instance puts it after surviving instances on a timer tie"
+  tap "b"
+  tap "toggle"
+  tap "toggle"
+  clock +10
+  expect state total == 21
+
+test "reopening a gate retains instance order on a timer tie"
+  tap "b"
+  tap "gate"
+  tap "gate"
+  clock +10
+  expect state total == 12
+
+test "rekeying retains instance order on a timer tie"
+  tap "b"
+  tap "rekey"
+  clock +10
+  expect state total == 12

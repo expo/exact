@@ -497,3 +497,20 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
   walk(ast,null,null);
   return found;
 }
+
+/** The specifiers a TypeScript or JavaScript file imports and re-exports from, read from its syntax tree, so a string or
+ * comment that spells an import is none: `import … from "x"` and `export … from "x"` (not `import type` or `export
+ * type`), `import "x"` and `import("x")`. The compiler reads the same set by tokens (`contract/cli/src/sources/data.rs`). */
+export function moduleSpecifiers(file, text, parseSync) {
+  const { program } = parseSync(file, text, { sourceType: 'module' });
+  const out = [];
+  const visit = (node) => {
+    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+    if (!node || typeof node !== 'object') return;
+    if (/^(Import|ExportNamed|ExportAll)Declaration$/.test(node.type) && node.source && (node.importKind ?? node.exportKind) !== 'type') out.push(node.source.value);
+    if (node.type === 'ImportExpression' && typeof node.source?.value === 'string') out.push(node.source.value);
+    for (const key in node) visit(node[key]);
+  };
+  visit(program);
+  return out;
+}

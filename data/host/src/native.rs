@@ -158,7 +158,9 @@ fn execute(
         return image(op == "fs.transformImage", grants, directories, args);
     }
     let (operation, destination, data) = operation(op, args)?;
-    if path.starts_with("app:/") && destination.is_some_and(|d| !d.starts_with("app:/")) {
+    if path.starts_with("app:/")
+        && destination.is_some_and(|d| !d.starts_with("app:/") && !fs::is_known_folder(d))
+    {
         return Err("portable storage needs an app:/ destination".into());
     }
     let result = fs::run_with_limits(
@@ -529,10 +531,12 @@ pub(super) const AGENT_REFUSAL: &str =
 /// Classify malformed disk spellings too: the filesystem adapter refuses them
 /// after source/grant admission, before opening any handle. This is not authority.
 fn native_filesystem(op: &str, args: &Value) -> bool {
-    cfg!(windows)
-        && op.starts_with("fs.")
+    op.starts_with("fs.")
         && args["path"].as_str().is_some_and(|path| {
-            !path.starts_with("app:/") && !exact_data::documents::is_document(path)
+            fs::is_known_folder(path)
+                || (cfg!(windows)
+                    && !path.starts_with("app:/")
+                    && !exact_data::documents::is_document(path))
         })
 }
 /// `copyFile` from a chosen document into an app file (LLP 1069.010 D1,

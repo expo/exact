@@ -47,6 +47,7 @@ use nfcStatus, scan, abortScan, abortWrite, openNFCSettings, reading, readingerr
 
 use setAppShortcuts, ShortcutItem from "@exact/quick-actions"
 use setContentIndex, ContentDescription from "@exact/search-index"
+use appIcon, setAppIcon, AppIconStatus from "@exact/app-icon"
 
 routes nav
   tab library "/"
@@ -169,6 +170,9 @@ component Shelf
   mutation scanned as shape NDEFScanEnd then scanEnded
   mutation tagged as shape Tagged then tagEnded
   mutation found as shape Owner then openFound
+  // The Home Screen icon: Shelf's own or Paper (app.json's alternate_icons).
+  resource shownIcon = appIcon() as shape AppIconStatus else empty()
+  mutation iconSet as shape AppIconStatus refreshes shownIcon
 
   derive current = top(nav)
   derive visible = lib.books.filter(b => matches(b, filter, query.trim().toLowerCase()))
@@ -213,6 +217,11 @@ component Shelf
     fails when match logged { case some(a) => not a.ok, case none => false }
   action logPages(id: string, page: number)
     send logged = setPage(id, page)
+  // Only from the person's tap: iOS tells them of the change in an alert.
+  action chooseIcon(name: string)
+    send iconSet = setAppIcon(icon=name)
+  action choosePrimaryIcon
+    send iconSet = setAppIcon()
   action addTitled(title: string, author: string, pages: number)
     send logged = addBook(title, author, pages, "want", "", "", time.epochAtZero + performanceNow())
 
@@ -645,6 +654,8 @@ component Shelf
                     flex=1
                     min-height=0
                     StatsSections(lib=lib, finished=finished, goalBy=goalBy)
+                    if shownIcon.available
+                      IconSection(status=shownIcon, primary=choosePrimaryIcon, choose=chooseIcon)
       // The tab bar: each tab a symbol over its label, naming its panel.
       row role="tablist" testId="tabs"
         button role="tab"
@@ -1179,6 +1190,29 @@ component StatsSections
           )
       footer
         text (finished >= lib.goal ? "Goal reached." : `${lib.goal - finished} to go.`) testId="goal-left"
+
+// The Home Screen icon, chosen as an app's Settings offer it: Shelf's own and
+// the alternates the build ships, each with its picture, the one shown checked.
+component IconSection
+  props
+    status: AppIconStatus
+    primary: action
+    choose: action
+  view
+    section
+      header
+        text "App Icon"
+      button press=primary role="radio" aria-checked=(status.icon == none) testId="icon-primary"
+        image "assets/icon.png" alt="" width=29 height=29 border-radius=7
+        text "Shelf" flex=1
+        if status.icon == none
+          image "symbol:checkmark" color="AccentColor"
+      if status.icons.includes("Paper")
+        button press=choose("Paper") role="radio" aria-checked=(status.icon == some("Paper")) testId="icon-paper"
+          image "assets/icon-paper.png" alt="" width=29 height=29 border-radius=7
+          text "Paper" flex=1
+          if status.icon == some("Paper")
+            image "symbol:checkmark" color="AccentColor"
 
 // What a screen shows with nothing in it (UIKit's ContentUnavailableView).
 component Empty

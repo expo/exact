@@ -13,6 +13,8 @@ pub mod fetch;
 pub mod fetch_async;
 pub mod fs;
 pub mod fs_image;
+#[cfg(windows)]
+mod fs_known_windows;
 pub(crate) mod fs_more;
 #[cfg(all(
     feature = "intl",

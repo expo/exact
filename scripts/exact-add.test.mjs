@@ -2,7 +2,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -46,3 +46,22 @@ test('add installs with the package manager the app\'s tree names, or with none 
   });
 });
 
+
+// #427: a package outside exact2 is added by its directory, as `file:` with a path from the app, or by a registry name
+// with its scope or version; a bare name stays exact2's own.
+test('add takes an outside package by its directory and names its GPU surfaces', async () => {
+  const { outsideSpecifier } = await import('./package-manager.mjs');
+  for (const spec of ['../maplibre-exact', './map', '/abs/map', 'file:../map', '@birkskyum/maplibre-exact', 'maplibre-exact@1.2.0']) assert.ok(outsideSpecifier(spec), spec);
+  for (const spec of ['geolocaton', 'maplibre-exact', undefined]) assert.ok(!outsideSpecifier(spec), String(spec));
+  inDir(dir => {
+    const root = resolve(import.meta.dir, '..'), app = resolve(dir, 'shop'), pkg = resolve(dir, 'sky');
+    cpSync(resolve(root, 'packages/fixtures/sky'), pkg, { recursive: true });
+    const made = spawnSync(process.execPath, [resolve(root, 'scripts/exact.mjs'), 'new', app], { encoding: 'utf8' });
+    assert.equal(made.status, 0, made.stdout + made.stderr);
+    const added = spawnSync(process.execPath, ['exact.mjs', 'add', '../sky'], { cwd: app, encoding: 'utf8', env: { ...process.env, EXACT: root } });
+    assert.equal(added.status, 0, added.stdout + added.stderr);
+    assert.match(added.stdout, /add: @fixture\/sky is file:\.\.\/sky\. Place its surfaces with canvas surface=sky\(…\)/);
+    assert.equal(JSON.parse(readFileSync(resolve(app, 'package.json'), 'utf8')).dependencies['@fixture/sky'], 'file:../sky');
+    assert.ok(existsSync(resolve(app, 'node_modules/@fixture/sky/exact.json')));
+  });
+});

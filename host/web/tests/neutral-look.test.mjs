@@ -68,7 +68,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
   // The properties each length is written on.
   const WHERE = {
     'control-height': ['min-height', 'min-width', 'height', 'padding-inline-end'], 'control-height-coarse': ['min-height', 'min-width', 'height'],
-    'control-radius': ['border-radius'], 'surface-radius': ['border-radius'], 'mark-radius': ['border-radius'], 'segment-radius': ['border-radius'],
+    'control-radius': ['border-radius'], 'surface-radius': ['border-radius'], 'sheet-wide-radius': ['border-radius'], 'mark-radius': ['border-radius'], 'segment-radius': ['border-radius'],
     'control-line': ['border', 'border-top', 'border-bottom', 'border-inline-end', '--exact-raised', '--exact-modal', 'box-shadow'], // a list row's separator is a line in its box
     'focus-ring-offset': ['outline-offset'],
     'mark-size': ['width', 'height', 'background'], 'mark-size-coarse': ['width', 'height'],
@@ -88,7 +88,7 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
     'alert-title': ['font-size'], 'alert-message-gap': ['margin-bottom', 'margin-top'], 'alert-scroll-gutter': ['padding-inline-end'],
     'menu-min-width': ['min-width'], 'menu-max-width': ['max-width'], 'menu-margin': ['max-width'], 'menu-padding': ['padding'], 'menu-offset': ['margin'], 'popover-padding': ['padding'], 'popover-margin': ['margin', 'margin-left'],
     'menu-row-height': ['min-height'], 'menu-row-padding-block': ['padding'], 'menu-row-padding-inline': ['padding', 'padding-inline-start'], 'menu-row-gap': ['--exact-button-space-width', 'margin-inline-end', 'padding-inline-start', 'margin-inline-start'],
-    'sheet-wide': ['@media'], 'sheet-width': ['width'], 'sheet-height': ['height', 'max-height'], 'sheet-margin': ['width', 'height', 'max-height'], 'sheet-top': ['inset', 'max-height', 'top'], 'sheet-stack-offset': ['top'], 'sheet-compact-height': ['@media'],
+    'sheet-wide': ['@media'], 'sheet-width': ['width'], 'sheet-height': ['height', 'max-height'], 'sheet-margin': ['width', 'height', 'max-height', '--exact-sheet-stack-room'], 'sheet-top': ['inset', 'max-height', 'top'], 'sheet-stack-offset': ['top', '--exact-sheet-stack-offset', '--exact-sheet-step-rise', 'grid-template-rows'], 'sheet-wide-step-inset': ['--exact-sheet-step-scale'], 'sheet-compact-height': ['@media'],
     'sheet-padding': ['padding', 'margin', 'margin-inline-end', 'padding-inline-end'], 'sheet-gap': ['padding', 'margin'], 'sheet-action-gap': ['margin'],
     'list-row-inset': ['padding-left', 'padding-right'],
     'raised-shadow-y': ['--exact-raised'], 'raised-shadow-blur': ['--exact-raised'], 'modal-shadow-y': ['--exact-modal'], 'modal-shadow-blur': ['--exact-modal'],

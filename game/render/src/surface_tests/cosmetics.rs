@@ -150,7 +150,10 @@ pub(super) fn hue(pixels: &fixture::Pixels) -> usize {
 fn a_skin_and_a_shape_change_keep_the_old_look_until_the_new_one_draws() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Dice, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     let bind = |s: &mut WorldSurface<Dice, crate::ModelExecutor, true>, skin: u32, shape: u32| {
         s.bind(
             &[Value::Number(skin.into()), Value::Number(shape.into())],
@@ -288,7 +291,10 @@ impl Game for Ribbon {
 fn a_blended_material_s_uv_offset_scrolls_its_texture_in_place() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Ribbon, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[Value::Number(0u32.into())], None).unwrap();
     // Red then blue columns, sampled nearest, wrapping.
     let red = [255, 0, 0, 255];
@@ -425,7 +431,10 @@ fn an_instance_skin_keeps_an_unlit_or_coated_materials_shading() {
     let Some(gpu) = gpu() else { return };
     let centre = |shading: u32, blue: bool, skin: bool| -> [u8; 4] {
         let mut s = WorldSurface::<ShadedSkin, crate::ModelExecutor, true>::default();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.bind(
             &[
                 Value::Number(shading.into()),
@@ -529,7 +538,10 @@ fn an_instance_skin_keeps_an_unlit_or_coated_materials_shading() {
 fn a_new_picture_waits_for_a_shown_texture_not_yet_delivered() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Dice, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     let live = |now| Frame {
         seekable: false,
         ..frame(now)
@@ -576,7 +588,10 @@ fn a_new_picture_waits_for_a_shown_texture_not_yet_delivered() {
 fn a_tick_after_the_invalidation_that_shows_an_undelivered_texture_waits() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Dice, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     let live = |now| Frame {
         seekable: false,
         ..frame(now)
@@ -623,7 +638,10 @@ fn a_tick_after_the_invalidation_that_shows_an_undelivered_texture_waits() {
 fn a_new_picture_awaiting_a_texture_keeps_ticking_and_taking_messages() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Dice, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     let live = |now| Frame {
         seekable: false,
         ..frame(now)

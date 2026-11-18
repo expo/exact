@@ -9,6 +9,15 @@ import { withBase } from '../host/web-js/route-pattern.js';
 
 export const EXACT_PATHS = '/.exact/';
 
+/** A web popup return must stay in the browser, including its percent-encoded spellings. */
+export const webAuthCallback = (url) => url.protocol === 'https:' && decodeURIComponent(url.pathname).endsWith(`${EXACT_PATHS}auth/callback`);
+
+/** The callbacks Android registers: private schemes and native HTTPS endpoints, without HTTP loopback or web popup returns. */
+export const androidAuthCallbacks = (callbacks) => [...new Set(callbacks.filter(callback => {
+  const url = new URL(callback);
+  return url.protocol !== 'http:' && !webAuthCallback(url);
+}))];
+
 /** `text` as an origin a claim may name, or why it cannot be one. The URL Standard's parser serializes it: the host
  * lower-cased and written as A-labels, `:443` dropped. Another port is refused: Apple's entitlement is
  * `<service>:<fully qualified domain>` (Apple, "Associated Domains Entitlement") and Android fetches `assetlinks.json`
@@ -153,12 +162,14 @@ export function unclaimedNote(manifest, host) {
 }
 
 /** What an APK's App Links cannot do on the releases it supports (`host.android.minimumOS`, default 12): below 12, one
- * host that fails verification leaves every autoVerify filter of the app unverified (Android, "Verify App Links");
+ * navigation or auth callback host that fails verification leaves every autoVerify filter of the app unverified (Android, "Verify App Links");
  * below 15, the excluded paths open the app; an excluded path a narrower scope keeps (`claimed`) opens it on every
  * release. Each is said when the app signs in (`signsIn`), the case the exclusions are for. */
-export function androidLinkNotes(manifest, filters, { signsIn = false } = {}) {
+export function androidLinkNotes(manifest, filters, { signsIn = false, callbacks = [] } = {}) {
   const minimum = Number(manifest.host?.android?.minimumOS ?? '12'), notes = [];
-  if (filters.length > 1 && minimum < 12) notes.push(`App Links: below Android 12 one unverified host of ${filters.map((f) => f.host).join(', ')} leaves all of them unverified`);
+  const returns = androidAuthCallbacks(callbacks).map(c => new URL(c)).filter(url => url.protocol === 'https:');
+  const hosts = [...new Set([...filters.map(f => f.host), ...returns.map(url => url.hostname)])];
+  if (hosts.length > 1 && minimum < 12) notes.push(`App Links: below Android 12 one unverified host of ${hosts.join(', ')} leaves all of them unverified`);
   const paths = (key) => filters.flatMap((f) => f[key].map((p) => `${f.host}${p}`)), excluded = paths('exclude'), claimed = paths('claimed');
   const opens = (list) => `${list.join(', ')} open${list.length === 1 ? 's' : ''} the app rather than the browser`;
   if (signsIn && excluded.length && minimum < 15) notes.push(`App Links: below Android 15 ${opens(excluded)}, since a filter cannot exclude a path there`);

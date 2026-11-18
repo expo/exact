@@ -1,8 +1,93 @@
 import { test, expect } from 'bun:test';
-import { closeSync, fstatSync, mkdtempSync, mkdirSync, existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, fstatSync, mkdtempSync, mkdirSync, existsSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { placeMacDylibs, placeMacLibraries } from './bundle.mjs';
+import { spawnSync } from 'node:child_process';
+import { swiftPrivacyManifests, swiftResourceOverlay } from './compose.mjs';
+import { plistFile } from './assets.mjs';
+import { useXcode } from './devices.mjs';
+import { readPrivacyManifest, writePrivacyManifest } from './privacy.mjs';
+
+test.skipIf(process.platform !== 'darwin')('SwiftPM Swift and Objective-C resources survive a signed Mac app relocation', () => {
+  useXcode();
+  mkdirSync(join(import.meta.dir, '../../target'), { recursive: true });
+  const dir = mkdtempSync(join(import.meta.dir, '../../target/swift-resources-'));
+  const write = (file, contents) => writeFileSync(join(dir, file), contents);
+  const run = (command, args) => {
+    const result = spawnSync(command, args, { cwd: dir, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  try {
+    for (const name of ['SwiftResources', 'ClangResources/include', 'ReadResources']) mkdirSync(join(dir, 'Sources', name), { recursive: true });
+    write('Package.swift', `// swift-tools-version:5.9
+import PackageDescription
+let package = Package(name: "Resources",
+  products: [.library(name: "SharedResources", type: .dynamic, targets: ["ReadResources"])], targets: [
+    .target(name: "SwiftResources", resources: [.copy("value.txt"), .copy("PrivacyInfo.xcprivacy")]),
+    .target(name: "ClangResources", resources: [.copy("value.txt")]),
+    .target(name: "ReadResources", dependencies: ["SwiftResources", "ClangResources"])
+])
+`);
+    write('Sources/SwiftResources/value.txt', 'swift resource');
+    const sdkPrivacy = { NSPrivacyAccessedAPITypes: [{ NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults', NSPrivacyAccessedAPITypeReasons: ['CA92.1'] }],
+      NSPrivacyTracking: true, NSPrivacyTrackingDomains: ['sdk.example'] };
+    write('Sources/SwiftResources/PrivacyInfo.xcprivacy', plistFile(sdkPrivacy));
+    write('Sources/SwiftResources/Read.swift', `import Foundation
+public func swiftResource() throws -> String {
+    let value = try String(contentsOf: Bundle.module.url(forResource: "value", withExtension: "txt")!, encoding: .utf8)
+    UserDefaults.standard.set(value, forKey: "exact-resource-fixture")
+    return UserDefaults.standard.string(forKey: "exact-resource-fixture")!
+}
+`);
+    write('Sources/ClangResources/value.txt', 'clang resource');
+    write('Sources/ClangResources/include/Read.h', 'const char *clangResource(void);\n');
+    write('Sources/ClangResources/Read.m', `#import <Foundation/Foundation.h>
+#import "Read.h"
+const char *clangResource(void) {
+    NSURL *url = [SWIFTPM_MODULE_BUNDLE URLForResource:@"value" withExtension:@"txt"];
+    return [[NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:NULL] UTF8String];
+}
+`);
+    write('Sources/ReadResources/Read.swift', `import SwiftResources
+import ClangResources
+@_cdecl("read_resources") public func readResources() {
+    precondition(try! swiftResource() == "swift resource")
+    precondition(String(cString: clangResource()) == "clang resource")
+    print("Swift and Objective-C resources read")
+}
+`);
+    const args = ['swift', 'build', '--build-system', 'native', '--disable-build-manifest-caching', '-c', 'release'];
+    const bin = run('xcrun', [...args, '--show-bin-path']);
+    run('xcrun', [...args, '--print-manifest-job-graph']);
+    run('xcrun', [...args, ...swiftResourceOverlay(bin)]);
+    const bundle = join(dir, 'Relocated.app'), contents = join(bundle, 'Contents');
+    mkdirSync(join(contents, 'MacOS'), { recursive: true });
+    mkdirSync(join(contents, 'Resources'));
+    const library = join(contents, 'MacOS/libSharedResources.dylib');
+    copyFileSync(join(bin, 'libSharedResources.dylib'), library);
+    expect(() => writePrivacyManifest(join(contents, 'Resources'), [library], { mac: true, modules: true })).toThrow('must declare its UserDefaults reason');
+    const manifests = swiftPrivacyManifests(readdirSync(bin).filter(name => name.endsWith('.bundle')).map(name => join(bin, name)));
+    expect(manifests).toHaveLength(1);
+    writePrivacyManifest(join(contents, 'Resources'), [library], { mac: true, modules: true, manifests });
+    expect(readPrivacyManifest(join(contents, 'Resources/PrivacyInfo.xcprivacy'))).toEqual(sdkPrivacy);
+    write('main.swift', `import Foundation
+let path = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("libSharedResources.dylib").path
+let library = dlopen(path, RTLD_NOW | RTLD_LOCAL)!
+let read = unsafeBitCast(dlsym(library, "read_resources")!, to: (@convention(c) () -> Void).self)
+read()
+`);
+    run('xcrun', ['swiftc', 'main.swift', '-o', join(contents, 'MacOS/ReadResources')]);
+    run('codesign', ['--force', '--sign', '-', '--timestamp=none', library]);
+    write('Relocated.app/Contents/Info.plist', plistFile({ CFBundleIdentifier: 'dev.exact.resources', CFBundleExecutable: 'ReadResources', CFBundlePackageType: 'APPL' }));
+    for (const name of readdirSync(bin).filter(name => name.endsWith('.bundle'))) cpSync(join(bin, name), join(contents, 'Resources', name), { recursive: true });
+    run('codesign', ['--force', '--sign', '-', '--timestamp=none', bundle]);
+    run('codesign', ['--verify', '--deep', '--strict', bundle]);
+    renameSync(join(dir, '.build'), join(dir, 'build-unavailable'));
+    expect(run(join(contents, 'MacOS/ReadResources'), [])).toBe('Swift and Objective-C resources read');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 test('replacing package and service dylibs preserves the old open inode', () => {
   const root = mkdtempSync(join(tmpdir(), 'exact-dylibs-')), descriptors = [];

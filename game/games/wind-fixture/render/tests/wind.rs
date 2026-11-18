@@ -22,7 +22,10 @@ fn frame(now_ms: f64) -> Frame {
 /// Two frames half a second apart, and the world hash after them.
 fn film<H: Hooks>(gpu: &exact_gpu::Gpu) -> (fixture::Pixels, fixture::Pixels, u64) {
     let mut surface = WorldSurface::<WindGame, ModelExecutor, true, H>::default();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.bind(&[], None).unwrap();
     // The first frames build and validate the hook pipelines.
     for ms in [0., 16., 33.] {

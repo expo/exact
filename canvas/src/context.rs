@@ -258,6 +258,8 @@ pub(crate) struct Inner {
     pub(crate) next_id: u32,
     /// Image handles given an id in this generation.
     pub(crate) image_ids: Vec<(String, u32)>,
+    /// Each pattern's image handle.
+    pub(crate) patterns: Vec<(u32, String)>,
     pub(crate) env: Env,
     notes: Vec<String>,
     /// The last few colour strings a style was set to, parsed: a draw that
@@ -487,7 +489,9 @@ impl Context2d {
 
     /// Where this context draws: set by the runner before each draw.
     pub fn set_env(&self, env: Env) {
-        self.g().env = env;
+        let mut g = self.g();
+        g.env = env;
+        g.hold_patterns();
     }
 
     /// The environment's text engine, for a seam that measures on the

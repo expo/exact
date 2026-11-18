@@ -670,3 +670,92 @@ fn puts_cannot_replace_a_stream_head_or_lock_by_a_folded_spelling() {
         assert_eq!(fs::read_to_string(cohort.join(".lock")).unwrap(), "lock");
     }
 }
+
+#[test]
+fn a_retried_envelope_cannot_publish_an_index_whose_blob_was_released() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("cache");
+    let epoch = "b".repeat(32);
+    let digest = format!("{:x}", Sha256::digest("bbbb"));
+    let retain = |files: Value, blobs: Value| {
+        operate(
+            &root,
+            &json!({"op":"retain", "path":format!("{epoch}/1"), "quota":4096,
+                "token":TOKEN, "files":files, "blobs":blobs}),
+            None,
+        )
+    };
+    let index = STANDARD.encode(json!({"assets":[{"sha256":digest}]}).to_string());
+    retain(
+        json!({}),
+        json!({ digest.as_str(): STANDARD.encode("bbbb") }),
+    )
+    .unwrap();
+    // The envelope request fails after its index is written, before the envelope.
+    let failed = json!({"assets.json":index, "collision":STANDARD.encode("file"),
+        "collision/child":STANDARD.encode("child"), "exact.json":STANDARD.encode("envelope")});
+    assert!(retain(failed, json!({})).is_err());
+    assert!(fixture
+        .path(&format!("cache/{epoch}/1/assets.json"))
+        .exists());
+    // No published generation names the blob, so a release removes it.
+    let release = json!({"op":"release", "token":TOKEN, "blobs":[digest]});
+    assert_eq!(operate(&root, &release, None).unwrap(), json!(1));
+    // A retry of the envelope names the released blob and must be refused.
+    let retry = json!({"assets.json":index, "exact.json":STANDARD.encode("envelope")});
+    let result = retain(retry, json!({}));
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("missing blob")),
+        "{result:?}"
+    );
+    assert!(!fixture
+        .path(&format!("cache/{epoch}/1/exact.json"))
+        .exists());
+}
+
+#[test]
+fn a_release_passes_over_finder_metadata_in_an_epoch() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("cache");
+    let epoch = "9".repeat(32);
+    let digest = format!("{:x}", Sha256::digest("abandoned"));
+    let index = json!({"assets":[]}).to_string();
+    operate(
+        &root,
+        &json!({"op":"retain", "path":format!("{epoch}/1"), "quota":4096, "token":TOKEN,
+            "files":{"assets.json":STANDARD.encode(index), "exact.json":STANDARD.encode("envelope")},
+            "blobs":{ digest.as_str(): STANDARD.encode("abandoned") }}),
+        None,
+    )
+    .unwrap();
+    // Finder writes its metadata into a folder a person opens.
+    fs::write(fixture.path(&format!("cache/{epoch}/.DS_Store")), "finder").unwrap();
+    let release = json!({"op":"release", "token":TOKEN, "blobs":[digest]});
+    let result = operate(&root, &release, None);
+    assert_eq!(result.as_ref().ok(), Some(&json!(1)), "{result:?}");
+    assert!(!fixture.path(&format!("cache/blobs/{digest}")).exists());
+}
+
+/// A link that fails for a reason other than an existing name (here its
+/// temporary file is gone; a volume without hard links fails the same way)
+/// reports that reason, not a conflict with a file that does not exist.
+#[test]
+#[cfg(unix)]
+fn an_immutable_write_reports_why_its_link_failed() {
+    let fixture = Fixture::new();
+    let dir = fixture.dir("origin");
+    let error = dir
+        .write_checked("value", b"bytes", true, TOKEN, || {
+            for name in dir.names()? {
+                if name.starts_with(".tmp-") {
+                    dir.unlink(&name)?;
+                }
+            }
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(!fixture.path("origin/value").exists());
+    assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error}");
+}

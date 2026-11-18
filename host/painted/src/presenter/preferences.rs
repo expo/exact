@@ -121,6 +121,7 @@ impl<D: DataSource> Presenter<D> {
         if error.is_some() {
             return error;
         }
+        self.dirty |= self.surfaces.reduced_motion(preferences.reduced_motion);
         self.after_commit()
     }
 

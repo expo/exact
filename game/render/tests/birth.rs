@@ -74,7 +74,10 @@ fn first_presented_skin_matches_current_pose_in_its_rectangle() {
     fn first<const H: u8>(gpu: &exact_game_render::exact_gpu::Gpu, event: &str) -> fixture::Pixels {
         let data = assets();
         let mut s = WorldSurface::<Birth<H>, exact_game_render::ModelExecutor, true>::default();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.bind(&[], None).unwrap();
         for _ in 0..16 {
             for n in s.assets().requests {
@@ -112,7 +115,10 @@ fn first_presented_skin_matches_current_pose_in_its_rectangle() {
                 }
                 "model arrival" => {
                     s.device_lost();
-                    s.device_ready(exact_gpu::wgpu::Features::empty());
+                    s.device_ready(
+                        exact_gpu::wgpu::Features::empty(),
+                        exact_gpu::wgpu::Limits::downlevel_defaults(),
+                    );
                     for _ in 0..16 {
                         for n in s.assets().requests {
                             s.asset(&n, Ok(&data[&n]));
@@ -268,7 +274,7 @@ fn rigid_node_animation_moves_pixels_and_glow_dims_baked_emission() {
         ..Default::default()
     }];
     let mut surface = WorldSurface::<Rigid, exact_game_render::ModelExecutor, true>::default();
-    surface.device_ready(wgpu::Features::empty());
+    surface.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     surface.bind(&[], None).unwrap();
     assert_eq!(surface.assets().requests, ["rig.model"]);
     surface.asset("rig.model", Ok(&exact_game::asset::encode_model(&model)));

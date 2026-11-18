@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 /// An ordinary timer whose native callback owns its live firing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeTimer {
-    /// Plan row to deliver.
+    /// Scheduler row to deliver, stable for this arming generation.
     pub index: u32,
     /// Arming generation; a cancelled callback cannot fire a replacement.
     pub generation: u64,
@@ -35,9 +35,9 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn native_timer(&self, i: usize) -> bool {
         self.clock.native_timers
             && self.clock_live()
-            && !self.plan.timers[i].frame
-            && !self.plan.timers[i].change
-            && self.plan.timers[i].wait == 0
+            && !self.timer_row(i).frame
+            && !self.timer_row(i).change
+            && self.timer_row(i).wait == 0
     }
 
     /// Current native timer instances. Repeats retain their arming generation.
@@ -66,9 +66,9 @@ impl<D: DataSource> Runner<D> {
                     index: i as u32,
                     generation: t.generation,
                     due_ms: t.next_ms,
-                    interval_ms: self.plan.timers[i].interval_ms,
-                    tolerance_ms: self.plan.timers[i].tolerance_ms,
-                    once: self.plan.timers[i].once,
+                    interval_ms: self.timer_row(i).interval_ms,
+                    tolerance_ms: self.timer_row(i).tolerance_ms,
+                    once: self.timer_row(i).once,
                 }
             })
             .collect()
@@ -173,7 +173,7 @@ impl<D: DataSource> Runner<D> {
                     "native timer {} ({})",
                     i,
                     self.plan
-                        .str(self.plan.action(self.plan.timers[i].action).name)
+                        .str(self.plan.action(self.timer_row(i).action).name)
                 );
                 let failed = Err(e);
                 self.log_outcome(&what, &failed, false);
@@ -187,6 +187,11 @@ impl<D: DataSource> Runner<D> {
 
 #[derive(Clone)]
 pub(super) struct Timer {
+    pub(super) site: usize,
+    /// Creation order within a declaration, independent of recycled scheduler rows.
+    pub(super) instance: u64,
+    pub(super) owner: Option<std::rc::Weak<std::cell::RefCell<vm::Owned>>>,
+    pub(super) path: String,
     /// The next due time; infinite once a one-shot timer has fired, and
     /// while a gated task is idle (LLP 1092 D8); a frame task's next
     /// virtual frame (LLP 1073 D3), `virtual_frame(base, k)`.
@@ -207,7 +212,15 @@ pub(super) struct Timer {
 /// completion is bound to is where a result goes, not when.
 impl PartialEq for Timer {
     fn eq(&self, other: &Self) -> bool {
-        self.next_ms == other.next_ms
+        self.site == other.site
+            && self.instance == other.instance
+            && self.path == other.path
+            && match (&self.owner, &other.owner) {
+                (Some(a), Some(b)) => a.ptr_eq(b),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.next_ms == other.next_ms
             && self.armed == other.armed
             && self.generation == other.generation
             && self.key == other.key

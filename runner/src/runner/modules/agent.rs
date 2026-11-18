@@ -322,6 +322,9 @@ impl<D: DataSource> Runner<D> {
             for dependent in self.network_dependents(key) {
                 self.announce(&dependent);
             }
+            for status in self.app_icon_statuses(key) {
+                self.announce(&status);
+            }
             // An agent word is its extension's: any of its names stands for it.
             let extension = key.split_once('.').map_or("", |(e, _)| e);
             let row = (self.plan.modules.iter()).find(|m| {

@@ -231,6 +231,9 @@ inductive TaskKind where
 
 structure TaskDecl where
   name : String
+  /-- The arm whose instances own this task (LLP 1035.005.004 D6). -/
+  owner : Option (Nat × Nat) := .none
+  args : List Expr := []
   waitKind : Nat := 0
   maxMs : Nat := 0
   kind : TaskKind

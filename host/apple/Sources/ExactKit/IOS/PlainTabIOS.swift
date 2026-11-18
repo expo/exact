@@ -223,10 +223,7 @@ extension NavigationHost {
     func adoptMore(_ nav: UINavigationController) {
         #if os(iOS)
         guard nav !== adoptedMore else { return }
-        if let old = adoptedMore {
-            retireStack(old)
-            if old.delegate is NavigationDelegateProxy { old.delegate = nil }
-        }
+        if let old = adoptedMore { retireStack(old) }
         registerStack(nav)
         adoptedMore = nav
         #endif

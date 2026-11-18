@@ -171,34 +171,6 @@ def sameRowId (a b : RowId) : Bool :=
   a.length == b.length && (a.zip b).all fun ((t, k, d), (t', k', d')) =>
     t == t' && d == d' && Value.same k k'
 
-inductive RegionBinding where
-  | when
-  | matchN (name : String)
-  | each (item : String) (index : Option String)
-
-partial def findRegion (tag : Nat) : List Node → Option RegionBinding
-  | [] => none
-  | .element _ _ _ _ children :: rest =>
-    (findRegion tag children).orElse fun _ => findRegion tag rest
-  | .when own _ thn els :: rest =>
-    if own == tag then some .when else
-      (findRegion tag thn).orElse fun _ =>
-        (findRegion tag els).orElse fun _ => findRegion tag rest
-  | .matchN own _ name someNodes noneNodes :: rest =>
-    if own == tag then some (.matchN name) else
-      (findRegion tag someNodes).orElse fun _ =>
-        (findRegion tag noneNodes).orElse fun _ => findRegion tag rest
-  | .each own item index _ _ body :: rest =>
-    if own == tag then some (.each item index) else
-      (findRegion tag body).orElse fun _ => findRegion tag rest
-
-def markerValue (p : Program) (store : RowStore) (id : RowId) (kind : Nat) : Option Value :=
-  (store.find? fun (candidate, _) =>
-    candidate.length == id.length + 1 && sameRowId (candidate.take id.length) id &&
-      match candidate.getLast? with
-      | some (tag, _, markerKind) => tag == instanceMarkerTag p && markerKind == kind
-      | none => false).bind fun (candidate, _) => candidate.getLast?.map (·.2.1)
-
 def isMarkerId (p : Program) (id : RowId) : Bool :=
   id.getLast?.any fun (tag, _, _) => tag == instanceMarkerTag p
 

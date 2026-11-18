@@ -204,13 +204,14 @@ export function helperClassifications(group) {
     ["painted:host/painted/src/presenter/delivery.rs", "Presenter::reader_drew Presenter::set_reader_blesses Presenter::update_check_due Presenter::update_foreground Presenter::update_launched"],
   ]),
   group("navigation", ["one-shot"], "current router, route part or presented transition", "UI-owned",
-    "runner/router.rs host_root commits the current router's host root; painted stage/authored.rs retains the route's transition parts until arrival.", [
+    "runner/router.rs host_root commits the current router's host root; painted stage/authored.rs retains the route's transition parts until arrival; stage/zoom.rs resolves the live source and retains geometry only for its route's transition.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_host_root exact_route_part"],
     ["runner:runner/src/runner/router.rs", "Runner::host_root"],
     ["painted:host/painted/src/flights.rs", "Host::flying Host::start_flights"],
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::focus_landed"],
     ["painted:host/painted/src/presenter/reveal.rs", "Presenter::reveal_flights"],
     ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::drawn_at Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
+    ["painted:host/painted/src/presenter/stage/zoom.rs", "Presenter::navigation_container Presenter::source_node Presenter::source_rect Presenter::sync_sources"],
   ]),
   group("module announcements", ["subscription"], "bound module, app topic and its current readers", "UI-owned",
     "Store::announce_topic records changed app topics; exact_peer_changed delivers them to another session. Canvas extension activation checks the current plan's declared action before raising its event.", [

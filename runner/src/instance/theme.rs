@@ -94,7 +94,7 @@ pub(crate) fn newly_refused(now: &[String], set: &[String]) -> Vec<String> {
 /// Every row that read a token, by view and row (D7's index): what a
 /// token's new value sets again, with no tree visited and no binding
 /// evaluated. One map, so a themed list's rows allocate only its growth.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ThemeIndex {
     rows: std::collections::HashMap<(ViewId, u16), ThemedRow>,
     /// Each node's state looks that read a token (LLP 1121 D8): what a
@@ -227,7 +227,7 @@ pub(super) fn tuple_of(plan: &Plan, pin: Option<&Value>, around: u32) -> u32 {
 /// it set its row (a row it unset, or whose value the row refused, is the
 /// inherited one's). A bit a binding, the first 64 inline and the rest, for
 /// the rare node with more bindings, beside.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct Themed {
     named: u64,
     set: u64,

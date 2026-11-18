@@ -136,6 +136,7 @@ fn a_refresh_cannot_read_a_shipped_file() {
     set_roots(Roots {
         home: None,
         bundle: Some(shipped),
+        known_folder: None,
     });
     let _unset = Unset;
     let mut app = root.module();

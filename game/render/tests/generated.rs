@@ -57,7 +57,10 @@ fn generated_props_upload_once_share_a_draw_and_keep_vertex_colors() {
     surface
         .bind(&[Value::Number(0.), Value::Bool(false)], None)
         .unwrap();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert!(surface.assets().requests.is_empty());
     surface.prepare_assets(
         &gpu.device,
@@ -274,7 +277,10 @@ fn grove_frame_cpu() {
             None,
         )
         .unwrap();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.prepare_assets(&gpu.device, &gpu.queue, format);
     let texture = gpu
         .device

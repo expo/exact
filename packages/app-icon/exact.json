@@ -1,0 +1,48 @@
+{
+  "kind": "interface",
+  "name": "@exact/app-icon",
+  "version": "1.0.0",
+  "agent": {
+    "icons": "string[]"
+  },
+  "shapes": {
+    "AppIconStatus": {
+      "available": "bool",
+      "icon": "option<string>",
+      "icons": "string[]"
+    }
+  },
+  "names": [
+    {
+      "source": "appIcon",
+      "answers": "AppIconStatus",
+      "substitute": {
+        "appIcon": "status",
+        "default": {
+          "available": false,
+          "icon": null,
+          "icons": []
+        }
+      }
+    },
+    {
+      "send": "setAppIcon",
+      "request": true,
+      "origin": "app",
+      "foreground": true,
+      "options": {
+        "icon": "option<string>"
+      },
+      "answers": "AppIconStatus",
+      "substitute": {
+        "appIcon": "set",
+        "choose": {
+          "ticket": "app-icon",
+          "typed": false,
+          "choices": ["ok"]
+        },
+        "unsupported": ["web", "macos", "android", "linux", "windows", "tvos", "watchos", "terminal"]
+      }
+    }
+  ]
+}

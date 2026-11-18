@@ -587,6 +587,16 @@
     {
       "name": "timers",
       "fields": [
+        {
+          "name": "owner",
+          "codec": "opt:arms",
+          "_comment": "LLP 1035.005.004 D6: each instance of this arm owns a timer; none is a single root-lifetime task."
+        },
+        {
+          "name": "args",
+          "codec": "range:args",
+          "_comment": "The lifted action's captured props, evaluated in the owner's frame when it fires."
+        },
         { "name": "change", "codec": "bool" },
         { "name": "wait", "codec": "u8" },
         { "name": "max_ms", "codec": "u32" },

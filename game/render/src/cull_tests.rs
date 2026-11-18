@@ -407,7 +407,10 @@ fn culling_changes_no_pixels_in_one_sample_a_pixel() {
 fn culling_changes_no_pixels_with_animated_skins_models_and_sockets() {
     let Some(gpu) = gpu() else { return };
     let mut surface = WorldSurface::<Herd, crate::ModelExecutor, true>::default();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.bind(&[], None).unwrap();
     let fox = samples::sample("Fox");
     let crate_box = samples::sample("BoxTextured");

@@ -447,7 +447,7 @@ impl Core {
             retry_scheduled: Mutex::default(),
             uploads: stream::Uploads::default(),
             me: me.clone(),
-            processes: process::Processes::new(),
+            processes: process::Processes::new(budget),
         });
         let (lanes, count) = match lanes {
             Some((lanes, threads)) => (Some(lanes), threads),
@@ -559,7 +559,10 @@ impl Core {
     /// whose body is one of the app's files (LLP 1108 D6 R2). Set once,
     /// before the first request; without it such a request is refused.
     pub fn set_app_roots(&self, roots: [std::path::PathBuf; 3]) {
-        let _ = self.shared.root_paths.set(roots);
+        if self.shared.root_paths.set(roots).is_ok() {
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            self.refresh_storage_roots();
+        }
         process::launched(&self.shared);
     }
 
@@ -1054,7 +1057,7 @@ fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str>
         bytes = bytes.checked_add(n).ok_or("request size overflow")?;
     }
     if bytes > MAX_REQUEST {
-        return Err("native request exceeds 4 MiB");
+        return Err("native request exceeds 4 MiB (URL, headers and body together): send a larger body from an app file with exactBodyFrom");
     }
     // A plain independent reply is read into one buffer of its ceiling
     // (`body_to::receive`; the asynchronous core grows its buffer only up to

@@ -151,6 +151,8 @@ final class Canvas2DHost: Canvas2DEnv {
     var onRelease: ((String) -> Void)?
     private var images: [String: CGImage] = [:]
     private var loading: [String: UUID] = [:]
+    /// Handles whose last decode failed: a changed file decodes them again.
+    private var failed: Set<String> = []
     /// When each decoded handle was last drawn, or decoded if it has not been since.
     private var drawnAt: [String: CFTimeInterval] = [:]
     private var imageBytes = 0
@@ -210,6 +212,9 @@ final class Canvas2DHost: Canvas2DEnv {
                         if let old = self.images.updateValue(image, forKey: src) { self.imageBytes -= old.bytesPerRow * old.height }
                         self.imageBytes += image.bytesPerRow * image.height
                         self.drawnAt[src] = CACurrentMediaTime()
+                        self.failed.remove(src)
+                    } else {
+                        self.failed.insert(src)
                     }
                     self.onImage?(src, image)
                     self.releaseOverBudget()
@@ -218,11 +223,22 @@ final class Canvas2DHost: Canvas2DEnv {
         }
     }
 
+    /// Let go handles the runtime no longer asks for, decoded, failed or
+    /// loading: a changed file decodes none of them.
+    func drop(_ srcs: [String]) {
+        for src in srcs {
+            if let old = images.removeValue(forKey: src) { imageBytes -= old.bytesPerRow * old.height }
+            loading.removeValue(forKey: src)
+            failed.remove(src)
+            drawnAt.removeValue(forKey: src)
+        }
+    }
+
     /// Replace a loaded handle and discard replies for its previous bytes.
     func pictureChanged(_ src: String) {
         let old = images.removeValue(forKey: src)
         let pending = loading.removeValue(forKey: src) != nil
-        guard old != nil || pending else { return }
+        guard old != nil || pending || failed.remove(src) != nil else { return }
         if let old { imageBytes -= old.bytesPerRow * old.height }
         drawnAt.removeValue(forKey: src)
         onRelease?(src)

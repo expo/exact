@@ -690,7 +690,7 @@ fn scan(
 }
 
 /// What the tree last showed: the inputs an update compares against.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Seen {
     slots: Vec<Value>,
     derives: Vec<Option<Value>>,

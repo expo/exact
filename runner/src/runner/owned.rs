@@ -26,6 +26,7 @@ use std::rc::{Rc, Weak};
 
 /// The runner's row for one instance's request.
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct OwnedRow {
     /// The plan's resource.
     pub(super) site: usize,
@@ -54,7 +55,7 @@ pub(super) struct Want {
 
 /// How many renders one commit may make while owned requests answer at once
 /// and ask again: past it, a request's arguments read its own answer.
-const RENDERS: usize = 64;
+pub(super) const RENDERS: usize = 64;
 
 impl<D: DataSource> Runner<D> {
     /// Row `i`'s instance request, when it is one.
@@ -94,16 +95,10 @@ impl<D: DataSource> Runner<D> {
         settled: bool,
         update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
     ) -> Result<CommitReceipt, RunnerError> {
-        let mut receipt = self.render_once(settled, update)?;
-        for _ in 0..RENDERS {
-            if !self.reconcile_owned()? {
-                return Ok(receipt);
-            }
-            let next = self.render_once(true, |tree, u| tree.update(u))?;
-            receipt = merged(receipt, next);
+        if self.transactional_render() {
+            return self.render_task_owned(settled, update);
         }
-        self.poison();
-        Err(RunnerError::Cycle)
+        self.render_once(settled, update)
     }
 
     /// After the boot's first frame, whose `receipt` it extends: the renders
@@ -120,17 +115,12 @@ impl<D: DataSource> Runner<D> {
             }
         }
         if !asked? {
+            self.reconcile_tasks(&self.tree.as_ref().expect("booted").owners())?;
             return Ok(());
         }
-        for _ in 0..RENDERS {
-            let next = self.render_once(true, |tree, u| tree.update(u))?;
-            *receipt = merged(std::mem::take(receipt), next);
-            if !self.reconcile_owned()? {
-                return Ok(());
-            }
-        }
-        self.poison();
-        Err(RunnerError::Cycle)
+        let next = self.render_owned(true, |tree, u| tree.update(u))?;
+        *receipt = merged(std::mem::take(receipt), next);
+        Ok(())
     }
 
     /// After a render: each live instance's requests' gates and arguments,
@@ -140,7 +130,8 @@ impl<D: DataSource> Runner<D> {
     /// settlement's, which settles every row.)
     pub(super) fn reconcile_owned(&mut self) -> Result<bool, RunnerError> {
         let requests = self.plan.resources.iter().any(|r| r.owner.is_some());
-        if !requests && !self.sends_live() {
+        let tasks = self.plan.timers.iter().any(|t| t.owner.is_some());
+        if !requests && !tasks && !self.sends_live() {
             return Ok(false);
         }
         let owners = self.tree.as_ref().map(Tree::owners).unwrap_or_default();

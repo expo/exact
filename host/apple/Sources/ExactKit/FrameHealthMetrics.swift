@@ -59,7 +59,7 @@ enum FrameHealthMetrics {
             refreshes: bins(2, 32), lateBy: bins(3, 32), read: FrameHealth.nanoseconds(now))
     }
 
-    static func reply(_ sample: Sample, health: FrameHealth, cursor: [String: Any]? = nil) -> [String: Any] {
+    static func reply(_ sample: Sample, health: FrameHealth, cursor: [String: Any]? = nil, extra: [String: Any] = [:]) -> [String: Any] {
         let s = sample.snapshot
         let current: [[UInt32]] = [sample.intervals, sample.work]
         var baseline = Array(repeating: UInt64(0), count: 17)
@@ -110,7 +110,7 @@ enum FrameHealthMetrics {
         let stale = s.running != 0 && s.last_arrival_ns != 0 && sample.read > s.last_arrival_ns + 1_000_000_000
         let window = FrameHealthAssessment.Window(delta, scheduledPeriodNs: s.period_ns, running: s.running != 0,
             overdue: UInt64(overdue), stale: stale)
-        let result: [String: Any] = ["format": format, "available": health.enabled && !health.virtual,
+        var result: [String: Any] = ["format": format, "available": health.enabled && !health.virtual,
             "source": health.source, "evidence": "callback-and-owner-work-proxies", "qualification": "unqualified",
             "status": health.virtual ? "virtual" : !health.enabled ? "unavailable" : s.running == 0 ? "inactive" : stale ? "stale" : "observing",
             "unavailableReason": health.unavailableCode as Any? ?? (health.virtual ? "virtual-clock" : NSNull()),
@@ -127,6 +127,7 @@ enum FrameHealthMetrics {
             "capture": ["agentLeaseRemainingMs": max(0, ((health.agentCaptureUntil - CACurrentMediaTime()) * 1000).rounded()),
                 "hud": health.hudVisible],
             "cursor": sample.cursor]
+        result.merge(extra) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: result), data.count < 4000 else {
             return ["format": format, "available": false, "error": "metrics-budget", "reason": "The metrics exceeded the 4000-byte carrier budget. Use a matching Exact reader."]
         }
@@ -201,8 +202,8 @@ extension FrameHealth {
         }
         return newest(nativeHealth) > newest(self) ? nativeHealth : self
     }
-    func metrics(cursor: [String: Any]? = nil) -> [String: Any] {
+    func metrics(cursor: [String: Any]? = nil, extra: [String: Any] = [:]) -> [String: Any] {
         expireCapture(at: CACurrentMediaTime())
-        return FrameHealthMetrics.reply(FrameHealthMetrics.read(self), health: self, cursor: cursor)
+        return FrameHealthMetrics.reply(FrameHealthMetrics.read(self), health: self, cursor: cursor, extra: extra)
     }
 }

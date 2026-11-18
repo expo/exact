@@ -11,6 +11,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
+import androidx.browser.auth.AuthTabIntent
+import androidx.browser.customtabs.CustomTabsService
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -136,6 +138,80 @@ class AuthTest {
         assertEquals("test.default", shadowOf(activity).nextStartedActivity.`package`)
     }
 
+    private fun authTabBrowser() {
+        browser(true)
+        val service = ResolveInfo().apply {
+            serviceInfo = ServiceInfo().apply { packageName = "test.browser"; name = "Tabs" }
+            filter = IntentFilter(SystemBrowser.SERVICE).apply { addCategory(CustomTabsService.CATEGORY_AUTH_TAB) }
+        }
+        shadowOf(activity.packageManager).addResolveInfoForIntent(Intent(SystemBrowser.SERVICE), service)
+    }
+
+    @Test fun httpsUsesAuthTabAndDeliversTheConvexCallbackFromItsResult() {
+        authTabBrowser()
+        callbacks("[\"https://app.test/cb\"]")
+        Auth.open(activity, 1, "https://login.test/authorize", "https://app.test/cb", "s1")
+        val opened = shadowOf(activity).nextStartedActivityForResult
+        assertNotNull(opened)
+        assertTrue(opened.intent.getBooleanExtra(AuthTabIntent.EXTRA_LAUNCH_AUTH_TAB, false))
+        assertEquals("app.test", opened.intent.getStringExtra(AuthTabIntent.EXTRA_HTTPS_REDIRECT_HOST))
+        assertEquals("/cb", opened.intent.getStringExtra(AuthTabIntent.EXTRA_HTTPS_REDIRECT_PATH))
+        controller.pause().stop().start().resume()
+        assertTrue(Host.answers.isEmpty())
+        val returned = "https://app.test/cb?convexAuthCode=secret&state=s1"
+        shadowOf(activity).receiveResult(opened.intent, AuthTabIntent.RESULT_OK, intent(returned))
+        assertEquals(listOf(returned), Host.urls)
+        Auth.end(1)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(11))
+        assertTrue(Host.answers.isEmpty())
+    }
+
+    @Test fun anOlderBrowserReturnsThroughTheExactHttpsAppLink() {
+        browser(true)
+        callbacks("[\"https://app.test/cb\"]")
+        Auth.open(activity, 1, "https://login.test/authorize", "https://app.test/cb", "s1")
+        val opened = shadowOf(activity).nextStartedActivity
+        assertFalse(opened.getBooleanExtra(AuthTabIntent.EXTRA_LAUNCH_AUTH_TAB, false))
+        assertEquals(Intent.ACTION_VIEW, opened.action)
+        assertEquals("test.browser", opened.`package`)
+        assertFalse(opened.hasExtra(SystemBrowser.SESSION))
+        controller.pause().stop()
+        controller.newIntent(intent("https://app.test/cb?convexAuthError=denied&state=stale")).start().resume()
+        assertTrue(Host.urls.isEmpty())
+        assertTrue(Host.answers.isEmpty())
+        val returned = "https://app.test/cb?convexAuthCode=secret&state=s1"
+        controller.newIntent(intent(returned))
+        assertEquals(listOf(returned), Host.urls)
+        assertNull(activity.intent.data)
+    }
+
+    @Test fun authTabVerificationFailureCancelsOnlyItsOwnWait() {
+        authTabBrowser()
+        callbacks("[\"https://app.test/cb\"]")
+        Auth.open(activity, 1, "https://login.test/authorize", "https://app.test/cb", "s1")
+        val first = shadowOf(activity).nextStartedActivityForResult
+        Auth.end(1)
+        Auth.open(activity, 2, "https://login.test/authorize", "https://app.test/cb", "s2")
+        val second = shadowOf(activity).nextStartedActivityForResult
+        Auth.result(activity, first.requestCode, AuthTabIntent.RESULT_CANCELED, null)
+        assertTrue(Host.answers.isEmpty())
+        Auth.result(activity, second.requestCode, AuthTabIntent.RESULT_VERIFICATION_FAILED, null)
+        assertEquals(listOf(2 to "failed"), Host.answers)
+        assertTrue(Host.urls.isEmpty())
+    }
+
+    @Test fun anUnclaimedAuthTabResultFailsWithoutLeavingAWait() {
+        authTabBrowser()
+        val callback = "https://app.test/.exact/auth/callback"
+        Auth.open(activity, 1, "https://login.test/authorize", callback, "s1")
+        val opened = shadowOf(activity).nextStartedActivityForResult
+        Auth.result(activity, opened.requestCode, AuthTabIntent.RESULT_OK, intent("$callback?convexAuthCode=secret&state=s1"))
+        assertEquals(listOf(1 to "failed"), Host.answers)
+        assertTrue(Host.urls.isEmpty())
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(11))
+        assertEquals(listOf(1 to "failed"), Host.answers)
+    }
+
     @Test fun aPlainDefaultBrowserWinsOverAnotherBrowsersCustomTabs() {
         browser(true, "test.tabs")
         browser(false, "test.default", priority = 10)
@@ -149,16 +225,18 @@ class AuthTest {
         shadowOf(activity.packageManager).setShouldShowActivityChooser(true)
         browser(true, "test.tabs")
         browser(false, "test.plain")
-        Auth.open(activity, 1, "https://login.test/authorize", "app.test:/cb", "s1")
-        val opened = shadowOf(activity).nextStartedActivity
-        assertEquals(Intent.ACTION_CHOOSER, opened.action)
-        val first = opened.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)!!
-        val rest = opened.getParcelableArrayExtra(Intent.EXTRA_INITIAL_INTENTS)!!.map { it as Intent }
-        val choices = listOf(first) + rest
-        assertEquals(setOf("test.tabs", "test.plain"), choices.map { it.`package` }.toSet())
-        assertTrue(choices.all { it.dataString == "https://login.test/authorize" })
-        assertTrue(choices.single { it.`package` == "test.tabs" }.hasExtra(SystemBrowser.SESSION))
-        assertFalse(choices.single { it.`package` == "test.plain" }.hasExtra(SystemBrowser.SESSION))
+        for (callback in listOf("app.test:/cb", "https://app.test/cb")) {
+            Auth.open(activity, 1, "https://login.test/authorize", callback, "s1")
+            val opened = shadowOf(activity).nextStartedActivity
+            assertEquals(Intent.ACTION_CHOOSER, opened.action)
+            val first = opened.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)!!
+            val rest = opened.getParcelableArrayExtra(Intent.EXTRA_INITIAL_INTENTS)!!.map { it as Intent }
+            val choices = listOf(first) + rest
+            assertEquals(setOf("test.tabs", "test.plain"), choices.map { it.`package` }.toSet())
+            assertTrue(choices.all { it.action == Intent.ACTION_VIEW && it.dataString == "https://login.test/authorize" })
+            assertEquals(callback == "app.test:/cb", choices.single { it.`package` == "test.tabs" }.hasExtra(SystemBrowser.SESSION))
+            assertFalse(choices.single { it.`package` == "test.plain" }.hasExtra(SystemBrowser.SESSION))
+        }
     }
 
     @Test fun aCustomTabsServiceDoesNotMakeALinkHandlerABrowser() {
@@ -193,6 +271,42 @@ class AuthTest {
         Auth.end(1)
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(11))
         assertTrue(Host.answers.isEmpty())
+    }
+
+    @Test fun aFragmentCallbackKeepsItsParametersAndLeavesRejectionToTheRunner() {
+        browser(true)
+        Auth.open(activity, 1, "https://login.test/authorize", "app.test:/cb", "s +😀")
+        val url = "app.test:/cb?tracking=1#state=s+%2B%F0%9F%98%80&id_token=token&code=hybrid"
+        controller.newIntent(intent(url))
+        assertEquals(listOf(url), Host.urls)
+        assertNull(activity.intent.data)
+        Host.urls.clear()
+        controller.newIntent(intent("app.test:/cb#state=wrong"))
+        assertTrue(Host.urls.isEmpty())
+        for (suffix in listOf("?state=wrong#state=s+%2B%F0%9F%98%80", "?state=s+%2B%F0%9F%98%80#state=wrong", "#state=s+%2B%F0%9F%98%80&state=wrong")) {
+            val malformed = "app.test:/cb$suffix"
+            controller.newIntent(intent(malformed))
+            assertEquals(malformed, Host.urls.last())
+            assertNull(activity.intent.data)
+        }
+        Auth.end(1)
+        Host.urls.clear()
+        Auth.open(activity, 2, "https://login.test/logout", "app.test:/cb", "s", true)
+        // A state-less sign-in answer is addressed to no logout; the logout's state addresses one.
+        for (suffix in listOf("#error=denied", "#code=one")) {
+            controller.newIntent(intent("app.test:/cb$suffix"))
+            assertTrue(Host.urls.isEmpty())
+            assertNull(activity.intent.data)
+        }
+        for (suffix in listOf("#id_token=t&state=s", "?access_token=t&state=s", "")) {
+            val returned = "app.test:/cb$suffix"
+            controller.newIntent(intent(returned))
+            assertEquals(returned, Host.urls.last())
+            assertNull(activity.intent.data)
+        }
+        Host.urls.clear()
+        controller.newIntent(intent("app.test:/cb#state=wrong"))
+        assertTrue(Host.urls.isEmpty())
     }
 
     private fun authRequest(id: Int, state: String = "s1", logout: Boolean = false): IntArray {
@@ -474,20 +588,32 @@ class AuthTest {
         assertEquals(listOf(1 to "cancelled"), Host.answers)
     }
 
-    @Test fun stateLessLogoutReturnsAndCannotTakeASignInResponse() {
+    @Test fun aLogoutForwardsItsOwnResponseForImmediateRunnerRejection() {
         browser(true)
         val requests = Requests(activity)
         requests.perform(authRequest(1, "sign-in"))
         requests.perform(authRequest(2, "logout", logout = true))
         controller.pause().stop()
-        controller.newIntent(intent("app.test:/cb?code=sign-in-code&state=logout")).start().resume()
+        controller.newIntent(intent("app.test:/cb#code=unaddressed")).start().resume()
         assertTrue(Host.urls.isEmpty())
+        val rejected = "app.test:/cb?code=sign-in-code&state=logout"
+        controller.newIntent(intent(rejected))
+        assertEquals(listOf(rejected), Host.urls)
+        Auth.end(2)
+        Host.urls.clear()
         val signIn = "app.test:/cb?code=sign-in-code&state=sign-in"
         controller.newIntent(intent(signIn))
+        assertEquals(listOf(signIn), Host.urls)
+        Auth.end(1)
+        requests.perform(authRequest(2, "logout", logout = true))
+        controller.newIntent(intent("app.test:/cb#id_token=unexpected"))
         assertEquals(listOf(signIn), Host.urls)
         val returned = "app.test:/cb"
         controller.newIntent(intent(returned))
         assertEquals(listOf(signIn, returned), Host.urls)
+        Auth.end(2)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(11))
+        assertTrue(Host.answers.isEmpty())
     }
 
     @Test fun defaultBrowserWaitsUntilTheBoundAndForgettingCancelsOnlyTheWait() {

@@ -54,7 +54,7 @@ test('browser agent settling retains render traps and quarantines all later modu
     const enter = (render = false) => { globalThis.entries++; if(render && globalThis.armed) wasm.instance.exports.trap_borrowed_world(); };
     export default function() {}
     export function gpu_load() {} export function gpu_unload() {enter();}
-    export function gpu_child_view() {} export function gpu_seekable() {} export function gpu_period() {}
+    export function gpu_child_view() {} export function gpu_seekable() {} export function gpu_reduced_motion() {} export function gpu_period() {}
     export function gpu_shader_names(){return '[]';} export function gpu_shaders_clear() {}
     export function gpu_create(){return 1;} export function gpu_bind_at(){return true;}
     export function gpu_wants_input(){return false;} export function gpu_dirty(){return globalThis.armed;}
@@ -157,7 +157,7 @@ async function noWebGPU(install, run) {
     if(path==='/')return new Response(html,{headers:{'content-type':'text/html'}});
     if(path==='/gpu.js' && new URL(req.url).searchParams.has('g')) return new Response(`
       var wasm_bindgen = Object.assign(async () => {}, {
-        gpu_child_view() {}, gpu_load() {}, gpu_unload() {}, gpu_seekable() {}, gpu_tier() {},
+        gpu_child_view() {}, gpu_load() {}, gpu_unload() {}, gpu_seekable() {}, gpu_reduced_motion() {}, gpu_tier() {},
         gpu_shader_names: () => '[]', gpu_shaders_clear() {}, gpu_shader_check: async () => true,
         gpu_create: () => ${new URL(req.url).searchParams.get('g') === '1' ? 0 : 1},
         gpu_bind_at: () => true, gpu_lifecycle() {}, gpu_error: () => 'controlled create failure',

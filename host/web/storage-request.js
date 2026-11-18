@@ -3,7 +3,7 @@
 import { bodyTarget, createFileSystem, requestBody } from './storage-fs.js';
 import { createSqlite } from './storage-sqlite.js';
 import { agentStorageRefusal, storageKey } from './storage-environment.js';
-import { grantError } from './grant-admission.js';
+import { grantError, knownFolderPath } from './grant-admission.js';
 import './documents-glue.js';
 const maxBytes = 16 << 20;
 let toldAgent = false;
@@ -81,6 +81,7 @@ export function createStorageRequests(appId, admitted) {
           const value=op==='fs.recentDocuments'?await globalThis.exact.documents.recent(scope):await globalThis.exact.documents.forget(args?.path,scope);
           return encoder.encode(JSON.stringify(value??null));
         }
+        if ([args?.path, args?.destination].some(knownFolderPath)) throw Object.assign(new Error('NotSupportedError: well-known folders are unavailable on this host'), { name: 'NotSupportedError', code: 'failed' });
         // Two app files, never a document (LLP 1069.002 A1.1): refused before the document branch.
         if ((op==='fs.compressImage'||op==='fs.transformImage') && ![args?.path,args?.destination].every(p=>typeof p==='string'&&p.startsWith('app:/'))) throw new Error(op.slice(3)+': needs app:/ paths');
         // A document the person chose is not app storage (LLP 1069.010 D1).

@@ -176,6 +176,50 @@ class HeadlessLaunchTest {
         assertEquals(listOf("launch $url", "open $next"), Host.told.filter { it.startsWith("launch") || it.startsWith("open") })
     }
 
+    private fun push(vararg data: Pair<String, String>) = Intent(Intent.ACTION_MAIN).apply {
+        putExtra("google.message_id", "expo-42")
+        data.forEach { (key, value) -> putExtra(key, value) }
+    }
+
+    @Test fun anExpoPushTapSetsTheColdLaunchLocation() {
+        activity(push("experienceId" to "@owner/app", "body" to """{"navigate":"/urgencies"}"""))
+        assertEquals("/urgencies", Host.environment["EXACT_LAUNCH_URL"])
+        assertFalse(Host.told.any { it.startsWith("open ") })
+    }
+
+    @Test fun anExpoPushTapLaunchesOverAHeadlessHost() {
+        headless()
+        activity(push("scopeKey" to "@owner/app", "body" to """{"navigate":"/urgencies"}"""))
+        assertEquals(listOf("launch /urgencies"), beforeTheFirstFrame())
+    }
+
+    @Test fun aWarmPushTapReadsOnlyTheSendersNavigate() {
+        activity(Intent(Intent.ACTION_MAIN))
+        val body = """{"id":"alert-42","navigate":"/urgencies"}"""
+        val cases = listOf(
+            push("experienceId" to "@owner/app", "body" to body) to "/urgencies",
+            push("scopeKey" to "@owner/app", "body" to body) to "/urgencies",
+            push("navigate" to "/top", "scopeKey" to "@owner/app", "body" to body) to "/top",
+            push("navigate" to "/direct") to "/direct",
+            push("body" to body) to null,
+            push("projectId" to "project", "body" to body) to null,
+            push("scopeKey" to "@owner/app") to null,
+            push("navigate" to "", "scopeKey" to "@owner/app", "body" to body) to null,
+            push("navigate" to " ", "scopeKey" to "@owner/app", "body" to body) to null,
+            push("scopeKey" to "@owner/app", "body" to body).also { it.removeExtra("google.message_id") } to null,
+        ) + listOf("not JSON", "[]", "{}", """{"navigate":42}""", """{"navigate":null}""",
+            """{"navigate":""}""", """{"navigate":"  "}""").map {
+            push("experienceId" to "@owner/app", "body" to it) to null
+        }
+        for ((intent, location) in cases) {
+            Host.told.clear()
+            made.single().newIntent(intent)
+            settle()
+            assertEquals(intent.extras.toString(), listOfNotNull(location?.let { "open $it" }),
+                Host.told.filter { it.startsWith("open ") })
+        }
+    }
+
     @Test fun theFirstActivitysShareIsTheLaunchLocation() {
         headless()
         val target = "{\"action\":\"/share\",\"params\":{\"text\":\"text\"}}"

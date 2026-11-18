@@ -2190,6 +2190,15 @@ component A
   view
     text "a"
 ---
+== syntax-resource-clause-order
+shape G
+  phase: string
+component A
+  state on = true
+  resource got = receive("a") as shape G else empty() when on
+  view
+    text "a"
+---
 == type-resource-for-list
 shape G
   phase: string

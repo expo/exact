@@ -538,7 +538,10 @@ fn floor_shading(model: bool) {
         for &camera_scale in scales {
             let mut surface =
                 WorldSurface::<Floor, exact_game_render::ModelExecutor, true>::default();
-            surface.device_ready(exact_gpu::wgpu::Features::empty());
+            surface.device_ready(
+                exact_gpu::wgpu::Features::empty(),
+                exact_gpu::wgpu::Limits::downlevel_defaults(),
+            );
             surface
                 .bind(
                     &FloorView {
@@ -1137,7 +1140,10 @@ fn quad_centre(gpu: &Gpu, [mode, light, view]: [u32; 3], unlit: bool, layers: u3
     surface
         .bind(&[mode, light, view, Value::Bool(unlit), layers], None)
         .unwrap();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.prepare_assets(
         &gpu.device,
         &gpu.queue,

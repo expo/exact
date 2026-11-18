@@ -147,14 +147,20 @@ export const onHover = (e, kind, f, l) => {
 };
 export const onFocusWithin = (e, kind, f, l) =>
   l(kind, ev => {
-    if (ev.$stopped) return;
-    const outer = KeyEvent;
-    KeyEvent = ev;
-    try {
-      f([ev.target?.exactExitId ?? ev.target?.id ?? '', ev.relatedTarget?.exactExitId ?? ev.relatedTarget?.id ?? null]);
-    } finally {
-      KeyEvent = outer;
-    }
+    const value = [ev.target?.exactExitId ?? ev.target?.id ?? '', ev.relatedTarget?.exactExitId ?? ev.relatedTarget?.id ?? null];
+    const run = () => {
+      if (ev.$stopped) return;
+      const outer = KeyEvent;
+      KeyEvent = ev;
+      try {
+        f(value);
+      } finally {
+        KeyEvent = outer;
+      }
+    };
+    // Removing the focused subtree fires inside reconciliation. Its replacement must be attached before an
+    // ancestor's focus action commits and publishes the tree, as for ordinary focus and blur below.
+    if (Flushing) FocusQueue.push(run); else run();
   });
 // `keycapture` hears keydown outermost first, then `key` bubbles; `keyup` bubbles too (#140). An action taking one more
 // parameter hears the KeyboardEvent record (contract/types selection.rs's order: code, repeat and isComposing last; a

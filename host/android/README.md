@@ -66,8 +66,9 @@ transform or an ancestor's) use the live-subtree scale path instead: it draws th
 transform, where the raster would fly upright. The largest corner radius is
 used while flying. Reversal preserves position, not velocity.
 
-This supports in-page transitions. Separate native dialog panes, presentation
-zooms and the platform's edge-stretch deformation are not covered. The Android
+This supports in-page transitions. Separate native dialog panes and the
+platform's edge-stretch deformation are not covered. Route zooms use the
+stage's container transform (below). The Android
 reader and Rust recorder must be rebuilt together after a stream change.
 
 ### Build
@@ -89,11 +90,11 @@ The warning does not change JVM options or disappear when you set a JIT workarou
 packages both architectures. The default remains `arm64-v8a`, including release
 builds. Install the selected Rust targets for the pinned toolchain first.
 Each ABI gets its own app library, GPU modules and sound arm, with 16 KB alignment.
-TypeScript apps support only arm64: the vendored Hermes resolver does not support
-Android x86_64 ICU, and the pinned release has no x86_64 Android bundle. A bundle
-override does not enable this target. Use an ARM device or emulator, or an x86_64
-image with ARM translation, with the default arm64 APK. Native x86_64 builds are
-available for apps whose Android dependencies do not link Hermes.
+TypeScript apps need a Hermes bundle for each selected ABI. The pinned v6 release
+supplies Android arm64 only. Until an x86_64 bundle is published, set
+`HERMES_LEAN_SYS_DIR_x86_64_linux_android` to a complete x86_64 Android bundle.
+The resolver validates its receipt, ICU archives and filters, and bytecode version
+against the pinned host compiler. An arm64 or host bundle cannot substitute for it.
 
 The build:
 
@@ -556,6 +557,15 @@ in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a swi
 the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
 The controls' shapes are still the desktop painter's (D9).
 
+**An icon button is Material's** (D9; `host/painted/src/paint/icon_button.rs`): a button holding a symbol and no
+title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Compose Material 3 1.4's
+`SmallIconButtonTokens`), in a 48 dp touch target. Its `buttonStyle` picks which: unsaid or `plain` the standard
+`IconButton` (no container, in `onSurface`), `tinted` the `FilledTonalIconButton`, `filled` the
+`FilledIconButton`, any other said style the `OutlinedIconButton`. With an `aria-pressed` it is that button's toggle
+(`IconToggleButton` and the rest), in `IconButtonDefaults`' checked and unchecked colours. The oracle draws it
+beside Compose's as the `icon-button`, `icon-button-tonal`, `icon-button-outlined` and `icon-toggle-checked`
+specimens.
+
 **A press is Material's ripple** (D9; `host/painted/src/paint/ripple.rs`): on a button, a segment, a field that opens
 something, a checkbox and a radio (in the 40 dp circle round the mark, from its middle), a list's row and any other
 node that presses (a `press` or a link's `href`) with no pressed look of its own (`:active`, `-exact-press-scale`,
@@ -624,7 +634,7 @@ capability has a call of its own.
 | 14 | whether a canvas receives pad input (LLP 1133.022 D4) | one word: 1 or 0 | observes controller buttons and joystick motion, consuming them only while 1; Android's fallback keys always pass through for navigation | none |
 | 15 | a GPU surface's haptic message (LLP 1009 D10) | the canvas's view id (a surface id is its module's, and two modules count from 1), then a string: the message's JSON as `exact_gpu::haptics` writes it (a texture's `intensity` and `sharpness`, its stop, or a pattern); exact2 sends a stop when the surface goes | `SurfaceHaptics`, on the vibrator ("Haptics", below); nothing while the activity is paused | none |
 | 16 | Contract sound operations | a JSON string: asset `files`, `reset`, monotonic `submitted` seconds and `ops` (play 1, end 2, change 4), each with a voice id and `at` in monotonic seconds; play has a sound index, gain, rate and pan, change has optional gain, rate and pan and a ramp in seconds | `SoundOutput` opens `libexact_sound.so` at the first play; AAudio runs the shared mixer against its speaker timestamp; the existing focus owner applies `audio_session` | none; under the driver, `state.sounds.output` remains `"agent"` |
-| 17 | open an auth session | three strings: the granted authorization URL, callback endpoint and state | opens the default browser, with a Custom Tab when supported; keeps a ten-minute wait across activity recreation | `opened` acknowledges the wait without settling; `unavailable` (501), `failed` (502), or `cancelled` (499 on return after a stop without a callback, at the bound, or with no attached activity); a callback with a matching state arrives through `Native.open` and the runner checks it; a stale callback consumes the return without ending the wait |
+| 17 | open an auth session | three strings: the granted authorization URL, callback endpoint and state | opens Auth Tab for HTTPS when the default browser supports it, otherwise a plain browser returning through a verified App Link; custom-scheme callbacks use a Custom Tab when supported; keeps a ten-minute wait across activity recreation | `opened` acknowledges the wait without settling; `unavailable` (501), `failed` (502), or `cancelled` (499 on an Auth Tab cancellation result, a return from another browser after a stop without a callback, the bound, or no attached activity); a callback with a matching state arrives through `Native.open` and the runner checks it; a stale callback consumes the return without ending the wait |
 | 18 | a file input's `showPicker` (LLP 1069.002) | the input node, `multiple` (1 or 0), the count of `accept` types, then each type as a string | the system photo picker when its filters fit and it is available, otherwise `ACTION_OPEN_DOCUMENT`; offers HEIC/HEIF for conversion as below and copies the selected URIs into the app's cache off the UI thread (`FilePicker`) | a JSON array of `{path, name, type, extension, extensions, converted, name_type}` records: staging path, display name, nullable MIME type and storage extension, the chooser's mapping of extension tokens to MIME types, whether conversion occurred, and Android's MIME for the display-name suffix. Null or an empty array cancels; other text is a refusal reason. The presenter copies into `app:/tmp/picked/`, removes the reader's copies, and fires `change` or journals the refusal and fires `cancel` |
 | 19 | end an auth wait | one word: the request id from kind 17 | removes the wait; the browser owns its tab | none |
 | 20 | a signed update activated with its own assets (LLP 1030.006 D1, D5) | the generation's asset directory as a string, empty for the APK's | opens every video and page again, and the next sound batch its files, under `Native.assetRoot()` (`AssetRoot`); calls `Native.drew()` after its next drawing, which makes the new generation's boot good | none |
@@ -1264,6 +1274,25 @@ other side and fades in over the rest (`FastOutSlowIn`). The top app bar crosses
 in the page for the crossing. A popped route is drawn from its kept drawing. Under the agent a sheet and a crossing
 move on its clock: `clock settle` ends them.
 
+**A pushed or full-screen route with `navigationSource`** uses Material's container transform when the named
+source is visible in the route beneath. It picks the first matching `id` by node id, as the iOS zoom does, and
+uses the source's last painted rectangle, including scrolling and transforms. The route's whole box grows
+from that rectangle, fitted by width and clipped to the moving container's height, with corners rounding to
+16 dp at the source and content fading in over the first 30 %. The route beneath stays at rest. Back shrinks
+the kept drawing into the source, fading out over the last 30 %; it rechecks the source's current geometry
+and visibility, including rounded overflow clips. A missing, hidden, fully clipped or offscreen source uses
+the shared axis for a pushed route and a cut for a full-screen route, on both entrance and return.
+Reader-owned transform or opacity tracks on the source or an ancestor also take this fallback, since the
+stage cannot read their live samples. A full-screen entrance without a usable source keeps no drawing
+and offers no predictive Back preview. The source binding follows the live route, including changes and clearing it,
+and survives switching tabs until the route leaves its stack. A predictive
+Back's committed return starts at the preview's pose. Inside a sheet the shared axis stays; Remove animations
+cuts. This transforms the whole route rather than aligning to a matching image inside it as UIKit can.
+
+The timing follows Material's `MaterialContainerTransform`: `motionDurationMedium4` (400 ms) entering,
+`motionDurationMedium3` (350 ms) returning, and `motionEasingEmphasizedInterpolator` (the two-segment
+[Material 3 emphasized path](https://github.com/material-components/material-components-android/blob/master/lib/java/com/google/android/material/motion/res/values/tokens.xml)).
+
 **Predictive Back** (Android 14, `OnBackAnimationCallback`, `Native.backProgress`): the reader passes the gesture's
 start, progress and edge, and its cancel. Where Back would pop a route, the route shrinks toward 90 %, moves toward
 the side the swipe came from by a twentieth of the width less 8 dp and rounds its corners to 28 dp, the route it
@@ -1282,7 +1311,7 @@ agent's clock. The callback registers as an animation callback (`CoreBackPreview
 the system's Back gesture, so the preview itself was seen only in the presenter's tests.
 
 Not built: the hand-off between a sheet and a scroller in it (a list at its top dragged down moves the list's edge,
-not the sheet); a tab switch's fade-through; a `fullscreen` route's own entrance; a sheet's window of its own
+not the sheet); a tab switch's fade-through; a `fullscreen` route's entrance without a visible `navigationSource`; a sheet's window of its own
 (the IME's insets move it by ending the page, as they move any page).
 
 ## The bars (LLP 1115.001 D11)
@@ -1416,12 +1445,14 @@ Not built of D11:
 - **The medium and large top app bars**, which collapse as the content scrolls (S3); the colour change as a
   transition; a centred title; an overflow menu for buttons that do not fit (they are all placed, and the title
   is cut first).
-- **The segmented buttons** for a `tablist` in the content, and for one in a header (it stays in the page, as the
-  search field does). A `radiogroup` of radios is built (`kernel/src/segmented.rs`, `paint/segment.rs`): Compose's
-  `SingleChoiceSegmentedButtonRow`, its numbers the schema's `segmented-button-` rows, seen through the presenter on
-  a Mac and not yet on a phone or beside the oracle's `segmented-buttons` specimen. Owed there: Compose's motion
-  (the label slides and the check grows as the choice moves; here both change at once).
-  **List items** and their dividers (rows as cells land on every host at once).
+- **Segmented-button qualification and motion.** Content and header `tablist`s, and `radiogroup`s, use
+  Compose's `SingleChoiceSegmentedButtonRow` treatment (`kernel/src/segmented.rs`, `host/painted/src/paint/segment.rs`).
+  A header's tablist stays in the page under the bar, as its search field does. Tabs keep their tab semantics
+  and `aria-selected`; root navigation tabs keep the navigation bar, and `appearance="none"` keeps authored paint.
+  Headless kernel and presenter tests cover the treatment. A phone run and comparison with the Material oracle's
+  `segmented-buttons` specimen remain owed, as does Compose's motion (the label slides and the check grows;
+  here both change at once).
+- **List items** and their dividers (rows as cells land on every host at once).
 - **A header's rich title**: the avatar, the subtitle and the tap on the title that iOS shows are not read here.
 - **`onSecondaryContainer`** for the selected symbol, badges, a navigation rail on a wide window, and hiding the
   navigation bar for a route pushed while the tablist is hidden (the bar follows the tablist's own `display`).

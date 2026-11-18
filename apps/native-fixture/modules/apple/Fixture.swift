@@ -305,9 +305,32 @@ final class FixtureTabs: UIViewController {
         self.contents = contents
         control = UISegmentedControl(items: contents.tabs.map { $0.item.title ?? $0.name })
         super.init(nibName: nil, bundle: nil)
-        contents.onSelect = { [weak self] _ in self?.show() }
+        contents.onSelect = { [weak self] _ in
+            guard let self else { return }
+            show()
+            if let url = openOnNextSelect {
+                openOnNextSelect = nil
+                open(url)
+                selectedJustAfterOpen = self.contents.selected
+            }
+            if backOnNextSelect {
+                backOnNextSelect = false
+                goBack()
+            }
+        }
     }
     required init?(coder: NSCoder) { nil }
+    /// A Back of the app's own and a link it opens (the UIKit tests call
+    /// these), and whether Exact took the last one.
+    @objc private(set) var intentTaken = false
+    /// A URL the container opens from inside the next `onSelect` (a UIKit test sets it).
+    @objc var openOnNextSelect: String?
+    /// The tab Exact's contents said was selected just after that open, inside the same `onSelect`.
+    @objc private(set) var selectedJustAfterOpen = -1
+    /// Whether the container goes back from inside the next `onSelect` (a UIKit test sets it).
+    @objc var backOnNextSelect = false
+    @objc func goBack() { intentTaken = contents.back() }
+    @objc func open(_ url: String) { intentTaken = contents.open(url) }
     override func viewDidLoad() {
         super.viewDidLoad()
         for tab in contents.tabs {

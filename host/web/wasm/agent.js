@@ -664,14 +664,14 @@ export async function agentSettled(request) {
   if (host.textflow) {
     await host.textflow.settle();
   }
-  return agent(request);
+  return tagged(await agent(request));
 }
-// Every reply carries the runner's `epoch`, `incarnation` and `clock` (LLP
+// Every reply carries the runner's `generation`, `epoch`, `incarnation` and `clock` (LLP
 // 1035.002 D3), read after the operation; a reply's own `clock` (where a
-// `clock` call landed) is kept, and an error is left alone. The driver
+// `clock` call landed) is kept,. The driver
 // tags the input replies it delivers through CDP the same way.
 function tagged(reply) {
-  if (!reply || reply.error != null) {
+  if (!reply) {
     return reply;
   }
   const tags = ask({ op: "tags" });

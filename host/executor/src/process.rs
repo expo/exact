@@ -63,6 +63,8 @@ pub(crate) struct Processes {
     clock: Arc<Clock>,
     /// The drive's launch facts, under the agent.
     agent: Option<AgentFacts>,
+    /// Every session's storage and PATH admission share process-lifetime protection.
+    folder_roots: FolderRoots,
     /// The host starts programs (§8). Off, every process request answers
     /// `Unsupported` (the render host).
     enabled: AtomicBool,
@@ -81,7 +83,7 @@ impl Processes {
         origin == CallOrigin::App || names.iter().all(|n| captured.contains(n))
     }
 
-    pub(crate) fn new() -> Processes {
+    pub(crate) fn new(budget: super::WorkerBudget) -> Processes {
         let agent = AgentFacts::from_env();
         #[cfg(test)]
         let agent = UNDER_AGENT.take().or(agent);
@@ -97,6 +99,7 @@ impl Processes {
             drained: Condvar::new(),
             clock: Arc::new(clock),
             agent,
+            folder_roots: folder_roots(budget),
             enabled: AtomicBool::new(false),
             login_captured: Mutex::default(),
             one_shots: Mutex::default(),
@@ -1054,15 +1057,140 @@ impl Core {
     }
 }
 
+pub(super) fn storage_roots(processes: &Processes) -> ibex2::stdlib::fs::Roots {
+    processes
+        .folder_roots
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|protected| protected.roots.clone())
+        .unwrap_or_default()
+}
+
+type FolderRoots = Arc<Mutex<Option<ProtectedRoots>>>;
+
+#[cfg_attr(test, derive(Clone))]
+struct ProtectedRoots {
+    roots: ibex2::stdlib::fs::Roots,
+    guard: Option<ibex2::stdlib::fs::KnownFolderGuard>,
+    settings: Vec<(&'static str, std::path::PathBuf)>,
+}
+
+fn folder_roots(budget: super::WorkerBudget) -> FolderRoots {
+    match budget {
+        super::WorkerBudget::Process => {
+            static ROOTS: std::sync::LazyLock<FolderRoots> =
+                std::sync::LazyLock::new(Default::default);
+            ROOTS.clone()
+        }
+        super::WorkerBudget::Thread => FolderRoots::default(),
+    }
+}
+
+fn make_storage_roots(processes: &Processes) -> ibex2::stdlib::fs::Roots {
+    ibex2::stdlib::fs::Roots {
+        home: home(processes),
+        bundle: real::bundle().ok(),
+        known_folder: Some(match &processes.agent {
+            Some(_) => {
+                let folders = home(processes)
+                    .ok_or_else(|| std::io::Error::from_raw_os_error(2))
+                    .and_then(|home| exact_data::known_folders::AgentFolders::new(&home));
+                Arc::new(move |name| match &folders {
+                    Ok(folders) => folders.resolve(name).map(Into::into),
+                    Err(error) => Err(ibex2::stdlib::fs::copy_io_error(error)),
+                })
+            }
+            None => {
+                #[cfg(target_os = "macos")]
+                let resolve = exact_data::known_folders::macos;
+                #[cfg(target_os = "linux")]
+                let resolve = exact_data::known_folders::linux_storage;
+                Arc::new(move |name| resolve(name).map(Into::into))
+            }
+        }),
+    }
+}
+
 impl Core {
     /// Start programs for data code: a desktop host's executor (§8). Its
     /// `home:` and `bundle:` directories are storage's too (D6).
     pub fn allow_processes(&self) {
         self.shared.processes.enabled.store(true, Ordering::Release);
-        ibex2::stdlib::fs::set_roots(ibex2::stdlib::fs::Roots {
-            home: home(&self.shared.processes),
-            bundle: real::bundle().ok(),
+        self.refresh_storage_roots();
+    }
+
+    pub(crate) fn refresh_storage_roots(&self) {
+        let processes = &self.shared.processes;
+        if !processes.enabled.load(Ordering::Acquire) {
+            return;
+        }
+        let roots = self.protected_storage_roots(|| {
+            let roots = make_storage_roots(processes);
+            #[cfg(target_os = "macos")]
+            let settings = exact_data::known_folders::macos_settings();
+            #[cfg(target_os = "linux")]
+            let settings = exact_data::known_folders::linux_settings();
+            #[cfg(target_os = "macos")]
+            let roles = &["screenshots"][..];
+            #[cfg(target_os = "linux")]
+            let roles = &[
+                "desktop",
+                "documents",
+                "downloads",
+                "music",
+                "pictures",
+                "videos",
+                "screenshots",
+            ][..];
+            let settings = if processes.agent.is_none() {
+                settings
+                    .into_iter()
+                    .flat_map(|path| roles.iter().map(move |&role| (role, path.clone())))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (roots, settings)
         });
+        ibex2::stdlib::fs::set_roots(roots);
+    }
+
+    fn protected_storage_roots(
+        &self,
+        make: impl FnOnce() -> (
+            ibex2::stdlib::fs::Roots,
+            Vec<(&'static str, std::path::PathBuf)>,
+        ),
+    ) -> ibex2::stdlib::fs::Roots {
+        let processes = &self.shared.processes;
+        let mut held = processes
+            .folder_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let protected = held.get_or_insert_with(|| {
+            let (mut roots, settings) = make();
+            let guard = roots.guard_known_folders(&ibex2::grant::GrantSet::default(), &[], &[]);
+            ProtectedRoots {
+                roots,
+                guard,
+                settings,
+            }
+        });
+        if let (Some(guard), Ok(grants)) = (
+            &protected.guard,
+            ibex2::grant::GrantSet::parse(&exact_runner::io_grants(&self.grants)),
+        ) {
+            guard.protect(
+                &grants,
+                &protected.settings,
+                self.shared
+                    .root_paths
+                    .get()
+                    .map_or(&[], |paths| paths.as_slice()),
+            );
+        }
+        protected.roots.clone()
     }
 
     /// The clock the host's process work keeps, for the runner under the

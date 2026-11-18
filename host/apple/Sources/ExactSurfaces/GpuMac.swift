@@ -65,7 +65,7 @@ final class CanvasesHost {
     final class Entry {
         let view: NodeView
         let name: String
-        var values: Any
+        var values: Data
         var id: UInt32 = 0
         var presentable = true
         var wants = false
@@ -109,7 +109,7 @@ final class CanvasesHost {
         var waiting = false
         /// The artifact whose surface this canvas is (LLP 1009 D6), once created.
         var module: GpuModule?
-        init(view: NodeView, name: String, values: Any) { self.view = view; self.name = name; self.values = values }
+        init(view: NodeView, name: String, values: Data) { self.view = view; self.name = name; self.values = values }
     }
     var entries: [UInt32: Entry] = [:]
     var publishers: [String: Entry] = [:]
@@ -183,7 +183,7 @@ final class CanvasesHost {
     }
 
     /// A surface op: new inputs for a canvas node.
-    func surface(view: NodeView, name: String, values: Any) {
+    func surface(view: NodeView, name: String, values: Data) {
         if let e = entries[view.id], e.view !== view || e.name != name { destroy(view: view.id) }
         if let e = entries[view.id] {
             e.values = values

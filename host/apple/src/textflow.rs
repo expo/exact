@@ -467,6 +467,49 @@ pub fn line_breaks(
     }
     ends.len()
 }
+/// The breaks Blink's scorer balances a paragraph at
+/// (`exact_textflow::balanced_breaks`, whose arguments these are): `count`
+/// opportunities as parallel `ends`, `nexts` and `hyphens`. Writes the
+/// `lines - 1` indices where lines break; returns their count, 0 where the
+/// scorer gives nothing or `cap` is too small.
+#[allow(clippy::too_many_arguments)]
+pub fn balanced_breaks(
+    width: f32,
+    indent: f32,
+    font_size: f32,
+    justified: bool,
+    ends: *const f32,
+    nexts: *const f32,
+    hyphens: *const u8,
+    count: usize,
+    lines: usize,
+    out: *mut u32,
+    cap: usize,
+) -> usize {
+    let (Some(ends), Some(nexts), Some(hyphens)) = (
+        slice(ends, count),
+        slice(nexts, count),
+        slice(hyphens, count),
+    ) else {
+        return 0;
+    };
+    let opportunities: Vec<_> = ends
+        .iter()
+        .zip(nexts)
+        .zip(hyphens)
+        .map(|((&end, &next), &hyphen)| (end, next, hyphen != 0))
+        .collect();
+    let Some(breaks) =
+        exact_textflow::balanced_breaks(width, indent, font_size, justified, &opportunities, lines)
+            .filter(|breaks| breaks.len() <= cap && !out.is_null())
+    else {
+        return 0;
+    };
+    for (i, &at) in breaks.iter().enumerate() {
+        unsafe { out.add(i).write(at as u32) };
+    }
+    breaks.len()
+}
 /// Release a prepared source. Zero, stale, and repeated frees are no-ops.
 pub fn free(handle: u64) {
     with_sources(|sources| sources.remove(&handle));
@@ -571,6 +614,35 @@ macro_rules! textflow_exports {
             cap: usize,
         ) -> usize {
             $crate::textflow::line_breaks(text, len, words, word_count, out, cap)
+        }
+        /// Where Blink's scorer breaks a balanced paragraph (LLP 1001 §6).
+        #[no_mangle]
+        pub extern "C" fn exact_text_balanced_breaks(
+            width: f32,
+            indent: f32,
+            font_size: f32,
+            justified: u32,
+            ends: *const f32,
+            nexts: *const f32,
+            hyphens: *const u8,
+            count: usize,
+            lines: usize,
+            out: *mut u32,
+            cap: usize,
+        ) -> usize {
+            $crate::textflow::balanced_breaks(
+                width,
+                indent,
+                font_size,
+                justified != 0,
+                ends,
+                nexts,
+                hyphens,
+                count,
+                lines,
+                out,
+                cap,
+            )
         }
         /// Natural text's base direction per paragraph (LLP 1060.000 D3).
         #[no_mangle]

@@ -14,7 +14,27 @@ private var replacementLost = true
 private var replacements = 0
 var controlEvents: [[String: Any]] = []
 private var boundObjects: [NSDictionary] = []
+private var boundJSON: [Data] = []
+private var motionPreferences: [Bool] = []
 final class SurfaceControlTests: XCTestCase {
+    func testGpuModuleFollowsTheAgentMotionPreference() {
+        let previous = DisplayPreferences.agent
+        defer { DisplayPreferences.agent = previous }
+        DisplayPreferences.agent = (true, false)
+        motionPreferences = []
+        let (session, _, _) = fixture(reducedMotion: { motionPreferences.append($0) })
+        defer { session.destroy() }
+        XCTAssertEqual(motionPreferences, [true])
+        DisplayPreferences.agent = (false, false)
+        waitForMainQueue()
+        XCTAssertEqual(motionPreferences, [true, false])
+        DisplayPreferences.agent = (false, true)
+        waitForMainQueue()
+        XCTAssertEqual(motionPreferences, [true, false])
+        DisplayPreferences.agent = (true, true)
+        waitForMainQueue()
+        XCTAssertEqual(motionPreferences, [true, false, true])
+    }
     func testArchivedGpuFrameworksKeepTheBakedDigestAndDevelopmentDylibPath() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -37,12 +57,13 @@ final class SurfaceControlTests: XCTestCase {
         }
     }
     override class func setUp() { super.setUp(); ExactSurfaces.install() } // LLP 1047.001 D4
-    func fixture() -> (ExactSession, NodeView, NodeView) {
+    func fixture(reducedMotion: GpuModule.SeekableFn? = nil) -> (ExactSession, NodeView, NodeView) {
         #if os(macOS)
         _ = NSApplication.shared
         #endif
         let s = ExactApp.shared.makeSession(label: "control-test")
         let m = GpuModule(create: { _, _, _, _, _ in 1 }, bind: { _, p, n in
+                if let p { boundJSON.append(Data(bytes: p, count: n)) }
                 if let p, let object = try? JSONSerialization.jsonObject(with: Data(bytes:p, count:n)) as? NSDictionary { boundObjects.append(object) }; return 0
             },
             render: { _, _, _, _, _ in 0 }, dirty: { _ in 0 }, destroy: { _ in },
@@ -53,13 +74,14 @@ final class SurfaceControlTests: XCTestCase {
             wantsInput: { _ in 1 }, input: { _, p, n in
                 controlEvents.append((try? JSONSerialization.jsonObject(with: Data(bytes:p!, count:n))) as? [String: Any] ?? [:]); return 0
             }, messages: nil, published: nil, agent: { _, _, _ in recoveryLength }, outPtr: { UnsafePointer(recoveryReply) })
+        if let reducedMotion { m.followReducedMotion(reducedMotion) }
         s.surfaceHost.modules[""] = m; s.surfaceHost.attempted = [""]
         let canvas = NodeView(id:100, kind:"canvas", presenter:s.presenter)
         let button = NodeView(id:101, kind:"button", presenter:s.presenter)
         canvas.frame = CGRect(x:0,y:0,width:200,height:200); button.frame=CGRect(x:0,y:0,width:100,height:100)
         canvas.addSubview(button); button.props["action"] = "jump"
         s.presenter.root.addSubview(canvas); s.presenter.views[100] = canvas; s.presenter.views[101] = button
-        let e = CanvasesHost.Entry(view:canvas, name:"world", values:[]); e.id=1; e.wantsInput=true; e.module=m
+        let e = CanvasesHost.Entry(view:canvas, name:"world", values:Data("[]".utf8)); e.id=1; e.wantsInput=true; e.module=m
         s.surfaceHost.entries[100]=e; canvas.canvasInput=CanvasInputHost(view:canvas)
         return (s, canvas, button)
     }
@@ -238,6 +260,32 @@ final class SurfaceControlTests: XCTestCase {
             XCTAssertEqual(boundObjects.last,values as NSDictionary)
         }
     }
+    func testSurfaceArgumentsKeepSourceOrderThroughBatchBinding() {
+        let (s, _, _) = fixture(); defer { s.destroy() }
+        let module = s.surfaceHost.modules[""]!
+        for stamped in [false, true] {
+            module.bindAt = stamped ? { _, p, n, _ in
+                if let p { boundJSON.append(Data(bytes: p, count: n)) }
+                return 0
+            } : nil
+            for values in [
+                #"{"zebra":2,"src":"noise","alpha":[1,2],"gain":3,"flag":true}"#,
+                #"{"flag":false,"alpha":{"second":2,"first":1},"zebra":null}"#,
+                "{}", #"[{"second":2,"first":1},true,null]"#, "[]"
+            ] {
+                for op in [
+                    #"{"op":"surface","id":100,"name":"world","values":\#(values)}"#,
+                    #"{"values":\#(values),"id":100,"name":"world","op":"surface"}"#
+                ] {
+                    boundJSON.removeAll()
+                    let batch = Batch.decode(Data(#"{"ops":[\#(op)]}"#.utf8))
+                    XCTAssertNil(batch.error)
+                    s.apply(batch)
+                    XCTAssertEqual(boundJSON.map { String(decoding: $0, as: UTF8.self) }, [values])
+                }
+            }
+        }
+    }
     func testContactIdentityIncludesCanvasAndReleaseRequest() {
         let (s, canvas, button) = fixture(); defer { s.destroy() }
         #if os(macOS)
@@ -250,7 +298,7 @@ final class SurfaceControlTests: XCTestCase {
         s.presenter.root.addSubview(other); other.addSubview(second); second.props["action"]="jump"
         s.presenter.views[200]=other; s.presenter.views[201]=second
         other.canvasInput=CanvasInputHost(view:other)
-        let e=CanvasesHost.Entry(view:other,name:"other",values:[]); e.id=2; e.wantsInput=true; e.module=s.surfaceHost.modules[""]; s.surfaceHost.entries[200]=e
+        let e=CanvasesHost.Entry(view:other,name:"other",values:Data("[]".utf8)); e.id=2; e.wantsInput=true; e.module=s.surfaceHost.modules[""]; s.surfaceHost.entries[200]=e
         XCTAssertTrue(button.control("down",id:1)); XCTAssertTrue(second.control("down",id:1))
         XCTAssertTrue(second.control("up",id:1)); XCTAssertNotNil(s.surfaceHost.entries[100]!.controls[1]); XCTAssertNil(e.controls[1])
         XCTAssertTrue(second.control("down",id:1))
@@ -306,7 +354,7 @@ final class SurfaceControlTests: XCTestCase {
         let other=NodeView(id:200,kind:"canvas",presenter:s.presenter),second=NodeView(id:201,kind:"button",presenter:s.presenter)
         s.presenter.root.addSubview(other);other.addSubview(second);second.props["action"]="jump"
         s.presenter.views[200]=other;s.presenter.views[201]=second;other.canvasInput=CanvasInputHost(view:other)
-        let e=CanvasesHost.Entry(view:other,name:"other",values:[]);e.id=2;e.wantsInput=true;e.module=s.surfaceHost.modules[""];s.surfaceHost.entries[200]=e
+        let e=CanvasesHost.Entry(view:other,name:"other",values:Data("[]".utf8));e.id=2;e.wantsInput=true;e.module=s.surfaceHost.modules[""];s.surfaceHost.entries[200]=e
         XCTAssertTrue(button.control("down",id:7));XCTAssertTrue(second.control("up",id:7));XCTAssertTrue(s.surfaceHost.entries[100]!.controls.isEmpty)
         XCTAssertTrue(button.control("down",id:8));other.addSubview(button)
         s.presenter.apply(wireBatch([]))
@@ -321,7 +369,7 @@ final class SurfaceControlTests: XCTestCase {
         bytes.withUnsafeBufferPointer { recoveryReply.update(from:$0.baseAddress!,count:$0.count) }; recoveryLength=UInt32(bytes.count)
         m.deviceLost={ replacementLost }; m.recover={ replacementLost=false; return recoveryLength }
         m.recoverDevice()
-        let fresh=CanvasesHost.Entry(view:canvas,name:"fresh",values:[]); fresh.id=2; s.surfaceHost.entries[100]=fresh
+        let fresh=CanvasesHost.Entry(view:canvas,name:"fresh",values:Data("[]".utf8)); fresh.id=2; s.surfaceHost.entries[100]=fresh
         let done=expectation(description:"recovery")
         DispatchQueue.main.asyncAfter(deadline:.now()+0.05) { done.fulfill() }; wait(for:[done],timeout:2)
         XCTAssertEqual(m.deliveryClock(fresh,now:300)["now"] as? Double,300)
@@ -370,7 +418,7 @@ final class SurfaceControlTests: XCTestCase {
         XCTAssertEqual(replacements,2); XCTAssertEqual(m.lossGeneration,1)
         XCTAssertNil(m.deliveryClock(e,now:100)["now"])
         XCTAssertNotNil(m.deliveryClock(e,now:200)["now"])
-        let fresh = CanvasesHost.Entry(view:canvas,name:"new",values:[])
+        let fresh = CanvasesHost.Entry(view:canvas,name:"new",values:Data("[]".utf8))
         XCTAssertEqual(m.deliveryClock(fresh,now:300)["now"] as? Double,300)
     }
     #if os(macOS)

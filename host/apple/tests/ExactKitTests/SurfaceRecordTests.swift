@@ -64,8 +64,8 @@ final class SurfaceRecordTests: XCTestCase {
         let canvases = session.surfaceHost
         let owner = NodeView(id: 100, kind: "canvas", presenter: session.presenter)
         let duplicate = NodeView(id: 101, kind: "canvas", presenter: session.presenter)
-        canvases.surface(view: owner, name: "world", values: [])
-        canvases.surface(view: duplicate, name: "world", values: [])
+        canvases.surface(view: owner, name: "world", values: Data("[]".utf8))
+        canvases.surface(view: duplicate, name: "world", values: Data("[]".utf8))
         canvases.surfaceRecord("world", "{\"beacons\":7}")
         let text = try XCTUnwrap(session.presenter.views.values.first { $0.kind == "text" })
         canvases.destroy(view: 101)
@@ -105,7 +105,7 @@ final class SurfaceRecordTests: XCTestCase {
         defer { session.destroy() }
         let c = session.surfaceHost
         let view = NodeView(id: 100, kind: "canvas", presenter: session.presenter)
-        c.surface(view: view, name: "world", values: [])
+        c.surface(view: view, name: "world", values: Data("[]".utf8))
         let entry = try XCTUnwrap(c.entries[100])
         entry.id = 1; entry.restoreAttempted = true; entry.restoreError = "surface world: restore refused: fixture"
         c.worldInput.bytes = Data([1])
@@ -160,7 +160,7 @@ final class SurfaceRecordTests: XCTestCase {
         let session = try fixture()
         defer { session.destroy() }
         let view = NodeView(id:100, kind:"canvas", presenter:session.presenter)
-        let entry = CanvasesHost.Entry(view:view, name:"world", values:[])
+        let entry = CanvasesHost.Entry(view:view, name:"world", values:Data("[]".utf8))
         entry.id = 1
         entry.rendered(1)
         XCTAssertTrue(entry.needsFrame(dirty:false))

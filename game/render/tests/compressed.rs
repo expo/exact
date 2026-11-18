@@ -105,7 +105,7 @@ fn draw(
         Some(held) => s.texture_families(held),
         None => s,
     };
-    s.device_ready(features);
+    s.device_ready(features, wgpu::Limits::downlevel_defaults());
     s.bind(&[], None).unwrap();
     let mut fetched = Vec::new();
     for _ in 0..8 {

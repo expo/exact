@@ -6,7 +6,7 @@ use super::{collection, NodeInst};
 use exact_plan::Value;
 
 /// A [`NodeInst`]'s state that few nodes have.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct Rare {
     /// A virtualized list's engine.
     pub(super) collection: Option<Box<collection::Collection>>,

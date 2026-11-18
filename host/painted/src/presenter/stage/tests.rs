@@ -10,6 +10,8 @@ use crate::paint::Backend;
 mod parts;
 #[path = "rules_tests.rs"]
 mod rules;
+#[path = "zoom_tests.rs"]
+mod zoom;
 
 /// A page, a sheet with two detents and one with none, a route pushed
 /// inside the first sheet, and a page pushed over the first.

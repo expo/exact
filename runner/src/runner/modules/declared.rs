@@ -42,6 +42,7 @@ use serde_json::{json, Map};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+mod app_icon;
 mod app_list;
 mod desktop;
 mod handed;
@@ -78,6 +79,8 @@ pub(in crate::runner) struct Declared {
     /// A launch the login item made (`--login`), and whether its
     /// registration asked `hidden` (`desktop.rs`).
     login_launch: Option<bool>,
+    /// The alternate icon the session shows, none for the primary (`app_icon.rs`).
+    app_icon: Option<String>,
 }
 
 /// One entry of a keyed list.

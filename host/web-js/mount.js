@@ -17,6 +17,8 @@ import {
   writeItem,
   sig,
   effect,
+  memo,
+  stood,
   commit,
   say,
   journal,
@@ -116,53 +118,105 @@ function adoptArm(p, f, own) {
   const s = f ? scope(() => f(p), own) : null;
   return [s, mark(p)];
 }
+// An owning task can refuse a new instance. Prepare its detached subtree during
+// settlement, before any existing scope or DOM range is replaced.
+export let PrepareTasks = false;
+export function taskRegions() { PrepareTasks = true; }
+const PreparedScopes = new Set();
+/** Task owners follow the candidate regions, even while their DOM update waits. */
+export function taskScopeLive(s) {
+  for (; s; s = s.up) if (s.gone || s.taskCurrent?.() === false) return false;
+  return true;
+}
+function prepareScope(s, current, used, forget) {
+  s.taskCurrent = current;
+  const prepared = { s, used, committed: false };
+  PreparedScopes.add(prepared);
+  (s.ends ??= []).push(() => { PreparedScopes.delete(prepared); forget(); });
+  const keep = () => {};
+  keep.refused = () => {
+    if (!prepared.committed && !used()) {
+      if (!s.gone) end(s);
+      PreparedScopes.delete(prepared);
+    }
+  };
+  stood(keep);
+}
+/** Once validation succeeds, retire preparations superseded before publication. */
+export function finishTaskScopes() {
+  for (const p of PreparedScopes) {
+    if (p.s.gone || p.used()) PreparedScopes.delete(p);
+    else if (!untracked(() => taskScopeLive(p.s))) {
+      end(p.s);
+      PreparedScopes.delete(p);
+    } else p.committed = true;
+  }
+}
+function preparedView(view, own, parent) {
+  const frag = document.createDocumentFragment();
+  frag.$listOwner = listOwner(parent);
+  const s = view ? scope(() => view(frag), own) : null;
+  return { frag, s, used: false };
+}
+function armRegion(p, subject, a0, a1, matched) {
+  let [a, b] = range(p), own = Owner, arm = -1, s = null;
+  const bound = matched ? sig(null) : null;
+  const choose = () => {
+    const v = subject(), want = (matched ? v != null : v) ? 0 : a1 ? 1 : -1;
+    if (matched && v != null) write(bound.n, v);
+    return want;
+  };
+  const viewFor = want => presentArm(want < 0 ? null : want ? a1 : matched ? p2 => a0(p2, bound) : a0, subject, want, bound);
+  const pending = new Map();
+  const ready = PrepareTasks ? memo(() => {
+    const want = choose();
+    return untracked(() => {
+      let made = null;
+      if (want !== arm && b) {
+        made = pending.get(want);
+        if (!made || made.s?.gone) {
+          made = preparedView(viewFor(want), own, b.parentNode);
+          pending.set(want, made);
+          const prepared = made;
+          if (made.s) prepareScope(made.s, () => ready().made === prepared,
+            () => prepared.used, () => { if (pending.get(want) === prepared) pending.delete(want); });
+        }
+      }
+      return { want, made };
+    });
+  }) : null;
+  const currentScope = () => {
+    if (s && ready) {
+      const current = s;
+      s.taskCurrent = () => ready().want === arm && s === current;
+    }
+  };
+  effect(() => {
+    const next = ready?.(), want = next ? next.want : choose();
+    if (want === arm) return;
+    arm = want;
+    if (!b) return untracked(() => { [s, b] = adoptArm(p, viewFor(want), own); currentScope(); });
+    untracked(() => {
+      if (s) end(s);
+      clear(a, b);
+      if (next?.made) {
+        next.made.used = true;
+        s = next.made.s;
+        pending.delete(want);
+        b.before(next.made.frag);
+        Paint?.list(b.parentNode);
+      } else {
+        const view = viewFor(want);
+        s = view ? build(b, view, own) : null;
+      }
+      currentScope();
+    });
+  }).$r = () => [a, b];
+}
 /** `when`: arm 0 while the subject holds, else arm 1 (or nothing). */
-export function when(p, subject, a0, a1) {
-  let [a, b] = range(p),
-    own = Owner;
-  let arm = -1,
-    s = null;
-  effect(() => {
-    const want = subject() ? 0 : a1 ? 1 : -1;
-    if (want === arm) return;
-    arm = want;
-    const view = presentArm(want < 0 ? null : want ? a1 : a0, subject, want);
-    if (!b)
-      return untracked(() => {
-        [s, b] = adoptArm(p, view, own);
-      });
-    untracked(() => {
-      if (s) end(s);
-      clear(a, b);
-      s = view ? build(b, view, own) : null;
-    });
-  }).$r = () => [a, b]; // the region's range, for shared.js
-}
+export function when(p, subject, a0, a1) { armRegion(p, subject, a0, a1, false); }
 /** `match`: arm 0 with the bound value while the subject is `some`, else arm 1. */
-export function match(p, subject, a0, a1) {
-  let [a, b] = range(p),
-    own = Owner;
-  let arm = -1,
-    s = null;
-  const bound = sig(null);
-  effect(() => {
-    const v = subject(),
-      want = v != null ? 0 : a1 ? 1 : -1;
-    if (v != null) write(bound.n, v);
-    if (want === arm) return;
-    arm = want;
-    const view = presentArm(want < 0 ? null : want ? a1 : p2 => a0(p2, bound), subject, want, bound);
-    if (!b)
-      return untracked(() => {
-        [s, b] = adoptArm(p, view, own);
-      });
-    untracked(() => {
-      if (s) end(s);
-      clear(a, b);
-      s = view ? build(b, view, own) : null;
-    });
-  }).$r = () => [a, b]; // the region's range, for shared.js
-}
+export function match(p, subject, a0, a1) { armRegion(p, subject, a0, a1, true); }
 /** `each`: rows by key in item order; a kept row keeps its elements, its
  * item and position are signals its bindings read. */
 export function each(p, list, key, row, pure) {
@@ -172,7 +226,8 @@ export function each(p, list, key, row, pure) {
   let rows = new Map(),
     single = false,
     order = null;
-  effect(() => {
+  const pending = new Map();
+  const prepare = () => {
     const items = list(),
       // rows go where the end anchor is: at an arm's top, `p` is the fragment the arm was built in
       parent = b?.parentNode ?? p;
@@ -193,7 +248,7 @@ export function each(p, list, key, row, pure) {
               () => items[i],
               () => i,
             );
-    untracked(() => {
+    return untracked(() => {
       // Conditional arms leave their build fragment.
       if (b) p = a.parentNode;
       // Rows moving or leaving are adopted rows (a row waiting for its slice
@@ -214,13 +269,15 @@ export function each(p, list, key, row, pure) {
       }
       // A row's place in the last pass is its `at`; repeats count once a key repeats.
       const next = new Map(),
+        gone = new Map(rows),
         seen = new Map();
       items.forEach((item, i) => {
         const k = rowKey(keyAt(i), next, seen);
         if (k.startsWith('d')) journal.push(`each: repeated key ${k}`);
-        let r = rows.get(k);
+        let r = rows.get(k) ?? pending.get(k);
+        if (r?.s?.gone) r = null;
         if (r) {
-          rows.delete(k);
+          gone.delete(k);
           r.old = r.at;
           if (!Object.is(r.item.n.v, item)) writeItem(r.item.n, item);
           if (r.index.n.v !== i) write(r.index.n, i);
@@ -257,6 +314,12 @@ export function each(p, list, key, row, pure) {
           const frag = document.createDocumentFragment();
           frag.$listOwner = listOwner(parent);
           r.s = scope(() => row(frag, r.item, r.index, r.k), own);
+          if (PrepareTasks) {
+            pending.set(k, r);
+            const made = r;
+            prepareScope(r.s, () => (prepared()?.next ?? rows).get(k) === made,
+              () => !made.frag, () => { if (pending.get(k) === made) pending.delete(k); });
+          }
           // A row of one element is that element (a region at its top would
           // have put its own anchors beside it); any other is bracketed.
           if (frag.childNodes.length === 1 && frag.firstChild.nodeType === 1) r.start = r.end = frag.firstChild;
@@ -269,14 +332,24 @@ export function each(p, list, key, row, pure) {
           r.frag = frag;
         }
         r.k = k;
+        if (PrepareTasks && r.s) r.s.taskCurrent = () => (prepared()?.next ?? rows).get(k) === r;
         next.set(k, r);
       });
+      return { next, gone, parent };
+    });
+  };
+  const prepared = PrepareTasks ? memo(prepare) : prepare;
+  effect(() => {
+    const result = prepared();
+    if (!result) return;
+    untracked(() => {
+      const { next, gone, parent } = result;
       const list = (order = [...next.values()]);
       for (let i = 0; i < list.length; i++) list[i].at = i;
       // Every row goes and the region is all its parent holds: emptied at once, but not where the parent holds a modal
       // route, which may leave (navigation.js `sheetLeaves`).
       if (
-        rows.size &&
+        gone.size &&
         b &&
         !Leave &&
         list.every(r => r.frag) &&
@@ -284,12 +357,12 @@ export function each(p, list, key, row, pure) {
         !b.nextSibling &&
         !viewChildren(parent).some(r => r.getAttribute('navigationPresentation') === 'modal')
       ) {
-        endAll(rows);
+        endAll(gone);
         parent.textContent = '';
         parent.append(a, b);
-      } else if (rows.size) {
-        endAll(rows);
-        for (const r of rows.values()) {
+      } else if (gone.size) {
+        endAll(gone);
+        for (const r of gone.values()) {
           let n = r.start;
           while (n) {
             const m = n.nextSibling;
@@ -321,6 +394,7 @@ export function each(p, list, key, row, pure) {
             else batch = r.frag;
             first = r.start;
             r.frag = null;
+            pending.delete(r.k);
             continue;
           }
           flush();

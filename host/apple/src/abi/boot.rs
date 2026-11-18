@@ -124,6 +124,10 @@ impl<D: DataSource> Bridge<D> {
         let wall = self.live_clock;
         let ctx = hooks.ctx;
         let launch = self.launch();
+        let sequence = self
+            .host
+            .as_ref()
+            .map(|host| host.runner().reboot_sequence());
         match exact_runner::time::launching_with(launch, || {
             Host::boot_stored_after_decode(
                 plan,
@@ -131,7 +135,7 @@ impl<D: DataSource> Bridge<D> {
                 measurer,
                 self.launch_layout,
                 self.boot_viewport(width, height),
-                None,
+                sequence.as_ref(),
                 snapshot,
                 secrets,
                 self.compat,

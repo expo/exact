@@ -438,6 +438,8 @@ pub trait CanvasEngine {
     fn image(&mut self, src: &str, result: Result<(u32, u32), String>, also: &[u64]);
     /// [`Runner::canvas_image_released`].
     fn release_image(&mut self, src: &str);
+    /// [`Runner::canvas_image_named`].
+    fn image_named(&self, src: &str) -> bool;
     /// [`Runner::canvas_fonts_loaded`].
     fn fonts_loaded(&mut self);
     /// Bind a capture to its mounted lifetime and minimum completed sequence,
@@ -480,7 +482,16 @@ impl Canvases {
             .collect();
         for v in gone {
             let r = self.records.remove(&v).expect("listed");
-            self.retired.push((r.lifetime, r.generation));
+            self.retire(&r);
+        }
+    }
+
+    /// A canvas lifetime ends: its source's recorders and the handles it
+    /// asked for let it go.
+    fn retire(&mut self, r: &Record) {
+        self.retired.push((r.lifetime, r.generation));
+        if let Some(t) = self.table() {
+            t.forget(r.lifetime);
         }
     }
 }
@@ -512,7 +523,7 @@ impl CanvasEngine for Canvases {
                 }
                 _ => {
                     if let Some(old) = self.records.remove(&u.view) {
-                        self.retired.push((old.lifetime, old.generation));
+                        self.retire(&old);
                     }
                     self.records.insert(
                         u.view,
@@ -824,6 +835,14 @@ impl CanvasEngine for Canvases {
             ));
         }
         r.in_flight = None;
+        if let Some(t) = self
+            .images
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            t.drew(lifetime);
+        }
         let mut gradients = r.gradients.clone();
         let mut ops = 0;
         for l in &reply.lists {
@@ -1123,6 +1142,10 @@ impl CanvasEngine for Canvases {
         }
     }
 
+    fn image_named(&self, src: &str) -> bool {
+        self.table().is_some_and(|t| t.named(src))
+    }
+
     fn fonts_loaded(&mut self) {
         for r in self.records.values_mut() {
             if r.text {
@@ -1372,12 +1395,20 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// The host let the decoded `src` go (a cache past its budget): a later
-    /// draw that uses it requests it again (LLP 1056 D9).
+    /// The host let `src` go (a cache past its budget, a changed file, or
+    /// no canvas drawing it), decoded, broken or still loading: a later draw
+    /// that uses it requests it again (LLP 1056 D9).
     pub fn canvas_image_released(&mut self, src: &str) {
         if let Some(c) = self.canvases.as_mut() {
             c.release_image(src);
         }
+    }
+
+    /// Whether a mounted canvas's latest draw, or the one under way, asked
+    /// for `src`, decoded or not: a host whose file changed decodes it
+    /// again only then.
+    pub fn canvas_image_named(&self, src: &str) -> bool {
+        self.canvases.as_ref().is_some_and(|c| c.image_named(src))
     }
 
     /// A font finished loading (the web, LLP 1056 D8): every canvas whose

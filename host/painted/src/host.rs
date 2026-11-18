@@ -111,7 +111,7 @@ pub struct Host<D: DataSource> {
     now_ms: f64,
     height_owner: Option<NodeKey>,
     pub(crate) flow_damage: crate::paint::damage::Changes,
-    /// What changed for the painter's kept rows since its last frame.
+    /// What changed for the painter's kept rows since its last invalidation.
     pub(crate) row_dirty: crate::paint::rows::Dirty,
     pub(crate) scroll_anchors: crate::scroll_anchor::State,
     /// The nodes whose `:hover` look holds, the one whose `:focus-visible`
@@ -704,8 +704,8 @@ impl<D: DataSource> Host<D> {
         !self.presses.is_empty()
     }
 
-    /// What changed for kept rows since the last take: commits, layouts,
-    /// presentation, and every node with press feedback now.
+    /// Changes still awaiting row invalidation, the latest unpainted commit's
+    /// time, and every node with press feedback now.
     pub(crate) fn take_row_dirty(&mut self) -> crate::paint::rows::Dirty {
         let mut dirty = std::mem::take(&mut self.row_dirty);
         for key in self.presses.keys() {

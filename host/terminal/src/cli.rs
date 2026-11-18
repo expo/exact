@@ -237,7 +237,7 @@ fn layout<D: DataSource>(host: &Host<D>) -> String {
         }
     }
     format!(
-        "{{\"viewport\":{{\"w\":{},\"h\":{}}},\"cell\":{{\"w\":{},\"h\":{}}},\"nodes\":[{}]}}\n",
+        "{{\"viewport\":{{\"w\":{},\"h\":{}}},\"cell\":{{\"w\":{},\"h\":{}}},\"nodes\":[{}]}}",
         num(cols as f64 * f64::from(COLUMN)),
         num(rows as f64 * f64::from(ROW)),
         num(f64::from(COLUMN)),
@@ -683,7 +683,10 @@ fn drive_ops<D: DataSource>(mut host: Host<D>, mut args: Vec<String>) -> Result<
                 say(&vt.text(all))?;
             }
             "document" => say(&document(&mut host))?,
-            "layout" => say(&layout(&host))?,
+            "layout" => say(&format!(
+                "{}\n",
+                exact_runner::agent::tagged(&host.runner, layout(&host))
+            ))?,
             "runner-tree" => say(&format!("{}\n", exact_runner::agent::tree(&host.runner)))?,
             "node" => {
                 let id = arg();
@@ -692,9 +695,18 @@ fn drive_ops<D: DataSource>(mut host: Host<D>, mut args: Vec<String>) -> Result<
                     return Err(ExitCode::FAILURE);
                 };
                 let node = exact_runner::agent::node(&host.runner, id);
-                say(&format!("{{\"node\":{node}}}\n"))?;
+                say(&format!(
+                    "{}\n",
+                    exact_runner::agent::tagged(&host.runner, format!("{{\"node\":{node}}}"))
+                ))?;
             }
-            "plan" => say(&format!("{{\"plan\":\"{}\"}}\n", host.plan_digest()))?,
+            "plan" => say(&format!(
+                "{}\n",
+                exact_runner::agent::tagged(
+                    &host.runner,
+                    format!("{{\"plan\":\"{}\"}}", host.plan_digest())
+                )
+            ))?,
             "screenshot" => {
                 let file = arg();
                 let body = if file.ends_with(".ans") {

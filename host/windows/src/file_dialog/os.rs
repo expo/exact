@@ -4,12 +4,7 @@
 use crate::{accessibility::Event, modal::Schedule};
 use exact_painted::presenter::file_dialog::{FileDialog, Outcome, StartFolder};
 use exact_runner::file_pickers::Kind;
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    path::PathBuf,
-    rc::Rc,
-};
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 use windows::{
     core::{Interface, HSTRING, PWSTR},
     Win32::{
@@ -19,10 +14,9 @@ use windows::{
             COINIT_APARTMENTTHREADED,
         },
         UI::Shell::{
-            FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
-            FOLDERID_Pictures, FOLDERID_Screenshots, FOLDERID_Videos, FileOpenDialog,
-            FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName,
-            SHGetKnownFolderItem, FILEOPENDIALOGOPTIONS, KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
+            FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem,
+            SHCreateItemFromParsingName, SHGetKnownFolderItem, FILEOPENDIALOGOPTIONS,
+            KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
         },
     },
 };
@@ -36,24 +30,17 @@ use windows_sys::Win32::{
 use winit::event_loop::EventLoopProxy;
 
 #[derive(Default)]
-pub(crate) struct Dialogs(Option<Rc<State>>);
+pub(crate) struct Dialogs(Option<Rc<Window>>);
 
-struct State {
+struct Window {
     window: Cell<RawWindow>,
     message: u32,
-    posted: Cell<bool>,
-    open: Cell<bool>,
-    queued: RefCell<VecDeque<(u32, FileDialog)>>,
-    answered: RefCell<Vec<Answer>>,
+    dialogs: super::State,
     modal: Schedule,
     proxy: EventLoopProxy<Event>,
 }
 
-pub(crate) struct Answer {
-    pub id: u32,
-    pub outcome: Outcome,
-    pub lines: Vec<String>,
-}
+use super::Answer;
 
 impl Dialogs {
     pub fn install(
@@ -67,13 +54,10 @@ impl Dialogs {
         if message == 0 {
             return false;
         }
-        let state = Rc::new(State {
+        let state = Rc::new(Window {
             window: Cell::new(window as RawWindow),
             message,
-            posted: Cell::new(false),
-            open: Cell::new(false),
-            queued: Default::default(),
-            answered: Default::default(),
+            dialogs: Default::default(),
             modal,
             proxy,
         });
@@ -100,36 +84,43 @@ impl Dialogs {
         self.0.as_ref().is_some_and(|s| !s.window.get().is_null())
     }
 
-    pub fn queue(&self, id: u32, dialog: FileDialog) {
+    pub fn queue(&self, id: u32, dialog: FileDialog, live: std::sync::Weak<()>) {
         if let Some(state) = &self.0 {
-            state.queued.borrow_mut().push_back((id, dialog));
+            state
+                .dialogs
+                .queued
+                .borrow_mut()
+                .push_back((id, dialog, live));
             state.post();
         }
     }
 
     pub fn take_answers(&self) -> Vec<Answer> {
-        self.0
-            .as_ref()
-            .map_or_else(Vec::new, |s| std::mem::take(&mut *s.answered.borrow_mut()))
+        self.0.as_ref().map_or_else(Vec::new, |s| {
+            std::mem::take(&mut *s.dialogs.answered.borrow_mut())
+        })
     }
 }
 
-impl State {
+impl Window {
     fn wake(&self) {
         let _ = self.proxy.send_event(Event::Wake);
     }
 
     fn post(&self) {
-        if self.open.get() || self.posted.get() || self.queued.borrow().is_empty() {
+        if self.dialogs.open.get()
+            || self.dialogs.posted.get()
+            || self.dialogs.queued.borrow().is_empty()
+        {
             return;
         }
         if !self.window.get().is_null()
             && unsafe { PostMessageW(self.window.get(), self.message, 0, 0) } != 0
         {
-            self.posted.set(true);
+            self.dialogs.posted.set(true);
         } else {
-            for (id, _) in self.queued.borrow_mut().drain(..) {
-                self.answered.borrow_mut().push(Answer {
+            for (id, _, _) in self.dialogs.queued.borrow_mut().drain(..) {
+                self.dialogs.answered.borrow_mut().push(Answer {
                     id,
                     outcome: Outcome::Refused("no window for the file dialog".into()),
                     lines: Vec::new(),
@@ -140,21 +131,11 @@ impl State {
     }
 
     fn show(&self) {
-        self.posted.set(false);
-        if self.open.replace(true) {
-            return;
-        }
-        let request = self.queued.borrow_mut().pop_front();
-        if let Some((id, dialog)) = request {
-            let mut lines = Vec::new();
-            let outcome = choose(&dialog, self.window.get(), &self.modal, &mut lines);
-            self.answered
-                .borrow_mut()
-                .push(Answer { id, outcome, lines });
-            self.wake();
-        }
-        self.open.set(false);
-        self.post();
+        self.dialogs.show(
+            |dialog, lines| choose(dialog, self.window.get(), &self.modal, lines),
+            || self.wake(),
+            || self.post(),
+        );
     }
 }
 
@@ -168,8 +149,8 @@ unsafe extern "system" fn observe(
 ) -> isize {
     unsafe {
         // A timer can close the owner during Show. Hold the state through that reentry.
-        Rc::increment_strong_count(data as *const State);
-        let state = Rc::from_raw(data as *const State);
+        Rc::increment_strong_count(data as *const Window);
+        let state = Rc::from_raw(data as *const Window);
         if message == state.message {
             state.show();
             return 0;
@@ -177,7 +158,7 @@ unsafe extern "system" fn observe(
         if message == WM_NCDESTROY {
             state.window.set(std::ptr::null_mut());
             RemoveWindowSubclass(window, Some(observe), subclass);
-            drop(Rc::from_raw(data as *const State));
+            drop(Rc::from_raw(data as *const Window));
         }
         DefSubclassProc(window, message, wparam, lparam)
     }
@@ -226,19 +207,9 @@ fn ask(
         if picker.kind == Kind::Save {
             dialog.SetFileName(&HSTRING::from(&picker.suggested_name))?;
         }
-        match request.start_folder() {
-            Ok(Some(folder)) => {
-                if set_folder(&dialog, &folder).is_err() {
-                    lines.push(format!(
-                        "{}: startIn: refused: {} is not a folder here",
-                        request.command,
-                        picker.start_in.as_deref().unwrap_or_default()
-                    ));
-                }
-            }
-            Err(reason) => lines.push(reason),
-            Ok(None) => {}
-        }
+        super::start_folder(request, lines, |folder| {
+            set_folder(&dialog, folder).map_err(|error| error.to_string())
+        });
         {
             let _entered = modal.enter();
             dialog.Show(Some(owner))?;
@@ -247,9 +218,7 @@ fn ask(
             return Ok(vec![path(dialog.GetResult()?)?]);
         }
         let items = dialog.cast::<IFileOpenDialog>()?.GetResults()?;
-        (0..items.GetCount()?)
-            .map(|i| path(items.GetItemAt(i)?))
-            .collect()
+        paths((0..items.GetCount()?).map(|i| items.GetItemAt(i)))
     }
 }
 
@@ -258,20 +227,13 @@ fn set_folder(dialog: &IFileDialog, folder: &StartFolder) -> windows::core::Resu
         match folder {
             StartFolder::Chosen(folder) => {
                 let item: IShellItem =
-                    SHCreateItemFromParsingName(&HSTRING::from(folder.as_os_str()), None)?;
+                    SHCreateItemFromParsingName(&crate::shell_path(folder)?, None)?;
                 dialog.SetFolder(&item)
             }
             StartFolder::Known(name) => {
-                let id = match name.as_str() {
-                    "desktop" => FOLDERID_Desktop,
-                    "documents" => FOLDERID_Documents,
-                    "downloads" => FOLDERID_Downloads,
-                    "music" => FOLDERID_Music,
-                    "pictures" => FOLDERID_Pictures,
-                    "videos" => FOLDERID_Videos,
-                    "screenshots" => FOLDERID_Screenshots,
-                    _ => return Err(windows::core::Error::from_hresult(E_INVALIDARG)),
-                };
+                let id = exact_data::known_folders::windows_id(name)
+                    .map(windows::core::GUID::from_u128)
+                    .ok_or_else(|| windows::core::Error::from_hresult(E_INVALIDARG))?;
                 let item: IShellItem = SHGetKnownFolderItem(&id, KF_FLAG_DEFAULT, None)?;
                 if !path(item.clone())?.is_dir() {
                     return Err(windows::core::Error::from_hresult(windows::core::HRESULT(
@@ -286,13 +248,15 @@ fn set_folder(dialog: &IFileDialog, folder: &StartFolder) -> windows::core::Resu
     }
 }
 
+fn paths(
+    items: impl Iterator<Item = windows::core::Result<IShellItem>>,
+) -> windows::core::Result<Vec<PathBuf>> {
+    items.map(|item| path(item?)).collect()
+}
+
 fn path(item: IShellItem) -> windows::core::Result<PathBuf> {
     let text = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)? };
-    let path = PathBuf::from(taken(text));
-    if path.to_str().is_none() {
-        return Err(windows::core::Error::from_hresult(E_INVALIDARG));
-    }
-    Ok(path)
+    Ok(PathBuf::from(taken(text)))
 }
 
 fn taken(text: PWSTR) -> std::ffi::OsString {
@@ -300,4 +264,65 @@ fn taken(text: PWSTR) -> std::ffi::OsString {
     let owned = std::ffi::OsString::from_wide(unsafe { text.as_wide() });
     unsafe { CoTaskMemFree(Some(text.0.cast())) };
     owned
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_chosen_verbatim_folder_overrides_the_previous_folder() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target/507-tmp")
+            .join(format!("start-folder-{}", std::process::id()));
+        let a = root.join("A");
+        let b = root.join("B");
+        for folder in [&a, &b] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let a = std::fs::canonicalize(a).unwrap();
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+            {
+                let dialog: IFileDialog =
+                    CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).unwrap();
+                set_folder(&dialog, &StartFolder::Chosen(b)).unwrap();
+                set_folder(&dialog, &StartFolder::Chosen(a.clone())).unwrap();
+                assert_eq!(
+                    std::fs::canonicalize(path(dialog.GetFolder().unwrap()).unwrap()).unwrap(),
+                    a
+                );
+            }
+            CoUninitialize();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn collecting_shell_paths_preserves_non_unicode_beside_unicode() {
+        use std::os::windows::ffi::OsStringExt;
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target/507-tmp")
+            .join(format!("shell-paths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chosen = [
+            dir.join(std::ffi::OsString::from_wide(&[0xd800, 0x2e, 0x74])),
+            dir.join("good.txt"),
+        ];
+        for path in &chosen {
+            std::fs::write(path, b"chosen").unwrap();
+        }
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap();
+            let items = chosen.iter().map(|p| {
+                SHCreateItemFromParsingName::<_, _, IShellItem>(&crate::shell_path(p)?, None)
+            });
+            let result = paths(items);
+            CoUninitialize();
+            assert_eq!(result.unwrap(), chosen);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

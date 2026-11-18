@@ -105,7 +105,7 @@ pub(crate) struct Window {
     pub(crate) segments: Vec<Range<usize>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SizeIndex {
     order: Rc<[Rc<str>]>,
     positions: HashMap<Rc<str>, usize>,
@@ -1002,7 +1002,7 @@ fn valid_geometry(value: f64) -> Result<(), IndexError> {
 
 /// A sum tree avoids subtractive Fenwick updates leaving negative residue after
 /// many measurements. Only O(log N) ancestors are recomputed from their children.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SumTree {
     sums: Vec<f64>,
     measured: Vec<u64>,

@@ -1,7 +1,7 @@
 //! Always-mounted authored children remain siblings of the windowed rows.
 use super::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Fixed {
     pub(super) split: usize,
     pub(super) views: [ViewId; 2],

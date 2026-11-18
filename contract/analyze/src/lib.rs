@@ -245,9 +245,6 @@ pub fn check_all(checked: &Checked<'_>) -> Result<Analysis, Vec<AnalyzeError>> {
             related: Vec::new(),
         });
     }
-    // A child may own `state`, `derive`, and `action` (LLP 1017 P4c); that it
-    // owns no `resource`, `mutation`, or `task` is the type pass's refusal
-    // (`type-child-resource`), made before its view is checked.
     for (ci, c) in file.components.iter().enumerate() {
         let scoped = if ci == 0 { &expanded.root } else { c };
         let checked_view = checking.authored(ci);
@@ -324,7 +321,7 @@ fn check_mutation_then(c: &Component) -> Vec<AnalyzeError> {
                 return err(
                 "analyze-then-self-send",
                 format!(
-                    "`{}` cannot send `{}`{through}: it runs when that mutation answers. To repeat while a condition holds, declare a root task: `task NAME when COND`, with `every(ms, action)` on the next indented line",
+                    "`{}` cannot send `{}`{through}: it runs when that mutation answers. To repeat while a condition holds, declare a task: `task NAME when COND`, with `every(ms, action)` on the next indented line",
                     a.name, m.name
                 ),
                 send.span,

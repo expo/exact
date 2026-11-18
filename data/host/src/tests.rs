@@ -1302,3 +1302,6 @@ fn image_cancellation_orders_publication_and_the_consumer_reads_only_success() {
     assert_eq!(work.outstanding_workers(), 0);
     assert_eq!(work.pending_completions(), 0);
 }
+
+#[cfg(any(unix, windows))]
+mod known_folders;

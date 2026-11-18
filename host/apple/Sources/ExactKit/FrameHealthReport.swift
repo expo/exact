@@ -141,13 +141,13 @@ enum FrameHealthReport {
         return packet
     }
 
-    static func encode(_ packet: [String: Any]) -> Data {
+    static func encode(_ packet: [String: Any], extra: [String: Any] = [:]) -> Data {
         // Reserve the carrier's newline. Explanations live in the versioned schema documentation.
         let budget = maximumBytes - 1
-        let failure = Data("{\"format\":\"exact.frame-health/2\",\"available\":false,\"error\":\"report-size-or-encoding-budget\"}".utf8)
+        let failure = refusal("report-size-or-encoding-budget", extra: extra)
         guard let rows = packet["hitches"] as? [[Any]], rows.count <= 16,
               var retention = packet["retention"] as? [String: Any] else { return failure }
-        var packet = packet
+        var packet = packet.merging(extra) { _, new in new }
         // Encode each row once to choose a suffix; one byte reserves a change in omitted-count digits.
         packet["hitches"] = [[Any]]()
         retention["omittedForBudget"] = rows.count
@@ -191,16 +191,16 @@ enum FrameHealthReport {
     /// Copy bounded evidence on the main thread, then encode it on a utility worker, one export at a time so that no
     /// encoding backlog builds.
     static func prepare(health: FrameHealth, session: ExactSession?, now: Double = CACurrentMediaTime(), beside: FrameHealth? = nil,
-                        completion: @escaping (Data) -> Void) {
+                        extra: [String: Any] = [:], completion: @escaping (Data) -> Void) {
         guard !health.reportInFlight, !encoding else {
-            completion(Data("{\"format\":\"exact.frame-health/2\",\"available\":false,\"error\":\"report-busy\",\"retryAfterMs\":1000}".utf8))
+            completion(refusal("report-busy", retryAfterMs: 1000, extra: extra))
             return
         }
         health.reportInFlight = true
         encoding = true
         let packet = snapshot(health: health, session: session, now: now, beside: beside)
         DispatchQueue.global(qos: .utility).async {
-            let data = encode(packet)
+            let data = encode(packet, extra: extra)
             DispatchQueue.main.async { [weak health] in
                 health?.reportInFlight = false
                 encoding = false
@@ -209,24 +209,30 @@ enum FrameHealthReport {
         }
     }
 
+    static func refusal(_ error: String, retryAfterMs: Int? = nil, extra: [String: Any]) -> Data {
+        var reply: [String: Any] = ["format": format, "available": false, "error": error]
+        if let retryAfterMs { reply["retryAfterMs"] = retryAfterMs }
+        return try! JSONSerialization.data(withJSONObject: reply.merging(extra) { _, new in new }, options: [.sortedKeys])
+    }
+
     private static func limited(_ text: String, _ count: Int) -> String { String(decoding: text.utf8.prefix(count), as: UTF8.self) }
     private static let deviceModel = limited(BuildInfo.device(), 160)
 }
 
 extension FrameHealth {
     /// Admit at most one agent report every 15 seconds; each report is at most 4000 bytes.
-    func agentReport(session: ExactSession?, source: FrameHealth? = nil, now: Double = CACurrentMediaTime(), completion: @escaping (Data) -> Void) {
+    func agentReport(session: ExactSession?, source: FrameHealth? = nil, now: Double = CACurrentMediaTime(), extra: [String: Any] = [:], completion: @escaping (Data) -> Void) {
         guard now >= FrameHealthReport.nextAgentReport else {
             let delay = Int(ceil((FrameHealthReport.nextAgentReport - now) * 1000))
-            completion(Data("{\"format\":\"exact.frame-health/2\",\"available\":false,\"error\":\"report-rate-limit\",\"retryAfterMs\":\(delay)}".utf8))
+            completion(FrameHealthReport.refusal("report-rate-limit", retryAfterMs: delay, extra: extra))
             return
         }
         let selected = source ?? reportSource
         guard !selected.reportInFlight, !FrameHealthReport.encoding else {
-            FrameHealthReport.prepare(health: selected, session: session, now: now, completion: completion)
+            FrameHealthReport.prepare(health: selected, session: session, now: now, extra: extra, completion: completion)
             return
         }
         FrameHealthReport.nextAgentReport = now + 15
-        FrameHealthReport.prepare(health: selected, session: session, now: now, completion: completion)
+        FrameHealthReport.prepare(health: selected, session: session, now: now, extra: extra, completion: completion)
     }
 }

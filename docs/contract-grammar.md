@@ -385,26 +385,28 @@ calls (a shape, a `fn`, a component) comes from its own `use` lines or is
 declared in it, beside the block; another file, the root among them, names
 such a declaration on a `use` line. The
 component's rules hold for its members wherever they are written: a child's
-members file declares no mutation or task.
+members file may declare resources, mutations and tasks at bounded uses.
 
 There is one `props`, `inject`, `provide`, `slot`, and `view` section at most in
-a component. Only the root may own tasks. Any component may own resources and
-mutations (LLP 1035.005.004): each instance of a child asks for its own
+a component. Any component may own resources, mutations and tasks (LLP 1035.005.004): each instance of a child asks for its own
 resources, after the render that makes it, and lets go when the render destroys
 it. Each instance sends its own mutations: its own `pending`, failure, queue and
 answer, and its `then` runs in that instance, where it may call an action prop.
 A child's `refreshes` names its own resources. A send in flight when the render
 destroys the instance stays sent, but its answer changes nothing and its `then`
 does not run, and its waiting sends are dropped. A child's resource is not a
-resource over a list, and a child that owns requests is used where its instances
+resource over a list, and a child that owns requests or tasks is used where its instances
 are bounded: outside every region, under `if` and `match`, or in a row of
 `stack(nav)`, `t.stack` or `nav.tabs`, never under another `for` or in a
 virtualized list (`type-child-resource`). Its state initializers do not read its
 own resources (`type-state-reads-request`). The device's facts,
 `exactViewport()` and `exactPage()` with no arguments (`EmptyState` reads
 `accessibilityTextSize`), open no request: every instance reads the root's one
-answer. A task's
-body has exactly one schedule. A gated task (`when cond`, LLP 1092) has its
+answer. A task's body has exactly one schedule. Each child's task starts with
+its instance, stops when the instance is destroyed and runs its action in that
+instance's frame. A hidden tab or covered screen can remain alive: gate its
+work on activity. Frame tasks are allowed, with one action per armed instance
+per frame. Reload restarts timers over the carried state. A gated task (`when cond`, LLP 1092) has its
 timer only while `cond` holds, armed from the commit that made it true; `key=`
 re-arms it from the commit that changed the key (compared as a `for` key),
 and `key=` alone is `when true key=…`. The gate is a bool (`type-task-gate`), the
@@ -1530,8 +1532,8 @@ CSS hyphens are part of the authored name. `testId` and admitted host-specific
 props retain their declared spelling.
 `text-wrap-style="balance"` and its `text-wrap="balance"` shorthand are
 inherited; `auto` restores ordinary greedy wrapping. `pretty` and `stable` are refused with the supported values, `auto | balance`. Every host balances the
-lines before a paragraph's first forced break, up to six, at the narrowest
-width that keeps their count, as Chrome does (LLP 1001 §6).
+lines before a paragraph's first forced break, up to six, where Chrome
+breaks them (LLP 1001 §6).
 `-webkit-font-smoothing` takes `auto` or `antialiased` and is inherited; `none`
 and `subpixel-antialiased` are refused. It changes how glyphs paint, never how
 text measures (LLP 1019 D12).
@@ -3204,9 +3206,11 @@ Syntax is only the first layer. In particular:
   called `name(x)`, as it is declared) but not take a declared shape's constructor name.
 - Action reads see the starting snapshot. Writes land together. Locals are
   immutable and cannot shadow visible names or escape their block.
-- Tasks are root-owned. A child may own ordinary state, derives, actions,
-  resources and mutations, each instance its own, where its instances are
-  bounded (`type-child-resource`). An action writes only its own admitted slots.
+- A child may own ordinary state, derives and actions, and, at bounded uses,
+  resources, mutations and tasks (`type-child-resource`). Each instance owns its
+  work; its task runs in that instance's frame until destruction. Hidden instances
+  stay alive, so a task that should stop while hidden needs a `when` gate.
+  An action writes only its own admitted slots.
 - A `then` handler takes no parameters and must not send its own mutation.
 - A state's initializer reads only props, injects and the states above it; a
   resource, derive, mutation, action or later state it names is

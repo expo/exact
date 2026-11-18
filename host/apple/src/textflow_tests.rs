@@ -304,3 +304,39 @@ fn line_breaks_follow_chrome_in_a_path() {
         6
     );
 }
+/// The scorer through the bridge: the report's heading (expo/exact#437) at
+/// 6.02 a character breaks after "Seven" and "studies in" in 96, and a
+/// three-word paragraph, which Blink bisects, gets none.
+#[test]
+fn balanced_breaks_cross_the_bridge() {
+    let text = "Seven studies in live typography";
+    let at = |chars: usize| chars as f32 * 6.02;
+    let spaces: Vec<usize> = text.match_indices(' ').map(|(i, _)| i).collect();
+    let ends: Vec<f32> = spaces.iter().copied().chain([text.len()]).map(at).collect();
+    let nexts: Vec<f32> = spaces
+        .iter()
+        .map(|i| i + 1)
+        .chain([text.len()])
+        .map(at)
+        .collect();
+    let hyphens = [0u8; 5];
+    let mut out = [0u32; 6];
+    let breaks = |count: usize, lines: usize, out: &mut [u32; 6]| {
+        balanced_breaks(
+            96.0,
+            0.0,
+            10.0,
+            false,
+            ends.as_ptr(),
+            nexts.as_ptr(),
+            hyphens.as_ptr(),
+            count,
+            lines,
+            out.as_mut_ptr(),
+            out.len(),
+        )
+    };
+    assert_eq!(breaks(5, 3, &mut out), 2);
+    assert_eq!(out[..2], [0, 2]);
+    assert_eq!(breaks(3, 2, &mut out), 0);
+}

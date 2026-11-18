@@ -406,6 +406,34 @@ fn an_image_the_host_released_is_requested_again() {
     assert!(ops(&lists[0].lists[0]).contains(&"DrawImage".to_string()));
 }
 
+/// A handle is named while a mounted canvas's latest draw asks for it,
+/// broken or not, and a released broken one is asked for again.
+#[test]
+fn a_handle_is_named_while_the_latest_draw_asks_for_it() {
+    let (mut r, log) = boot();
+    log.borrow_mut().pictures = true;
+    let view = r.canvas_views()[0];
+    r.set_canvas_geometry(view, geometry(10.0, 10.0, 1.0));
+    r.draw_canvases(&|_| true);
+    r.take_canvas_lists();
+    r.take_canvas_image_requests();
+    r.canvas_image("photo.png", Ok((4, 2)), &[]);
+    r.canvas_image("gone.png", Err("404".into()), &[]);
+    r.draw_canvases(&|_| true);
+    r.take_canvas_lists();
+    assert!(r.canvas_image_named("photo.png") && r.canvas_image_named("gone.png"));
+    r.canvas_image_released("gone.png");
+    r.canvas_fonts_loaded();
+    r.draw_canvases(&|_| true);
+    r.take_canvas_lists();
+    assert_eq!(r.take_canvas_image_requests(), ["gone.png"]);
+    log.borrow_mut().pictures = false;
+    r.canvas_fonts_loaded();
+    r.draw_canvases(&|_| true);
+    r.take_canvas_lists();
+    assert!(!r.canvas_image_named("photo.png") && !r.canvas_image_named("gone.png"));
+}
+
 /// LLP 1100 D12a: `color-space` and `color-type` are the canvas's getContext
 /// settings: the draw is told, the host's bitmap carries them, a change is
 /// a new generation, and float16 counts 8 bytes a pixel.

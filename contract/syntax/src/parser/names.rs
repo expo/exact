@@ -57,7 +57,7 @@ pub(super) fn section_hint(word: &str) -> String {
     };
     let place = match section {
         "props" => " (any component but the first in the file declares them)",
-        "resource" | "mutation" | "task" | "sequence" => " (only the root component declares one)",
+        "sequence" => " (only the root component declares one)",
         _ => "",
     };
     format!(": did you mean `{section}`{place}?")

@@ -31,7 +31,7 @@ fn action_checks_reuse_declarations_and_observe_prior_writes() {
     let c = &file.components[0];
     let mut sink = Sink::default();
     SCOPE_BUILDS.with(|count| count.set(0));
-    let ct = check_component(c, &Types::default(), None, &[], &mut sink);
+    let ct = check_component(c, &Types::default(), None, &[], &[], &mut sink);
     assert!(sink.errors.is_empty(), "{:?}", sink.errors);
     assert_eq!(ct.slots, vec![Ty::Option(Box::new(Ty::Number)); 2]);
     // Call-parameter refinement still has one scope per action; body checks
@@ -78,6 +78,7 @@ pub(crate) fn check_component(
     types: &Types,
     owners: Option<&[Owner]>,
     resource_owners: &[Owner],
+    task_owners: &[Owner],
     sink: &mut Sink,
 ) -> ComponentTypes {
     let shapes = &types.shapes;
@@ -451,7 +452,12 @@ pub(crate) fn check_component(
         }
     }
     check_view(&c.view, &scope, shapes, sink);
-    super::tasks::check_tasks(c, &scope, shapes, sink);
+    let arms = super::checks::owned_scopes(c, &ct, types, task_owners);
+    for (i, t) in c.tasks.iter().enumerate() {
+        if let Some(scope) = resource_scope(task_owners, &arms, i, &scope) {
+            super::tasks::check_task(t, scope, shapes, sink);
+        }
+    }
     super::tasks::sequences::check(c, owners.is_some(), &scope, shapes, sink);
     ct
 }

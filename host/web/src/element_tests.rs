@@ -708,13 +708,30 @@ fn a_local_inset_is_the_browsers_custom_property() {
     style.set_dynamic(StyleId::SafeArea, &off).unwrap();
     let ignore = StyleValue::Text("container top".into());
     style.set_dynamic(StyleId::SafeAreaIgnore, &ignore).unwrap();
+    // Nor does a reservation yet (D11)
+    let reserved = [
+        StyleId::AdditionalSafeAreaTop,
+        StyleId::AdditionalSafeAreaRight,
+        StyleId::AdditionalSafeAreaBottom,
+        StyleId::AdditionalSafeAreaLeft,
+        StyleId::SafeAreaPaddingTop,
+        StyleId::SafeAreaPaddingRight,
+        StyleId::SafeAreaPaddingBottom,
+        StyleId::SafeAreaPaddingLeft,
+    ];
+    for row in reserved {
+        style.set_dynamic(row, &StyleValue::Number(20.0)).unwrap();
+    }
     let (out, skipped) = crate::css::css_text(&style, &[]);
     let own = "--exact-safe-area-inset-bottom:calc(8px + var(--exact-safe-area-inset-top));";
     assert_eq!(out, own);
     assert!(skipped.is_empty(), "{skipped:?}");
-    // A clear of the ignore, row 256, past a `u8` style id, writes nothing too
-    style.mask.clear(StyleId::SafeAreaIgnore);
-    style.written.set(StyleId::SafeAreaIgnore);
+    // A clear of the ignore, row 256, past a `u8` style id, writes nothing
+    // too, nor does a reservation's
+    for row in [StyleId::SafeAreaIgnore].into_iter().chain(reserved) {
+        style.mask.clear(row);
+        style.written.set(row);
+    }
     assert_eq!(crate::css::css_text(&style, &[]).0, own);
 }
 

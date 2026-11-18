@@ -231,7 +231,7 @@ impl Index {
 
 /// The instance tree's tab state, kept in [`Ids`], which lasts the
 /// runner's life and every update reaches.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Tabs {
     /// The plan's [`panel_sites`], found when first asked; none once every
     /// tab is built ([`Tabs::build_every_tab`]).

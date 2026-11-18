@@ -210,10 +210,10 @@ component Row
     contract::compile_path(&app.write("app.contract", root)).unwrap();
     app.write(
         "row.contract",
-        "members Row\n  state shown = start + 1\n  task tick mount\n    after(1, bump)\n  action bump\n    shown = shown + 1\n",
+        "members Row\n  state shown = start + 1\n  task tick mount\n    after(1, missing)\n",
     );
     let error = app.refuse(root);
-    assert_eq!(error.id, "type-child-resource", "{error}");
+    assert_eq!(error.id, "analyze-unknown-action", "{error}");
     assert_eq!(
         error.file.as_deref(),
         Some(row.canonicalize().unwrap().as_path()),

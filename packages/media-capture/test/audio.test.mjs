@@ -18,7 +18,7 @@ test.skipIf(process.platform !== 'darwin')('disabled audio tracks record silence
       'host/apple/modules/ExactPackage.swift', '-o', join(out, 'libExactPackage.a')]);
     run('xcrun', ['swiftc', '-sanitize=thread', '-parse-as-library', '-I', out, '-L', out, '-lExactPackage',
       'packages/media-capture/apple/MediaCapture.swift', 'packages/media-capture/apple/VideoCapture.swift',
-      'packages/recording/apple/Recording.swift', 'packages/media-capture/test/Audio.swift', '-o', join(out, 'audio')]);
+      'packages/recording/apple/Recording.swift', 'packages/recording/apple/VideoRecorder.swift', 'packages/media-capture/test/Audio.swift', '-o', join(out, 'audio')]);
     run(join(out, 'audio'), [out]);
   } finally {
     rmSync(out, { recursive: true, force: true });

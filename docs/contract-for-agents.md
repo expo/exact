@@ -257,7 +257,12 @@ A script drives the same session in JavaScript: `const s = await open({ host:
 `s.resize(width, height)`, `s.prefer({ … })`, `s.perf(target)` and `s.close()` — the
 CLI's operations by the same names. Their replies are the CLI's `--json` output: `s.tree()`
 is `{ roots, nodes: [{ id, type, depth, props: { testId, text, value, … }, children }] }`,
-every node in one preorder list (`depth` and `children` give the nesting), and `s.state()` is `{ slots, derives, resources,
+every node in one preorder list (`depth` and `children` give the nesting),
+with `generation`, `epoch`, `incarnation` and `clock` on replies. `generation` advances
+once per committed replacement or carried reboot; `epoch` continues across it, while
+a new kernel can repeat `incarnation`. `state.replacement` names root slots dropped
+because they are gone (`no place`) or their type changed (`type changed`).
+`s.state()` is `{ slots, derives, resources,
 pending, … }`. `app` is the app's name; an app outside the Exact
 checkout is found through `EXACT_APP_DIR` (its directory), as its own `exact.mjs agent`
 sets it, so a script run with plain `bun` sets it to the app's directory too
@@ -296,10 +301,10 @@ compile complete examples, parse authored tests, and check local links.
 | `slot` | Component | Accept caller-authored children |
 | `state name = expr` / `state name: T = expr` | Component | Stored state; its type is inferred unless declared |
 | `derive name = expr` | Component | Dependency-driven computed value |
-| `resource name = source(args) as shape T` | Root component | Reactive data request |
-| `mutation name as shape T [queue \| parallel]` | Root component | Optional reply slot for explicit sends |
+| `resource name = source(args) as shape T` | Root or bounded child | Reactive data request |
+| `mutation name as shape T [queue \| parallel]` | Root or bounded child | Optional reply slot for explicit sends |
 | `action name(args)` | Component | Event transaction; effects inferred |
-| `task name mount` / `task name when cond [key=expr]` | Root component | One timer/frame schedule or keyed change action, always or while `cond` holds |
+| `task name mount` / `task name when cond [key=expr]` | Root or bounded child | One timer/frame schedule or keyed change action, always or while `cond` holds |
 | `view` | Component | UI tree |
 
 Top-level declarations begin in column 1. Indent with spaces. Comments use `//`.
@@ -715,8 +720,8 @@ component Row
       archive(id)
 ```
 
-Children may hold state, derives, actions and resources. They cannot declare
-mutations or tasks: the root passes the actions that send them
+Children may hold state, derives, actions, resources, mutations and tasks
+at bounded uses
 ([A feature's requests](#a-features-requests)). A child used under `for` owns row state keyed to that row's identity.
 Stable keys matter when content is inserted, removed, filtered, or reordered.
 A child's derive is compiled once per component use and evaluated at each read
@@ -886,13 +891,15 @@ and `detected` calls `showQuote(lines)`, passed as `showQuote=showQuote(e.params
 Leaving the screen forgets what it sent: a reply after that changes nothing, its
 `then` does not run, and a queued send not yet asked is dropped.
 
-A component that owns a resource or a mutation is used where its instances are
+A component that owns a resource, mutation or task is used where its instances are
 bounded: outside every region, under `if` and `match`, or in a row of
 `stack(nav)`, `t.stack` or `nav.tabs`. Under any other `for`, or in a virtualized
 `list`, it is refused (`type-child-resource`): declare the root's resource over
 the list (`resource feeds = load(id) for id in ids key=id`) and pass each row its
 answer, or declare the mutation in the root and pass each row an action that
-sends it (`add=addWork`). Tasks stay the root's. Data two features read
+sends it (`add=addWork`). A child's task runs in its instance's frame and ends
+when that instance is destroyed. A hidden instance stays alive; gate its task
+with `when active` if it should stop while hidden. Data two features read
 belongs to the root, which passes it down; name its declarations with the
 feature's prefix (`historyDays`), since the root and its members files share one
 set of names.
@@ -1065,7 +1072,7 @@ Choose the mechanism from its lifetime:
 | Writes a person may repeat before the first answers: a rename, a save | `mutation … parallel`: every send asked at once, each reply lands |
 | Run once after a delay, while a condition holds (a toast, a debounce) | `task … when cond` with `after(ms, action)` |
 | Repeat while a condition holds (a game tick, a pulse) | `task … when cond` with `every(ms, action)` |
-| Act when a sheet or route opens (scroll the chosen item into view, load its draft) | In the root, even when the sheet is a child component's view: `task reveal when top(nav).name == "icons" key=top(nav).id` with `change(reveal)` |
+| Act when a sheet or route opens (scroll the chosen item into view, load its draft) | In the screen component: `task reveal when active key=id` with `change(reveal)`; pass its activity and entry id as props |
 | Pending indicator | `pending(resourceOrMutationName)` |
 | "Loading" for a new question, not for a refresh | `not current(resourceName)`: false while it shows its placeholder, an answer to other call arguments, or a value kept across `when`'s idleness; a refresh of the same arguments leaves it true |
 | Resource request failed without an answer | `failed(resourceOrMutationName)` |
@@ -1582,16 +1589,21 @@ ID-token hint and revocation therefore always name the same login without
 losing the press's browser activation. Until the provider logout succeeds or
 a new sign-in replaces it, the store retains its endpoint and ID token under
 the same secret lease; the app remains signed out. Entra and Cognito may
-return from logout without `state`; that return is accepted only when it has
-neither `code` nor `error`. A returned `state`, when present, must match. A
-sign-in response therefore cannot complete a waiting logout.
-When the runner or Android must choose among several logouts at one callback, a
-return without `state` completes the oldest live one. On the web, a return from
-a popup whose opener remains completes that popup's logout. Before navigating,
-the glue puts a fresh random identity in the blank popup's own
-`sessionStorage`; the callback reads and removes it. After severance, only the
-live logout holding that identity completes. An unaddressed state-less return
-completes nothing, and no tab takes a shared lock or reads another tab's state.
+return from logout without `state`. A successful logout return carries no
+`code`, `error`, `id_token` or `access_token` in its query or fragment. Its
+state, when present, must occur once and match the request.
+On Android and in the runner, a matching state addresses the return; a
+sign-in takes a sign-in answer before a logout sharing its state. A return
+without state and without a sign-in answer goes to the oldest logout at that
+callback, whoever else waits; one without state that carries a sign-in answer
+goes to nobody. On the web, the
+logout's own popup addresses its return through its opener. Before navigating,
+the glue also puts a fresh random identity in that popup's `sessionStorage`;
+the callback reads and removes it. After severance, that identity addresses
+the return to the live logout holding it. An addressed logout return carrying
+a sign-in answer fails immediately with 502. An unaddressed broadcast carrying
+a sign-in answer completes no logout, even if its state matches. No tab takes
+a shared lock or reads another tab's state.
 A request still held at the ten-minute bound answers 499 once, whether its
 timer or a late return arrives first.
 
@@ -1709,10 +1721,19 @@ before awaiting anything. Both parameter maps refuse `response_type`,
 `code_challenge_method`, `nonce` and `max_age` with `TypeError`; the package
 sets those fields or cannot validate what they ask for.
 
+With `openid`, `signIn(store, { nonce })` sends an app-chosen, non-empty string
+and checks the ID token against that exact value. Use a fresh value for each
+sign-in. Omit it to let the package generate one. The option applies only to
+that press, for a browser sign-in or `authorize`; raw parameter maps still
+refuse `nonce`.
+
 For flows the package does not cover, data code may use `openAuthSession`
 and `authCallback` directly; their public declarations and rejection statuses
-are in the generated `app.d.ts`. A callback must carry exactly one `state`,
-equal to the nonempty value supplied to `openAuthSession`. Keep callback URLs
+are in the generated `app.d.ts`. A callback must carry exactly one `state`
+across its query and fragment, equal to the nonempty value supplied to
+`openAuthSession`; duplicates are refused, including one in each. The full URL
+returns to data code unchanged, including fragment parameters such as
+`id_token` ([OIDC fragment responses](https://openid.net/specs/openid-connect-core-1_0.html#ImplicitAuthResponse)). Keep callback URLs
 in data code: they can contain credentials.
 
 On the web, closing the sign-in popup is not reported as cancellation:
@@ -1793,6 +1814,63 @@ test "signs in, shows the person, and is still signed in after a relaunch"
   clock data
   expect text "status" == "Signed in"
 ```
+
+#### HTTPS callbacks
+
+For a backend that accepts only HTTPS return URLs, declare
+`auth.callback https://app.example/auth/return` instead of the custom-scheme
+callback. Register that URL with the backend. Apple uses
+[`ASWebAuthenticationSession.Callback.https`](https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession/callback/https(host:path:));
+it requires iOS 17.4 or macOS 14.4. Android uses an
+[Auth Tab](https://developer.chrome.com/docs/android/custom-tabs/guide-auth-tab)
+when the selected browser supports it, otherwise a browser returning through
+a verified App Link on exactly `/auth/return`. HTTP loopback remains unavailable
+on Android.
+
+Serve the domain associations over HTTPS at the origin root, without redirects:
+
+- `/.well-known/apple-app-site-association` needs
+  `{"webcredentials":{"apps":["TEAM.com.example.app"]}}`. `TEAM` is the signing
+  team and `com.example.app` the bundle id. The bake derives the matching
+  `webcredentials:app.example` entitlement from the callback grant. On macOS,
+  signing it requires a provisioning profile that allows Associated Domains.
+  A development build without one reports the missing association; a release
+  build refuses to ship without it.
+  Debuggable builds append `?mode=developer` to each derived `webcredentials:`
+  entry so Apple fetches the file from the domain directly. Enable Associated
+  Domains Development on the test device ([Apple's setup](https://developer.apple.com/documentation/xcode/supporting-associated-domains)).
+- `/.well-known/assetlinks.json` needs a `delegate_permission/common.handle_all_urls`
+  statement naming the Android package and its signing certificates' SHA-256
+  fingerprints. Put the fingerprints in `host.android.certificates` in `app.json`;
+  include each signing identity used to install the app, including Play App Signing.
+
+With `app.origin` set to this origin and `host.ios.team` set, the web build writes
+these files into `.well-known/`, and deploy publishes them with the web root.
+For a callback on another origin, the build prints the files that domain must
+serve, merging any passkey and navigation entries into the same documents.
+Keep `.well-known/` at the origin root when the site has a base path.
+`handle_links` controls ordinary navigation and is not needed for auth callbacks.
+On Android 11 and earlier, one unverified navigation or callback host prevents
+verification of every App Link; the build names the hosts when more than one is registered.
+Reserve `/.exact/auth/callback` for the web popup; use a different path for the
+native callback so an installed app does not intercept the web sign-in.
+Apple returns `502` with its reason when the app is not associated with the
+callback domain. A session that starts has not yet proved callback delivery;
+check the return in a signed app with the domain's association file published.
+
+### Web sign-in callback
+
+Grant the deployed site's exact `auth.callback https://app.example/.exact/auth/callback`
+and register it with the provider. A loopback development page grants its own
+callback automatically; deployment has no such exception.
+
+Serve the generated `dist/.exact/auth/callback` at `/.exact/auth/callback`,
+without a router fallback or trailing-slash redirect, and its script at
+`/.exact/auth/callback.js`. Include the hidden `.exact/` directory in the upload.
+With Wrangler or another static-assets uploader, verify that both URLs return
+the generated files after deploying; if the uploader omits them, serve them
+explicitly from the Worker. Keep the callback's `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer` headers.
 
 ### Native sign-in (`@exact/sign-in`)
 
@@ -1997,11 +2075,15 @@ signIn: async (_a, store) => {
   against its allowed redirect origins, and the driver picks a new port each
   run: drive with `agent web --port 3000` (or `EXACT_PORT`) and allow
   `http://127.0.0.1:3000`.
-- **Hosts.** This flow has run on the web. Convex Auth takes only an `http` or
-  `https` `redirectTo`, so natively it cannot return to a custom-scheme
-  callback (`auth.callback`); macOS's fixed-port loopback callback is `http`
-  but has not been tried with it, and Android answers 501 for a loopback or
-  HTTPS callback.
+- **Native callbacks.** Convex Auth takes only HTTP or HTTPS `redirectTo` URLs.
+  Declare `auth.callback https://app.example/auth/return` and allow its origin
+  in Convex. Use only an HTTPS callback for this flow: `authCallback()` prefers
+  a declared custom scheme when one is present. Apple requires iOS 17.4 or
+  macOS 14.4 and the callback host's `webcredentials` association. Android uses
+  Auth Tab when supported, otherwise the callback's verified App Link; HTTP
+  loopback still answers 501. The [HTTPS callback setup](#https-callbacks) describes
+  the signing identities and association files. Native Google approval and
+  token rotation still need a check against the app's real Convex deployment.
 
 ### Child processes (`@exact/child-process`)
 
@@ -3390,6 +3472,103 @@ A view placed by a Contract library counts too, including through a re-export. T
 still declares the view's package as a direct dependency. A component the app never
 instantiates does not link its views' implementations.
 
+### A package's GPU surfaces
+
+Any package may declare `gpu` beside `views` in its main `exact.json` (LLP 1153.003 D5):
+
+```json
+"gpu": {
+  "crate": "rust",
+  "exactGpu": "0.3",
+  "surfaces": { "sky": { "arity": 1, "factory": "sky_surface::surface" } },
+  "targets": ["web", "macos", "ios", "linux"]
+}
+```
+
+`crate` names a directory inside the package containing a standalone `Cargo.toml` and
+`Cargo.lock`. Its dependency is `exact-gpu = "0.3"`, without a path or Git source. It uses
+`exact_gpu::wgpu` and depends on no other Exact crate. Each factory returns
+`Box<dyn exact_gpu::Surface>`. The build generates the registry and `module!` exports,
+including the web dependencies; the package writes neither. `packages/fixtures/sky` is
+a complete example.
+
+For compute or larger resources, `gpu.limits` and `gpu.features` each take `required`
+and `optional` members. Limits are objects of WebGPU camelCase names to nonnegative
+integers; features are arrays of WebGPU feature names. For example,
+`"limits":{"required":{"maxStorageBufferBindingSize":268435456},"optional":{"maxBufferSize":1073741824}}`
+and `"features":{"optional":["float32-filterable","subgroups"]}`. The build checks names,
+ranges and duplicate declarations. Each package's device requests its own requirements,
+clamping optional entries to the adapter and raising paired limits as needed. An unavailable required entry refuses only that package's surfaces with a
+diagnostic; apps that declare nothing keep the existing grant. `Surface::device_ready`
+receives the granted `wgpu::Features` and `wgpu::Limits` before preparation, including after
+recovery. See [the GPU recipe](recipes/gpu-module.md) for the request and fixture APIs.
+
+The app adds the package with `bun exact.mjs add <directory or @scope/name>` and writes
+`canvas surface=sky(false)`. The package's full name supplies the module name:
+`@fixture/sky` becomes `fixture-sky`. Duplicate module or surface names are refused,
+including conflicts with `gpu.modules`. A placed surface may take up to `arity` positional
+arguments; the surface checks named arguments and defaults.
+
+`targets` names hosts among `web`, `macos`, `ios`, `tvos`, `android`, `linux` and
+`windows`, and defaults to all of them; the watch draws no GPU surface. An omitted host
+builds no artifact for the package, and its canvases there are drawn as they would be
+without it: by the app's own `gpu/` module when that registers the name, else by the data
+source on Canvas 2D. With neither, the canvas shows only its own styles, and a native host
+logs that the module is absent.
+
+Each package resolves in its own generated workspace under `.exact/package-gpu/`.
+The checkout supplies `exact-gpu`. The build tries three whole dependency graphs in order:
+a merge that prefers newer compatible shared versions while preserving the generated
+manifest's exact pins; every package-lock entry except `exact-gpu` and competing exact
+pins, plus the checkout's `exact-gpu` and the pinned dependencies; then a merge that
+prefers the SDK's versions. The package-first attempt retains multiple versions in one
+semver series and adds none of the SDK's other dependency blocks. Cargo resolves each
+attempt; a crate Cargo picks that neither lock holds is replaced by the newest version of
+the same name and series that one does, if Cargo accepts it. The first attempt whose
+versions and checksums all occur in either input lock wins.
+Missing Cargo sources are fetched before the locked build. If every attempt fails, the
+error names each attempt's failure. An incompatible `exactGpu` requirement stops the
+build before resolution. Neither input lock changes.
+The app commits no Rust files for a package. Modules load only when their surfaces mount;
+package WGSL is compiled into the crate, rather than shipped through `gpu.shaderRoots`.
+
+### Native SDK dependencies
+
+An Apple implementation names Swift Package Manager products in its
+`apple/exact.json` (LLP 1133.001 D9, expo/exact#751):
+
+```json
+{
+  "swiftPackages": [{
+    "url": "https://github.com/apple/swift-collections.git",
+    "exactVersion": "1.1.4",
+    "products": ["DequeModule"]
+  }]
+}
+```
+
+For an app's own `modules/apple/*.swift`, put the same `swiftPackages` array
+under `host.ios` or `host.macos` in `app.json`. Swift imports the product's
+modules normally. All Apple destinations share one `Package.resolved` beside
+the app. Run `bun exact.mjs lock` after changing these declarations, bindings
+or used interfaces; review and commit the lock. Lock discovery follows the
+compiled plan, including views placed through Contract libraries. Builds
+refuse a missing or mismatched lock and disable automatic resolution.
+Conflicting direct versions name both requesters.
+SwiftPM verifies binary targets by checksum. One shared dynamic library links
+all declared products used by the app's Swift and its bound implementations,
+so SDK singletons and configuration are shared across consumers. It loads with
+the first consumer that needs it; an unused implementation stays unloaded.
+App-local `.xcframework`s remain supported. Package resources ship with the
+app and are available through `Bundle.module`. SDK privacy manifests and the
+requesting implementations' declarations accompany the shared library and
+dependency dylibs. CocoaPods is not supported.
+
+Android implementations declare pinned `group:artifact:version` coordinates
+in `android/exact.json`'s `maven` array; an app's own Kotlin uses
+`host.android.maven`. See [Maven libraries](../host/android/README.md#maven-libraries-one-locked-verified-gradle-graph-llp-1133008-d8-item-5)
+for the shared Gradle graph, lock and verification files.
+
 ### A package's storage and session
 
 A package's implementation finds the session's directories behind `app:/data`,
@@ -3853,7 +4032,8 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   item's image inside the bar's capsule (a "● Clock" chip in 12-point monospace).
   The button's left and right padding is room the face keeps inside that capsule
   (`padding="0px 7px"`). A filled box holding a text or symbol (an avatar, a badge) is drawn without the
-  capsule. Leave the font unsaid for an ordinary Edit or Done.
+  capsule; on a button that says `backgroundMaterial="glass"` (or `"glass-clear"`) it
+  sits in a glass capsule of its own, as a `buttonStyle="glass"` button does. Leave the font unsaid for an ordinary Edit or Done.
 - A readout nothing presses (a "● Clock" or "Saved" beside the title) is
   `role="status"` in the header, beside the buttons. (A `button disabled=true` is a
   dimmed bar item, UIKit's disabled one, which VoiceOver reads as a button that cannot
@@ -4145,7 +4325,7 @@ surrounding box, or a `url(#id)` clip on the SVG element in `userSpaceOnUse`
 coordinates without percentages instead.
 See [CSS Masking 1 §5](https://www.w3.org/TR/css-masking-1/#the-clip-path).
 
-A root task has one `every(ms, action)`, `after(ms, action)`,
+A task has one `every(ms, action)`, `after(ms, action)`,
 `every(frame, action)`, or keyed `change(action)` entry, on the line under it:
 
 ```text
@@ -4206,8 +4386,16 @@ toast, a debounce (`when draft != saved key=draft` with `after(800, save)`), a
 round's tick (`when screen == "play"`), a flight's frames
 (`when flying` with `every(frame, step)`) and a sheet's opening
 (`when top(nav).name == "icons" key=top(nav).id` with `change(reveal)`) are each
-one gated task, and each is the root's: a child component declares none
-(`type-child-resource`), so a sheet a component draws has its task in the root.
+one gated task. A child at a bounded use may declare the same forms: each instance
+starts its tasks when it mounts and their gates hold, and stops them when a gate
+fails or the instance is destroyed. Actions run in that instance's frame. A
+covered screen or hidden tab can stay alive, so pass its activity as a prop and
+gate work on it; visibility alone grants no permission. Each instance of an
+`every(frame, …)` task runs an action per frame while armed. Reload carries
+compatible state and restarts timers, as it does for root tasks.
+On the deterministic clock, equal-deadline tasks run in declaration order;
+instances of one declaration run in creation order. A gate or key change keeps
+that order; destroying and recreating an instance gives it a new place.
 
 **Retry backoff.** For a bounded ladder of delays, use one gated task per step.
 Only the active step has a timer, which wakes once at its deadline:
@@ -4383,6 +4571,10 @@ hand an action that takes it a `PointerEvent` (`offsetX`/`offsetY` from the
 node's content box, `button` and `buttons`, `pressure`, `pointerType`,
 `pointerId`, and `clientX`/`clientY` from the viewport, `frame()`'s space), on
 any node, a canvas included; set `touch-action="none"` on a drawing surface.
+The web browser fixes `touch-action` when the touch starts. On iOS, the host
+reads it when UIKit asks whether the pan may begin, so a write in that touch's
+`pointerdown` applies there. For the same behavior on every host, set `none` before the
+touch starts (LLP 1057.001).
 Any button goes down, numbered as the DOM's: `button` 0 primary, 1 middle, 2
 secondary, 3 back, 4 forward (-1 on a move), `buttons` bits 1, 4, 2, 8, 16. A
 `contextmenu` action may take the same record, where the click was. The back
@@ -5295,15 +5487,15 @@ in the app's appearance; the Mac's Develop menu has the same item. Row and item 
 checked while the card shows, and follow it when it closes itself. The card starts hidden
 and takes the touches within its bounds: drag it from anywhere, even past the window's
 edges, and on release it springs to the point along the edges of an area 8 points inside
-the window, past the safe area and above any keyboard, that is nearest where its
-momentum would carry it; accessibility actions move it to an edge, keeping its position
+the window, past the safe area and above any keyboard, that is nearest where it would
+stop sliding at a constant 2,000 points/s²: a gentle release stays by the nearest edge,
+and a fling reaches another. Accessibility actions move it to an edge, keeping its position
 along the other axis. Close, at its top left, or the checked **Frame Health** dismisses
-it. On iOS, Minimize leaves a small status and frame rate at the same edge, below
-the status bar, while measurement continues; tap it to restore the card. Dragging and
-accessibility actions move either form, and rotation and keyboard changes keep it
-within the window.
-Minimize also stays available below Details and on the compact card. Touches outside
-the visible form reach the app. LLP 1079.000 §7.2 describes its rows: Live, Paused
+it. On iOS, Minimize, beside Close, leaves a small status and frame rate at the same edge,
+8 points below the status bar, while measurement continues; tap it to restore the card.
+In a screen corner, the small status moves along the edge until its corner keeps 8 points
+from the screen's. Dragging and accessibility actions move either form, and rotation and
+keyboard changes keep it within the window. Touches outside the visible form reach the app. LLP 1079.000 §7.2 describes its rows: Live, Paused
 or Idle; the requested rate and any system limit; frame rate
 and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate and
 frame time, or a table of work time, late frames, maximum frame time and pacing
@@ -5311,9 +5503,9 @@ changes. A tap on a chart expands it; a tap on the title defines each figure; Sh
 at its top right, asks what to share, Agent Report, Summary or Image, and opens the
 system's share sheet with that one item; where the card measures the screen, it offers
 two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
-Details, beside Share, swaps the figures and charts for `perf frames health`'s
-three results over the last 5 s with their reasons and the counts behind them, in rows
-that scroll within the card. These are timing proxies; actual presentation and
+Details, at the end of the line under the header, swaps the figures and charts for
+`perf frames health`'s three results over the last 5 s with their reasons and the counts
+behind them, in rows that scroll within the card; Done in its place returns. These are timing proxies; actual presentation and
 native-only animation cadence are unmeasured. While the card is shown, bounded hitch
 capture also records matching asynchronous owner and apply timestamps. Idle time never
 becomes a frame time.
@@ -6238,7 +6430,7 @@ that restates a constant is weaker evidence than the user's actual sequence.
 | `for t in tokens` with an offset `tokens.slice(0, tokens.indexOf(t))…` in the row, or a `fn` that walks the list it is passed: each row's work grows with the list, and past 65,536 steps that binding is unset (`lower-row-own-list`) | Count it once in the data module: the source gives each token the field it reads (`at`) |
 | `RoundButton(label="Start quiz", …)`, cut to "Start q…" in its 80-point circle (`lower-round-button-label`) | The circle is for a word (Start, Stop, Lap); a screen's main action of more words is `button buttonStyle="filled"` with its `text` (`recipes/content-design.md`) |
 | `now = performanceNow()`, then `now` read in the same action (`analyze-read-after-assign`) | Bind it and read the local: `let stamp = performanceNow()`, `now = stamp`, then `stamp` |
-| A child `task`, or a child `resource` or `mutation` used under a `for` over data (`type-child-resource`) | The task in the root; for a row, the root's resource over the list or its mutation, passed down as an answer or an action |
+| A child owning a `resource`, `mutation` or `task` used under a `for` over data or in a virtualized list (`type-child-resource`) | Put the resource family, mutation or shared task in the enclosing screen and pass its answer or action to the rows |
 | `fontSize`, `radius`, `resizeMode` | `font-size`, `border-radius`, `object-fit` |
 | `width=20px` | `width=20` or `width="20px"` |
 | Unbounded `scroll` | Real height/max-height or flex in a bounded layout |
@@ -6506,9 +6698,9 @@ hold an address or a code (a URL, an email, a key) takes `hyphens="none"`: a hyp
 
 `text-wrap="balance"` (CSS's `text-wrap-style`, inherited) evens a short
 paragraph's lines, for a tooltip, a toast or an empty state's message: the
-lines before its first forced break take the narrowest width that keeps their
-count, as Chrome's do, on every host. It balances up to six lines (more, or a
-`line-clamp`, wrap as usual), moves only the breaks (the box measures as
+lines before its first forced break keep their count and break where Chrome's
+do, on every host. It balances up to six lines (more, a `line-clamp`, or a
+word wider than the box, wrap as usual), moves only the breaks (the box measures as
 before, and `text-align` places the lines in it), and `auto` turns it off. `pretty` and `stable` are refused; supported values are `auto | balance`.
 
 `-webkit-font-smoothing="antialiased"` (inherited) draws text as Chrome and

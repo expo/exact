@@ -257,7 +257,23 @@ final class FrameHealthTrackTests: XCTestCase {
         defer { Agent.out = saved }
         let wire = try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: request)) as? [String: Any] ?? [:]
         agent.handle(op: "perf", wire, line: "")
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: pipe.fileHandleForReading.availableData) as? [String: Any])
+        let data = pipe.fileHandleForReading.availableData
+        XCTAssertLessThanOrEqual(data.count, FrameHealthTrack.maximumBytes, "the final emitted line includes its tags and newline")
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func testTheEmittedTrackPageIncludesTagsWithinItsBudget() throws {
+        let session = ExactApp.shared.makeSession(label: "track-tags")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(size: CGSize(width: 400, height: 800)).error)
+        let now = CACurrentMediaTime(), scroll = scroller()
+        let track = FrameHealthTrack(node: 7, scroller: scroll, now: now, durationMs: 120_000, maximumFramesPerSecond: 120)
+        for i in 0..<5000 { track.record(Double(i), phase: "d", at: now + Double(i) / 120) }
+        session.frameHealth.track = track
+        let reply = try ask(Agent(session: session), ["op": "perf", "frames": true, "track": "read"])
+        for key in ["generation", "epoch", "incarnation", "clock"] { XCTAssertNotNil(reply[key], key) }
+        XCTAssertEqual((reply["rows"] as? [[Any]])?.first?[3] as? Int, 90400)
+        XCTAssertEqual(reply["more"] as? Bool, true)
     }
 
     /// Where the last read stopped, as the driver keeps it, so consecutive reads don't repeat rows.

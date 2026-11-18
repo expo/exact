@@ -47,7 +47,10 @@ fn models() -> [Model; 2] {
 /// The device work after the empty table's frames, and after the throw's.
 fn throw<const PREPARED: bool>(gpu: &Gpu) -> [crate::world::assets::Work; 2] {
     let mut s = WorldSurface::<Table<PREPARED>, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[Value::Number(0u32.into())], None).unwrap();
     let [rig, held] = models();
     s.asset("rig.model", Ok(&asset::encode_model(&rig)));
@@ -101,7 +104,10 @@ fn a_prepared_throw_grows_no_buffer_and_builds_no_pipeline() {
 fn pipeline_time_is_reported_on_live_frames_only() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Table<false>, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[Value::Number(1u32.into())], None).unwrap();
     let [rig, held] = models();
     s.asset("rig.model", Ok(&asset::encode_model(&rig)));

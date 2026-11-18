@@ -63,6 +63,57 @@ fn view_with_test_id(host: &Host<caltrain_data::Caltrain>, test_id: &str) -> u32
     k.node_by_key(key).unwrap().id
 }
 
+#[test]
+fn a_mount_projects_text_folds_with_the_final_handlers() {
+    let plan = contract::compile(
+        r#"component App
+  state shown = false
+  action show
+    shown = not shown
+  view
+    column
+      button press=show testId="show"
+        text "Show"
+      if shown
+        column testId="handled"
+          text "Press" press=show
+        column testId="plain"
+          text "Plain"
+"#,
+    )
+    .unwrap();
+    exact_web::link(exact_web_capabilities::ALL);
+    let (mut host, _) = Host::boot(&plan.encode(), (), Default::default(), "/").unwrap();
+    for _ in 0..2 {
+        let kernel = host.runner().kernel();
+        let show = kernel
+            .node_by_key(kernel.find_by_test_id("show")[0])
+            .unwrap()
+            .id;
+        let batch = host.dispatch(show, Event::Press);
+        let kernel = host.runner().kernel();
+        for (name, folded) in [("handled", false), ("plain", true)] {
+            let id = kernel
+                .node_by_key(kernel.find_by_test_id(name)[0])
+                .unwrap()
+                .id;
+            let create = batch
+                .split("{\"op\":\"create\",")
+                .find(|op| op.starts_with(&format!("\"id\":{id},")))
+                .unwrap()
+                .split("{\"op\":")
+                .next()
+                .unwrap();
+            assert_eq!(create.contains("display:block;"), folded, "{create}");
+            assert!(
+                !batch.contains(&format!("\"op\":\"style\",\"id\":{id},")),
+                "{batch}"
+            );
+        }
+        host.dispatch(show, Event::Press);
+    }
+}
+
 /// A text that is its box's only child, with nothing of its own, is the box's
 /// text content (LLP 1007.001): its element makes no box. One with a test id,
 /// a row of its own, a sibling or a handler keeps its box, and a sibling that

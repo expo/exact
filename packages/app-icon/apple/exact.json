@@ -1,0 +1,20 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/app-icon@^1.0",
+  "platform": "apple",
+  "targets": [
+    "ios"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "swift": [
+      "AppIcon.swift"
+    ]
+  },
+  "artifacts": [],
+  "class": "AppIconModule"
+}

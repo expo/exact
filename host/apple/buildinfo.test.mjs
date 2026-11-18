@@ -47,6 +47,13 @@ test('the dark icons are part of an iPhone binary\'s identity, not a Mac\'s, whi
   expect(nativeManifestMetadata(dark, 'macos')).toEqual(nativeManifestMetadata(manifest, 'macos'));
 });
 
+test('the alternate icons are part of an iPhone binary\'s identity, and no other host builds them', () => {
+  const manifest = { app: { id: 'com.exact.dusk' }, icons: [{ src: 'assets/icon.png' }] };
+  const paper = { ...manifest, alternate_icons: [{ name: 'Paper', icons: [{ src: 'assets/paper.png' }] }] };
+  expect(nativeManifestMetadata(paper, 'ios')).not.toEqual(nativeManifestMetadata(manifest, 'ios'));
+  for (const platform of ['macos', 'android']) expect(nativeManifestMetadata(paper, platform)).toEqual(nativeManifestMetadata(manifest, platform));
+});
+
 test('an app inside exact2 carries exact2\'s commit alone, and the kind', () => {
   const info = buildInfo({ dir: resolve(root, 'apps/caltrain') }, { root, now });
   expect(info.ExactBuildTime).toBe('2026-10-08T10:00:00.000Z');

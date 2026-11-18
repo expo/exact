@@ -449,7 +449,20 @@ def waitBeatAfter (deadline interval execution : F64) : F64 :=
 /-- A timer. A frame task's is a virtual display (the runner's, while the
 host does not present frames, as in a differential run): it is due at
 `virtualFrame base k`, and each fire moves to the next frame. -/
+structure TaskState where
+  next : F64 := F64.posInf
+  nominal : F64 := 0
+  base : F64 := 0
+  k : Nat := 1
+  armed : Bool := false
+  armedKey : Option Value := .none
+  deriving Inhabited, Repr
+
 structure Timer where
+  owner : Option (Nat × Nat) := .none
+  args : List Expr := []
+  instances : List (RowId × TaskState) := []
+  selected : Option RowId := .none
   change : Bool := false
   action : String
   waitKind : Nat := 0
@@ -472,13 +485,25 @@ structure Timer where
 
 /-- The timer after it fires: spent, at its next virtual frame, or one
 interval on. -/
-def Timer.fired (tm : Timer) : Timer :=
+def Timer.tick (tm : Timer) : Timer :=
   if tm.once then { tm with next := F64.posInf }
   else if tm.frame then { tm with k := tm.k + 1, next := virtualFrame tm.base (tm.k + 1) }
   else if tm.waitKind != 0 then
     let nominal := waitBeatAfter tm.nominal tm.interval tm.next
     { tm with nominal, next := if tm.waitKind == 1 then frameAtOrAfter nominal else nominal }
   else { tm with next := tm.next + tm.interval }
+
+def Timer.state (tm : Timer) : TaskState :=
+  ⟨tm.next, tm.nominal, tm.base, tm.k, tm.armed, tm.armedKey⟩
+
+def Timer.withState (tm : Timer) (s : TaskState) : Timer :=
+  { tm with next := s.next, nominal := s.nominal, base := s.base, k := s.k,
+            armed := s.armed, armedKey := s.armedKey }
+
+theorem Timer.tick_fields (tm : Timer) :
+    tm.tick.action = tm.action ∧ tm.tick.gate = tm.gate ∧ tm.tick.key = tm.key ∧ tm.tick.owner = tm.owner := by
+  unfold Timer.tick
+  split <;> (try split) <;> (try split) <;> exact ⟨rfl, rfl, rfl, rfl⟩
 
 /-- Execution time, then idle priority, nominal time and declaration order. -/
 def Timer.precedes (tm b : Timer) : Bool :=
@@ -487,6 +512,25 @@ def Timer.precedes (tm b : Timer) : Bool :=
       ((b.waitKind == 4) == (tm.waitKind == 4) &&
         (if tm.waitKind == 0 then tm.next else tm.nominal) <
         (if b.waitKind == 0 then b.next else b.nominal))))
+
+/-- Select the earliest instance even when the preceding firing's action refuses. -/
+def Timer.selectInstance (tm : Timer) (instances : List (RowId × TaskState)) : Timer :=
+  let picked := instances.foldl (fun best item => match best with
+    | .none => some item
+    | .some (_, s) => if (tm.withState item.2).precedes (tm.withState s) then some item else best) none
+  let next := tm.withState (picked.map (·.2) |>.getD {})
+  { next with instances, selected := picked.map (·.1) }
+
+def Timer.fired (tm : Timer) : Timer :=
+  let fired := tm.tick
+  if tm.owner.isNone then fired else
+    fired.selectInstance (tm.instances.map fun (id, state) =>
+      (id, if tm.selected.any (fun selected => (RowStore.find [(id, [])] selected).isSome) then fired.state else state))
+
+theorem Timer.fired_fields (tm : Timer) :
+    tm.fired.action = tm.action ∧ tm.fired.gate = tm.gate ∧ tm.fired.key = tm.key ∧ tm.fired.owner = tm.owner := by
+  unfold Timer.fired
+  split <;> exact tm.tick_fields
 
 /-- What a refused queued send saw: the slots, and the derives and
 resources settled against them (LLP 1092 D3). -/
@@ -667,104 +711,213 @@ def keySame : Option Value → Option Value → Bool
 
 /-- Whether a gate holds: no gate (`key=` alone) always does; a value
 that is not `true` is false. -/
-def gateOn (env : Env) : Option Expr → Result Bool
+def gateOn (env : Env) (ls : Locals := []) : Option Expr → Result Bool
   | .none => .ok true
-  | .some g => eval fuel env false [] g >>= fun v =>
+  | .some g => eval fuel env false ls g >>= fun v =>
     .ok (match v with
       | .bool true => true
       | _ => false)
 
 /-- A timer's key as `rowKey` reads it: none when unkeyed; a key that is
 no key refuses (the runner's `TaskKey`). -/
-def gateKey (env : Env) : Option Expr → Result (Option Value)
+def gateKey (env : Env) (ls : Locals := []) : Option Expr → Result (Option Value)
   | .none => .ok .none
-  | .some k => eval fuel env false [] k >>= fun v => rowKey v >>= fun kv => .ok (.some kv)
+  | .some k => eval fuel env false ls k >>= fun v => rowKey v >>= fun kv => .ok (.some kv)
+
+/-- Where instance `id`'s elements were rendered: their locals and rows in
+force. -/
+def instanceScope (id : RowId) : List VNode → Option (Locals × List RowId)
+  | [] => .none
+  | n@{ children, .. } :: rest =>
+    if n.rows.head?.any (RowId.same · id) then .some (n.locals, n.rows)
+    else (instanceScope id children).orElse fun _ => instanceScope id rest
+
+inductive RegionBinding where
+  | when
+  | matchN (name : String)
+  | each (item : String) (index : Option String)
+
+partial def findRegion (tag : Nat) : List Node → Option RegionBinding
+  | [] => none
+  | .element _ _ _ _ children :: rest =>
+    (findRegion tag children).orElse fun _ => findRegion tag rest
+  | .when own _ thn els :: rest =>
+    if own == tag then some .when else
+      (findRegion tag thn).orElse fun _ =>
+        (findRegion tag els).orElse fun _ => findRegion tag rest
+  | .matchN own _ name someNodes noneNodes :: rest =>
+    if own == tag then some (.matchN name) else
+      (findRegion tag someNodes).orElse fun _ =>
+        (findRegion tag noneNodes).orElse fun _ => findRegion tag rest
+  | .each own item index _ _ body :: rest =>
+    if own == tag then some (.each item index) else
+      (findRegion tag body).orElse fun _ => findRegion tag rest
+
+def markerValue (p : Program) (store : RowStore) (id : RowId) (kind : Nat) : Option Value :=
+  (store.find? fun (candidate, _) =>
+    candidate.length == id.length + 1 && RowId.same (candidate.take id.length) id &&
+      match candidate.getLast? with
+      | some (tag, _, markerKind) => tag == instanceMarkerTag p && markerKind == kind
+      | none => false).bind fun (candidate, _) => candidate.getLast?.map (·.2.1)
+
+/-- An instance's bindings, including when its view has no elements. -/
+def recordedScope (p : Program) (store : RowStore) (id : RowId) : Locals × List RowId := Id.run do
+  let mut locals : Locals := []
+  let mut rows : List RowId := []
+  for n in [0:id.length] do
+    let path := id.take (n + 1)
+    rows := path :: rows
+    let some (tag, _, _) := path.getLast? | continue
+    match findRegion tag p.view with
+    | some (.matchN name) =>
+      if let some value := markerValue p store path 2 then
+        locals := (name, value) :: locals
+    | some (.each item index) =>
+      if let some value := markerValue p store path 0 then
+        locals := (item, value) :: locals
+      if let some name := index then
+        if let some value := markerValue p store path 1 then
+          locals := (name, value) :: locals
+    | _ => pure ()
+  return (locals, rows)
 
 /-- One timer after a commit (D8): a false gate drops it (an infinite
 deadline); a gate turned true, or a changed key, arms it from the commit's
 time — a frame task's virtual frames start again there (the runner's
 `gate_step`); anything else leaves it as it was. -/
-def gateTimer (env : Env) (tm : Timer) : Result Timer :=
+def gateTimer (env : Env) (tm : Timer) (ls : Locals := []) : Result Timer :=
   match tm.gate, tm.key with
   | .none, .none => .ok tm
   | g, k =>
-    gateOn env g >>= fun on =>
+    gateOn env ls g >>= fun on =>
     if !on then .ok { tm with armed := false, armedKey := .none, next := F64.posInf } else
-    gateKey env k >>= fun key =>
+    gateKey env ls k >>= fun key =>
     .ok (if tm.armed && keySame key tm.armedKey then tm
       else if tm.frame then
         { tm with armed := true, armedKey := key, base := env.now, k := 1,
                   next := virtualFrame env.now 1 }
       else { tm with armed := true, armedKey := key, nominal := env.now + tm.interval, next := (if tm.waitKind == 1 then frameAtOrAfter (env.now + tm.interval) else env.now + tm.interval) })
 
-theorem gateTimer_fields {env : Env} {tm tm' : Timer} (h : gateTimer env tm = .ok tm') :
-    tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key := by
+theorem gateTimer_fields {env : Env} {tm tm' : Timer} {ls : Locals} (h : gateTimer env tm ls = .ok tm') :
+    tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key ∧ tm'.owner = tm.owner := by
   unfold gateTimer at h
   split at h
-  · cases h; exact ⟨rfl, rfl, rfl⟩
+  · cases h; exact ⟨rfl, rfl, rfl, rfl⟩
   · simp only [bind, Except.bind] at h
     split at h
     · cases h
     · split at h
-      · cases h; exact ⟨rfl, rfl, rfl⟩
+      · cases h; exact ⟨rfl, rfl, rfl, rfl⟩
       · split at h
         · cases h
         · cases h
           split
-          · exact ⟨rfl, rfl, rfl⟩
-          · split <;> exact ⟨rfl, rfl, rfl⟩
+          · exact ⟨rfl, rfl, rfl, rfl⟩
+          · split <;> exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem gateTimer_action {env : Env} {tm tm' : Timer} (h : gateTimer env tm = .ok tm') :
     tm'.action = tm.action :=
   (gateTimer_fields h).1
 
+def eachTags : List Node → List Nat
+  | [] => []
+  | .element _ _ _ _ children :: rest => eachTags children ++ eachTags rest
+  | .when _ _ thn els :: rest => eachTags thn ++ eachTags els ++ eachTags rest
+  | .matchN _ _ _ sm nn :: rest => eachTags sm ++ eachTags nn ++ eachTags rest
+  | .each tag _ _ _ _ body :: rest => tag :: (eachTags body ++ eachTags rest)
+
+/-- The task states of the live instances of one declaration. A render's
+locals supply its props; each instance keeps its phase until its gate or key changes.
+Surviving instances retain creation order, with newly mounted instances appended. -/
+def taskInstances (env : Env) (store : RowStore) (_view : List VNode) (tm : Timer)
+    (owner : Nat × Nat) : Result (List (RowId × TaskState)) := do
+  let live := store.filter fun (id, _) => id.getLast?.any fun (tag, key, _) =>
+    tag == owner.1 && (Value.same key (.num (F64.ofNat owner.2)) ||
+      (eachTags env.prog.view).contains owner.1)
+  let kept := tm.instances.filter fun (id, _) => live.any fun (i, _) => RowId.same i id
+  let added := live.filter fun (id, _) => !(tm.instances.any fun (i, _) => RowId.same i id)
+  (kept.map (·.1) ++ added.map (·.1)).mapM fun id => do
+    let scope := recordedScope env.prog store id
+    let old := (tm.instances.find? fun (i, _) => RowId.same i id).map (·.2)
+    let due := env.now + tm.interval
+    let initial : Timer :=
+      { tm with
+        armed := !(tm.gate.isSome || tm.key.isSome)
+        base := env.now
+        k := 1
+        nominal := due
+        next := if tm.frame then virtualFrame env.now 1 else if tm.waitKind == 1 then frameAtOrAfter due else due }
+    let current := old.map (tm.withState) |>.getD initial
+    let ownedEnv := ({ env with rows := rowSlots store scope.2 } : Env).withOwned
+    let g ← gateTimer ownedEnv current scope.1
+    pure (id, g.state)
+
+/-- One declared timer, with the earliest live instance selected for the clock.
+The declaration's action, gate and key stay fixed. -/
+def gateTask (env : Env) (store : RowStore) (view : List VNode) (tm : Timer) : Result Timer :=
+  match tm.owner with
+  | .none => gateTimer env tm
+  | .some owner =>
+    match taskInstances env store view tm owner with
+    | .error _ => .error (.refused "a child's task gate or key did not evaluate")
+    | .ok instances => .ok (tm.selectInstance instances)
+
+theorem gateTask_fields {env store view tm tm'} (h : gateTask env store view tm = .ok tm') :
+    tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key ∧ tm'.owner = tm.owner := by
+  unfold gateTask at h
+  split at h
+  · exact gateTimer_fields h
+  · split at h
+    · cases h
+    · cases h; exact ⟨rfl, rfl, rfl, rfl⟩
+
 /-- D8's step over a commit's settled state, at its time. -/
 def gateStep (p : Program) (slots : List (String × Value)) (st : Settled) (now : F64)
-    (timers : List Timer) : Result (List Timer) :=
-  timers.mapM (gateTimer { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle })
+    (timers : List Timer) (store : RowStore := []) (view : List VNode := []) : Result (List Timer) :=
+  timers.mapM (gateTask { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle } store view)
 
-theorem mapM_gateTimer_actions {env : Env} :
-    ∀ {ts ts' : List Timer}, ts.mapM (gateTimer env) = .ok ts' → ts'.map (·.action) = ts.map (·.action)
+theorem mapM_gateTimer_actions {env : Env} {store view} :
+    ∀ {ts ts' : List Timer}, ts.mapM (gateTask env store view) = .ok ts' → ts'.map (·.action) = ts.map (·.action)
   | [], ts', h => by cases h; rfl
   | t :: ts, ts', h => by
     simp only [List.mapM_cons, bind, Except.bind] at h
-    cases ht : gateTimer env t with
+    cases ht : gateTask env store view t with
     | error e => rw [ht] at h; cases h
     | ok t' =>
       rw [ht] at h
-      cases hs : ts.mapM (gateTimer env) with
+      cases hs : ts.mapM (gateTask env store view) with
       | error e => rw [hs] at h; cases h
       | ok ts₂ =>
         rw [hs] at h; cases h
-        simp only [List.map_cons, gateTimer_action ht, mapM_gateTimer_actions hs]
+        simp only [List.map_cons, (gateTask_fields ht).1, mapM_gateTimer_actions hs]
 
-theorem mapM_gateTimer_mem {env : Env} :
-    ∀ {ts ts' : List Timer}, ts.mapM (gateTimer env) = .ok ts' → ∀ tm' ∈ ts', ∃ tm ∈ ts,
-      tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key
+theorem mapM_gateTimer_mem {env : Env} {store view} :
+    ∀ {ts ts' : List Timer}, ts.mapM (gateTask env store view) = .ok ts' → ∀ tm' ∈ ts', ∃ tm ∈ ts,
+      tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key ∧ tm'.owner = tm.owner
   | [], ts', h, _, hm => by cases h; cases hm
   | t :: ts, ts', h, tm', hm => by
     simp only [List.mapM_cons, bind, Except.bind] at h
-    cases ht : gateTimer env t with
+    cases ht : gateTask env store view t with
     | error e => rw [ht] at h; cases h
     | ok t' =>
       rw [ht] at h
-      cases hs : ts.mapM (gateTimer env) with
+      cases hs : ts.mapM (gateTask env store view) with
       | error e => rw [hs] at h; cases h
       | ok ts₂ =>
         rw [hs] at h; cases h
         rcases List.mem_cons.mp hm with rfl | hm
-        · exact ⟨t, List.mem_cons_self .., gateTimer_fields ht⟩
+        · exact ⟨t, List.mem_cons_self .., gateTask_fields ht⟩
         · obtain ⟨tm, h₁, h₂⟩ := mapM_gateTimer_mem hs tm' hm
           exact ⟨tm, List.mem_cons_of_mem _ h₁, h₂⟩
 
 /-- The gate step keeps every timer, its gate and its key; it moves only
 whether it is armed and its deadline. -/
-theorem gateStep_mem {p slots st now ts ts'} (h : gateStep p slots st now ts = .ok ts') :
-    ∀ tm' ∈ ts', ∃ tm ∈ ts, tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key :=
+theorem gateStep_mem {p slots st now ts ts' store view} (h : gateStep p slots st now ts store view = .ok ts') :
+    ∀ tm' ∈ ts', ∃ tm ∈ ts, tm'.action = tm.action ∧ tm'.gate = tm.gate ∧ tm'.key = tm.key ∧ tm'.owner = tm.owner :=
   mapM_gateTimer_mem h
 
 /-- The gate step keeps every timer's action. -/
-theorem gateStep_actions {p slots st now ts ts'} (h : gateStep p slots st now ts = .ok ts') :
+theorem gateStep_actions {p slots st now ts ts' store view} (h : gateStep p slots st now ts store view = .ok ts') :
     ts'.map (·.action) = ts.map (·.action) :=
   mapM_gateTimer_actions h
 
@@ -918,7 +1071,7 @@ def runAction (p : Program) (o : Oracle) (c : Config) (name : String) (args : Li
         | .ok (st, r) =>
           -- D8's gate step, after settlement and inside the commit: a
           -- refusal there refuses it, before the view is touched.
-          match gateStep p slots st c.now c.timers with
+          match gateStep p slots st c.now c.timers (r.toOption.map (·.2) |>.getD []) (r.toOption.map (·.1) |>.getD []) with
           | .error e => refuse e
           | .ok timers =>
             match r with
@@ -971,7 +1124,7 @@ def nextCommit (p : Program) (o : Oracle) (c : Config) (m : String) : Config × 
       match update p o slots c.store c.now c.settled [] c.view with
       | .error e => stall e
       | .ok (st, r) =>
-        match gateStep p slots st c.now c.timers with
+        match gateStep p slots st c.now c.timers (r.toOption.map (·.2) |>.getD []) (r.toOption.map (·.1) |>.getD []) with
         | .error e => stall e
         | .ok timers =>
           match r with
@@ -1043,13 +1196,13 @@ def startTimers (p : Program) (slots : List (String × Value)) : Result (List Ti
     -- A frame task's first virtual frame follows boot (at 0); its `ms`
     -- is a placeholder, never read.
     -- A gated task starts idle; boot's gate step arms it (LLP 1092 D8).
-    let gated := t.gate.isSome || t.key.isSome
+    let gated := t.owner.isSome || t.gate.isSome || t.key.isSome
     if t.kind == .frame then
-      return { action := t.action, interval := 0, once := false,
+      return { owner := t.owner, args := t.args, action := t.action, interval := 0, once := false,
                next := if gated then F64.posInf else virtualFrame 0 1, frame := true, base := 0, k := 1,
                gate := t.gate, key := t.key, armed := !gated }
     let ms ← (← eval fuel { prog := p, slots } false [] t.ms).asNum
-    pure { action := t.action, interval := ms, once := t.kind == .after || t.kind == .change, change := t.kind == .change,
+    pure { owner := t.owner, args := t.args, action := t.action, interval := ms, once := t.kind == .after || t.kind == .change, change := t.kind == .change,
            waitKind := t.waitKind, maxMs := t.maxMs, nominal := ms,
            next := if gated then F64.posInf else if t.waitKind == 1 then frameAtOrAfter ms else ms, gate := t.gate, key := t.key, armed := !gated }
 
@@ -1095,7 +1248,9 @@ def boot (p : Program) (o : Oracle) : Config × Outcome :=
       let env : Env := { prog := p, slots, derives := st.derives, resources := st.resources, now := 0, idle := st.idle }
       match renderTabs fuel { env, store := [], tabs := renderTabContext o [], oracle := o } with
       | .ok (view, live) =>
-        ({ slots, settled := st, store := live, view, now := 0, timers }, .ok)
+        match gateStep p slots st 0 timers live view with
+        | .error e => (empty, .refused e)
+        | .ok timers => ({ slots, settled := st, store := live, view, now := 0, timers }, .ok)
       -- A view that fails to render at boot fails the boot: there is no
       -- runner to poison.
       | .error e => (empty, .refused e)
@@ -1222,14 +1377,6 @@ def thenCommit (p : Program) (o : Oracle) (c : Config) (a : String) (args : List
   | .error (.refused m) => (c, .refused (.refused m))
   | .error _ => (c, .refused (.refused "a `then`'s arguments did not evaluate"))
 
-/-- Where instance `id`'s elements were rendered: their locals and rows in
-force. -/
-def instanceScope (id : RowId) : List VNode → Option (Locals × List RowId)
-  | [] => .none
-  | n@{ children, .. } :: rest =>
-    if n.rows.head?.any (RowId.same · id) then .some (n.locals, n.rows)
-    else (instanceScope id children).orElse fun _ => instanceScope id rest
-
 /-- The `then` of send row `i` (LLP 1035.005.004 D6): run in its
 instance's rows, its arguments read with the locals the instance's
 elements were rendered with (none when it rendered none; its rows are
@@ -1241,6 +1388,11 @@ def ownedThen (p : Program) (o : Oracle) (c : Config) (i : Nat) (a : String) : C
       ([], (List.range id.length).reverse.map fun k => id.take (k + 1))
     thenCommit p o c a (thenArgsOf p mutation) scope.2 scope.1
   | _ => (c, .ok)
+
+/-- A task's action reads its captures in its selected instance, as a child's `then` does. -/
+def timerCommit (p : Program) (o : Oracle) (c : Config) (tm : Timer) : Config × Outcome :=
+  let scope := tm.selected.map (recordedScope p c.store) |>.getD ([], [])
+  thenCommit p o c tm.action tm.args scope.2 scope.1
 
 /-- Move the clock to `t`, firing every timer due by then in order of due
 time (ties by declaration order), each at its own due time. An armed
@@ -1292,7 +1444,7 @@ def advance (p : Program) (o : Oracle) (c : Config) (t : F64) : Config × Outcom
         if tm.change && n + 1 < timerFireLimit then (c, .ok) else
         let timers := c.timers.set i tm.fired
         let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
-        match runAction p o c tm.action [] [] with
+        match timerCommit p o c tm with
         | (c, .ok) => if tm.change then (c, .ok) else go n c
         | (c, out) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c

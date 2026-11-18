@@ -3,6 +3,29 @@
 
 use super::*;
 
+/// Add the session identity after an operation, preserving any clock it already reports.
+pub fn tagged<D: DataSource>(runner: &Runner<D>, mut reply: String) -> String {
+    if !reply.ends_with('}') {
+        return reply;
+    }
+    let values = [
+        ("generation", runner.generation().to_string()),
+        ("epoch", runner.kernel().epoch().to_string()),
+        ("incarnation", runner.kernel().incarnation().to_string()),
+        ("clock", num(runner.now_ms()).to_string()),
+    ];
+    for (key, value) in values {
+        if field_num(&reply, key).is_none() {
+            reply.pop();
+            if reply.len() > 1 {
+                reply.push(',');
+            }
+            let _ = write!(reply, "\"{key}\":{value}}}");
+        }
+    }
+    reply
+}
+
 pub(super) fn request<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     let shallow = match after_key(request, "shallow") {
         None => false,
@@ -49,7 +72,8 @@ fn tree_rows<D: DataSource>(
     let mut s = String::new();
     let _ = write!(
         s,
-        "{{\"epoch\":{},\"incarnation\":{},\"clock\":{},\"roots\":",
+        "{{\"generation\":{},\"epoch\":{},\"incarnation\":{},\"clock\":{},\"roots\":",
+        runner.generation(),
         kernel.epoch(),
         kernel.incarnation(),
         num(runner.now_ms())

@@ -16,11 +16,16 @@ object SystemBrowser {
 
     /** [intent] may carry a package's AndroidX options. Auth selects only browsers so a claimed
      * authorization link cannot open another app; ordinary content keeps Android's link resolution. */
-    fun launch(activity: Activity, uri: Uri, intent: Intent = Intent(Intent.ACTION_VIEW), browserOnly: Boolean = false, options: Bundle? = null) {
+    fun launch(activity: Activity, uri: Uri, intent: Intent = Intent(Intent.ACTION_VIEW), browserOnly: Boolean = false,
+               customTabs: Boolean = true, options: Bundle? = null,
+               start: ((Intent, Bundle?) -> Unit)? = null) {
+        fun open(target: Intent) { if (start != null) start(target, options) else activity.startActivity(target, options) }
         intent.data = uri
         if (!browserOnly) {
-            if (!intent.hasExtra(SESSION)) intent.putExtras(Bundle().apply { putBinder(SESSION, null) })
-            activity.startActivity(intent, options)
+            if (customTabs) {
+                if (!intent.hasExtra(SESSION)) intent.putExtras(Bundle().apply { putBinder(SESSION, null) })
+            } else intent.removeExtra(SESSION)
+            open(intent)
             return
         }
         val manager = activity.packageManager
@@ -36,14 +41,14 @@ object SystemBrowser {
         }.map { it.activityInfo.packageName }.toSet()
         val browsers = handlers("https").intersect(handlers("http")).toMutableList()
         fun target(pkg: String) = Intent(intent).setPackage(pkg).apply {
-            if (manager.resolveService(Intent(SERVICE).setPackage(pkg), 0) != null) {
+            if (customTabs && manager.resolveService(Intent(SERVICE).setPackage(pkg), 0) != null) {
                 if (!hasExtra(SESSION)) putExtras(Bundle().apply { putBinder(SESSION, null) })
             } else removeExtra(SESSION)
         }
         val default = manager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
         if (default in browsers) {
             try {
-                activity.startActivity(target(default!!), options)
+                open(target(default!!))
                 return
             } catch (_: ActivityNotFoundException) {
                 // A browser can disappear between resolution and launch. Keep the remaining choices.
@@ -56,6 +61,6 @@ object SystemBrowser {
             Intent.createChooser(choices.first(), null)
                 .putExtra(Intent.EXTRA_INITIAL_INTENTS, choices.drop(1).toTypedArray())
         }
-        activity.startActivity(launch, options)
+        open(launch)
     }
 }

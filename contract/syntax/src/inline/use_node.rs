@@ -262,7 +262,7 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
         child_subst.insert(m.name.clone(), Expr::Ident(lifted.clone(), *span));
         names.insert(m.name.clone(), lifted);
     }
-    if !owned.is_empty() || !c.mutations.is_empty() {
+    if !owned.is_empty() || !c.mutations.is_empty() || !c.tasks.is_empty() {
         ctx.owned_uses.push(OwnedUse {
             component: name.clone(),
             instance,
@@ -421,6 +421,27 @@ fn prepare_use(node: &Node, subst: &mut Subst<'_, Expr>, ctx: &mut Ctx<'_>) -> O
             } else {
                 Vec::new()
             },
+        ));
+    }
+    for t in &c.tasks {
+        ctx.extra_tasks.push((
+            crate::Task {
+                name: lifted(&t.name, n),
+                gate: t.gate.as_ref().map(|e| subst_expr(e, &mut child)),
+                key: t.key.as_ref().map(|e| subst_expr(e, &mut child)),
+                timer: (
+                    t.timer.0.clone(),
+                    names
+                        .get(&t.timer.1)
+                        .cloned()
+                        .unwrap_or_else(|| t.timer.1.clone()),
+                    t.timer.2,
+                ),
+                ..t.clone()
+            },
+            owner,
+            instance,
+            then_args.clone(),
         ));
     }
     for st in &c.states {

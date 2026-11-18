@@ -100,7 +100,22 @@ impl<D: DataSource> Host<D> {
             self.canvas_kept.swap(0, 1);
             self.canvas_kept[1] = lists;
         }
-        batch.canvas_images(self.runner.take_canvas_image_requests());
+        // A handle no mounted canvas's latest draw asks for is let go, here
+        // and by the presenter: a canvas that asks again decodes it afresh.
+        let runner = &mut self.runner;
+        let mut dropped = Vec::new();
+        self.canvas_images.retain(|src| {
+            let named = runner.canvas_image_named(src);
+            if !named {
+                runner.canvas_image_released(src);
+                dropped.push(src.clone());
+            }
+            named
+        });
+        batch.canvas_images_dropped(dropped);
+        let asked = self.runner.take_canvas_image_requests();
+        self.canvas_images.extend(asked.iter().cloned());
+        batch.canvas_images(asked);
     }
 
     /// The presenter's replay of `view` is (`held`) or is no longer behind

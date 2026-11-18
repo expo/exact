@@ -1,7 +1,5 @@
 # Recipe: motion
 
-`transition` for changes; `keyframes` and `animation` for entrances or loops;
-`-exact-exit-animation` for removal, `-exact-layout-transition` for layout.
 
 ```contract
 keyframes rise
@@ -46,20 +44,23 @@ component App
   transforms.
 - **Spring:** `-exact-spring(stiffness, damping, mass)`: transition timing, no duration;
   not `animation`.
-- **Hover scale:** `:hover`, `:focus-visible` take `scale=1.08` with
+- **Hover scale:** `:hover`, `:focus-visible`: `scale=1.08` with
   `transition="scale 150ms ease"`; paint and hits grow, layout stays.
 - **Keyframes:** literals or app `fn` on constants.
 - **Exit:** an `if` arm or `for` row leaves layout at once, inert, and must end; siblings use
   layout transitions. Not in a popped screen or on Linux, Windows or Android.
-- **Routes:** a route takes `::view-transition-new` and `::view-transition-old`, its
-  entrance and exit: `animation=` alone, keyframes of opacity, translate, scale, rotate.
-  `none` cuts; unset is the platform's. Not on a sheet or zoom route.
-- **Layout:** moves/resizes the surface; children jump, unscaled.
-  `sharedElement=` flies, not on Linux or Windows.
-  Android: in-page only; no native dialogs or zooms.
+- **Routes:** `::view-transition-new` / `::view-transition-old` take `animation=`:
+  opacity, translate, scale, rotate keyframes. `none` cuts; unset is the platform's.
+  Not on sheets or zooms.
+- **Layout:** surfaces move/resize; children jump, unscaled. `sharedElement=` flies
+  except on Linux/Windows; Android: in-page only, no native dialogs.
+- **Zoom:** `navigationSource=` names an underlying `id`: UIKit's zoom on iOS 18;
+  Android's whole-route container transform on push/fullscreen, back to a visible
+  source. Missing/hidden/clipped/off-screen: push uses shared axis, fullscreen cuts.
+  No sheets.
 - **Expand/collapse:** as above; an `if` row appears full size, siblings slide over.
 - **JS target:** bound exit/layout values must be binding literals.
-- **Stagger:** delays; after motion, a gated `after(ms, action)`.
+- **Stagger:** delays; `after(ms, action)`.
 - **Reduced motion:** gate on `exactViewport()`; drive `prefer prefers-reduced-motion reduce`.
-  Native flights land; route parts cut.
-- **Check:** `clock settle` ends it; `screenshot .exact/m.png over 600 every 50` films it.
+  Flights land; routes cut.
+- **Check:** `clock settle`; `screenshot .exact/m.png over 600 every 50` films motion.

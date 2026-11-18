@@ -46,7 +46,8 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
       await page.setContent(`<!doctype html><style>${sheet}
         @font-face { font-family: Pinned; src: url(data:font/ttf;base64,${latin}); }
         #exact-root { font-family: Pinned; }
-        #exact-root #long { display: block; width: 130px; text-align: left; }
+        /* Clear of the sheet's corner: Chromium draws that curve one level apart in the two captures. */
+        #exact-root #long { display: block; width: 130px; margin-left: 56px; text-align: left; }
       </style><div id="exact-root"><section navigationPresentation="modal"><header>
         <button id="long" data-button-style="bordered" aria-label="MMMMMMMMMMMMMMMM"><img data-symbol-source="symbol:checkmark"></button>
       </header></section></div>`);

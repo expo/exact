@@ -83,6 +83,28 @@ function productionAppleReceiptFixture() {
   return { root, app, bake, evidence, localChanges, relocatedChanges, write, dispose: () => rmSync(root, { recursive: true, force: true }) };
 }
 
+test('receipts resolve GPU sources and build scripts in their own Cargo workspace', () => {
+  const fixture = productionAppleReceiptFixture(), { root, app, write, bake } = fixture;
+  try {
+    app.gpuWorkspace = resolve(root, 'module');
+    app.manifest.gpu = { modules: { sky: ['sky'] } };
+    write('module/Cargo.toml', '[workspace]\n[package]\nname="receipt-gpu-sky"\nversion="0.1.0"\nedition="2021"\n[lib]\ncrate-type=["cdylib"]\n');
+    write('module/src/lib.rs', '#[no_mangle] pub extern "C" fn color() -> u8 { include!("color.rs") }');
+    write('module/src/color.rs', '42');
+    write('module/build.rs', 'mod helper; fn main() { helper::watch(); }');
+    write('module/helper.rs', 'pub fn watch() { println!("cargo:rerun-if-changed=src/color.rs"); }');
+    const locked = spawnSync('cargo', ['generate-lockfile', '--offline'], { cwd: app.gpuWorkspace, encoding: 'utf8' });
+    assert.equal(locked.status, 0, locked.stderr);
+    const receipt = bake();
+    for (const path of ['src/lib.rs', 'src/color.rs', 'build.rs', 'helper.rs', 'Cargo.toml', 'Cargo.lock']) {
+      assert.ok(receipt.binary.inputs.some(input => input.path === resolve(app.gpuWorkspace, path)), path);
+    }
+    assert.deepEqual(pendingBuildInputs(receipt), []);
+    write('module/src/color.rs', '43');
+    assert.ok(pendingBuildInputs(receipt).some(name => name.endsWith('/src/color.rs')));
+  } finally { fixture.dispose(); }
+}, 30000);
+
 test.skipIf(process.platform === 'win32')('production Apple receipts retain main module-root link behavior', async () => {
   const fixture = productionAppleReceiptFixture(), { root, bake, evidence, localChanges, relocatedChanges } = fixture;
   try {

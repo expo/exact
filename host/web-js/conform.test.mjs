@@ -4,6 +4,7 @@ import { clockOnAll, clockVerdict, failedTests, parseStep } from './conform-step
 import { open } from '../../scripts/agent.mjs';
 import { chromium, launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { browserMissing } from '../../scripts/agent-playwright.mjs';
+import { linuxBinary } from '../../scripts/app.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -27,8 +28,8 @@ async function fixtureDrive(browser, {
   const deps = {
     ...comparisons, crossBrowser: browser, crossBrowsers: browser?.split(',') ?? [],
     readyBrowsers: browser?.split(',') ?? [], maxSteps: 3,
-    // The JS page's sheet cut for `cut`, which a stand-in page holds at every step.
-    sheetCut: () => new Set(cut), uncut: async (_evaluate, tokens) => [...tokens],
+    // What the JS page's build cut that a stand-in page holds at every step: `cut`, as `uncut` says each.
+    pageCut: () => cut, uncut: async (_evaluate, held) => held,
     STATE_KEYS: ['slots'], LINUX_APART: {}, LINUX_OPS: [], linuxFor: () => null, linuxRef: false,
     root: '/checkout', here: '/checkout/host/web-js', resolve, parseStep, clockOnAll, failedTests,
     resolveApp: () => ({ dir: '/fixture' }),
@@ -141,9 +142,9 @@ test('the wasm and JS drive still delivers every step to its two Chrome pages', 
   expect(run.report.failures).toEqual([]);
   expect(run.report.steps.map(s => s.step)).toEqual(['boot', 'tap scripted', 'refused tap refused', 'reload', 'wheel auto 12', 'clock +5', 'tap auto', 'clock +60000']);
   expect(run.report.steps.every(s => !s.browser && s.differences === 0)).toBe(true);
-  // A JS page holding a token its sheet was cut for fails each step it is seen at (LLP 1047.003 D1).
-  const cut = await fixtureDrive(null, { cut: ['t:dialog'] });
-  expect(cut.report.failures.filter(f => /^sheet: .* has t:dialog, which its sheet was cut for$/.test(f.what)).map(f => f.step))
+  // A JS page holding what its build cut (LLP 1047.003 D1, LLP 1047.002 D2.1, D4.2) fails each step it is seen at.
+  const cut = await fixtureDrive(null, { cut: ['t:dialog, which its sheet was cut for'] });
+  expect(cut.report.failures.filter(f => /^cut: .* has t:dialog, which its sheet was cut for$/.test(f.what)).map(f => f.step))
     .toEqual(cut.report.steps.map(s => s.step));
 });
 
@@ -814,6 +815,49 @@ test('URL comparison does not select its URLs or label as apps', () => {
   ]);
   expect(named).toEqual([]);
   expect(options['--label']).toBe('preview');
+});
+
+test('conformance finds Linux agent binaries with primary or package GPU modules', () => {
+  const dir = mkdtempSync(resolve(import.meta.dir, '../../target/conform-linux-'));
+  const apps = Object.fromEntries([
+    ['plain', false, {}], ['primary', true, {}], ['package', false, { sky: ['sky'] }], ['render', false, {}],
+  ].map(([name, hasGpu, modules]) => [name, {
+    target: resolve(dir, name, 'target'), hasGpu, manifest: { gpu: { modules } }, crate: () => `${name}-linux`,
+  }]));
+  const bindings = { root: dir, resolve, existsSync, readFileSync, linuxBinary,
+    resolveApp: name => apps[name], linuxRef: true, LINUX_APART: {} };
+  const source = comparisonSource.slice(comparisonSource.indexOf('const linuxCrate ='), comparisonSource.indexOf('// A TypeScript fixture'));
+  const linuxFor = new Function(...Object.keys(bindings), source + '; return linuxFor;')(...Object.values(bindings));
+  try {
+    for (const [name, app] of Object.entries(apps)) {
+      const manifest = resolve(dir, 'apps', name, 'linux/Cargo.toml');
+      mkdirSync(dirname(manifest), { recursive: true });
+      writeFileSync(manifest, `[package]\nname = "${app.crate()}"\n`);
+      const binary = linuxBinary(app, name === 'render' ? 'render-server' : app.crate());
+      mkdirSync(dirname(binary), { recursive: true }); writeFileSync(binary, 'built');
+      const reference = linuxFor({ name, app: name });
+      if (name === 'render') expect(reference.why).toContain('no render-linux binary built');
+      else expect(reference).toEqual({});
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('conformance delegates Linux builds to the host builder and reports failed builds', async () => {
+  const builds = [], report = { failures: [] }, root = '/checkout';
+  const apps = ['plain', 'primary', 'package', 'render'];
+  const bindings = {
+    root, apps, planFixtures: [{ data: 'package' }], resolve,
+    linuxRef: true, engineReady: true, argv: ['--build'], process: { execPath: process.execPath, env: {} }, report,
+    linuxCrate: name => `${name}-linux`, resolveApp: () => ({ target: '/checkout/target', workspace: root }),
+    spawned: async (command, args) => {
+      builds.push([command, args]);
+      return { status: args.includes('package') ? 1 : 0, stderr: 'package GPU build failed' };
+    },
+  };
+  const source = comparisonSource.slice(comparisonSource.indexOf("if (linuxRef && argv.includes('--build')"), comparisonSource.indexOf('const targets = apps.map'));
+  await new Function(...Object.keys(bindings), `return (async () => { ${source} })();`)(...Object.values(bindings));
+  expect(builds).toEqual(apps.map(name => [process.execPath, [resolve(root, 'scripts/build-linux.mjs'), name]]));
+  expect(report.failures).toEqual([{ target: 'linux', step: 'linux-build package', what: 'package GPU build failed' }]);
 });
 
 test("a { slots } Linux entry skips only the slots it names; a stop skips none", async () => {

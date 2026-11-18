@@ -100,9 +100,7 @@ pub(super) struct State {
 }
 
 impl State {
-    /// A new tree: what the bars were read from is the old one's, though
-    /// the new kernel may be at the same epoch, and a held or focused
-    /// target stood for one of its nodes.
+    /// A replacement invalidates node references held by the old bars.
     pub(super) fn replaced(&mut self) {
         self.read = None;
         self.scroller = None;

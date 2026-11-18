@@ -186,6 +186,19 @@ fn canvases_record_into_one_frame_submitted_at_the_flush() {
     assert!(m.flush(), "nothing open is a no-op");
     assert!(take().is_empty());
     assert!(!m.dirty(a) && !m.dirty(b));
+    m.set_reduced_motion(true);
+    assert!(m.dirty(a) && m.dirty(b));
+    for id in [a, b] {
+        m.render(id, &frame());
+    }
+    assert!(m.flush());
+    m.set_reduced_motion(true);
+    assert!(
+        !m.dirty(a) && !m.dirty(b),
+        "unchanged preferences stay idle"
+    );
+    m.set_reduced_motion(false);
+    assert!(m.dirty(a) && m.dirty(b));
 }
 
 #[test]

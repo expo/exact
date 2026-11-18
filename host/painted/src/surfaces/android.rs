@@ -417,8 +417,8 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         let wants = self.render_windows(false);
-        // Children a surface moved in this render follow it: the page paints
-        // with the placements it gives now (expo/exact#50).
+        // A placement or opacity change repaints even while the page rests
+        // (expo/exact#50; LLP 1133.039 D8).
         if self
             .surfaces
             .placements_moved(&self.host, &self.brush.placements)

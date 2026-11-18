@@ -41,7 +41,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         return tabs.tabBar.isHidden
     }
 
-    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+    func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what)
@@ -52,7 +52,7 @@ final class NavigationTabsIOSTests: XCTestCase {
     /// default window is iPhone 17's size at the screen's top left, which on
     /// a larger phone (iPhone Air, 18 Pro Max) ends above the indicator, and
     /// UIKit gives it no bottom inset.
-    private func fixture(_ label: String, module: Bool = false, wholeScreen: Bool = false, plan key: String = "EXACT_FIXTURE_PLAN", prepare: ((ExactSession) -> Void)? = nil) throws -> ExactSession {
+    func fixture(_ label: String, module: Bool = false, wholeScreen: Bool = false, plan key: String = "EXACT_FIXTURE_PLAN", prepare: ((ExactSession) -> Void)? = nil) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[key], "build.mjs --test --ios compiles \(key)")))
         let session = ExactApp.shared.makeSession(label: label)
@@ -88,7 +88,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         return session
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
@@ -102,31 +102,6 @@ final class NavigationTabsIOSTests: XCTestCase {
         until(authored ? "the tablist writes appearance none" : "the tablist is the tab bar's again") {
             session.presenter.navigation.adopts(tablist: list) == !authored
         }
-    }
-
-    /// The root's tablist shown while its stack is in a transition (a sheet
-    /// presenting over the tabs), when the bar cannot move, brings the bar
-    /// back at the next batch after it: the change is not lost, even when a
-    /// modal's own root, outside the tab bar's stacks, changes meanwhile.
-    func testTheRootsTablistShownDuringATransitionBringsTheBarBackAfterIt() throws {
-        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
-        guard hostedWindowScene() != nil else { throw missing("scene", "a presentation completes only in a scene's window") }
-        let session = try fixture("basics-roottabbar")
-        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
-        try tapNode(session, "toggle-choosing")
-        until("the bar left") { tabs.isTabBarHidden }
-        let sheet = UIViewController()
-        tabs.present(sheet, animated: true)
-        XCTAssertNotNil(nav.transitionCoordinator, "the sheet's transition holds the stack")
-        try tapNode(session, "toggle-choosing")
-        until("the sheet is up") { nav.transitionCoordinator == nil }
-        // A modal's root seen for the first time: a change its stack cannot follow either
-        let modal = RouteController(NodeView(id: 9_999, kind: "column", presenter: session.presenter))
-        session.presenter.navigation.followTablistAtRoot(modal, hidden: false, in: UINavigationController(rootViewController: modal))
-        sheet.dismiss(animated: false)
-        try tapNode(session, "bump")
-        until("the bar came back") { !tabs.isTabBarHidden }
     }
 
     func testAgentActivatesAHiddenRootTabThroughItsVisibleBar() throws {
@@ -1473,4 +1448,5 @@ extension XCTestCase {
         _ = Agent(session: session).tap(["id": Int(node.id)])
     }
 }
+
 #endif

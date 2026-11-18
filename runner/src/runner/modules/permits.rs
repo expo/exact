@@ -45,6 +45,10 @@ impl<D: DataSource> Runner<D> {
     /// implementation then answers the call, where one is bound, told the
     /// answer as the call's `preferred`: `{"typed": [ids]}` or `{"tap": c}`.
     pub(super) fn chosen(&mut self, row: &ModulesRow, token: u64, answer: &HoldAnswer) {
+        // The app's icon (`declared/app_icon.rs`): the alert's tap changes it.
+        if self.substitute(row)["appIcon"] == "set" {
+            return self.app_icon_chosen(row, token);
+        }
         let sheet = match answer {
             HoldAnswer::Value(text) => json!({ "typed": typed_list(text) }),
             HoldAnswer::Choice(c) => json!({ "tap": c }),

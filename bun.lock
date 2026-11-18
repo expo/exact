@@ -77,6 +77,10 @@
       "name": "@exact/altimeter",
       "version": "1.0.0",
     },
+    "packages/app-icon": {
+      "name": "@exact/app-icon",
+      "version": "1.0.0",
+    },
     "packages/attestation": {
       "name": "@exact/attestation",
       "version": "1.0.0",
@@ -345,6 +349,8 @@
     "@exact/alarms": ["@exact/alarms@workspace:packages/alarms"],
 
     "@exact/altimeter": ["@exact/altimeter@workspace:packages/altimeter"],
+
+    "@exact/app-icon": ["@exact/app-icon@workspace:packages/app-icon"],
 
     "@exact/attestation": ["@exact/attestation@workspace:packages/attestation"],
 

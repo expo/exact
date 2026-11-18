@@ -224,7 +224,7 @@ fn poses(
     }
     held.textures.clear();
     let mut s = WorldSurface::<Poses, crate::ModelExecutor, true>::default();
-    s.device_ready(wgpu::Features::empty());
+    s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     s.bind(&args.values(), None).unwrap();
     s.asset("deformed.model", Ok(&exact_game::asset::encode_model(&rig)));
     s.asset("crate.model", Ok(&exact_game::asset::encode_model(&held)));
@@ -364,7 +364,7 @@ fn band(gpu: &Gpu, far: bool, direct: bool) -> BandSurface {
     model.materials.fill(Default::default());
     model.textures.clear();
     let mut s = BandSurface::default();
-    s.device_ready(wgpu::Features::empty());
+    s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     s.bind(&BandArgs { far }.values(), None).unwrap();
     s.asset("crate.model", Ok(&exact_game::asset::encode_model(&model)));
     fixture::render(gpu, &mut s, &frame(0.)).unwrap();
@@ -549,7 +549,7 @@ type MixedSurface = WorldSurface<Mixed, crate::ModelExecutor, true>;
 
 fn mixed_surface(args: MixedArgs, glass: f32) -> MixedSurface {
     let mut s = MixedSurface::default();
-    s.device_ready(wgpu::Features::empty());
+    s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
     s.bind(&args.values(), None).unwrap();
     s.asset(
         "mixed.model",

@@ -32,6 +32,7 @@ final class VideoTrack {
     let id: String, stream: String
     var label: String, enabled = true, muted = true, muteReason: String? = "idle", readyState = "live"
     var device: AVCaptureDevice?
+    var frameRate: Double?
     /// Under the agent: the camera it shows.
     var facing = "environment"
     var settings: [String: Any] = [:], capabilities: [String: Any] = [:]
@@ -89,6 +90,7 @@ final class VideoTracks: ExactTrackOwner {
             let n = nextId()
             let t = VideoTrack(id: "track-\(context.session)-\(n)", stream: stream, label: device?.localizedName ?? "")
             t.tracks = self
+            t.frameRate = constraints["frameRate"] as? Double
             if let device {
                 t.device = device
                 read(t)
@@ -159,7 +161,8 @@ final class VideoTracks: ExactTrackOwner {
             return reply(shape(t))
         }
         var kept: [String: Any] = [:]
-        for k in ["zoom", "torch"] { if let v = args[k], !(v is NSNull) { kept[k] = v } }
+        for k in ["zoom", "torch", "frameRate"] { if let v = args[k], !(v is NSNull) { kept[k] = v } }
+        if let rate = kept["frameRate"] as? Double { t.frameRate = rate }
         if context.agent {
             if let torch = kept["torch"] as? Bool, t.capabilities["torch"] as? Bool == true { t.settings["torch"] = torch }
         } else if let capture = t.capture {
@@ -415,6 +418,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
     let session = AVCaptureSession()
     private(set) var device: AVCaptureDevice
     private let queue = DispatchQueue(label: "dev.exact.media-capture.camera")
+    private let onQueue = DispatchSpecificKey<Bool>()
     private var input: AVCaptureDeviceInput?
     private(set) var holders: [ObjectIdentifier: () -> VideoTrack?] = [:]
     private var objects: [String: AnyObject] = [:]
@@ -424,6 +428,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
     private init(device: AVCaptureDevice) {
         self.device = device
         super.init()
+        queue.setSpecific(key: onQueue, value: true)
         #if os(iOS)
         // The audio session is the host's (LLP 1133.009 D7): a capture session never configures it.
         session.automaticallyConfiguresApplicationAudioSession = false
@@ -441,7 +446,10 @@ final class VideoCapture: NSObject, ExactVideoSource {
         capture.log = log
         let first = capture.holders.isEmpty
         capture.holders[ObjectIdentifier(t)] = { [weak t] in t }
-        if first { capture.start(device) }
+        if first {
+            capture.start(device)
+            if let rate = t.frameRate { capture.apply(["frameRate": rate]) }
+        }
         return capture
     }
 
@@ -610,7 +618,9 @@ final class VideoCapture: NSObject, ExactVideoSource {
     }
 
     func apply(_ constraints: [String: Any]) {
-        Cameras.apply(constraints, to: device, queue: queue) { [weak self] in
+        // A consumer restoring constraints after configuration must finish before later queued work.
+        let pending = DispatchQueue.getSpecific(key: onQueue) == true ? nil : queue
+        Cameras.apply(constraints, to: device, queue: pending) { [weak self] in
             guard let self else { return }
             for get in self.holders.values { if let t = get() { t.tracks?.changed(t) } }
         }
@@ -725,10 +735,26 @@ enum Cameras {
         return out
     }
 
-    /// `zoom` and `torch` on the device, under its lock, on `queue` (or now); `done` on main after.
+    static func frameRate(_ ideal: Double, ranges: [(Double, Double)]) -> Double? {
+        guard ideal.isFinite, ideal > 0 else { return nil }
+        return ranges.filter { $0.0 > 0 && $0.1 >= $0.0 }
+            .map { min(max(ideal, $0.0), $0.1) }.min { abs($0 - ideal) < abs($1 - ideal) }
+    }
+
+    /// `frameRate`, `zoom` and `torch` under the device's lock, on `queue` (or now); `done` on main after.
     static func apply(_ c: [String: Any], to d: AVCaptureDevice, queue: DispatchQueue?, done: @escaping () -> Void = {}) {
         let work = {
             guard (try? d.lockForConfiguration()) != nil else { return }
+            let ranges = d.activeFormat.videoSupportedFrameRateRanges
+            if let ideal = c["frameRate"] as? Double,
+               let rate = frameRate(ideal, ranges: ranges.map { ($0.minFrameRate, $0.maxFrameRate) }),
+               let range = ranges.first(where: { $0.minFrameRate <= rate && rate <= $0.maxFrameRate }) {
+                // Keep the device's exact endpoints: rounding 1/60 can leave a fixed 60 fps range.
+                let interval = CMTimeMaximum(range.minFrameDuration,
+                    CMTimeMinimum(range.maxFrameDuration, CMTime(seconds: 1 / rate, preferredTimescale: 1_000_000_000)))
+                d.activeVideoMinFrameDuration = interval
+                d.activeVideoMaxFrameDuration = interval
+            }
             #if os(iOS)
             if let zoom = (c["zoom"] as? NSNumber)?.doubleValue {
                 d.videoZoomFactor = CGFloat(min(max(zoom, Double(d.minAvailableVideoZoomFactor)), Double(d.maxAvailableVideoZoomFactor)))

@@ -126,16 +126,16 @@ fn commits_before_the_shell_is_served_say_nothing() {
     assert_eq!(told(&mut p), [1]);
 }
 
-/// A plan replaced by one with no holder at the same kernel epoch still
-/// tells the shell the lock is off.
+/// A replacement advances the epoch and tells the shell the lock is off
+/// when the new plan has no holder.
 #[test]
-fn a_replacement_at_the_same_epoch_is_read_again() {
+fn a_replacement_advances_the_epoch_and_releases_the_lock() {
     let mut p = boot();
     p.serve_requests();
     assert_eq!(told(&mut p), [1]);
     let epoch = p.host().kernel().epoch();
     let plan = crate::test_plan("component App\n  view\n    text \"Nothing held\"\n");
     p.reload(&plan, Nothing).unwrap();
-    assert_eq!(p.host().kernel().epoch(), epoch, "the case under test");
+    assert!(p.host().kernel().epoch() > epoch);
     assert_eq!(told(&mut p), [0]);
 }

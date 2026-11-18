@@ -157,7 +157,7 @@ test('authored inline rows, classes and lowered arms override modal defaults', a
       expect(got[`unsaid-${wrapped}`]).toEqual({
         bar: ['grid', 'rgba(0, 0, 0, 0)', '0px', 'none'],
         title: ['24px', '1 / 1 / 2 / -1'], body: ['0px', '2 / 1 / 3 / -1'],
-        button: ['12px', 'center', '8px', 'color(srgb 0 0 0 / 0.45)', '3'],
+        button: ['12px', 'center', '8px', 'color(srgb 0 0 0 / 0.45)', '-2'],
       });
       for (const mode of ['inline', 'class', 'arm']) expect([mode, wrapped, got[`${mode}-${wrapped}`]]).toEqual([mode, wrapped, {
         bar: ['grid', 'rgb(1, 2, 3)', '3px', 'rgb(7, 8, 9) 0px 0px 4px 0px'],

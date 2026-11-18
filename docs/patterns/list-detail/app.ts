@@ -1,40 +1,40 @@
-import type { Answer, Result, Sources, Storage } from './app.contract.d.ts';
+import type { Answer, Database, Result, Sources, Storage } from './app.contract.d.ts';
 
-const FILE = 'app:/data/items.json';
-export const grants = [`fs.read ${FILE}`, `fs.write ${FILE}`].join('\n');
+const DB = 'app:/data/items.db';
+export const grants = `sqlite.open ${DB}`;
+let last: Promise<unknown> = Promise.resolve();
 
-type Item = Result<'loadItems'>[number];
-let items: Item[] | null = null; // memory; the file is what survives a launch
-let last: Promise<unknown> = Promise.resolve(); // the mutation before this one
-
-async function load(storage: Storage): Promise<Item[]> {
-  if (!items) items = await storage.fs.readFile(FILE).then(
-    (bytes) => JSON.parse(new TextDecoder().decode(bytes)) as Item[],
-    (e) => { if (e.code === 'ENOENT') return []; throw e; }); // no file yet; 'bake' (the build) passes through
-  return items;
-}
-async function save(storage: Storage, next: Item[]): Promise<Result<'addItem'>> {
-  await storage.fs.atomicWriteFile(FILE, new TextEncoder().encode(JSON.stringify(next)));
-  items = next; // only once stored: a failed write leaves memory as the file is
-  return { ok: true, error: '' };
-}
-// One mutation at a time, each reading what the one before it saved.
-function mutate<T>(work: () => Promise<T>): Promise<T> {
-  const run = last.then(work, work);
+// Close after each answer: on the web an open database holds its cross-tab lock.
+function use<T>(storage: Storage, work: (db: Database) => Promise<T>): Promise<T> {
+  const run = last.then(async () => {
+    const db = await storage.sqlite.open(DB);
+    try {
+      await db.execute('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, title_key TEXT NOT NULL UNIQUE, notes TEXT NOT NULL, locked INTEGER NOT NULL DEFAULT 0)');
+      return await work(db);
+    } finally { await db.close(); }
+  });
   last = run.catch(() => {});
   return run;
 }
-
+const saved = (): Result<'addItem'> => ({ ok: true, error: '' });
 const sources: Sources = {
-  loadItems: async (_args, _store, storage) => [...(await load(storage))].reverse(), // newest first
-  addItem: ([title, notes], _store, storage) => mutate(async () => {
-    const all = await load(storage);
-    const same = all.find((i) => i.title.toLowerCase() === title.toLowerCase());
-    if (same) return { ok: false, error: `There’s already an item called ${same.title}. Choose another title.` }; // a refusal is a reply too
-    const id = String(Math.max(0, ...all.map((i) => Number(i.id))) + 1);
-    return save(storage, [...all, { id, title, notes, locked: false }]);
+  loadItems: (_args, _store, storage) => use(storage, async db =>
+    (await db.query('SELECT id, title, notes, locked FROM items ORDER BY id DESC')).rows
+      .map(([id, title, notes, locked]) => ({ id: String(id), title: String(title), notes: String(notes), locked: Number(locked) !== 0 }))),
+  addItem: ([title, notes], _store, storage) => use(storage, async db => {
+    const key = title.toLowerCase(); // JavaScript's Unicode lowercasing, not SQLite's ASCII-only lower().
+    const result = await db.execute('INSERT INTO items (title, title_key, notes) VALUES (?, ?, ?) ON CONFLICT(title_key) DO NOTHING', [title, key, notes]);
+    if (result.changes) return saved();
+    const { rows } = await db.query('SELECT title FROM items WHERE title_key = ?', [key]);
+    return { ok: false, error: `There’s already an item called ${String(rows[0]?.[0] ?? title)}. Choose another title.` };
   }),
-  lockItem: ([id, locked], _store, storage) => mutate(async () => save(storage, (await load(storage)).map((i) => i.id === id ? { ...i, locked } : i))),
-  removeItem: ([id], _store, storage) => mutate(async () => save(storage, (await load(storage)).filter((i) => i.id !== id))),
+  lockItem: ([id, locked], _store, storage) => use(storage, async db => {
+    await db.execute('UPDATE items SET locked = ? WHERE id = ?', [Number(locked), id]);
+    return saved();
+  }),
+  removeItem: ([id], _store, storage) => use(storage, async db => {
+    await db.execute('DELETE FROM items WHERE id = ?', [id]);
+    return saved();
+  }),
 };
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);

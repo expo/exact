@@ -312,7 +312,7 @@ impl NodeArena {
 
     fn is_neutral_segmented(&self, slot: u32) -> bool {
         metrics::column() == Column::Neutral
-            && self.segmented_radios(slot).is_some()
+            && self.segmented_members(slot).is_some()
             && !self.grouped_row(slot)
     }
 

@@ -662,6 +662,7 @@ impl<D: DataSource> Bridge<D> {
             // Validate carried-state answers and layout, without endowing real
             // storage or releasing candidate effects. A refusal keeps the live
             // host. The accepted validation runner is disposable, too.
+            let carried = self.host.as_ref().map(Host::carry).unwrap_or_default();
             let length = self.prepare_plan_with_delivery(
                 plan_len,
                 validation,
@@ -673,13 +674,8 @@ impl<D: DataSource> Bridge<D> {
             if self.prepared.is_none() {
                 return length;
             }
-            let mut carried = self.prepared.as_ref().unwrap().host.carry();
-            // Only validated answers cross this boundary. Store effects belong
-            // to the committed session, never to the disposable validation pass.
-            if let Some(live) = &self.host {
-                carried.store = live.carry().store;
-            }
-            validated = Some(carried);
+            let answers = self.prepared.as_ref().unwrap().host.carry();
+            validated = Some(carried.with_validated_answers(answers));
             self.discard_plan();
         }
         // The real candidate remains deferred through all-session acceptance.
@@ -1464,6 +1460,10 @@ mod collection_tests;
 #[cfg(test)]
 #[path = "abi/canvas_scale_tests.rs"]
 mod canvas_scale_tests;
+
+#[cfg(test)]
+#[path = "abi/canvas_image_tests.rs"]
+mod canvas_image_tests;
 
 #[cfg(test)]
 #[path = "abi/launch_layout_tests.rs"]

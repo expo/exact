@@ -310,7 +310,11 @@ impl Emitter<'_> {
             )?
         );
         let _ = writeln!(o, "  actions := {},", self.actions_list(&root.actions, ct)?);
-        let _ = writeln!(o, "  tasks := {},", self.tasks_list(root)?);
+        let _ = writeln!(
+            o,
+            "  tasks := {},",
+            self.tasks_list(root, &expanded.task_owners, &expanded.task_args)?
+        );
         let _ = writeln!(o, "  view := {},", self.nodes(&root.view)?);
         let _ = writeln!(o, "  routes := {},", self.routes_list());
         let _ = writeln!(o, "  router := {},", self.router());
@@ -721,9 +725,14 @@ impl Emitter<'_> {
         Ok(format!("[{}]", out.join(",\n    ")))
     }
 
-    fn tasks_list(&self, root: &Component) -> Result<String, CompileError> {
+    fn tasks_list(
+        &self,
+        root: &Component,
+        owners: &[contract_syntax::Owner],
+        args: &[Vec<Expr>],
+    ) -> Result<String, CompileError> {
         let mut tasks = Vec::new();
-        for t in &root.tasks {
+        for (i, t) in root.tasks.iter().enumerate() {
             let kind = match t.kind {
                 TaskKind::Every => ".every",
                 TaskKind::After => ".after",
@@ -732,6 +741,18 @@ impl Emitter<'_> {
             };
             // A gated task's gate and key (LLP 1092 D12), as D9 lowers them.
             let mut gate = String::new();
+            if let Some(contract_syntax::Owner::Arm { tag, arm }) = owners.get(i) {
+                gate += &format!(", owner := .some ({tag}, {arm})");
+            }
+            if let Some(args) = args.get(i).filter(|a| !a.is_empty()) {
+                gate += &format!(
+                    ", args := [{}]",
+                    args.iter()
+                        .map(|a| self.expr(a))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .join(", ")
+                );
+            }
             if let Some(g) = &t.gate {
                 gate += &format!(", gate := .some ({})", self.expr(g)?);
             }
@@ -992,14 +1013,19 @@ impl Emitter<'_> {
             Stmt::Command { name, args, .. } => {
                 // The arguments in the order the runner receives them, `none`
                 // where a named one is left to its default.
-                let ordered = contract_lower::expr::command_args(name, args);
-                let parts = ordered
-                    .iter()
-                    .map(|a| match a {
-                        Some(e) => self.expr(e),
-                        None => Ok(".none".to_string()),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let parts = match contract_lower::expr::observe_args(name, args) {
+                    Some(flat) => flat
+                        .iter()
+                        .map(|e| self.expr(e))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    None => contract_lower::expr::command_args(name, args)
+                        .iter()
+                        .map(|a| match a {
+                            Some(e) => self.expr(e),
+                            None => Ok(".none".to_string()),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                };
                 format!("(.command {} [{}])", string(name), parts.join(", "))
             }
             Stmt::Send {

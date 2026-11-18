@@ -19,6 +19,7 @@ impl Painter {
             h,
             canvas,
             clip_depth,
+            opacity,
             ..
         } = p
         else {
@@ -69,7 +70,13 @@ impl Painter {
             if let Some((pixels, rect)) =
                 placement::warp_clipped(&source, h, clip_depth, self.scale, self.viewport)
             {
+                if opacity < 1. {
+                    self.backend.push_opacity(opacity);
+                }
                 self.backend.surface_image(Arc::new(pixels), rect);
+                if opacity < 1. {
+                    self.backend.pop_opacity();
+                }
             }
         }
         for mut b in child_walk.boxes {
@@ -134,6 +141,7 @@ mod tests {
             crate::placement::Placement::Visible {
                 h: [1., 0., 10., 0., 0.8, 20., 0., 0., 1.],
                 depth: 0.,
+                opacity: 1.,
                 clip_depth: [[0., 0., 1.]; 2],
                 canvas: id("canvas"),
             },

@@ -1,6 +1,7 @@
 // Verified https links (LLP 1038 D8): the declaration's refusals, the claims each host derives and the files each
 // origin serves.
-import { test } from 'bun:test';
+import { test, expect } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,78 @@ const CERT = Array(32).fill('AB').join(':');
 const notes = { name: 'Notes', app: { id: 'com.example.notes', name: 'Notes', origin: 'https://notes.example' }, start_url: '/notes/', scope: '/notes/',
   handle_links: 'preferred', scope_extensions: [{ type: 'origin', origin: 'https://share.example' }], host: { ios: { team: 'TEAM' }, android: { certificates: [CERT] } } };
 const appOf = (manifest) => ({ manifest, id: manifest.app.id, origin: manifest.app.origin ?? null });
+
+test('https auth callbacks publish credentials and verified returns without claiming navigation', () => {
+  const app = appOf({ ...notes, handle_links: 'auto', scope_extensions: [] });
+  const callbacks = ['https://notes.example/cb', 'https://auth.example/cb', 'app.test:/cb'];
+  const options = { callbacks };
+  assert.deepEqual(appleAssociation(app, options), { webcredentials: { apps: ['TEAM.com.example.notes'] } });
+  assert.equal(androidStatements(app, options)[0].relation[0], 'delegate_permission/common.handle_all_urls');
+  const elsewhere = elsewhereFiles(app, options);
+  assert.deepEqual(elsewhere.map((entry) => entry.origin), ['https://auth.example']);
+  assert.deepEqual(elsewhere[0].files['apple-app-site-association'], { webcredentials: { apps: ['TEAM.com.example.notes'] } });
+  assert.equal(elsewhere[0].files['assetlinks.json'][0].target.package_name, 'com.example.notes');
+  const merged = elsewhereFiles(appOf(notes), { callbacks: ['https://share.example/cb'] })[0].files;
+  assert.deepEqual(Object.keys(merged['apple-app-site-association']), ['applinks', 'webcredentials']);
+  assert.deepEqual(merged['apple-app-site-association'].webcredentials.apps, ['TEAM.com.example.notes']);
+  assert.equal(merged['assetlinks.json'].length, 1);
+  assert.deepEqual(appleAssociation({ ...app, origin: `${app.origin}/` }, options), appleAssociation(app, options));
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-auth-links-'));
+  try {
+    writeLinkFiles(root, app, options);
+    assert.deepEqual(JSON.parse(readFileSync(resolve(root, '.well-known/apple-app-site-association'))), appleAssociation(app, options));
+    assert.deepEqual(JSON.parse(readFileSync(resolve(root, '.well-known/assetlinks.json'))), androidStatements(app, options));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('escaped web popup callbacks derive no native domain association', () => {
+  const app = appOf({ ...notes, handle_links: 'auto', scope_extensions: [] });
+  for (const path of ['/.exact/auth/callback', '/%2Eexact/auth/callback', '/site/%2eexact/auth%2Fcallback']) {
+    const options = { callbacks: [`https://notes.example${path}`, `https://auth.example${path}`] };
+    assert.equal(appleAssociation(app, options), null, path);
+    assert.deepEqual(androidStatements(app, options), [], path);
+    assert.deepEqual(elsewhereFiles(app, options), [], path);
+  }
+});
+
+test('callback-only association files name missing signing identities', () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-auth-links-missing-'));
+  try {
+    for (const host of [{}, { ios: notes.host.ios }, { android: notes.host.android }]) {
+      const app = appOf({ ...notes, handle_links: 'auto', scope_extensions: [], host });
+      const lines = writeLinkFiles(root, app, { callbacks: ['https://notes.example/auth/return'] }).join('\n');
+      assert.match(lines, /notes.example/);
+      assert.equal(lines.includes('no host.ios.team'), !host.ios);
+      assert.equal(lines.includes('no host.android.certificates'), !host.android);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Android 11 verification notes count native callback hosts beside navigation hosts', () => {
+  const manifest = { ...notes, scope_extensions: [], host: { android: { minimumOS: '11' } } };
+  const filters = androidLinkFilters(manifest);
+  const callbacks = ['https://auth.example/return', 'https://auth.example/other', 'https://notes.example/cb'];
+  assert.deepEqual(androidLinkNotes(manifest, filters, { callbacks }), [
+    'App Links: below Android 12 one unverified host of notes.example, auth.example leaves all of them unverified']);
+  assert.deepEqual(androidLinkNotes(manifest, filters, { callbacks: [
+    'https://notes.example/cb', 'https://notes.example/other', 'https://popup.example/.exact/auth/callback',
+    'https://popup.example/%2eexact/auth/callback', 'notes:/cb', 'http://127.0.0.1/return',
+  ] }), []);
+  assert.deepEqual(androidLinkNotes({ ...manifest, host: { android: { minimumOS: '12' } } }, filters, { callbacks }), []);
+});
+
+test('an external origin gets one association file for callbacks, passkeys and navigation', () => {
+  const passkeys = ['share.example', 'passkeys.example', 'localhost', 'share.example'];
+  const files = elsewhereFiles(appOf(notes), { callbacks: ['https://share.example/return'], passkeys });
+  assert.deepEqual(files.map(entry => entry.origin), ['https://share.example', 'https://passkeys.example']);
+  const shared = files[0].files;
+  assert.deepEqual(Object.keys(shared['apple-app-site-association']), ['applinks', 'webcredentials']);
+  assert.deepEqual(shared['apple-app-site-association'].webcredentials.apps, ['TEAM.com.example.notes']);
+  assert.deepEqual(shared['assetlinks.json'].map(statement => statement.relation[0]), [
+    'delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds']);
+  assert.deepEqual(files[1].files['assetlinks.json'].map(statement => statement.relation[0]), ['delegate_permission/common.get_login_creds']);
+});
 
 test('the declaration is refused where it is wrong, every problem named, and the removed boolean by name', async () => {
   const { readManifest } = await import('./app.mjs');
@@ -96,11 +169,11 @@ test('the deployed origin\'s files are written merged and every other origin\'s 
     .map(({ origin, files }) => [origin, Object.keys(files)]), [['https://share.example', ['web-app-origin-association']], ['https://raw.example', ['apple-app-site-association']]]);
   const root = mkdtempSync(resolve(tmpdir(), 'exact-link-files-'));
   try {
-    const lines = writeLinkFiles(root, app, { webcredentials: true, passkeys: true });
+    const lines = writeLinkFiles(root, app, { passkeys: ['notes.example'] });
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(resolve(root, '.well-known/apple-app-site-association'), 'utf8'))), ['applinks', 'webcredentials']);
     assert.equal(JSON.parse(readFileSync(resolve(root, '.well-known/assetlinks.json'), 'utf8')).length, 2);
     assert.equal(lines[0], 'links: notes.example/notes/, share.example open the app');
-    assert.deepEqual(lines.slice(1).map((l) => l.split(' ').slice(0, 5).join(' ')), ['links: https://share.example must serve /.well-known/apple-app-site-association',
+    assert.deepEqual(lines.slice(2).map((l) => l.split(' ').slice(0, 5).join(' ')), ['links: https://share.example must serve /.well-known/apple-app-site-association',
       'links: https://share.example must serve /.well-known/assetlinks.json', 'links: https://share.example must serve /.well-known/web-app-origin-association']);
     // Without a team or certificates the build names what it could not write.
     rmSync(resolve(root, '.well-known'), { recursive: true });
@@ -217,3 +290,44 @@ test('native metadata and Apple plists bake the incoming web mount', async () =>
     assert.match(plist, /<key>base<\/key>\s*<string>\/app\/<\/string>/);
   }
 });
+
+test('JavaScript derives callback associations and preserves a bake\'s passkeys', () => {
+  const root = resolve(import.meta.dir, '..'), dir = mkdtempSync(resolve(root, 'target/web-js-associations-'));
+  const cert = Array(32).fill('AB').join(':');
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Associations', rust: false,
+      app: { id: 'test.associations', name: 'Associations', origin: 'https://app.example' },
+      host: { ios: { team: 'TEAM' }, android: { certificates: [cert] } } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  resource label = label() as shape string\n  view\n    text label\n');
+    writeFileSync(resolve(dir, 'app.ts'), "export const grants = 'auth.passkey app.example\\nauth.passkey auth.example\\nauth.session https://as.test\\nauth.callback https://app.example/auth/return\\nauth.callback https://auth.example/return';\nexport const answer = () => 'Sign in';\n");
+    const env = { ...process.env, EXACT_APP_DIR: dir, EXACT_WEB_DIST: resolve(dir, 'bake') };
+    const standalone = resolve(dir, 'standalone');
+    const unbaked = spawnSync(process.execPath, ['host/web-js/build.mjs', 'associations', '--out', standalone, '--render', 'none'], {
+      cwd: root, env, encoding: 'utf8',
+    });
+    expect(unbaked.status, unbaked.stdout + unbaked.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(resolve(standalone, '.well-known/apple-app-site-association'))).webcredentials.apps).toEqual(['TEAM.test.associations']);
+    expect(JSON.parse(readFileSync(resolve(standalone, '.well-known/assetlinks.json'))).map(s => s.relation[0])).toEqual([
+      'delegate_permission/common.handle_all_urls']);
+    expect(unbaked.stdout + unbaked.stderr).not.toContain('delegate_permission/common.get_login_creds');
+    const baked = spawnSync(process.execPath, ['host/web/build.mjs', 'associations', '--bake'], { cwd: root, env, encoding: 'utf8' });
+    expect(baked.status, baked.stdout + baked.stderr).toBe(0);
+    const output = baked.stdout + baked.stderr;
+    const external = output.split('\n').filter(line => line.startsWith('links: https://auth.example must serve /.well-known/assetlinks.json '));
+    expect(external).toHaveLength(1);
+    expect(JSON.parse(external[0].slice(external[0].indexOf(' [') + 1)).map(statement => statement.relation[0])).toEqual([
+      'delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds']);
+    expect(output.match(/\/\.well-known\/assetlinks\.json /g)).toHaveLength(1);
+    const bake = env.EXACT_WEB_DIST, out = resolve(dir, 'web');
+    const names = ['apple-app-site-association', 'assetlinks.json'];
+    const files = names.map(name => readFileSync(resolve(bake, '.well-known', name), 'utf8'));
+    expect(JSON.parse(files[0]).webcredentials.apps).toEqual(['TEAM.test.associations']);
+    expect(JSON.parse(files[1]).map(s => s.relation[0])).toEqual([
+      'delegate_permission/common.handle_all_urls', 'delegate_permission/common.get_login_creds']);
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'associations', '--production', '--plan', resolve(bake, 'app.plan'), '--out', out, '--render', 'none'], {
+      cwd: root, env, encoding: 'utf8',
+    });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    expect(names.map(name => readFileSync(resolve(out, '.well-known', name), 'utf8'))).toEqual(files);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 120000);

@@ -14,8 +14,9 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cargoEnvironment, lockedMetadata, pathFrom, patchLines, readManifest as readAppManifest } from './app.mjs';
 import { pathWithin } from './paths.mjs';
-import { nativePackages } from './package-libraries.mjs';
+import { directDependencies, nativePackages } from './package-libraries.mjs';
 import { MEMBER_OF, appCrates, authoredWorkspace, gpuShellsDir, notAMember, shellsDir } from './cargo-check.mjs';
+import { OFFLINE_MISSING } from './filesystem.mjs';
 import { APPLE_BUILD_SCRIPT, appleBuildScript } from './linked-plan.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -723,10 +724,256 @@ export function joinsGpu(dir, crate) {
 }
 
 /** `app` as its GPU crates build: in their own workspace when the app's is generated (LLP 1153.003 D5.1). */
-export const gpuView = app => {
-  const at = app.gpuWorkspace;
-  return at && at !== app.workspace ? Object.create(app, { workspace: { value: at } }) : app;
+export const gpuView = (app, module = null) => {
+  const at = module?.package ? ensurePackageGpu(app, module) : app.gpuWorkspace;
+  return at && (module?.package || at !== app.workspace) ? Object.create(app, { workspace: { value: at } }) : app;
 };
+
+/** Cargo's workspace inputs and the checkout's injected profiles are absent from rustc's dep-info. */
+export function gpuWorkspaceInputs(app) {
+  const result = lockedMetadata(app.workspace);
+  if (result.status !== 0) throw new Error(`GPU workspace ${app.workspace}: ${result.stderr || result.error?.message}`);
+  const metadata = JSON.parse(result.stdout);
+  return [resolve(ROOT, 'Cargo.toml'),
+    ...['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml'].map(file => resolve(app.workspace, file)).filter(existsSync),
+    ...metadata.packages.filter(p => p.source === null).map(p => p.manifest_path)];
+}
+
+const packageModules = Symbol('package GPU modules'), packageDeclarations = Symbol('package exact.json files');
+/** What package GPU declarations make every host's build read, whichever hosts they name: each direct dependency's main
+ * exact.json that `packageGpuManifest` read, which says whether and for which hosts it declares GPU surfaces, and each
+ * package GPU crate's lock. */
+export const packageGpuInputs = manifest => [...manifest[packageDeclarations] ?? [],
+  ...(manifest[packageModules] ?? []).map(m => resolve(m.root, m.crate, 'Cargo.lock'))];
+/** The hosts that draw GPU surfaces (LLP 1153.003 §3): what a package's `targets` may name, and its default. The
+ * watch draws none, so no GPU module is built for it. */
+export const GPU_PLATFORMS = ['web', 'macos', 'ios', 'tvos', 'android', 'linux', 'windows'];
+export function gpuModules(manifest, platform = null) {
+  if (platform && !GPU_PLATFORMS.includes(platform)) return [];
+  return [...Object.entries(manifest.gpu?.modules ?? {}).map(([name, surfaces]) => ({ name, surfaces })),
+    ...(manifest[packageModules] ?? [])].filter(m => !platform || !m.targets || m.targets.includes(platform));
+}
+/** The surfaces of package modules whose `targets` omit `platform`: no artifact draws them there (LLP 1153.003 D5.8). */
+export const unregisteredSurfaces = (manifest, platform) =>
+  (manifest[packageModules] ?? []).filter(m => m.targets && !m.targets.includes(platform)).flatMap(m => m.surfaces);
+/** `gpuModules` with package declarations read now, not when `app` was resolved: a long-lived process (a dev loop)
+ * otherwise acts on the declarations it started with. */
+export const currentGpuModules = (app, platform = null) => gpuModules(packageGpuManifest({ gpu: app.manifest.gpu }, app.dir), platform);
+/** Where `ensurePackageGpu` generates a package module's workspace. */
+export const packageGpuDir = (app, module) => resolve(app.dir, '.exact/package-gpu', module.name);
+
+/** As package_views.rs does, read only direct dependencies whose main export is an exact.json. */
+export function packageGpuManifest(manifest, dir) {
+  const modules = [], declarations = [], owners = new Map(), slugs = new Map();
+  for (const [name, surfaces] of Object.entries(manifest.gpu?.modules ?? {})) {
+    slugs.set(name, `gpu.modules.${name}`);
+    for (const surface of surfaces) owners.set(surface, `gpu.modules.${name}`);
+  }
+  for (const { name: pkg, root } of directDependencies(dir)) {
+    const exports = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).exports;
+    const main = typeof exports === 'string' ? exports : exports?.['.'];
+    const file = typeof main === 'string' ? main : main?.contract ?? main?.default;
+    if (typeof file !== 'string' || !file.endsWith('exact.json')) continue;
+    const declaration = resolve(root, file), gpu = JSON.parse(readFileSync(declaration, 'utf8')).gpu;
+    declarations.push(declaration);
+    if (gpu === undefined) continue;
+    const fail = why => { throw new Error(`${pkg}: exact.json gpu ${why}`); };
+    if (!gpu || typeof gpu !== 'object') fail('must be an object');
+    if (typeof gpu.crate !== 'string' || !gpu.crate.split(/[\\/]/).every(p => p && p !== '.' && p !== '..') || gpu.crate.startsWith('/')) fail('crate must be a directory inside the package');
+    if (typeof gpu.exactGpu !== 'string' || !gpu.exactGpu) fail('requires an exactGpu version requirement');
+    const name = pkg.replace(/^@/, '').replace(/[\/_.]/g, '-');
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) fail('package name must form a lowercase module slug');
+    if (slugs.has(name)) throw new Error(`GPU module ${name} is claimed by both ${slugs.get(name)} and ${pkg}`);
+    slugs.set(name, pkg);
+    if (!gpu.surfaces || Array.isArray(gpu.surfaces) || typeof gpu.surfaces !== 'object' || !Object.keys(gpu.surfaces).length) fail('surfaces must declare at least one surface');
+    for (const [surface, spec] of Object.entries(gpu.surfaces)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(surface)) fail('surface names must be identifiers');
+      if (!Number.isInteger(spec?.arity) || spec.arity < 0 || spec.arity > 0xffffffff) fail('each surface needs a nonnegative integer arity');
+      if (typeof spec.factory !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+$/.test(spec.factory)) fail('each surface needs a Rust factory path, crate::function');
+      if (owners.has(surface)) throw new Error(`GPU surface ${surface} is claimed by both ${owners.get(surface)} and ${pkg}`);
+      owners.set(surface, pkg);
+    }
+    if (gpu.targets !== undefined && (!Array.isArray(gpu.targets) || gpu.targets.some(t => !GPU_PLATFORMS.includes(t)))) fail(`targets may name only ${GPU_PLATFORMS.join(', ')}`);
+    modules.push({ name, surfaces: Object.keys(gpu.surfaces).sort(), package: pkg, root: realpathSync(root), declaration,
+      crate: gpu.crate, exactGpu: gpu.exactGpu, declarations: gpu.surfaces, targets: gpu.targets, limits: gpu.limits, features: gpu.features });
+  }
+  manifest[packageModules] = modules; manifest[packageDeclarations] = declarations;
+  return manifest;
+}
+
+// Cargo treats a bare version as a caret requirement; commas are conjunctions.
+// Build metadata (`0.38.0+1.3.281`) takes no part in either, as in SemVer 2.0.0 §10.
+export function gpuVersionMatches(version, requirement) {
+  if (requirement.includes('||')) return false;
+  const bare = v => v.replace(/\+[0-9A-Za-z.-]*$/, '');
+  const range = requirement.split(',').map(r => bare(r.trim())).map(r => /^\d+(?:\.\d+){0,2}$/.test(r) ? `^${r}` : r).join(' ');
+  try { return Bun.semver.satisfies(bare(version), range); } catch { return false; }
+}
+
+/** Whole-graph starting points (LLP 1153.003 D5.4). Merged prefers newer compatible shared blocks;
+ * package-first keeps every package block except exact-gpu and competing exact pins, adding only the checkout's
+ * exact-gpu and the pinned closure. SDK-first keeps the SDK's block for each name, series and source it holds. */
+export function packageGpuLock(sdk, own, attempt = 'merged', pins = {}) {
+  const graph = text => {
+    const blocks = lockBlocks(text), packages = Bun.TOML.parse(text).package ?? [];
+    const edge = dep => { const [name, version, ...source] = dep.split(' '); return packages.findIndex(p => p.name === name && (!version || p.version === version) && (!source.length || p.source === source.join(' ').slice(1, -1))); };
+    const reached = (roots, skipGpu = false) => {
+      const seen = new Set(), pending = [...roots];
+      while (pending.length) {
+        const i = pending.pop();
+        if (i < 0 || seen.has(i) || skipGpu && packages[i].name === 'exact-gpu') continue;
+        seen.add(i);
+        pending.push(...(packages[i].dependencies ?? []).map(edge));
+      }
+      return seen;
+    };
+    return { blocks, packages, reached };
+  };
+  const s = graph(sdk), o = graph(own);
+  const gpu = o.reached(o.packages.flatMap((p, i) => p.name === 'exact-gpu' ? [i] : []));
+  const shared = o.reached(o.packages.flatMap((_, i) => !gpu.has(i) ? [i] : []), true);
+  const keep = o.blocks.filter((_, i) => attempt === 'package-first' ? o.packages[i].name !== 'exact-gpu' : !gpu.has(i) || shared.has(i))
+    .map(b => b.replace(/^ "exact-gpu[^"\n]*",\n/gm, ''));
+  const sdkGpu = s.reached(s.packages.flatMap((p, i) => ['exact-gpu', 'wasm-bindgen', 'wasm-bindgen-futures', 'web-sys'].includes(p.name) ? [i] : []));
+  const lock = blocks => `version = 4\n\n${blocks.join('\n\n')}\n`;
+  const pinned = s.packages.flatMap((p, i) => pins[p.name]?.some(req => gpuVersionMatches(p.version, req)) ? [i] : []);
+  if (attempt === 'package-first') {
+    const needed = s.reached(pinned);
+    const added = s.blocks.filter((_, i) => s.packages[i].name === 'exact-gpu' || needed.has(i));
+    const pinnedSeries = new Set(pinned.map(i => lockSeriesSource(s.blocks[i])));
+    const ownBlocks = keep.filter(b => !pinnedSeries.has(lockSeriesSource(b)));
+    // Keep the package's dependency blocks, including multiple versions in one series.
+    const identities = new Set(ownBlocks.map(lockBlockId));
+    return lock([...ownBlocks, ...added.filter(b => !identities.has(lockBlockId(b)))]);
+  }
+  return lockSeed(lock(s.blocks.filter((_, i) => sdkGpu.has(i) || pinned.includes(i))), lock(keep),
+    attempt === 'merged' ? new Set(pinned.map(i => lockSeriesSource(s.blocks[i]))) : null);
+}
+
+/** Resolve a generated package GPU workspace against the two shipped locks. */
+export function settlePackageGpuLock(dir, sdk, own, label) {
+  const options = { cwd: dir, env: cargoEnvironment(), encoding: 'utf8', maxBuffer: 1 << 26 };
+  const failures = [];
+  const allowed = `${sdk}\n${lockBlocks(own).join('\n\n')}`;
+  // The generated manifest carries the dependencies copied from game/Cargo.toml, including CLI pins.
+  const manifest = Bun.TOML.parse(readFileSync(resolve(dir, 'Cargo.toml'), 'utf8'));
+  const tables = [manifest.dependencies, manifest['build-dependencies'],
+    ...Object.values(manifest.target ?? {}).flatMap(t => [t.dependencies, t['build-dependencies']])];
+  const pins = {};
+  for (const table of tables.filter(Boolean)) for (const [alias, spec] of Object.entries(table)) {
+    const requirement = typeof spec === 'string' ? spec : spec.version;
+    if (requirement?.split(',').some(r => r.trim().startsWith('='))) (pins[spec.package ?? alias] ??= []).push(requirement);
+  }
+  for (const attempt of ['merged', 'package-first', 'sdk-first']) {
+    writeChanged(resolve(dir, 'Cargo.lock'), packageGpuLock(sdk, own, attempt, pins));
+    let resolved = spawnSync('cargo', ['metadata', '--offline', '--format-version', '1'], options);
+    if (resolved.status !== 0 && OFFLINE_MISSING.test(resolved.stderr ?? '')) {
+      // Fetch may resolve missing sources; validation below binds that resolution to the input locks.
+      const fetched = spawnSync('cargo', ['fetch'], options);
+      resolved = fetched.status === 0 ? spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], options) : fetched;
+    }
+    const outside = resolved.status === 0 ? repairOutside(dir, options, allowed) : [];
+    if (resolved.status === 0 && !outside.length) return;
+    const reason = outside.length ? `requires versions or checksums neither lock holds: ${outside.join(', ')}`
+      : resolved.stderr || resolved.error?.message;
+    failures.push(`${attempt}: ${reason}`);
+  }
+  throw new Error(`${label}: its locked dependencies have no accepted resolution:\n${failures.join('\n')}`);
+}
+
+/** A crate neither lock holds is one Cargo picked from its cache for an edge no lock entry fixed. Each is replaced
+ * by the newest block of its name, series and source that a lock holds and that Cargo then accepts as resolved
+ * (a lock edit rather than `cargo update --precise`, which a directory source ignores); what remains is returned. */
+function repairOutside(dir, options, allowed) {
+  const lockPath = resolve(dir, 'Cargo.lock'), held = lockBlocks(allowed), tried = new Set();
+  const field = (block, key) => new RegExp(`^${key} = "([^"]*)"`, 'm').exec(block)?.[1] ?? '';
+  for (;;) {
+    const outside = outsideExact2(readFileSync(lockPath, 'utf8'), allowed);
+    const id = outside.find(o => !tried.has(o));
+    if (!id) return outside;
+    tried.add(id);
+    const [name, version, source = ''] = id.split(' ');
+    const before = readFileSync(lockPath, 'utf8');
+    const current = lockBlocks(before).find(b => field(b, 'name') === name && field(b, 'version') === version);
+    const candidates = held.filter(b => field(b, 'name') === name && field(b, 'source') === source && series(field(b, 'version')) === series(version))
+      .sort((a, b) => Bun.semver.order(field(b, 'version'), field(a, 'version')));
+    for (const block of candidates) {
+      const precise = field(block, 'version');
+      writeFileSync(lockPath, before.replace(current, block).replaceAll(`"${name} ${version}`, `"${name} ${precise}`));
+      let moved = spawnSync('cargo', ['metadata', '--offline', '--format-version', '1'], options);
+      // An allowed version absent from the local cache is fetched, as the attempt's own resolution is.
+      if (moved.status !== 0 && OFFLINE_MISSING.test(moved.stderr ?? '')
+        && spawnSync('cargo', ['fetch'], options).status === 0) {
+        moved = spawnSync('cargo', ['metadata', '--offline', '--format-version', '1'], options);
+      }
+      const after = readFileSync(lockPath, 'utf8');
+      // Cargo rewrites the block's dependency list; its identity and checksum are what must hold.
+      const kept = lockBlocks(after).some(b => field(b, 'name') === name && field(b, 'version') === precise
+        && field(b, 'checksum') === field(block, 'checksum'));
+      if (moved.status === 0 && kept && !outsideExact2(after, allowed).includes(id)) break;
+      writeFileSync(lockPath, before);
+    }
+  }
+}
+
+function gpuRequirementsSource(modules) {
+  const pairs = values => Object.entries(values ?? {}).map(([name, value]) => `(${JSON.stringify(name)}, ${value})`).join(', ');
+  const strings = values => (values ?? []).map(value => JSON.stringify(value)).join(', ');
+  return '&[' + modules.map(m => {
+    const targets = m.targets?.map(t => t === 'web' ? 'target_arch = "wasm32"' : `target_os = "${t}"`);
+    return `${targets ? `#[cfg(any(${targets.join(', ')}))] ` : ''}exact_gpu::grants::Requirements {
+    package: ${JSON.stringify(m.package)}, surfaces: &[${strings(m.surfaces)}],
+    required_limits: &[${pairs(m.limits?.required)}], optional_limits: &[${pairs(m.limits?.optional)}],
+    required_features: &[${strings(m.features?.required)}], optional_features: &[${strings(m.features?.optional)}],
+}`;
+  }).join(', ') + ']';
+}
+
+/** One generated cdylib per package, resolved without any host or other package's graph (LLP 1153.003 D5). */
+export function ensurePackageGpu(app, module) {
+  const dir = packageGpuDir(app, module), source = resolve(module.root, module.crate);
+  const lockPath = resolve(source, 'Cargo.lock'), manifestPath = resolve(source, 'Cargo.toml');
+  if (!existsSync(lockPath)) throw new Error(`${module.package}: its GPU crate must ship Cargo.lock (${lockPath})`);
+  const manifest = Bun.TOML.parse(readFileSync(manifestPath, 'utf8'));
+  const version = Bun.TOML.parse(readFileSync(resolve(ROOT, 'gpu/Cargo.toml'), 'utf8')).package.version;
+  if (!gpuVersionMatches(version, module.exactGpu)) throw new Error(`${module.package} requires exact-gpu ${module.exactGpu}, but this checkout provides ${version}`);
+  const tables = [manifest.dependencies, manifest['build-dependencies'], ...Object.values(manifest.target ?? {}).flatMap(t => [t.dependencies, t['build-dependencies']])].filter(Boolean);
+  let usesGpu = false;
+  for (const table of tables) for (const [key, spec] of Object.entries(table)) {
+    const dep = spec.package ?? key;
+    if (dep === 'exact-gpu') {
+      const req = typeof spec === 'string' ? spec : spec.version;
+      if (!req || spec.path || spec.git || spec.workspace || !gpuVersionMatches(version, req)) throw new Error(`${module.package}: exact-gpu must require the checkout's ${version} from crates.io, without a path, git or workspace dependency`);
+      usesGpu = true;
+    } else if (dep.startsWith('exact-') || dep === 'contract' || dep.startsWith('contract-') || SDK_CRATES.has(dep)) throw new Error(`${module.package}: a GPU package may depend on exact-gpu, not ${dep}`);
+  }
+  if (!usesGpu) throw new Error(`${module.package}: its GPU crate must depend on exact-gpu`);
+  if (manifest.package?.workspace || Object.keys(manifest.workspace ?? {}).length) throw new Error(`${module.package}: its GPU crate must have a standalone Cargo.toml`);
+  const crateName = manifest.package?.name;
+  if (!crateName) throw new Error(`${manifestPath}: missing package.name`);
+  const alias = crateName.replaceAll('-', '_');
+  for (const spec of Object.values(module.declarations)) if (!spec.factory.startsWith(`${alias}::`)) throw new Error(`${module.package}: factory ${spec.factory} must start with ${alias}::`);
+  mkdirSync(resolve(dir, 'src'), { recursive: true });
+  const pins = Bun.TOML.parse(readFileSync(resolve(ROOT, 'game/Cargo.toml'), 'utf8')).workspace.dependencies;
+  const toml = v => typeof v === 'string' ? JSON.stringify(v) : `{ ${Object.entries(v).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(', ')} }`;
+  writeChanged(resolve(dir, 'Cargo.toml'), `[workspace]\nresolver = "2"\n\n[package]\nname = "${app.crate(`gpu-${module.name}`)}"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[lib]\ncrate-type = ["cdylib"]\n\n[dependencies]\nexact-gpu = { path = ${JSON.stringify(resolve(ROOT, 'gpu'))} }\n${alias} = { package = ${JSON.stringify(crateName)}, path = ${JSON.stringify(source)} }\n\n[target.'cfg(target_arch = "wasm32")'.dependencies]\n${['wasm-bindgen', 'wasm-bindgen-futures', 'web-sys'].map(d => `${d} = ${toml(pins[d])}`).join('\n')}\n\n[patch.crates-io]\nexact-gpu = { path = ${JSON.stringify(resolve(ROOT, 'gpu'))} }\n${patchLines(dir, pathWithin).join('\n')}\n`);
+  writeChanged(resolve(dir, 'src/lib.rs'), `use exact_gpu::Registry;\npub static REGISTRY: Registry = Registry {\n    surfaces: &[${module.surfaces.map(s => `(${JSON.stringify(s)}, ${module.declarations[s].arity}, ${module.declarations[s].factory})`).join(', ')}],\n    shaders: &[],\n};\nexact_gpu::module!(REGISTRY, ${gpuRequirementsSource([module])});\n`);
+  for (const file of ['rust-toolchain.toml', '.cargo/config.toml']) writeChanged(resolve(dir, file), readFileSync(resolve(ROOT, file), 'utf8'));
+  const sdk = readFileSync(resolve(ROOT, 'Cargo.lock'), 'utf8'), own = readFileSync(lockPath, 'utf8');
+  const fingerprint = createHash('sha256').update(sdk).update(own).update(readFileSync(manifestPath))
+    .update(readFileSync(resolve(dir, 'Cargo.toml'))).update(readFileSync(fileURLToPath(import.meta.url))).digest('hex');
+  const stamp = resolve(dir, '.lock-inputs');
+  let metadata = existsSync(stamp) && readFileSync(stamp, 'utf8') === fingerprint ? lockedMetadata(dir) : null;
+  if (metadata?.status !== 0) {
+    settlePackageGpuLock(dir, sdk, own, `${module.package} with exact-gpu ${version}`);
+    metadata = lockedMetadata(dir);
+  }
+  if (metadata.status !== 0) throw new Error(`${module.package}: ${metadata.stderr || metadata.error?.message}`);
+  const packages = JSON.parse(metadata.stdout).packages, gpu = packages.filter(p => p.name === 'exact-gpu');
+  if (gpu.length !== 1 || gpu[0].source !== null || realpathSync(gpu[0].manifest_path) !== resolve(ROOT, 'gpu/Cargo.toml')) throw new Error(`${module.package}: exact-gpu must resolve only from this checkout, never from a registry or another source`);
+  writeChanged(stamp, fingerprint);
+  return dir;
+}
 /** Two workspaces' metadata as one graph: the host's, and its GPU crates' resolved apart from it. A package both
  * hold is one node, with the dependencies either resolved for it. */
 export function joinMetadata(host, gpu) {
@@ -812,7 +1059,7 @@ export async function bringPlatform(dir, platform, { report = null, os = process
     if (platform === 'macos' && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
     if (platform === 'windows' && os !== 'win32') return { refused: `${verb}: a Windows build needs Windows with the MSVC Rust target; nothing was written` };
     if (report?.error) return { refused: `${verb}: the setup report could not be read, so nothing was written: ${report.error}` };
-    const missing = (report ?? []).filter(row => !row.ok);
+    const missing = (report ?? []).filter(row => row.required && !row.ok);
     if (missing.length) return { refused: `${verb}: this machine lacks what a ${platform} build needs; nothing was written:\n${missing.map(row => `  ${row.name}: ${row.have} (SDK ${row.want})\n    ${row.fix}`).join('\n')}` };
     if (!manifest) {
       // An app without app.json had the defaults scripts/app.mjs `readManifest` supplies; naming a platform writes them.
@@ -830,11 +1077,26 @@ export async function bringPlatform(dir, platform, { report = null, os = process
   return { lines };
 }
 
-// By name and semver series (Cargo's compatibility: 1.x, 0.37.x, 0.0.3): one
-// graph holds at most one version of a package per series.
+// Cargo's compatible semver series: 1.x, 0.37.x, 0.0.3.
 export const series = version => { const [major, minor, patch] = String(version).split('.'); return major !== '0' ? major : minor !== '0' ? `0.${minor}` : `0.0.${patch}`; };
 export const seriesId = block => `${/^name = "([^"]+)"/m.exec(block)?.[1]} ${series(/^version = "([^"]+)"/m.exec(block)?.[1])}`;
 export const lockBlocks = text => text.split(/\n(?=\[\[package\]\]\n)/).slice(1).map(block => block.trimEnd());
+
+// Git revisions belong to one source, as Cargo's update of a locked git dependency does.
+const lockSeriesSource = block => `${seriesId(block)} ${/^source = "([^"#]*)/m.exec(block)?.[1] ?? ''}`;
+const lockBlockId = block => `${/^name = "([^"]+)"/m.exec(block)[1]} ${/^version = "([^"]+)"/m.exec(block)[1]} ${/^source = "([^"]*)"/m.exec(block)?.[1] ?? ''}`;
+
+/** Merge by compatible series and source, preserving exact pins; null keeps every SDK choice. */
+function lockSeed(sdk, own, pinned) {
+  const held = new Map(lockBlocks(sdk).map(block => [lockSeriesSource(block), block]));
+  const version = block => /^version = "([^"]+)"/m.exec(block)[1];
+  for (const block of lockBlocks(own)) {
+    const id = lockSeriesSource(block), previous = held.get(id);
+    if (!previous || pinned && !pinned.has(id) && Bun.semver.order(version(block), version(previous)) > 0
+      && gpuVersionMatches(version(block), version(previous))) held.set(id, block);
+  }
+  return `version = 4\n\n${[...held.values()].join('\n\n')}\n`;
+}
 
 // A lock's packages by identity. Dependency edges follow from the versions
 // and the activated features, so a workspace's subset keeps every version but may
@@ -873,3 +1135,11 @@ export const CRATES_IO = 'registry+https://github.com/rust-lang/crates.io-index'
 /** Whether Cargo refused a locked graph because the lock no longer matches the
  * manifests, a lock to refresh, rather than for a crate missing from its cache. */
 export const staleLock = stderr => /cannot update the lock file|lock file \S+ needs to be updated/.test(stderr ?? '');
+
+// Only explicitly developmental gpu-dev hosts may be reused across GPU edits.
+export const bindGpuProduct = (profile, trust) => profile !== 'gpu-dev' || trust !== 'development';
+export function bakeSelection(graph, part) {
+  if (part && !['gpu','host'].includes(part)) throw new Error(`unknown bake part: ${part}`);
+  const gpu = [graph.surface, ...(graph.modules ?? [])];
+  return (part === 'gpu' ? gpu : part === 'host' ? [graph.root] : [...gpu,graph.root]).filter(Boolean);
+}

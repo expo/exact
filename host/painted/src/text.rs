@@ -798,7 +798,13 @@ impl TextEngine {
     pub(crate) fn finish_text_frame(&mut self) {
         self.release_held();
         self.paragraphs.finish_handoff();
+        self.maintain();
+    }
+
+    pub(crate) fn maintain(&mut self) {
         self.paragraphs.maintain();
+        self.held
+            .retain(|_, paragraph| paragraph.strong_count() != 0);
     }
 
     pub(crate) fn retiring_accepted<'a>(

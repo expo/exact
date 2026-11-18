@@ -16,7 +16,7 @@ use exact_plan::{BindingKind, Plan, RegionKind, RegionsId};
 /// Rows mounted out of their port and rows that showed, for the commit that
 /// carries the batch ([`exact_kernel::Kernel::await_view`],
 /// [`exact_kernel::CommitReceipt::revealed`]).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RowsShown {
     /// Wrappers of rows mounted (or bound again) out of the port.
     pub awaiting: Vec<exact_kernel::ViewId>,

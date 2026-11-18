@@ -89,6 +89,20 @@ pub(crate) fn tree_handle(tree: Comparison, floor: bool, added: f32) -> *const (
     )
 }
 
+/// `handle`'s calculation with `points` more after its floor: a padding
+/// that a reservation adds to (LLP 1123 D11). An unknown handle stays.
+pub(crate) fn plus(handle: *const (), points: f32) -> *const () {
+    let found = (HANDLES.lock().unwrap_or_else(|e| e.into_inner()))
+        .get(handle as usize >> 3)
+        .map(|calc| (calc.key, calc.value.clone()));
+    let Some((mut key, tree)) = found else {
+        return handle;
+    };
+    let (Key::Pair { added, .. } | Key::Tree { added, .. }) = &mut key;
+    *added = (f32::from_bits(*added) + points).to_bits();
+    intern(key, tree)
+}
+
 std::thread_local! {
     /// The environment of the layout running on this thread.
     static LAYOUT_ENV: std::cell::RefCell<Env> = std::cell::RefCell::new(Env::default());

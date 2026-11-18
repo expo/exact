@@ -357,6 +357,9 @@ impl<D: DataSource> Host<D> {
         }
         host.relayer(&order, &mut batch);
         let handlers = host.runner.handlers();
+        for (id, kinds) in &handlers {
+            host.mirror.entry(*id).or_default().handled = !kinds.is_empty();
+        }
         for id in &order {
             host.create(*id, &mut batch, handlers.get(id).map_or(&[], Vec::as_slice));
         }
@@ -833,6 +836,15 @@ impl<D: DataSource> Host<D> {
             .filter_map(|key| self.runner.kernel().node_by_key(*key).map(|n| n.id))
             .collect();
         self.relayer(&changed, batch);
+        let handlers = if receipts.iter().any(|t| !t.receipt.created.is_empty()) {
+            self.runner.handlers()
+        } else {
+            SortedMap::new()
+        };
+        // A parent's text fold needs its children's handlers before their creates.
+        for (id, kinds) in &handlers {
+            self.mirror.entry(*id).or_default().handled = !kinds.is_empty();
+        }
         for t in receipts {
             let r = &t.receipt;
             batch.at(t.at_ms);
@@ -864,11 +876,6 @@ impl<D: DataSource> Host<D> {
                     batch.destroy(id);
                 }
             }
-            let handlers = if r.created.is_empty() {
-                SortedMap::new()
-            } else {
-                self.runner.handlers()
-            };
             for key in &r.created {
                 if let Some(node) = self.runner.kernel().node_by_key(*key) {
                     let id = node.id;
@@ -902,6 +909,8 @@ impl<D: DataSource> Host<D> {
         }
         // Earlier receipts also read the final tree, whose children can be
         // created by a later receipt in this seek. Attach only after all creates.
+        // Creates and updates already projected the final tree with final handler metadata.
+        let mut visited = changed.iter().copied().collect();
         let mut refold = std::collections::BTreeSet::new();
         for id in changed {
             let parent = self.runner.kernel().node(id).and_then(|n| n.parent);
@@ -911,7 +920,7 @@ impl<D: DataSource> Host<D> {
         // One parent visit per batch: a theme flip touches every text row,
         // but their shared parent's fold needs to be decided only once.
         for id in refold {
-            self.refold(id, batch);
+            self.refold(id, batch, &mut visited);
         }
         let roots = self.page_roots();
         if roots != self.roots {

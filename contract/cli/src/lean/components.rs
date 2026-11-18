@@ -138,11 +138,7 @@ impl Emitter<'_> {
         let view = self.cnodes(&c.view, &mut ids)?;
         let resources = self.resources_list(c, ct, &[])?;
         let mutations = self.mutations_list(c, ct, &[], &[])?;
-        let tasks = if k == 0 {
-            self.tasks_list(c)?
-        } else {
-            "[]".into()
-        };
+        let tasks = self.tasks_list(c, &[], &[])?;
         Ok(format!(
             "{{\n      name := {}, props := [{}], injects := [{}], provides := [{}], slot := {},\n      \
              states := [{}],\n      derives := {},\n      resources := {},\n      mutations := {},\n      \

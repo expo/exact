@@ -2,12 +2,12 @@
 
 ## Serving
 
-`bun exact.mjs web-build --out dist` writes the site to `dist/`, and `bun exact.mjs serve
-dist` serves it on 127.0.0.1:8765 (`--port`, else `PORT`), rebuilding it when you edit.
-For API pages, start the stand-in (`bun server.ts`) first, or set
-`API_BASE_URL` to one that answers.
-`npm run build` and `npm start` do the same, as hosts run them. A static host serves
-`dist/` by the rule `serve --help` states.
+`bun exact.mjs web-build --out dist` builds `dist/`; `bun exact.mjs serve dist`
+serves on 127.0.0.1:8765 (`--port`, else `PORT`) and rebuilds edits.
+`npm run build` and `npm start` are aliases.
+For API pages, start `bun server.ts` or set `API_BASE_URL`. Static hosts follow
+`serve --help`. Upload hidden `.exact/` assets too (Wrangler included); see
+[web sign-in callbacks](../contract-for-agents.md#web-sign-in-callback).
 
 ## Hosting below a path
 

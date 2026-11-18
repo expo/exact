@@ -62,7 +62,7 @@
 //   mouse to deliver a wheel, so these compare hover followed by wheel at the
 //   same viewport point, even if hovering changes the target's box.
 //   --linux adds a second reference beside the wasm page: the Rust runner
-//   headless on the Linux host (`agent.mjs linux`, the data app's release
+//   headless on the Linux host (`agent.mjs linux`, the data app's development
 //   binary, built by --build), driven by the same steps on the same plan,
 //   its state and tree compared with the wasm page's (`linux` failures).
 //   A plan marked `// linux: layout` also compares its testId boxes with the
@@ -105,12 +105,12 @@ import { conformArgs } from './conform-args.mjs';
 import { withoutSlots } from './conform-linux.mjs';
 import { WASM_UNBOUND, markUnbound, referenceTapRefused } from './conform-marked.mjs';
 import { clockOnAll, failedTests, parseStep } from './conform-steps.mjs';
-import { tokens as pageTokens } from './page-style.mjs';
+import { pageCut, uncut } from './conform-cut.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { reloadWeb } from '../../scripts/agent-test.mjs';
 import { refuseStale, webChanges } from '../../scripts/agent-launch.mjs';
 import { poolBrowsers, probePlaywrightBrowser } from '../../scripts/agent-playwright.mjs';
-import { HOST_DEV, injectedProfiles, resolveApp } from '../../scripts/app.mjs';
+import { HOST_DEV, linuxBinary, resolveApp } from '../../scripts/app.mjs';
 import { closeFilesystemReader } from '../../scripts/filesystem.mjs';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
 import { startNet } from './conformance/net.mjs';
@@ -433,7 +433,7 @@ async function target(t, report) {
 
 async function drive(t, report, targetFail, dir, ws, js) {
   let W, J, L, current;
-  const cut = sheetCut(t.dist);
+  const cut = pageCut(t.dist);
   let peers = [], diverged = false;
   const live = () => peers.filter(p => p.active);
   const fail = (step, what, field = null, difference = false) => {
@@ -614,7 +614,7 @@ async function drive(t, report, targetFail, dir, ws, js) {
         const [fw, fj] = await pair(() => W.carrier.evaluate(paint), () => J.carrier.evaluate(paint));
         const op = []; diffJSON(fw, fj, 'paint', op); op.forEach(x => differ(step, x)); st += op.length;
       }
-      for (const token of await uncut(J.carrier.evaluate, cut)) { fail(step, `sheet: ${other} has ${token}, which its sheet was cut for`); st++; }
+      for (const what of await uncut(J.carrier.evaluate, cut)) { fail(step, `cut: ${other} has ${what}`); st++; }
       // Cross-browser pictures are never compared (each engine rasterizes text its own way): both are kept only as
       // evidence for a checkpoint that differed
       if (crossBrowser && st === 0) {
@@ -923,15 +923,9 @@ async function activation(t, report, fail, url, browser) {
 // document for HOLD ms); once the runtime has adopted the settled page,
 // state holds both, the field its text, and the page one root.
 const HOLD = 1500;
-// `sheetCut`: the tokens a JS page's sheet was cut for (LLP 1047.003 D1: the tags and attributes nothing inside the
-// root writes, whose rules left the sheet), from its build's .gen/sheet-cut.json; none for a page served from a URL.
-// `uncut`: those of them an element inside a root has, boot or settled, which that element would show unstyled.
-const sheetCut = dist => new Set(dist && existsSync(resolve(dist, '.gen/sheet-cut.json')) ? JSON.parse(readFileSync(resolve(dist, '.gen/sheet-cut.json'), 'utf8')) : []);
-const uncut = async (evaluate, cut) => !cut.size ? []
-  : [...pageTokens(await evaluate(`[...document.querySelectorAll('#exact-root')].map(root => root.innerHTML).join('')`))].filter(t => cut.has(t));
 
 async function bootPress(t, report, fail, dist, browser) {
-  const cut = sheetCut(dist);
+  const cut = pageCut(dist);
   const step = `${crossBrowser ? `${browser} ` : ''}boot press`;
   const bin = `${t.app}-render`;
   const at = [['linux', `${t.app}-linux`], ['web', `${t.app}-web`]].find(([dir]) => existsSync(resolve(root, 'apps', t.app, dir, 'src/bin', `${bin}.rs`)));
@@ -986,7 +980,7 @@ async function bootPress(t, report, fail, dist, browser) {
           return 'pressed'; })()`).catch(() => null);
       }
       if (pressed !== 'pressed') { fail(pass, pressed === 'late' ? 'the settled page arrived before the boot document could be pressed' : 'no boot document with boot-bump and boot-words'); continue; }
-      for (const token of await uncut(ev, cut)) fail(pass, `sheet: the boot document has ${token}, which its sheet was cut for`);
+      for (const what of await uncut(ev, cut)) fail(pass, `cut: the boot document has ${what}`);
       let got = null;
       const want = `1 early|early|${focus ? 'boot-words' : ''}|1|`;
       for (const end = Date.now() + 15000; Date.now() < end; await new Promise(z => setTimeout(z, 50))) {
@@ -995,7 +989,7 @@ async function bootPress(t, report, fail, dist, browser) {
         if (got?.startsWith(want)) break;
       }
       if (!got?.startsWith(want)) fail(pass, `after adoption: ${got}, not ${want}… (state|field|focus|roots|title)`);
-      for (const token of await uncut(ev, cut)) fail(pass, `sheet: the settled page has ${token}, which its sheet was cut for`);
+      for (const what of await uncut(ev, cut)) fail(pass, `cut: the settled page has ${what}`);
       report.steps.push({ target: t.name, step: pass, ...(crossBrowser ? { browser } : {}), differences: got?.startsWith(want) ? 0 : 1 });
     }
   } catch (e) {
@@ -1038,7 +1032,7 @@ function linuxFor(t) {
   if (!crate) return { why: `not compared on Linux: ${t.app} has no Linux host` };
   if (LINUX_APART[t.name]?.[0] === null) return { why: `not compared on Linux: ${LINUX_APART[t.name][1]}` };
   // agent.mjs runs the crate's own binary; a crate that builds only other bins (a render server) has none.
-  if (!existsSync(resolve(resolveApp(t.app).target, HOST_DEV, crate))) return { why: `not compared on Linux: ${t.app}'s Linux crate has no ${crate} binary built` };
+  if (!existsSync(linuxBinary(resolveApp(t.app)))) return { why: `not compared on Linux: ${t.app}'s Linux crate has no ${crate} binary built` };
   return {};
 }
 
@@ -1133,22 +1127,10 @@ if (argv.includes('--build') && engineReady) for (const a of new Set([...apps, .
   if (b.status !== 0) report.failures.push({ target: a, step: direct ? 'plan-build' : 'wasm-build', what: b.stderr.trim().split('\n').slice(-3).join(' ').slice(0, 300) });
 }
 if (linuxRef && argv.includes('--build') && engineReady) {
-  // Each data app's binary where agent.mjs runs it (`resolveApp(app).target`):
-  // the root workspace's crates in one build; an app in a workspace of its own
-  // (Messages, snapback4's) from its manifest into that workspace's target.
-  const own = [], rooted = [];
   for (const a of new Set([...apps, ...planFixtures.map(s => s.data)])) {
-    const crate = linuxCrate(a); if (!crate) continue;
-    const target = resolveApp(a).target;
-    if (target === resolveApp('caltrain').target) rooted.push(crate); else own.push({ a, crate, target });
-  }
-  // The development profile (Cargo.toml's `host-dev`), which a workspace of
-  // its own is given on the command line.
-  const builds = [...(rooted.length ? [{ what: rooted.join(' '), args: rooted.flatMap(c => ['-p', c]), env: {} }] : []),
-    ...own.map(o => ({ what: o.crate, args: [...injectedProfiles(resolveApp(o.a)), '--manifest-path', resolve(root, 'apps', o.a, 'linux', 'Cargo.toml')], env: { CARGO_TARGET_DIR: o.target } }))];
-  for (const { what, args, env } of builds) {
-    const b = await spawned('cargo', ['build', '-q', '--profile', HOST_DEV, ...args], { cwd: root, encoding: 'utf8', maxBuffer: 64 << 20, env: { ...process.env, ...env } });
-    if (b.status !== 0) report.failures.push({ target: 'linux', step: `linux-build ${what}`, what: b.stderr.trim().split('\n').slice(-3).join(' ').slice(0, 300) });
+    if (!linuxCrate(a)) continue;
+    const b = await spawned(process.execPath, [resolve(root, 'scripts/build-linux.mjs'), a], { cwd: root, encoding: 'utf8', maxBuffer: 64 << 20, env: process.env });
+    if (b.status !== 0) report.failures.push({ target: 'linux', step: `linux-build ${a}`, what: b.stderr.trim().split('\n').slice(-3).join(' ').slice(0, 300) });
   }
 }
 const targets = apps.map(a => ({ name: a, app: a, wasm: resolve(wasmRoot, a) }));

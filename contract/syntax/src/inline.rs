@@ -112,6 +112,12 @@ pub struct Expanded {
     /// a child's lifted action's captured props, read in the use site's
     /// scope; empty for the root's.
     pub mutation_then_args: Vec<Vec<Expr>>,
+    /// Each task's owner, declaring instance and captured action arguments.
+    pub task_owners: Vec<Owner>,
+    /// For each task, the component use that declared it.
+    pub task_instances: Vec<u32>,
+    /// For each task, its lifted action’s captured props.
+    pub task_args: Vec<Vec<Expr>>,
     /// Every use of a component that declares a request, with the repetition
     /// around it a request may not be under (D1): what the type check refuses.
     pub owned_uses: Vec<OwnedUse>,
@@ -292,7 +298,7 @@ pub fn free_calls(file: &File) -> BTreeSet<crate::Span> {
         }
     }
     let mut out = BTreeSet::new();
-    // A child declares no `task` or `sequence`, which the type pass refuses.
+    // A child declares no `sequence`, which the type pass refuses.
     for c in file.components.iter().skip(1) {
         let mut exprs: Vec<&Expr> = Vec::new();
         exprs.extend(
@@ -310,6 +316,9 @@ pub fn free_calls(file: &File) -> BTreeSet<crate::Span> {
                     .iter()
                     .flat_map(|e| std::iter::once(&e.list).chain(&e.key)),
             );
+        }
+        for t in &c.tasks {
+            exprs.extend(t.gate.iter().chain(&t.key));
         }
         for a in &c.actions {
             statements(&a.body, &mut exprs);
@@ -456,6 +465,7 @@ fn expand_with_sites(
         extra_actions: Vec::new(),
         extra_resources: Vec::new(),
         extra_mutations: Vec::new(),
+        extra_tasks: Vec::new(),
         owned_uses: Vec::new(),
         repeats: Vec::new(),
         router_rows: Vec::new(),
@@ -522,6 +532,15 @@ fn expand_with_sites(
         mutation_instances.push(instance);
         mutation_then_args.push(then_args);
     }
+    let mut task_owners = vec![Owner::Root; root.tasks.len()];
+    let mut task_instances = vec![0; root.tasks.len()];
+    let mut task_args = vec![Vec::new(); root.tasks.len()];
+    for (t, owner, instance, args) in ctx.extra_tasks {
+        root.tasks.push(t);
+        task_owners.push(owner);
+        task_instances.push(instance);
+        task_args.push(args);
+    }
     calls::resolve(&mut root.actions, &records, &mut ctx.errors);
     let mut errors = called_errors;
     errors.append(&mut ctx.errors);
@@ -538,6 +557,9 @@ fn expand_with_sites(
         mutation_owners,
         mutation_instances,
         mutation_then_args,
+        task_owners,
+        task_instances,
+        task_args,
         owned_uses: ctx.owned_uses,
     };
     (expanded, errors)
@@ -584,6 +606,7 @@ struct Ctx<'a> {
     /// The children's mutations lifted into the root, with their owners, the
     /// instance that declared them and their `then`'s arguments (D6).
     extra_mutations: Vec<(MutationDecl, Owner, u32, Vec<Expr>)>,
+    extra_tasks: Vec<(crate::Task, Owner, u32, Vec<Expr>)>,
     owned_uses: Vec<OwnedUse>,
     /// The data-sized repetitions around the current site, outermost first.
     repeats: Vec<Repeat>,

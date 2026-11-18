@@ -838,6 +838,21 @@ test('D6 GPU modules bake beside the primary and each surface has one owner', as
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 
+test('a package supplies a GPU module without an app GPU crate', async () => {
+  const { gpuModules, readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/package-gpu-'));
+  const pkg = resolve(dir, 'node_modules/@fixture/sky');
+  try {
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { '@fixture/sky': '1.0.0' } }));
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ exports: { '.': './exact.json' } }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/sky', version: '1.0.0',
+      gpu: { crate: 'rust', exactGpu: '0.3', surfaces: { sky: { arity: 1, factory: 'sky::surface' } } } }));
+    const modules = gpuModules(readManifest(dir, 'sky'));
+    assert.deepEqual(modules.map(({ name, surfaces }) => ({ name, surfaces })), [{ name: 'fixture-sky', surfaces: ['sky'] }]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('declared shader packs merge, reject duplicates and links, and preserve a rejected live candidate', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } = await import('node:fs');
   const { resolve } = await import('node:path');

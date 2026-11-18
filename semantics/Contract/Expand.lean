@@ -307,6 +307,7 @@ structure Ctx where
   extraResources : List ResourceDecl := []
   /-- Each use's mutations, renamed apart, in the order of the uses. -/
   extraMutations : List MutationDecl := []
+  extraTasks : List TaskDecl := []
   deriving Inhabited
 
 abbrev ExM := StateT Ctx (Except String)
@@ -1099,6 +1100,11 @@ def inlineNode (p : CProgram) : Nat → Subst → CNode → ExM (List Node)
           [{ md with name := nameOf md.name, refreshes := md.refreshes.map nameOf,
                      andThen := md.andThen.map nameOf, owner := owner', late := owner == .instance,
                      thenArgs := if md.andThen.isSome then captures.map (·.2.1) else [] }] }
+      for t in c.tasks do
+        modify fun ctx => { ctx with extraTasks := ctx.extraTasks ++
+          [{ t with name := lifted t.name n, action := nameOf t.action,
+                    gate := t.gate.map (substExpr cs), key := t.key.map (substExpr cs),
+                    owner := owner', args := captures.map (·.2.1) }] }
       for st in c.states do
         modify fun ctx => { ctx with extraStates := ctx.extraStates ++
           [{ name := nameOf st.name, ty := st.ty, init := substExpr cs st.init, owner := owner',
@@ -1161,7 +1167,7 @@ def expand (p : CProgram) : Except String Program := do
          states := routerState ++ p.localeStates ++ root.states ++ ctx.extraStates,
          derives := root.derives, resources := p.resources ctx.extraResources,
          mutations := root.mutations ++ ctx.extraMutations,
-         actions, tasks := root.tasks, view, routes := p.routes, router := p.router,
+         actions, tasks := root.tasks ++ ctx.extraTasks, view, routes := p.routes, router := p.router,
          strings := p.strings, locale := p.locale }
 
 end Contract.Expand

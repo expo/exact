@@ -784,9 +784,9 @@ def cboot (p : CProgram) (o : Oracle) : CConfig × Outcome :=
       -- alone: `difftest expansion` writes programs without them.
       if rp.mutations.any (·.queue) || rp.tasks.any (fun t => t.gate.isSome || t.key.isSome) then
         (empty, .refused (.unsupported "queued sends and gated tasks")) else
-      -- So are a child's mutations (LLP 1035.005.004 D6).
-      if p.components.any (!·.mutations.isEmpty) then
-        (empty, .refused (.unsupported "a child's mutations")) else
+      -- So are a child's mutations and tasks (LLP 1035.005.004 D6).
+      if p.components.any (fun c => !c.mutations.isEmpty || !c.tasks.isEmpty) then
+        (empty, .refused (.unsupported "a child's mutations or tasks")) else
       match settle rp o slots 0 with
       | .error e => (empty, .refused e)
       | .ok st =>

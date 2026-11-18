@@ -14,7 +14,7 @@ import { basename, resolve } from 'node:path';
 import { browserDiagnosticNoise, open as openAgent, render, runTests as runAgentTests } from './agent.mjs';
 import { driveStore, pollUntil } from './agent-launch.mjs';
 import { HOST_DEV, authoredTests, resolveApp, withAppFixture } from './app.mjs';
-import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, isDeckURL, webSmokeBuild, webSmokeSweep } from './smoke-inspect.mjs';
+import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, replacementGenerations, isDeckURL, webSmokeBuild, webSmokeSweep } from './smoke-inspect.mjs';
 import { DirectoryOrigin, parseWebRoot, webReleasePath, webRootPath } from './origin.mjs';
 import { jsTargetBuild, readStaticFile, serveStatic } from '../host/web/serve.mjs';
 import { canonicalBytes, publicKeyFromRaw, readAssetIndex, webRelease } from './deploy.mjs';
@@ -1335,11 +1335,7 @@ if ((host === 'web' || apple || host === 'linux') && !argv.includes('--app-only'
       check((await f.state()).focus.logical === byTestId(t, 'other')?.id, 'state agrees with tree focus');
       if (host === 'macos') {
         const source = resolve(tmp, 'reload.contract');
-        writeFileSync(source, readFileSync(resolve(ROOT, 'contract/corpus/accessibility.contract'), 'utf8').replace('text "Other"', 'text "Other reloaded"'));
-        const rebuilt = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, '-o', plan], {cwd:ROOT, encoding:'utf8'});
-        check(rebuilt.status === 0, 'reload fixture compiles: ' + rebuilt.stderr);
-        let tree; for (let i = 0; i < 100; i++) { tree = await axName('other'); if (tree === 'Other reloaded') break; await sleep(20); }
-        check(tree === 'Other reloaded', 'development plan reloaded in the same session: ' + JSON.stringify(await f.logs()));
+        await replacementGenerations(f, { root: ROOT, source, plan, original: readFileSync(resolve(ROOT, 'contract/corpus/accessibility.contract'), 'utf8'), check });
         const reloaded = await f.tree();
         check(byTestId(reloaded, 'first')?.focused !== true, 'reload does not steal focus for First');
         check(byTestId(reloaded, 'other')?.focused === true, 'reload keeps the focus on Other, at its place in the tree');

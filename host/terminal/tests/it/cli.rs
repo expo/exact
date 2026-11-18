@@ -1001,7 +1001,16 @@ fn layout_and_plan_answer_as_json() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
         .arg(&*path)
-        .args(["--size", "40x10", "--drive", "plan", "layout"])
+        .args([
+            "--size",
+            "40x10",
+            "--drive",
+            "plan",
+            "layout",
+            "runner-tree",
+            "node",
+            "1",
+        ])
         .output()
         .unwrap();
     assert!(
@@ -1010,11 +1019,18 @@ fn layout_and_plan_answer_as_json() {
         String::from_utf8_lossy(&out.stderr)
     );
     let text = String::from_utf8(out.stdout).unwrap();
+    for line in text.lines() {
+        let reply: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(reply["generation"], 1, "{line}");
+        assert!(reply["epoch"].as_u64().unwrap() > 0, "{line}");
+        assert_eq!(reply["incarnation"], 1, "{line}");
+        assert!(reply["clock"].is_number(), "{line}");
+    }
     let mut lines = text.lines();
     let plan = lines.next().unwrap();
     let digest = plan
         .strip_prefix("{\"plan\":\"")
-        .and_then(|p| p.strip_suffix("\"}"))
+        .and_then(|p| p.split_once('"').map(|(digest, _)| digest))
         .unwrap_or_else(|| panic!("{plan}"));
     assert!(
         digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),

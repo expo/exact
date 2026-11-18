@@ -172,6 +172,7 @@ fn neutral_control_text_kernel_and_painter_share_pinned_font_lines() {
                 AxisOffer::MaxContent,
                 false,
                 true,
+                false,
             );
             let line = match leading {
                 None | Some("clear") => normal.ceil(),

@@ -21,6 +21,14 @@ public enum ExactAuthSession {
 import AuthenticationServices
 
 final class AuthSessionHost: AuthSessionCapability {
+    @available(iOS 17.4, macOS 14.4, *)
+    static func callback(_ parts: URLComponents) -> ASWebAuthenticationSession.Callback {
+        if parts.scheme?.lowercased() == "https" {
+            return .https(host: parts.host!, path: parts.path)
+        }
+        return .customScheme(parts.scheme!.lowercased())
+    }
+
     func open(url: URL, callback: URLComponents, ephemeral: Bool, anchor: @escaping () -> AuthAnchor?,
               done: @escaping (Result<URL, AuthFailure>) -> Void) -> Result<AuthSheet, AuthFailure> {
         guard let scheme = callback.scheme?.lowercased() else {
@@ -31,21 +39,19 @@ final class AuthSessionHost: AuthSessionCapability {
             DispatchQueue.main.async {
                 if let url {
                     done(.success(url))
-                } else if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
-                    done(.failure(AuthFailure(status: 499, message: "cancelled")))
                 } else {
-                    done(.failure(AuthFailure(status: 502, message: error?.localizedDescription ?? "the session ended without a callback")))
+                    done(.failure(Self.failure(error)))
                 }
             }
         }
         let session: ASWebAuthenticationSession
         if scheme == "https" {
-            guard #available(iOS 17.4, macOS 14.4, *), let host = callback.host else {
+            guard #available(iOS 17.4, macOS 14.4, *), callback.host != nil else {
                 return .failure(AuthFailure(status: 501, message: "an https callback needs iOS 17.4 or macOS 14.4"))
             }
-            session = ASWebAuthenticationSession(url: url, callback: .https(host: host, path: callback.path), completionHandler: completion)
+            session = ASWebAuthenticationSession(url: url, callback: Self.callback(callback), completionHandler: completion)
         } else if #available(iOS 17.4, macOS 14.4, *) {
-            session = ASWebAuthenticationSession(url: url, callback: .customScheme(scheme), completionHandler: completion)
+            session = ASWebAuthenticationSession(url: url, callback: Self.callback(callback), completionHandler: completion)
         } else {
             session = ASWebAuthenticationSession(url: url, callbackURLScheme: scheme, completionHandler: completion)
         }
@@ -57,6 +63,15 @@ final class AuthSessionHost: AuthSessionCapability {
             return .failure(AuthFailure(status: 502, message: "the session could not start (no window)"))
         }
         return .success(sheet)
+    }
+
+    static func failure(_ error: Error?) -> AuthFailure {
+        // Apple also uses canceledLogin for an unassociated HTTPS callback, with a failure reason.
+        let reason = (error as NSError?)?.localizedFailureReason
+        if reason == nil, (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
+            return AuthFailure(status: 499, message: "cancelled")
+        }
+        return AuthFailure(status: 502, message: reason ?? error?.localizedDescription ?? "the session ended without a callback")
     }
 
     private final class Sheet: NSObject, AuthSheet, ASWebAuthenticationPresentationContextProviding {

@@ -217,21 +217,32 @@ public final class Agent {
     }
 
     func handle(op: String, _ req: [String: Any], line: String, completed: @escaping () -> Void = {}) {
+        let emit: ([String: Any]) -> Void = { [self] value in
+            Agent.reply(value["generation"] == nil ? tagged(value) : value)
+        }
+        func emitRaw(_ raw: String) {
+            guard raw.last == "}" else { Agent.raw(raw); return }
+            var out = String(raw.dropLast())
+            if out.count > 1 { out += "," }
+            out += session.agent("{\"op\":\"tags\"}").dropFirst()
+            Agent.raw(out)
+        }
         var asynchronous = false
         defer { if !asynchronous { completed() } }
         // A destroyed session's handle is a stranger to the library (LLP
         // 1031 D2): every operation is refused by name, in the API's shape.
         if session.state == .destroyed {
-            Agent.reply(["error": "session \(session.label): destroyed (runtime \(session.runtime.rt): no such runtime)"])
+            emit(["error": "session \(session.label): destroyed (runtime \(session.runtime.rt): no such runtime)"])
             return
         }
         // The bounded recorder must not enable legacy samplers or wait for rendering work.
         if op == "perf", req["frames"] as? Bool == true {
             let selected = req["source"] as? String == "scroll" ? session.frameHealth.nativeHealth : session.frameHealth
             if req["source"] as? String == "scroll", selected == nil {
-                Agent.reply(["format": FrameHealthMetrics.format, "available": false, "error": "native-scroll-unobserved", "reason": FrameHealth.developmentObserver ? "No native scroll has been observed. Reproduce a native drag on iOS/tvOS 18 or later." : "Native-scroll observation is experimental and disabled in release builds. Use a development build with iOS/tvOS 18 or later."])
+                emit(["format": FrameHealthMetrics.format, "available": false, "error": "native-scroll-unobserved", "reason": FrameHealth.developmentObserver ? "No native scroll has been observed. Reproduce a native drag on iOS/tvOS 18 or later." : "Native-scroll observation is experimental and disabled in release builds. Use a development build with iOS/tvOS 18 or later."])
                 return
             }
+            let tags = tagged([:])
             // `perf frames track` (exact.frame-health.track/1): one node's scroller, per committed offset, leased.
             if let action = req["track"] as? String {
                 let node = req["node"] as? Int
@@ -241,14 +252,14 @@ public final class Agent {
                 let hertz = presenter.viewport.window?.screen?.maximumFramesPerSecond ?? 60
                 #endif
                 let reply = session.frameHealth.trackRequest(action, node: node, scroller: node.flatMap(trackedScroller),
-                    durationMs: req["durationMs"] as? Double, cursor: req["cursor"] as? String, maximumFramesPerSecond: hertz)
-                if let raw = reply["raw"] as? String { Agent.raw(raw) } else { Agent.reply(reply) }
+                    durationMs: req["durationMs"] as? Double, cursor: req["cursor"] as? String, maximumFramesPerSecond: hertz, extra: tags)
+                if let raw = reply["raw"] as? String { Agent.raw(raw) } else { emit(reply) }
                 return
             }
             if req["report"] as? Bool == true {
                 let output = Agent.out
                 asynchronous = true
-                session.frameHealth.agentReport(session: session, source: req["source"] == nil ? nil : selected) { data in
+                session.frameHealth.agentReport(session: session, source: req["source"] == nil ? nil : selected, extra: tags) { data in
                     defer { completed() }
                     guard Agent.out === output else { return }
                     Agent.raw(String(decoding: data, as: UTF8.self))
@@ -257,42 +268,42 @@ public final class Agent {
             }
             if req["health"] as? Bool == true || (!ExactEnv.agentFreezes && req["report"] == nil && req["capture"] == nil) {
                 if req["late"] != nil || req["live"] != nil {
-                    Agent.reply(["format": FrameHealthMetrics.format, "error": "use-bounded-frame-reader", "reason": "Use perf frames report for hitches, or the driver's perf frames live <ms> for a live window."])
-                } else { Agent.reply((selected ?? session.frameHealth).metrics(cursor: req["cursor"] as? [String: Any])) }
+                    emit(["format": FrameHealthMetrics.format, "error": "use-bounded-frame-reader", "reason": "Use perf frames report for hitches, or the driver's perf frames live <ms> for a live window."])
+                } else { emit((selected ?? session.frameHealth).metrics(cursor: req["cursor"] as? [String: Any], extra: tags)) }
                 return
             }
             if let action = req["capture"] as? String {
-                Agent.reply(session.frameHealth.setAgentCapture(action, duration: req["durationMs"] as? Double ?? 60_000))
+                emit(session.frameHealth.setAgentCapture(action, duration: req["durationMs"] as? Double ?? 60_000))
                 return
             }
         }
         if req["widget"] != nil || req["activity"] != nil {
             #if EXACT_WIDGET_GALLERY && (os(iOS) || os(macOS))
             if op != "clock" {
-                Agent.reply(req["activity"] != nil ? ActivityAgent.answer(op, request: req, agent: self) : WidgetGallery.answer(op, request: req, agent: self))
+                emit(req["activity"] != nil ? ActivityAgent.answer(op, request: req, agent: self) : WidgetGallery.answer(op, request: req, agent: self))
                 return
             }
             #else
             #if os(iOS)
-            Agent.reply(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --ios --widget-gallery"])
+            emit(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --ios --widget-gallery"])
             #else
-            Agent.reply(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --widget-gallery"])
+            emit(["error": "widget gallery is unavailable; rebuild: bun host/apple/build.mjs --widget-gallery"])
             #endif
             return
             #endif
         }
         if ["tree", "state", "layout"].contains(op), presenter.viewport.window != nil,
            !drainLaunch(until: Date(timeIntervalSinceNow: 20)) {
-            Agent.reply(["error": "launch work is still pending"])
+            emit(["error": "launch work is still pending"])
             return
         }
         guard session.canvases.waitUntilReady() else {
-            Agent.reply(["error": "canvas creation is still in flight"])
+            emit(["error": "canvas creation is still in flight"])
             return
         }
         // A release build measures for `perf` from the agent's first request.
         if !session.frameHealth.liveCapture, ExactEnv.agentFreezes || !ExactEnv.agentMode || op == "perf" { session.measurePerf(frameSampler: ExactEnv.agentFreezes || !ExactEnv.agentMode) }
-        if Agent.worldRequest(req) { Agent.reply(tagged(world(req))); return }
+        if Agent.worldRequest(req) { emit(tagged(world(req))); return }
         // `tap @t` / `type @t` answer a held device request in the library,
         // before any view is looked up (LLP 1069.007 D4).
         if (op == "tap" || op == "type"), req["ticket"] != nil {
@@ -308,7 +319,7 @@ public final class Agent {
             if !session.webviews.answered(answer, request: req) { session.picker.documentAnswered(answer, request: req) }
             ShareSheet.answered(answer, in: session)
             listedAnswered(answer)
-            Agent.reply(tagged(answer))
+            emit(tagged(answer))
             return
         }
         // A relaunch handed a listed entry (`--notification '<entry>'`, LLP 1133.004 §7).
@@ -316,23 +327,23 @@ public final class Agent {
             let data = Data(session.agent(line).utf8)
             let answer = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "unreadable reply"]
             listedAnswered(answer)
-            Agent.reply(tagged(answer))
+            emit(tagged(answer))
             return
         }
         switch op {
-        case "tree" where req["ax"] as? Bool == true: Agent.reply(accessibilityElementsTree(req)) // LLP 1080.002
+        case "tree" where req["ax"] as? Bool == true: emit(accessibilityElementsTree(req)) // LLP 1080.002
         case "tree":
             var tree = decorateTree(presenter.elements.regions.decorate(session.natives.decorate(session.webviews.tree(line))))
             #if os(macOS)
             tree = decoratePictureInPicture(tree) // LLP 1042 §9.1
             #endif
-            Agent.reply(session.canvases.decorate(req, tree))
-        case "layout": Agent.reply(tagged(inspectLayout(req) ?? layout(req))) // LLP 1080.001: `native`, `agree`
+            emit(session.canvases.decorate(req, tree))
+        case "layout": emit(tagged(inspectLayout(req) ?? layout(req))) // LLP 1080.001: `native`, `agree`
         // A call that moved something settles the canvases before it
         // replies (LLP 1012's fixed point; LLP 1014 D5 reads placements
         // after a frame, so the frame is rendered here, not left to the
         // display link to get to between two calls).
-        case "tap" where req["part"] != nil: Agent.reply(tagged(partTap(req))) // a hatch's part: the aim and the landing (AgentParts.swift)
+        case "tap" where req["part"] != nil: emit(tagged(partTap(req))) // a hatch's part: the aim and the landing (AgentParts.swift)
         case "tap":
             var r: [String: Any]
             #if os(macOS)
@@ -344,7 +355,7 @@ public final class Agent {
                 // flow can be driven (the agent's window is never key, so a
                 // ⌘W it typed would go nowhere).
                 guard req.keys.allSatisfy({ ["op", "session", "close"].contains($0) }), req["close"] as? Bool == true else {
-                    Agent.reply(["malformed": true, "error": "tap close takes no other input fields"]); return
+                    emit(["malformed": true, "error": "tap close takes no other input fields"]); return
                 }
                 #if os(macOS)
                 r = closeWindow()
@@ -355,7 +366,7 @@ public final class Agent {
                 // The platform's Back, as a person takes it (LLP 1116.006
                 // D4): an input, as `close` is (AgentIOS, AgentMac `back`).
                 guard req.keys.allSatisfy({ ["op", "session", "back"].contains($0) }), req["back"] as? Bool == true else {
-                    Agent.reply(["malformed": true, "error": "tap back takes no other input fields"]); return
+                    emit(["malformed": true, "error": "tap back takes no other input fields"]); return
                 }
                 r = back()
             } else if req["resize"] != nil {
@@ -363,7 +374,7 @@ public final class Agent {
                 // ninth operation. Reject ambiguous input before touching UI.
                 guard req.keys.allSatisfy({ ["op", "session", "resize"].contains($0) }),
                       let size = Agent.resizeSize(req["resize"]!) else {
-                    Agent.reply(["malformed": true, "error": Agent.resizeError]); return
+                    emit(["malformed": true, "error": Agent.resizeError]); return
                 }
                 #if os(macOS)
                 r = resizeWindow(size)
@@ -393,40 +404,40 @@ public final class Agent {
             // inputs: they answer at once, within its own deadline.
             if req["aim"] == nil, req["log"] == nil { r = completingInput(r) }
             session.canvases.settle(now: session.now())
-            Agent.reply(tagged(r))
+            emit(tagged(r))
         case "type" where req["message"] != nil:
             let r = completingInput(post(req))
             session.canvases.settle(now: session.now())
-            Agent.reply(tagged(r))
+            emit(tagged(r))
         case "type":
             let r = completingInput(releaseCanvasKey(req) ?? type(req))
             session.canvases.settle(now: session.now())
-            Agent.reply(tagged(r))
-        case "share": Agent.reply(tagged(completingInput(session.receiveShare(req)))) // the driver's `share:` form (LLP 1133.024 D9)
-        case "reveal": Agent.reply(tagged(settling(reveal(req)))) // before a tap or a type: a target out of view, scrolled into it
-        case "clock": let r = clock(req); session.tellAgentOffset(); Agent.reply(tagged(r))
+            emit(tagged(r))
+        case "share": emit(tagged(completingInput(session.receiveShare(req)))) // the driver's `share:` form (LLP 1133.024 D9)
+        case "reveal": emit(tagged(settling(reveal(req)))) // before a tap or a type: a target out of view, scrolled into it
+        case "clock": let r = clock(req); session.tellAgentOffset(); emit(tagged(r))
         // A fetch fault (LLP 1103) is the runner's, below; the device facts are this host's.
         // @ref LLP 1125 §4 — the MIDI ports the agent names, and a message from one: the runner's.
-        case "prefer" where req["midi"] != nil: Agent.reply(tagged(midi(req)))
-        case "prefer" where req["extension"] != nil || req["permission"] != nil: Agent.reply(tagged(preferExtension(req)))
-        case "midi": Agent.reply(tagged(midi(req)))
-        case "prefer" where req["faults"] == nil: Agent.reply(tagged(prefer(req)))
-        case "screenshot": Agent.reply(tagged(screenshot(req)))
+        case "prefer" where req["midi"] != nil: emit(tagged(midi(req)))
+        case "prefer" where req["extension"] != nil || req["permission"] != nil: emit(tagged(preferExtension(req)))
+        case "midi": emit(tagged(midi(req)))
+        case "prefer" where req["faults"] == nil: emit(tagged(prefer(req)))
+        case "screenshot": emit(tagged(screenshot(req)))
         // What is wrong with the presented screen, as observations the driver judges (LLP 1116.003 D8).
         case "check":
             #if os(iOS) || os(tvOS)
-            Agent.reply(tagged(check(req)))
+            emit(tagged(check(req)))
             #else
-            Agent.reply(["error": "check: the web and iOS hosts carry it, not macOS yet"])
+            emit(["error": "check: the web and iOS hosts carry it, not macOS yet"])
             #endif
-        case "sample": Agent.reply(tagged(sample(req)))
+        case "sample": emit(tagged(sample(req)))
         case "logs":
             var forward = req
             forward.removeValue(forKey: "session")
             let json = (try? JSONSerialization.data(withJSONObject: forward)).map { String(decoding: $0, as: UTF8.self) } ?? line
             let data = Data(session.agent(json).utf8)
             let reply = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "unreadable logs"]
-            Agent.reply(session.canvases.decorate(req, reply))
+            emit(session.canvases.decorate(req, reply))
         case "state":
             // The runner's state, in its own order, then what this host
             // observes for the session (LLP 1035.002 D2): the focus, the
@@ -482,7 +493,7 @@ public final class Agent {
             Agent.raw(reply)
         // `perf hatches` (LLP 1075.003.000.001 §3.3): the hatches' calls, timed, and what their code recorded.
         case "perf" where req["hatches"] as? Bool == true:
-            Agent.reply(session.hatchPerf())
+            emit(session.hatchPerf())
         // `perf frames` is this host's (LLP 1079 D4); `perf <target>` is the runner's, below.
         case "perf" where req["frames"] as? Bool == true:
             // `hold`/`release` (LLP 1144 D1) keep a segment open across a fling, then let it go.
@@ -492,11 +503,11 @@ public final class Agent {
             }
             if req["live"] != nil {
                 asynchronous = true
-                liveFrames(req) { reply in Agent.reply(reply); completed() }
+                liveFrames(req) { reply in emit(reply); completed() }
             } else {
                 var frames = session.clock != nil ? ["virtual": true] : session.sampler?.reply(late: req["late"] as? Int ?? 20, all: req["records"] as? Bool == true) ?? ["unavailable": true]
                 frames["health"] = session.frameHealth.reply(virtual: session.clock != nil)
-                Agent.reply(frames)
+                emit(frames)
             }
         default:
             // The library's operations take the request without the
@@ -509,15 +520,15 @@ public final class Agent {
             if op == "perf", let data = session.hatchDiagnostics.joined(perf: reply).data(using: .utf8),
                var result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 result["hostWork"] = HostPhases.shared.work()
-                Agent.reply(result)
-            } else { Agent.raw(reply) }
+                emit(result)
+            } else {
+                let data = Data(reply.utf8)
+                let result = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "unreadable \(op) reply"]
+                emit(result)
+            }
         }
     }
 
-    /// Every reply carries the runner's `epoch`, `incarnation` and `clock`
-    /// (LLP 1035.002 D3) — read after the operation, so a reply's tags name
-    /// the world it left behind; a reply's own `clock` (where a `clock` call
-    /// landed) is kept. An error is left alone.
     /// A listed entry's click under the agent (LLP 1133.004 §7): its location
     /// opened, or the event the runner queued heard now.
     func listedAnswered(_ answer: [String: Any]) {
@@ -526,10 +537,14 @@ public final class Agent {
         else if answer["event"] != nil { session.deliverModuleEvents() }
     }
 
+    /// Every reply carries the runner's `generation`, `epoch`, `incarnation` and `clock`
+    /// (LLP 1035.002 D3) — read after the operation, so a reply's tags name
+    /// the world it left behind; a reply's own `clock` (where a `clock` call
+    /// landed) is kept.
     func tagged(_ r: [String: Any]) -> [String: Any] {
         let r = session.canvases.restoreReply(r)
-        guard r["error"] == nil,
-              let d = session.agent("{\"op\":\"tags\"}").data(using: .utf8),
+        guard session.booted else { return r }
+        guard let d = session.agent("{\"op\":\"tags\"}").data(using: .utf8),
               let tags = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return r }
         var out = r
         for (key, value) in tags where out[key] == nil { out[key] = value }

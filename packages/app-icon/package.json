@@ -1,0 +1,10 @@
+{
+  "name": "@exact/app-icon",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The app's icon on the home screen, chosen among the alternate icons it ships.",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json"
+  }
+}

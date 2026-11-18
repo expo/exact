@@ -31,7 +31,10 @@ impl Game for Looks {
 }
 fn delivered(clock_seekable: bool) -> WorldSurface<Looks, crate::ModelExecutor, true> {
     let mut s = WorldSurface::<Looks, crate::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[Value::Number(0u32.into())], None).unwrap();
     s.clock(clock_seekable);
     let mut requested = s.assets().requests;
@@ -202,7 +205,10 @@ type Switched = WorldSurface<Switch, crate::ModelExecutor, true>;
 /// A live surface past its first frame, the time of that frame.
 fn switched(gpu: &Gpu) -> (Switched, f64) {
     let mut s = Switched::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[Value::Number(0u32.into())], None).unwrap();
     s.clock(false);
     for (_, texture, rgb) in LOOKS {

@@ -53,7 +53,7 @@ final class CanvasPlacedControlsIOSTests: XCTestCase {
         let overlay = try XCTUnwrap(canvas.overlay)
         try XCTUnwrap(canvas.canvasMetal).frame = canvas.bounds
         overlay.frame = canvas.bounds
-        let e = CanvasesHost.Entry(view: canvas, name: "deck", values: []); e.id = 7; e.module = m; e.each = true
+        let e = CanvasesHost.Entry(view: canvas, name: "deck", values: Data("[]".utf8)); e.id = 7; e.module = m; e.each = true
         host.entries[100] = e
         return Deck(session: s, host: host, canvas: canvas, overlay: overlay, window: window)
     }

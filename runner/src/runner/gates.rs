@@ -81,7 +81,7 @@ impl<D: DataSource> Runner<D> {
         self.sequence_step()?;
         let mut seen = Vec::new();
         for (i, row) in self.plan.timers.iter().enumerate() {
-            if !row.gated && !row.keyed {
+            if row.owner.is_some() || (!row.gated && !row.keyed) {
                 continue;
             }
             let on = self
@@ -105,30 +105,8 @@ impl<D: DataSource> Runner<D> {
             };
             seen.push((i, on, key));
         }
-        let now = self.now_ms;
         for (i, on, key) in seen {
-            let t = &mut self.timers[i];
-            if !on {
-                t.armed = false;
-                t.next_ms = f64::INFINITY;
-                t.key = None;
-            } else if !t.armed || t.key != key {
-                t.armed = true;
-                t.generation = t.generation.wrapping_add(1);
-                t.completion = Default::default();
-                t.key = key;
-                let row = &self.plan.timers[i];
-                if row.frame {
-                    // While the agent or a test seeks, the task's next
-                    // virtual frame; a presenting host fires it at its
-                    // next frame (D10).
-                    t.base = now;
-                    t.k = 1;
-                    t.next_ms = super::virtual_frame(now, 1);
-                } else {
-                    t.next_ms = now + row.interval_ms as f64;
-                }
-            }
+            self.arm_task(i, on, key);
         }
         Ok(())
     }
@@ -152,11 +130,7 @@ impl<D: DataSource> Runner<D> {
             return false;
         }
         // An idle gated frame task keeps no frame source running (LLP 1092 D10).
-        self.plan
-            .timers
-            .iter()
-            .zip(&self.timers)
-            .any(|(t, s)| t.frame && s.armed)
+        self.timers.iter().enumerate().any(|(i, s)| self.timer_row(i).frame && s.armed)
             // A font axis moving (LLP 1019 §13 D10).
             || self.text_axes.running()
     }
@@ -212,9 +186,8 @@ impl<D: DataSource> Runner<D> {
     fn timer_deadline(&self, stopped: bool, other: [Option<f64>; 18]) -> Option<f64> {
         self.timers
             .iter()
-            .zip(&self.plan.timers)
             .enumerate()
-            .filter(|(_, (_, row))| !(row.frame && self.clock.presenting))
+            .filter(|(i, _)| !(self.timer_row(*i).frame && self.clock.presenting))
             // No timer fires while a wake runs unseen (LLP 1133.017 D6).
             .filter(|_| !stopped)
             .map(|(i, _)| self.timer_execution(i))
@@ -237,9 +210,9 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .enumerate()
             .filter(|(i, _)| {
-                !(self.plan.timers[*i].frame && self.clock.presenting) && !self.wake_stops_timers()
+                !(self.timer_row(*i).frame && self.clock.presenting) && !self.wake_stops_timers()
             })
-            .map(|(i, _)| self.timer_execution(i) + self.plan.timers[i].tolerance_ms as f64)
+            .map(|(i, _)| self.timer_execution(i) + self.timer_row(i).tolerance_ms as f64)
             .chain(self.other_timer_due_ms())
             .filter(|at| at.is_finite())
             .reduce(f64::min)
@@ -312,12 +285,12 @@ impl<D: DataSource> Runner<D> {
     /// Each task's next due time, or `None` while it is idle or spent (the
     /// agent's `state.tasks`, D10).
     pub fn tasks(&self) -> Vec<(String, Option<f64>)> {
-        self.plan
-            .timers
+        self.timers
             .iter()
-            .zip(&self.timers)
-            .map(|(row, t)| {
-                let name = self.plan.str(row.name).to_string();
+            .enumerate()
+            .filter(|(i, t)| self.timer_row(*i).owner.is_none() || t.owner.is_some())
+            .map(|(i, t)| {
+                let name = self.task_name(i);
                 (name, Some(t.next_ms).filter(|ms| ms.is_finite()))
             })
             .collect()

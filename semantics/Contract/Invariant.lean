@@ -380,15 +380,17 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
     have hset : ∀ y ∈ c.timers.set i tm.fired, y.action ∈ A := fun y hy => by
       rcases List.mem_or_eq_of_mem_set hy with hy | rfl
       · exact hA y hy
-      · unfold Timer.fired; split <;> (try split) <;> (try split) <;> exact htm
+      · rw [tm.fired_fields.1]; exact htm
     dsimp only
-    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
-      tm.action [] [] = r
+    generalize hr : timerCommit p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next } tm = r
     have hJ' := hclock c _ (if tm.change && tm.next < c.now then c.now else tm.next) c.armed c.nexts
       c.sendRows hJ hset
     obtain ⟨c₂, out₂⟩ := r
-    have hf := (runAction_frame hr).1
-    have hJ₂ := hrun _ _ _ _ _ _ hJ' (.inl htm) hr
+    have result : J c₂ ∧ c₂.timers.map (·.action) = (c.timers.set i tm.fired).map (·.action) := by
+      rcases thenCommit_cases (by simpa only [timerCommit] using hr) with he | ⟨vs, hr⟩
+      · subst he; exact ⟨hJ', rfl⟩
+      · exact ⟨hrun _ _ _ _ _ _ hJ' (.inl htm) hr, (runAction_frame hr).1⟩
+    obtain ⟨hJ₂, hf⟩ := result
     have hA₂ : ∀ y ∈ c₂.timers, y.action ∈ A := fun y hy => by
       obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map hf hy
       exact he ▸ hset y₀ hy₀
@@ -601,7 +603,7 @@ theorem boot_cases {p o c out} (h : boot p o = (c, out)) :
     | exact .inl (Prod.mk.inj h).1.symm
     | (simp only [Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h
        exact .inr ⟨_, _, _, _, by assumption, by assumption, by assumption, renderTabs_render fuel (by assumption),
-         gateStep_actions (by assumption)⟩)
+         (gateStep_actions (by assumption)).trans (gateStep_actions (by assumption))⟩)
 
 theorem foldlM_inv {α β ε : Type} {f : β → α → Except ε β} (P : β → Prop) :
     ∀ {l : List α} {init r}, (∀ b a b', a ∈ l → P b → f b a = .ok b' → P b') →
@@ -626,16 +628,16 @@ theorem mapM_mem {α β ε : Type} {f : α → Except ε β} :
 
 /-- Every timer is a task's: its action, its gate and its key. -/
 theorem startTimers_tasks {p slots timers} (h : startTimers p slots = .ok timers) :
-    ∀ tm ∈ timers, ∃ t ∈ p.tasks, tm.action = t.action ∧ tm.gate = t.gate ∧ tm.key = t.key := by
+    ∀ tm ∈ timers, ∃ t ∈ p.tasks, tm.action = t.action ∧ tm.gate = t.gate ∧ tm.key = t.key ∧ tm.owner = t.owner := by
   intro tm htm
   obtain ⟨t, ht, hf⟩ := mapM_mem h tm htm
   dsimp only at hf
   split at hf
   · simp only [Except.pure_ok_iff] at hf
-    subst hf; exact ⟨t, ht, rfl, rfl, rfl⟩
+    subst hf; exact ⟨t, ht, rfl, rfl, rfl, rfl⟩
   · simp only [Except.bind_ok_iff, Except.pure_ok_iff] at hf
     obtain ⟨_, _, _, _, rfl⟩ := hf
-    exact ⟨t, ht, rfl, rfl, rfl⟩
+    exact ⟨t, ht, rfl, rfl, rfl, rfl⟩
 
 /-- Every timer runs a task's action. -/
 theorem startTimers_actions {p slots timers} (h : startTimers p slots = .ok timers) :

@@ -905,7 +905,10 @@ impl<D: DataSource> Runner<D> {
         (self.call_origin(), self.invocation_id())
     }
 
-    /// One of [`Self::send_unsent`]'s sends, under its commit's origin.
+    /// One of [`Self::send_unsent`]'s sends, under its commit's origin. It
+    /// is asked as a send made now is (`ask_send`: its owner, its sockets,
+    /// its failure), except that a refusal ends this one send, said in the
+    /// journal, never the commit.
     fn send_one(
         &mut self,
         target: super::Target,
@@ -916,67 +919,42 @@ impl<D: DataSource> Runner<D> {
         let m = target
             .mutation()
             .expect("a send's target names its mutation");
-        let name = self.mutation_name(m).to_string();
-        let answer = self
-            .check_send_arguments(m, &args)
-            .map_err(|e| format!("{e:?}"))
-            .and_then(|()| {
-                self.mutation_requests += 1;
-                let answer = if Self::activity_send(&source) {
-                    self.activity_request(&source, &args)
-                } else if self.plan.fetch_named(&source).is_some() {
-                    self.fetch_answer(&source, &args)
-                } else {
-                    self.store.set_clock_ms(self.now_ms);
-                    let answer = self
-                        .data
-                        .answer_for(target, &mut self.store, &source, &args);
-                    let answer = self.single_answer(target, answer);
-                    self.refuse_locked(answer)
-                };
-                // What its turn sent as an answer (LLP 1016.000 D7, the amendment
-                // of 2026-10-18).
-                self.stage_answer(target);
-                answer.map_err(|e| format!("{e:?}"))
-            });
-        let refused = match answer {
-            Ok(super::Answer::Now(value)) if self.conforms(&value, self.mutation_row(m).ty) => {
-                match self.mutation_slot(m) {
-                    Ok(slot) => {
-                        if self.newest_wins(m) {
-                            self.forget_ticket(target);
-                        }
-                        self.land_write(target, None, &value);
-                        if self.conclude_send(target) {
-                            self.slots[slot] = Value::some(value);
-                        }
-                        self.landed.push(m);
-                        for r in self.declared_refreshes(m) {
-                            self.force_refresh(r);
-                            self.note_reasked(r);
-                        }
-                        None
-                    }
-                    Err(e) => Some(format!("{e:?}")),
+        // Read before a refusal ends it.
+        let write = self.asked_write(target);
+        let superseded = self.concluded_after(target);
+        let why = match self.ask_send(target, &source, &args, None) {
+            Ok(super::queue::Asked::Now(slot, value)) => {
+                if self.newest_wins(m) {
+                    self.forget_ticket(target);
                 }
+                // As a reply lands (`reply.rs`): in the instance that sent
+                // it, and only as the latest send to conclude.
+                if !superseded {
+                    self.failed_mut[m] = None;
+                    self.land_send(m, slot, value);
+                }
+                self.landed.push(m);
+                for r in self.declared_refreshes(m) {
+                    self.force_refresh(r);
+                    self.note_reasked(r);
+                }
+                return;
             }
-            Ok(super::Answer::Now(_)) => {
-                Some("its answer does not fit the mutation's shape".to_string())
-            }
-            Ok(super::Answer::Later(request)) => {
+            Ok(super::queue::Asked::Later(request)) => {
                 later.push((target, source, args, request));
-                None
+                return;
             }
-            Err(error) => Some(error),
+            // `ask_send` set its failure, said why and ended its write.
+            Ok(super::queue::Asked::Failed) => None,
+            Err(e) => Some(format!("{e:?}")),
         };
-        if let Some(why) = refused {
-            self.log(super::lines::unsent_refused(&name, &why));
-            // Its write ends; the resources it showed in drop it in
-            // this commit, and a refusal of the commit does not bring
-            // it back.
-            self.refused_unsent.push((target, self.asked_write(target)));
+        if let Some(why) = why {
+            self.log(super::lines::unsent_refused(self.mutation_name(m), &why));
             self.end_write(target, None);
         }
+        // The resources it showed in drop it in this commit, and a refusal
+        // of the commit does not bring it back.
+        self.refused_unsent.push((target, write));
     }
 }
 

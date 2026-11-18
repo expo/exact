@@ -2,7 +2,7 @@
 use super::*;
 use exact_kernel::{Kernel, NodeKey};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Preview {
     pub(super) binding: ReorderBinding,
     pub(super) token: ReorderToken,
@@ -377,7 +377,7 @@ pub(super) struct DropAnchor {
 }
 
 /// Anchor eligibility outlives the visual preview, without keeping its row pinned.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct PendingDrop {
     token: ReorderToken,
     source: String,

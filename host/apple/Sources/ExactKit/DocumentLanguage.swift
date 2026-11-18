@@ -24,6 +24,7 @@ extension Presenter {
         #else
         root.semanticContentAttribute = documentDirection == "rtl" ? .forceRightToLeft : .forceLeftToRight
         root.accessibilityLanguage = documentLanguage.isEmpty ? nil : documentLanguage
+        if language != nil { turnChrome() }
         #endif
         for node in changed {
             let direction = node.style["direction"]?.string ?? documentDirection
@@ -41,6 +42,27 @@ extension Presenter {
     }
 
     #if !os(macOS)
+    /// UIKit's own chrome (a navigation bar's Back, the tab bar's order, a
+    /// sheet's bar) follows the `layoutDirection` trait, which a view's
+    /// `semanticContentAttribute` does not set. The controllers Exact owns
+    /// take the document's direction once it is told one: the navigation
+    /// owner and each presented sheet. The embedder's window and its other
+    /// controllers, another session's among them, keep their own.
+    private func turnChrome() {
+        let direction: UITraitEnvironmentLayoutDirection = documentDirection == "rtl" ? .rightToLeft : .leftToRight
+        guard chromeDirection != direction else { return }
+        chromeDirection = direction
+        for controller in navigation.chromeOwners + modals.controllers { turnChrome(controller) }
+    }
+
+    /// `controller` takes the document's direction, as it is installed or
+    /// presented and when the direction changes.
+    func turnChrome(_ controller: UIViewController) {
+        guard let direction = chromeDirection,
+              !controller.traitOverrides.contains(UITraitLayoutDirection.self) || controller.traitOverrides.layoutDirection != direction else { return }
+        controller.traitOverrides.layoutDirection = direction
+    }
+
     /// A platform view a node holds (a field, a control) is told the
     /// language; a node reads it (`NodeView.accessibilityLanguage`).
     private func setLanguage(_ view: UIView) {

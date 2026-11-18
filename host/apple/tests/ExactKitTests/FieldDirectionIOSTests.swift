@@ -179,6 +179,33 @@ final class FieldDirectionIOSTests: XCTestCase {
         node.headerField = nil
     }
 
+    /// A field whose node says `dir="ltr"` stays left to right in a
+    /// right-to-left document, under controllers whose `layoutDirection`
+    /// the document's direction turns (here, the window's, as a navigation
+    /// owner's reaches its routes).
+    func testAFieldThatSaysLeftToRightStaysSoInARightToLeftDocument() throws {
+        for kind in ["input", "textarea"] {
+            let (p, node) = field(kind, "Hello مرحبا", style: ["direction": "ltr"])
+            window?.traitOverrides.layoutDirection = .rightToLeft
+            p.apply(wireBatch([["op": "language", "lang": "ar", "dir": "rtl"]]))
+            let text: UIView & UITextInput = try XCTUnwrap(node.field ?? node.textArea, kind)
+            text.updateTraitsIfNeeded()
+            text.layoutIfNeeded()
+            XCTAssertEqual(window?.traitCollection.layoutDirection, .rightToLeft, "\(kind): right to left above it")
+            XCTAssertEqual(text.effectiveUserInterfaceLayoutDirection, .leftToRight, "\(kind): its own views (a clear button) sit left to right")
+            if let f = node.field {
+                XCTAssertEqual(paragraph(f.defaultTextAttributes)?.baseWritingDirection, .leftToRight)
+                XCTAssertEqual(f.textAlignment, .left)
+            }
+            if let tv = node.textArea {
+                XCTAssertEqual(base(tv), .leftToRight)
+                XCTAssertEqual(tv.textAlignment, .left)
+            }
+            XCTAssertLessThan(try x(text, 0), try x(text, 6), "\(kind): H left of م")
+            window?.isHidden = true
+        }
+    }
+
     /// Test 6: a plain text area's placeholder is drawn at its start, the
     /// right under `rtl`, as the paragraph its text would take.
     func testAPlainTextAreasPlaceholderSitsAtItsStart() throws {

@@ -85,7 +85,7 @@ fn frames_at_scale() {
     for n in sizes {
         let mut surface = GardenSurface::default();
         bind(&mut surface);
-        surface.device_ready(gpu.device.features());
+        surface.device_ready(gpu.device.features(), gpu.device.limits());
         let mut frame = Frame {
             width: 1280.,
             height: 720.,

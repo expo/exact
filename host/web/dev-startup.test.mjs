@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, watch, writeFileSync } from 'node:fs';
+import { declaredSources } from '../../scripts/file-dependencies.mjs';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
 import { claimDevLoop, stopBuildTree } from './dev-startup.mjs';
 import { applyStaticChange, applyStaticTreeChange } from './serve.mjs';
@@ -159,7 +160,7 @@ if (kind === 'host' && !existsSync(resolve(dir, '.built'))) {
   writeFileSync(resolve(dir, '.built'), '');
   if (process.env.FIXTURE_PHASE === 'gpu') {
     const profile = resolve(process.env.CARGO_TARGET_DIR, 'wasm32-unknown-unknown/web'); mkdirSync(profile, { recursive: true });
-    for (const kind of ['gpu', 'gpu-extra', 'web']) writeFileSync(resolve(profile, (basename(dir) + '-' + kind).replaceAll('-', '_') + '.d'), 'artifact: ' + resolve(dir, kind === 'web' ? 'runtime.rs' : 'shared.rs') + '\\n');
+    for (const kind of ['gpu', 'gpu-extra', 'web']) writeFileSync(resolve(profile, (basename(dir) + '-' + kind).replaceAll('-', '_') + '.d'), 'artifact: ' + resolve(dir, kind === 'web' ? 'runtime.rs' : 'node_modules/fixture/shared.rs') + '\\n');
   }
 } else if (kind === 'js' && (process.env.FIXTURE_PHASE.startsWith('reader') || process.env.FIXTURE_PHASE === 'inspect'
   || (process.env.FIXTURE_PHASE === 'queued-edit' && !existsSync(resolve(dir, '.built'))))) {
@@ -239,7 +240,10 @@ for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer
       ...(phase === 'mixed' ? { rust: { module: { package: 'fixture' } } } : {}),
       ...(phase === 'gpu' ? { gpu: { modules: { extra: ['extra'] } } } : {}) }));
     if (['module-build', 'module', 'mixed'].includes(phase)) writeFileSync(resolve(dir, 'app.ts'), 'export const value = 1;');
-    if (phase === 'gpu') for (const name of ['shared.rs', 'runtime.rs']) writeFileSync(resolve(dir, name), '// fixture\n');
+    if (phase === 'gpu') {
+      mkdirSync(resolve(dir, 'node_modules/fixture'), { recursive: true });
+      for (const name of ['node_modules/fixture/shared.rs', 'runtime.rs']) writeFileSync(resolve(dir, name), '// fixture\n');
+    }
     writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "shutdown"\n');
     writeFileSync(resolve(dir, 'preload.mjs'), preload);
     writeFileSync(resolve(dir, 'tool.mjs'), tool);
@@ -273,7 +277,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) for (const phase of ['js', 'producer
       }
       if (phase === 'gpu') {
         await until(() => output.includes(`127.0.0.1:${port}/`) && existsSync(resolve(dir, '.ready-producer')), () => output);
-        writeFileSync(resolve(dir, 'shared.rs'), '// changed\n');
+        writeFileSync(resolve(dir, 'node_modules/fixture/shared.rs'), '// changed\n');
       }
       const ready = phase === 'reader-handoff' ? '.handoff' : phase === 'queued-edit' ? '.queued-signal'
         : '.ready-' + (phase === 'rebuild' ? 'host' : phase === 'mixed' ? 'module-build' : phase);
@@ -329,17 +333,18 @@ test.each([false, true])('JS receipt recovers from metadata errors and records C
   const source = readFileSync(resolve(root, 'host/web-js/dev.mjs'), 'utf8');
   const body = source.slice(source.indexOf('function build('), source.indexOf('\nconst mtimeMs'));
   const dir = mkdtempSync(resolve(root, 'target/dev-receipt-')), dist = resolve(dir, 'dist');
-  const file = resolve(dir, 'cargo.contract'), app = { dir, target: resolve(dir, 'target'), name: 'receipt', manifest: {} };
+  const file = resolve(dir, 'cargo.contract'), crate = resolve(dir, 'node_modules/fixture/rust'), rust = resolve(crate, 'src/lib.rs');
+  const app = { dir, target: resolve(dir, 'target'), name: 'receipt', manifest: {} };
   let produced = !firstRead, failed = false, edit = null;
   const began = Date.now() + 60_000;
-  const env = { resolve, createHash, rmSync, existsSync, readFileSync, writeFileSync, cargoContractReads, changedContractReads, contractReadReceipt,
+  const env = { resolve, dirname, basename, createHash, rmSync, existsSync, readFileSync, writeFileSync, cargoContractReads, changedContractReads, contractReadReceipt,
     Date: class extends Date { static now() { return began; } },
     root, appSources: () => ({ digest: 'sources' }), installedFileDependencies() {}, designPath: () => null,
-    devPackages: () => ({ sources: [], trees: [], shallow: [] }), changedSince: () => false, compilerWarnings: () => [],
+    devPackages: () => ({ sources: [], trees: [], shallow: [] }), changedSince: () => false, compilerWarnings: () => [], compilerError: () => false,
     devDesign: () => null, mapDesignSource: () => null, appManifestDigest: () => 'app', buildFileCards: () => ({}), builtSettings: () => ({}),
     replaceBuild: (stage, output) => { rmSync(output, { recursive: true, force: true }); mkdirSync(output, { recursive: true });
       writeFileSync(resolve(output, '.exact-build.json'), readFileSync(resolve(stage, '.exact-build.json'))); },
-    webSourceRoots: () => { if (failed) throw new Error('cargo metadata: invalid manifest'); return produced ? [{ file }] : []; },
+    webSourceRoots: () => { if (failed) throw new Error('cargo metadata: invalid manifest'); return produced ? [crate, { file }, { file: rust }] : []; },
     spawn(command, args) {
       const stage = args[args.indexOf('--out') + 1];
       mkdirSync(resolve(stage, '.gen'), { recursive: true });
@@ -354,8 +359,14 @@ test.each([false, true])('JS receipt recovers from metadata errors and records C
   };
   const build = new Function('env', `const {${Object.keys(env).join(',')}} = env; let building, lastSources = []; ${body}; return build;`)(env);
   try {
+    mkdirSync(resolve(crate, 'src'), { recursive: true });
+    writeFileSync(rust, 'pub const RED: bool = false;');
     writeFileSync(file, 'new Cargo include');
-    expect((await build(app, dist)).error).toBeNull();
+    const built = await build(app, dist);
+    expect(built.error).toBeNull();
+    expect(built.packages.roots).toContain(crate);
+    expect(built.packages.sources).toContain(rust);
+    expect(built.packages.roots).toContainEqual({ file: rust });
     expect(JSON.parse(readFileSync(resolve(dist, '.exact-build.json'))).reads.cargo[file]).toBe(createHash('sha256').update('new Cargo include').digest('hex'));
     const before = readFileSync(resolve(dist, '.exact-build.json'), 'utf8');
     failed = true;
@@ -380,3 +391,88 @@ test.each([false, true])('JS receipt recovers from metadata errors and records C
     expect(webChanges(dist, app).all.some(path => path.endsWith('/cargo.contract'))).toBe(true);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('Cargo watchers ignore reads and observe edits through installed source links', () => {
+  const source = readFileSync(resolve(root, 'host/web-js/dev.mjs'), 'utf8');
+  const times = source.slice(source.indexOf('const changedSince ='), source.indexOf('/** The inputs that moved'));
+  const changed = source.slice(source.indexOf('  const changed = (base'), source.indexOf('  // The resident loop\'s start'));
+  const watchStart = source.indexOf('  const packages = new Set();');
+  const watches = source.slice(watchStart, source.indexOf('  watchPackages(built.packages);', watchStart));
+  const crate = '/app/node_modules/fixture/rust', file = `${crate}/src/lib.rs`, sdk = '/sdk/compiler';
+  const entries = new Set([crate, file, `${crate}/src`, sdk, `${sdk}/src/lib.rs`]), handlers = new Map(), edits = new Set();
+  let targetTime = 1;
+  const old = { mtimeMs: 1, ctimeMs: 1, birthtimeMs: 1, isSymbolicLink: () => false };
+  const env = { resolve, dirname, basename, declaredSources: () => () => null, app: { dir: '/app', manifest: {} },
+    built: { packages: { roots: [crate, sdk, { file }], sources: [file] } }, edited: edits,
+    skipped: /(^|\/)(node_modules|target)(\/|$)/, settingsFile: () => false,
+    existsSync: path => entries.has(path),
+    lstatSync: path => { if (!entries.has(path)) throw Error('missing'); return { ...old, isSymbolicLink: () => path === file }; },
+    statSync: path => { if (!entries.has(path)) throw Error('missing'); return { ...old, mtimeMs: path === file ? targetTime : 1 }; },
+    Date: class extends Date { static now() { return 60_000; } },
+    watch(path, options, callback) { handlers.set(path, callback ?? options); return { close() {} }; },
+    temporaryOfDesign: () => false, OUTPUT: /^$/, INPUT_TREE: /^$/, stopYoungBuild() {}, rebuild() {},
+    setTimeout: () => 1, clearTimeout() {},
+  };
+  new Function('env', `const {${Object.keys(env).join(',')}} = env;
+    const watchers = [], stopping = false, since = 50_000, movedSinceBuild = new Set(), appeared = new Set();
+    let timer = null, saved, inputs = 0, residentChild = null; const starting = {};
+    ${times}\n${changed}\n${watches}\nwatchPackages(built.packages);
+  `)(env);
+  expect(handlers.has(crate)).toBe(true);
+  expect(handlers.has(`${crate}/src`)).toBe(true);
+  handlers.get(sdk)('change', 'compiler');
+  handlers.get(sdk)('change', 'src/lib.rs');
+  handlers.get(crate)('change', 'src/lib.rs');
+  expect([...edits]).toEqual([]);
+  targetTime = 60_000;
+  handlers.get(crate)('change', 'src/lib.rs');
+  expect([...edits]).toEqual([file]);
+  edits.clear(); entries.delete(file);
+  handlers.get(`${crate}/src`)('rename', 'lib.rs');
+  expect([...edits]).toEqual([file]);
+});
+
+// Bun installs a `file:` package outside the app as links to its declared files, so its source is edited where the
+// links lead, which a watcher of the install never hears about: the loop watches the declared directory too.
+test('a Cargo watcher sees an edit made at a linked file: package\'s declared directory', async () => {
+  const source = readFileSync(resolve(root, 'host/web-js/dev.mjs'), 'utf8');
+  const times = source.slice(source.indexOf('const changedSince ='), source.indexOf('/** The inputs that moved'));
+  const changed = source.slice(source.indexOf('  const changed = (base'), source.indexOf('  // The resident loop\'s start'));
+  const watchStart = source.indexOf('  const packages = new Set();');
+  const watches = source.slice(watchStart, source.indexOf('  watchPackages(built.packages);', watchStart));
+  const dir = realpathSync(mkdtempSync(resolve(root, 'target/linked-watch-'))), app = resolve(dir, 'app'), pkg = resolve(dir, 'pkg');
+  const crate = resolve(app, 'node_modules/fixture/rust'), file = resolve(crate, 'src/lib.rs'), edits = new Set(), watchers = [];
+  try {
+    mkdirSync(resolve(pkg, 'rust/src'), { recursive: true });
+    mkdirSync(resolve(crate, 'src'), { recursive: true });
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: 'fixture' }));
+    writeFileSync(resolve(pkg, 'rust/src/lib.rs'), 'before');
+    writeFileSync(resolve(app, 'package.json'), JSON.stringify({ dependencies: { fixture: 'file:../pkg' } }));
+    symlinkSync(resolve(pkg, 'package.json'), resolve(app, 'node_modules/fixture/package.json'));
+    symlinkSync(resolve(pkg, 'rust/src/lib.rs'), file);
+    // The declared directory's watcher counts as ready once it reports a probe beside the source, which the loop
+    // ignores (no file of that name is installed). The loop's time starts after the setup, so its writes are no edit.
+    let ready = false;
+    const watching = (at, options, listener) => watch(at, options, (event, name) => {
+      if (at === resolve(pkg, 'rust') && String(name).endsWith('probe')) ready = true;
+      listener(event, name);
+    });
+    const env = { resolve, dirname, basename, existsSync, lstatSync, statSync, watch: watching, declaredSources, watchers, edited: edits,
+      app: { dir: app, manifest: {} }, built: { packages: { roots: [crate, { file }], sources: [file] } },
+      skipped: /(^|\/)(node_modules|target)(\/|$)/, settingsFile: () => false, temporaryOfDesign: () => false, OUTPUT: /^$/, INPUT_TREE: /^$/,
+      stopYoungBuild() {}, rebuild() {}, setTimeout: () => 1, clearTimeout() {} };
+    new Function('env', `const {${Object.keys(env).join(',')}} = env;
+      const stopping = false, since = Date.now() + 1, movedSinceBuild = new Set(), appeared = new Set();
+      let timer = null, saved, inputs = 0, residentChild = null; const starting = {};
+      ${times}\n${changed}\n${watches}\nwatchPackages(built.packages);
+    `)(env);
+    await until(() => { writeFileSync(resolve(pkg, 'rust/src/probe'), ''); return ready; }, () => 'the declared directory\'s watcher');
+    expect([...edits]).toEqual([]);
+    writeFileSync(resolve(pkg, 'rust/src/lib.rs'), 'after');
+    await until(() => edits.size, () => 'the edit');
+    expect([...edits]).toEqual([file]);
+  } finally {
+    for (const watcher of watchers) watcher.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);

@@ -199,16 +199,44 @@ impl exact_runner::DataSource for StillCanvas {
         Err(exact_runner::DataError::UnknownSource(name.into()))
     }
     fn canvas_surfaces(&self) -> Vec<(String, usize)> {
-        vec![("still".into(), 0)]
+        vec![
+            ("still".into(), 0),
+            ("blank".into(), 0),
+            ("pattern".into(), 0),
+            ("saved".into(), 0),
+        ]
     }
     fn draw_2d(
         &mut self,
-        _: &str,
+        surface: &str,
         _: &[exact_plan::Value],
         ctx: &exact_canvas::Context2d,
         _: &exact_canvas::Frame,
     ) -> Result<bool, exact_canvas::DrawError> {
         ctx.clear_rect(0., 0., 32., 32.);
+        if surface == "blank" {
+            return Ok(false);
+        }
+        // A pattern made once and then held between draws: by `fillStyle`,
+        // or by a saved state under a colour.
+        let saved = surface == "saved";
+        if surface == "pattern" || saved {
+            if saved {
+                ctx.restore();
+            }
+            if !matches!(ctx.fill_style(), exact_canvas::Style::Pattern(_)) {
+                let pattern = ctx.create_pattern_with_image_handle("freeze/screen-0.png", "repeat");
+                if let Some(pattern) = pattern.unwrap() {
+                    ctx.set_fill_style_canvas_pattern(&pattern);
+                }
+            }
+            ctx.fill_rect(0., 0., 32., 32.);
+            if saved {
+                ctx.save();
+                ctx.set_fill_style_str("black");
+            }
+            return Ok(true);
+        }
         ctx.draw_image_with_image_handle("freeze/screen-0.png", 0., 0.)
             .unwrap();
         Ok(false)
@@ -289,6 +317,140 @@ fn a_replaced_still_refreshes_image_and_canvas_handles() {
         pixels(&presenter),
         (vec![192, 64, 128, 255], vec![192, 64, 128, 255])
     );
+}
+
+#[test]
+fn a_canvas_whose_still_was_missing_draws_it_once_captured() {
+    use crate::presenter::{PainterChoice, Presenter};
+    let files = Files::new();
+    std::fs::create_dir_all(&files.roots()[2]).unwrap();
+    let plan =
+        crate::test_plan("component App\n  view\n    canvas surface=still() width=32 height=32\n");
+    let (mut presenter, error) = Presenter::boot_with(
+        &plan,
+        StillCanvas,
+        (100., 100.),
+        1.,
+        files.roots()[2].clone(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let pixel = |p: &mut Presenter<StillCanvas>| {
+        p.host.sync_canvases(1., true, &p.assets);
+        let canvases = p.host().canvas_snapshots();
+        canvases.values().next().unwrap().pixels.data()[..4].to_vec()
+    };
+    assert_eq!(pixel(&mut presenter), [0; 4]);
+    let red = vec![Display {
+        screen: Json::Null,
+        width: 32,
+        height: 32,
+        read: Box::new(|| Ok([192, 64, 128, 255].repeat(32 * 32))),
+    }];
+    files.capture(red, &Mutex::new(true)).unwrap();
+    presenter.picture_changed("freeze/screen-0.png", false);
+    assert_eq!(pixel(&mut presenter), [192, 64, 128, 255]);
+}
+
+/// A changed still is decoded again only for a mounted canvas whose latest
+/// draw asked for it, and a canvas mounted after the change draws the new
+/// file, whether or not the earlier one decoded.
+#[test]
+fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
+    use crate::presenter::{PainterChoice, Presenter};
+    let files = Files::new();
+    std::fs::create_dir_all(&files.roots()[2]).unwrap();
+    let plan = crate::test_plan(
+        "component App\n  state shown = true\n  state other = false\n  action toggle\n    shown = not shown\n  action add\n    other = true\n  view\n    column\n      button press=toggle testId=\"toggle\" width=10 height=10\n      button press=add testId=\"add\" width=10 height=10\n      if other\n        canvas surface=blank() width=32 height=32\n      if shown\n        canvas surface=still() testId=\"still\" width=32 height=32\n",
+    );
+    let (mut presenter, error) = Presenter::boot_with(
+        &plan,
+        StillCanvas,
+        (100., 100.),
+        1.,
+        files.roots()[2].clone(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let still = "freeze/screen-0.png";
+    let named = |p: &Presenter<StillCanvas>, id: &str| {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(id)[0]).unwrap().id
+    };
+    let pixel = |p: &mut Presenter<StillCanvas>| {
+        p.host.sync_canvases(1., true, &p.assets);
+        let canvases = p.host().canvas_snapshots();
+        canvases[&named(p, "still")].pixels.data()[..4].to_vec()
+    };
+    let tap = |p: &mut Presenter<StillCanvas>, id: &str| {
+        p.tap(named(p, id)).unwrap();
+        p.host.sync_canvases(1., true, &p.assets);
+    };
+    let toggle = |p: &mut Presenter<StillCanvas>| tap(p, "toggle");
+    let capture = |p: &mut Presenter<StillCanvas>, red: u8| {
+        let display = Display {
+            screen: Json::Null,
+            width: 32,
+            height: 32,
+            read: Box::new(move || Ok([red, 64, 128, 255].repeat(32 * 32))),
+        };
+        files.capture(vec![display], &Mutex::new(true)).unwrap();
+        p.picture_changed(still, false);
+    };
+    // No canvas is left while the file appears.
+    assert_eq!(pixel(&mut presenter), [0; 4]);
+    toggle(&mut presenter);
+    capture(&mut presenter, 192);
+    toggle(&mut presenter);
+    assert_eq!(pixel(&mut presenter), [192, 64, 128, 255]);
+    // Another canvas stays while the still's goes.
+    tap(&mut presenter, "add");
+    toggle(&mut presenter);
+    assert!(!presenter.host().canvas_image_cached(still));
+    capture(&mut presenter, 32);
+    assert!(!presenter.host().canvas_image_cached(still));
+    toggle(&mut presenter);
+    assert_eq!(pixel(&mut presenter), [32, 64, 128, 255]);
+}
+
+/// A pattern's image stays while a canvas's retained style holds it, though
+/// later draws only fill with it.
+#[test]
+fn a_retained_pattern_keeps_its_image_across_draws() {
+    use crate::presenter::{PainterChoice, Presenter};
+    let files = Files::new();
+    let display = Display {
+        screen: Json::Null,
+        width: 32,
+        height: 32,
+        read: Box::new(|| Ok([192, 64, 128, 255].repeat(32 * 32))),
+    };
+    files.capture(vec![display], &Mutex::new(true)).unwrap();
+    // One canvas at a time: another drawing the same image would keep it.
+    for surface in ["pattern", "saved"] {
+        let plan = crate::test_plan(&format!(
+            "component App\n  view\n    canvas surface={surface}() width=32 height=32\n"
+        ));
+        let (mut presenter, error) = Presenter::boot_with(
+            &plan,
+            StillCanvas,
+            (100., 100.),
+            1.,
+            files.roots()[2].clone(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        for frame in 0..4 {
+            presenter.host.advance(16. * frame as f64);
+            presenter.host.sync_canvases(1., true, &presenter.assets);
+            let canvases = presenter.host().canvas_snapshots();
+            let pixel = &canvases.values().next().unwrap().pixels.data()[..4];
+            assert_eq!(pixel, [192, 64, 128, 255], "{surface}, frame {frame}");
+        }
+    }
 }
 
 struct PictureNotice(Context);

@@ -10,7 +10,7 @@ import { glueDeclarations, checkedGlueCall } from './glue-fixture.mjs';
 export async function fixture(options = {}) {
   const views = new Map(), records = [], metrics = [], reporting = [], diagnostics = [], observers = [], resizes = [], sizeWrites = [];
   let next = 0, hud = null, expectedView = null;
-  const changed = new Map(), events = [], order = [], restored = new Set();
+  const changed = new Map(), events = [], order = [], restored = new Set(), motion = [];
   let mutations = Promise.resolve(), frame, timerId = -1;
   const metricTimers = new Map();
   const window = new EventTarget();
@@ -31,7 +31,7 @@ export async function fixture(options = {}) {
       const host = new Element('host'); host.canvas = new Element(); views.set(id, host);
       exact.gpu.surface(id, 'world', []);
     }
-  }, gpu_seekable() {}, gpu_shader_names: () => '[]', gpu_shaders_clear() {},
+  }, gpu_seekable() {}, gpu_reduced_motion(on) { motion.push(on); }, gpu_shader_names: () => '[]', gpu_shaders_clear() {},
     gpu_create: () => ++next, gpu_bind_at(id) { if (options.initialBindFail === id) return false; changed.set(id, JSON.stringify({ value: id })); return true; },
     gpu_published(id) { const r = changed.get(id); changed.delete(id); return r; },
     gpu_performance_reporting: (id, enabled) => reporting.push([id, enabled]), gpu_performance: id => options.snapshot?.(id),
@@ -81,8 +81,13 @@ export async function fixture(options = {}) {
     .replace('await import(`./gpu.js?g=${version}`)', 'await candidate(version)')
     .replace('await import(`./gpu.js${query}`)', 'await candidate(0)')
     .replaceAll('await loadModule(version)', 'await candidate(version)');
+  // Inline style as a plain record, with the two CSSOM methods that reach a custom property.
+  const style = () => Object.defineProperties({}, {
+    getPropertyValue: {value(name) { return this[name] ?? ''; }},
+    setProperty: {value(name, value) { if (value === '') delete this[name]; else this[name] = value; }},
+  });
   class Element {
-    constructor(kind = 'canvas') { this.kind = kind; this.listeners = {}; this.handlers = new Map(); this.isConnected = true; this.style = {}; this.dataset = {}; this.tabIndex = 0; this._width = undefined; this._height = undefined; }
+    constructor(kind = 'canvas') { this.kind = kind; this.listeners = {}; this.handlers = new Map(); this.isConnected = true; this.style = style(); this.dataset = {}; this.tabIndex = 0; this._width = undefined; this._height = undefined; }
     get width() { return this._width; }
     set width(value) { this._width = value; sizeWrites.push({element:this, property:'width', value}); }
     get height() { return this._height; }
@@ -114,7 +119,7 @@ export async function fixture(options = {}) {
   await new (Object.getPrototypeOf(async function() {}).constructor)(
     'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout',
     source + `;exact.finishRestore = (view) => { const e = surfaces.get(view); e.pendingRestore = {bytes:new Uint8Array([7])}; finishRestore(e, gpu); };`
-  )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
+  )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact, matchMedia: options.matchMedia }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
     class { constructor(fn) { resizes.push(fn); } observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
     options.performance ?? globalThis.performance, (fn, ms) => {
       if (ms === 1000) { const id = timerId--; metricTimers.set(id, fn); return id; }
@@ -125,6 +130,6 @@ export async function fixture(options = {}) {
     views.set(id, el); exact.gpu.surface(id, name, []); return el;
   }
   function destroy(id) { views.delete(id); exact.gpu.destroy(id); }
-  return { metricTimers, pollMetrics: () => { const pending = [...metricTimers.values()]; metricTimers.clear(); for (const fn of pending) fn(); }, metrics, reporting, window, document, exact, records, diagnostics, sizeWrites, create, destroy, applyBatch, events, order, gpu, nextGpu, Element, publish:(id,value)=>changed.set(id,JSON.stringify(value)), mutation: () => observers.forEach(fn => fn()), resize: () => resizes.forEach(fn => fn()),
+  return { motion, metricTimers, pollMetrics: () => { const pending = [...metricTimers.values()]; metricTimers.clear(); for (const fn of pending) fn(); }, metrics, reporting, window, document, exact, records, diagnostics, sizeWrites, create, destroy, applyBatch, events, order, gpu, nextGpu, Element, publish:(id,value)=>changed.set(id,JSON.stringify(value)), mutation: () => observers.forEach(fn => fn()), resize: () => resizes.forEach(fn => fn()),
     frame: () => frame?.(0), expectView: id => { expectedView = id; }, stale: () => { hud = 'stale'; }, hud: () => hud };
 }

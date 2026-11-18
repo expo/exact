@@ -44,7 +44,7 @@ final class CanvasPointerMacTests: XCTestCase {
         let canvas = NodeView(id: 100, kind: "canvas", presenter: s.presenter)
         canvas.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
         s.presenter.root.addSubview(canvas); s.presenter.views[100] = canvas
-        let e = CanvasesHost.Entry(view: canvas, name: "world", values: []); e.id = 1; e.wantsInput = true; e.module = m
+        let e = CanvasesHost.Entry(view: canvas, name: "world", values: Data("[]".utf8)); e.id = 1; e.wantsInput = true; e.module = m
         s.surfaceHost.entries[100] = e; canvas.canvasInput = CanvasInputHost(view: canvas)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
         // The canvas is the window's content: the hit view for every point in it.

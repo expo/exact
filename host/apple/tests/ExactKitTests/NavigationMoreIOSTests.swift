@@ -947,6 +947,7 @@ final class NavigationMoreIOSTests: XCTestCase {
             navigation.setAppDelegate(home, nil)
             XCTAssertEqual(home.supportedInterfaceOrientations, own, "UIKit's own answer once the app clears it")
         }
+        waitForMainQueue()
         XCTAssertNil(given, "released once the app clears it")
     }
 
@@ -988,6 +989,7 @@ final class NavigationMoreIOSTests: XCTestCase {
             navigation.retireTabs()
             XCTAssertEqual(tabs.supportedInterfaceOrientations, own, "UIKit's own answer once the container is retired")
         }
+        waitForMainQueue()
         XCTAssertNil(given, "released with its container")
     }
 
@@ -1008,7 +1010,52 @@ final class NavigationMoreIOSTests: XCTestCase {
             XCTAssertEqual(tabs.supportedInterfaceOrientations, .portrait, "the app's answer, forwarded")
         }
         autoreleasepool { navigation.setAppDelegate(tabs, nil) }
+        waitForMainQueue()
         XCTAssertEqual(asked, own, "UIKit's own answer as the delegate goes")
+    }
+
+    /// A tab delegate that clears the app's delegate from inside its own
+    /// `responds(to:)`, while UIKit asks it what it answers, leaves UIKit no
+    /// answer for a method nothing would receive.
+    func testATabDelegateClearedWhileUIKitAsksItLeavesNoAnswerWithoutAReceiver() throws {
+        let session = try fixture("tabs-delegate-asked")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let own = tabs.supportedInterfaceOrientations
+        let app = TabAnswering()
+        app.asked = { [weak navigation, weak tabs] in
+            if let navigation, let tabs { navigation.setAppDelegate(tabs, nil) }
+        }
+        navigation.setAppDelegate(tabs, app)
+        XCTAssertNil(try XCTUnwrap(navigation.tabProxy).app, "cleared")
+        XCTAssertEqual(tabs.supportedInterfaceOrientations, own, "UIKit's own answer")
+        XCTAssertEqual(app.calls, 0, "nothing reached the cleared delegate")
+    }
+
+    /// A container that comes as the old container's delegate goes, and the
+    /// delegate given to it then, keep the proxy the new container got: the
+    /// old delegate goes after the tabs' retirement ends, which would
+    /// otherwise empty what its `deinit` set.
+    func testAContainerThatComesAsTheOldDelegateGoesKeepsItsProxy() throws {
+        let session = try fixture("tabs-delegate-successor")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let next = UITabBarController(), successor = TabAnswering()
+        autoreleasepool {
+            let app = TabDelegateGoing()
+            app.goes = { [weak navigation] in
+                navigation?.tabController = next
+                navigation?.setAppDelegate(next, successor)
+            }
+            navigation.setAppDelegate(tabs, app)
+        }
+        autoreleasepool { navigation.retireTabs() }
+        waitForMainQueue()
+        let proxy = try XCTUnwrap(navigation.tabProxy)
+        XCTAssertTrue(navigation.tabController === next)
+        XCTAssertTrue(next.delegate === proxy, "the new container's slot holds its proxy")
+        XCTAssertTrue(proxy.app === successor, "with the delegate given to it")
+        navigation.tabController = nil
     }
 
     /// A tab delegate replaced by another goes after the swap: one that
@@ -1027,8 +1074,10 @@ final class NavigationMoreIOSTests: XCTestCase {
             navigation.setAppDelegate(tabs, app)
         }
         autoreleasepool { navigation.setAppDelegate(tabs, TabAnswering()) }
-        XCTAssertNil(navigation.tabProxy.app, "the successor, cleared")
-        XCTAssertTrue(tabs.delegate === navigation.tabProxy, "the slot is Exact's")
+        waitForMainQueue()
+        let proxy = try XCTUnwrap(navigation.tabProxy)
+        XCTAssertNil(proxy.app, "the successor, cleared")
+        XCTAssertTrue(tabs.delegate === proxy, "the slot is Exact's")
         let logs = session.agent(#"{"op":"logs","since":0}"#)
         let given = try XCTUnwrap(logs.range(of: "hatch tabs: delegate TabAnswering"))
         let cleared = try XCTUnwrap(logs.range(of: "hatch tabs: delegate cleared"))

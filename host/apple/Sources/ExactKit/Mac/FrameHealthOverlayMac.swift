@@ -292,7 +292,7 @@ final class FrameHealthCardViewMac: NSView {
     var released: ((CGVector?) -> Void)?
     var activate: ((FrameHealthCardFace.Control) -> Void)?
     var expandedChanged: (() -> Void)?
-    /// Details in place of everything below the header, its rows drawn on one opaque view that scrolls
+    /// Details in place of the figures and charts, its rows drawn on one opaque view that scrolls
     /// where they outgrow the area; it shows no scroller, which would blend
     let detailsScroll = NSScrollView()
     private let detailsView = DetailsView()
@@ -337,7 +337,7 @@ final class FrameHealthCardViewMac: NSView {
         updatePlots()
     }
 
-    /// Show Details in place of everything below the header, from its first row, or the charts or table again.
+    /// Show Details in place of the figures and charts, from its first row, or the charts or table again.
     func showDetails(_ shown: Bool) {
         state.showsDetails = shown
         detailsScroll.isHidden = !shown
@@ -391,8 +391,8 @@ final class FrameHealthCardViewMac: NSView {
         updateAccessibility()
         // The table changes with each sample; the charts' labels only with their scales
         let labels = [next.input?.rateTop, next.input?.timeTop, state.table ? 1 : 0]
-        // Under Details only the header shows, and Details draws its own rows
-        if header { needsDisplay = true } else if !state.showsDetails {
+        // Under Details only the header and the line under it show, and Details draws its own rows
+        if header { needsDisplay = true } else if state.showsDetails { setNeedsDisplay(regions.context) } else {
             setNeedsDisplay(regions.figures)
             if !compact, state.table || labels != chartLabels { setNeedsDisplay(regions.chartArea) }
         }
@@ -451,7 +451,7 @@ final class FrameHealthCardViewMac: NSView {
         guard let ctx = NSGraphicsContext.current?.cgContext, let palette else { return }
         ctx.setFillColor(palette.background)
         ctx.fill(bounds)
-        FrameHealthCardFace.draw(ctx, .init(width: bounds.width, compact: compact), state: state, palette: palette)
+        FrameHealthCardFace.draw(ctx, regions, state: state, palette: palette)
         guard !compact, !state.showsDetails else { return }
         let area = regions.chartArea, p = presentation
         if state.table {
@@ -569,7 +569,7 @@ final class FrameHealthCardViewMac: NSView {
             case .status: frame = l.status; label = state.status == .paused ? "Resume frame health" : "Pause frame health"
             case .close: frame = l.close; label = "Close frame health"
             case .title: frame = l.title; label = "Frame health"; element.setAccessibilityHelp("Shows what these numbers mean.")
-            case .details: frame = l.details; label = "Frame health details"; element.setAccessibilitySelected(state.showsDetails)
+            case .details: frame = l.details; label = state.showsDetails ? "Done" : "Frame health details"
             case .share: frame = l.share; label = "Share frame health"
             case .charts, .table:
                 frame = element.role == .charts ? l.segments.0 : l.segments.1
@@ -594,7 +594,7 @@ final class FrameHealthCardViewMac: NSView {
                 label = p.details.map { "\($0.name): \($0.value)" + ($0.reason.map { ", " + $0 } ?? "") }.joined(separator: ". ") + ". " + p.detailsCaption
                 role = .staticText
             }
-            // Details takes the place of everything below the header
+            // Details takes the place of the figures and charts
             if state.showsDetails, ![.close, .title, .status, .details, .share, .detailsView].contains(element.role) { hidden = true }
             if element.role == .detailsView, !state.showsDetails { hidden = true }
             // In the card's own coordinates, which are flipped, as the parent space is

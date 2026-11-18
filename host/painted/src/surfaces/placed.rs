@@ -81,11 +81,24 @@ impl Surfaces {
                 };
                 match code {
                     1 => {
+                        let opacity = unsafe {
+                            abi.library
+                                .get::<unsafe extern "C" fn(u32, u32) -> f32>(
+                                    b"gpu_placement_opacity",
+                                )
+                                .map_or(1., |read| read(canvas.id, i as u32))
+                        };
+                        let opacity = if opacity.is_finite() {
+                            opacity.clamp(0., 1.)
+                        } else {
+                            1.
+                        };
                         result.insert(
                             *id,
                             Placement::Visible {
                                 h: h[..9].try_into().unwrap(),
                                 depth: h[9],
+                                opacity,
                                 clip_depth: [
                                     h[10..13].try_into().unwrap(),
                                     h[13..16].try_into().unwrap(),
@@ -104,11 +117,9 @@ impl Surfaces {
         result
     }
 
-    /// Whether a rendered `Each` canvas now places its children other than
-    /// `painted` (the last paint's placements) says. Placements are read for a
-    /// paint, and Android paints only when the page changed, so a surface that
-    /// moves its children in `render` while the page is still would leave them
-    /// where the last paint put them, for painting and accessibility alike.
+    /// Whether a rendered `Each` canvas's placements or opacity differ from
+    /// the last paint's. Android repaints only when the page changes, so it
+    /// must also repaint when a surface moves or fades a child in `render`.
     #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub(crate) fn placements_moved<D: DataSource>(
         &self,
@@ -194,11 +205,13 @@ pub(crate) fn moved(a: &BTreeMap<u32, Placement>, b: &BTreeMap<u32, Placement>) 
         Placement::Visible {
             h,
             depth,
+            opacity,
             clip_depth,
             canvas,
         } => Some((
             h.map(f32::to_bits),
             depth.to_bits(),
+            opacity.to_bits(),
             clip_depth.map(|r| r.map(f32::to_bits)),
             canvas,
         )),
@@ -218,6 +231,7 @@ mod tests {
         Placement::Visible {
             h: [1., 0., x, 0., 1., 0., 0., 0., 1.],
             depth: 0.,
+            opacity: 1.,
             clip_depth: [[0., 0., 1.]; 2],
             canvas: 7,
         }
@@ -238,6 +252,131 @@ mod tests {
         assert!(moved(&painted, &BTreeMap::from([(1, at(10.))])));
         // Placed before the first paint read any
         assert!(moved(&BTreeMap::new(), &painted));
+    }
+
+    #[test]
+    fn placement_opacity_multiplies_paint_and_alone_requests_android_repaint() {
+        use crate::presenter::{PainterChoice, Presenter};
+        use crate::surfaces::{tests, Abi, Canvas};
+        let (probe, compat) = tests::fixture();
+        let source = r##"component App
+  view
+    canvas testId="canvas" width=100 height=100
+      view testId="label" role="button" position="absolute" width=40 height=40 background-color="#ff0000" opacity=0.5
+"##;
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (100., 100.),
+            1.,
+            probe.parent().unwrap().into(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let id = |name| {
+            p.host
+                .kernel()
+                .node_by_key(p.host.kernel().find_by_test_id(name)[0])
+                .unwrap()
+                .id
+        };
+        let (canvas, label) = (id("canvas"), id("label"));
+        p.surfaces
+            .abis
+            .insert(String::new(), Abi::open_path(&probe, &compat, "").unwrap());
+        p.surfaces.canvases.insert(
+            canvas,
+            Canvas {
+                performance: false,
+                id: 1,
+                name: "probe".into(),
+                artifact: String::new(),
+                owner: true,
+                since: 0,
+                held: Default::default(),
+                restored_controls: None,
+                restore_error: None,
+                restore_input: false,
+                restore_bytes: None,
+                restore_logged: false,
+                uploaded: None,
+            },
+        );
+        let opacity = |placements: &BTreeMap<u32, Placement>| match placements[&label] {
+            Placement::Visible { opacity, .. } => opacity,
+            Placement::Hidden => panic!("label hidden"),
+        };
+        assert_eq!(opacity(&p.surfaces.placements(&p.host, false)), 1.);
+
+        let dir = probe.parent().unwrap();
+        let source = std::fs::read_to_string(dir.join("probe.c"))
+            .unwrap()
+            .replace(
+                "if (len<16) return 0;",
+                "if (outcome != 1) return outcome; if (len<16) return 0;",
+            );
+        let source = "static unsigned int outcome = 1;\n".to_owned()
+            + &source
+            + r#"
+static float opacity = 1;
+static uint32_t reads;
+float gpu_placement_opacity(uint32_t id, uint32_t index) { reads++; return opacity; }
+void test_opacity(float value) { opacity = value; }
+void test_outcome(uint32_t value) { outcome = value; }
+uint32_t test_opacity_reads(void) { return reads; }
+"#;
+        let c = dir.join("opacity.c");
+        std::fs::write(&c, source).unwrap();
+        let path = dir.join(format!("libopacity.{}", std::env::consts::DLL_EXTENSION));
+        tests::compile_fixture(&c, &path);
+        let mut compat = compat;
+        compat["embedded"]["gpu"]["sha256"] =
+            crate::surfaces::digest::file(&path, true).unwrap().into();
+        p.surfaces
+            .abis
+            .insert(String::new(), Abi::open_path(&path, &compat, "").unwrap());
+        let set = |p: &Presenter<()>, value| unsafe {
+            p.surfaces.abis[""].symbol::<unsafe extern "C" fn(f32)>(b"test_opacity")(value);
+        };
+        for (value, expected) in [(1., 127), (0.5, 191), (0., 255)] {
+            set(&p, value);
+            if value != 1. {
+                assert!(p.surfaces.placements_moved(&p.host, &p.brush.placements));
+            }
+            p.dirty = true;
+            let frame = p.frame();
+            let pixel = frame.pixel(20, 20).unwrap();
+            assert_eq!(pixel.red(), 255);
+            assert!(
+                (i32::from(pixel.green()) - expected).abs() <= 1,
+                "{pixel:?}"
+            );
+            let hit = p.boxes().iter().find(|b| b.id == label).unwrap();
+            assert_eq!(hit.rect, (0., 0., 40., 40.));
+            assert!(!p.surfaces.placements_moved(&p.host, &p.brush.placements));
+        }
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            set(&p, value);
+            assert_eq!(opacity(&p.surfaces.placements(&p.host, false)), 1.);
+        }
+        let abi = &p.surfaces.abis[""];
+        unsafe {
+            let reads = abi.symbol::<unsafe extern "C" fn() -> u32>(b"test_opacity_reads");
+            let outcome = abi.symbol::<unsafe extern "C" fn(u32)>(b"test_outcome");
+            let before = reads();
+            outcome(2);
+            assert!(matches!(
+                p.surfaces.placements(&p.host, false)[&label],
+                Placement::Hidden
+            ));
+            outcome(0);
+            assert!(p.surfaces.placements(&p.host, false).is_empty());
+            assert_eq!(reads(), before);
+        }
+        p.dirty = true;
+        let frame = p.frame();
+        assert!((i32::from(frame.pixel(20, 20).unwrap().green()) - 127).abs() <= 1);
     }
 
     /// A module whose surface composites its children, and which keeps what

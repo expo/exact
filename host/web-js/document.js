@@ -16,7 +16,7 @@
 // title it is the selected route's header's heading, else the app's name
 // (navigation.js `pageTitle`, both web targets': LLP 1115.000 D4.1).
 import { unselected, unselectedForHead, pageTitle, panelsOf, viewChildren, overPage } from "./navigation.js";
-import { scope, owner, onEnd, adopting } from "./rt.js";
+import { scope, owner, onEnd, adopting, end, stood, PrepareTasks } from "./rt.js";
 
 /** The active head's fields by prop name (`headTitle` …): what a renderer
  * reads (render.mjs), and the agent's `state.head`. */
@@ -194,18 +194,49 @@ const Waiting = new Map();
 let Every = false;
 /** Panel `e` waits; `build` makes its contents, in the scope in force here, when it is first selected. */
 export function tp(e, build) {
-  if ((Every ||= !!globalThis.__exactRender || adopting())) return scope(build, owner());
-  const up = owner(); Waiting.set(e, () => scope(build, up)); onEnd(() => Waiting.delete(e));
+  if ((Every ||= !!globalThis.__exactRender || adopting())) return scope(() => build(e), owner());
+  Waiting.set(e, { build, up: owner(), prepared: null });
+  onEnd(() => Waiting.delete(e));
 }
 /** Whether `e` is a panel whose tab has never been selected: the agent's `unopened`. */
 export const unopened = e => Waiting.has(e);
 /** Build each waiting panel its root now selects, and any no root's tablist names. */
 export function openTabs() {
-  for (let open = toOpen(); open.length; open = toOpen()) for (const e of open) { const build = Waiting.get(e); Waiting.delete(e); build(); }
+  for (let open = toOpen(); open.length; open = toOpen()) for (const e of open) {
+    const waiting = Waiting.get(e); Waiting.delete(e);
+    if (waiting.prepared) e.append(...waiting.prepared.shell.childNodes);
+    else scope(() => waiting.build(e), waiting.up);
+  }
 }
-function toOpen() {
+/** Validate a newly selected panel's tasks before publishing the selection. */
+export function prepareTabs() {
+  if (!PrepareTasks) return;
+  for (let open = toOpen(true); open.length; open = toOpen(true)) for (const e of open) {
+    const waiting = Waiting.get(e), shell = e.cloneNode(false);
+    const s = scope(() => waiting.build(shell), waiting.up);
+    waiting.prepared = { shell, s };
+    const keep = () => {};
+    keep.refused = () => {
+      if (Waiting.get(e) === waiting && waiting.prepared?.s === s) {
+        waiting.prepared = null;
+        if (!s.gone) end(s);
+      }
+    };
+    stood(keep);
+  }
+}
+function toOpen(preparing = false) {
+  const read = (e, name) => {
+    const f = preparing && e.$taskProps?.[name];
+    if (!f) return e.getAttribute(name);
+    const v = f();
+    return v == null ? null : String(v);
+  };
+  const made = e => !Waiting.has(e) || (preparing && Waiting.get(e).prepared);
+  const contents = e => preparing ? Waiting.get(e)?.prepared?.shell ?? e : e;
   const open = [], roots = new Set();
   for (const e of Waiting.keys()) {
+    if (preparing && made(e)) continue;
     let root = e.parentElement;
     while (root && !root.hasAttribute("navigationKey")) root = root.parentElement;
     if (!root?.hasAttribute("navigationBack")) root = null;
@@ -213,12 +244,12 @@ function toOpen() {
     if (!panels.includes(e)) { open.push(e); continue; }
     if (roots.has(root)) continue;
     roots.add(root);
-    const key = root.getAttribute("navigationKey");
+    const key = read(root, "navigationKey");
     // A panel holds the key once this runtime built it: an adopted page's
     // waiting panel already shows its rendered routes, which only `build` wires.
-    if (panels.some(p => !Waiting.has(p) && viewChildren(p).some(r => r.getAttribute("navigationKey") === key))) continue;
-    const named = [...root.getElementsByTagName("*")].filter(t => t.getAttribute("aria-selected") === "true").map(t => t.getAttribute("aria-controls"));
-    const waiting = panels.filter(p => Waiting.has(p)), chosen = waiting.find(p => named.includes(p.getAttribute("id"))) ?? waiting[0];
+    if (panels.some(p => made(p) && viewChildren(contents(p)).some(r => read(r, "navigationKey") === key))) continue;
+    const named = [...root.getElementsByTagName("*")].filter(t => read(t, "aria-selected") === "true").map(t => read(t, "aria-controls"));
+    const waiting = panels.filter(p => !made(p)), chosen = waiting.find(p => named.includes(read(p, "id"))) ?? waiting[0];
     if (chosen) open.push(chosen);
   }
   return open;

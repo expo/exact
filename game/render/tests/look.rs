@@ -83,7 +83,10 @@ fn fade(gpu: &Gpu, opacity: f32, tint: bool, primitive: bool) -> fixture::Pixels
         Value::Bool(primitive),
     ];
     s.bind(&args, None).unwrap();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.prepare_assets(
         &gpu.device,
         &gpu.queue,
@@ -294,7 +297,10 @@ fn a_generated_model_samples_a_shared_texture_through_its_uvs() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<Terrain, ModelExecutor, true>::default();
     s.bind(&[], None).unwrap();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert_eq!(s.assets().requests, vec!["halves.tex".to_owned()]);
     s.asset("halves.tex", Ok(&bin::to_vec(&halves())));
     s.prepare_assets(
@@ -382,7 +388,10 @@ fn sparks(gpu: &Gpu, stretch: f32, textured: bool, now_ms: f64) -> fixture::Pixe
         None,
     )
     .unwrap();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.asset("flip.tex", Ok(&bin::to_vec(&flip())));
     s.prepare_assets(
         &gpu.device,
@@ -708,7 +717,10 @@ fn lod_frame(gpu: &Gpu, distance: f64, blend: bool, split: bool) -> fixture::Pix
         Value::Bool(split),
     ];
     s.bind(&args, None).unwrap();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.prepare_assets(
         &gpu.device,
         &gpu.queue,
@@ -841,7 +853,10 @@ fn soft_particle_pixels<const SINGLE: bool>(orthographic: bool, offset: f32) {
             None,
         )
         .unwrap();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.prepare_assets(
             &gpu.device,
             &gpu.queue,
@@ -1007,7 +1022,10 @@ fn sprites_and_textured_and_procedural_particles_take_both_fogs() {
     for mode in [0, 1, 2] {
         let mut s = WorldSurface::<FogQuads, ModelExecutor, true>::default();
         s.bind(&[Value::Number(f64::from(mode))], None).unwrap();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.asset(
             "white.tex",
             Ok(&bin::to_vec(&asset::TextureData {
@@ -1115,7 +1133,10 @@ fn counts_every_particle_pipeline<const MSAA: bool>() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<LookQuads<MSAA>, ModelExecutor, true>::default();
     s.bind(&[], None).unwrap();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.asset(
         "white.tex",
         Ok(&bin::to_vec(&asset::TextureData {
@@ -1231,7 +1252,10 @@ fn a_particle_counts_where_any_covered_sample_shows_it_and_any_contribution_coun
         let mut s = WorldSurface::<Limits, ModelExecutor, true>::default();
         s.bind(&[Value::Bool(edge), Value::Bool(left)], None)
             .unwrap();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.asset(
             "white.tex",
             Ok(&bin::to_vec(&asset::TextureData {

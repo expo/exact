@@ -6,7 +6,6 @@ pub mod compress;
 mod files;
 mod geometry;
 mod import;
-mod meshopt;
 use files::write_changed;
 pub use files::{bake_game_level, bake_game_tables, check_size};
 mod sound;

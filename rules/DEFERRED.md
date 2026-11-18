@@ -75,6 +75,15 @@ and its build and drive plumbing are deleted, and Android's knob does not grow
 per host. Still out: variants for games, on Windows, for `exact install` and
 its siblings, for `share`, and in the association files.
 
+**Expanded (Charlie, 2026-11-17, on #764: "write up an LLP … and then pursue
+the best path"; LLP 1163.000):** alternate app icons the person chooses, on iOS
+and iPadOS: app.json `alternate_icons`, built as the app's own icons are, and
+`@exact/app-icon`'s `appIcon` and `setAppIcon`. The consumer is Shelf's App Icon
+setting. Take: the discovery of alternates from catalogs, where every extra
+`.appiconset` was one, is deleted; the manifest's list is the only roster. Still
+out: Android, until its own RFC (LLP 1163.000 D5); tvOS, until a consumer asks;
+the Mac's Dock tile; switching without the person's tap.
+
 **Expanded (Charlie, 2026-10-11, events ruling):** `keycapture=` admits DOM
 capture-phase key dispatch for the coding-agent desktop app's early shortcuts;
 `focusin`/`focusout` admit bubbling subtree focus observation for the clipped
@@ -662,6 +671,21 @@ after the panel. Still out: a host crate the app writes beside generated ones
 (an authored workspace is the escape), and a crate deeper than one level below
 `app.json` as a member.
 
+**Expanded (Charlie, 2026-11-17, #578; LLP 1181):** `@exact/shader`, a
+first-party GPU package (LLP 1153.003 D5) whose one surface runs a WGSL
+fragment shader from the app's assets over a canvas, with no Rust in the app:
+`canvas surface=shader(src="assets/plasma.wgsl", speed=2)`. The file's uniform
+struct declares its uniforms, which the canvas binds by name. `time`,
+`resolution` and `devicePixelRatio` are filled for a struct that declares
+them. A shader that declares `time` animates, and holds one frame where the
+person prefers reduced motion; any other rests. The compiler checks a literal
+`src` at build. It draws on the web, macOS, iOS, tvOS, Android, Linux and
+Windows. Consumer: the reporter's full-screen shader, which is a GPU crate and
+about 100 lines of wgpu today. Take: none offered; waived by Charlie. Still
+out: textures, the canvas's children as a texture, several passes, compute, a
+translucent canvas, Display P3 and HDR, matrices and arrays as uniforms, a
+built-in pointer, and inline or downloaded source (LLP 1181 §8).
+
 ## Features carried over as "no"
 
 **Admitted (Charlie, 2026-10-12, textrows ruling):** bounded
@@ -708,6 +732,14 @@ to the ideal end state). Still out: `rotate` and `translate` in a look, and
 `scale` in `:disabled` or `:checked`.
 
 **Runtime**
+
+**Swift Package Manager products (LLP 1133.001 D9; expo/exact#751):**
+waived by Charlie, 2026-11-16, expo/exact#751. An Apple implementation or
+the app's own Swift may name products at exact versions, with one committed
+`Package.resolved` per app and builds restricted to its resolved versions.
+Unblocks vendor SDKs distributed as Swift packages; app-local xcframeworks
+remain supported. CocoaPods stays out: its trunk stops accepting podspecs
+on 2026-12-02, and the Apple build has no Xcode project for it to integrate into.
 
 **Expanded (Charlie, 2026-10-13, issue-program ruling 10):** runner-owned
 WebSocket sending: the stream mapper receives a socket handle and a mutation
@@ -817,6 +849,15 @@ names no take; `:focus-within` remains out.
   else of the bundle, read only, changed only by a new binary; `home:` stays
   absent there, and Android has neither. Consumer: a data module reading a
   file the app ships. Take: none; Charlie's ruling.
+- **Admitted (Charlie, 2026-11-14, waived after the panel; LLP 1173 D2,
+  D4, D5):** `startIn` on the document pickers and `saveFile`, and the seven
+  well-known folders as `fs.write` namespaces whose writes only create, on
+  macOS and Linux; Windows folder writes wait for piece 4's drive. Consumer:
+  #507's screenshot annotation tool, saving captures without a picker per file.
+  Take: waived by Charlie, 2026-11-14, after the panel. Still refused: reading,
+  replacing or removing through these namespaces, photo-library and Android
+  MediaStore access through them, and `doc.keep` on Windows. These lines are
+  declared at build; the refusal of every other durable grant stands.
 - ~~Snapback / update economy.~~ Moved 2026-09-03 (Charlie: "you can pull out snapback
   for now"), in LLP 1026 D11's minimal form only: an installed app fetches a signed
   bundle of static files from a baked-in origin, after first pixel, into an on-disk
@@ -1202,7 +1243,7 @@ reading. Nothing that isn't HTML is added by it.
   Maven libraries need (LLP 1133.008 D8). Consumer: the photo editor, which
   takes a photo and then edits it. Unblocks a photo in an app without app
   Swift. Take: the photo editor's Android port moves to later. Still out,
-  each until a consumer asks (LLP 1133.008 §12): video recording, a camera
+  each until a consumer asks (LLP 1133.008 §12): a camera
   track in `video srcObject=` and frames to code, two cameras at once on
   iOS, document scanning (narrowed from "barcode and document scanning" by
   LLP 1133.027's record below), constraint dictionaries, zoom on the
@@ -1231,8 +1272,15 @@ reading. Nothing that isn't HTML is added by it.
   access-control app, whose guards record a short video and upload it
   (`exactBodyFrom`, now streamed from disk with no size bound where it is
   streamed). Unblocks that without app Kotlin or Swift. Take: none
-  offered; waived by the same ask. Still out: video recording in the app,
-  and the macOS, Windows, Linux, tvOS, visionOS and watchOS cells.
+  offered; waived by the same ask. Still out for the system camera UI: the
+  macOS, Windows, Linux, tvOS, visionOS and watchOS cells.
+- **Expanded (Charlie, 2026-11-16, expo/exact#748; consumer trigger met):**
+  in-app video recording through `startMediaRecorder` in `@exact/recording`,
+  over a camera stream sharing the preview and frame analysis session, to an
+  `app:/` file. Unblocks a guided clip with the app's overlay and countdown.
+  Android and the web first, then Apple; `maxDuration` bounds the clip and
+  the track's `frameRate` constraint sets its ideal rate. The result names
+  its MIME type, byte size, duration, pixel size and frame rate.
 - **Expanded (Charlie, 2026-10-23, "Expand, no take", on LLP 1133.009 §15
   question 6):** recording the microphone to a file and reading its level,
   by Media Capture's and MediaStream Recording's names (`getUserMedia(audio=)`
@@ -1875,8 +1923,15 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   toasts, trivia's round (their diaries' Top-5). Unblocks an app that does
   no work at rest while nothing is showing. Take: none offered. Still out:
   an implicit reaction to a state change (LLP 1017 P4c's `task … when [dep]`),
-  component-scoped and action-started timers, computed intervals, a gate
+  action-started timers, computed intervals, a gate
   that reads `performanceNow()`, and cancelling a queued send.
+  **Expanded (LLP 1035.005.004 §7/D6; waived by Charlie, 2026-11-16, expo/exact#476):**
+  a child used outside data-sized repetition may own the root's task forms,
+  including `every(frame, …)`. Each task lives with its instance, runs only
+  while its `when` holds, restarts on `key=` changes, and runs its action in
+  the instance's frame. Unblocks a tab or screen that owns its polling or
+  delayed work. Still out: action-started timers, computed intervals, timers
+  under a data-sized `for`, per-row timers, and a child's `sequence`.
   **Expanded (Charlie, 2026-11-12, request to implement Hirbod's open issues;
   #177):** a root `task NAME [when COND] key=EXPR` may use `change(action)`
   to queue one action after the host applies the current commit, without a timer

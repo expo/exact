@@ -290,7 +290,9 @@ mod tests {
         };
         let calls = Arc::new(Mutex::new((vec![], 0)));
         let mut module = Module::new(&REGISTRY);
-        let id = module.insert(Box::new(Probe(calls.clone())), None).unwrap();
+        let id = module
+            .insert("probe", Box::new(Probe(calls.clone())), None)
+            .unwrap();
         assert_eq!(module.take_performance(id, 0.0), None);
         assert_eq!(*calls.lock().unwrap(), (vec![], 0));
         assert!(module.set_performance_reporting(id, true));

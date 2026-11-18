@@ -181,7 +181,7 @@ the page and its reload stream, never the local installer's token.
 ```sh
 bun host/apple/build.mjs --run              # macOS
 bun host/apple/build.mjs --ios --run        # an iOS Simulator (--device --run for a connected iPhone)
-cargo build --profile host-dev -p caltrain-linux   # Linux: a DRM/KMS console, or headless anywhere (--release to ship)
+bun scripts/build-linux.mjs caltrain        # Linux: a DRM/KMS console, or headless anywhere
 ```
 
 A first native build takes ten to fifteen minutes on a laptop; later builds reuse it and
@@ -696,12 +696,13 @@ else here was admitted because a real app needed it.
   (`exact-camera srcObject=`) and takes still photos (`takePhoto`) on the web, iOS,
   macOS, and Android, behind the `device.camera` grant (LLP 1133.008).
   `takePhotoWithCameraApp` takes one in the system camera UI instead: Android's camera
-  app, iOS's camera picker, and on the web a file input with `capture`.
-  `recordVideoWithCameraApp` records a video the same way (LLP 1133.008.000). Neither
-  needs a grant on Android. iOS shows the `device.camera` line's purpose, and for a video
-  the `device.microphone` line's too. The package does not record video inside the app or
-  hand the camera's frames to code, and it has no Windows, Linux, tvOS, or watchOS
-  implementation.
+  app, iOS's camera picker, and on the web a file input with `capture`;
+  `recordVideoWithCameraApp` records a video there (LLP 1133.008.000). Neither needs a
+  grant on Android; iOS shows the `device.camera` line's purpose, and for a video the
+  `device.microphone` line's too. `startMediaRecorder` in
+  [`@exact/recording`](packages/recording/README.md) records the viewfinder's stream
+  in the app on Android, the web, iOS and macOS. The camera does not hand its frames
+  to code and has no Windows, Linux, tvOS, or watchOS implementation.
 - **Data.** TypeScript or Rust sources, optionally on a worker, and sources declared in
   Contract: an HTTP request whose JSON answer is read field by field. An app whose sources
   are all declared has no data module, and its native build links no JavaScript engine

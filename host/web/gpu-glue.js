@@ -47,6 +47,25 @@ let terminalRestoreReported = false;
 const restoreJournal = [];
 
 const exact = globalThis.exact;
+const motionQuery = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)');
+const reducedMotion = () => motionQuery?.matches === true;
+motionQuery?.addEventListener('change', () => {
+  if (!loaded || recoveringDevice || terminalDevice || trapped()) return;
+  gpu.gpu_reduced_motion(reducedMotion());
+  schedule();
+});
+function checkSurfaceOwners(module) {
+  const owners = Object.entries(exact.compat?.inputs?.gpuModules ?? {});
+  if (stem !== 'gpu' || !owners.length) return;
+  const names = JSON.parse(module.gpu_surfaces());
+  for (const [owner, surfaces] of owners) {
+    const conflicts = names.filter(name => surfaces.includes(name));
+    if (!conflicts.length) continue;
+    const message = `GPU surfaces ${conflicts.join(', ')} are registered by the primary and owned by module ${owner}`;
+    if (!(exact.production ?? exact.compat?.embedded?.trust === 'production')) throw new Error(message);
+    console.error(message);
+  }
+}
 const publishers = new Map(); // name -> first live entry
 const pendingRecords = [];
 let drainingRecords = false;
@@ -71,9 +90,18 @@ function deliverPosts(name) {
   for (const json of queued) if (!gpu.gpu_input(entry.id, json)) console.error("exact gpu:", gpu.gpu_error());
   messages(entry); schedule();
 }
-const inputStyle = document.createElement("style");
-inputStyle.textContent = "[data-gpu-input]:focus{outline:none}";
-document.head.append(inputStyle);
+// A surface's fade of a placed child (LLP 1133.039 D8). The child carries the factor in a property no author
+// writes, and one rule multiplies it into the child's picture, shadows included, so the child is not moved and its
+// opacity, mask and animations stay the author's. A box around the child is the only other place CSS takes group
+// opacity without writing an authored property, and it would change what the child's percentages, flex or grid
+// placement and containing block resolve against. The rule outranks the shell's (index.html: `all: unset` and
+// `all: revert` on a control would clear it) and yields to the author's, a class under `#exact-root#exact-root`
+// (emit.rs) or inline. So a `filter` the author wrote wins and that child is not faded: the web's known difference.
+const PLACEMENT_OPACITY = "--exact-placement-opacity";
+const placementStyle = `#exact-root#exact-root :where([style*="${PLACEMENT_OPACITY}"]){filter:opacity(var(${PLACEMENT_OPACITY}))}`;
+const glueStyle = document.createElement("style");
+glueStyle.textContent = "[data-gpu-input]:focus{outline:none}" + placementStyle;
+document.head.append(glueStyle);
 let loaded = false, loadMs;
 let recoveringDevice;
 let pendingCutover;
@@ -209,8 +237,14 @@ function childFrames(entry) {
   const children = [...entry.host.children].filter(el => !el.hasAttribute("data-surface"));
   return children.map(el => ({el, name:el.getAttribute("data-testid") ?? "", frame:[el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight]}));
 }
+// A placed child's fade, which `placementStyle` paints; 1 removes it.
+function placementOpacity(el, factor) {
+  const value = factor === 1 ? "" : String(factor);
+  if (el.style.getPropertyValue(PLACEMENT_OPACITY) !== value) el.style.setProperty(PLACEMENT_OPACITY, value);
+}
 function restoreChild(row) {
   if (!row.original) return;
+  placementOpacity(row.el, 1);
   Object.assign(row.el.style, row.original.style); row.el.inert = row.original.inert;
   delete row.original;
 }
@@ -263,6 +297,9 @@ function placeChildren(entry) {
     row.original ??= {style:Object.fromEntries(["transform","transformOrigin","zIndex","visibility","position"].map(k => [k, el.style[k]])), inert:el.inert};
     el.style.visibility = outcome === 2 ? "hidden" : row.original.style.visibility;
     el.inert = outcome === 2 || row.original.inert;
+    // Read only for a child the surface places and shows; a module without the export fades nothing.
+    const opacity = outcome === 2 ? 1 : gpu.gpu_placement_opacity?.(entry.id, i);
+    placementOpacity(el, Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1);
     if (outcome === 2) continue;
     const [x,y] = row.frame;
     el.style.transformOrigin = "0 0";
@@ -283,7 +320,11 @@ function placeChildren(entry) {
 }
 
 // Both code replacement and device recovery replace the presentation context.
-const replacementCanvas = entry => entry.el.cloneNode(false);
+const replacementCanvas = entry => {
+  const el = entry.el.cloneNode(false);
+  el.style.visibility = "hidden";
+  return el;
+};
 function installCanvas(old, entry) {
   cancelAssets(old); old.observer?.disconnect(); old.unlisten?.();
   old.el.replaceWith(entry.el);
@@ -307,8 +348,8 @@ function fallback(entry) {
   for (const row of entry.children ?? []) restoreChild(row);
   entry.children = undefined;
   entry.el.style.zIndex = "-1";
-  // Resetting the bitmap once discards stale pixels. Its CSS box stays in the
-  // wrapper, transparent over the wrapper's background and under its children.
+  entry.el.style.visibility = "hidden";
+  // Discard stale pixels while retaining the drawing element's CSS box.
   entry.el.width = 1;
   entry.el.height = 1;
 }
@@ -342,9 +383,10 @@ function recoverDevice() {
   recoveringDevice = (async () => {
     const outcome = pendingCutover?.module === module ? pendingCutover.outcome : JSON.parse(await module.gpu_recover(new Uint32Array(entries.map(e => e.id)), staged.map(([,e]) => e.el)));
     if (gpu !== module) { for (const [, e] of staged) e.el.remove(); return; }
+    if (outcome.status === "healthy" || outcome.status === "recovered") module.gpu_reduced_motion(reducedMotion());
     if (outcome.status === "healthy") {
       for (const [, e] of staged) e.el.remove();
-      api.recovery = outcome; resetRecovery(); return;
+      api.recovery = outcome; resetRecovery(); schedule(); return;
     }
     if (outcome.status === "no device") {
       for (const [, e] of staged) e.el.remove();
@@ -531,6 +573,8 @@ function tellSize(entry, module, r = entry.host.getBoundingClientRect()) {
 }
 // Creation/binding is a hard result. Staging never publishes or attaches listeners.
 function create(entry, module, carry) {
+  // Until a complete frame is presented, show the author's styles and children (LLP 1181 D13).
+  entry.el.style.visibility = "hidden";
   const r = entry.host.getBoundingClientRect(), { w, h, s } = size(entry.host, r);
   entry.el.width = Math.max(1, Math.round(w * s));
   entry.el.height = Math.max(1, Math.round(h * s));
@@ -665,7 +709,15 @@ function messages(entry, drainAssets = true) {
   finishRestore(entry, gpu);
   reportRestore(entry);
   const record = gpu.gpu_published(entry.id);
-  if (record !== undefined && live(entry.view) === entry && publishers.get(entry.name) === entry) surfaceRecord(entry.name, record);
+  if (record !== undefined && live(entry.view) === entry) {
+    if (!entry.terminal && entry.el.style.visibility === "hidden") {
+      // Malformed records still reach the runner's refusal handling.
+      try {
+        if (JSON.parse(record)?.presented === true) entry.el.style.visibility = "";
+      } catch {}
+    }
+    if (publishers.get(entry.name) === entry) surfaceRecord(entry.name, record);
+  }
   performanceRecord(entry);
   const texts = gpu.gpu_messages(entry.id);
   if (texts === undefined) return;
@@ -1260,12 +1312,14 @@ async function swap(version) {
   const carrier = { worldCarry: exact.worldCarry };
   try {
     next.gpu_tier?.(tierCode);
+    checkSurfaceOwners(next);
     await next.gpu_load();
     if (exact.now) next.gpu_seekable(true);
     if (sentPeriod) next.gpu_period(sentPeriod);
     const rows = await loadShaders(next);
     for (const [name, text] of rows) if (!await next.gpu_shader_check(name, text)) throw new Error(next.gpu_error());
     replaceShaders(rows, next);
+    next.gpu_reduced_motion(reducedMotion());
     // A canvas context belongs to one device. Stage on detached replacement
     // canvases; the old canvases and their worlds remain untouched until commit.
     // No await from carry through cutover; input cannot arrive between them.
@@ -1326,10 +1380,12 @@ try {
   // The tier is chosen before the device is made, from the adapter's facts (LLP 1139.003 D2).
   tierCode = Math.max(0, TIERS.indexOf(await chooseTier(exact.pageFacts)));
   gpu = guardedModule(await loadModule(version));
+  checkSurfaceOwners(gpu);
   gpu.gpu_tier?.(tierCode);
   await gpu.gpu_load();
   if (exact.now) gpu.gpu_seekable(true);
   replaceShaders(await loadShaders(gpu));
+  gpu.gpu_reduced_motion(reducedMotion());
   api.version = version;
   loaded = true;
 } catch (error) {

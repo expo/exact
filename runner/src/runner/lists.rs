@@ -184,6 +184,15 @@ impl<D: DataSource> Runner<D> {
         update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
     ) -> Result<CommitReceipt, RunnerError> {
         let (ops, surfaces, _) = self.update_ops(settled, update)?;
+        self.publish_render(ops, surfaces, settled)
+    }
+
+    pub(super) fn publish_render(
+        &mut self,
+        ops: Vec<exact_kernel::Op>,
+        surfaces: Vec<crate::SurfaceUpdate>,
+        settled: bool,
+    ) -> Result<CommitReceipt, RunnerError> {
         match self.apply(ops) {
             Ok(receipt) => {
                 self.publish_surfaces(surfaces);

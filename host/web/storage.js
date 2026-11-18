@@ -1,5 +1,6 @@
 // Storage completions belong to an answer checkpoint, not an arbitrary browser
 // microtask. @ref LLP 1027 D10: host work returns through the data seam.
+import { knownFolderPath } from './grant-admission.js';
 import { agentReads, agentStorageRefusal, directories, emptyRead, storageKey } from './storage-environment.js';
 let fileFactory, sqliteFactory, toldAgent = false;
 
@@ -44,7 +45,7 @@ export function createStorage(win, admitted, scope, key = storageKey(admitted.ap
   // operation does not take it.
   const claim = () => reserved.shift() || null;
   let disposed = false;
-  const error = e => Object.assign(new win.Error(e?.message || String(e)), {kind:e?.kind || 'Unavailable', code:e?.code});
+  const error = e => Object.assign(new win.Error(e?.message || String(e)), {kind:e?.kind || 'Unavailable', code:e?.code, ...(e?.name === 'NotSupportedError' ? { name: e.name } : {})});
   const unavailable = () => error({kind:'Unavailable',message:'storage environment disposed'});
   const clone = value => win.structuredClone(value);
   // Keep adapters as shared modules: the Rust request path uses the same
@@ -149,6 +150,7 @@ export function createStorage(win, admitted, scope, key = storageKey(admitted.ap
       // Snapshot input bytes before the caller can mutate its buffers.
       let captured;
       try { captured = structuredClone(args); } catch (e) { return failed(e); }
+      if (captured.slice(0, /^(rename|copyFile)$/.test(method) ? 2 : 1).some(knownFolderPath)) return failed(Object.assign(new Error('NotSupportedError: well-known folders are unavailable on this host'), { name: 'NotSupportedError', code: 'failed' }));
       // A document copied into an app file needs both (documents-glue.js `copyFile`).
       if (method === 'copyFile' && typeof captured[0] === 'string' && captured[0].startsWith('doc:/') && typeof captured[1] === 'string' && captured[1].startsWith('app:/'))
         return enqueue(async active => { await documentFiles(); const backend = await fileSystem(); active(); return globalThis.exact.documents.copyFile(captured[0], captured[1], admitted.grantSet, backend); }, clone, () => {}, true, method);

@@ -135,6 +135,8 @@ struct Em<'a> {
     classes: Vec<String>,
     /// Each distinct set of state looks (LLP 1121 D8), `data-exact-looks` index plus one.
     looks: Vec<Vec<(u8, String)>>,
+    /// Whether a node's own style holds a pressed paint (`input::unused`).
+    press_paint: bool,
     /// Where each class and each set of looks is in `classes` and `looks`.
     class_at: HashMap<String, usize>,
     looks_at: HashMap<Vec<(u8, String)>, usize>,
@@ -246,6 +248,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         out: String::new(),
         classes: Vec::new(),
         looks: Vec::new(),
+        press_paint: false,
         class_at: HashMap::new(),
         looks_at: HashMap::new(),
         root_class: None,
@@ -272,7 +275,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         site_attrs,
         dev_reload,
         panels: exact_runner::instance::tabs::panel_sites(plan),
-        owns_requests: plan.resources.iter().any(|r| r.owner.is_some()),
+        owns_requests: plan.resources.iter().any(|r| r.owner.is_some())
+            || plan.timers.iter().any(|t| t.owner.is_some()),
     };
     em.heights = em.drag_targets(PropId::HeightDragFor);
     em.transforms = em.drag_targets(PropId::TransformDragFor);
@@ -530,6 +534,10 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     if !commands.is_empty() {
         let use_commands = em.uses.rt("useCommands");
         body.push_str(&commands::install(&use_commands, &commands));
+    }
+    if plan.timers.iter().any(|t| t.owner.is_some()) {
+        let owned = em.uses.rt("ownedTasks");
+        let _ = write!(body, "{owned}();");
     }
     let mount = em.uses.rt("mount");
     let _ = write!(body, "{mount}($R=>{{{view}}});");
@@ -961,13 +969,19 @@ impl Em<'_> {
         if commands::dialog_glue(plan, &parts.tag, &attrs, NodesId(i)) {
             self.dialogs = true;
         }
-        if presence.contains("--exact-press:")
+        let press_paint = [
+            "--exact-press-opacity:",
+            "--exact-press-opacity-to:",
+            "--exact-press-background-color:",
+            "--exact-press-color:",
+        ]
+        .iter()
+        .any(|p| presence.contains(p));
+        self.press_paint |= press_paint;
+        if press_paint
+            || presence.contains("--exact-press:")
             || presence.contains("--exact-press-haptic:")
             || presence.contains("--exact-press-translate:")
-            || presence.contains("--exact-press-opacity:")
-            || presence.contains("--exact-press-opacity-to:")
-            || presence.contains("--exact-press-background-color:")
-            || presence.contains("--exact-press-color:")
             || !parts.looks.is_empty()
             || answers::property(plan, i, PropId::AccessibilityKeyShortcuts).is_some()
             || answers::role_can(plan, i, &["radiogroup", "tablist", "menu"])
@@ -1419,7 +1433,7 @@ impl Em<'_> {
         let panel = self.panels.binary_search(&exact_plan::NodesId(i)).is_ok();
         if panel {
             let tp = self.uses.rt("tp");
-            let _ = write!(self.out, "{tp}({e},()=>{{");
+            let _ = write!(self.out, "{tp}({e},{e}=>{{");
         }
         if virtualized {
             self.collection_children(i, &e, scope, &edges)?;

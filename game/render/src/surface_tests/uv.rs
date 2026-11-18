@@ -117,7 +117,10 @@ fn surface(
     interpolate: bool,
 ) -> WorldSurface<Ribbon, ModelExecutor, true> {
     let mut s = WorldSurface::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(
         &[
             Value::Number(mode.into()),

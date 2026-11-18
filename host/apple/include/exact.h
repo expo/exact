@@ -298,6 +298,15 @@ void exact_textflow_free(uint64_t handle);
  * min(count,cap) to out (null is a query); returns count, 0 for invalid UTF-8. */
 size_t exact_text_line_breaks(const uint8_t *utf8, size_t len,
     const uint32_t *words, size_t word_count, uint32_t *out, size_t cap);
+/* LLP 1001 §6: where Blink's scorer breaks a balanced paragraph of `lines` greedy
+ * lines in `width` (the first line's less `indent`), its block's font `font_size`.
+ * `count` break opportunities in order, the last the paragraph's end: where a line
+ * ending there ends, where the next starts, both from the paragraph's start, and
+ * whether it shows a hyphen. Writes the lines - 1 indices where lines break; returns
+ * their count, 0 where the scorer gives nothing (bisect, or keep the greedy lines). */
+size_t exact_text_balanced_breaks(float width, float indent, float font_size, uint32_t justified,
+    const float *ends, const float *nexts, const uint8_t *hyphens, size_t count, size_t lines,
+    uint32_t *out, size_t cap);
 
 /* LLP 1060.000 D3: natural text's base direction per paragraph (UAX #9 P2, P3 at its
  * paragraph separators; `fallback` where one has no strong character): 0 ltr, 1 rtl.

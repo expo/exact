@@ -133,7 +133,7 @@ pub(crate) fn set_from_compat(compat: &str) {
 #[cfg(windows)]
 fn set(tasks: &[Task]) -> windows::core::Result<()> {
     let exe = std::env::current_exe().map_err(|_| windows::core::Error::from_thread())?;
-    let exe = HSTRING::from(exe.as_os_str());
+    let exe = crate::shell_path(&exe)?;
     with_list(|list| set_list(list, tasks, &exe))
 }
 
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn empty_and_populated_task_lists_commit() {
         with_list(|list| {
-            let exe = HSTRING::from(std::env::current_exe().unwrap().as_os_str());
+            let exe = crate::shell_path(&std::env::current_exe().unwrap())?;
             let app = HSTRING::from(format!("Exact.JumpListTest.{}", std::process::id()));
             unsafe {
                 list.SetAppID(&app)?;

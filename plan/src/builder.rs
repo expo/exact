@@ -927,6 +927,8 @@ impl PlanBuilder {
         let always = self.constant(&Value::Bool(true));
         let name = self.str("");
         self.plan.timers.push(TimersRow {
+            owner: None,
+            args: ArgsRange::default(),
             change: false,
             interval_ms,
             wait: 0,
@@ -942,6 +944,14 @@ impl PlanBuilder {
             key: always,
         });
         TimersId(self.plan.timers.len() as u32 - 1)
+    }
+
+    /// An instance's task and the captured arguments its action reads (LLP 1035.005.004 D6).
+    pub fn set_timer_owner(&mut self, timer: TimersId, owner: Option<ArmsId>, args: &[Code]) {
+        let args = self.args(args);
+        let row = &mut self.plan.timers[timer.0 as usize];
+        row.owner = owner;
+        row.args = args;
     }
 
     /// Set the admission kind and optional waiting bound (LLP 1147).

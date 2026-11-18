@@ -368,6 +368,9 @@ impl Module {
             return Err(why);
         }
         self.flush();
+        if let Some(error) = self.refused_instance(id) {
+            return Err(error);
+        }
         let gpu = self.gpu.as_ref().ok_or("no device")?;
         let mut inst = if id == 0 {
             None

@@ -203,9 +203,9 @@ extension NavigationHost {
     /// tab, asked as UIKit asks it: by its `UITab` on a bar built from them.
     func appDeclinesTab(_ tabs: UITabBarController, _ controller: UIViewController) -> Bool {
         if #available(iOS 18.0, tvOS 18.0, *), let index = tabIndex(of: controller), builtTabs.indices.contains(index), let tab = builtTabs[index] as? UITab {
-            return tabProxy.app?.tabBarController?(tabs, shouldSelectTab: tab) == false
+            return tabProxy?.app?.tabBarController?(tabs, shouldSelectTab: tab) == false
         }
-        return tabProxy.app?.tabBarController?(tabs, shouldSelect: controller) == false
+        return tabProxy?.app?.tabBarController?(tabs, shouldSelect: controller) == false
     }
 
     /// UIKit's `didSelect` for a tap on the tab it shows, which selects
@@ -213,9 +213,9 @@ extension NavigationHost {
     /// it: by `UITab` on a bar built from them.
     func sendReselect(_ tabs: UITabBarController, _ controller: UIViewController) {
         if #available(iOS 18.0, tvOS 18.0, *), let index = tabIndex(of: controller), builtTabs.indices.contains(index), let tab = builtTabs[index] as? UITab {
-            return tabProxy.tabBarController(tabs, didSelectTab: tab, previousTab: tab)
+            return tabProxy?.tabBarController(tabs, didSelectTab: tab, previousTab: tab) ?? ()
         }
-        tabProxy.tabBarController(tabs, didSelect: controller)
+        tabProxy?.tabBarController(tabs, didSelect: controller)
     }
 
     /// The search tab activates its field on selection when its root route's
@@ -255,6 +255,7 @@ extension TabDelegateProxy {
 
     @available(iOS 18.0, tvOS 18.0, *)
     @objc func tabBarController(_ tabs: UITabBarController, didSelectTab tab: UITab, previousTab: UITab?) {
+        let app = self.app
         if let host, !host.builtTabs.isEmpty, tabs === host.tabController { host.followUIKit(tabs) }
         app?.tabBarController?(tabs, didSelectTab: tab, previousTab: previousTab)
     }
@@ -263,12 +264,14 @@ extension TabDelegateProxy {
     /// The sidebar's Edit hid or moved tabs, as More's Edit moves them (`syncNextTurn`).
     @available(iOS 18.0, tvOS 18.0, *)
     @objc func tabBarController(_ tabs: UITabBarController, displayOrderDidChangeFor group: UITabGroup) {
+        let app = self.app
         host?.syncNextTurn()
         app?.tabBarController?(tabs, displayOrderDidChangeFor: group)
     }
 
     @available(iOS 18.0, tvOS 18.0, *)
     @objc func tabBarController(_ tabs: UITabBarController, visibilityDidChangeFor changed: [UITab]) {
+        let app = self.app
         host?.syncNextTurn()
         app?.tabBarController?(tabs, visibilityDidChangeFor: changed)
     }

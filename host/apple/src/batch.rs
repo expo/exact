@@ -63,6 +63,9 @@ pub struct Batch {
     /// Image handles a 2D canvas asked for (LLP 1056 D9): the presenter
     /// decodes each and answers `exact_canvas_image`.
     images: Vec<String>,
+    /// Image handles no mounted canvas's latest draw asks for: the
+    /// presenter lets each go, decoded, failed or loading.
+    dropped_images: Vec<String>,
     /// The root font size or the window's modes moved (`Host::facts_moved`).
     pub facts: bool,
     /// A timer's continuation an advance released is still out
@@ -574,6 +577,11 @@ impl Batch {
     /// Image handles for the presenter to decode (LLP 1056 D9).
     pub fn canvas_images(&mut self, srcs: Vec<String>) {
         self.images.extend(srcs);
+    }
+
+    /// Image handles for the presenter to let go.
+    pub fn canvas_images_dropped(&mut self, srcs: Vec<String>) {
+        self.dropped_images.extend(srcs);
     }
 
     /// A canvas binding, preserving positional values or authored argument names.
@@ -1172,9 +1180,15 @@ impl Batch {
         if let Some(must) = self.must_finish {
             let _ = write!(s, ",\"mustFinish\":{must}");
         }
-        if !self.images.is_empty() {
-            s.push_str(",\"canvasImages\":[");
-            for (i, src) in self.images.iter().enumerate() {
+        for (key, srcs) in [
+            ("canvasImages", &self.images),
+            ("canvasImagesDropped", &self.dropped_images),
+        ] {
+            if srcs.is_empty() {
+                continue;
+            }
+            let _ = write!(s, ",\"{key}\":[");
+            for (i, src) in srcs.iter().enumerate() {
                 if i > 0 {
                     s.push(',');
                 }

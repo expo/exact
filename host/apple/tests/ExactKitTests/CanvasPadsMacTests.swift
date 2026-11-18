@@ -45,7 +45,7 @@ final class CanvasPadsMacTests: XCTestCase {
         let canvas = NodeView(id: 100, kind: "canvas", presenter: p)
         canvas.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
         p.root.addSubview(canvas); p.views[100] = canvas
-        let e = CanvasesHost.Entry(view: canvas, name: "world", values: []); e.id = 1; e.wantsInput = true; e.module = m
+        let e = CanvasesHost.Entry(view: canvas, name: "world", values: Data("[]".utf8)); e.id = 1; e.wantsInput = true; e.module = m
         s.surfaceHost.entries[100] = e
         // A control in the canvas, and an editor outside it.
         let control = NodeView(id: 101, kind: "view", presenter: p)

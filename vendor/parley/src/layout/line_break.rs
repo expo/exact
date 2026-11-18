@@ -13,8 +13,8 @@ use crate::analysis::cluster::Whitespace;
 use crate::analysis::Boundary;
 use crate::data::ClusterData;
 use crate::layout::{
-    BreakReason, Layout, LayoutData, LayoutItem, LayoutItemKind, LineData, LineItemData,
-    LineMetrics, Run,
+    BreakOpportunity, BreakReason, Layout, LayoutData, LayoutItem, LayoutItemKind, LineData,
+    LineItemData, LineMetrics, Run,
 };
 use crate::style::Brush;
 use crate::{InlineBoxKind, OverflowWrap, TextWrapMode};
@@ -309,6 +309,9 @@ pub struct BreakLines<'a, B: Brush> {
     /// Tabs on the line being built, each with the advance to its stop;
     /// set on the clusters when the line is committed.
     tabs: Vec<(usize, f32)>,
+    /// Where the line being built ends whatever its width
+    /// ([`Self::break_next_at`]).
+    break_at: Option<(usize, usize)>,
 }
 
 impl<'a, B: Brush> BreakLines<'a, B> {
@@ -326,6 +329,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
             prev_state: None,
             done: false,
             tabs: Vec::new(),
+            break_at: None,
         }
     }
 
@@ -469,6 +473,30 @@ impl<'a, B: Brush> BreakLines<'a, B> {
         self.break_next_line_or_box()
     }
 
+    /// Exact patch 19: where a line may end before the first forced break,
+    /// in logical order, the last that break or the layout's end.
+    pub fn opportunities(&self) -> Vec<BreakOpportunity> {
+        self.layout.data.break_opportunities()
+    }
+
+    /// Exact patch 19: the next line, ended at `at` whatever its width, as a
+    /// host that chose its breaks itself needs (CSS `text-wrap-style:
+    /// balance`, Blink's `LineBreaker::SetBreakAt`). The line keeps its max
+    /// advance for alignment. An `at` the line does not reach, or that it
+    /// starts at, ends it only at a forced break or the text's end.
+    pub fn break_next_at(&mut self, at: &BreakOpportunity) -> Option<YieldData> {
+        self.break_at = Some(at.place());
+        let line = self.break_next_line_or_box();
+        self.break_at = None;
+        line
+    }
+
+    /// Whether the line being built has reached the place it is to end at.
+    fn at_chosen_break(&self) -> bool {
+        self.break_at == Some((self.state.item_idx, self.state.cluster_idx))
+            && (self.state.line.x != 0.0 || !self.state.line.clusters.is_empty())
+    }
+
     /// Computes the next line in the paragraph. Returns the advance and size
     /// (width and height for horizontal layouts) of the line.
     fn break_next_line_or_box(&mut self) -> Option<YieldData> {
@@ -500,7 +528,11 @@ impl<'a, B: Brush> BreakLines<'a, B> {
         // within one unit past the available width (`AvailableWidthToFit`,
         // `LayoutUnit::AddEpsilon`). A line Chrome measures at exactly the
         // width, its float advances a few thousandths over, stays one line.
-        let fit = fit_limit(max_advance, line_indent);
+        let fit = if self.break_at.is_some() {
+            f32::MAX
+        } else {
+            fit_limit(max_advance, line_indent)
+        };
 
         // dbg!(&self.layout.items);
 
@@ -520,6 +552,9 @@ impl<'a, B: Brush> BreakLines<'a, B> {
 
             match item.kind {
                 LayoutItemKind::InlineBox => {
+                    if self.at_chosen_break() {
+                        return self.start_new_line(BreakReason::Regular, max_advance, line_indent);
+                    }
                     let inline_box = &self.layout.data.inline_boxes[item.index];
 
                     let (width_contribution, height_contribution) = match inline_box.kind {
@@ -582,6 +617,13 @@ impl<'a, B: Brush> BreakLines<'a, B> {
 
                     // Iterate over remaining clusters in the Run
                     while self.state.cluster_idx < cluster_end {
+                        if self.at_chosen_break() {
+                            return self.start_new_line(
+                                BreakReason::Regular,
+                                max_advance,
+                                line_indent,
+                            );
+                        }
                         let cluster = run.get(self.state.cluster_idx - cluster_start).unwrap();
 
                         // Retrieve metadata about the cluster

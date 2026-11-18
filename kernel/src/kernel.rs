@@ -22,7 +22,7 @@ use crate::text::{MonospaceMeasurer, TextMeasurer, TextRun, TextStyle};
 use crate::txn::{self, CommitReceipt, Target};
 use crate::wire::{self, Op};
 mod alert;
-mod block;
+pub(crate) mod block;
 mod cover;
 mod document;
 mod environment;
@@ -462,26 +462,6 @@ impl Kernel {
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
         }
         self.measure_symbols(true);
-    }
-
-    /// The published epoch: bumps on every commit that changed something.
-    pub fn epoch(&self) -> u64 {
-        self.epoch
-    }
-
-    /// What moves whenever a trial measure (`Kernel::measure_block`) could
-    /// answer differently: the incarnation, the epoch (a commit that changed
-    /// something) and the layout publications. A host that keeps measures
-    /// keeps them while this stands: a change a trial would read either is
-    /// such a commit or waits for a layout (`measure_block` refuses until).
-    pub fn layout_stamp(&self) -> (u64, u64, u64) {
-        (self.incarnation, self.epoch, self.arena.last_pass())
-    }
-
-    /// The kernel incarnation: bumps on every [`Kernel::reset`]. Keys from an
-    /// earlier incarnation never resolve.
-    pub fn incarnation(&self) -> u64 {
-        self.incarnation
     }
 
     /// Live node count.

@@ -602,60 +602,7 @@ impl Kernel {
     /// is inside a route is that route's; a panel inside a tablist still
     /// belongs to the root.
     pub fn root_tabs(&self, root: ViewId) -> Option<RootTabs> {
-        fn walk(
-            kernel: &Kernel,
-            ids: &[ViewId],
-            lists: &mut Vec<ViewId>,
-            panels: &mut Vec<ViewId>,
-        ) {
-            for id in ids {
-                let Some(node) = kernel.node(*id) else {
-                    continue;
-                };
-                let role = node.props.str(PropId::AccessibilityRole);
-                if role == Some("tabpanel") {
-                    panels.push(*id);
-                }
-                if role == Some("tablist") {
-                    lists.push(*id);
-                }
-                if node.props.str(PropId::NavigationKey).is_none() {
-                    walk(kernel, &node.children(), lists, panels);
-                }
-            }
-        }
-        let (mut lists, mut panels) = (Vec::new(), Vec::new());
-        walk(self, &self.node(root)?.children(), &mut lists, &mut panels);
-        lists.into_iter().find_map(|tablist| {
-            let (tabs, named): (Vec<ViewId>, Vec<ViewId>) = self
-                .node(tablist)?
-                .children()
-                .into_iter()
-                .filter_map(|tab| {
-                    let node = self.node(tab)?;
-                    if node.props.str(PropId::AccessibilityRole) != Some("tab") {
-                        return None;
-                    }
-                    let name = node.props.str(PropId::AccessibilityControls)?;
-                    let panel = panels.iter().copied().find(|panel| {
-                        self.node(*panel)
-                            .is_some_and(|n| n.props.str(PropId::Id) == Some(name))
-                    })?;
-                    Some((tab, panel))
-                })
-                .unzip();
-            let search = tabs.iter().position(|tab| {
-                self.node(*tab)
-                    .and_then(|n| n.props.str(PropId::Rel).map(|rel| rel_has(rel, "search")))
-                    .unwrap_or(false)
-            });
-            (!named.is_empty()).then_some(RootTabs {
-                tablist,
-                tabs,
-                panels: named,
-                search,
-            })
-        })
+        self.arena().root_tabs(self.arena().slot_of(root)?)
     }
 
     /// A text node's words as a bar sets them (a title, a label): its
@@ -663,5 +610,59 @@ impl Kernel {
     /// collapse it; `None` when blank or no text.
     pub fn bar_text(&self, view: ViewId) -> Option<String> {
         crate::grouped::text_of(&self.node(view)?)
+    }
+}
+
+impl crate::arena::NodeArena {
+    /// The same root-tab rule used by the host and segmented defaults.
+    pub(crate) fn root_tabs(&self, root: u32) -> Option<RootTabs> {
+        fn walk(
+            arena: &crate::arena::NodeArena,
+            slot: u32,
+            lists: &mut Vec<u32>,
+            panels: &mut Vec<u32>,
+        ) {
+            match arena.props(slot).str(PropId::AccessibilityRole) {
+                Some("tabpanel") => panels.push(slot),
+                Some("tablist") => lists.push(slot),
+                _ => {}
+            }
+            if arena.props(slot).str(PropId::NavigationKey).is_none() {
+                for child in arena.children(slot) {
+                    walk(arena, *child, lists, panels);
+                }
+            }
+        }
+        let (mut lists, mut panels) = (Vec::new(), Vec::new());
+        for child in self.children(root) {
+            walk(self, *child, &mut lists, &mut panels);
+        }
+        lists.into_iter().find_map(|list| {
+            let (tabs, named): (Vec<ViewId>, Vec<ViewId>) = self
+                .children(list)
+                .iter()
+                .filter_map(|tab| {
+                    if self.props(*tab).str(PropId::AccessibilityRole) != Some("tab") {
+                        return None;
+                    }
+                    let name = self.props(*tab).str(PropId::AccessibilityControls)?;
+                    let panel = panels
+                        .iter()
+                        .find(|p| self.props(**p).str(PropId::Id) == Some(name))?;
+                    Some((self.local_id(*tab), self.local_id(*panel)))
+                })
+                .unzip();
+            let search = tabs.iter().position(|tab| {
+                self.props(self.slot_of(*tab).expect("live tab"))
+                    .str(PropId::Rel)
+                    .is_some_and(|rel| rel_has(rel, "search"))
+            });
+            (!named.is_empty()).then_some(RootTabs {
+                tablist: self.local_id(list),
+                tabs,
+                panels: named,
+                search,
+            })
+        })
     }
 }

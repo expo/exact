@@ -12,12 +12,22 @@ const DARK = '(prefers-color-scheme: dark)', LIGHT = '(prefers-color-scheme: lig
 const purposes = (entry) => (entry.purpose ?? 'any').split(' ').filter(Boolean);
 
 /** A list's field name and entries: `icons`, or for the dark scheme `color_scheme_dark.icons`,
- * which replaces it there as `color_scheme_dark` replaces each member it names (D2). */
+ * which replaces it there as `color_scheme_dark` replaces each member it names (D2). An
+ * alternate's fragment (`alternateIcons`) names its fields from its place in the manifest. */
 function list(manifest, scheme) {
+  const at = manifest.at ?? '';
   return scheme === 'dark'
-    ? { field: 'color_scheme_dark.icons', entries: manifest.color_scheme_dark?.icons ?? [] }
-    : { field: 'icons', entries: manifest.icons ?? [] };
+    ? { field: `${at}color_scheme_dark.icons`, entries: manifest.color_scheme_dark?.icons ?? [] }
+    : { field: `${at}icons`, entries: manifest.icons ?? [] };
 }
+
+/** The manifest's alternate icons (LLP 1163.000 D1), in its order: each one's `name` and its
+ * fragment, shaped as a manifest's own icon members (`icons`, `color_scheme_dark.icons`,
+ * `host.ios.icon`), so the functions here read it as they read the app's. */
+export const alternateIcons = (manifest) => (manifest.alternate_icons ?? []).map((entry, i) => ({
+  name: entry.name,
+  manifest: { icons: entry.icons, color_scheme_dark: entry.color_scheme_dark, host: entry.host ?? {}, at: `alternate_icons[${i}].` },
+}));
 
 const facts = new Map();
 /** What the file at `src` is, read from its bytes: its format, pixel size and the `sizes` a link
@@ -55,8 +65,37 @@ function readFacts(path) {
 
 /** The manifest's icon problems, every one in one pass (LLP 1163 D8): each entry is a PNG, SVG or
  * ICO under `assets/` (the directory the web root serves) whose written `sizes` and `type` are its
- * own, and a dark entry is `any` only. */
+ * own, and a dark entry is `any` only; the same of each alternate (`alternateProblems`). */
 export function appIconProblems(manifest, dir) {
+  return [...iconListProblems(manifest, dir), ...alternateProblems(manifest, dir)];
+}
+
+/** The names Apple gives the primary icon, lower-cased: `AppIcon`, and the stem of a selected
+ * Icon Composer project. */
+const primaryNames = (manifest) => ['appicon', ...(manifest.host?.ios?.icon ? [manifest.host.ios.icon.split('/').filter(Boolean).at(-1).replace(/\.icon$/, '').toLowerCase()] : [])];
+
+/** Each alternate's problems (LLP 1163.000 D1): a name used once regardless of case and not the
+ * primary's, and its icons checked as the app's are, with at least one square `any` or
+ * `maskable` file for its light slot. */
+function alternateProblems(manifest, dir) {
+  const seen = new Map(), reserved = primaryNames(manifest);
+  return alternateIcons(manifest).flatMap(({ name, manifest: fragment }, i) => {
+    const at = `alternate_icons[${i}]`, problems = [], key = name.toLowerCase();
+    if (seen.has(key)) problems.push(`${at}.name: "${name}" is alternate_icons[${seen.get(key)}]'s name too, regardless of case; name each alternate once`);
+    else seen.set(key, i);
+    if (reserved.includes(key)) problems.push(`${at}.name: "${name}" is the primary icon's name on Apple; choose another`);
+    const files = iconListProblems(fragment, dir);
+    if (files.length) return [...problems, ...files];
+    const square = fragment.icons.some((entry) => {
+      const file = iconFile(dir, entry.src);
+      return purposes(entry).some((p) => p === 'any' || p === 'maskable') && fits(file, 'square');
+    });
+    if (!square) problems.push(`${at}.icons: none is a square "any" or "maskable" file, which the alternate's light slot takes; add one`);
+    return problems;
+  });
+}
+
+function iconListProblems(manifest, dir) {
   return ['light', 'dark'].flatMap((scheme) => {
     const { field, entries } = list(manifest, scheme);
     return entries.flatMap((entry, i) => {
@@ -188,12 +227,14 @@ export function writeTinted(source, out) {
   writeFileSync(out, encodePng({ width: image.width, height: image.height, data }));
 }
 
-/** Each icon's source and the SHA-256 of its bytes, both schemes: what a cache of built icons keys on. */
+/** Each icon's source and the SHA-256 of its bytes, both schemes, the app's and then each
+ * alternate's under its name: what a cache of built icons keys on. */
 export function iconDigests(manifest, dir) {
-  return ['light', 'dark'].flatMap((scheme) => list(manifest, scheme).entries.map((entry) => {
+  const digests = (fragment) => ['light', 'dark'].flatMap((scheme) => list(fragment, scheme).entries.map((entry) => {
     const path = resolve(dir, entry.src);
     return [scheme, entry.src, entry.purpose ?? null, existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex') : null];
   }));
+  return [...digests(manifest), ...alternateIcons(manifest).flatMap(({ name, manifest: fragment }) => digests(fragment).map((row) => [name, ...row]))];
 }
 
 /** `icons` as `manifest.json` publishes them: `sizes` and `type` from each file where the

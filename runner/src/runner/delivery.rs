@@ -111,8 +111,10 @@ impl<D: DataSource> Runner<D> {
         viewport: crate::Viewport,
         launch: &str,
     ) -> Result<Runner<D>, RunnerError> {
-        let snapshot = carried.map_or(snapshot, |value| value.store.clone());
-        let seed = carried.map_or(Seed::Fresh, Seed::Carried);
+        let snapshot = carried
+            .filter(|c| !c.fresh_state)
+            .map_or(snapshot, |value| value.store.clone());
+        let seed = carried.map_or(Seed::Fresh, Carried::seed);
         Self::boot_inner(
             links, plan, data, kernel, seed, snapshot, delivery, viewport, launch,
         )
