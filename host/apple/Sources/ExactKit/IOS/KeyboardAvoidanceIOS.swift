@@ -48,7 +48,8 @@ extension Presenter {
         if surface(containing: node)?.kind == .popover { menus.rehostPopovers() }
         var v: UIView? = node.superview, nearest = true
         while let cur = v {
-            var target: UIScrollView? = cur is ScrollView || cur is GroupedScroller ? cur as? UIScrollView : nil
+            // A scroller only: the first check of a class against a protocol searches every conformance loaded
+            var target = (cur as? UIScrollView).flatMap { $0 is ScrollView || $0 is GroupedScroller ? $0 : nil }
             if let waiting = cur as? NodeView, waiting.scrollDormant { waiting.needScroll(); target = waiting.scrollView }
             if let sv = target {
                 // A grouped list's collection view puts back the offset it
