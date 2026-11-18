@@ -46,6 +46,11 @@
  * may write it.
  * EXACT_APPLE_KEEP_CHECKOUT=0 turns the scope off.
  *
+ * A CARGO_TARGET_DIR keeps and takes nothing, registry crates included: it is a
+ * target apps may share, which already holds its units for the next build that
+ * names it, and keeping copied them after every development build (several GB
+ * each time).
+ *
  * A production build compiles everything it ships and keeps nothing.
  */
 import { spawnSync } from 'node:child_process';
@@ -143,7 +148,9 @@ export function checkoutCrates(root, app) {
  */
 export function keptCrates({ root, env, profile, app = null }) {
   const idle = { take() {}, keep() {} };
-  if (typeof Bun === 'undefined') return idle;
+  // Every CARGO_TARGET_DIR counts as shared, since the variable cannot tell: one private to a checkout (a CI's, say)
+  // also loses the take of registry crates its other apps compiled.
+  if (typeof Bun === 'undefined' || env.CARGO_TARGET_DIR) return idle;
   const channel = env.RUSTUP_TOOLCHAIN ?? /channel\s*=\s*"([^"]+)"/.exec(text(resolve(root, 'rust-toolchain.toml')) ?? '')?.[1];
   if (!channel || !/^[\w.+-]+$/.test(channel)) return idle;
   const store = resolve(env.HOME ?? homedir(), '.cache/exact/apple-crates', `${channel}-${profile}`);

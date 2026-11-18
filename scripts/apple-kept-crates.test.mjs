@@ -146,6 +146,33 @@ test('a rebuild in the same target after an edit makes the next generation, and 
   } finally { rmSync(run, { recursive: true, force: true }); }
 }, 180_000);
 
+test('a CARGO_TARGET_DIR takes and keeps nothing, registry crates included', () => {
+  const run = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-kept-shared-'))), store = (home) => resolve(home, '.cache/exact/apple-crates');
+  const made = (home) => existsSync(store(home)) ? readdirSync(store(home), { recursive: true }).filter(path => /(^|\/)(gen-|\.making-)/.test(path)) : [];
+  try {
+    const root = checkout(resolve(run, 'checkout')), first = appOf(resolve(run, 'first'), root);
+    build(first);
+    // A build under a CARGO_TARGET_DIR (one apps share, as that target) keeps nothing, not even a begun generation.
+    const shared = resolve(run, 'shared-home');
+    keeper(shared, root, first, { CARGO_TARGET_DIR: first.target }).keep(first.target, 'app', resolve(first.dir, 'Cargo.lock'));
+    assert.deepEqual(made(shared), []);
+    // The control: the same target, as the app's own, keeps its registry (cfg-if) and checkout units, and the next app's starts from them.
+    const own = resolve(run, 'own-home');
+    keeper(own, root, first).keep(first.target, 'app', resolve(first.dir, 'Cargo.lock'));
+    assert.ok(made(own).some(path => path.startsWith(`fixture-${profile}/app/gen-`)), 'a registry generation');
+    assert.equal(scopes(own).length, 1);
+    const next = appOf(resolve(run, 'next'), root);
+    keeper(own, root, next).take(next.target, 'app');
+    assert.ok(existsSync(resolve(next.target, profile, '.fingerprint')));
+    // And with generations kept, a target that has compiled nothing starts with none of them.
+    cpSync(store(own), store(shared), { recursive: true });
+    const later = appOf(resolve(run, 'later'), root);
+    keeper(shared, root, later, { CARGO_TARGET_DIR: later.target }).take(later.target, 'app');
+    assert.equal(existsSync(resolve(later.target, profile)), false);
+    assert.equal(existsSync(resolve(later.target, `kept-crates-${profile}.json`)), false);
+  } finally { rmSync(run, { recursive: true, force: true }); }
+}, 120_000);
+
 test('another checkout takes only the registry\'s crates, and the switch turns the checkout\'s scope off', () => {
   const run = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-kept-checkout-'))), home = resolve(run, 'home');
   try {
