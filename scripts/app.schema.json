@@ -535,7 +535,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["title", "parameters"],
-            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string`, or an enum of exactly its values), at render as it reads the family's size; the refresh does not see them. Generated Swift, so a change needs a new binary.",
+            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string`, or an enum of exactly its values), at render as it reads the family's size. The refresh receives them as its second argument, a record of the same fields; on Android it receives the defaults. Generated Swift, so a change needs a new binary.",
             "properties": {
               "title": { "type": "string", "description": "The intent's title (the Edit Widget sheet is headed by the widget's own title and description)." },
               "description": { "type": "string", "description": "The intent's description; defaults to the title." },

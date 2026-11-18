@@ -772,7 +772,9 @@ App Intents metadata, through which the sheet shows them:
 
 On Android the same parameters are the widget's settings, one list of choices
 each: a placed widget starts with the defaults, and the launcher's long-press
-menu opens the settings.
+menu opens the settings. A choice there changes that widget's render alone:
+Android keeps one timeline for a kind, and its refresh receives each parameter's
+default (LLP 1126.003 D5).
 
 On watchOS, the complication picker offers
 [`recommendations`](https://developer.apple.com/documentation/widgetkit/appintentrecommendation)
@@ -804,24 +806,38 @@ component NextTrains
 
 The shape has one field per parameter, typed `string` or an `enum` of exactly its
 values; every injecting component names one shape. A configuration that no component
-reads, or an inject without one, fails the bake with an edit. The refresh does not see
-the configuration: one timeline serves every configuration and family, and each render
-reads its own. The configuration, labels included, is generated Swift and so a binary
+reads, or an inject without one, fails the bake with an edit.
+
+A configured widget's refresh receives the configuration too, as its second
+argument: a record with one field per parameter, in the order the injected shape
+declares them, each one of that parameter's values. In TypeScript it is
+`nextTrains: ([date, { rows }]) => …`. On iOS, macOS and watchOS the refresh runs
+for each configuration a person has placed, with that placement's values, so it
+can fetch different data for each. The timeline it returns serves that
+configuration's placements in every family, and each render still reads its own
+values. On Android the argument is the defaults, as above, so a render there must
+not rely on the refresh having read its choice.
+
+The configuration, labels included, is generated Swift and so a binary
 compatibility input; Live Activities have none. Keep kind, parameter and value
 identifiers stable across updates; changing a title does not change a choice.
 A removed or renamed parameter is ignored, and a missing or removed value uses
 that parameter's current default. Other valid choices are retained. Reordering
-entries, parameters or values does not reassign a saved choice. Data-backed
-options and fetching different data for each placement are not supported.
+entries, parameters or values does not reassign a saved choice. The refresh
+receives a saved choice by the same rules. Data-backed options are not supported:
+a person chooses among the values `app.json` declares.
 
 `component` and the `props` shape are declared or imported by `app.contract`;
 every component prop must match a field of that shape. `preview` supplies all
 fields, with their declared types. `refresh` names a data-source function taking
-an epoch-millisecond number and returning a timeline: records with `date` (epoch
-milliseconds) and `props` (the declared shape), in that field order. The plan's
+an epoch-millisecond number and, for a widget with a `configuration`, that
+configuration's record, and returning a timeline: records with `date` (epoch
+milliseconds) and `props` (the declared shape), in that field order. Widgets that
+name one `refresh` share its signature, so they declare the same `configuration`
+and props; the bake refuses a difference. The plan's
 `snapshot_refresh` header selects its typed source row; the render has no resource
 for it. A data bake checks an immediate refresh answer against that signature at epoch
-zero; pending answers are checked by the source declarations. TypeScript checks
+zero with the configuration's defaults; pending answers are checked by the source declarations. TypeScript checks
 the generated `Sources` type, including async refreshes. Compile entries once
 with `contract::snapshot::entries(app)`, then pass that map to `source_plan`,
 `check_refreshes` and receipt generation. `snapshot::bake_app` takes separate
@@ -840,10 +856,11 @@ Refresh has a 900 ms deadline starting when it begins, including boot. Each JS
 turn gets the time remaining to that deadline, rather than the app's 100 ms
 per-call budget. This leaves 100 ms below LLP 1126 D8's one-second
 line for completion and teardown. Failure or timeout uses the last good timeline
-cached in the App Group for this kind and generation, only while the app's store
+cached in the App Group for this kind, generation and configuration, only while the app's store
 has not changed since it was cached (a store write, such as an account switch,
 expires it), or else an “Open app” placeholder,
-and schedules a retry no sooner than 15 minutes later. Rendering and gallery
+and schedules a retry no sooner than 15 minutes later. A kind keeps the last good
+timelines of the eight configurations refreshed most recently. Rendering and gallery
 previews do not load Hermes or read the store.
 
 Live Activity entries are top-level `live_activities` rows, each with a `kind`
@@ -6508,12 +6525,13 @@ mode presentation are stand-ins; archive fidelity needs the real extension.
 | `bun scripts/agent.mjs macos widget next-trains tree state` | First declared family, full colour, light, large text |
 | `bun scripts/agent.mjs ios widget next-trains --epoch 2026-08-28T09:05:00Z "clock +600000" tree state` | Refresh and render at the app’s advanced clock |
 
-| `bun scripts/agent.mjs ios widget next-trains --configuration '{"rows":"one"}' "screenshot target/one.png" state` | A configured widget's render with that choice; `state` reports the `configuration` |
+| `bun scripts/agent.mjs ios widget next-trains --configuration '{"rows":"one"}' "screenshot target/one.png" state` | A configured widget's refresh and render with that choice; `state` reports the `configuration` and the props its refresh returned |
 
 A configured widget's cells render its defaults, then each other value of each
 parameter (the rest at their defaults) in full colour, light and dark;
 `--configuration <json>` names parameters and values over the defaults, and a name or
-value the configuration does not declare is refused with the ones it does.
+value the configuration does not declare is refused with the ones it does. Each
+cell's refresh receives the values it renders.
 
 An immediate refresh answer supplies its first timeline entry. Pending, empty
 or unavailable data keeps the preview; `state` reports which. The gallery's
