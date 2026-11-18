@@ -176,12 +176,14 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   writeFileSync(resolve(barCard, 'app.json'), JSON.stringify({ name: 'Bar card', app: { id: appId, name: 'Bar card' }, widgets: [{ kind: 'bar-card', families: ['systemMedium'], component: 'BarCard', props: 'CardProps', refresh: 'nextTrains', preview: { title: 'Preview' } }] }));
   contract([resolve(barCard, 'app.contract'), '--entry', 'bar-card', '-o', env[`${prefix}_SNAPSHOT_BAR_CARD_PLAN`] = resolve(dir, 'bar-card.plan')]);
   // An activity whose Lock Screen placement has a background and a link (ActivityDriverTests: the tint, the URL).
-  // A configured widget (WidgetGalleryTests): its render reads the chosen rows, its defaults unless chosen.
+  // A configured widget (WidgetGalleryTests): its render reads the chosen rows, its defaults unless chosen, and the
+  // chosen book's id.
   const configured = resolve(dir, 'entries/configured');
   mkdirSync(configured, { recursive: true });
-  writeFileSync(resolve(configured, 'app.contract'), 'shape Props\n  title: string\nshape Rows\n  rows: enum<"automatic", "one", "three">\ncomponent App\n  view\n    text "App"\ncomponent Card\n  props\n    title: string\n  inject\n    snapshot_configuration: Rows\n  view\n    text `${title} ${snapshot_configuration.rows}`\n');
-  writeFileSync(resolve(configured, 'app.json'), JSON.stringify({ name: 'Configured widget', app: { id: appId, name: 'Configured widget' }, widgets: [{ kind: 'configured', families: ['systemSmall', 'systemMedium'], component: 'Card', props: 'Props', refresh: 'nextTrains', preview: { title: 'Rows' },
-    configuration: { title: 'Card', parameters: [{ name: 'rows', type: 'enum', title: 'Rows', values: [{ value: 'automatic', title: 'Automatic' }, { value: 'one', title: '1' }, { value: 'three', title: '3' }] }] } }] }));
+  writeFileSync(resolve(configured, 'app.contract'), 'shape Props\n  title: string\nshape Rows\n  rows: enum<"automatic", "one", "three">\n  book: option<string>\ncomponent App\n  view\n    text "App"\ncomponent Card\n  props\n    title: string\n  inject\n    snapshot_configuration: Rows\n  view\n    column\n      text `${title} ${snapshot_configuration.rows}`\n      text (match snapshot_configuration.book { case some(id) => `Book ${id}`, case none => "No book" })\n');
+  writeFileSync(resolve(configured, 'app.json'), JSON.stringify({ name: 'Configured widget', app: { id: appId, name: 'Configured widget' }, intents: { entities: { book: { title: 'Book' } } }, widgets: [{ kind: 'configured', families: ['systemSmall', 'systemMedium'], component: 'Card', props: 'Props', refresh: 'nextTrains', preview: { title: 'Rows' },
+    configuration: { title: 'Card', parameters: [{ name: 'rows', type: 'enum', title: 'Rows', values: [{ value: 'automatic', title: 'Automatic' }, { value: 'one', title: '1' }, { value: 'three', title: '3' }] },
+      { name: 'book', type: 'entity', title: 'Book', entity: 'book' }] } }] }));
   contract([resolve(configured, 'app.contract'), '--entry', 'configured', '-o', env[`${prefix}_SNAPSHOT_CONFIGURED_PLAN`] = resolve(dir, 'configured.plan')]);
   const tinted = resolve(dir, 'entries/tinted');
   mkdirSync(tinted, { recursive: true });

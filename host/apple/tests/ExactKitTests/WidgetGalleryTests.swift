@@ -411,7 +411,8 @@ final class WidgetGalleryTests: XCTestCase {
         XCTAssertEqual(WidgetGallery.entries(in: assets).map(\.kind), ["added"])
     }
     /// A configured widget's render reads the agent's choice over the defaults, the gallery lists
-    /// each other choice, and a parameter or value the configuration does not declare is refused.
+    /// each other fixed choice, and a parameter or value the configuration does not declare is refused.
+    /// An entity parameter takes any entry's id.
     func testConfiguredWidgetRendersEachChoice() throws {
         #if os(macOS)
         _ = NSApplication.shared
@@ -447,10 +448,17 @@ final class WidgetGalleryTests: XCTestCase {
             XCTAssertEqual(state["configuration"] as? [String: String], ["rows": rows])
             XCTAssertEqual((state["slots"] as? [String: Any])?["snapshot_configuration"] as? [String: String], ["rows": rows])
             let nodes = try XCTUnwrap(read("tree", chosen)["nodes"] as? [[String: Any]])
-            XCTAssertTrue(nodes.contains { ($0["props"] as? [String: String])?["text"] == "Rows \(rows)" }, rows)
+            for text in ["Rows \(rows)", "No book"] {
+                XCTAssertTrue(nodes.contains { ($0["props"] as? [String: String])?["text"] == text }, text)
+            }
         }
+        let book = "{\"book\":\"b7\"}"
+        XCTAssertEqual(read("state", book)["configuration"] as? [String: String], ["rows": "automatic", "book": "b7"])
+        let nodes = try XCTUnwrap(read("tree", book)["nodes"] as? [[String: Any]])
+        XCTAssertTrue(nodes.contains { ($0["props"] as? [String: String])?["text"] == "Book b7" })
+        XCTAssertEqual(read("state", "{\"book\":\"\"}")["error"] as? String, "widget --configuration: book is an entry's id, which is not empty")
         XCTAssertEqual(read("state", "{\"rows\":\"seven\"}")["error"] as? String, "widget --configuration: rows is one of automatic, one, three")
-        XCTAssertEqual(read("state", "{\"columns\":\"one\"}")["error"] as? String, "widget --configuration: configured has no parameter columns; parameters: rows")
+        XCTAssertEqual(read("state", "{\"columns\":\"one\"}")["error"] as? String, "widget --configuration: configured has no parameter columns; parameters: rows, book")
         for (saved, rows) in [("{\"rows\":\"removed\"}", "automatic"), ("{\"renamed\":\"one\"}", "automatic"),
                               ("{\"rows\":\"one\",\"removed\":\"old\"}", "one")] {
             let restored = try HeadlessSession(plan: Data(contentsOf: plan), entry: "configured",
