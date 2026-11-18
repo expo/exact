@@ -322,12 +322,12 @@ final class ElementHatches: ElementHatching {
     /// 1075.003.000.001 §2.5): it runs on a later turn of the main queue,
     /// after the batch being applied and after the session has finished with
     /// it, so a hatch called from a batch or a reset never applies a batch of
-    /// its own there. One FIFO a session, at most 256 acts and 1 MB of
-    /// `input` text, an act past either refused by name and counted. False
-    /// when refused.
+    /// its own there. One FIFO a session, at most 256 acts and 1 MB of the
+    /// text they carry (an `input`'s, a tab container's URL), an act past
+    /// either refused by name and counted. False when refused.
     @discardableResult
     func later(_ id: UInt32, _ name: String, bytes: Int = 0, _ work: @escaping () -> Void) -> Bool {
-        later(presenter.views[id]?.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)", name, bytes: bytes, work)
+        later(named(id), name, bytes: bytes, work)
     }
 
     /// The same, for an act the journal names by `what` rather than by a node.
@@ -347,8 +347,18 @@ final class ElementHatches: ElementHatching {
         return true
     }
 
+    /// Refuse text an act carries over 64 KB, at the asking: counted, and
+    /// journaled under the caller's `name` with the text's length as the
+    /// reason. False when the text is within the bound.
+    func refusedOverBound(_ what: String, _ name: String, bytes: Int) -> Bool {
+        guard bytes > hatchTextBytes else { return false }
+        refused += 1
+        presenter.session?.log("hatch \(what): \(name) refused: \(bytes) bytes is over 64 KB")
+        return true
+    }
+
     private struct Act { let what: String, name: String, bytes: Int, work: () -> Void }
-    static let maxQueued = 256, maxBytes = 1 << 20, snapshot = 64, inputBytes = 65536
+    static let maxQueued = 256, maxBytes = 1 << 20, snapshot = 64
     private var queue: [Act] = [], queuedBytes = 0, scheduled = false
     /// Acts refused, and drains run, since launch; the acts still queued.
     private(set) var refused = 0, drains = 0
@@ -373,10 +383,8 @@ final class ElementHatches: ElementHatching {
         }
     }
 
-    private func said(_ id: UInt32, _ line: String) {
-        let what = presenter.views[id]?.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)"
-        presenter.session?.log("hatch \(what): \(line)")
-    }
+    private func said(_ id: UInt32, _ line: String) { presenter.session?.log("hatch \(named(id)): \(line)") }
+    private func named(_ id: UInt32) -> String { presenter.views[id]?.props["hatch"].map { "element \($0) #\(id)" } ?? "node #\(id)" }
 
     /// A hatch's `input(text)` (§2.5): an authored text field's whole value,
     /// through the field's own primitive, cut to its limits, reported as a
@@ -386,11 +394,7 @@ final class ElementHatches: ElementHatching {
     func input(_ id: UInt32, _ text: String) -> Bool {
         guard let node = presenter.views[id] else { return false }
         let bytes = text.utf8.count
-        guard bytes <= Self.inputBytes else {
-            refused += 1
-            said(id, "input refused: \(bytes) bytes is over 64 KB")
-            return false
-        }
+        if refusedOverBound(named(id), "input", bytes: bytes) { return false }
         return later(id, "input", bytes: bytes) { [weak self, weak node] in
             guard let self, let node, self.presenter.views[id] === node else { return }
             let refuse = { (why: String) in self.refused += 1; self.said(id, "input refused: \(why)") }

@@ -218,7 +218,9 @@ extension NavigationHost {
     /// `text`, as the bar's item presses it.
     /// Queued on the hatch act queue, it runs on a later turn and only in the
     /// term of the container that sent it. False when it cannot be queued:
-    /// Exact's own container, text that is no URL, a full queue.
+    /// Exact's own container, a URL that is empty, over 64 KB or that
+    /// `URL(string:)` does not parse (such as one with a malformed host), a
+    /// full queue. Its refusals name a URL as `urlName` does.
     func tabIntent(_ kind: UInt32, _ text: String) -> Bool {
         guard tabController == nil, tabOwner != nil else { return false }
         let term = tabOwnerTerm
@@ -234,10 +236,12 @@ extension NavigationHost {
                 }
             }
         case 1:
+            let call = "open(\(Self.urlName(text)))", bytes = text.utf8.count
+            if presenter.elements.refusedOverBound("tabs", call, bytes: bytes) { return false }
             guard !text.isEmpty, let url = URL(string: text) else { return false }
-            return presenter.elements.later("tabs", "open(\(text))", bytes: text.utf8.count) { [weak self] in
+            return presenter.elements.later("tabs", call, bytes: bytes) { [weak self] in
                 guard let self, inTerm(term), let session = presenter.session else { return }
-                if !session.openURL(url) { session.log("hatch tabs: open(\(text)) refused: the session did not take it") }
+                if !session.openURL(url) { session.log("hatch tabs: \(call) refused: the session did not take it") }
             }
         case 2:
             guard let index = Int(text) else { return false }
@@ -252,6 +256,17 @@ extension NavigationHost {
         default:
             return false
         }
+    }
+
+    /// A URL as an intent's refusal names it: without its query and
+    /// fragment, where tokens usually travel, as an image's source is named
+    /// (a path and user info stay as given); one that begins with them by
+    /// its `?` or `#`; and one whose part before them is over 64 KB by its
+    /// whole length. `ExactTabContents.open` names it the same way.
+    static func urlName(_ text: String) -> String {
+        let cut = sourceWithoutQuery(text)
+        if cut.utf8.count > hatchTextBytes { return "\(text.utf8.count) bytes" }
+        return cut.isEmpty ? text.unicodeScalars.first.map(String.init) ?? "" : cut
     }
 
     private func backRefused(_ why: String) { presenter.session?.log("hatch tabs: back() refused: \(why)") }

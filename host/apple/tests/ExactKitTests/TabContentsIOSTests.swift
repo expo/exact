@@ -77,8 +77,8 @@ final class TabContentsIOSTests: XCTestCase {
     }
 
     /// The container opens a URL as one that arrived from the system: the
-    /// router goes there, and the container shows the tab it chose; text
-    /// that is no URL is not taken, and Exact says so.
+    /// router goes there, and the container shows the tab it chose; empty
+    /// text is not taken, and the container's refusal is journaled.
     func testTheAppsContainerOpensAURLAsOneThatArrived() throws {
         let session = try fixture("contents-open")
         let navigation = session.presenter.navigationHost
@@ -92,8 +92,63 @@ final class TabContentsIOSTests: XCTestCase {
         }
         XCTAssertEqual(journal(session, "tabs: open(/second) refused"), 0)
         owner.perform(Selector(("open:")), with: "")
-        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "no URL")
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "empty text")
         XCTAssertEqual(journal(session, "tabs: open() refused"), 1)
+    }
+
+    /// A URL over 64 KB is refused at the asking and not queued. The
+    /// refusals name it without its query and fragment, where tokens usually
+    /// travel; a path of 64 KB as it is, and a longer one by the whole URL's
+    /// length.
+    func testTheAppsContainerRefusesAURLOver64KBAndJournalsItWithoutItsQuery() throws {
+        let session = try fixture("contents-open-long")
+        let owner = try XCTUnwrap(session.presenter.navigationHost.tabOwner)
+        let url = "/second?token=" + String(repeating: "a", count: hatchTextBytes) + "#part"
+        owner.perform(Selector(("open:")), with: url)
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "over 64 KB")
+        XCTAssertEqual(session.presenter.elements.inFlight, 0, "not queued")
+        XCTAssertEqual(journal(session, "hatch tabs: open(/second) refused: \(url.utf8.count) bytes is over 64 KB"), 1, "Exact says why")
+        XCTAssertEqual(journal(session, "open(/second) refused"), 2, "and the container's call is refused, by the same name")
+        XCTAssertEqual(journal(session, "token="), 0)
+        XCTAssertEqual(journal(session, "#part"), 0)
+        let path = "/" + String(repeating: "b", count: hatchTextBytes) + "?key=k"
+        owner.perform(Selector(("open:")), with: path)
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "over 64 KB")
+        XCTAssertEqual(journal(session, "hatch tabs: open(\(path.utf8.count) bytes) refused: \(path.utf8.count) bytes is over 64 KB"), 1, "Exact names it by its length")
+        XCTAssertEqual(journal(session, "open(\(path.utf8.count) bytes) refused"), 2, "and so does the container")
+        XCTAssertEqual(journal(session, "bbbbbbbbbbbbbbbb"), 0)
+        XCTAssertEqual(journal(session, "key="), 0)
+        // A path of exactly 64 KB is named as it is on both sides, which holds the module's copy of the bound to the host's
+        let edge = "/" + String(repeating: "d", count: hatchTextBytes - 1)
+        owner.perform(Selector(("open:")), with: edge + "?key=k")
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "over 64 KB")
+        XCTAssertEqual(journal(session, "tabs: open(\(edge)) refused"), 2, "both refusals name the path")
+    }
+
+    /// A URL of 64 KB is taken. With the act queue full, a URL is refused,
+    /// and the queue names it without its query and fragment, and by its `?`
+    /// or `#` when it begins with one.
+    func testTheAppsContainerTakesA64KBURLAndAFullQueueRefusesOneWithoutItsQuery() throws {
+        let session = try fixture("contents-open-full")
+        let owner = try XCTUnwrap(session.presenter.navigationHost.tabOwner)
+        let elements = session.presenter.elements
+        let bound = "/second?" + String(repeating: "c", count: hatchTextBytes - 8)
+        XCTAssertEqual(bound.utf8.count, hatchTextBytes)
+        owner.perform(Selector(("open:")), with: bound)
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, true, "64 KB is within the bound")
+        for _ in elements.inFlight..<ElementHatches.maxQueued { owner.perform(Selector(("open:")), with: "/second") }
+        XCTAssertEqual(elements.inFlight, ElementHatches.maxQueued)
+        owner.perform(Selector(("open:")), with: "/second?token=t#part")
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "the queue is full")
+        XCTAssertEqual(journal(session, "hatch tabs: open(/second) refused: the act queue is full"), 1)
+        owner.perform(Selector(("open:")), with: "?token=t#part")
+        XCTAssertEqual(owner.value(forKey: "intentTaken") as? Bool, false, "the queue is full")
+        XCTAssertEqual(journal(session, "hatch tabs: open(?) refused: the act queue is full"), 1, "named by its `?`, not as an empty URL")
+        XCTAssertEqual(journal(session, "tabs: open(?) refused"), 2, "and so is the container's call")
+        owner.perform(Selector(("open:")), with: "#part")
+        XCTAssertEqual(journal(session, "tabs: open(#) refused"), 2, "one that begins with its fragment by its `#`")
+        XCTAssertEqual(journal(session, "token="), 0)
+        XCTAssertEqual(journal(session, "#part"), 0)
     }
 
     /// An intent sent from inside the container's `onSelect`, which Exact

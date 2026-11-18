@@ -679,6 +679,22 @@ final class FieldSelectionIOSTests: XCTestCase {
         }
     }
 
+    /// A hatch's `input` text over 64 KB is refused at the asking, counted
+    /// and not queued; 64 KB is taken and reported.
+    func testHatchInputOver64KBIsRefusedAtTheAsking() throws {
+        let p = presenter()
+        let hatches = try XCTUnwrap(p.hatchElements)
+        var events: [Int] = []
+        p.fieldSelections.onReplacement = { _, value, _ in events.append(value.utf8.count) }
+        let refused = hatches.refused
+        XCTAssertFalse(hatches.input(3, String(repeating: "x", count: hatchTextBytes + 1)))
+        XCTAssertEqual(hatches.refused, refused + 1, "counted")
+        XCTAssertEqual(hatches.inFlight, 0, "not queued")
+        XCTAssertTrue(hatches.input(3, String(repeating: "x", count: hatchTextBytes)))
+        hatches.drain()
+        XCTAssertEqual(events, [hatchTextBytes])
+    }
+
     private func drainSelectTasks() {
         let done = expectation(description: "queued select tasks finished")
         DispatchQueue.main.async { done.fulfill() }

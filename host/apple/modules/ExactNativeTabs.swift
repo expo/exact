@@ -76,10 +76,22 @@ public final class ExactTabContents {
     @discardableResult public func back() -> Bool { intent(0, "", "back()") }
     /// The container opens `url` as a URL that arrived from the system
     /// (`ExactSession.openURL`); the router decides where it leads. Queued as
-    /// `select` is. False, and journaled, when Exact cannot queue it (text
-    /// that is no URL, the container retired); a location the session does
-    /// not take is journaled when it runs.
-    @discardableResult public func open(_ url: String) -> Bool { intent(1, url, "open(\(url))") }
+    /// `select` is. False, and journaled, when Exact cannot queue it: a URL
+    /// that is empty, over 64 KB or that `URL(string:)` does not parse, a full
+    /// act queue, a container that has not yet taken the place of Exact's
+    /// own, a retired container, a host without the intents' entry. A
+    /// location the session does not take is journaled when it runs. These
+    /// refusals name the URL without its query and fragment, where tokens
+    /// usually travel (a path and user info stay as given); one that begins
+    /// with them by its `?` or `#`; and one whose part before them is over
+    /// 64 KB by its whole length. The router's own lines name a location as
+    /// they were given it.
+    @discardableResult public func open(_ url: String) -> Bool {
+        // Named as the host's `NavigationHost.urlName` names it, which this module cannot call; 65536 is `hatchTextBytes`
+        let cut = String(url.unicodeScalars.prefix { $0 != "?" && $0 != "#" })
+        let name = cut.utf8.count > 65536 ? "\(url.utf8.count) bytes" : cut.isEmpty ? url.unicodeScalars.first.map(String.init) ?? "" : cut
+        return intent(1, url, "open(\(name))")
+    }
     private func intent(_ kind: UInt32, _ text: String, _ call: String) -> Bool {
         guard let hatches else { return false }
         guard isLive, hatches.tabIntent(kind, text) else { hatches.log("tabs: \(call) refused"); return false }
