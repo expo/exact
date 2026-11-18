@@ -337,6 +337,9 @@ function commandFixture() {
     writeFileSync(resolve(root, file), '');
   }
   copyFileSync(resolve(import.meta.dir, 'affected.mjs'), resolve(root, 'scripts/affected.mjs'));
+  for (const file of ['filesystem.mjs', 'paths.mjs']) {
+    symlinkSync(resolve(import.meta.dir, file), resolve(root, 'scripts', file));
+  }
   mkdirSync(resolve(root, 'host/apple'), { recursive: true });
   symlinkSync(resolve(import.meta.dir, '../host/apple/xctest.mjs'), resolve(root, 'host/apple/xctest.mjs'));
   symlinkSync(resolve(import.meta.dir, '../node_modules'), resolve(root, 'node_modules'), 'dir');
