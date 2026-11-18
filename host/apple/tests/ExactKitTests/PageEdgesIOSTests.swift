@@ -451,6 +451,30 @@ final class PageEdgesIOSTests: XCTestCase {
         }
     }
 
+    /// A route that opts out of its sides (`-exact-safe-area="left right"`, LLP 1123 D4) lays its content
+    /// out to its edges there, though its host's cover holds them (a split's floating sidebar): its
+    /// scroller spans the room its bars leave, so they stay its bars, as they do with no cover at all.
+    func testARouteOptedOutOfItsSidesKeepsItsBars() {
+        let p = Presenter()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "button"],
+            ["op": "create", "id": 4, "kind": "scroll", "props": ["flexGrows": "true"]],
+            ["op": "children", "id": 2, "ids": [3]],
+            ["op": "children", "id": 1, "ids": [2, 4]],
+            ["op": "roots", "ids": [1]]
+        ]))
+        let route = p.views[1]!, bar = p.views[2]!, list = p.views[4]!
+        route.frame = CGRect(x: 0, y: 0, width: 951, height: 669)
+        bar.frame = CGRect(x: 0, y: 82, width: 951, height: 51)
+        list.frame = CGRect(x: 0, y: 133, width: 951, height: 502)
+        p.navigationHost.covers[route.id] = .edges(.init(top: 82, right: 84, bottom: 34, left: 320))
+        XCTAssertNil(ControlBars(p).bars(of: list, in: route, top: true), "a scroller wider than the cleared room is no bar's")
+        route.style["safe_area"] = .number(Double(2 | 8))
+        XCTAssertEqual(ControlBars(p).bars(of: list, in: route, top: true).map { $0.map(\.id) }, [bar.id])
+    }
+
     func testAControlBarMayIncludeACaptionButACaptionAloneIsNotABar() {
         let p = Presenter()
         p.apply(wireBatch([

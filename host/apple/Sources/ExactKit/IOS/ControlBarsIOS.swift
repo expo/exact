@@ -143,10 +143,15 @@ final class ControlBars {
     }
 
     /// `p`'s content box inside the cover a route's containers give it, as
-    /// well as the author's padding.
+    /// well as the author's padding, but for the edges the route opts out of
+    /// (`-exact-safe-area`, LLP 1123 D4), which its content reaches.
     private func available(_ p: NodeView) -> CGRect {
         var room = p.contentBox()
-        if case .edges(let e)? = presenter.navigation.covers[p.id] { room = room.inset(by: UIEdgeInsets(top: e.top, left: e.left, bottom: e.bottom, right: e.right)) }
+        if case .edges(let e)? = presenter.navigation.covers[p.id] {
+            let off = RouteGeometry.clearanceOff(p)
+            let kept = { (bit: Int, inset: CGFloat) in off & bit != 0 ? 0 : inset }
+            room = room.inset(by: UIEdgeInsets(top: kept(1, e.top), left: kept(8, e.left), bottom: kept(4, e.bottom), right: kept(2, e.right)))
+        }
         return room
     }
 
