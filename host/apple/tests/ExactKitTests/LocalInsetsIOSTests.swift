@@ -126,6 +126,30 @@ final class LocalInsetsIOSTests: XCTestCase {
         }
     }
 
+    /// The sides a sheet's content reads while the sheet moves in are the ones it lands with, so nothing in it moves
+    /// as it lands. Only a screen with a side inset (the iPhone Duo's button strip) can fail it: elsewhere both are 0.
+    func testASheetsContentReadsTheSidesItLandsWithFromItsFirstFrame() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the bars and the safe area are a scene window's")
+        }
+        let (session, _) = try fixture(scene)
+        let navigation = session.presenter.navigation
+        until("the route shows") { self.node(session, "open") != nil }
+        _ = Agent(session: session).tap(["id": Int(try XCTUnwrap(node(session, "open")).id)])
+        var first: [CGFloat]?
+        until("the sheet's first insets are reported") {
+            first = self.node(session, "sheet").flatMap { navigation.localInsets.wanted[$0.id] }
+            return first != nil
+        }
+        let sheet = try XCTUnwrap(node(session, "sheet"))
+        let c = try XCTUnwrap(navigation.controllers[sheet.id])
+        until("the sheet lands") { c.presentingViewController != nil && c.transitionCoordinator == nil }
+        let box = sheet.convert(sheet.bounds, to: c.surface), safe = c.surface.safeAreaInsets
+        let reported = try XCTUnwrap(first)
+        XCTAssertEqual(reported[1], max(0, safe.right - max(0, c.surface.bounds.maxX - box.maxX)), accuracy: 0.5, "right")
+        XCTAssertEqual(reported[3], max(0, safe.left - max(0, box.minX)), accuracy: 0.5, "left")
+    }
+
     func testAScrollerAtTheTopOptsOutAndItsFirstBoxReachesUnderTheBar() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the bars and the safe area are a scene window's")
