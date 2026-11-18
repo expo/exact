@@ -9,7 +9,7 @@ import UIKit
 /// motion, timers and canvases (`Frames`), a list's smooth correction
 /// (`OffsetDriver`), a navigation transition's reveal, the scroll pump's
 /// owed work, deferred heavy leaves, live SVG filters, a textarea's
-/// `resize` drag. Press feedback eases
+/// `resize` drag, a native view's picture while its box resizes. Press feedback eases
 /// on the render server and needs none. A development session's
 /// `FrameSampler` (LLP 1079) keeps its own link: it measures the cadence
 /// the display delivers, which must not be the clock's own callbacks or
@@ -20,7 +20,7 @@ package final class FrameClock: NSObject {
     package static let shared = FrameClock()
 
     /// A correction moves the port before the reveal and the pump read it.
-    package enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip, stage }
+    package enum Order: Int { case session, offsetDriver, navigationReveal, scroll, heavyLeaves, svgFilter, resizeGrip, stage, nativeResize }
 
     private final class User {
         weak var owner: AnyObject?

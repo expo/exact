@@ -119,6 +119,9 @@ package protocol NativeModuleHosting: AnyObject {
     func retryWaitingScreens(in subtree: NodeView)
     func moved(_ subtree: NodeView)
     func leaving(_ subtree: NodeView)
+    /// `owner`'s box changes size, in `resize`, inside an animation UIKit has open: its platform view keeps the
+    /// layout it has for its bounds until the animation ends.
+    func resize(_ owner: NodeView, inAnimation resize: () -> Void)
     #else
     func ownsFocus(_ owner: NodeView) -> Bool
     @discardableResult func focus(_ owner: NodeView) -> Bool
@@ -200,6 +203,7 @@ final class NoNativeModule: NativeModuleHosting {
     func retryWaitingScreens(in subtree: NodeView) {}
     func moved(_ subtree: NodeView) {}
     func leaving(_ subtree: NodeView) {}
+    func resize(_ owner: NodeView, inAnimation resize: () -> Void) { resize() }
     #else
     func ownsFocus(_ owner: NodeView) -> Bool { false }
     func focus(_ owner: NodeView) -> Bool { false }

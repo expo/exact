@@ -196,7 +196,7 @@ extension Agent {
     /// first seen, the nearest to its attachment a reader can know. Callers
     /// look at every animation in one pass, so ones attached together are
     /// first seen together.
-    static func inFlight(_ a: CAAnimation, on layer: CALayer, key: String, now: CFTimeInterval) -> Bool {
+    package static func inFlight(_ a: CAAnimation, on layer: CALayer, key: String, now: CFTimeInterval) -> Bool {
         guard a.speed != 0, a.repeatCount < 1e6, a.repeatDuration < 1e6, a.duration < 60 else { return false }
         let span = max(a.duration * Double(max(1, a.repeatCount)) * (a.autoreverses ? 2 : 1), a.repeatDuration) / Double(abs(a.speed))
         guard a.beginTime == 0 else { return layer.convertTime(now, from: nil) < a.beginTime + span }

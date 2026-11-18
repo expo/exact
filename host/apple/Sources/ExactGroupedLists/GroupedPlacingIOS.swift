@@ -68,11 +68,8 @@ extension GroupedListView {
                 rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing, frame.width]
     }
 
-    /// Before a batch: the carried rows it must read at home go back. A
-    /// row stays in its cell for frame and content-box updates. Its
-    /// ancestors can change geometry, children or props other than
-    /// `inert` while UIKit animates the column. Other writes to an
-    /// ancestor bring every carried row home before the batch.
+    /// Geometry and child order changes preserve carried rows. A style or
+    /// inertness change on an ancestor brings its carried rows home.
     func prepare(_ ops: [BatchOp]) {
         guard !carried.isEmpty else { return }
         var above = Set<UInt32>(), walked = Set<ObjectIdentifier>()
@@ -87,13 +84,12 @@ extension GroupedListView {
         for op in ops {
             if [.roots, .flight, .land, .exit].contains(op.op) { return restore() }
             if carried[op.id] != nil {
-                if op.op != .frame, op.op != .fieldContent, let row = host.presenter.views[op.id] { alone.append(row) }
+                if !op.isGeometry, let row = host.presenter.views[op.id] { alone.append(row) }
                 continue
             }
-            guard above.contains(op.id) else { continue }
+            guard above.contains(op.id), !op.isGeometry else { continue }
             switch op.op {
-            case .frame, .content, .children: continue
-            case .unknown where op.payload["op"] as? String == "block": continue
+            case .children: continue
             case .props where op.props["inert"] == nil && !op.clear.contains("inert"): continue
             default: return restore()
             }

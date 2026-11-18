@@ -120,3 +120,16 @@ extension BatchValue {
         return nil
     }
 }
+
+extension BatchOp {
+    /// An op that changes only where something is drawn and how large: a box (`frame`), a scroller's content
+    /// size (`content`), a field's or box's content box (`fieldContent`), a block's used size (a `block` op, which
+    /// arrives as `unknown` with its payload, LLP 1115.002 D8.2).
+    package var isGeometry: Bool {
+        switch op {
+        case .frame, .content, .fieldContent: true
+        case .unknown: payload["op"] as? String == "block"
+        default: false
+        }
+    }
+}
