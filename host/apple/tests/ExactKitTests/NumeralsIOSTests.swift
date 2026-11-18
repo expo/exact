@@ -229,35 +229,37 @@ final class NumeralsIOSTests: XCTestCase {
             ("aligned to the end", ["text_align": "end"], [:]),
             ("a box off the pixel grid", [:], ["textLeft": "10.25", "textOffset": "8.25"]),
         ]
-        for (k, (name, style, props)) in cases.enumerated() {
-            let one = 100 * (k + 1) + 1, two = one + 50
+        // Every case in one window, each a rolling paragraph over the same one drawn by Exact.
+        var creates: [[String: Any]] = [], frames: [[String: Any]] = [], ids: [Int] = [], areas: [(top: CGRect, bottom: CGRect)] = []
+        for (k, (_, style, props)) in cases.enumerated() {
+            let one = 100 * (k + 1) + 1, two = one + 50, y = Double(20 + 120 * k)
             var paragraph: [String: Any] = ["font_size": 20.0]
             paragraph.merge(style) { $1 }
             var rolling = paragraph
             rolling["content_transition"] = "numeric"
-            p.apply(wireBatch([
-                ["op": "create", "id": one, "kind": "text", "style": rolling, "props": props],
-                ["op": "create", "id": two, "kind": "text", "style": paragraph, "props": props],
-                ["op": "roots", "ids": [one, two]],
-                ["op": "frame", "id": one, "x": 20.0, "y": 20.0, "w": 360.0, "h": 40.0],
-                ["op": "frame", "id": two, "x": 20.0, "y": 80.0, "w": 360.0, "h": 40.0],
-            ]))
-            let a = try XCTUnwrap(p.views[UInt32(one)]), b = try XCTUnwrap(p.views[UInt32(two)])
-            let top = CGRect(x: 0, y: 20, width: 400, height: 40), bottom = top.offsetBy(dx: 0, dy: 60)
-            for count in ["8", "88", "8888"] {
-                p.apply(wireBatch([["op": "paragraph", "id": one, "runs": runs(one, count)], ["op": "paragraph", "id": two, "runs": runs(two, count)]]))
-                XCTAssertTrue(a.rollsNumerals, "\(name), \(count)")
-                paint(p, [a, b])
-                _ = still(window, inked: [top, bottom], "\(name), \(count)")
-                let pixels = try shot(window, per: per, height: bottom.maxY)
-                let rolled = ink(pixels, in: top, per: per), drawn = ink(pixels, in: bottom, per: per)
+            creates += [["op": "create", "id": one, "kind": "text", "style": rolling, "props": props],
+                        ["op": "create", "id": two, "kind": "text", "style": paragraph, "props": props]]
+            frames += [["op": "frame", "id": one, "x": 20.0, "y": y, "w": 360.0, "h": 40.0],
+                       ["op": "frame", "id": two, "x": 20.0, "y": y + 60, "w": 360.0, "h": 40.0]]
+            ids += [one, two]
+            areas.append((CGRect(x: 0, y: y, width: 400, height: 40), CGRect(x: 0, y: y + 60, width: 400, height: 40)))
+        }
+        p.apply(wireBatch(creates + [["op": "roots", "ids": ids]] + frames))
+        let views = try ids.map { try XCTUnwrap(p.views[UInt32($0)]) }
+        for count in ["8", "88", "8888"] {
+            p.apply(wireBatch(ids.map { ["op": "paragraph", "id": $0, "runs": runs($0, count)] }))
+            paint(p, views)
+            _ = still(window, inked: areas.flatMap { [$0.top, $0.bottom] }, count)
+            let pixels = try shot(window, per: per, height: areas[areas.count - 1].bottom.maxY)
+            for (k, (name, _, _)) in cases.enumerated() {
+                XCTAssertTrue(views[2 * k].rollsNumerals, "\(name), \(count)")
+                let rolled = ink(pixels, in: areas[k].top, per: per), drawn = ink(pixels, in: areas[k].bottom, per: per)
                 for (what, got, want) in [("the glyphs' left", rolled.glyphs.minX, drawn.glyphs.minX), ("the glyphs' top", rolled.glyphs.minY, drawn.glyphs.minY),
                                           ("the glyphs' bottom", rolled.glyphs.maxY, drawn.glyphs.maxY), ("the box's left", rolled.box.minX, drawn.box.minX),
                                           ("the box's top", rolled.box.minY, drawn.box.minY)] {
                     XCTAssertEqual(got * window.screen.scale, want * window.screen.scale, accuracy: 0.25, "\(name), \(count): \(what), in device pixels")
                 }
             }
-            p.apply(wireBatch([["op": "destroy", "id": one], ["op": "destroy", "id": two], ["op": "roots", "ids": []]]))
         }
     }
 
