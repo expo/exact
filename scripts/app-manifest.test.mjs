@@ -1072,7 +1072,7 @@ test('app.json variants: a suffix, a name, icons and settings per name, refused 
   const dir = mkdtempSync(resolve(tmpdir(), 'manifest-variants-'));
   const save = (variants, extra = {}) => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'V', app: { id: 'com.example.v', name: 'V' }, env: ['API'], variants, ...extra }));
   try {
-    const dev = { idSuffix: '.dev', name: 'V Dev', env: { API: 'https://staging.example' } };
+    const dev = { idSuffix: '.dev', name: 'V Dev', env: { API: 'https://staging.example' }, host: { ios: { icon: 'assets/Dev.icon' }, macos: { icon: 'assets/Dev.icon' } } };
     save({ dev, 'qa-2': { idSuffix: '.qa.two', name: 'V QA' } });
     assert.deepEqual(readManifest(dir, 'v').variants.dev, dev);
     assert.equal(readManifest(dir, 'v').app.id, 'com.example.v');
@@ -1083,6 +1083,10 @@ test('app.json variants: a suffix, a name, icons and settings per name, refused 
       [{ dev: { ...dev, env: { api: 'x' } } }, /variants\.dev\.env\.api\.name/], [{ dev: { ...dev, env: { API: 1 } } }, /variants\.dev\.env\.API/],
       [{ dev: { ...dev, env: { OTHER: 'x' } } }, /variants\.dev\.env\.OTHER: not a setting the manifest's "env" declares/],
       [{ dev: { ...dev, bundleId: 'x' } }, /variants\.dev\.bundleId: not a known key/],
+      // Of `host`, a variant names its Icon Composer projects and nothing else.
+      [{ dev: { ...dev, host: { ios: { icon: 'assets/Dev.icon', minimumOS: '18.0' } } } }, /variants\.dev\.host\.ios\.minimumOS: not a known key/],
+      [{ dev: { ...dev, host: { android: { id: 'com.example.other' } } } }, /variants\.dev\.host\.android: not a known key/],
+      [{ dev }, /variants\.dev\.host\.ios\.icon: assets\/Dev\.icon gives the primary icon the name of alternate_icons\[0\] \("dev"\) on Apple; rename one/, { alternate_icons: [{ name: 'dev', icons: [{ src: 'assets/missing.png' }] }] }],
       [{ dev: { ...dev, icons: [{ src: 'assets/missing.png' }] } }, /variants\.dev\.icons\[0\]\.src: assets\/missing\.png does not exist/],
       [{ dev }, /host\.ios\.appClip\.id com\.other\.Clip does not begin with com\.example\.v\./, { host: { ios: { appClip: { id: 'com.other.Clip' } } } }],
       [{ dev, qa: { idSuffix: '.dev', name: 'V QA' } }, /variants\.qa\.idSuffix: variants\.dev has \.dev too/],
@@ -1102,14 +1106,19 @@ test('a selected variant resolves the manifest as contract/cli/src/manifest/vari
   const manifest = {
     app: { id: 'com.example.v', name: 'V' }, icons: [{ src: 'assets/icon.png' }],
     color_scheme_dark: { background_color: '#000000', icons: [{ src: 'assets/dark.png' }] },
-    host: { android: { id: 'com.example.v_android' }, ios: { appClip: { id: 'com.example.v.Clip' }, icon: 'assets/v.icon' } },
-    variants: { dev: { idSuffix: '.dev', name: 'V Dev', icons: [{ src: 'assets/dev.png' }] }, plain: { idSuffix: '.qa.two', name: 'V QA' } },
+    host: { android: { id: 'com.example.v_android' }, ios: { appClip: { id: 'com.example.v.Clip' }, icon: 'assets/v.icon' }, macos: { icon: 'assets/v-mac.icon' } },
+    variants: {
+      dev: { idSuffix: '.dev', name: 'V Dev', icons: [{ src: 'assets/dev.png' }] }, plain: { idSuffix: '.qa.two', name: 'V QA' },
+      project: { idSuffix: '.project', name: 'V Project', host: { ios: { icon: 'assets/project.icon' } } },
+      whole: { idSuffix: '.whole', name: 'V Whole', icons: [{ src: 'assets/whole.png' }], host: { macos: { icon: 'assets/whole.icon' } } },
+    },
   };
   assert.equal(resolveVariant(manifest, undefined), manifest);
   const dev = resolveVariant(manifest, 'dev');
   assert.deepEqual(dev.app, { id: 'com.example.v.dev', name: 'V Dev' });
   assert.equal(dev.host.android.id, 'com.example.v_android.dev');
   assert.deepEqual(dev.host.ios, { appClip: { id: 'com.example.v.dev.Clip' } });
+  assert.deepEqual(dev.host.macos, {});
   assert.deepEqual(dev.icons, [{ src: 'assets/dev.png' }]);
   assert.deepEqual(dev.color_scheme_dark, { background_color: '#000000' });
   assert.deepEqual(dev.variant, { name: 'dev', base: 'com.example.v' });
@@ -1117,7 +1126,19 @@ test('a selected variant resolves the manifest as contract/cli/src/manifest/vari
   const plain = resolveVariant(manifest, 'plain');
   assert.equal(plain.app.id, 'com.example.v.qa.two');
   assert.equal(plain.host.ios.icon, 'assets/v.icon');
-  assert.throws(() => resolveVariant(manifest, 'preview'), /^Error: variant preview: app\.json has no variants\.preview \(it declares dev, plain\)$/);
+  // A variant's own Icon Composer project replaces the app's on that platform, and nothing else.
+  const project = resolveVariant(manifest, 'project');
+  assert.deepEqual(project.host.ios, { appClip: { id: 'com.example.v.project.Clip' }, icon: 'assets/project.icon' });
+  assert.deepEqual(project.host.macos, { icon: 'assets/v-mac.icon' });
+  assert.deepEqual([project.icons, project.color_scheme_dark], [manifest.icons, manifest.color_scheme_dark]);
+  // With `icons` too, the app's projects are not read, and the variant's own is.
+  const whole = resolveVariant(manifest, 'whole');
+  assert.deepEqual(whole.icons, [{ src: 'assets/whole.png' }]);
+  assert.deepEqual(whole.color_scheme_dark, { background_color: '#000000' });
+  assert.deepEqual(whole.host.ios, { appClip: { id: 'com.example.v.whole.Clip' } });
+  assert.deepEqual(whole.host.macos, { icon: 'assets/whole.icon' });
+  assert.equal(manifest.host.ios.icon, 'assets/v.icon', 'the manifest itself is left alone');
+  assert.throws(() => resolveVariant(manifest, 'preview'), /^Error: variant preview: app\.json has no variants\.preview \(it declares dev, plain, project, whole\)$/);
   // The flag sets EXACT_VARIANT for this process and its children, over an exported value.
   const env = { EXACT_VARIANT: 'plain' }, args = ['--run', '--variant', 'dev', 'shelf'];
   assert.deepEqual(takeVariant(args, env), ['--run', 'shelf']);

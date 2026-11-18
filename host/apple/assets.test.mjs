@@ -8,6 +8,7 @@ import { appleAssets, appleAssetCatalogInventory, appleRefusals, composerFallbac
 import { pngPixels } from './image.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 import { alternateIcons } from '../../scripts/app-icons.mjs';
+import { resolveVariant } from '../../scripts/variants.mjs';
 import { useXcode } from './devices.mjs';
 
 test.skipIf(process.platform !== 'darwin')('SVG icon catalogs include independent vector renditions and invalidate on an edit', () => {
@@ -155,6 +156,36 @@ test.skipIf(process.platform !== 'darwin')('alternate icons are the declared ros
     // A name actool did not compile is refused, not shipped: a catalog set it cannot read.
     writeFileSync(resolve(catalog, 'Card.appiconset/Contents.json'), JSON.stringify({ images: [{ filename: 'missing.png', idiom: 'universal', platform: 'ios', size: '1024x1024' }], info: { author: 'x', version: 1 } }));
     assert.throws(() => iosAssets(app([paper, night, card]), dir, false), /did not compile the alternate icon Card/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 120_000);
+
+test.skipIf(process.platform !== 'darwin')("a variant's Icon Composer project is its build's primary icon, and the app's build keeps the app's", () => {
+  useXcode();
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-variant-icon-'));
+  try {
+    for (const name of ['Base', 'Dev']) cpSync(new URL('../../scripts/fixtures/Primary.icon', import.meta.url).pathname, resolve(dir, `art/${name}.icon`), { recursive: true });
+    const manifest = {
+      app: { id: 'com.example.v', name: 'V' }, host: { ios: { icon: 'art/Base.icon' }, macos: { icon: 'art/Base.icon' } },
+      variants: { dev: { idSuffix: '.dev', name: 'V Dev', host: { ios: { icon: 'art/Dev.icon' }, macos: { icon: 'art/Dev.icon' } } } },
+    };
+    const app = (variant) => ({ dir, name: 'Variants', manifest: resolveVariant(manifest, variant) });
+    const built = (variant) => {
+      const out = mkdtempSync(resolve(dir, 'out-'));
+      const keys = iosAssets(app(variant), out, false, { catalog: true });
+      const info = JSON.parse(spawnSync('xcrun', ['assetutil', '--info', resolve(out, 'Assets.car')], { encoding: 'utf8' }).stdout);
+      return { primary: keys.CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName, stacks: [...new Set(info.filter(asset => asset.AssetType === 'IconImageStack').map(asset => asset.Name))] };
+    };
+    assert.deepEqual(built('dev'), { primary: 'Dev', stacks: ['Dev'] });
+    assert.deepEqual(built(undefined), { primary: 'Base', stacks: ['Base'] });
+    const mac = (variant) => appleAssets(app(variant), mkdtempSync(resolve(dir, 'mac-')), { platform: 'macos' }).CFBundleIconName;
+    assert.deepEqual([mac('dev'), mac(undefined)], ['Dev', 'Base']);
+    // The receipt's inventory is the variant's project, so an edit to it is a new native build.
+    assert.deepEqual(appleAssetCatalogInventory(app('dev'), 'ios').map(entry => entry.path), ['art/Dev.icon']);
+    // The project is the primary a distributed bundle needs, and a refusal names the field the author wrote.
+    assert.deepEqual(appleRefusals(app('dev'), 'ios', { archive: true }), []);
+    rmSync(resolve(dir, 'art/Dev.icon'), { recursive: true });
+    assert.deepEqual(appleRefusals(app('dev'), 'ios', { archive: true }), ['variants.dev.host.ios.icon: art/Dev.icon does not exist']);
+    assert.deepEqual(appleRefusals(app(undefined), 'ios', { archive: true }), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120_000);
 
