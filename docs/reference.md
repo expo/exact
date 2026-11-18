@@ -3702,8 +3702,7 @@ Expo's `deviceId` is a UUID made from the first 16 bytes of a SHA-256, with the
 v4 version and variant bits set, so it needs no separate storage. On Android
 the hash is of the case-sensitive Firebase installation ID: the UUID stays the
 same while that ID does, including across FCM token rotations. On Apple it is
-of the device token, so a new device token gives a new UUID and a new Expo
-token.
+of the device token, so a new device token gives a new UUID.
 
 The call returns `{type: "expo", data: "ExponentPushToken[…]"}`. An HTTP
 refusal throws with Expo's status and the first 500 characters of its reply;
@@ -3711,6 +3710,42 @@ if the reply cannot be read, the error still carries the status.
 Grant `net.fetch https://exp.host`, exchange again when the live subscription
 changes, and send the Expo token to your server. The [push recipe](recipes/push.md)
 includes the handler, channel and backend send.
+
+### Expo push on iOS and iPadOS
+
+The app needs no Firebase file. Give the EAS project an Apple Push
+Notifications service key with `eas credentials`, as
+[Expo's setup guide](https://docs.expo.dev/push-notifications/push-notifications-setup/#get-credentials-for-development-builds)
+describes. The Contract is the Android example's below, without the `push`
+handler. In `app.ts` the exchange names the APNs environment the build
+registers with:
+
+```ts
+const APNS_SANDBOX = import.meta.env.APNS_SANDBOX ?? '';
+
+export const answer: Answer = async (source, args) => {
+  if (source === 'exchangePush') {
+    const [subscription] = args;
+    if (!subscription?.apple) return { type: 'expo', data: '' };
+    const token = await getExpoPushTokenAsync(subscription, manifest, { development: APNS_SANDBOX === '1' });
+    // Save token.data on the backend, as the Android example does.
+    return token;
+  }
+  throw new Error(`Unknown source ${source}`);
+};
+```
+
+Exact does not read the environment, so the build supplies it: declare
+`"env": ["APNS_SANDBOX"]` in `app.json` and set `APNS_SANDBOX=1` in the
+commands that build for a simulator or sign with a development profile. The
+value follows the signing, not the variant or the build mode: App Store
+Connect signs a TestFlight or App Store build for production. A build that
+leaves it unset exchanges as production. A wrong value still exchanges, and
+APNs then refuses the token as `BadDeviceToken`.
+
+On Apple no app code runs when a push arrives. The backend sends `title` and
+`body` at the top level of the message, which the system shows, and `navigate`
+in `data`, which the tap opens.
 
 ### Android Expo push example
 
@@ -3795,32 +3830,6 @@ The handler may also refresh the urgencies resource. Await notification and
 network work inside its mutation so the wake owns it. A socket's
 `exactStream` mapper cannot post; have its mapped counter key a resource
 whose answer calls `showNotification` instead.
-
-### Expo push on iOS and iPadOS
-
-The app needs no Firebase file. Give the EAS project an Apple Push
-Notifications service key with `eas credentials`, as
-[Expo's setup guide](https://docs.expo.dev/push-notifications/push-notifications-setup/#get-credentials-for-development-builds)
-describes. The Contract is the Android example's without the `push` handler.
-In `app.ts` the same helper exchanges the subscription once the app says which
-APNs environment the build registers with:
-
-```ts
-const APNS_SANDBOX = import.meta.env.APNS_SANDBOX ?? '';
-
-if (subscription?.apple) {
-  return getExpoPushTokenAsync(subscription, manifest, { development: APNS_SANDBOX === '1' });
-}
-```
-
-Exact does not read the environment, so the build supplies it: declare
-`"env": ["APNS_SANDBOX"]` in `app.json` and set `APNS_SANDBOX=1` in the
-commands that build for a simulator or sign with a development profile. A
-build that leaves it unset exchanges as production.
-
-On Apple no app code runs when a push arrives. The backend sends `title` and
-`body` at the top level of the message, which the system shows, and `navigate`
-in `data`, which the tap opens.
 
 Under the agent nothing reaches APNs or FCM, and `pushSubscription()` reads null
 while the permission is not granted, as on the phone. A subscribe while

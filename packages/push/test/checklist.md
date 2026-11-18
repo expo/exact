@@ -91,18 +91,18 @@ means the token belongs to the other environment (the other `HOST`).
 ## iPhone through Expo
 
 Use an app that exchanges its subscription as
-[the reference](../../../docs/reference.md#expo-push-on-ios-and-ipados) shows,
-and the EAS project its `extra.eas.projectId` names, holding the team's APNs key. Mocked
-fetch covers the exchange's request; these steps cover Expo's answer and the
-delivery.
+[the reference](../../../docs/reference.md#expo-push-on-ios-and-ipados) shows.
+Its bundle id is the one the EAS project named by `extra.eas.projectId` holds
+the team's APNs key for. Mocked fetch covers the exchange's request; these
+steps cover Expo's answer and the delivery.
 
-13. In the development build of step 5, exchange with `development: true`: the
-    call answers `ExponentPushToken[…]`.
+13. In a development build of that app, signed as step 5's is, exchange with
+    `development: true`: the call answers `ExponentPushToken[…]`.
 14. Send to that token with [Expo's push tool](https://expo.dev/notifications)
     and data `{ "navigate": "/thread/42" }`: Expo's ticket and receipt are
     `ok`, the banner shows, and its tap opens `/thread/42`.
-15. In the Ad Hoc build of step 9, exchange with `development: false` and send
-    again: the same.
+15. In an Ad Hoc build of that app, signed as step 9's is, exchange with
+    `development: false` and send again: the same.
 16. Exchange step 13's token again with `development: false` and send: no
     banner shows. Record Expo's receipt.
 
