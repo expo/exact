@@ -19,7 +19,8 @@
   },
   "shapes": {
     "ApplePushSubscription": {
-      "deviceToken": "string"
+      "deviceToken": "string",
+      "appId": "string"
     },
     "AndroidPushSubscription": {
       "installationId": "string",

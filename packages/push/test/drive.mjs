@@ -79,6 +79,7 @@ run('bun', ['install'], app);
 const flags = [...(sim ? ['--sim', sim] : []), '--storage', 'push', '--reset-storage'];
 const agent = (...ops) => JSON.parse(`[${run('bun', ['exact.mjs', 'agent', 'ios', '--json', ...flags, ...ops], app).trim().split('\n').filter((l) => l.startsWith('{')).join(',')}]`);
 const text = (tree, testId) => tree?.nodes?.find((n) => n.props?.testId === testId)?.props?.text;
+const apple = (deviceToken) => JSON.stringify({ apple: { deviceToken, appId: id } });
 
 {
   // The web has no implementation: its declared absence, not an error, whatever the permission.
@@ -96,13 +97,13 @@ const text = (tree, testId) => tree?.nodes?.find((n) => n.props?.testId === test
   const allowed = agent('tap subscribe', `tap @${permission} allow`, 'state').at(-1);
   const value = (allowed.pending ?? []).find((p) => p.device?.capability === 'subscription')?.ticket;
   check('allowed, it waits on the subscription\'s value', value != null && allowed.extensions?.push?.permissions?.notifications === 'granted', JSON.stringify(allowed.pending));
-  const answered = agent('tap subscribe', `tap @${permission} allow`, `type @${value} {"apple":{"deviceToken":"ab12"}}`, 'clock settle', 'tree',
-    'prefer extension push.pushSubscription={"apple":{"deviceToken":"cd34"}}', 'clock settle', 'tree');
+  const answered = agent('tap subscribe', `tap @${permission} allow`, `type @${value} ${apple('ab12')}`, 'clock settle', 'tree',
+    `prefer extension push.pushSubscription=${apple('cd34')}`, 'clock settle', 'tree');
   const [first, rotated] = answered.filter((r) => Array.isArray(r.nodes));
   check('the value answers the call and is the live value', text(first, 'subscribed') === 'answered' && text(first, 'token') === 'ab12', JSON.stringify([text(first, 'subscribed'), text(first, 'token')]));
   check('a value preferred later is a rotation the source reads', text(rotated, 'token') === 'cd34', text(rotated, 'token'));
   // While permission is not granted the subscription reads none, a token given before included; granted, the token.
-  const turned = agent('--permission', 'notifications=denied', 'prefer extension push.pushSubscription={"apple":{"deviceToken":"ef56"}}', 'clock settle', 'state', 'tree',
+  const turned = agent('--permission', 'notifications=denied', `prefer extension push.pushSubscription=${apple('ef56')}`, 'clock settle', 'state', 'tree',
     'prefer permission.notifications granted', 'clock settle', 'tree');
   const [deniedState] = turned.filter((r) => r.slots);
   const [denied, granted] = turned.filter((r) => Array.isArray(r.nodes));

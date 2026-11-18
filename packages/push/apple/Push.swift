@@ -75,7 +75,7 @@ public final class PushModule: NSObject, ExactPackage {
                     }
                     register()
                     said = context.push.current["token"] as? String
-                    reply(["exact:answer": subscription(said)])
+                    reply(["exact:answer": said.map { subscription($0) as Any } ?? NSNull()])
                 }
             case "subscribePush": subscribe(reply)
             default: reply(["error": "NotSupportedError"])
@@ -94,9 +94,10 @@ public final class PushModule: NSObject, ExactPackage {
         }
     }
 
-    /// The value app code reads: the credential under the platform's key.
-    private func subscription(_ token: String?) -> Any {
-        token.map { ["apple": ["deviceToken": $0]] as Any } ?? NSNull()
+    /// The value app code reads: the credential under the platform's key,
+    /// with the bundle id APNs issued it to, a server's `apns-topic`.
+    private func subscription(_ token: String) -> [String: Any] {
+        ["apple": ["deviceToken": token, "appId": Bundle.main.bundleIdentifier ?? ""]]
     }
 
     #if os(iOS) || os(macOS)
@@ -155,7 +156,7 @@ public final class PushModule: NSObject, ExactPackage {
         // The process holds the system's answer already (another session's, or an embedder's forwarded one).
         if let token = context.push.current["token"] as? String {
             Self.registered = true
-            return reply(["apple": ["deviceToken": token]])
+            return reply(subscription(token))
         }
         // Apple promises no answer within any time; a call that had none
         // in 60 s fails alone, and a later answer still reaches the source.
@@ -178,7 +179,7 @@ public final class PushModule: NSObject, ExactPackage {
         waiting = [:]
         for call in calls {
             call.bound.cancel()
-            if let token { call.reply(["apple": ["deviceToken": token]]) }
+            if let token { call.reply(subscription(token)) }
             else { call.reply(["error": "AbortError", "message": answer["error"] as? String ?? "registration failed"]) }
         }
         if token != said, saidState == "granted" {

@@ -3553,9 +3553,10 @@ register beside them under this grant.
   ephemeral authorization, it asks nothing. Then the app registers, and the call answers the
   system's answer: the subscription, or `AbortError` with the system's
   message.
-- `pushSubscription()` reads `{apple: {deviceToken}}`, the token's bytes in
-  lowercase hex, or on Android `{android: {installationId, token, appId}}`, the
-  Firebase Installations ID, FCM registration token and installed package id.
+- `pushSubscription()` reads `{apple: {deviceToken, appId}}`, the token's bytes in
+  lowercase hex and the installed bundle id, or on Android
+  `{android: {installationId, token, appId}}`, the Firebase Installations ID,
+  FCM registration token and installed package id.
   Otherwise it reads null. It never asks: its
   first read in a launch registers once when permission is already granted, as
   Apple asks of every launch (on Android, once the app has subscribed), and a
@@ -3572,7 +3573,7 @@ register beside them under this grant.
   `available: false`.
 
 The server sends APNs an alert (`apns-push-type: alert`, `apns-topic` the
-bundle id), APNs's own `aps` dictionary and one key of Exact's:
+subscription's `appId`), APNs's own `aps` dictionary and one key of Exact's:
 
 ```json
 { "aps": { "alert": { "title": "Delayed", "body": "The 9:41 now leaves at 9:52" }, "sound": "default" },
@@ -3680,15 +3681,31 @@ A notification message follows the presentation path above and raises no
 `push` event. Delivery remains subject to FCM, Doze and the phone's battery
 policy; a server must keep alerts available for the app to reconcile.
 
-`getExpoPushTokenAsync(subscription, manifest)` from `@exact/push/expo`
-exchanges `android.token` through Expo's service. Pass the app's imported
-`app.json`: `extra.eas.projectId` names its EAS project. The subscription's
-`android.appId` supplies the installed package id, including normalization and
-the selected variant's suffix. Expo's `deviceId` is a UUID derived from the
-first 16 bytes of the case-sensitive Firebase installation ID's SHA-256,
-with the v4 version and variant bits set. It stays the same while the
-installation ID does, including across FCM token rotations, without separate
-storage. It returns `{type: "expo", data: "ExponentPushToken[…]"}`. An HTTP
+`getExpoPushTokenAsync(subscription, manifest, options)` from
+`@exact/push/expo` exchanges the subscription's token through Expo's service:
+`android.token` as an FCM token, or `apple.deviceToken` as an APNs one. Pass the
+app's imported `app.json`: `extra.eas.projectId` names its EAS project. The
+subscription's `appId` supplies the installed package or bundle id, with the
+selected variant's suffix and, on Android, its normalization.
+
+An APNs token also needs `options.development`: `true` when the build
+registers with APNs's sandbox (a simulator, or a development profile), `false`
+for an Ad Hoc, TestFlight or App Store build. Expo uses the sandbox for a token
+exchanged with `true`
+([`ExpoPushTokenOptions`](https://github.com/expo/expo/blob/main/packages/expo-notifications/src/Tokens.types.ts)),
+and APNs answers `BadDeviceToken` to a token from the other environment. The
+app states it because Exact does not read it: iOS has no public call that
+reads the signed `aps-environment` (LLP 1133.004 §9 P3). Without it the call
+throws and sends nothing. An FCM token ignores it.
+
+Expo's `deviceId` is a UUID made from the first 16 bytes of a SHA-256, with the
+v4 version and variant bits set, so it needs no separate storage. On Android
+the hash is of the case-sensitive Firebase installation ID: the UUID stays the
+same while that ID does, including across FCM token rotations. On Apple it is
+of the device token, so a new device token gives a new UUID and a new Expo
+token.
+
+The call returns `{type: "expo", data: "ExponentPushToken[…]"}`. An HTTP
 refusal throws with Expo's status and the first 500 characters of its reply;
 if the reply cannot be read, the error still carries the status.
 Grant `net.fetch https://exp.host`, exchange again when the live subscription
@@ -3779,29 +3796,56 @@ network work inside its mutation so the wake owns it. A socket's
 `exactStream` mapper cannot post; have its mapped counter key a resource
 whose answer calls `showNotification` instead.
 
+### Expo push on iOS and iPadOS
+
+The app needs no Firebase file. Give the EAS project an Apple Push
+Notifications service key with `eas credentials`, as
+[Expo's setup guide](https://docs.expo.dev/push-notifications/push-notifications-setup/#get-credentials-for-development-builds)
+describes. The Contract is the Android example's without the `push` handler.
+In `app.ts` the same helper exchanges the subscription once the app says which
+APNs environment the build registers with:
+
+```ts
+const APNS_SANDBOX = import.meta.env.APNS_SANDBOX ?? '';
+
+if (subscription?.apple) {
+  return getExpoPushTokenAsync(subscription, manifest, { development: APNS_SANDBOX === '1' });
+}
+```
+
+Exact does not read the environment, so the build supplies it: declare
+`"env": ["APNS_SANDBOX"]` in `app.json` and set `APNS_SANDBOX=1` in the
+commands that build for a simulator or sign with a development profile. A
+build that leaves it unset exchanges as production.
+
+On Apple no app code runs when a push arrives. The backend sends `title` and
+`body` at the top level of the message, which the system shows, and `navigate`
+in `data`, which the tap opens.
 
 Under the agent nothing reaches APNs or FCM, and `pushSubscription()` reads null
 while the permission is not granted, as on the phone. A subscribe while
 `prompt` waits on the
 `permission` ticket (`tap @t allow`), then on the subscription's value (`type
-@t '{"apple":{"deviceToken":"ab12"}}'`); `prefer extension
+@t '{"apple":{"deviceToken":"ab12","appId":"com.example.app"}}'`); `prefer extension
 push.pushSubscription=<json>` sets the value later, as a rotation.
 
 Android's data-message routing, deadline, registration and token rotation have
-JVM coverage; Expo's exchange request is checked with mocked fetch. Real
+JVM coverage; Expo's exchange request, for an FCM token and for an APNs one,
+is checked with mocked fetch. Real
 registration and FCM/Expo delivery need the app's Firebase project and have
 not been verified here. The [device checklist](../packages/push/test/checklist.md)
 names the foreground, background and killed-process checks.
 
 Run on an iOS 27 simulator: the real prompt; a registration the simulator
-answered with a token; a relaunch that only reads `pushSubscription()`
+answered with a token, read with the installed bundle id; a relaunch that only reads `pushSubscription()`
 answering the same token; the entitlement in the built app; pushes sent with
 `xcrun simctl push` shown and their taps opening `navigate`, with the app in
 front, from the Home Screen and at launch. On 2026-11-14, Xcode's iOS 27.0
 simulator accepted a `mutable-content: 1` push for the extension fixture but
 did not launch its service extension or write its App Group marker. The direct
 reference separately constructed requests and called the handler's receipt and
-expiry methods with a controlled download callback. Not yet run: delivery through APNs, the
+expiry methods with a controlled download callback. Not yet run: delivery through APNs, an
+APNs token exchanged with Expo's service and a push delivered through it, the
 entitlement and extension signed against device profiles, and a production
 build. `packages/push/test/checklist.md` is those checks; until they pass,
 nothing here is claimed for a device.

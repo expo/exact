@@ -4,7 +4,16 @@ export interface ExpoPushApp {
 }
 
 export interface ExpoPushSubscription {
+  apple?: { deviceToken: string; appId: string } | null;
   android?: { installationId: string; token: string; appId: string } | null;
 }
 
-export declare function getExpoPushTokenAsync(subscription: ExpoPushSubscription, app: ExpoPushApp): Promise<{ type: 'expo'; data: string }>;
+export interface ExpoPushOptions {
+  /**
+   * Required for an APNs token: whether the build registers with APNs's sandbox. True on a simulator and under a
+   * development profile; false under an Ad Hoc, TestFlight or App Store one.
+   */
+  development?: boolean;
+}
+
+export declare function getExpoPushTokenAsync(subscription: ExpoPushSubscription, app: ExpoPushApp, options?: ExpoPushOptions): Promise<{ type: 'expo'; data: string }>;

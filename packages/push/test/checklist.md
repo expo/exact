@@ -88,6 +88,24 @@ means the token belongs to the other environment (the other `HOST`).
     `<app id>.notifications`, and the archive passes the distribution service's
     validation.
 
+## iPhone through Expo
+
+Use an app that exchanges its subscription as
+[the reference](../../../docs/reference.md#expo-push-on-ios-and-ipados) shows,
+and the EAS project its `extra.eas.projectId` names, holding the team's APNs key. Mocked
+fetch covers the exchange's request; these steps cover Expo's answer and the
+delivery.
+
+13. In the development build of step 5, exchange with `development: true`: the
+    call answers `ExponentPushToken[…]`.
+14. Send to that token with [Expo's push tool](https://expo.dev/notifications)
+    and data `{ "navigate": "/thread/42" }`: Expo's ticket and receipt are
+    `ok`, the banner shows, and its tap opens `/thread/42`.
+15. In the Ad Hoc build of step 9, exchange with `development: false` and send
+    again: the same.
+16. Exchange step 13's token again with `development: false` and send: no
+    banner shows. Record Expo's receipt.
+
 ## Android through Expo
 
 Use the reporter's POCO X6 Pro (Android 14, HyperOS), the Firebase client for
