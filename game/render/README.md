@@ -56,8 +56,53 @@ entities through `entities()` to get tick-interpolated `FrameView::pose`. Use
 `Pipelines<T>` for asynchronous candidate validation, `Needs::PENDING` until ready,
 and `error()` for a named rejected replacement. Never step or mutate the simulation.
 
-Stages are compute before shadows, opaque, background after sky, an optional
-surface continuation, and optional HDR post before bloom/tone. Geometry uses
+For incremental preparation, set `Hooks::ALLOWANCE` to the maximum number of
+bounded units one call may complete (LLP 1182.000 D6). Keep an ordered queue
+and check the deadline after each unit.
+
+```rust,ignore
+for _ in 0..view.time.allowance {
+    let Some(unit) = self.todo.pop_first() else { break };
+    self.run(unit, gpu);
+    if view.time.deadline.is_some_and(|deadline| deadline.passed()) { break; }
+}
+```
+
+In each clock mode, timestamps must move past the latest one the budget has
+seen to grant allowance. A timed bind can supply the starting timestamp. With
+no starting timestamp, the first live frame grants the allowance and the first
+agent frame grants zero. Look frames always grant zero.
+The device-free Linux agent draws only look frames, so a budgeted hook's
+window never fills there.
+
+Use `Needs::PENDING` for work a redraw can finish, such as validating a pipeline.
+Add `Needs::STARVED` when all remaining work requires allowance. Under the
+agent's clock, pending work requests another frame until it finishes or becomes
+starved. `Needs::ANIMATE` still requests frames. Live rendering continues while
+either kind of work is pending. `STARVED` alone has no effect.
+
+The live deadline uses the display period as its target. When the last canvas
+interval is at least one and a half display periods and the scheduler has read a
+nonzero cap, the target is the cap's period. An unknown interval uses the display
+period. An unknown display period leaves the call with allowance alone.
+
+The deadline reserves the longest tail from the last eight frames, timed from
+the end of `prepare` to the end of encode. With fewer than eight samples it
+reserves half the target. A display period change clears the history. The
+deadline includes ticks run within the frame. A timed bind can run ticks before
+`frame_start`, outside the deadline. If the deadline has passed on entry to
+`prepare`, a frame with allowance still grants one unit. Keep units short, since
+a started unit runs to completion.
+
+`renderHooks.budget` reports the declared `allowance`, the number of calls
+that ended past the deadline (`overFrames`), and how many milliseconds late
+they ended in total (`overMs`). That total includes time lost before
+`prepare` began. `perf_reset`, a restore and a restart clear both counters.
+The budget report is `null` when the hook leaves `ALLOWANCE` at zero.
+
+Stages are compute before shadows, opaque, `background` after sky for blended
+geometry that draws without sampling the scene, `surface` for geometry that
+samples the scene copy, and optional HDR post before bloom/tone. Geometry uses
 `Game::samples` (`Game::SAMPLES`, 4× MSAA by default; one under the `Low` rung of `Game::quality`); hooks use `FrameView.sample_count`. `SCENE_COPY` supplies resolved HDR and positive view-space depth (zero for
 sky); `FINAL_DEPTH` requests final sampled depth independently; `HDR_POST` supplies
 a distinct HDR output. Respect the active rectangle inside bucketed textures.
@@ -82,11 +127,18 @@ the assembled sources, rejects duplicate stems/symlinks and ships ordinary shade
 assets. Compose the corresponding reflected slices with `exact_gpu::shader_packs!`.
 No manual copy or private game dependency is needed in public engine code.
 
-Tree/state report stages. `world.renderHooks` contains CPU rings, attachment-byte
-estimates and separate engine/game creation counts before/after readiness; absent
-raw-device reporting is `null`. Raw hook draws/dispatches are neither culled nor
-counted in the engine’s draw/triangle counters. `world.gpuMs` (below) names each hook
-stage; unsupported finer intervals are `null`.
+A hook's optional `report()` supplies a JSON object at `state.world.renderHooks.game`,
+with refusals for invalid reports in `gameError`.
+
+Implement `frame_work()` to report cumulative `FrameWork` since the hook was
+made (LLP 1182.000 D1). Count draw calls the hook issues in opaque, background,
+surface and post. Count submitted triangles as index count divided by three
+(vertex count for non-indexed triangle lists), times instances. Count the bytes
+given to `write_buffer`, `write_texture` and `create_buffer_init` in any stage.
+Count an item once per frame when it draws, even across layers. Use `item_name()`
+to name that unit. Compute dispatches and engine draws for custom materials do
+not enter these counts. Raw hook draws and dispatches are neither culled nor
+counted in the engine's draw and triangle counters.
 
 ## Culling
 
@@ -918,18 +970,46 @@ artistic scale rather than candela, and at 0 only the range window, a spot's con
 N·L shape it (three.js `decay`). Decays 2 and 0 take no `pow` in the shader.
 Missing materials/environment use defaults.
 
-Performance samples appear only in `state.world.perf`: live frame stamps, tick,
-feed, encode (frame input through submit), pipeline and ticks/frame distributions.
-`pipelineMs` is the time a live frame spent creating render and compute pipelines
-on its thread (`perf::pipeline`): in the host's asset preparation before it, its feed
-and encode, frames before it that stopped short of drawing, and the `Game::PREPARE`
-warm-up after the previous submit. A worker compiling a live-settings variant stalls
-no frame and is not counted. The log's `game renderer first frame encoded` line
+`state.world.perf.frameMs` measures intervals between consecutive live frames; a
+seekable frame between two starts the interval again. `tickMs`,
+`feedMs`, `encodeMs` and `pipelineMs` measure CPU work on live frames and, once
+perf is armed, under the agent's clock. `perf.clock` is `"live"` or `"agent"`
+and identifies the CPU rings' clock mode. The first CPU sample of the other
+mode clears the world and hook CPU rings in place. The previous window stays
+readable until that sample arrives. Display intervals and tick counts carry
+across CPU windows. A redraw at the same clock time is a frame and is sampled
+when CPU timing is enabled.
+`ticksPerFrame` counts ticks run. `catchUp` counts live host gaps over 250 ms, the
+most a frame admits. `clampFrames` and `clampMs` count excess time consumed by a
+running clock after a submitted live frame of the same unpaused picture. `idleFrames`
+and `idleMs` count the excess on wakes, pauses and advances without that prior
+submission. Both millisecond totals count only the excess over 250 ms.
+`ticksOwed` and `ticksPerFrame` sample the same drawn frames. `ticksOwed` uses the
+live scheduler's advance target with the full host gap minus the tick at the start
+of the advance, when the gap exceeds 250 ms and the clock is running. Other drawn
+frames use the ticks run: seekable frames, a paused clock, which asks for none, and
+a wake from rest, which discards its gap before the scheduler reads it. A timed
+bind and an advance-only frame update `catchUp` without adding tick count samples.
+`overloadFrames` counts live frames, timed binds and advance-only frames that run
+more than `ceil(display period in seconds × HZ) + 1` ticks when the display period
+is known.
+The first logs the ticks owed and run, the ticks per display period, the clamped
+and idle time, and `perf world:<surface>`.
+`pipelineMs` is the time a measured frame spent creating render and compute pipelines
+on its thread (`perf::pipeline`), including the host's asset preparation, feed
+and encode, earlier frames that stopped short of drawing, and the `Game::PREPARE`
+warm-up after the previous submit. Pipelines made in a measured agent request
+or timed bind count toward the next drawn frame in that mode, and pending time
+waits for a frame of its own mode. A worker compiling a live-settings variant
+stalls no frame and is not counted. The log's `game renderer first frame encoded` line
 gives the same time from the renderer's making to that frame as `pipeline_ms=`
-(`untimed` when the renderer was made, or a frame drawn, on the agent's clock).
-Driver work a pipeline defers to its first use is GPU or encode time, not this. CPU sample
-rings retain 16,384 values. Seekable renders, agent advances and timed binds make
-no CPU frame perf clock calls unless tick spans are armed; samples do not enter hashes.
+(`untimed` when that interval was outside CPU measurement or crossed clock modes).
+CPU sample rings retain 16,384 values. On a canvas under the agent's clock, when
+armed, a frame, an agent request or a timed bind samples the last 240 ticks of its
+advance and the feed that follows them. Under the live clock a request and a bind
+time nothing. Unarmed seekable renders and advances make no CPU perf clock calls.
+The tick, feed and encode times in `exactCanvasPerformance` and the trace come
+from live frames only. Samples stay outside hashes and scheduling.
 `perf world:<surface>` arms exclusive tick spans, exposed in
 `state.world.perf.tickSpans`: name, source line, p50, p95, maximum and per-tick
 mean milliseconds. `tick.other` completes the tick. `tickSpans.tickMs` measures
@@ -948,7 +1028,7 @@ end), tonemap, depth resolves, the water's shafts and hook stages; the transluce
 blended models) and inside-pass hook stages where the device times inside passes.
 A pass the frame did not run is not read. GPU timings also fill under the agent's
 virtual clock (seekable frames), so `state world perf:true` then `clock +ms` times
-an offscreen frame there; CPU frame rings stay live-only. Arming allocates the query set and
+an offscreen frame there. Arming allocates the query set and
 readback buffers; an unarmed canvas creates none. GPU intervals overlap; do not sum
 them. The allocation-free claim covers
 only the `steady_sim_feed_and_frame_inputs_allocate_nothing` moving-cube/camera/light
@@ -1178,6 +1258,25 @@ instrumentation is outside this slice. `ready` is exactly an empty `readyReasons
 failures are included. Headless state has `ready: false`, reason
 `no device`, and zero GPU work; it is simulation evidence only.
 
+`state.world.renderHooks` reports stages, CPU rings, attachment-byte estimates,
+and engine and game creation counts before and after readiness.
+`cpuMs` times each stage of a frame whose encode succeeds, on a live frame or,
+when armed, under the agent's clock. These rings clear along with the other CPU rings when `perf.clock`
+changes. A look frame is not timed: it adds no sample to these rings or to the
+world's, and leaves `perf.clock` as it was.
+`reportedWork` is `null` without `work()` reporting. `frame` is `null` without
+frame work reporting. A frame report names the unit in `items` and supplies
+`draws`, `triangles`, `uploadBytes` and `itemsDrawn` rings. The first read or a
+decrease in any counter sets a baseline. Frames that run hook
+stages sample the difference, including zero, under either clock; a frame whose
+encode failed samples the work its stages did. A look frame advances the baseline
+and adds no sample: its work is attributed to no frame. Percentiles require arming. Unarmed rings keep `count`, `mean` and
+`max`. `perf_reset` clears the rings and keeps the baseline. Restoring or
+restarting the world clears those totals and releases ring storage while keeping
+the baseline. Device loss drops the frame work and hook CPU rings with the renderer.
+The web live world row shows the largest draws, triangles, upload bytes and ticks in a
+frame. `world.gpuMs` names each hook stage; unsupported finer intervals are `null`.
+
 Both asset fixture proofs exercise same-device restores after ready and compare
 work across ordinary and paranoid ticks. Their web-only response instrumentation
 records browser `performance.measure('a3-restore')` through the first draw. A
@@ -1230,11 +1329,11 @@ and browser hashes. [Game README](../README.md) covers clock, save and dev carry
 `frame.environment.exposure` and `.bloom`. Render failures are either
 `RenderError::Capacity { arena, slot, limit }` or `RenderError::Scene(reason)`.
 Mesh centers support transparent sorting; there is no unused sphere-radius API.
-World surfaces retain small work counters by default. A world-state request with
-`perf: true` or `perf_reset: true` arms the six 16,384-sample diagnostic rings;
-`perf.armed` distinguishes recorded percentiles from the unarmed zero values.
-Arming preserves accumulated counts, means, maxima and cadence; only `perf_reset`
-clears them. The feel probe requests `perf: true`.
+On an unarmed surface, a plain `state` request returns totals and `null`
+percentiles. Set `perf: true` or `perf_reset: true` to arm the seven
+16,384-sample diagnostic rings. Percentiles stay `null` until the first sample
+in each ring. `perf` preserves accumulated totals and cadence. `perf_reset`
+clears them and the five `catchUp` counters. The feel probe requests `perf: true`.
 
 ## Skinned model path
 

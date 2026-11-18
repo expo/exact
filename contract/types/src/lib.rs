@@ -1385,6 +1385,7 @@ fn check_with_sites(
         let mut errors = uses::prefer_call_sites(sink.errors, independent, file, &types, &expanded);
         for e in &mut errors {
             records::nominal(e, &types.shapes, file);
+            uses::routes_owner(e, file);
         }
         Err(errors)
     }

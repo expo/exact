@@ -1458,3 +1458,31 @@ image "photo.png" color="-exact-system-red" width=20 height=20 testId="photo""#,
     );
     assert!(tint("photo").is_some(), "a raster is given no tint");
 }
+
+#[test]
+fn a_list_animates_its_changes_only_when_its_rows_ask_for_motion() {
+    // As a UIKit list applies its snapshots at once unless its code asks
+    // (`apply(_:animatingDifferences: true)`), a native list moves its rows
+    // only when they carry the motion a column's rows would: a layout
+    // transition (a move) or an exit animation (a removal).
+    let animates = |extra: &str| {
+        let r = boot_source(&format!(
+            "keyframes leave\n  to opacity=0\n\n{}",
+            app(&format!("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go {extra}\n      text \"Account\"\n    button press=go\n      text \"Chats\""))
+        ));
+        r.kernel().grouped_list(id(&r, "list")).unwrap().animates
+    };
+    assert!(!animates(""), "rows with no motion apply at once");
+    assert!(
+        !animates("-exact-layout-transition=\"none\""),
+        "nor with `none`"
+    );
+    assert!(
+        animates("-exact-layout-transition=\"320ms ease\""),
+        "a row's layout transition animates the list's moves"
+    );
+    assert!(
+        animates("-exact-exit-animation=\"leave 200ms ease-in both\""),
+        "a row's exit animation animates its removals"
+    );
+}

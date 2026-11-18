@@ -240,9 +240,8 @@ fn unchanged_poll_inputs_do_no_discovery_and_every_changed_input_refreshes_it() 
     assert_eq!(r.collection_timer_due_ms(), Some(510.));
     // A stale-source deadline remains independently live when no poll is armed.
     r.extensions.polls.clear();
-    r.extensions
-        .stale
-        .insert(key, r.wall_time().epoch_at_zero + 100.);
+    let at = r.wall_time().epoch_at_zero + 100.;
+    r.extensions.stale.insert(key, at);
     assert_eq!(r.collection_timer_due_ms(), Some(100.));
 }
 
@@ -409,7 +408,8 @@ fn an_ungranted_value_stands_until_the_permission_is_granted() {
     let mut r = boot(b.finish().unwrap());
     let row = r.plan.modules[0].clone();
     let token = json!({"apple": {"deviceToken": "ab12"}});
-    r.extensions.preferred.insert(r.key(&row), token.clone());
+    let key = r.key(&row);
+    r.extensions.preferred.insert(key, token.clone());
     let read = |r: &Runner<Source>| match r.decide(&row, false, &json!({})) {
         Decision::Now(value) => value,
         _ => panic!("a read answers now"),
@@ -492,12 +492,10 @@ fn member_only_routing_preserves_options_and_uses_the_members_binding() {
     assert!(refused["message"].as_str().unwrap().contains("first"));
 
     r.extensions.agent.insert("one".into());
-    r.extensions
-        .preferred
-        .insert(r.key(&owner), json!({"wrong": true}));
-    r.extensions
-        .preferred
-        .insert(r.key(&member), json!({"member": true}));
+    let key = r.key(&owner);
+    r.extensions.preferred.insert(key, json!({"wrong": true}));
+    let key = r.key(&member);
+    r.extensions.preferred.insert(key, json!({"member": true}));
     assert!(r.members_refused(&owner, &args).is_none());
     let body: Json = serde_json::from_slice(&r.forward_body(&owner, args.clone(), None)).unwrap();
     assert_eq!(body["preferred"], json!({"member": true}));

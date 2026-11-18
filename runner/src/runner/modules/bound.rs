@@ -35,7 +35,7 @@ impl<D: DataSource> Runner<D> {
     /// its own substitute: their names' readers are asked again, of the
     /// module now, and each `agent` implementation is given the preferred
     /// values the agent set.
-    pub fn bind_extensions(&mut self, real: &[&str], agent: &[&str]) {
+    pub(super) fn bind_extensions_linked(&mut self, real: &[&str], agent: &[&str]) {
         self.extensions.bound = real.iter().map(|e| e.to_string()).collect();
         self.extensions.agent = (agent.iter())
             .filter(|e| !real.contains(e))
@@ -89,7 +89,7 @@ impl<D: DataSource> Runner<D> {
 
     /// A provider reports its physical name; every active declaration of
     /// that name watches its own qualified topic.
-    pub(in crate::runner) fn declaration_topics(&self, topics: Vec<String>) -> Vec<String> {
+    pub(super) fn declaration_topics_linked(&self, topics: Vec<String>) -> Vec<String> {
         let mut out = topics.clone();
         for topic in topics {
             for row in &self.plan.modules {
@@ -291,7 +291,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Request `ticket` went out with `body`: a send to an implementation
     /// is kept by its number until its reply lands.
-    pub(in crate::runner) fn note_send(&mut self, ticket: u64, body: &[u8]) {
+    pub(super) fn note_send_linked(&mut self, ticket: u64, body: &[u8]) {
         let Ok(v) = serde_json::from_slice::<Json>(body) else {
             return;
         };
@@ -309,7 +309,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Request `ticket`'s reply landed: its send is no longer cancelled.
-    pub(in crate::runner) fn landed_send(&mut self, ticket: u64) {
+    pub(super) fn landed_send_linked(&mut self, ticket: u64) {
         if let Some((_, n)) = self.extensions.sent.remove(&ticket) {
             self.unanchor(n);
         }
@@ -317,7 +317,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Request `ticket` runs on with no answer awaiting it (module work): its
     /// send is not cancelled, and its anchor goes with its reply.
-    pub(in crate::runner) fn keep_send(&mut self, ticket: u64) {
+    pub(super) fn keep_send_linked(&mut self, ticket: u64) {
         self.extensions.sent.remove(&ticket);
     }
 
@@ -422,7 +422,7 @@ impl<D: DataSource> Runner<D> {
     /// answers here is told, `{"extension", "foreground": bool}`, as the
     /// fact admission reads (LLP 1133.009 D10 item 3). An implementation
     /// begins in the foreground.
-    pub(in crate::runner) fn tell_foreground(&self) {
+    pub(super) fn tell_foreground_linked(&self) {
         let Some(handler) = self.native_slot().extension_handler() else {
             return;
         };

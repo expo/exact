@@ -768,7 +768,13 @@ export function renderPerf(r) {
     }
     for (const w of r.world ?? []) {
       const g = n => n == null ? '—' : `${Math.round(n * 100) / 100} ms`, ms = x => x ? `p50 ${g(x.p50)} p95 ${g(x.p95)} p99 ${g(x.p99)} mean ${g(x.mean)}` : '—';
-      out.push(`  world ${w.canvas}: frame ${ms(w.perf.frameMs)} · tick ${ms(w.perf.tickMs)} · feed ${ms(w.perf.feedMs)} · encode ${ms(w.perf.encodeMs)}${w.perf.pipelineMs ? ` · pipelines ${ms(w.perf.pipelineMs)}` : ''}`);
+      let row = `  world ${w.canvas}: frame ${ms(w.perf.frameMs)} · tick ${ms(w.perf.tickMs)} · feed ${ms(w.perf.feedMs)} · encode ${ms(w.perf.encodeMs)}${w.perf.pipelineMs ? ` · pipelines ${ms(w.perf.pipelineMs)}` : ''}`;
+      if (w.renderHooks) {
+        const { cpuMs, frame } = w.renderHooks;
+        const max = (ring, unit = '') => ring?.count > 0 && ring.max != null ? `${ring.max}${unit}` : '—';
+        row += ` · hooks prepare ${ms(cpuMs?.prepare?.count ? cpuMs.prepare : null)} · draws max ${max(frame?.draws)} · triangles max ${max(frame?.triangles)} · upload max ${max(frame?.uploadBytes, ' B')} · ticks/frame max ${max(w.perf.ticksPerFrame)}`;
+      }
+      out.push(row);
     }
     for (const l of r.late ?? []) out.push(`  t=${l.t} late: ${l.missed} missed (${l.interval} ms)${l.overrun ? ` · committed ${l.overrun} ms late` : ''} · seq ${l.seq ? l.seq.join('..') : '—'}${l.apply != null ? ` · apply ${l.apply}` : ''}${l.layout != null ? ` · layout ${l.layout}` : ''}${l.loaf ? ` · loaf script ${l.loaf.script}${l.loaf.styleLayout != null ? ` style+layout ${l.loaf.styleLayout}` : ''}` : ''}${l.phases ? ` · ${[...l.phases].sort((a, b) => b.ms - a.ms).map(p => `${p.phase} ${p.ms}`).join(' ')} unattributed ${l.unattributed}` : ''}`);
     return out.join('\n');

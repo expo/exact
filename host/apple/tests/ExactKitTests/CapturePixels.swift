@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 @testable import ExactKit
+@testable import ExactImages
 
 /// Alpha is the last byte in the tests' RGBA8 and BGRA8 captures.
 enum CapturePixels {

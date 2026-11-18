@@ -2,6 +2,7 @@ import XCTest
 import ExactPackage
 import ExactSnapshot
 @testable import ExactKit
+@testable import ExactImages
 
 /// An `app:/` file is read as the data module's `readFile` reads it: a
 /// symbolic link the app's own code planted in its directories, to a file or

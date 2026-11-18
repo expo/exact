@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactGroupedLists
 
 /// One swipe row open on a screen (`SwipeActionsHost.opening`), whatever
@@ -32,16 +33,16 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         func facts(_ kind: Kind) -> String {
             let owner = p.views[rows[kind]!.owner]
             return "open: \(Kind.allCases.filter(isOpen)), \(kind) at \(owner.map { $0.convert($0.bounds, to: window) } ?? .null)"
-                + ", projected: \(owner.map { p.swipeActions.cell(of: $0) != nil } ?? false), key: \(window.isKeyWindow)"
-                + ", open row: \(p.swipeActions.openRow.map(String.init) ?? "none"), painted moving: \(p.views[50]?.scrollView.map { $0.isDragging || $0.isDecelerating } ?? false)"
+                + ", projected: \(owner.map { p.swipeHost.cell(of: $0) != nil } ?? false), key: \(window.isKeyWindow)"
+                + ", open row: \(p.swipeHost.openRow.map(String.init) ?? "none"), painted moving: \(p.views[50]?.scrollView.map { $0.isDragging || $0.isDecelerating } ?? false)"
         }
         func isOpen(_ kind: Kind) -> Bool {
             let row = rows[kind]!
             if kind == .painted || kind == .listPainted { return (p.views[row.owner]?.scrollView?.contentOffset.x ?? 0) > 1 }
             // Swiped as UIKit's cell has it: false once a close begins.
-            let swiped = kind == .native ? p.views[row.owner].flatMap(p.swipeActions.cell)?.configurationState.isSwiped == true
+            let swiped = kind == .native ? p.views[row.owner].flatMap(p.swipeHost.cell)?.configurationState.isSwiped == true
                 : (p.groupedLists as? GroupedListHost)?.lists[1]?.cell(row.owner)?.configurationState.isSwiped == true
-            return swiped && p.swipeActions.actionView(row.action) != nil
+            return swiped && p.swipeHost.actionView(row.action) != nil
         }
         /// Where a finger lands on `kind`'s row, near its trailing edge.
         func start(_ kind: Kind) throws -> CGPoint {
@@ -119,7 +120,7 @@ final class SwipeOneOpenIOSTests: XCTestCase {
         CATransaction.flush()
         waitForMainQueue()
         for kind in [Kind.grouped, .native] {
-            XCTAssertTrue(p.swipeActions.ownsAction(kind == .grouped ? 23 : 43), "\(kind) row swipes natively: \(p.swipeActions.refusal(of: p.views[kind == .grouped ? 21 : 40]!) ?? "")")
+            XCTAssertTrue(p.swipeHost.ownsAction(kind == .grouped ? 23 : 43), "\(kind) row swipes natively: \(p.swipeHost.refusal(of: p.views[kind == .grouped ? 21 : 40]!) ?? "")")
         }
         let s = Screen(p: p, window: window)
         let taps = UITapGestureRecognizer(target: s, action: #selector(Screen.tapped))

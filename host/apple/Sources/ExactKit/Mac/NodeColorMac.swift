@@ -71,7 +71,7 @@ extension NodeView {
     func retint(changed: Bool = false) {
         guard kind == "svg" || hasSymbolLeaf || style.values.contains(where: \.namesTint) || inlineText.contains(where: \.namesTint) else { return }
         guard changed || accentNode.map(ObjectIdentifier.init) != tintSource else { return }
-        if kind == "svg" { presenter?.svg.reappear(id, dark: drawsDark, clock: presenter?.session?.clock, tint: viewTint) }
+        if kind == "svg" { presenter?.svg?.reappear(id, dark: drawsDark, clock: presenter?.session?.clock, tint: viewTint) }
         reapplyColors()
     }
 }

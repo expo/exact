@@ -65,7 +65,7 @@ extension NodeView {
     func layoutContent() {
         guard kind == "svg" || kind == "canvas2d", let presenter else { return }
         let box = contentBox()
-        if kind == "svg" { return presenter.svg.place(id, in: box) }
+        if kind == "svg" { presenter.svg?.place(id, in: box); return }
         let radii = BorderPaint.contentRadii(cornerSizes(in: bounds), outer: bounds, inner: box)
         presenter.canvas2d.place(id, in: box, radii: radii)
     }

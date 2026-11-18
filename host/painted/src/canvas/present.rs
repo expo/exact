@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 pub(crate) struct Pictures {
     next: u64,
     painted: Option<u64>,
-    waiting: VecDeque<(u64, Carried)>,
+    waiting: VecDeque<(u64, Carried, bool)>,
 }
 
 /// The reader drops reports it cannot make (a frame never drawn); past this
@@ -22,8 +22,8 @@ const WAITING: usize = 16;
 
 impl Pictures {
     /// A turn painted a picture carrying `carried`; `wanted`: its present
-    /// is to be reported.
-    pub(crate) fn painted(&mut self, carried: Carried, wanted: bool) {
+    /// is to be reported. `ready` belongs to this picture, not its acknowledgement's turn.
+    pub(crate) fn painted(&mut self, carried: Carried, wanted: bool, ready: bool) {
         self.painted = None;
         if !wanted {
             return;
@@ -32,7 +32,7 @@ impl Pictures {
         if self.waiting.len() == WAITING {
             self.waiting.pop_front();
         }
-        self.waiting.push_back((self.next, carried));
+        self.waiting.push_back((self.next, carried, ready));
         self.painted = Some(self.next);
     }
 
@@ -43,10 +43,19 @@ impl Pictures {
 
     /// The picture `token` was presented: what it carried. It and every
     /// older picture are forgotten, the later present covering them.
-    pub(crate) fn presented(&mut self, token: u64) -> Option<Carried> {
-        let at = self.waiting.iter().position(|(t, _)| *t == token)?;
-        let carried = self.waiting[at].1;
-        self.waiting.drain(..=at);
+    pub(crate) fn presented(
+        &mut self,
+        token: u64,
+        at: f64,
+        launch: &mut crate::launch_marks::LaunchMarks,
+    ) -> Option<Carried> {
+        let at_index = self.waiting.iter().position(|(t, _, _)| *t == token)?;
+        let (_, carried, ready) = self.waiting[at_index];
+        self.waiting.drain(..=at_index);
+        if !launch.done() {
+            launch.presented(at, ready, !self.waiting.is_empty());
+        }
+        launch.record_done();
         Some(carried)
     }
 }
@@ -78,7 +87,9 @@ impl<D: exact_runner::DataSource + Default> super::CanvasHost<D> {
     /// The picture `token` was presented at `at_ns` (`System.nanoTime`):
     /// whether a frame is now wanted.
     pub fn picture_presented(&mut self, token: u64, at_ns: i64) -> bool {
-        let Some(carried) = self.presents.presented(token) else {
+        let startup_at =
+            crate::launch_marks::boottime() - (super::reader::monotonic_ns() - at_ns) as f64 / 1e9;
+        let Some(carried) = self.presents.presented(token, startup_at, &mut self.launch) else {
             return false;
         };
         let at = monotonic_ms(at_ns, self.now());
@@ -106,20 +117,133 @@ mod tests {
         )
         .unwrap();
         let mut pictures = Pictures::default();
-        pictures.painted(p.picture_carried(), false);
+        let mut launch = crate::launch_marks::LaunchMarks::new();
+        pictures.painted(p.picture_carried(), false, false);
         assert_eq!(pictures.take(), 0, "no present wanted");
         let carried = p.picture_carried();
-        pictures.painted(carried, true);
+        pictures.painted(carried, true, false);
         let first = pictures.take();
         assert_eq!(pictures.take(), 0, "taken once");
-        pictures.painted(carried, true);
+        pictures.painted(carried, true, false);
         let second = pictures.take();
         assert!(second > first);
-        assert_eq!(pictures.presented(second), Some(carried));
         assert_eq!(
-            pictures.presented(first),
+            pictures.presented(second, crate::launch_marks::boottime(), &mut launch),
+            Some(carried)
+        );
+        assert_eq!(
+            pictures.presented(first, crate::launch_marks::boottime(), &mut launch),
             None,
             "covered by the later present"
         );
+    }
+
+    #[test]
+    fn startup_is_published_once_when_ready_pictures_overlap() {
+        use crate::launch_marks::{boottime, LaunchMarks};
+        use std::{sync::mpsc, time::Duration};
+        const BARRIER: &str = "test.startup.overlap.barrier";
+        let (mut p, _) = Presenter::boot_with(
+            &crate::test_plan("component App\n  view\n    column\n"),
+            (),
+            (100., 100.),
+            1.,
+            std::path::PathBuf::new(),
+            crate::presenter::PainterChoice::Cpu,
+        )
+        .unwrap();
+        let (sent, received) = mpsc::channel();
+        crate::journal::subscribe(move |event| {
+            if event.kind == "startup" || event.kind == BARRIER {
+                let _ = sent.send(event.clone());
+            }
+        });
+        let mut launch = LaunchMarks::new();
+        launch.launch_end();
+        launch.activated();
+        launch.recorded();
+        let mut pictures = Pictures::default();
+        pictures.painted(p.picture_carried(), true, true);
+        let token = pictures.take();
+        launch.turn(&[]);
+        assert!(!launch.done());
+        launch.recorded();
+        pictures.painted(p.picture_carried(), true, true);
+        let newer = pictures.take();
+        launch.turn(&[]);
+        assert!(!launch.done());
+        pictures.presented(token, boottime(), &mut launch);
+        launch.record_done();
+        assert!(launch.done());
+        assert_eq!(launch.timeout_ms(), None, "the reader can now go idle");
+        let report = launch.report();
+        assert_eq!(report["tti"], "settled");
+        assert_eq!(
+            report["metrics"]["timeToInteractive"],
+            report["metrics"]["timeToFirstRender"]
+        );
+        let mut count = 0;
+        let mut delivered_count = || {
+            // Another thread may be draining; the barrier follows every prior event.
+            crate::journal::record(BARRIER, Default::default());
+            loop {
+                let event = received.recv_timeout(Duration::from_secs(10)).unwrap();
+                if event.kind == BARRIER {
+                    return count;
+                }
+                if event.fields == report {
+                    count += 1;
+                }
+            }
+        };
+        assert_eq!(delivered_count(), 1);
+        pictures.presented(newer, boottime(), &mut launch);
+        launch.record_done();
+        assert_eq!(launch.report(), report);
+        assert_eq!(delivered_count(), 1);
+    }
+
+    #[test]
+    fn an_older_picture_cannot_settle_a_newer_loaded_frame() {
+        use crate::launch_marks::{boottime, LaunchMarks};
+        let (mut p, _) = Presenter::boot_with(
+            &crate::test_plan("component App\n  view\n    column\n"),
+            (),
+            (100., 100.),
+            1.,
+            std::path::PathBuf::new(),
+            crate::presenter::PainterChoice::Cpu,
+        )
+        .unwrap();
+        let mut launch = LaunchMarks::new();
+        launch.launch_end();
+        launch.activated();
+        let mut pictures = Pictures::default();
+        launch.recorded();
+        pictures.painted(p.picture_carried(), true, false);
+        let placeholder = pictures.take();
+        launch.turn(&["requests:forecast".into()]);
+        launch.recorded();
+        pictures.painted(p.picture_carried(), true, true);
+        let loaded = pictures.take();
+        launch.turn(&[]);
+        let first_at = boottime();
+        pictures.presented(placeholder, first_at, &mut launch);
+        assert!(
+            !launch.done(),
+            "the placeholder's acknowledgement is still pending content"
+        );
+        launch.turn(&[]);
+        assert!(
+            !launch.done(),
+            "the loaded frame has not reached the screen"
+        );
+        let at = boottime();
+        pictures.presented(loaded, at, &mut launch);
+        let report = launch.report();
+        assert_eq!(report["tti"], "settled");
+        let tti = report["metrics"]["timeToInteractive"].as_f64().unwrap();
+        let ttr = report["metrics"]["timeToFirstRender"].as_f64().unwrap();
+        assert!((tti - ttr - (at - first_at)).abs() < 1e-9);
     }
 }

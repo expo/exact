@@ -1,15 +1,29 @@
 use super::*;
 use objc2_foundation::NSBundle;
 
+/// The file beside an archive's that is there only while a pipeline is added to
+/// the archive restored from it (`BinaryArchive::mark_additions`).
+pub(super) fn marker(path: &Path) -> PathBuf {
+    path.with_extension("adding")
+}
+
+/// Install the device's archive, restored from `data`, with `marker` as its
+/// additions' marker (`BinaryArchive::mark_additions`).
 pub(super) fn install(
     device: &wgpu::Device,
     data: Option<&[u8]>,
+    marker: Option<PathBuf>,
 ) -> Option<Arc<wgpu::hal::metal::BinaryArchive>> {
     shader_libraries();
     // SAFETY: the guarded device remains owned by wgpu; this installs only its optional cache.
     let hal = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }?;
     match hal.install_binary_archive(data) {
-        Ok(archive) => Some(archive),
+        Ok(archive) => {
+            if let Some(marker) = marker {
+                archive.mark_additions(marker);
+            }
+            Some(archive)
+        }
         Err(error) => {
             eprintln!("game Metal pipeline cache unavailable: {error}");
             None
@@ -77,6 +91,13 @@ pub(super) fn disk(device: &wgpu::Device, artifact: u64) -> Option<Disk> {
         .to_vec();
     key.extend(identity.as_bytes());
     let path = cache_path(&dir, &adapter, artifact);
+    // A device that keeps no archive reads none and writes none; one an earlier
+    // build wrote for it goes.
+    if hal.binary_archive_unavailable().is_some() {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(marker(&path));
+        return None;
+    }
     let mut disk = Disk::new(path.clone(), hash(&key));
     let seed = std::env::var_os("EXACT_GPU_CACHE_SEED")
         .map(PathBuf::from)
@@ -96,7 +117,7 @@ mod simulator {
         let Some(gpu) = crate::fixture::device_or_skip(crate::fixture::device()) else {
             return;
         };
-        assert!(super::install(&gpu.device, None).is_none());
+        assert!(super::install(&gpu.device, None, None).is_none());
     }
 }
 
@@ -119,12 +140,21 @@ mod tests {
         command
     }
 
+    /// A Metal device that keeps archives (not a virtual machine's, `binary_archive_unavailable`).
+    fn archive_device() -> Option<crate::Gpu> {
+        let gpu = crate::fixture::device_or(crate::fixture::device(), false)?;
+        // SAFETY: read-only inspection of the guarded Metal device.
+        let keeps = unsafe { gpu.device.as_hal::<wgpu::hal::api::Metal>() }
+            .is_some_and(|hal| hal.binary_archive_unavailable().is_none());
+        keeps.then_some(gpu)
+    }
+
     fn isolated(test: &str) -> bool {
         const CHILD: &str = "EXACT_METAL_MODULE_TEST";
         if std::env::var(CHILD).as_deref() == Ok(test) {
             return false;
         }
-        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
+        if archive_device().is_none() {
             return true;
         }
         let directory = super::super::tests::directory();
@@ -307,7 +337,7 @@ mod tests {
     fn the_next_process_removes_a_dead_process_snapshot_files() {
         const CHILD: &str = "EXACT_METAL_SWEEP_TEST";
         if std::env::var_os(CHILD).is_some() {
-            let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+            let Some(gpu) = archive_device() else {
                 return;
             };
             let root = std::env::temp_dir().join("exact-metal");
@@ -323,14 +353,14 @@ mod tests {
             let (_, dead) = left("dead");
             let (lock, living) = left("living");
             lock.try_lock().unwrap();
-            let archive = install(&gpu.device, None).unwrap();
+            let archive = install(&gpu.device, None, None).unwrap();
             pipelines(&gpu, false);
             assert!(archive.data().is_some());
             assert!(!dead.exists());
             assert!(living.join("0.metallib").exists());
             return;
         }
-        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
+        if archive_device().is_none() {
             return;
         }
         let directory = super::super::tests::directory();
@@ -360,7 +390,7 @@ mod tests {
         ) {
             return;
         }
-        let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+        let Some(gpu) = archive_device() else {
             return;
         };
         let directory = super::super::tests::directory();
@@ -384,7 +414,7 @@ mod tests {
         ) {
             return;
         }
-        let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+        let Some(gpu) = archive_device() else {
             return;
         };
         let directory = super::super::tests::directory();
@@ -426,7 +456,7 @@ mod tests {
         if isolated("pipeline_cache::metal::tests::module_save_without_new_metal_additions_starts_no_writer") {
             return;
         }
-        let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+        let Some(gpu) = archive_device() else {
             return;
         };
         let directory = super::super::tests::directory();
@@ -596,6 +626,14 @@ mod tests {
             }
             let gpu = crate::fixture::device().expect("Metal adapter required");
             assert_eq!(gpu.adapter.get_info().backend, wgpu::Backend::Metal);
+            if mode == "stopped-idle" {
+                // A launch that discards a stopped archive and ends before writing one.
+                let module = module(gpu, disk);
+                let archive = module.pipeline_cache.shared.as_ref().unwrap().metal.clone();
+                assert!(!archive.unwrap().restored());
+                assert!(!path.exists() && marker(&path).exists());
+                return;
+            }
             if mode == "reopen" {
                 let standalone = PipelineCache::new(&gpu.device);
                 pipelines(&gpu, true);
@@ -616,13 +654,35 @@ mod tests {
                 archive.restored(),
                 matches!(
                     mode.as_str(),
-                    "warm" | "shader" | "seed" | "reopen" | "late" | "late-seed"
+                    "warm" | "shader" | "seed" | "reopen" | "late" | "late-seed" | "refused"
                 )
             );
             let late_path = path.with_extension(format!("{mode}-late"));
             let late = matches!(mode.as_str(), "late" | "late-seed").then(|| {
                 PipelineCache::shared_disk(&gpu.device, Some(Disk::new(late_path.clone(), 2)))
             });
+            if mode == "refused" {
+                // Metal refusing to serialize the restored archive after an addition:
+                // this process's snapshot directory is made unwritable.
+                use std::os::unix::fs::PermissionsExt;
+                let own = std::env::temp_dir()
+                    .join("exact-metal")
+                    .join(std::process::id().to_string());
+                let set =
+                    |mode| std::fs::set_permissions(&own, std::fs::Permissions::from_mode(mode));
+                set(0o500).unwrap();
+                pipelines(gpu, true);
+                cache.save_metal();
+                let mut state = cache.shared.as_ref().unwrap().disk.lock().unwrap();
+                state.disks[0].reap(true);
+                set(0o700).unwrap();
+                assert_eq!(state.disks[0].saved, 0);
+                assert!(
+                    !path.exists(),
+                    "an archive that cannot be written again goes"
+                );
+                return;
+            }
             pipelines(gpu, mode == "shader");
             let (hits, misses) = archive.counts();
             assert_eq!(
@@ -678,7 +738,7 @@ mod tests {
             );
             return;
         }
-        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
+        if archive_device().is_none() {
             return;
         }
         let directory = super::super::tests::directory();
@@ -701,6 +761,20 @@ mod tests {
         run("seed");
         run("late-seed");
         run("shader");
+        let marker = marker(&path);
+        assert!(
+            !marker.exists(),
+            "an addition to a restored archive leaves no marker"
+        );
+        // A launch that stopped inside an addition: the next ones do not restore that
+        // archive, and its marker stays until one of them writes a new archive.
+        std::fs::write(&marker, b"").unwrap();
+        run("stopped-idle");
+        run("stopped");
+        assert!(!marker.exists());
+        run("warm");
+        run("refused");
+        run("cold");
         run("wrong-key");
         std::fs::write(&path, b"corrupt").unwrap();
         run("corrupt");

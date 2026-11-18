@@ -85,15 +85,17 @@ public enum ExactContentIndex {
         if let mirror { return mirror }
         let read = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Mirror.self, from: $0) } ?? Mirror()
         mirror = read
+        // An app update can add a widget parameter after the index was written.
+        publishToWidgets(read)
         return read
     }
     /// The mirror, kept and written; false, with a journal line, when the file was not written.
     @discardableResult private static func save(_ m: Mirror) -> Bool {
         mirror = m
-        publishToWidgets(m)
         do {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(m).write(to: file, options: .atomic)
+            publishToWidgets(m)
             return true
         } catch {
             ExactTools.log(nil, "contentIndex: the mirror was not written: \(error.localizedDescription)")
@@ -103,7 +105,7 @@ public enum ExactContentIndex {
 
     /// What Edit Widget offers follows the mirror: an index the app clears clears the list.
     private static func publishToWidgets(_ m: Mirror) {
-        guard let root = widgetRoot, !widgetKinds.isEmpty else { return }
+        guard !widgetKinds.isEmpty, let root = widgetRoot else { return }
         let offered = widgetKinds.reduce(into: [String: [ContentIndexEntries.Entry]]()) { lists, kind in
             lists[kind] = m.entries.filter { $0["kind"]?.string == kind }.compactMap { entry in
                 guard let id = entry["id"]?.string, let title = entry["title"]?.string else { return nil }

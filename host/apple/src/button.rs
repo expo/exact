@@ -24,7 +24,7 @@ pub(crate) fn face_json_named(
     style: Option<&str>,
     icon: Option<&str>,
 ) -> String {
-    let quote = exact_runner::agent::quote;
+    let quote = exact_runner::json::quote;
     let button = face.is_some();
     let face = face.cloned().unwrap_or_default();
     let row = style.and_then(exact_kernel::generated::button_style);

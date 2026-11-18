@@ -3,6 +3,7 @@ import AppKit
 import IOSurface
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 final class TextRasterMacTests: XCTestCase {
     private var session: ExactSession!

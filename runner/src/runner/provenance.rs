@@ -658,3 +658,59 @@ impl<D: DataSource> Runner<D> {
         (self.origins.calling).unwrap_or_else(|| self.commit_causes())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::request::{Request, Response};
+    use crate::{Answer, CallOrigin, DataError, DataSource, Outcome, Runner, Store, Value};
+    use exact_kernel::Kernel;
+
+    /// Every send answers later.
+    struct Later;
+
+    impl DataSource for Later {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!("answers through answer")
+        }
+
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            Ok(Answer::Later(Request::native(b"{}".to_vec())))
+        }
+
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            _: Outcome,
+        ) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::Number(0.0)))
+        }
+    }
+
+    #[test]
+    fn a_module_less_session_forgets_the_origin_of_a_request_that_landed() {
+        let source = "component App\n  mutation m as shape number\n  action go\n    send m = save(1)\n  view\n    text \"x\"\n";
+        let plan = contract::compile(source).unwrap();
+        let mut r = Runner::boot(
+            plan,
+            Later,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.take_requests();
+        r.act_from(CallOrigin::Tool, "go", vec![]).unwrap();
+        let sent = r.take_requests();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(r.origins.tickets.len(), 1);
+        let ok = Outcome::Response(Response {
+            status: 200,
+            headers: Vec::new(),
+            body: b"{}".to_vec(),
+        });
+        r.fulfill(sent[0].ticket, ok).unwrap();
+        assert!(r.origins.tickets.is_empty() && r.origins.ids.is_empty());
+    }
+}

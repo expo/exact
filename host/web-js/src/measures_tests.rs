@@ -153,7 +153,10 @@ fn a_bound_row_maps_a_tokens_name_to_its_css() {
         out.js
     );
     assert!(
-        out.js.contains(",\"padding-top\",\"px\",()=>$tl("),
+        out.js
+            .split(",\"padding-top\",\"px\",")
+            .nth(1)
+            .is_some_and(|b| b.split(';').next().unwrap().contains("$tl(")),
         "{}",
         out.js
     );
@@ -167,13 +170,17 @@ fn bound_length_maps(tag: &str, rows: &str) {
     );
     for development in [false, true] {
         let out = crate::emit::emit(&plan, false, development).unwrap();
-        let map = |property: &str| {
+        let map = |property: &str, id| {
             let binding = out
                 .js
                 .split(&format!(",\"{property}\",\"px\",()=>"))
                 .nth(1)
                 .unwrap_or_else(|| panic!("{}", out.js));
-            let name = binding.split('(').next().unwrap();
+            let name = crate::measures::map_name(id, false, false, false);
+            assert!(
+                binding.split(';').next().unwrap().contains(&name),
+                "{binding}"
+            );
             let value = out
                 .js
                 .split(&format!("const {name}="))
@@ -182,8 +189,8 @@ fn bound_length_maps(tag: &str, rows: &str) {
                 .unwrap_or_else(|| panic!("{}", out.js));
             (name, value)
         };
-        let (width_name, width) = map("width");
-        let (spacing_name, spacing) = map("letter-spacing");
+        let (width_name, width) = map("width", exact_kernel::StyleId::Width);
+        let (spacing_name, spacing) = map("letter-spacing", exact_kernel::StyleId::LetterSpacing);
         assert!(
             width.contains("\"space.row\":\"var(--x-space-row)\""),
             "width: {width}"
@@ -274,7 +281,11 @@ fn a_rows_map_takes_its_kinds_and_an_svg_attribute_writes_inline() {
             .unwrap_or_default()
             .to_string()
     };
-    assert!(width.starts_with("\"px\",()=>$tl("), "{}", out.js);
+    assert!(
+        width.starts_with("\"px\",") && width.split(';').next().unwrap().contains("$tl("),
+        "{}",
+        out.js
+    );
     assert!(
         !map("$tl").contains("weight.strong") && map("$tl").contains("space.row"),
         "{}",

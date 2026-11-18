@@ -341,6 +341,14 @@ a map or still mapped; each copied slot starts its map in `submitted()`.
 
 ## Frame pacing and timing
 
+An incomplete frame (`Surface::frame_presentable` is false) keeps the last picture.
+By default it follows `frame_ready`. A surface drawing a retained picture while
+its replacement prepares returns true from `frame_presentable` and false from
+`frame_ready`: the picture keeps moving, and `presented` stays false for the
+requested generation.
+Return true from `Surface::is_empty` to discard it and show the canvas's styles
+and children. The picture stays hidden until a new complete frame is presented.
+
 `Surface::reduced_motion` receives the person's motion preference when the
 surface is created and whenever it changes. Hosts call
 `gpu_reduced_motion(on)` with the same `prefersReducedMotion` value they give

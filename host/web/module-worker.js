@@ -67,7 +67,13 @@ self.__exact_host = (op, name, value) => {
   if (op === 11) return stream ? Array.from(stream(Number(value)), b => b.toString(16).padStart(2, '0')).join('') : undefined;
   // `authCallback()` is the page's; `openAuthSession` refuses here: its popup
   // must open in the press's call stack, on the page (LLP 1069.006).
-  if (op === 12) { if (name === 'placement') return 'worker'; if (name === 'bake') return undefined; context.externalRead = true; return `${location.origin}/.exact/auth/callback`; }
+  if (op === 12) {
+    if (name === 'placement') return 'worker';
+    if (name === 'bake') return undefined;
+    context.externalRead = true;
+    if (name === 'host') return 'web';
+    return `${location.origin}/.exact/auth/callback`;
+  }
   if (op >= 18 && op <= 20) { context.externalRead = true; return presenceRead(context.store, op, name); }
   // The answer's write to the name it holds, or its request with effects, while
   // it holds its lease (store.js `secretWrite`, `secretEffect`): each arms the

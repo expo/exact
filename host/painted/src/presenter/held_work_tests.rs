@@ -1,6 +1,10 @@
 use super::*;
 use exact_runner::{Answer, DataError, Dispatch, Outcome, Request, Store, Value};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[derive(Default)]
 struct Held {
     ready: bool,
@@ -15,7 +19,7 @@ impl DataSource for Held {
     }
 
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-        Ok(Answer::Later(Request::continuation(1)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(1)))
     }
 
     fn dispatch(&mut self, token: u64, _: &Store) -> Dispatch {
@@ -116,7 +120,7 @@ impl DataSource for Holding {
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
         self.asked += 1;
-        Ok(Answer::Later(Request::continuation(self.asked)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(self.asked)))
     }
     fn dispatch(&mut self, _: u64, _: &Store) -> Dispatch {
         Dispatch::Held
@@ -257,7 +261,11 @@ fn an_empty_pump_delivers_a_refusal_from_waiting_admission() {
         let sent = sent.clone();
         p.executor
             .run(
-                request(ticket, Request::continuation(ticket), RequestClass::Ordered),
+                request(
+                    ticket,
+                    Request::continuation::<TestWork>(ticket),
+                    RequestClass::Ordered,
+                ),
                 Some(Work::Later(Box::new(move |reply| {
                     sent.send(reply).unwrap();
                 }))),

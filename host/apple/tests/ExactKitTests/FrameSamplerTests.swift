@@ -7,6 +7,7 @@ import XCTest
 import AppKit
 #endif
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1079 D3–D5 on Apple: the trailer's `seq`, the sampler's arithmetic
 /// against the link's own target period, its journal line, and Save Trace.
@@ -1112,8 +1113,8 @@ final class FrameSamplerTests: XCTestCase {
         let p = 1.0 / 60
         var t = CACurrentMediaTime()
         sampler.observe(now: t, target: t + p)
-        session.hatchDiagnostics.timed("element avatar", "built", counts: false) { Thread.sleep(forTimeInterval: 0.03) }
-        session.hatchDiagnostics.timed("element avatar", "changed", counts: false) { Thread.sleep(forTimeInterval: 0.005) }
+        session.hatchDiagnostics!.timed("element avatar", "built", counts: false) { Thread.sleep(forTimeInterval: 0.03) }
+        session.hatchDiagnostics!.timed("element avatar", "changed", counts: false) { Thread.sleep(forTimeInterval: 0.005) }
         t = CACurrentMediaTime()
         sampler.observe(now: t, target: t + p)                       // 35 ms and more since the last: late
         sampler.observe(now: t + p, target: t + 2 * p)               // on time, and no call in it
@@ -1126,8 +1127,8 @@ final class FrameSamplerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(ran[0]["ms"] as? Double), 35)
         XCTAssertNil(late[0]["coverage"], "every call in the window is still kept")
         // A window before any call names none; one that cuts a call charges the part inside it.
-        XCTAssertNil(session.hatchDiagnostics.window(from: t - 100, to: t - 99))
-        let half = try XCTUnwrap(session.hatchDiagnostics.window(from: t - 0.010, to: t)?["hatches"] as? [[String: Any]])
+        XCTAssertNil(session.hatchDiagnostics!.window(from: t - 100, to: t - 99))
+        let half = try XCTUnwrap(session.hatchDiagnostics!.window(from: t - 0.010, to: t)?["hatches"] as? [[String: Any]])
         XCTAssertLessThanOrEqual(try XCTUnwrap(half[0]["ms"] as? Double), 10.01)
     }
 
@@ -1154,7 +1155,7 @@ final class FrameSamplerTests: XCTestCase {
         XCTAssertTrue(session.agent(#"{"op":"logs","since":0}"#).contains("frame late at "), "a late frame is one journal line")
 
         // What a hatch recorded is in the trace's `hatches`, as `state` and `perf hatches` give it (LLP 1075.003.000.001 §3.3).
-        _ = session.hatchDiagnostics.record(kind: 1, node: 0, scope: "module", name: "swipes", value: 3, text: Data())
+        _ = session.hatchDiagnostics!.record(kind: 1, node: 0, scope: "module", name: "swipes", value: 3, text: Data())
         let url = try session.saveTrace().get()
         defer { try? FileManager.default.removeItem(at: url) }
         let trace = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
@@ -1209,16 +1210,16 @@ final class FrameSamplerTests: XCTestCase {
     /// the next trace and the agent's `perf` read.
     func testAReleaseBuildsFirstTraceStartsItsMeasuring() throws {
         let session = ExactApp.shared.makeSession()
-        defer { session.runtime.measureWork(); session.destroy(); HatchDiagnostics.measuring = true }
+        defer { session.runtime.measureWork(); session.destroy(); HatchDiagnosticsLink.measuring = true }
         // As a release build boots: no site's work counted, no sampler, no hatch timing.
         exact_measure_work_later()
         XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
         XCTAssertTrue(session.agent(#"{"op":"perf"}"#).contains("not measured until first asked"), "no site's work is counted")
         session.sampler?.stop()
         session.sampler = nil
-        HatchDiagnostics.measuring = false
+        HatchDiagnosticsLink.measuring = false
         let probes = { (session.hatchPerf()["calls"] as? [[String: Any]] ?? []).filter { $0["hatch"] as? String == "probe" }.count }
-        session.natives.timedHatch("probe", "tick") {}
+        session.nativeViews!.timedHatch("probe", "tick") {}
         XCTAssertEqual(probes(), 0, "no call is timed")
         session.log("before the trace")
         let url = try session.saveTrace().get()
@@ -1231,8 +1232,8 @@ final class FrameSamplerTests: XCTestCase {
         XCTAssertTrue("\(trace["journal"] ?? "")".contains("before the trace"), "the journal is kept")
         XCTAssertNotNil((trace["perf"] as? [String: Any])?["sites"], "the sites' work is kept")
         XCTAssertNotNil(session.sampler, "the trace started the frames")
-        XCTAssertTrue(HatchDiagnostics.measuring, "and the hatch timing")
-        session.natives.timedHatch("probe", "tick") {}
+        XCTAssertTrue(HatchDiagnosticsLink.measuring, "and the hatch timing")
+        session.nativeViews!.timedHatch("probe", "tick") {}
         XCTAssertEqual(probes(), 1)
     }
 }

@@ -168,7 +168,7 @@ impl<D: DataSource> Runner<D> {
                 ));
             }
             let mut text = String::new();
-            crate::agent::typed_json(&self.plan, ty, value, &mut text);
+            crate::json::typed_json(&self.plan, ty, value, &mut text);
             values.push(
                 serde_json::from_str::<Json>(&text)
                     .map_err(|e| DataError::BadArguments(e.to_string()))?,
@@ -331,7 +331,7 @@ component App
             assert!(r.set_activities(&snapshot).unwrap().is_some());
             assert!(r.set_activities(&snapshot).unwrap().is_none());
             let mut state = String::new();
-            crate::agent::typed_json(
+            crate::json::typed_json(
                 r.plan(),
                 r.plan().resources[0].ty,
                 r.resource("activities").unwrap(),

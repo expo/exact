@@ -61,7 +61,7 @@ impl DataSource for Source {
             return Err(DataError::UnknownSource(source.into()));
         }
         if source.contains("wait") {
-            return Ok(Answer::Later(Request::continuation(u64::MAX)));
+            return Ok(Answer::Later(Request::continuation::<TestWork>(u64::MAX)));
         }
         if source.contains("request") {
             let mut request = Request::get("https://example.test");
@@ -473,7 +473,7 @@ impl DataSource for Proxy {
         self.next += 1;
         self.recorded
             .push((self.next, source.to_string(), args.to_vec()));
-        Ok(Answer::Later(Request::continuation(self.next)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(self.next)))
     }
     fn parse(
         &mut self,
@@ -929,6 +929,10 @@ fn discarded_resumes_release_yielded_argument_keys() {
 // each call's stages stay its own, whatever order the replies come in.
 
 use exact_runner::{RequestOut, Runner};
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 
 fn twins<D: DataSource>(data: D) -> Runner<D> {
     use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};

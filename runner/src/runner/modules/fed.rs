@@ -46,7 +46,7 @@ struct Surface {
 
 impl<D: DataSource> Runner<D> {
     /// The GPU canvases a commit published: their surface names, kept by view.
-    pub(in crate::runner) fn fed_canvases(&mut self, updates: &[crate::SurfaceUpdate]) {
+    pub(super) fn fed_canvases_linked(&mut self, updates: &[crate::SurfaceUpdate]) {
         for u in updates {
             (self.extensions.fed.canvases).insert(u.view, u.name.clone());
         }

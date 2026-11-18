@@ -30,7 +30,7 @@
 //!
 //! @ref LLP 1125 D6–D8
 
-use crate::agent::num;
+use crate::json::num;
 use exact_plan::Value;
 use std::collections::VecDeque;
 
@@ -484,7 +484,7 @@ pub fn batch_op(ops: &[MidiOp], boot: bool) -> Option<String> {
                 at,
             } => {
                 s.push_str(&format!("{{\"op\":\"send\",\"id\":{id},\"output\":"));
-                crate::agent::quote(output, &mut s);
+                crate::json::quote(output, &mut s);
                 s.push_str(",\"data\":[");
                 for (k, b) in data.iter().enumerate() {
                     if k > 0 {
@@ -503,7 +503,7 @@ pub fn batch_op(ops: &[MidiOp], boot: bool) -> Option<String> {
                         if k > 0 {
                             s.push(',');
                         }
-                        crate::agent::quote(input, &mut s);
+                        crate::json::quote(input, &mut s);
                     }
                 }
                 s.push_str("]}");

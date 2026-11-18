@@ -1,0 +1,15 @@
+{
+  "game": {
+    "render": {
+      "crate": "terrain-fixture-render",
+      "hooks": "Passes",
+      "shaders": "shaders::SHADERS"
+    }
+  },
+  "gpu": {
+    "shaderRoots": ["render/shaders"],
+    "shaderPreludes": {
+      "terrain": ["exact-game-render:frame"]
+    }
+  }
+}

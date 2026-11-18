@@ -3,6 +3,8 @@ import UIKit
 import XCTest
 import ExactSurfaces
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
 
 /// A scroll asks the pump for work only when work is owed: a paragraph
 /// without all its pixels, or a list's rows. A screen whose text is all
@@ -388,13 +390,13 @@ final class ScrollPumpIOSTests: XCTestCase {
         p.scrollPump.pump()
         XCTAssertFalse(p.scrollPump.asksForFrames)
         XCTAssertTrue(RasterWorkers.shared.single, "giving up the display link does not end travel")
-        let fills = p.scrollPump.fillPasses, flushes = p.collections.flushes
+        let fills = p.scrollPump.fillPasses, flushes = p.listHost.flushes
         time += 0.16
         XCTAssertEqual(p.scrollPump.velocity(1), 0)
         waitFor("the fast sample expires while the finger stays still") { !RasterWorkers.shared.single }
         XCTAssertFalse(p.scrollPump.asksForFrames)
         XCTAssertEqual(p.scrollPump.fillPasses, fills, "expiry needs no pump")
-        XCTAssertEqual(p.collections.flushes, flushes, "expiry sends no report")
+        XCTAssertEqual(p.listHost.flushes, flushes, "expiry sends no report")
         for _ in 0..<6 {
             time += 1.0 / 60
             scroll.contentOffset.y += 360
@@ -410,7 +412,7 @@ final class ScrollPumpIOSTests: XCTestCase {
         }
         XCTAssertGreaterThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
         XCTAssertTrue(RasterWorkers.shared.single)
-        p.collections.rested(1)
+        p.listHost.rested(1)
         XCTAssertFalse(RasterWorkers.shared.single, "rest clears the latch without another pump")
         time += 1.0 / 60
         scroll.contentOffset.y += 360

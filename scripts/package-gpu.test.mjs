@@ -2,10 +2,10 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { ensurePackageGpu, gpuModules, gpuVersionMatches, gpuView, gpuWorkspaceInputs, joinMetadata, outsideExact2, packageGpuLock, packageGpuManifest, settlePackageGpuLock, unregisteredSurfaces } from './app-shells.mjs';
+import { ensurePackageGpu, gpuModules, gpuVersionMatches, gpuView, gpuWorkspaceInputs, joinMetadata, outsideExact2, packageGpuLock, packageGpuManifest, SDK_CRATES, settlePackageGpuLock, unregisteredSurfaces } from './app-shells.mjs';
 import { fresh } from '../host/web-js/module.mjs';
 import { withoutExtensions } from '../host/apple/extensions.mjs';
 import { bakeTarget, HOST_DEV, linuxBinary, linuxBuild, patchLines } from './app.mjs';
@@ -271,6 +271,14 @@ test('package GPU modules resolve independently from shipped locks and reject in
       assert.equal(packages.some(p => p.name === 'exact-js' || p.name === 'contract'), false);
       assert.equal(readFileSync(resolve(pkg, 'rust/Cargo.lock'), 'utf8'), lock);
     }
+    const originalCargo = readFileSync(resolve(pkg, 'rust/Cargo.toml'), 'utf8');
+    put(resolve(pkg, 'gltf/Cargo.toml'), '[package]\nname="exact-model-gltf"\nversion="1.0.0"\nedition="2021"\n[workspace]\n');
+    put(resolve(pkg, 'gltf/src/lib.rs'), 'pub fn geometry() {}');
+    put(resolve(pkg, 'rust/Cargo.toml'), originalCargo.replace('exact-gpu = "0.4"', 'exact-gpu = "0.4"\nexact-model-gltf = { path = "../gltf" }'));
+    const withReader = ensurePackageGpu({ dir, crate: kind => `one-${kind}` }, module);
+    const readerGraph = JSON.parse(spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], { cwd: withReader, encoding: 'utf8' }).stdout);
+    assert.equal(readerGraph.packages.find(p => p.name === 'exact-model-gltf').source, null);
+    put(resolve(pkg, 'rust/Cargo.toml'), originalCargo);
     const app = { dir, crate: kind => `one-${kind}` };
     assert.throws(() => ensurePackageGpu(app, { ...module, exactGpu: '0.5' }), /requires exact-gpu 0.5, but this checkout provides 0\.4\.\d+/);
     const cargo = readFileSync(resolve(pkg, 'rust/Cargo.toml'), 'utf8');
@@ -310,6 +318,27 @@ test('a package lock replaces the GPU subtree and retains shared dependencies', 
   assert.ok(gpuVersionMatches('0.4.1+sdk-1.4.341.0', '0.4.0+sdk-1.4.341.0'));
   assert.equal(gpuVersionMatches('0.39.0+1.3.281', '0.38.0+1.3.281'), false);
 });
+
+test('the shader surface tests run in its generated workspace without SDK dependencies', () => {
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/gpu-shader-'));
+  const root = resolve(import.meta.dir, '../packages/shader');
+  try {
+    const module = { ...JSON.parse(readFileSync(resolve(root, 'exact.json'), 'utf8')).gpu,
+      package: '@exact/shader', name: 'exact-shader', root, surfaces: ['shader'],
+      declarations: { shader: { arity: 3, factory: 'exact_shader::surface' } } };
+    const app = { dir, crate: kind => `fixture-${kind}` };
+    const workspace = ensurePackageGpu(app, module);
+    const metadata = spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], { cwd: workspace, encoding: 'utf8' });
+    assert.equal(metadata.status, 0, metadata.stderr);
+    const packages = JSON.parse(metadata.stdout).packages;
+    assert.equal(realpathSync(packages.find(p => p.name === 'exact-shader-uniforms').manifest_path), resolve(root, 'uniforms/Cargo.toml'));
+    assert.equal(packages.some(p => SDK_CRATES.has(p.name)), false);
+    const tested = spawnSync('cargo', ['test', '--locked', '--offline', '--tests', '--no-fail-fast', '-p', 'exact-shader'], {
+      cwd: workspace, encoding: 'utf8', env: { ...process.env, CARGO_TARGET_DIR: resolve(import.meta.dir, '../target') },
+    });
+    assert.equal(tested.status, 0, tested.stdout + tested.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 600000);
 
 test('a package GPU lock keeps the newer shared version in each compatible series and source', () => {
   const block = (name, version, source = 'registry+crates', deps = []) =>

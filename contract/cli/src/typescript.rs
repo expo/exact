@@ -151,6 +151,8 @@ pub fn typescript_exporting(
            key(name: string): Promise<CryptoKeyPair | null>;\n\
          }\n\
          declare global {\n\
+           /** The runtime host, read inside an answer; also `web` in a web worker. No grant. Answers that read it are not baked. */\n\
+           function exactHost(): 'web' | 'native';\n\
            /** Sign in through the system browser (LLP 1069.006): the callback URL, or a rejection whose `status` is 499 cancelled, 403, 409, 428, 501 or 502. `message` is the sentence a loopback callback's page shows in place of \"You can close this tab.\" (LLP 1133.005 D9). */\n\
            function openAuthSession(url: string, options: { callback: string; state: string; /** An RP-initiated logout return has neither code nor error and may omit state. */ logout?: boolean; ephemeral?: boolean; message?: string }): Promise<string>;\n\
            /** This carrier's auth callback, known before PAR (LLP 1069.006 D2). */\n\

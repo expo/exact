@@ -69,6 +69,8 @@ fn a_reply_is_a_plain_stringify_whether_or_not_its_elements_were_kept() {
         "nulTail",
         "boxedHook",
         "boxedUnspelled",
+        "boxedChangedPrototype",
+        "proxyDescriptor",
         "nestedProxy",
         "nulKept",
         "proxyHoles",

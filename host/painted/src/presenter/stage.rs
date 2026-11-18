@@ -22,9 +22,12 @@
 //! route that opened it.
 //!
 //! **Pushes and pops** cross on Material's shared X axis: the route that
-//! leaves slides 30 toward where it goes and fades in the first 35 % of
+//! leaves slides 30 toward where it goes and fades out in the first 35 % of
 //! 300 ms, the one that arrives slides in 30 from the other side and fades
-//! in over the rest. Predictive Back previews a pop or a sheet's dismissal
+//! in over the rest. A switch to another stack fades through: the leaving
+//! route fades out over the first 35 % of emphasized progress, and the
+//! arriving route fades in over the rest as it grows from 92 %.
+//! Predictive Back previews a pop or a sheet's dismissal
 //! as Material's guidance has it (`stage/touch.rs`). A route that declares
 //! its own entrance or exit plays that instead (`stage/authored.rs`).
 //! A route with a visible `navigationSource` grows from it by Material's
@@ -36,16 +39,16 @@
 //! box the sheet's own route was laid out in.
 use super::*;
 use crate::navigation::{sheet_of, Presented};
-use crate::paint::stage::{Item, Stage};
+use crate::paint::stage::{destination_path, Cross, Item, Stage};
 use crate::paint::tape::Tape;
 use crate::paint::{Rect4, Shape};
-use exact_kernel::{BlockAxis, HostBlock, NodeKey};
+use exact_kernel::{BlockAxis, HostBlock, Kernel, NodeKey};
 use std::rc::Rc;
 use tiny_skia::Transform;
 
 mod authored;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 mod touch;
 mod zoom;
 
@@ -66,10 +69,11 @@ const EXIT_MS: f64 = 200.0;
 const SETTLE_MS: f64 = 300.0;
 const AXIS_MS: f64 = 300.0;
 const AXIS_SHIFT: f32 = 30.0;
-/// The share of the shared axis the leaving route fades in.
+/// The progress at which the leaving route has faded out.
 const AXIS_FADE: f32 = 0.35;
+const FADE_THROUGH_SCALE: f32 = 0.92;
 
-/// Material 3's easing curves (`MotionTokens`), as cubic Béziers.
+/// Material 3's easing curves (`MotionTokens`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Curve {
     Decelerate,
@@ -196,11 +200,10 @@ struct Closing {
     scale: f32,
 }
 
-/// A push or a pop crossing.
+/// A route crossing.
 struct Shift {
     forward: bool,
-    /// The route that leaves: still in the tree after a push, only its
-    /// kept drawing after a pop.
+    /// The route that leaves, drawn live or from its kept drawing once removed.
     outgoing: NodeKey,
     incoming: NodeKey,
     /// The sheet it runs inside, by the route that opened it.
@@ -216,9 +219,39 @@ struct Shift {
     /// Only that route is drawn: the other is a sheet's, drawn as the sheet.
     alone: bool,
     container: Option<zoom::Container>,
+    /// A switch between stacks uses Material's fade through.
+    through: bool,
+    /// The leaving route's ancestors when the switch began: what of them
+    /// still stands is shared with the arriving route, not the arriving
+    /// side's to move.
+    left: Vec<NodeKey>,
 }
 
-/// How a route is drawn, about its own box.
+impl Shift {
+    /// What moves with `route` in a fade through: its destination path,
+    /// up to the first ancestor the other side holds too.
+    fn destination(&self, kernel: &Kernel, route: ViewId) -> Vec<ViewId> {
+        let live = |key: NodeKey| kernel.node_by_key(key).map(|n| keys_above(kernel, n.id));
+        let other = match kernel.node(route).is_some_and(|n| n.key == self.incoming) {
+            true => [self.left.clone(), live(self.outgoing).unwrap_or_default()].concat(),
+            false => live(self.incoming).unwrap_or_default(),
+        };
+        destination_path(kernel, route, &other)
+    }
+}
+
+/// The keys of `id`'s ancestors, nearest first.
+fn keys_above(kernel: &Kernel, id: ViewId) -> Vec<NodeKey> {
+    let mut keys = Vec::new();
+    let mut at = kernel.node(id).and_then(|n| n.parent);
+    while let Some(node) = at.and_then(|id| kernel.node(id)) {
+        keys.push(node.key);
+        at = node.parent;
+    }
+    keys
+}
+
+/// A route's motion in its box, or in the page for a fade through.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Pose {
     dx: f32,
@@ -226,7 +259,7 @@ pub(super) struct Pose {
     scale: f32,
     /// Degrees clockwise, about `origin`.
     rotate: f32,
-    /// The point it scales and turns about, in its own box.
+    /// The point it scales and turns about, in that drawing space.
     origin: (f32, f32),
     opacity: f32,
     /// Its corners' radius while Back shrinks it or a container grows.
@@ -247,7 +280,7 @@ impl Pose {
         height: None,
     };
 
-    /// Its box's own space to the page's, the box at `at`.
+    /// The pose about its origin, translated to `at`.
     fn transform(&self, at: (f32, f32)) -> Transform {
         Transform::from_translate(at.0 + self.dx, at.1 + self.dy)
             .pre_translate(self.origin.0, self.origin.1)
@@ -364,7 +397,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Follow the first root's stack after a commit or a change of the
-    /// window: sheets open and close, a push or a pop starts its crossing,
+    /// window: sheets open and close, a route change starts its crossing,
     /// and the routes in a sheet are laid out in its block.
     pub(super) fn sync_stage(&mut self) {
         let now = self.host.now();
@@ -420,11 +453,7 @@ impl<D: DataSource> Presenter<D> {
         };
         for sheet in gone {
             let from = self.sheet_top_now(&sheet);
-            let scale = self
-                .stage
-                .preview
-                .as_ref()
-                .map_or(1.0, |p| p.sheet_scale(sheet.modal));
+            let scale = (self.stage.preview.as_ref()).map_or(1.0, |p| p.sheet_scale(sheet.modal));
             if !still && presents && self.brush.kept(sheet.shown) {
                 self.stage.closing.push(Closing {
                     shown: sheet.shown,
@@ -626,8 +655,8 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// A push or a pop of one route, within the page or within one sheet,
-    /// starts a crossing; anything else is a cut. A part the route it adds
+    /// A push or a pop of one route crosses on the shared axis; a switch
+    /// between page stacks fades through. A part the route it adds
     /// or removes declares plays instead (`stage/authored.rs`), on a shell
     /// with no bars too; else only a shell with bars moves.
     fn sync_shift(
@@ -648,14 +677,17 @@ impl<D: DataSource> Presenter<D> {
         // A second route change ends the first transition (LLP 1013.001 D6):
         // whatever this one chooses, a cut included, starts from rest.
         self.stage.shift = None;
+        let left = (top_was.as_ref().filter(|t| t.key == *old))
+            .map_or_else(Vec::new, |t| t.ancestors.clone());
         let pushed = now_keys.len() > before.len() && now_keys.starts_with(before);
         let popped = before.len() > now_keys.len() && before.starts_with(now_keys);
         let top = now_keys.len() - 1;
         let returning_fullscreen = top_was.as_ref().is_some_and(|t| t.key == *old && !t.pushed);
         if now_keys.len().abs_diff(before.len()) == 1 {
             let part = match (pushed, popped) {
-                (true, _) => (self.entrance(stack, kinds, top))
-                    .map(|part| (part, kinds[top] == Presented::Pushed)),
+                (true, _) => {
+                    (self.entrance(stack, top)).map(|part| (part, kinds[top] == Presented::Pushed))
+                }
                 (_, true) => {
                     (top_was.filter(|t| t.key == *old)).and_then(|t| Some((t.exit?, t.pushed)))
                 }
@@ -672,11 +704,23 @@ impl<D: DataSource> Presenter<D> {
         let still = self.motion_off();
         let returning_source = self.stage.zooms.iter().any(|z| z.route == *old);
         let container = self.navigation_container(before, stack, now_keys, kinds);
-        if popped && returning_source && returning_fullscreen && container.is_none() {
+        // A full-screen route returns into its source or cuts. Its drawing
+        // is kept only for a switch to another stack.
+        if popped && returning_fullscreen && container.is_none() {
             return;
         }
+        // A page goes to a page in another stack. A sheet's own change
+        // remains the sheet's, including when the old stack is removed.
+        let through = !pushed
+            && !popped
+            && before.first() != now_keys.first()
+            && kinds[top] != Presented::Sheet
+            && sheet_of(kinds, top).is_none()
+            && !kinds.contains(&Presented::Sheet)
+            && !self.stage.sheets.iter().any(|s| before.contains(&s.modal));
         let (forward, within) = match (pushed, popped) {
             (true, _) if container.is_some() => (true, None),
+            _ if through => (true, None),
             // The route pushed is a page, or pushed inside a sheet.
             (true, _) if kinds[top] == Presented::Pushed && now_keys.len() == before.len() + 1 => {
                 (true, sheet_of(kinds, top))
@@ -715,13 +759,25 @@ impl<D: DataSource> Presenter<D> {
             sheet,
             progress: match container {
                 Some(_) => zoom::progress(forward, now),
-                None => Glide::new(0.0, 1.0, now, AXIS_MS, Curve::Standard),
+                None => Glide::new(
+                    0.0,
+                    1.0,
+                    now,
+                    AXIS_MS,
+                    if through {
+                        Curve::Emphasized
+                    } else {
+                        Curve::Standard
+                    },
+                ),
             },
             bar,
             from,
             authored: None,
             alone: false,
             container,
+            through,
+            left,
         });
     }
 
@@ -782,8 +838,15 @@ impl<D: DataSource> Presenter<D> {
         let kernel = self.host.kernel();
         let mut out = Vec::new();
         if let Some(shift) = &self.stage.shift {
-            out.extend(kernel.node_by_key(shift.incoming).map(|n| n.id));
-            out.extend(kernel.node_by_key(shift.outgoing).map(|n| n.id));
+            for key in [shift.incoming, shift.outgoing] {
+                let Some(route) = kernel.node_by_key(key).map(|n| n.id) else {
+                    continue;
+                };
+                match shift.through {
+                    true => out.extend(shift.destination(kernel, route)),
+                    false => out.push(route),
+                }
+            }
         }
         if let Some((outgoing, incoming)) = self.stage.preview.as_ref().and_then(|p| p.pair()) {
             out.extend(kernel.node_by_key(outgoing).map(|n| n.id));
@@ -814,7 +877,8 @@ impl<D: DataSource> Presenter<D> {
         let Some(top) = stack.last().copied() else {
             return stage;
         };
-        // After the last route of the stack, in the tree's order.
+        // After the last route of the stack, in the tree's order; in a fade
+        // through, after the destinations crossing.
         let parent = kernel.node(top).and_then(|n| n.parent);
         stage.after = (parent.and_then(|p| kernel.node(p)))
             .map(|p| p.children())
@@ -824,7 +888,16 @@ impl<D: DataSource> Presenter<D> {
                         .node(*c)
                         .is_some_and(|n| n.props.str(PropId::NavigationKey).is_some())
                 })
-            });
+            })
+            .into_iter()
+            .collect();
+        if let Some(shift) = self.stage.shift.as_ref().filter(|s| s.through) {
+            stage.after = [shift.incoming, shift.outgoing]
+                .iter()
+                .filter_map(|key| kernel.node_by_key(*key))
+                .filter_map(|n| shift.destination(kernel, n.id).last().copied())
+                .collect();
+        }
         // A top route whose exit is declared is kept, so that its exit can
         // play after the commit that removes it.
         let exits = !self.motion_off()
@@ -839,7 +912,8 @@ impl<D: DataSource> Presenter<D> {
             return stage;
         }
         // A page Back would pop is kept, so that it can slide out after the
-        // commit that removes it.
+        // commit that removes it; any other page, so that a switch to another
+        // stack can fade it.
         let kinds: Vec<Presented> = (stack.iter())
             .map(|id| {
                 kernel
@@ -850,9 +924,13 @@ impl<D: DataSource> Presenter<D> {
         let zoomed = kernel
             .node(top)
             .is_some_and(|n| self.stage.zooms.iter().any(|z| z.route == n.key));
-        let pops = stack.len() > 1 && (kinds[stack.len() - 1] == Presented::Pushed || zoomed);
-        if pops && !self.motion_off() && sheet_of(&kinds, stack.len() - 1).is_none() {
-            stage.tape.push(top);
+        let page = kinds[stack.len() - 1] != Presented::Sheet;
+        if page && !self.motion_off() && sheet_of(&kinds, stack.len() - 1).is_none() {
+            let pops = stack.len() > 1 && (kinds[stack.len() - 1] == Presented::Pushed || zoomed);
+            match pops {
+                true => stage.tape.push(top),
+                false => stage.rest.push(top),
+            }
         }
         let now = self.host.now();
         let (bar_top, bar_bottom) = self.bar_pictures();
@@ -912,8 +990,10 @@ impl<D: DataSource> Presenter<D> {
         Transform::from_translate(frame.0 - page[0], frame.1 - page[1])
     }
 
-    /// A page route crossing: its bar, then the route, as `pose` moves both,
-    /// at its own box or at `place`.
+    /// A route crossing: where the walk paints it, or at `place`, a sheet's
+    /// box on a shell with no bars. A fade through moves the destination
+    /// that holds the route, about the window's centre, and leaves its top
+    /// bar in place.
     fn stage_page_route(
         &self,
         stage: &mut Stage,
@@ -924,10 +1004,31 @@ impl<D: DataSource> Presenter<D> {
     ) {
         let kernel = self.host.kernel();
         let live = kernel.node_by_key(key);
-        let at = match (&live, place) {
-            (_, Some(at)) => at,
-            (Some(n), None) => (n.frame.x - self.page.0, n.frame.y - self.page.1),
-            (None, None) => self.taped_at(key),
+        let Some(at) = place else {
+            let through = self.stage.shift.as_ref().filter(|s| s.through);
+            let key = match &live {
+                Some(n) => {
+                    if !self.motion_off() {
+                        stage.tape.push(n.id);
+                    }
+                    let path = match through {
+                        Some(shift) => shift.destination(kernel, n.id),
+                        None => vec![n.id],
+                    };
+                    (path.last().and_then(|id| kernel.node(*id))).map_or(key, |d| d.key)
+                }
+                None => key,
+            };
+            stage.crossing.push(Cross {
+                key,
+                motion: pose.transform((0.0, 0.0)),
+                page: through.is_some(),
+                opacity: pose.opacity,
+                radius: pose.radius,
+                height: pose.height,
+                bar: bar.map(|(tape, frame)| (tape, self.window_to_page(frame))),
+            });
+            return;
         };
         let kept_size = self
             .stage
@@ -1133,6 +1234,24 @@ impl<D: DataSource> Presenter<D> {
                     true => (Pose::REST, pose),
                     false => (pose, Pose::REST),
                 };
+            }
+            if shift.through {
+                let (w, h) = self.window().map_or(self.viewport, |window| window.size);
+                let page = self.chrome().frame;
+                let out_pose = Pose {
+                    opacity: (1.0 - t / AXIS_FADE).clamp(0.0, 1.0),
+                    ..Pose::REST
+                };
+                // MaterialFadeThrough applies its interpolator to both
+                // providers: FadeThrough's threshold is eased progress,
+                // and Scale runs for the whole transition.
+                let in_pose = Pose {
+                    scale: FADE_THROUGH_SCALE + (1.0 - FADE_THROUGH_SCALE) * t,
+                    origin: (w / 2.0 - page[0], h / 2.0 - page[1]),
+                    opacity: ((t - AXIS_FADE) / (1.0 - AXIS_FADE)).clamp(0.0, 1.0),
+                    ..Pose::REST
+                };
+                return (out_pose, in_pose);
             }
             let way = if shift.forward { 1.0 } else { -1.0 };
             // The fades go by the clock, the moves by the curve.

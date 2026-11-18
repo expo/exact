@@ -1,6 +1,6 @@
 import { grantWords, trimGrant, knownFolderPath } from '../web/grant-admission.js';
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
-import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
+import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, readManifest, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { rustDataOf } from '../../scripts/app-shells.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
@@ -461,7 +461,7 @@ async function typecheck(checking) {
   writeFileSync(resolve(stage,'__exact_backend_source.json'), JSON.stringify(readFileSync(resolve(stage,'app.ts'),'utf8')));
   const real = realpathSync(stage);
   if (real !== tsStage) throw new Error(`the TypeScript stage moved: ${real}`);
-  configure(real, false, parseSync, true);
+  await configure(real, false, parseSync, true);
   const backendWarning=JSON.parse(readFileSync(resolve(real,'__exact_backend.json'),'utf8')).warning;
   if (backendWarning) console.warn(`warning: ${backendWarning}`);
   // The packages whose declarations the check reads (typescript.mjs
@@ -545,7 +545,7 @@ const grants = ts ? developmentLocalNetwork(String(tsModule.grants ?? '')) : '';
 if (ts) {
   const resolved = (await import('../../scripts/app.mjs')).readManifest(appDir, app), expected = resolved.variant?.base ?? resolved.app.id;
   const problems = [
-    ...['__exact_backend_source.json', '__exact_backend.json', '__exact_code_warnings.json', '__exact_packages.json', '__exact_entry.ts', '__exact_tsconfig.json', '__exact_config.mjs', '__exact_binding.mjs', '__exact_env.mjs', '__exact_launch_setting.mjs', '__exact_portable.mjs', '__exact_env.json', '__exact_paths.json', '__exact_declarations.json', '__exact_canvas.js', '__exact_canvas.d.ts', 'app.js']
+    ...['__exact_backend_source.json', '__exact_backend.json', '__exact_code_warnings.json', '__exact_packages.json', '__exact_entry.ts', '__exact_tsconfig.json', '__exact_config.mjs', '__exact_binding.mjs', '__exact_env.mjs', '__exact_launch_setting.mjs', '__exact_portable.mjs', '__exact_facts.mjs', '__exact_grants.json', '__exact_env.json', '__exact_paths.json', '__exact_declarations.json', '__exact_canvas.js', '__exact_canvas.d.ts', 'app.js']
       .filter(name => existsSync(resolve(appDir, name))).map(name => `${name} is reserved for the producer`),
     // The launch module's name (LLP 1153.002) with any extension, or a directory, as the native bake refuses it.
     ...readdirSync(appDir).filter(name => name === '__exact_launch' || name.startsWith('__exact_launch.')).map(name => `${name}: __exact_launch is the producer's launch module; rename it`),
@@ -580,7 +580,7 @@ if (rustLinked) {
 const secretNames = [...new Set([...tsGrantSet.entries, ...rustGrantSet.entries].filter(([, , grant]) => grant?.[0] === 'secret-keep').map(([, , grant]) => grant[1]))];
 writeFileSync(resolve(gen, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(tsGrantSet)}),rustGrantSet=createGrantSet(${JSON.stringify(rustGrantSet)});\n`);
 // The app's launch modules that have a web service.
-const launchWeb = launchModules(appDir, manifest).filter(m => m.web);
+const launchWeb = launchModules(appDir, manifest, ['web']);
 if (launchWeb.length) {
   const marks = readFileSync(resolve(here, 'marks.js'), 'utf8');
   writeFileSync(resolve(gen, 'marks.js'), siteBase === '/' ? marks : marks.replace('function route(url) {', `import { appLocation } from './site.js';\nfunction route(url) {\n  url = appLocation(url);`));
@@ -880,6 +880,8 @@ cpSync(resolve(here, 'transport.js'), resolve(gen, 'transport.js'));
 cpSync(resolve(here, 'clockin.js'), resolve(gen, 'clockin.js'));
 cpSync(resolve(here, 'midi.js'), resolve(gen, 'midi.js'));
 // The server bundle a JavaScript render runs (render.mjs), one script per VM context.
+let renderOrigin;
+try { renderOrigin = new URL(manifest.app?.origin).origin; } catch { /* No configured origin. */ }
 writeFileSync(resolve(gen, 'main-server.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
   `import app${rustLinked || declared ? `, { ${[rustLinked && 'sources', declared && 'prepareSources'].filter(Boolean).join(', ')} }` : ''} from './app.js';`,
@@ -905,6 +907,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   ] : []),
   // Two steps, so a server can send the page's head between them
   // (render.mjs): the app starts and names its route, then settles.
+  `globalThis.__exactRenderOrigin = ${JSON.stringify(renderOrigin)};`,
   'let t0, route, planResources;',
   'const prepare = async () => {',
   ...(ts ? [`  ts(data, ${mixed});`] : []),
@@ -950,8 +953,8 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   `  const unfinished = () => answersAtWork(true)${ts ? ' || unfinishedIO()' : ''};`,
   // A stream or long poll holds the page until its first message, as on the render host (runner.rs `in_flight`): a long
   // poll's reply that carries none (a 204, a 503 to wait out) takes it out of `inflight`, for clocks, but not here.
-  // A stream whose body file the render refused as it opened started no request, and holds nothing (ts-data.js).
-  '  const unmessaged = t => !!t && (!!t.stream || !!t.req?.stream) && !t.messages && !t.closed && !t.ctl?.refused;',
+  // A stream refused storage or visitor credentials started no request, and holds nothing.
+  '  const unmessaged = t => !!t && (!!t.stream || !!t.req?.stream) && !t.messages && !t.closed && !t.refused && !t.ctl?.refused;',
   '  const outstanding = () => inflight.n > 0 || Resources.some(r => r.waiting || (r.pending() && unmessaged(r.ticket))) || answersAtWork() || looseOut() || (waitStatus && unfinished());',
   '  do await new Promise(r => setTimeout(r, 1)); while (outstanding() && performance.now() < end);',
   '  markBars(document.getElementById("exact-root")); // the bars the glue marks, so their symbols are the size they will be',
@@ -962,7 +965,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   `    origin: ${JSON.stringify(manifest.app?.origin ?? null)}, status: Head.headStatus ?? null, time: clock.now, ...answers(planResources, types[2], sourceTypes),`,
   // Each resource whose source failed, with its message: the server's log names it (render.mjs), as the page cannot.
   '    failed: Resources.filter(r => r.failed).map(r => `${r.name}: ${r.error}`),',
-  // Each pending resource refused storage, by its request (admission.js) or call (ts-data.js), for the log.
+  // Each pending resource deferred to the reader's device, by its request or call, for the log.
   '    refused: Resources.filter(r => r.pending() && (r.ticket?.refused || (r.ticket?.call ?? r.ticket?.ctl)?.refused)).map(r => [r.name, r.ticket.refused ?? (r.ticket.call ?? r.ticket.ctl).refused]),',
   // `continuing`: work that outlives the render, whatever it waited for (a page with no status does not wait for an
   // answered source's I/O): the client asks every answer again (render.mjs `revalidate`). The answers the client asks
@@ -1020,7 +1023,7 @@ const scopedModule = (code, id) => {
   // string, which throws as on Hermes (`eval`, which no import may bind, is imported under a fresh name below).
   const bound = ['fetch', 'Date', 'Math', 'Intl', 'setTimeout', 'setInterval', 'requestAnimationFrame', 'requestIdleCallback',
     'clearTimeout', 'clearInterval', 'cancelAnimationFrame', 'cancelIdleCallback', 'performance', 'scheduler', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'crypto', 'AbortSignal',
-    'Function', 'Promise', 'queueMicrotask', 'Response'];
+    'Function', 'Promise', 'queueMicrotask', 'Response', 'exactHost'];
   // The DOM and Node's globals are absent, as on Hermes (js/bake/src/typescript.mjs `packageRefusals`).
   const absent = ['window', 'self', 'frames', 'parent', 'top', 'opener', 'document', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage',
     'indexedDB', 'HTMLElement', 'Element', 'getComputedStyle', 'customElements', 'alert', 'process', 'Buffer', 'global'];
@@ -1447,9 +1450,8 @@ if (pages.length && how === 'rust') {
   const renderApp = resolveApp(appDir);
   const r = spawnSync('cargo', ['run', ...injectedProfiles(renderApp), '--profile', 'host-dev', '-q', '-p', at[1], '--bin', bin, '--', '--plan', plan, '--name', manifest.name, ...(manifest.app?.origin ? ['--origin', manifest.app.origin] : []), '--shell', resolve(out, 'index.html'), '--build'],
     { cwd: renderApp.workspace, encoding: 'utf8', maxBuffer: 256 << 20, env: { ...process.env, CARGO_TARGET_DIR: renderApp.target, EXACT_UPDATE_TRUST: 'development' } });
-  if (r.status !== 0) { console.error(r.stderr); process.exit(1); }
-  const docs = r.stdout.split('\n').filter(Boolean).map(l => JSON.parse(l));
-  for (const doc of docs) if (doc.error) { console.error(`${bin} ${doc.location}: ${doc.error}`); process.exit(1); }
+  let docs;
+  try { docs = renderEntryPages(bin, r); } catch (e) { console.error(e.message); process.exit(1); }
   const files = buildPageFiles(out, docs, routes);
   for (const [i, doc] of docs.entries()) {
     const file = files[i];

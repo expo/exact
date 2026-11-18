@@ -4,6 +4,10 @@
 //! test's to make.
 use super::super::super::{Core, WORKERS};
 use exact_runner::{FailureKind, Outcome, Request, RequestOut};
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use ibex2::{
     boundary::HostError,
     stdlib::{
@@ -679,7 +683,7 @@ fn a_long_poll_on_other_work_is_refused_at_admission_and_fences_ordered_work() {
     for request in [
         Request::native(b"x".to_vec()).long_poll("since", "seq"),
         Request::storage(b"{}".to_vec()).long_poll("since", "seq"),
-        Request::continuation(7).long_poll("since", "seq"),
+        Request::continuation::<TestWork>(7).long_poll("since", "seq"),
     ] {
         let (core, script, _woke) = setup(vec![Reply::Is(200, vec![JSON], r#"{"other":1}"#)]);
         let ordered = request.is_ordered();

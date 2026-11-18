@@ -17,7 +17,7 @@
 //! present it. A host without the picker (Linux; a browser without
 //! `showOpenFilePicker`) refuses and fires `cancel`.
 
-use crate::agent::{field_bool, field_str, quote};
+use crate::json::{field_bool, field_str, quote};
 use crate::{DataSource, Runner};
 use exact_kernel::ViewId;
 use exact_plan::Value;
@@ -284,7 +284,7 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
         return permission(runner, json);
     }
     let Some(kind) = Kind::of(&command) else {
-        return crate::agent::error(&format!("{command} is not a picker"));
+        return crate::json::error(&format!("{command} is not a picker"));
     };
     let parsed = match field_str(json, "id") {
         Some(id) => Picker {

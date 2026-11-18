@@ -9,20 +9,6 @@
 #if os(macOS)
 import AppKit
 
-/// The look an arriver shows while it flies: where its image is drawn,
-/// in its own bounds (`applyImageLayer` defers to it).
-struct FlightLook {
-    var image: CGRect
-    /// The leaver's decoded image, drawn while the arriver's own is still
-    /// loading: a new node's raster lands a turn or more after the commit
-    /// that hides the leaver, and a flight drawing nothing until then showed
-    /// no photo at all for a frame or two on a device (LLP 1013.000 D4).
-    var stand: NativeRasterLease? = nil
-    /// A view scaled whole in its clip (`FlightScale`): `applyTransform`
-    /// keeps this scale while it flies, as a layout would otherwise undo it.
-    var scale: CGFloat? = nil
-}
-
 /// Where a leaver was shown when its name moved on.
 struct FlightSource {
     var rect: NSRect // the window's content view coordinates
@@ -31,7 +17,7 @@ struct FlightSource {
     var fit: CGRect?
     var natural: CGSize?
     /// The leaver's decoded image (`FlightLook.stand`), held for the flight.
-    var raster: NativeRasterLease?
+    var raster: (any ImageLease)?
 }
 
 final class Flight {
@@ -54,16 +40,45 @@ final class FlightLayer: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// A flight's clip: the shown box of a view flying scaled (D4.4).
-final class FlightClip: NSView {
-    override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+/// The built-in flights behind `FlightLink.make`: the presenter's
+/// extensions below, over the flights this holds.
+final class BuiltInFlights: FlightHosting {
+    weak var presenter: Presenter?
+    var flights: [UInt32: Flight] = [:]
+    init(_ presenter: Presenter) { self.presenter = presenter }
+    var isEmpty: Bool { flights.isEmpty }
+    func begin(_ op: BatchOp) { presenter?.beginFlight(op) }
+    func land(_ id: UInt32) { if let f = flights[id] { presenter?.landFlight(f) } }
+    func present(_ id: UInt32, _ progress: CGFloat) { presenter?.presentFlight(id, progress) }
+    func forget(_ id: UInt32) { presenter?.forgetFlight(id) }
+    func batchApplied() { presenter?.flightsBatchApplied() }
+    func landInside(_ view: NSView) { presenter?.landFlights(inside: view) }
+    func reset() { presenter?.resetFlights() }
+    func isFlying(_ view: NodeView) -> Bool { presenter?.isFlying(view) ?? false }
+    func regridSlots() { presenter?.regridSlots() }
+    func slot(of view: NodeView) -> NSView? { flights[view.id].flatMap { $0.view === view ? $0.slot : nil } }
+    func owns(_ view: NSView) -> Bool { flights.values.contains { $0.container === view || $0.slot === view } }
+    func frame(_ id: UInt32, _ frame: NSRect) -> Bool { presenter?.flightFrame(id, frame) ?? false }
 }
 
-/// A flying view's empty place in its parent.
-final class FlightSlot: NSView {
-    override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+extension Presenter {
+    /// The flights the built-in host holds.
+    var flights: [UInt32: Flight] {
+        get { (flightHost as? BuiltInFlights)?.flights ?? [:] }
+        set { (flightHost as? BuiltInFlights)?.flights = newValue }
+    }
+
+    /// Each flight's slot, where its view lands, from its parent's final
+    /// origin: the slot is no node, so no parent's pass reaches it.
+    func regridSlots() {
+        for f in flights.values {
+            guard let view = f.view, let slot = f.slot, slot.superview != nil, let layout = view.grid?.layout else { continue }
+            let origin = gridOrigin(above: slot)
+            let place = PixelGrid.place(layout, in: origin, scale: gridScale(under: origin))
+            view.grid = place
+            _ = flightFrame(view.id, view.frameInScrollDocument(place.drawn))
+        }
+    }
 }
 
 extension Presenter {

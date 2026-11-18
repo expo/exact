@@ -500,7 +500,7 @@ impl<D: DataSource> Presenter<D> {
 
 impl<D: DataSource + Default> Presenter<D> {
     pub(crate) fn settle_scroll_commands(&mut self, line: &str, mut reply: String) -> String {
-        use exact_runner::agent::{field_bool, field_str};
+        use exact_runner::json::{field_bool, field_str};
         self.retire_model_scroll_ends();
         if (self.scroll_end.pending.is_empty()
             && self.scroll_end.completed.is_empty()

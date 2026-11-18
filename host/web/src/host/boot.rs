@@ -98,6 +98,7 @@ impl<D: DataSource> Host<D> {
         });
         let mut runner = Runner::boot_with_delivery_linked(
             crate::link::runner_links(),
+            exact_runner::ModuleLinks::ALL,
             plan,
             data,
             kernel,

@@ -27,8 +27,13 @@ exact-kernel = { path = "../../kernel" }
 exact-forma = { path = "../../forma" }
 exact-plan = { path = "../../plan" }
 exact-runner = { path = "../../runner" }
+# Literal package shaders use the same WGSL validator as GPU builds (LLP 1181 D9).
+exact-gpu-reflect = { path = "../../gpu/reflect" }
+exact-shader-uniforms = { path = "../../packages/shader/uniforms" }
+exact-color = { path = "../../color" }
 # The app manifest, diagnostics and source maps as JSON; plan digests.
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]

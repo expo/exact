@@ -97,8 +97,17 @@ class DrawTest(private val id: String, private val scheme: String) {
         // minimumInteractiveComponentSize puts round it: Exact lays a control out at its drawn size and its padding,
         // and answers the 48 dp as a touch target apart (LLP 1115.001.001 §5 Q5). Anything else's is the tagged box.
         val control = tagged.children.firstOrNull { it.config.getOrNull(SemanticsProperties.Role) in CONTROLS }
+        // A selectable group's (a segmented row) is its controls' together, for the same reason: the row is only as
+        // tall as the 48 dp round each of them.
+        val group = tagged.children.singleOrNull()?.takeIf { SemanticsProperties.SelectableGroup in it.config }
+        val members = group?.children.orEmpty().filter { it.config.getOrNull(SemanticsProperties.Role) in CONTROLS }
+        val layout = control?.boundsInRoot
+            ?: members.map { it.boundsInRoot }.reduceOrNull { a, b ->
+                Rect(minOf(a.left, b.left), minOf(a.top, b.top), maxOf(a.right, b.right), maxOf(a.bottom, b.bottom))
+            }
+            ?: tagged.boundsInRoot
         val facts = JSONObject().put("id", id).put("scheme", scheme).put("density", density.toDouble())
-            .put("layout", box((control ?: tagged).boundsInRoot, density)).put("nodes", nodes).put("texts", texts)
+            .put("layout", box(layout, density)).put("nodes", nodes).put("texts", texts)
         File(out, "$name.json").writeText(facts.toString(2))
     }
 

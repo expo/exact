@@ -3,23 +3,26 @@ import CExact
 import Foundation
 
 extension Runtime {
-    func collectionFixedSizes(_ view: UInt32, lead: Int, trail: Int) -> [Double]? {
-        on(busy: nil) {
-            let sizes = (0..<2).map { exact_collection_fixed_size(rt, view, UInt32(lead), UInt32(trail), UInt32($0)) }
+    package func collectionFixedSizes(_ view: UInt32, lead: Int, trail: Int) -> [Double]? {
+        guard let fixedSize = CoreExports.collectionFixedSize else { return nil }
+        return on(busy: nil) {
+            let sizes = (0..<2).map { fixedSize(rt, view, UInt32(lead), UInt32(trail), UInt32($0)) }
             return sizes.allSatisfy { $0.isFinite && $0 >= 0 } ? sizes : nil
         }
     }
 
     func collectionSnap(_ view: UInt32, proposed: Double, port: Double, minimum: Double = 0, maximum: Double, distance: Double = .infinity) -> Double? {
-        on(busy: nil) {
-            let value = exact_collection_snap(rt, view, proposed, port, minimum, maximum, distance)
+        guard let snap = CoreExports.collectionSnap else { return nil }
+        return on(busy: nil) {
+            let value = snap(rt, view, proposed, port, minimum, maximum, distance)
             return value.isFinite ? value : nil
         }
     }
 
     func collectionSnapStop(_ view: UInt32, release: Double, rest: Double, port: Double, minimum: Double, maximum: Double) -> Double? {
-        on(busy: nil) {
-            let value = exact_collection_snap_stop(rt, view, release, rest, port, minimum, maximum)
+        guard let snapStop = CoreExports.collectionSnapStop else { return nil }
+        return on(busy: nil) {
+            let value = snapStop(rt, view, release, rest, port, minimum, maximum)
             return value.isFinite ? value : nil
         }
     }
@@ -28,12 +31,7 @@ extension Runtime {
         self.init(hooks: RuntimeHooks(
             decodeBatch: { Batch.decode($0, resolver: $1) },
             prepareBatch: { $0.prepare() }, symbolMeasure: SymbolMeasure.measure,
-            prewarmIslands: { svg in
-                if svg & 1 != 0 { SvgRasterModule.prewarm() }
-                #if os(iOS) || os(tvOS)
-                if svg & 2 != 0 { SvgFilterMetal.prewarm() }
-                #endif
-            }))
+            prewarmIslands: SvgLink.prewarm))
     }
 
     func holdBegin(_ view: UInt32, property: UInt32, now: Double) -> (NativeHold?, Batch) {
@@ -226,19 +224,5 @@ extension Runtime {
             }
             return read(exact_host_covers(rt, write(bytes)))
         }
-    }
-    func regionComplete(_ artifact: RegionArtifact) -> Batch {
-        return on {
-            let p = artifact.metadata
-            let retained = Unmanaged.passRetained(artifact).toOpaque()
-            return read(exact_region_complete(rt, artifact.id,
-                ExactMetrics(width: Float(p.width), height: Float(p.height), baseline: Float(p.firstBaseline)),
-                retained, { pointer in
-                    if let pointer { Unmanaged<RegionArtifact>.fromOpaque(pointer).release() }
-                }))
-        }
-    }
-    func regionFallback(_ request: UInt64) -> Batch {
-        on { read(exact_region_fallback(rt, request)) }
     }
 }

@@ -18,7 +18,7 @@ impl<D: DataSource + 'static> Placed<D> {
             .entry((k, fetch))
             .or_default()
             .push_back(Stage::Turn(token));
-        let mut request = Request::continuation(token);
+        let mut request = Request::continuation::<crate::host_work::WorkerTurn>(token);
         request.fetch = fetch;
         request.module = instance;
         Ok(Answer::Later(request))

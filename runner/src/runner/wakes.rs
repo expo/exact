@@ -10,7 +10,7 @@
 //!   `then`s, the held module calls and the queued sends stamped with its
 //!   id (LLP 1133.023 D7, `provenance.rs`). Sends waiting for the data source
 //!   to be ready (a cold boot's) are counted too, since none can be told
-//!   apart. A wake and a tool call (`modules/calls.rs`) run one at a time.
+//!   apart. A wake and a tool call (`calls.rs`) run one at a time.
 //! - **Done.** An invocation completes when it owns nothing; the wake ends
 //!   when every invocation has ended and the storage queue has drained
 //!   (LLP 1097 D10), the whole process's.

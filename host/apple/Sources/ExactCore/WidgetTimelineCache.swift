@@ -9,6 +9,7 @@ public struct WidgetTimelineCache: Hashable {
     /// How many configurations' answers a kind keeps in a generation. A person can edit a
     /// widget any number of times, so a write past this removes the answers written longest ago.
     package static let kept = 8
+    private let configured: Bool
     private let file: URL
     private let counterFile: URL
     /// Nil when the counter file is unreadable: the refresh still answers from
@@ -22,10 +23,15 @@ public struct WidgetTimelineCache: Hashable {
 
     /// `configuration` is a configured placement's chosen values, the bytes its refresh receives.
     public init(root: URL, kind: String, generation: String, configuration: Data? = nil) throws {
-        let chosen = configuration ?? Data()
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        _ = chosen.withUnsafeBytes { CC_SHA256($0.baseAddress, CC_LONG(chosen.count), &hash) }
-        let name = hash.map { String(format: "%02x", $0) }.joined()
+        configured = configuration != nil
+        let name: String
+        if let configuration {
+            var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+            _ = configuration.withUnsafeBytes { CC_SHA256($0.baseAddress, CC_LONG(configuration.count), &hash) }
+            name = hash.map { String(format: "%02x", $0) }.joined()
+        } else {
+            name = "default"
+        }
         file = root.appendingPathComponent("Library/Caches/widget-timelines/\(generation)/\(kind)/\(name).json")
         counterFile = root.appendingPathComponent("widget-store-generation")
         counter = try? Self.readCounter(counterFile)
@@ -71,7 +77,7 @@ public struct WidgetTimelineCache: Hashable {
         if let saved = try? JSONEncoder().encode(Saved(counter: counter, bytes: bytes)) {
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? saved.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            removeOldest()
+            if configured { removeOldest() }
         }
         guard isCurrent else { throw Failure.storeChanged }
         return bytes

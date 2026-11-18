@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
+@testable import ExactNativeViews
 
 /// LLP 1123 D2: every route is a content owner. Its root is laid out in its
 /// controller's view, its host block (LLP 1115.002 D8.2), and the runner is
@@ -562,7 +564,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         guard let scene = hostedWindowScene() else { throw missing("scene", "arranged inset ownership needs a route in a window") }
         let (session, root, first, second, route, _) = try arrangedPeers(in: scene)
         let p = session.presenter, navigation = p.navigation
-        session.natives.hatchesConnected = true
+        session.nativeViews!.hatchesConnected = true
         route.hatched = true
         route.ownedScroll = second
         for pane in [first, second] {
@@ -968,7 +970,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         resize(814)
         until("the sheet's route takes its size") { self.laidOut(session, sheet.id) == sheetView.bounds.size }
         // A slice in flight: what the presenter tells the runtime waits for it
-        p.collections.onFill?(sheet.id, Data())
+        p.listHost.onFill?(sheet.id, Data())
         XCTAssertTrue(session.fillInFlight)
         // First in line behind the slice, a size told at once when it runs
         session.whenIdle { resize(300) }
@@ -1133,7 +1135,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         until("the scroller is laid out") { scroller.bounds.height == 60 }
         XCTAssertEqual(scroller.contentOffset.y, 0)
         XCTAssertTrue(try XCTUnwrap(field.field).becomeFirstResponder())
-        p.collections.onFill?(try node(session, "route-sheet").id, Data())
+        p.listHost.onFill?(try node(session, "route-sheet").id, Data())
         XCTAssertTrue(session.fillInFlight)
         setKeyboard(p, top: 600)
         NotificationCenter.default.post(name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
@@ -1450,7 +1452,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         let sheetView = try XCTUnwrap(p.navigation.controllers[sheet.id]?.view)
         until("the sheet's route takes its size") { self.laidOut(session, sheet.id) == sheetView.bounds.size }
         // A slice in flight, and a report waiting behind it
-        p.collections.onFill?(sheet.id, Data())
+        p.listHost.onFill?(sheet.id, Data())
         XCTAssertTrue(session.fillInFlight)
         controller.view.frame = CGRect(x: 0, y: 374, width: 402, height: 500)
         controller.view.layoutIfNeeded()

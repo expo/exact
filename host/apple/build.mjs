@@ -948,7 +948,11 @@ async function main(args, lockHeld = false) {
     mkdirSync(resolve(embed, 'include'), { recursive: true });
     const archive = `lib${crate.replace(/-/g, '_')}.a`;
     copyFileSync(resolve(libDir, archive), resolve(embed, archive));
-    copyFileSync(resolve(pkg, 'include/exact.h'), resolve(embed, 'include/exact.h'));
+    // Every header but an unlinked family's (LLP 1047.001 D4): a family in its own target has an `explicit` submodule
+    // in CExact's module map, and its exports, `exact_<name>.h`, are in the archive only when it is linked.
+    const families = [...readFileSync(resolve(pkg, 'Sources/CExact/module.modulemap'), 'utf8').matchAll(/explicit module \w+ \{\s*header "[^"]*\/(exact_(\w+)\.h)"/g)];
+    const unlinked = new Set(families.filter(([, , name]) => appleLink !== 'all' && !appleLink.split(',').includes(name)).map(([, header]) => header));
+    for (const header of readdirSync(resolve(pkg, 'include')).filter((h) => !unlinked.has(h))) copyFileSync(resolve(pkg, 'include', header), resolve(embed, 'include', header));
     copyAppleGpuProducts(libDir, embed, gpuArtifacts, frameworkBundles);
     const embeddedLibrary = embedLibrary(library, embed, ios); // a package's framework (LLP 1154 D3), which the consumer links and embeds
     // Beside the executable in the embedding app's bundle, as the standalone app has it.
@@ -961,7 +965,7 @@ async function main(args, lockHeld = false) {
     writeFileSync(resolve(embed, 'receipt.json'), receipt(app, { platform, target: ios ? target : (process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin'), sdk, archive, gpu, package: pkg, composition, compatibilityId:bakedCompat.id, build:buildReceipt }));
     const bytes = statSync(resolve(embed, archive)).size;
     placeAppleArtifact(embed, paths.embed);
-    console.log(`host/apple: ${paths.embed.replace(root + '/', '')} — ${archive} ${(bytes / 1048576).toFixed(2)} MB, include/exact.h${gpu ? `, ${gpu}` : ''}${svgFilterBuilt ? `, ${svgFilterLibraryName} (the bundle's top level)` : ios ? ', no SVG filter kernels (no Metal toolchain)' : ''}, shaders, assets, compat.json; link it with ExactKit${composition === 'updating' ? ' + ExactUpdates' : ''} from the package at ${pkg.replace(root + '/', '')}`);
+    console.log(`host/apple: ${paths.embed.replace(root + '/', '')} — ${archive} ${(bytes / 1048576).toFixed(2)} MB, include/*.h${gpu ? `, ${gpu}` : ''}${svgFilterBuilt ? `, ${svgFilterLibraryName} (the bundle's top level)` : ios ? ', no SVG filter kernels (no Metal toolchain)' : ''}, shaders, assets, compat.json; link it with ExactKit${composition === 'updating' ? ' + ExactUpdates' : ''} from the package at ${pkg.replace(root + '/', '')}`);
     if (embedOnly) { if (args.includes('--json')) reportBuilt({ path: paths.embed, ...built() }); return; }
   }
   const t1 = Date.now(); buildStep('swift');
@@ -1415,7 +1419,8 @@ async function test(args) {
     // The development profile, as an app's build: `release` put the whole graph through LTO for a test run.
     run('cargo', ['rustc', '--crate-type', 'staticlib', ...injectedProfiles(app), '--profile', HOST_DEV, '-p', crate, '--lib', ...(ios ? ['--target', iosTarget] : [])], { cwd: app.workspace, env: cargoEnv });
     const libDir = ios ? resolve(app.target, iosTarget, HOST_DEV) : resolve(app.target, HOST_DEV);
-    const env = { ...process.env, EXACT_TESTS: '1', EXACT_LIB_DIR: libDir, EXACT_LIB: unit.name.replace(/-/g, '_'), EXACT_APP_COMPOSITION: 'embedded' };
+    // The tests install the development composition as their bundle loads (TestsInstall.swift).
+    const env = { ...process.env, EXACT_TESTS: '1', EXACT_LIB_DIR: libDir, EXACT_LIB: unit.name.replace(/-/g, '_'), EXACT_APP_COMPOSITION: 'embedded', EXACT_APPLE_LINK: appleComposition({ uses: [] }, false).link };
     mkdirSync(paths.namespace, { recursive: true });
     env.EXACT_SVG_METALLIB = svgFilterLibrary(ios ? 'iphonesimulator' : 'macosx', ios ? '17.0' : '14.0', resolve(paths.namespace, svgFilterLibraryName), true);
     if (ios) env.TEST_RUNNER_EXACT_SVG_METALLIB = env.EXACT_SVG_METALLIB;

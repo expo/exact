@@ -37,6 +37,48 @@ pub(super) fn json_holds(held: &str) -> bool {
     enumerated || named || matches!(held, "any" | "number" | "string" | "bool")
 }
 
+/// Retain written keys for the positional input records of LLP 1133.039 D1.
+/// Other package shapes keep JSON's sorted field order.
+pub(super) fn shape_order(
+    text: &str,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, serde_json::Error> {
+    use serde::{
+        de::{IgnoredAny, MapAccess, Visitor},
+        Deserialize, Deserializer,
+    };
+    #[derive(Deserialize)]
+    struct Declaration {
+        shapes: Option<std::collections::BTreeMap<String, Fields>>,
+    }
+    struct Fields(Vec<String>);
+    impl<'de> Deserialize<'de> for Fields {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Keys;
+            impl<'de> Visitor<'de> for Keys {
+                type Value = Fields;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("a shape's fields")
+                }
+                fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Fields, M::Error> {
+                    let mut keys = Vec::new();
+                    while let Some((key, _)) = map.next_entry::<String, IgnoredAny>()? {
+                        keys.push(key);
+                    }
+                    Ok(Fields(keys))
+                }
+            }
+            deserializer.deserialize_map(Keys)
+        }
+    }
+    let declaration: Declaration = serde_json::from_str(text)?;
+    Ok(declaration
+        .shapes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, fields)| (name, fields.0))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,6 +123,51 @@ mod tests {
         }
         for ty in ["X", "option<X>", "X[]"] {
             assert!(!is_json(&Value::from(ty)), "{ty}");
+        }
+    }
+
+    #[test]
+    fn ordinary_package_shapes_keep_their_name_order() {
+        use contract_syntax::Span;
+        for (text, name, expected) in [
+            (
+                include_str!("../../../../packages/health/exact.json"),
+                "HealthBucket",
+                vec!["end", "start", "value"],
+            ),
+            (
+                include_str!("../../../../packages/barcode-detection/exact.json"),
+                "Rect",
+                vec!["height", "width", "x", "y"],
+            ),
+            (
+                include_str!("../../../../packages/calls/exact.json"),
+                "CallEvent",
+                vec!["held", "muted"],
+            ),
+        ] {
+            let json = serde_json::from_str(text).unwrap();
+            let shapes = super::super::shapes(
+                &json,
+                &shape_order(text).unwrap(),
+                Span {
+                    line: 1,
+                    col: 0,
+                    end_col: 0,
+                    source_id: 0,
+                },
+            )
+            .unwrap();
+            let shape = shapes.iter().find(|s| s.name == name).unwrap();
+            assert_eq!(
+                shape
+                    .fields
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{name}"
+            );
         }
     }
 }

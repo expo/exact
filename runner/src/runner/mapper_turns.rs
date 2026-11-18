@@ -274,7 +274,11 @@ impl<D: DataSource> Runner<D> {
             if !open || b.out.is_none() && b.held.is_empty() {
                 self.mapper_turns.by_stream.remove(&stream);
             } else if b.out.is_none() {
-                self.send_turn(stream, Request::continuation(HELD), true);
+                self.send_turn(
+                    stream,
+                    Request::continuation::<crate::host_work::StreamTurn>(HELD),
+                    true,
+                );
             }
         }
         result

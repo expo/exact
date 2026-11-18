@@ -21,9 +21,25 @@ struct Reply {
     quiescent: bool,
     changing: Vec<String>,
     settleAt: f64,
+    nextTickAt: f64,
 }
 fn reply(s: &mut Sim<Still>) -> Reply {
     json::from_str(&s.agent(r#"{"op":"clock"}"#)).unwrap()
+}
+#[test]
+fn clock_reports_the_next_tick_in_host_time() {
+    let mut s = Sim::<Still>::new(Options::default()).unwrap();
+    s.advance(900.0, Clock::Seekable);
+    let at = reply(&mut s).nextTickAt;
+    assert_eq!(s.ticks_due(at - 0.001, Clock::Seekable), 0);
+    assert_eq!(s.ticks_due(at, Clock::Seekable), 1);
+    s.advance(at, Clock::Seekable);
+    s.world().publish("count", 1);
+    assert!(reply(&mut s).nextTickAt > at);
+    assert!(s.settle());
+    assert_eq!(reply(&mut s).nextTickAt, 0.0);
+    s.bind(&Options { paused: true }.values(), None).unwrap();
+    assert_eq!(reply(&mut s).nextTickAt, 0.0);
 }
 #[test]
 fn logging_refusal_preserves_rest_and_hash() {

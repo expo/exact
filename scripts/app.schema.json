@@ -45,7 +45,7 @@
     },
     "launch": {
       "type": "array",
-      "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Its apple/launch/*.swift is linked into the executable. Its apple/service/*.swift becomes lib<name>_service.dylib, loaded after startup.",
+      "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Every declared host must have a part: apple/launch/*.swift, web/service.js, linux/launch.rs or android/launch.rs. Apple service sources in apple/service/*.swift become lib<name>_service.dylib, loaded after startup. A missing part refuses the build.",
       "items": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9]*$"
@@ -329,7 +329,7 @@
     },
     "link": {
       "type": "array",
-      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips", "shadows", "corners", "rotate", "text_stroke", "symbol_palette", "presence"] },
+      "items": { "enum": ["markdown", "motion", "collections", "drag", "surfaces", "router", "format", "materials", "backdrop", "share", "documents", "picker", "timelines", "text_transform", "effects", "animations", "gradients", "grid", "geometry", "segments", "dataset", "tabs", "grouped_lists", "io", "transitions", "media_picker", "auth_session", "numerals", "dates", "sqlite", "tips", "shadows", "corners", "rotate", "text_stroke", "symbol_palette", "presence", "modules", "tools", "svg", "images", "native_views", "content_regions", "traces", "controls"] },
       "uniqueItems": true,
       "description": "Capabilities a native production build links ahead of use (LLP 1047 D8; LLP 1047.001). Otherwise the composition contains what the plan and grants use: auth.session selects auth_session, sqlite.open selects sqlite, and secret.keep with a presence policy selects presence. Adding a grant changes compatibility and requires a new binary even if its capability was linked ahead. Development links every capability except media_picker, auth_session, numerals and tips, which follow use. Names are the runner's (exact_runner::Capability::name)."
     },

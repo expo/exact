@@ -1,0 +1,10 @@
+/target/
+/dist/
+/dist.previous/
+/dist.*
+/artifacts/
+/.exact/
+/.shells/
+/app.contract.d.ts
+/assets/
+/.baked-assets.json

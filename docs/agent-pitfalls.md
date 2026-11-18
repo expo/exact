@@ -1041,7 +1041,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 - **A token kept in an app data file.** Exact has a secret store, and it holds
   strings, not only keys: grant `secret.keep <name>` and use
   `store.set`/`store.get`/`store.forget` in an answer (the Keychain on Apple,
-  `localStorage` on the web; a Linux launch forgets it at exit for now). The
+  origin-readable `localStorage` on the web; unencrypted files retained across
+  launches on Linux). **Web refresh and session tokens need a server-set
+  HttpOnly, Secure cookie:** follow [web sessions](recipes/web-sessions.md). The
   Signal clone kept its signal-cli bearer token in a plain config file because
   `secret.keep` read like the P-256 key store of LLP 1069.005. (2026-10-06.)
 
@@ -1204,6 +1206,21 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   and `"audio"` in `host.ios.backgroundModes`: the lock screen shows only a
   non-mixable playback session's media, and audio stops at the lock without the
   mode. `"playback-mix"` does not qualify. (LLP 1098 D8.)
+
+## GPU surfaces
+
+- **A record's named fields reach the wrong surface arguments.** Records cross
+  into a GPU surface by position, not by field name. Import the package's
+  shapes (`ModelNode` and `ModelHotspot` for `@exact/model-viewer`); if you
+  declare a shorter shape, keep its fields in the package's declaration order.
+  (Model viewer's record parsing tests, LLP 1133.039 D1.)
+- **A model viewer stops a page scrolling over it.** A canvas that takes input
+  owns every touch and wheel in its box. `cameraControls=true` reserves that
+  input at mount; `disableZoom=true` does not return the wheel to the page.
+  Leave controls unsaid for a passive model, or room beside an interactive
+  one for scrolling. Changing mode needs another canvas mount, as in the
+  [scrolling fixture](../packages/model-viewer/test/fixture/scrolling.contract).
+  (Model viewer scrolling drives, LLP 1133.039 D9.)
 
 ## Input
 
@@ -1948,6 +1965,25 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   without `appearance="auto"` for aligned image frames or arbitrary children.
   `-exact-control-size` and `-exact-corner-style` are admitted only on an
   explicit native button, including through classes. (LLP 1069.011.001 D12–D14.)
+
+- **`Request::continuation` does not compile: "type annotations needed"**, or
+  an Apple production build answers a source's request with `Unlinked("io")`.
+  A continuation runs on the host's executor, which an Apple production build
+  links only with `io` (LLP 1047.001 D12). Declare the work on the source that
+  builds it: `impl exact_runner::HostWork for MySource {}`, and write
+  `Request::continuation::<Self>(token)`. The build script passes
+  `exact_bake::hands_out_work!(source)` to `compatibility_id` beside the grants,
+  so the bake links `io` with nothing in `app.json`; pass the source the entry
+  runs, which may not be the one the bake runs (Markdown Stress bakes with
+  `MarkdownStress` and runs `NativeMarkdownStress`). A source that forwards
+  another's continuations declares it too. A TypeScript module needs nothing:
+  its bake reads the bundle for the prelude's timers (`setTimeout`,
+  `AbortSignal.timeout`) and `scheduler.yield()`, and links I/O for a native
+  slot's `native.later()`. It cannot see a timer the
+  module names at run time (`globalThis["set" + "Timeout"]`), nor a source
+  that names another type's marker: those are refused by name. A push of a
+  module that newly hands out host work to a binary without `io` is refused
+  (`appleUses.io`): bake a new binary.
 
 - **Natively, a Snapback resource or mutation fails with `native call outside an
   answer` while the same app works on the web.** Seen with five resources

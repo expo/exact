@@ -35,7 +35,7 @@ fn column(root: &[(StyleId, &str)], rows: &[(StyleId, &str)]) -> Kernel {
 
 /// The owner 2 under `band`, its root clear of it with `root`'s rows,
 /// holding `ops`' boxes, laid out once.
-fn laid(band: [f32; 4], root: &[(StyleId, &str)], mut ops: Vec<Op>) -> Kernel {
+pub(super) fn laid(band: [f32; 4], root: &[(StyleId, &str)], mut ops: Vec<Op>) -> Kernel {
     let mut own = vec![(StyleId::SafeAreaIgnore, "none"), (StyleId::Height, "100%")];
     own.extend_from_slice(root);
     ops.push(style(2, vec![], &own));

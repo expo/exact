@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 import CExact
 @testable import ExactKit
+@testable import ExactImages
 
 final class RasterInputIOSTests: XCTestCase {
     func testAPictureSurvivesAPopAndPushUntilMemoryPressure() throws {

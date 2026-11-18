@@ -89,8 +89,10 @@ fn the_freeze_bit_releases_pending_and_delivered_streams_before_returning() {
         links.io = None;
         let mut bridge = Bridge::with_links(links);
         bridge.boot(&plan, Feed, Hooks::none(), 390., 844.);
+        // Without I/O the bridge refuses the stream (`without_io`), but it is
+        // pending until a pump settles that: the freeze is what releases it.
         let host = bridge.host.as_mut().unwrap();
-        let first = host.take_requests().pop().unwrap().ticket;
+        let first = host.runner().pending()[0].1;
         if delivered {
             host.runner_mut()
                 .fulfill(first, Outcome::Message(Message::default()))
@@ -108,10 +110,9 @@ fn the_freeze_bit_releases_pending_and_delivered_streams_before_returning() {
         assert!(!host.runner().holds(first));
         assert!(host.runner().streams().is_empty());
         bridge.set_page(0);
-        let host = bridge.host.as_mut().unwrap();
-        assert_ne!(
-            host.take_requests().pop().unwrap().ticket,
-            first,
+        let host = bridge.host.as_ref().unwrap();
+        assert!(
+            host.runner().pending().iter().any(|(_, t)| *t != first),
             "foreground opens a fresh stream"
         );
     }

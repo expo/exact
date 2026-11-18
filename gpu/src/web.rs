@@ -295,6 +295,11 @@ pub fn render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 
     .unwrap_or(2)
 }
 
+/// Current instance presentation policy, including an explicitly empty picture.
+pub fn presentation_flags(id: u32) -> u32 {
+    with(|m| m.presentation_flags(id)).unwrap_or(0)
+}
+
 /// Submit the frame the canvases recorded, once (LLP 1009 D7): before the
 /// task that rendered them ends, which is when the browser presents.
 /// `true` on success; a surface's failure is [`error`]'s.
@@ -566,6 +571,10 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 {
             $crate::web::render(id, width, height, scale, now_ms)
+        }
+        #[wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_presentation_flags(id: u32) -> u32 {
+            $crate::web::presentation_flags(id)
         }
 
         /// Submit the recorded frame once; before the rendering task ends.

@@ -1,5 +1,9 @@
 use exact_kernel::{Kernel, NodeType};
 use exact_plan::{asm::Asm, builder::PlanBuilder, MutationMode, TypeKind};
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     Answer, DataError, DataSource, HttpScheduling, Outcome, Request, RequestClass, RequestOut,
     Response, Runner, Store, Value,
@@ -114,7 +118,7 @@ fn other_work_stays_ordered_for_resources_and_parallel_sends() {
             ..get()
         },
         Request::storage(b"{}".to_vec()),
-        Request::continuation(1),
+        Request::continuation::<TestWork>(1),
         Request::capture_surface("canvas"),
         Request {
             socket: true,
@@ -157,7 +161,7 @@ fn each_request_after_a_reply_is_classified_again() {
     let mut r = boot(Request::get("https://example.test/data"));
     let first = one_request(&mut r);
     assert_eq!(first.class, RequestClass::Read);
-    r.data().next = Some(Request::continuation(1));
+    r.data().next = Some(Request::continuation::<TestWork>(1));
     r.fulfill(first.ticket, response()).unwrap();
     let next = one_request(&mut r);
     assert_eq!(next.class, RequestClass::Ordered);
@@ -167,7 +171,7 @@ fn each_request_after_a_reply_is_classified_again() {
     r.act("parallel", vec![]).unwrap();
     let send = one_request(&mut r);
     assert_eq!(send.class, RequestClass::Parallel(1));
-    r.data().next = Some(Request::continuation(2));
+    r.data().next = Some(Request::continuation::<TestWork>(2));
     r.fulfill(send.ticket, response()).unwrap();
     let next = one_request(&mut r);
     assert_eq!(next.class, RequestClass::Ordered);

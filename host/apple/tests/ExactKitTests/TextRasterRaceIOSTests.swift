@@ -7,6 +7,7 @@
 import XCTest
 import CoreText
 @testable import ExactKit
+@testable import ExactImages
 
 final class TextRasterRaceIOSTests: XCTestCase {
     private func run(_ text: String) -> Run {

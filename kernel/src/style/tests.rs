@@ -638,6 +638,33 @@ fn segment_lengths_parse_resolve_and_refuse_by_name() {
             "calc(env(viewport-segment-width 0) + 1px)",
             EnvRefusal::IndexCount,
         ),
+        // A calculation's index that is no integer, as written: a number
+        // whose value is one, a dimension, an escaped digit.
+        (
+            "calc(env(viewport-segment-width 1.0 0) + 1px)",
+            EnvRefusal::IndexForm,
+        ),
+        (
+            "calc(env(viewport-segment-width 1px 0) + 1px)",
+            EnvRefusal::IndexForm,
+        ),
+        (
+            "calc(env(viewport-segment-width \\31  0) + 1px)",
+            EnvRefusal::IndexForm,
+        ),
+        (
+            "calc(env(viewport-segment-width 2147483648 0) + 1px)",
+            EnvRefusal::IndexRange,
+        ),
+        // A no-break space is part of an identifier and of a unit.
+        (
+            "calc(env(viewport-segment-width \u{a0}0 0) + 1px)",
+            EnvRefusal::IndexForm,
+        ),
+        (
+            "calc(env(viewport-segment-width 16\u{a0} 0) + 1px)",
+            EnvRefusal::IndexForm,
+        ),
     ] {
         let parsed = super::calc::parse(bad).map_err(|r| match r {
             super::calc::Refused::Env(e) => e,

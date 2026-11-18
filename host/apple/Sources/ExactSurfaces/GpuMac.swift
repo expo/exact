@@ -541,7 +541,7 @@ final class CanvasesHost {
             rendered(e, r)
             rendered += 1
             // A render that drew nothing, as without its drawable, draws when one lands (`renderStarved`)
-            e.waiting = !(m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1))
+            e.waiting = (m.presentationFlags?(e.id) ?? 0) & 4 == 0 && !(m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1))
             if !e.waiting { drawn += 1 }
             more = more || e.wants
             readPlacements(m, e)
@@ -578,7 +578,7 @@ final class CanvasesHost {
             rendered(e, r)
             rendered += 1
             // A render that drew nothing, as without its drawable, draws when one lands (`renderStarved`)
-            e.waiting = !(m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1))
+            e.waiting = (m.presentationFlags?(e.id) ?? 0) & 4 == 0 && !(m.drew.map { $0(e.id) != 0 } ?? (m.starved?(e.id) != 1))
             if !e.waiting { drawn += 1 }
             readPlacements(m, e)
             messages(e)

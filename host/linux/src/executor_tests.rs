@@ -5,6 +5,10 @@ use exact_runner::{Outcome, Request, RequestClass, RequestOut, Work};
 use std::sync::mpsc::{channel, TryRecvError};
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[test]
 fn retained_handoff_outcomes_drain_and_release_room_for_the_next_turn() {
     let executor = Executor::start("");
@@ -18,7 +22,7 @@ fn retained_handoff_outcomes_drain_and_release_room_for_the_next_turn() {
                     class: RequestClass::Ordered,
                     ticket,
                     target: "test".into(),
-                    request: Request::continuation(ticket),
+                    request: Request::continuation::<TestWork>(ticket),
                     forced: false,
                 },
                 Some(Work::Later(Box::new(move |reply| {

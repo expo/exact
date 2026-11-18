@@ -242,12 +242,16 @@ fn an_activation_already_taken_or_superseded_scrolls_nothing() {
     }
 }
 
-/// LLP 1153 D5.1: a page that arrives with no fragment opens its scroller
-/// where it opens, its start with nothing written; under
-/// `scroll-restoration="manual"` it stays where it was.
+/// LLP 1153 D5.1: with no fragment, a page's scroller starts over: at its
+/// start with nothing written, at the offset `scrollTop` gives, and under
+/// `scroll-restoration="manual"` where it was.
 #[test]
-fn a_page_that_arrives_without_a_fragment_opens_at_its_start_unless_manual() {
-    for (port, expected) in [("", 0.), (r#" scroll-restoration="manual""#, 500.)] {
+fn a_page_that_arrives_without_a_fragment_starts_its_scroller_over() {
+    for (port, expected) in [
+        ("", 0.),
+        (" scrollTop=120", 120.),
+        (r#" scroll-restoration="manual""#, 500.),
+    ] {
         let mut p = boot_with(port);
         let port_id = open(&mut p, "moves", None);
         assert_eq!(p.scroll_of(port_id).1, 500.);

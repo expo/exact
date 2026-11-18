@@ -427,3 +427,36 @@ fn the_leaf_names_its_target_as_an_author_writes_it() {
         assert_eq!(css, format!("var(--exact-{name}safe-area-inset-top, 7px)"));
     }
 }
+
+#[test]
+fn a_reset_keeps_what_the_host_reported_for_the_session() {
+    // The session's band, its view's targets and a registered target are
+    // the host's, as the environment is: a tree built after a reset reads
+    // them though the host reports none of them again
+    let ops = || {
+        let mut ops = create(1..=4);
+        ops.push(style(1, vec![], &[(StyleId::Height, "844")]));
+        let map = Target::Registered("map".into());
+        ops.extend([
+            fixed_reader(2, "780"),
+            reads(3, Target::Kind(Kind::Owner)),
+            reads(4, map),
+        ]);
+        ops.extend([children(1, &[2, 3, 4]), Op::AttachRoot { id: 1 }]);
+        ops
+    };
+    let mut k = Kernel::with_monospace();
+    k.apply(0, 1, &ops()).unwrap();
+    k.set_session_band([0.0, 0.0, 34.0, 0.0]).unwrap();
+    k.set_session_targets(controller(2, 50.0)).unwrap();
+    k.set_registered_target("map", Some(native(1, 12.0)))
+        .unwrap();
+    lay_out(&mut k);
+    let read = |k: &Kernel| (k.observation(2).unwrap()[2], top(k, 3), top(k, 4));
+    let before = read(&k);
+    assert_eq!(before, (Some(10.0), 50.0, 12.0));
+    k.reset();
+    k.apply(0, 1, &ops()).unwrap();
+    lay_out(&mut k);
+    assert_eq!(read(&k), before);
+}

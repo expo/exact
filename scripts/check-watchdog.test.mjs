@@ -173,9 +173,12 @@ test('a builder that finishes is passed through: its exit status and its output,
 test('js/bake/src/typescript.mjs imports only what the native bake copies beside it into its stage', async () => {
   const dir = scratch();
   copyFileSync(resolve(ROOT, 'js/bake/src/typescript.mjs'), join(dir, '__exact_config.mjs'));
-  for (const name of ['__exact_binding.mjs', '__exact_env.mjs', '__exact_launch_setting.mjs', '__exact_portable.mjs']) copyFileSync(resolve(ROOT, 'js/bake/src', name), join(dir, name));
-  const { checkBound: staged } = await import(join(dir, '__exact_config.mjs'));
-  expect(staged({})).toBe(CHECK_BOUND_MS);
+  // The modules the resident bake stages beside `typescript.mjs` (its `include_str!`s).
+  const staged = [...readFileSync(resolve(ROOT, 'js/bake/src/resident.rs'), 'utf8').matchAll(/include_str!\("(__exact_[\w]+\.mjs)"\)/g)].map(m => m[1]);
+  expect(staged.length).toBeGreaterThan(0);
+  for (const name of staged) copyFileSync(resolve(ROOT, 'js/bake/src', name), join(dir, name));
+  const { checkBound } = await import(join(dir, '__exact_config.mjs'));
+  expect(checkBound({})).toBe(CHECK_BOUND_MS);
 });
 
 test('a tsc that never returns is stopped at the bound (js/bake/src/typescript.mjs check)', async () => {

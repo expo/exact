@@ -15,6 +15,7 @@ import { liveById, installFits } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)
 export { animationClocks, launchLocation, launchVisits } from './navigation.js';
 export { fontFamily } from './font-family.js';
+export { cssNames } from './regions.js';
 import { Head, markDocument, projectRoots, openTabs, prepareTabs, unopened, tp } from './document.js';
 export { Head, unopened, tp };
 export { canSetStatus, statusSubject } from './document.js';

@@ -24,7 +24,7 @@ extension NavigationHost {
         guard !bounds.isEmpty, let route = p.chosen.last, frame(route.node) == bounds else { return false }
         // No presentation or bar may acquire an owner in the partial batch.
         return !batch.ops.contains { $0.op == .command } && !presenter.views.values.contains { node in
-            node.kind == "list" && (node.hasRowCells || node.style["appearance"]?.string != "none") || node.kind == "video" || node.kind == "audio" || node.kind == "iframe" || PackagePictures.mayServe(node.imageSource ?? node.props["imageSource"] ?? "")
+            node.kind == "list" && (node.hasRowCells || node.style["appearance"]?.string != "none") || node.kind == "video" || node.kind == "audio" || node.kind == "iframe" || packageMayServe(node.imageSource ?? node.props["imageSource"] ?? "")
                 || node.props["accessibilityRole"] == "toolbar" || node.props["type"] == "search"
                 || node.props["accessibilityRole"] == "search"
                 || node.props["popover"] != nil || node.props["tip"] != nil

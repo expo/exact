@@ -9,6 +9,10 @@ use exact_runner::{
 };
 use std::sync::{Arc, Mutex};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const SOURCE: &str = r##"shape Row
   n: number
 component App
@@ -655,7 +659,9 @@ mod tool_authority {
         ) -> Result<Option<Request>, DataError> {
             if self.remaining > 0 {
                 self.remaining -= 1;
-                return Ok(Some(Request::continuation(900 + self.remaining as u64)));
+                return Ok(Some(Request::continuation::<super::TestWork>(
+                    900 + self.remaining as u64,
+                )));
             }
             self.module_landed(s, token, outcome)?;
             Ok(None)

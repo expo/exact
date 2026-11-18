@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1070.000 §2.5 under UIKit: an input counts against the request under
 /// way when it began, by its own timestamp against the time the request
@@ -25,12 +26,12 @@ final class CollectionInputIOSTests: XCTestCase {
 
     func testAnInputCountsAgainstTheRequestUnderWayWhenItBegan() throws {
         let p = list()
-        defer { p.collections.reset() }
-        let requestAt = try XCTUnwrap(p.collections.entries[1]).requestAt
-        p.collections.gestureBegan(1, at: requestAt - 0.01)
-        XCTAssertFalse(try XCTUnwrap(p.collections.entries[1]).gesture, "a touch that began before the request")
-        p.collections.gestureBegan(1, at: requestAt + 0.01)
-        XCTAssertTrue(try XCTUnwrap(p.collections.entries[1]).gesture, "one that began after it")
+        defer { p.listHost.reset() }
+        let requestAt = try XCTUnwrap(p.listHost.entries[1]).requestAt
+        p.listHost.gestureBegan(1, at: requestAt - 0.01)
+        XCTAssertFalse(try XCTUnwrap(p.listHost.entries[1]).gesture, "a touch that began before the request")
+        p.listHost.gestureBegan(1, at: requestAt + 0.01)
+        XCTAssertTrue(try XCTUnwrap(p.listHost.entries[1]).gesture, "one that began after it")
     }
 
     /// The selected tab tapped again scrolls its screen's list to the top:
@@ -38,8 +39,8 @@ final class CollectionInputIOSTests: XCTestCase {
     /// gives way to any the tab's press made in answer, under way or ended.
     func testAScrollToTheTopGivesWayToARequestTheTabsPressMade() throws {
         let p = list()
-        defer { p.collections.reset() }
-        let entry = try XCTUnwrap(p.collections.entries[1]), scroll = try XCTUnwrap(p.views[1]?.scroll)
+        defer { p.listHost.reset() }
+        let entry = try XCTUnwrap(p.listHost.entries[1]), scroll = try XCTUnwrap(p.views[1]?.scroll)
         let route = RouteController(try XCTUnwrap(p.views[1]))
         p.navigation.scrollsToTopAnimated = false
         scroll.contentOffset.y = 600
@@ -66,16 +67,16 @@ final class CollectionInputIOSTests: XCTestCase {
     /// (LLP 1070.000 §2.6); one beside the list is not.
     func testAFingerComingDownOnTheListIsTheReadersGesture() throws {
         let p = list()
-        defer { p.collections.reset() }
-        let contact = p.collections.watchContacts(in: p.viewport)
+        defer { p.listHost.reset() }
+        let contact = p.listHost.watchContacts(in: p.viewport)
         defer { p.viewport.removeGestureRecognizer(contact) }
-        let after = try XCTUnwrap(p.collections.entries[1]).requestAt + 0.01
+        let after = try XCTUnwrap(p.listHost.entries[1]).requestAt + 0.01
         let beside = Touch(p.viewport, at: after), onRow = Touch(try XCTUnwrap(p.views[10]), at: after)
         contact.touchesBegan([beside], with: UIEvent())
-        XCTAssertFalse(try XCTUnwrap(p.collections.entries[1]).gesture, "beside the list")
+        XCTAssertFalse(try XCTUnwrap(p.listHost.entries[1]).gesture, "beside the list")
         contact.touchesEnded([beside], with: UIEvent())
         contact.touchesBegan([onRow], with: UIEvent())
-        XCTAssertTrue(try XCTUnwrap(p.collections.entries[1]).gesture, "on its row")
+        XCTAssertTrue(try XCTUnwrap(p.listHost.entries[1]).gesture, "on its row")
     }
 
     private final class Touch: UITouch {

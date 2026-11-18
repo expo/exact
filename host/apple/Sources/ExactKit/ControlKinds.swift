@@ -230,14 +230,14 @@ struct SelectMenu: Equatable {
 /// then carries no row, and the platform columns keep their defaults here,
 /// which are what a button with no style draws (`unsaid`; the Mac's push
 /// button).
-struct ButtonFace: Equatable {
+package struct ButtonFace: Equatable {
     /// Whether the node is a button at all; the rest is empty when not.
     var button = true
-    var title: String?
+    package var title: String?
     var subtitle: String?
     var placement: String?
     var rows = ButtonFaceRows()
-    var symbol: String?
+    package var symbol: String?
     /// An svg-only icon's token name (`icon.reply`), the agent's name for its path.
     var symbolIcon: String?
     struct Image: Equatable {
@@ -246,10 +246,10 @@ struct ButtonFace: Equatable {
         var size: CGSize?
     }
     var image: Image?
-    var raster = false
+    package var raster = false
     var leading = true
     var label: String?
-    var fits = true
+    package var fits = true
     /// A tab's badge (LLP 1075.003 §9.9): the text of the filled box beside
     /// its face, which the kernel reads from the tab's children.
     var badge: String?

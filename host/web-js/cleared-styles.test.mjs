@@ -228,6 +228,82 @@ async function action(evaluate, id, mode) {
 const bound = (runtime, mapped) => runtime === 'JS' ? [mapped[1], mapped[3]] : [mapped[1]];
 const held = runtime => runtime === 'JS' ? ['running', '--local'] : ['paused'];
 
+const TEXT_STYLE_EXPRESSIONS = [
+  ['min(14px, -exact-subheadline)', root => Math.min(14, root * 0.875)],
+  ['max(-exact-subheadline, 14px)', root => Math.max(14, root * 0.875)],
+  ['clamp(12px, -exact-subheadline, 20px)', root => Math.max(12, Math.min(root * 0.875, 20))],
+  ['calc(-exact-subheadline * 1.2 + 2px)', root => root * 0.875 * 1.2 + 2],
+  ['min(max(-exact-subheadline, 10px), calc(-exact-body + 2px))', root => root * 0.875],
+  [' -Apple-System-Title1 ', root => root * 1.6875],
+  ['-EXACT-title-1', root => root * 1.6875],
+];
+
+engineTest.chromium('JS: bound text-style expressions follow literal sizes and root-size changes', () => fixture('JS', async evaluate => {
+  let current = true;
+  for (const rootSize of [16, 32]) {
+    await evaluate(`document.documentElement.style.fontSize = '${rootSize}px'`);
+    for (const compact of [true, false, true]) {
+      if (compact !== current) {
+        await action(evaluate, 'toggle', compact ? 'compact' : 'regular');
+        current = compact;
+      }
+      const sizes = await evaluate(`Object.fromEntries(['literal', 'bound', 'built', 'body'].map(id => {
+        const e = document.querySelector('[data-testid="' + id + '"]');
+        return [id, getComputedStyle(e).fontSize];
+      }))`);
+      expect(sizes.literal).toBe('14px');
+      expect(sizes.bound).toBe(compact ? sizes.literal : sizes.body);
+      expect(sizes.built).toBe(compact ? sizes.literal : sizes.body);
+      const expressions = await evaluate(`Array.from(document.querySelectorAll('[data-testid^="expr-"]'), e => parseFloat(getComputedStyle(e).fontSize))`);
+      for (const [i, [, size]] of TEXT_STYLE_EXPRESSIONS.entries()) {
+        expect(expressions[i], TEXT_STYLE_EXPRESSIONS[i][0]).toBeCloseTo(compact ? size(rootSize) : rootSize, 4);
+      }
+    }
+  }
+}, `component App
+  state compact = true
+  state style = "subheadline"
+  state cap = 14
+${TEXT_STYLE_EXPRESSIONS.map(([text], i) => `  state expr${i} = ${JSON.stringify(text)}`).join('\n')}
+  action toggle
+    compact = not compact
+    style = compact ? "body" : "subheadline"
+    cap = compact ? 100 : 14
+  view
+    column padding=16 gap=8
+      text (compact ? "compact" : "regular") testId="mode"
+      text "Literal" font-size="min(-exact-subheadline, 14px)" testId="literal"
+      text "Bound" font-size=(compact ? "min(-exact-subheadline, 14px)" : "-exact-body") testId="bound"
+      text "Built" font-size=\`min(-exact-\${style}, \${cap}px)\` testId="built"
+      text "Body" font-size="-exact-body" testId="body"
+${TEXT_STYLE_EXPRESSIONS.map((_, i) => `      text "Expression" font-size=(compact ? expr${i} : "-exact-body") testId="expr-${i}"`).join('\n')}
+      button press=toggle "Toggle" testId="toggle"
+`), 30000);
+
+engineTest.chromium('JS: built platform lengths resolve on every length row that accepts them', () => fixture('JS', async evaluate => {
+  for (const rootSize of [16, 32]) {
+    await evaluate(`document.documentElement.style.fontSize = '${rootSize}px';document.documentElement.style.setProperty('--exact-hairline', '0.5px')`);
+    const lengths = await evaluate(`Object.fromEntries(['width', 'height', 'padding', 'border', 'spacing'].map(id => {
+      const s = getComputedStyle(document.querySelector('[data-testid="' + id + '"]'));
+      return [id, parseFloat(s.getPropertyValue(({padding:'padding-left',border:'border-top-width',spacing:'letter-spacing'})[id] ?? id))];
+    }))`);
+    for (const [name, expected] of Object.entries({ width: rootSize * 1.145625, height: rootSize * 1.145625 + 2,
+      padding: rootSize * 1.145625, border: 1, spacing: 0.5 })) {
+      expect(lengths[name], name).toBeCloseTo(expected, 2);
+    }
+  }
+}, `component App
+  state name = "accessory-checkmark-width"
+  state edge = "hairline"
+  view
+    column
+      view width=\`-exact-\${name}\` testId="width"
+      view height=\`calc(-exact-\${name} + 2px)\` testId="height"
+      view padding-left=\`clamp(0px, -exact-\${name}, 100px)\` testId="padding"
+      view border-top-style="solid" border-top-width=\`max(-exact-\${edge}, 1px)\` testId="border"
+      text "Spacing" letter-spacing=\`-exact-\${edge}\` testId="spacing"
+`), 30000);
+
 for (const runtime of ['JS', 'wasm']) {
   const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest.chromium;
   check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {

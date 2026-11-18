@@ -933,13 +933,17 @@ dependencies = [
  "contract-lower",
  "contract-syntax",
  "contract-types",
+ "exact-color",
  "exact-data",
  "exact-forma",
+ "exact-gpu-reflect",
  "exact-kernel",
  "exact-motion",
  "exact-plan",
  "exact-runner",
+ "exact-shader-uniforms",
  "libc",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
 ]
@@ -2142,6 +2146,10 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "exact-shader-uniforms"
+version = "0.1.0"
 
 [[package]]
 name = "exact-svg-file"

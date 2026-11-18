@@ -252,7 +252,7 @@ impl SvgState {
     pub(crate) fn presented(&mut self, kernel: &Kernel, id: ViewId) -> bool {
         if self.elements.contains_key(&id) {
             for root in self.sent.keys() {
-                if exact_kernel::svg::scene_sources(kernel, *root).contains(&id) {
+                if crate::link::families::scene_sources(kernel, *root).contains(&id) {
                     self.dirty.insert(*root);
                 }
             }
@@ -266,8 +266,8 @@ impl SvgState {
         }
     }
 
-    /// The `svg` and `animations` ops this batch owes, and new cost-limit warnings.
-    pub(crate) fn emit(
+    /// The `svg` ops this batch owes, and new cost-limit warnings.
+    pub(crate) fn emit_scenes(
         &mut self,
         kernel: &Kernel,
         engine: &Engine,
@@ -329,6 +329,11 @@ impl SvgState {
                 self.sent.insert(root, (scene, bx));
             }
         }
+        notes
+    }
+
+    /// The `animations` ops a box's CSS animations and played transitions owe.
+    pub(crate) fn emit_boxes(&mut self, kernel: &Kernel, engine: &Engine, batch: &mut Batch) {
         let resized: Vec<ViewId> = self
             .box_size
             .iter()
@@ -414,7 +419,6 @@ impl SvgState {
                 }
             }
         }
-        notes
     }
 }
 

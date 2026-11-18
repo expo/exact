@@ -18,7 +18,7 @@
   "detached": {
     ".claude/skills/llp-super-refine/SKILL.md": {
       "release": "2673e8caa575c909eea16ce8835e870f0cfd2b488318775ce3ed13d4ef80ba2e",
-      "reason": "Edited in exact2 to name the default models in use here (Claude Fable 5.1; codex gpt-6.1-sol; grok-4.7) and the codex command line. User-owned: an update notes upstream changes to it and applies none."
+      "reason": "Edited in exact2 to name the default models in use here and the codex command line. User-owned: an update notes upstream changes to it and applies none."
     }
   }
 }

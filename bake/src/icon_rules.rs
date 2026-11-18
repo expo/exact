@@ -298,6 +298,7 @@ mod tests {
             "aarch64-apple-darwin",
             &manifest,
             Some(""),
+            false,
         );
         super::SKIP.with(|s| s.set(false));
         compat.unwrap()
@@ -609,6 +610,7 @@ mod tests {
                             "aarch64-apple-darwin",
                             m,
                             Some(""),
+                            false,
                         );
                         super::SKIP.with(|s| s.set(false));
                         r.map(|_| ())

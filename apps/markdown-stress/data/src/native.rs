@@ -112,6 +112,9 @@ impl Drop for NativeMarkdownStress {
     }
 }
 
+/// It parses its document on the host's worker (LLP 1047.001 D12).
+impl exact_runner::HostWork for NativeMarkdownStress {}
+
 impl DataSource for NativeMarkdownStress {
     fn app_id(&self) -> &str {
         self.sync.app_id()
@@ -162,7 +165,7 @@ impl DataSource for NativeMarkdownStress {
             claimed: false,
             cell,
         });
-        Ok(Answer::Later(Request::continuation(serial)))
+        Ok(Answer::Later(Request::continuation::<Self>(serial)))
     }
 
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {

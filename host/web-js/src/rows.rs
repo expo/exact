@@ -203,6 +203,8 @@ impl Em<'_> {
             format!("()=>{map}(({f})())")
         });
         let f = measure.as_deref().unwrap_or(f);
+        let length = style::length_value(id, f, &mut self.uses);
+        let f = length.as_deref().unwrap_or(f);
         // A list on a corner is the elliptical radius no row holds, which
         // the browser would draw: refused whole, as the kernel refuses it.
         let corner = (exact_kernel::style::sides::FAMILIES[8].contains(&id)
@@ -452,7 +454,8 @@ impl Em<'_> {
             }
             StyleId::FontSize | StyleId::FontWeight if parts.tag == "img" => {
                 let size = id == StyleId::FontSize;
-                let mut writes = vec![(if size { "font-size" } else { "font-weight" }.into(), if size { "px" } else { "" }.into(), None)];
+                let map = size.then(|| self.uses.share('m', style::TEXT_STYLE_MAP.to_string()));
+                let mut writes = vec![(if size { "font-size" } else { "font-weight" }.into(), if size { "px" } else { "" }.into(), map)];
                 writes.push((if size { "--exact-symbol-size-authored" } else { "--exact-symbol-weight-authored" }.into(), String::new(), Some("v=>v==null?null:1".into())));
                 writes
             }

@@ -1,7 +1,8 @@
 //! A node's state looks in `layout <node>` (LLP 1121 D8; stage 9 E): each
 //! look's rows as a style row is, its value and the token it read.
 
-use super::{quote, row, token_fields};
+use super::{row, token_fields};
+use crate::json::quote;
 use crate::{DataSource, Runner};
 use exact_kernel::{NodeRef, StyleId};
 

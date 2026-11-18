@@ -25,7 +25,7 @@ extension NodeView {
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
-        if let c = presenter?.collections, c.offsetDrivers[id] != nil || c.startOwed.contains(id) { return }
+        if let c = presenter?.collections, c.drivesOffset(id) || c.startOwed.contains(id) { return }
         presenter?.collections.animationEnded(id, atTarget: endedAtTarget(scrollView))
         scrollMayHaveEnded(scrollView)
     }
@@ -93,8 +93,8 @@ extension NodeView {
     func authorOwnsScroll(_ sv: UIScrollView) -> Bool {
         guard let presenter else { return authoredScrollAnimating }
         return authoredScrollAnimating || presenter.elementScrolls.revealing(sv) != nil
-            || presenter.collections.offsetDrivers[id] != nil || presenter.collections.startOwed.contains(id)
-            || presenter.collections.entries[id]?.snapshot.underWay == true
+            || presenter.collections.drivesOffset(id) || presenter.collections.startOwed.contains(id)
+            || presenter.collections.snapshot(id)?.underWay == true
     }
 
     /// The scroll is over: its last `scroll` first, then `scrollend`, once.

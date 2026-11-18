@@ -251,6 +251,22 @@ class Natives(
             var live = false
             val drew = ArrayList<Element>()
             for (e in elements.values.toList()) {
+                if (e.kind == 3) {
+                    val status = Native.canvasReady(e.id)
+                    if (status == 3 && !e.presentation.awaitingFrame) {
+                        e.presentation.discard()
+                        e.last = null
+                        e.wrapped.clear(); e.drawn = -1L
+                        if (e.view is SurfaceView || e.view is TextureView) replacePresentation(e, false)
+                        record(e); finishRedraws(e); any = true
+                    }
+                    if (e.presentation.awaitingFrame) {
+                        live = true
+                        if (e.view is TextureView && status != 3) { record(e); any = true }
+                    }
+                    if (status == 3) continue
+                    if (e.view is TextureView && !e.presentation.ready) live = true
+                }
                 if (e.view is SurfaceView) {
                     if (e.copying) { live = true; continue }
                     if (!e.presentation.ready) {
@@ -472,16 +488,19 @@ class Natives(
         if (e.w <= 0 || e.h <= 0) return
         e.node.setPosition(0, 0, e.w, e.h)
         val c = e.node.beginRecording(e.w, e.h)
-        if (e.kind == 3 && !e.presentation.ready && e.last != null) {
+        if (e.kind == 3 && !e.presentation.ready && (e.presentation.awaitingFrame || e.last != null)) {
             if (e.view is TextureView) {
                 // TextureView latches its first image during draw; its update callback can run here.
                 val save = c.saveLayerAlpha(0f, 0f, e.w.toFloat(), e.h.toFloat(), 0)
                 e.view.draw(c)
                 c.restoreToCount(save)
             }
-            val bmp = e.last!!
-            src.set(0, 0, bmp.width, bmp.height); dst.set(0, 0, e.w, e.h)
-            c.drawBitmap(bmp, src, dst, bitmapPaint)
+            val bmp = e.last
+            if (bmp == null) c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
+            else {
+                src.set(0, 0, bmp.width, bmp.height); dst.set(0, 0, e.w, e.h)
+                c.drawBitmap(bmp, src, dst, bitmapPaint)
+            }
         } else if (e.view is SurfaceView && e.presentation.ready) c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
         else if (!e.stale) e.view.draw(c)
         e.node.endRecording()
@@ -627,6 +646,7 @@ class Natives(
         if (kind == 3) {
             presentation(e, e.fullWindow && windowCanvas)
             if (e.view is SurfaceView && e.presentation.replaced(Native.canvasReady(id))) { e.dirty = true; poll() }
+            poll()
         }
         if (json != null && kind == 2) e.disabled = json.optBoolean("disabled")
         if (layer == null) e.directRows.add(row) else inLayer(layer, e, row)
@@ -1125,6 +1145,7 @@ class Natives(
         // and the main thread would wait out that work in its first draw.
         Exact.attachSurface(e.id, surface, w, h) { e.window = it }
         frameRate(e)
+        poll()
     }
 
     /** The frame rates GPU canvases ask for ([Native.frameRates]: view and rate pairs, 0 for the display's): a

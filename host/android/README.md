@@ -107,7 +107,7 @@ The build:
 2. builds the app's `android/` crate for each selected ABI (arm64 by default) at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_painted::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
-   which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
+   which writes the app's hatches' install (`hatches.rs`), launch list (`launch.rs`) and the plan's uses (`uses.txt`) beside it. Each `app.json` `launch` module must provide `android/launch.rs`; the list runs once before the host boots, with the app's cache directory available. `apps/caltrain/android` is the one to copy for an app whose data is Rust and
    `apps/shelf/android` for one whose data is TypeScript (three files each, and a line in the root `Cargo.toml`'s
    `members`). A game's is generated in its `.shells/` (`game/app/shells.mjs`). An app with GPU modules (LLP 1009;
    every game) is built as a Linux bake is (`buildBake`): the modules first, then the crate, whose bake records each
@@ -1286,8 +1286,8 @@ the kept drawing into the source, fading out over the last 30 %; it rechecks the
 and visibility, including rounded overflow clips. A missing, hidden, fully clipped or offscreen source uses
 the shared axis for a pushed route and a cut for a full-screen route, on both entrance and return.
 Reader-owned transform or opacity tracks on the source or an ancestor also take this fallback, since the
-stage cannot read their live samples. A full-screen entrance without a usable source keeps no drawing
-and offers no predictive Back preview. The source binding follows the live route, including changes and clearing it,
+stage cannot read their live samples. A full-screen entrance without a usable source offers no
+predictive Back preview. The source binding follows the live route, including changes and clearing it,
 and survives switching tabs until the route leaves its stack. A predictive
 Back's committed return starts at the preview's pose. Inside a sheet the shared axis stays; Remove animations
 cuts. This transforms the whole route rather than aligning to a matching image inside it as UIKit can.
@@ -1295,6 +1295,32 @@ cuts. This transforms the whole route rather than aligning to a matching image i
 The timing follows Material's `MaterialContainerTransform`: `motionDurationMedium4` (400 ms) entering,
 `motionDurationMedium3` (350 ms) returning, and `motionEasingEmphasizedInterpolator` (the two-segment
 [Material 3 emphasized path](https://github.com/material-components/material-components-android/blob/master/lib/java/com/google/android/material/motion/res/values/tokens.xml)).
+
+**A switch to another stack** (a tab selected by the navigation bar or an app's own `select`, or a root replaced)
+uses Material's **fade through** over 300 ms. As in
+[`MaterialFadeThrough`](https://github.com/material-components/material-components-android/blob/master/lib/java/com/google/android/material/transition/MaterialFadeThrough.java),
+M3's emphasized easing drives both the fade and scale: the leaving route fades out over the first 35 % of eased
+progress, the arriving route fades in over the rest, and its scale grows from 92 % to 100 % about the window's
+centre over the whole transition. Each route's top app bar fades at its resting size and window position.
+In a tabbed root the whole tabpanel crosses, not only its route. The top page's drawing, including a `fullscreen`
+page, is kept before a switch can remove it, and released when the crossing ends. A switch with a sheet open,
+inside a sheet, or under reduced motion cuts. Pushes and pops inside a tab keep the shared axis.
+
+Both crossings are drawn where the page draws the routes, so each route keeps its ancestors' transform, opacity and
+clip, its place in the stacking order, and is hit only where it shows. A route that a commit removed is drawn from
+its kept drawing relative to its nearest surviving ancestor, under that ancestor's current transform, scroll and
+compositing. The complete removed branch keeps its backgrounds, borders, shadows and compositing; its placement
+is applied once, including row-local and scroll offsets. Sticky constraints follow surviving scrollers' current
+offsets; a removed scroller stays as recorded. The drawing takes no touch.
+The drawing is kept on every frame by walking the branch a second time. A retained list row goes into it with its
+portable draw commands and a reference, its `RenderNode` kept until no drawing holds it. Those commands are recorded
+on first attachment and reused until the row changes. A filter rasterizes the commands at replay, including when
+an ancestor gains a filter during the fade. Scrolling an unchanged, unfiltered list walks none of its rows twice,
+and a switch mid-scroll fades.
+Subtree paint bounds include the outgoing drawing at its current placement, so a shrinking ancestor's filter,
+offscreen plane or retained row does not crop it. Authored clips and masks still apply.
+A kept drawing scaled or turned (Back's preview, an authored exit, an ancestor's transform) draws such a row with
+op 55, which places its `RenderNode` by a matrix where op 17 places it by a translation.
 
 **Predictive Back** (Android 14, `OnBackAnimationCallback`, `Native.backProgress`): the reader passes the gesture's
 start, progress and edge, and its cancel. Where Back would pop a route, the route shrinks toward 90 %, moves toward
@@ -1314,9 +1340,9 @@ agent's clock. The callback registers as an animation callback (`CoreBackPreview
 the system's Back gesture, so the preview itself was seen only in the presenter's tests.
 
 Not built: continuous hand-off between a sheet and a scroller in it. Ownership stays fixed for each contact:
-after raising the sheet to its tallest detent, lift and swipe again to scroll the list. Also not built: a tab
-switch's fade-through; a `fullscreen` route's entrance without a visible `navigationSource`; a sheet's window of
-its own (the IME's insets move it by ending the page, as they move any page).
+after raising the sheet to its tallest detent, lift and swipe again to scroll the list. Also not built: a
+`fullscreen` route's entrance without a visible `navigationSource`; a sheet's window of its own (the IME's insets
+move it by ending the page, as they move any page).
 
 ## The bars (LLP 1115.001 D11)
 
@@ -1413,8 +1439,9 @@ change in one frame. The reader's two views are made with the reader and laid ou
 where they are: a statement often arrives while the page's view is being drawn, where a layout asked of the parent
 would come a frame late. They sit in a layer of their own over the page (the window's size, drawing nothing itself
 and taking no touch), which the frame's drawing reaches after the page's view and records again in that same pass.
-Filmed at 120 frames a second, a tab switch changes the page, the title and the indicator in one frame. A cold
-launch was not read frame by frame: it is under the launcher's own opening animation.
+On a tab switch, the bar statement arrives on the frame the crossing starts. The page and title then fade
+through over 300 ms; the navigation bar's indicator updates on that first frame. A cold launch was not read
+frame by frame: it is under the launcher's own opening animation.
 
 **Addressing what is in a bar.** A driver reads the bars from the agent's `state.bars`: each one's frame in the
 window, what it says, and each target's authored node and box (`kind` is `up`, `item` or `tab`). `tap` names a node
@@ -1453,9 +1480,10 @@ Not built of D11:
   Compose's `SingleChoiceSegmentedButtonRow` treatment (`kernel/src/segmented.rs`, `host/painted/src/paint/segment.rs`).
   A header's tablist stays in the page under the bar, as its search field does. Tabs keep their tab semantics
   and `aria-selected`; root navigation tabs keep the navigation bar, and `appearance="none"` keeps authored paint.
-  Headless kernel and presenter tests cover the treatment. A phone run and comparison with the Material oracle's
-  `segmented-buttons` specimen remain owed, as does Compose's motion (the label slides and the check grows;
-  here both change at once).
+  Headless kernel and presenter tests cover the treatment. The Material oracle's `segmented-buttons` specimen
+  matches Compose's height, corners, outline, colours and baselines, headless and on an API 36 emulator; a hugging
+  group is 2 dp wider (QUEUE). The outline is whole pixels, as `Modifier.border` rounds it. A phone run remains
+  owed, as does Compose's motion (the label slides and the check grows; here both change at once).
 - **List items** and their dividers (rows as cells land on every host at once).
 - **A header's rich title**: the avatar, the subtitle and the tap on the title that iOS shows are not read here.
 - **`onSecondaryContainer`** for the selected symbol, badges, a navigation rail on a wide window, and hiding the

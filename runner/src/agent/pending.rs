@@ -4,7 +4,7 @@
 //! `timer` with when it is due (LLP 1027.000 D1), then held device requests
 //! (LLP 1069.007 D3).
 
-use super::quote;
+use crate::json::quote;
 use crate::{DataSource, Runner};
 use std::fmt::Write as _;
 
@@ -41,7 +41,7 @@ pub(super) fn state<D: DataSource>(runner: &Runner<D>, s: &mut String) {
         let _ = write!(
             s,
             ",\"ticket\":{ticket},\"timer\":{}}}",
-            crate::agent::num(*due)
+            crate::json::num(*due)
         );
     }
     // Held device requests, after the network's (LLP 1069.007 D3): each

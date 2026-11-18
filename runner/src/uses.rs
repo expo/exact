@@ -14,6 +14,9 @@ use exact_kernel::{PropId, StyleId};
 use exact_plan::{BindingKind, EventKind, Opcode, Plan, Stdlib, StrId};
 use std::fmt;
 
+mod apple;
+pub use apple::{apple_uses, data_url, image_sources, lays_out_grid, ImageSource};
+
 /// A capability beyond the core, linked into an artifact only when its plan
 /// uses it (LLP 1047 §4's roster, as each one moves behind its seam).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,11 +148,42 @@ pub enum Capability {
     /// Locked secrets (LLP 1133.010 D16), selected by `secret.keep` grants
     /// with a presence policy, including names whose protection is optional.
     Presence,
+    /// A package's native modules, views and events (LLP 1047.001 D10,
+    /// D11): a plan whose `modules`, `views` or `module_events` table is not
+    /// empty. Native only ([`apple_uses`]); the web loads its packages
+    /// itself.
+    Modules,
+    /// Tool calls (LLP 1111; LLP 1047.001 D11): a plan whose `tools` table
+    /// is not empty. Native only ([`apple_uses`]).
+    Tools,
+    /// SVG decoding (LLP 1047.001 D10): an SVG element, or an image whose
+    /// file can be an SVG, which the host tells by its bytes. Native only.
+    Svg,
+    /// Loading and showing image files: an `image` whose source can be a
+    /// file, or a Markdown atom's icon. Native only.
+    Images,
+    /// The app module's native views and hatches (LLP 1024, LLP
+    /// 1075.003.000): a module tag, a `hatch`, or a package's view, and an
+    /// app whose module artifact connects the app-level hatches, which the
+    /// bake reads. Native only.
+    NativeViews,
+    /// Content regions (long documents): never set by a plan, since the
+    /// entry registers the region. An entry that registers one requires it
+    /// in its set, so a manifest's `link` names it. Native only.
+    ContentRegions,
+    /// Trace recording: a plan that runs `startTrace_EXPERIMENTAL` or
+    /// `stopTrace_EXPERIMENTAL`, or a manifest's `link` for an embedder that
+    /// calls the public API. Native only.
+    Traces,
+    /// The optional native controls: switches, checkboxes, radios, sliders,
+    /// pop-up selects, date pickers, progress, steppers and segmented
+    /// controls. A plain button is the core's. Native only.
+    Controls,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 37] = [
+    pub const ALL: [Capability; 45] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -187,6 +221,14 @@ impl Capability {
         Capability::TextStroke,
         Capability::SymbolPalette,
         Capability::Presence,
+        Capability::Modules,
+        Capability::Tools,
+        Capability::Svg,
+        Capability::Images,
+        Capability::NativeViews,
+        Capability::ContentRegions,
+        Capability::Traces,
+        Capability::Controls,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -229,6 +271,14 @@ impl Capability {
             Capability::TextStroke => "text_stroke",
             Capability::SymbolPalette => "symbol_palette",
             Capability::Presence => "presence",
+            Capability::Modules => "modules",
+            Capability::Tools => "tools",
+            Capability::Svg => "svg",
+            Capability::Images => "images",
+            Capability::NativeViews => "native_views",
+            Capability::ContentRegions => "content_regions",
+            Capability::Traces => "traces",
+            Capability::Controls => "controls",
         }
     }
 
@@ -250,6 +300,19 @@ pub struct Uses(u64);
 impl Uses {
     /// The core alone.
     pub const NONE: Uses = Uses(0);
+
+    /// The native roster's entries (LLP 1047.001 D10), which only an Apple
+    /// set names: [`apple_uses`] and the Apple bake select them, and no other
+    /// host links anything for them.
+    pub const NATIVE: Uses = Uses::NONE
+        .with(Capability::Modules)
+        .with(Capability::Tools)
+        .with(Capability::Svg)
+        .with(Capability::Images)
+        .with(Capability::NativeViews)
+        .with(Capability::ContentRegions)
+        .with(Capability::Traces)
+        .with(Capability::Controls);
 
     /// This set and `capability`.
     pub const fn with(self, capability: Capability) -> Uses {
@@ -277,9 +340,17 @@ impl Uses {
             if exact_grants::line_presence(line).is_some() {
                 uses = uses.with(Capability::Presence);
             }
+            // The listener's and the data executor's own lines, outside the
+            // I/O grammar, admit work the executor runs.
+            if exact_grants::process::is_process_line(line.trim()) {
+                uses = uses.with(Capability::Io);
+            }
             uses = match line.split_whitespace().next() {
                 Some("sqlite.open") => uses.with(Capability::Sqlite),
-                Some("auth.session") => uses.with(Capability::AuthSession),
+                // The sign-in sheet's answer reaches its source through the
+                // executor's pump.
+                Some("auth.session") => uses.with(Capability::AuthSession).with(Capability::Io),
+                Some("net.listen" | "env.launch") => uses.with(Capability::Io),
                 _ => uses,
             };
         }
@@ -559,49 +630,6 @@ pub fn uses(plan: &Plan) -> Uses {
         uses = uses.with(Capability::MediaPicker);
     }
     uses
-}
-
-/// What `plan` uses on Apple (LLP 1047.001 D10): [`uses`], with
-/// [`Capability::Grid`] the grid algorithm, which Apple links by use, for a
-/// plan whose layout can reach it ([`lays_out_grid`]). A native host parses
-/// the grid rows whatever it links, so a grid row alone does not need it.
-/// The browser lays out a grid itself, and the other native hosts link the
-/// algorithm whole, so for them the capability is the rows' grammars.
-pub fn apple_uses(plan: &Plan) -> Uses {
-    let uses = uses(plan).beyond(Uses::NONE.with(Capability::Grid));
-    if lays_out_grid(plan) {
-        uses.with(Capability::Grid)
-    } else {
-        uses
-    }
-}
-
-/// Whether laying out `plan` can reach the grid algorithm: a `display` that
-/// can be `grid`, or a node that can be a table's part (`table`, `caption`,
-/// a row group, `tr`, `th`, `td`), which the kernel lays out as a grid,
-/// with an anonymous table around a part outside one (LLP 1153 D7.3). A
-/// computed value counts as either.
-pub fn lays_out_grid(plan: &Plan) -> bool {
-    plan.bindings.iter().any(|binding| {
-        let can_be = |used: &dyn Fn(&str) -> bool| {
-            constant_str(plan, plan.code(binding.expr)).is_none_or(used)
-        };
-        match binding.kind {
-            BindingKind::Style => {
-                StyleId::from_bit(u32::from(binding.id)) == Some(StyleId::Display)
-                    && can_be(&|v| v.trim().eq_ignore_ascii_case("grid"))
-            }
-            BindingKind::Prop => {
-                PropId::from_wire(binding.id) == Some(PropId::SemanticTag)
-                    && can_be(&|v| {
-                        matches!(
-                            v,
-                            "table" | "caption" | "thead" | "tbody" | "tfoot" | "tr" | "th" | "td"
-                        )
-                    })
-            }
-        }
-    })
 }
 
 /// Whether a file input of `plan` can take iOS's photo picker: its `type`
@@ -936,6 +964,20 @@ mod grant_tests {
     }
 
     #[test]
+    fn the_listener_the_processes_and_the_sign_in_sheet_link_io() {
+        for grants in [
+            "net.listen unix:/tmp/exact-listen-fixture",
+            "process.spawn /usr/bin/git",
+            "auth.session https://example.test",
+        ] {
+            assert!(
+                Uses::NONE.with_grants(grants).has(Capability::Io),
+                "{grants}"
+            );
+        }
+    }
+
+    #[test]
     fn sqlite_grants_select_sql_storage_apart_from_other_io() {
         let fetch = Uses::NONE.with_grants("net.fetch https://example.test");
         assert!(fetch.has(Capability::Io));
@@ -954,45 +996,5 @@ mod grant_tests {
         assert!(!Uses::NONE
             .with_grants("auth.callback app:/oauth")
             .has(Capability::AuthSession));
-    }
-}
-
-#[cfg(test)]
-mod grid_tests {
-    use super::{apple_uses, uses, Capability};
-
-    fn plan(view: &str) -> exact_plan::Plan {
-        let source = format!("component A\n  state wide = true\n  view\n    {view}\n");
-        contract::compile(&source).unwrap_or_else(|e| panic!("{source}: {e:?}"))
-    }
-
-    /// D10: Apple's `grid` covers every plan whose layout reaches the grid
-    /// algorithm; elsewhere it stays the grammars a grid row needs.
-    #[test]
-    fn apple_links_grid_layout_for_every_plan_that_lays_out_a_grid() {
-        let column = |attrs: &str| format!("column {attrs}\n      text \"a\"");
-        let table =
-            |attrs: &str| format!("table{attrs}\n      tr\n        td\n          text \"a\"");
-        let grid_rows = column("display=\"grid\" grid-template-columns=\"1fr 1fr\"");
-        let flex_rows = column("display=\"flex\" justify-items=\"center\"");
-        for (view, apple, everywhere) in [
-            ("text \"a\"".to_string(), false, false),
-            (column("display=\"flex\""), false, false),
-            (column("display=\"none\""), false, false),
-            // A computed value counts as a use of whatever it might select.
-            (column("display=(wide ? \"block\" : \"flex\")"), true, false),
-            (column("display=\"grid\""), true, false),
-            ("text \"a\" display=\"grid\"".to_string(), true, false),
-            (grid_rows, true, true),
-            // A grid row on a box that is no grid reaches no grid layout.
-            (flex_rows, false, true),
-            (table(""), true, false),
-            // A table that is a block holds an anonymous table, a grid too.
-            (table(" display=\"block\""), true, false),
-        ] {
-            let plan = plan(&view);
-            assert_eq!(apple_uses(&plan).has(Capability::Grid), apple, "{view}");
-            assert_eq!(uses(&plan).has(Capability::Grid), everywhere, "{view}");
-        }
     }
 }

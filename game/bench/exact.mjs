@@ -209,14 +209,19 @@ export async function macWorld(paths, seconds) {
     return {perf:result.world.perf,gpuMs:result.world.gpuMs,pixels:result.world.perf.pixels,tick:result.world.tick,entities:result.world.entities};
   } finally {process.removeListener('SIGINT',interrupted);process.removeListener('SIGTERM',interrupted);await stop(child);}
 }
+export function holdsRefreshRate({ fps_avg, ms_p95 }, hz, budget) {
+  return fps_avg >= hz * 0.96 && Number.isFinite(ms_p95) && ms_p95 <= budget;
+}
+
 export function summarize({perf,pixels,tick,entities,gpuMs},engine,n,scene=0) {
   const f=perf.frameMs;
   if(!f.count || !(f.mean>0) || !perf.tickMs.count) throw new Error('No live perf samples');
   if(pixels[0]!==2560 || pixels[1]!==1440 || perf.instances!==Number(n)+(scene===1?1:0)) throw new Error(`Wrong scene: ${JSON.stringify({pixels,instances:perf.instances,n})}`);
   if(f.count>=16384) throw new Error('Perf window exceeded ring capacity; shorten BENCH_SECONDS');
   const r=v=>Math.round(v*100)/100;
+  const percentile=v=>v===null?null:r(v);
   return {engine,scene:'cubes',n:Number(n),mode:['entities','field','materials'][scene],pixels,frames:f.count,culled:perf.culled??null,gpuMs:gpuMs??null,
-    fps_avg:Math.round(10000/f.mean)/10,ms_p50:r(f.p50),ms_p95:r(f.p95),ms_p99:r(f.p99),ms_max:r(f.max),
+    fps_avg:Math.round(10000/f.mean)/10,ms_p50:percentile(f.p50),ms_p95:percentile(f.p95),ms_p99:percentile(f.p99),ms_max:r(f.max),
     script_ms_avg:r(perf.tickMs.mean),tick_ms:r(perf.tickMs.mean),feed_ms:r(perf.feedMs.mean),encode_ms:r(perf.encodeMs.mean),
     draws:perf.draws,instances:perf.instances,tick,entities,perf,headless,measurement:headless?'sanity-only':'live'};
 }

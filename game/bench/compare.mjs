@@ -34,7 +34,7 @@ export async function compare() {
       console.error(`N=${n}: load moved more than 2×; retaking all five engines`);
     }
     if(!accepted) throw new Error(`N=${n}: three load-mismatched attempts; stop and retake later`);
-    table.push(`| ${n.toLocaleString('en-US')} | ${accepted.map(r=>`${r.fps_avg} / ${r.ms_p95} / ${r.script_ms_avg} (load ${r.load1})`).join(' | ')} |`);
+    table.push(`| ${n.toLocaleString('en-US')} | ${accepted.map(r=>`${r.fps_avg} / ${r.ms_p95 ?? '—'} / ${r.script_ms_avg} (load ${r.load1})`).join(' | ')} |`);
   }
   const sweeps=[];
   for(const [engine,...mode] of engines) {

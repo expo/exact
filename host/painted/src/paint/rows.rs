@@ -11,6 +11,13 @@
 //! new beside a frame that stayed (a resolved padding, a scroll extent). A
 //! layout change that moves a node only makes the row suspect: kept while
 //! every node sits where it sat relative to the row.
+//!
+//! A drawing the stage keeps apart (`stage.rs`) holds the rows the walk drew
+//! this frame by reference ([`RowPin`]): a row's id names one recording for
+//! its whole life, so the backend is told to free it only once no such
+//! drawing holds it. The first attachment also records portable commands,
+//! reused until the row changes; a CPU filter can replay those commands.
+use super::tape::{Recorder, Tape};
 use super::*;
 use exact_ink::counters::{self, Counter};
 use exact_kernel::id::{IdMap, IdSet};
@@ -74,6 +81,8 @@ struct RowFrame {
 /// One kept row.
 struct Row {
     id: u32,
+    /// Commands for replay on a backend without this retained row.
+    drawing: Option<Rc<Tape>>,
     /// The row's top-left in viewport points when recorded.
     origin: (f32, f32),
     scale: (f32, f32),
@@ -107,7 +116,21 @@ struct Row {
 type Slot = (ViewId, Rect4, Shape, Transform);
 
 /// The row state [`Painter::rows_pause`] set aside.
-pub(super) struct Paused(Option<Capture>, bool);
+pub(super) struct Paused(Option<Capture>, bool, Option<Refer>);
+
+/// A drawing being kept that holds rows by reference: its recorder, and
+/// the scale of the transform that places it in the page.
+type Refer = (Recorder, (f32, f32));
+
+/// A kept row a drawing kept apart holds: its free waits until no drawing
+/// holds it.
+pub(crate) struct RowPin(u32);
+
+impl RowPin {
+    pub(crate) fn id(&self) -> u32 {
+        self.0
+    }
+}
 
 /// A row being recorded.
 #[derive(Default)]
@@ -128,10 +151,19 @@ pub(super) struct Rows {
     kept: IdMap<NodeKey, Row>,
     suspect: IdSet<NodeKey>,
     next: u32,
-    frame: u64,
+    pub(super) frame: u64,
     active: bool,
     recording: Option<Capture>,
     freed: Vec<u32>,
+    /// The rows drawings kept apart hold, by id.
+    pins: HashMap<u32, std::rc::Weak<RowPin>>,
+    /// Rows no longer kept whose free waits for the drawings holding them.
+    held: Vec<u32>,
+    /// A drawing is being kept with rows by reference.
+    pub(super) refer: Option<Refer>,
+    /// Rows drawings took by reference, and rows they walked again.
+    #[cfg(test)]
+    pub(super) referred: (usize, usize),
     /// Viewport width, scale and appearance the kept rows were drawn at.
     world: Option<(u32, u32, bool)>,
     /// The last paint's focused node and whether its ring was suppressed.
@@ -162,7 +194,7 @@ impl Rows {
 /// Room around a row's boxes for what paints outside them (shadows).
 const MARGIN: f32 = 48.0;
 
-fn union(a: Option<Rect4>, b: Rect4) -> Rect4 {
+pub(super) fn union(a: Option<Rect4>, b: Rect4) -> Rect4 {
     match a {
         None => b,
         Some(a) => {
@@ -188,7 +220,15 @@ impl Painter {
         let rows = std::mem::take(&mut self.rows);
         // The reader can still hold these IDs until it receives their deletions.
         self.rows.next = rows.next;
-        for id in rows.kept.into_values().map(|r| r.id).chain(rows.freed) {
+        self.unkeep_rows();
+        let held = rows.held.into_iter();
+        for id in rows
+            .kept
+            .into_values()
+            .map(|r| r.id)
+            .chain(rows.freed)
+            .chain(held)
+        {
             self.backend.row_free(id);
         }
     }
@@ -283,6 +323,7 @@ impl Painter {
     /// is freed, each is recorded again as a new row.
     pub(crate) fn forget_rows(&mut self) {
         self.rows = Rows::default();
+        self.unkeep_rows();
     }
 
     /// The platform's colours resolve differently (LLP 1115.001 D4):
@@ -347,13 +388,22 @@ impl Painter {
             }
         }
         self.rows.suspect.clear();
-        for id in std::mem::take(&mut self.rows.freed) {
-            self.backend.row_free(id);
+        let held = std::mem::take(&mut self.rows.held);
+        for id in std::mem::take(&mut self.rows.freed).into_iter().chain(held) {
+            if (self.rows.pins.get(&id)).is_some_and(|pin| pin.strong_count() > 0) {
+                self.rows.held.push(id);
+            } else {
+                self.backend.row_free(id);
+            }
         }
+        self.rows.pins.retain(|_, pin| pin.strong_count() > 0);
     }
 
     /// A scroller's rows begin: the backend groups them; their boxes are noted.
     pub(super) fn group_begin(&mut self, walk: &Walk<'_, '_>, id: ViewId) {
+        if self.rows.refer.is_some() {
+            return;
+        }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
         self.backend.group_begin(id, scroll);
         self.rows
@@ -362,6 +412,9 @@ impl Painter {
     }
 
     pub(super) fn group_end(&mut self, walk: &Walk<'_, '_>) {
+        if self.rows.refer.is_some() {
+            return;
+        }
         self.backend.group_end();
         if let Some(g) = self.rows.groups.last_mut() {
             g.2 = walk.boxes.len();
@@ -396,26 +449,31 @@ impl Painter {
         // A zoomable container's child is drawn at the zoom, which a row
         // replayed at another offset would not follow.
         self.rows.active
-            && self.backend.rows()
+            && (self.rows.refer.is_some() || self.backend.rows())
             && (scrolls(y) || self.rows_wrapper(node.key))
             && zoom::range(node).is_none()
     }
 
-    /// Whether `key` is the container walked for its scroller's rows.
-    /// Rows neither record nor keep until [`Painter::rows_resume`]: a tape
-    /// walks every node (`stage.rs`).
-    pub(super) fn rows_pause(&mut self) -> Paused {
+    /// Rows neither record nor keep until [`Painter::rows_resume`], while a
+    /// drawing is kept apart (`stage.rs`). With `refer`, a row the walk drew
+    /// this frame goes into the drawing by reference, if the drawing's
+    /// placement in the page has the scale given; else every node is walked.
+    pub(super) fn rows_pause(&mut self, refer: Option<Refer>) -> Paused {
+        let active = self.rows.active;
         Paused(
             self.rows.recording.take(),
-            std::mem::replace(&mut self.rows.active, false),
+            std::mem::replace(&mut self.rows.active, active && refer.is_some()),
+            std::mem::replace(&mut self.rows.refer, refer),
         )
     }
 
-    pub(super) fn rows_resume(&mut self, Paused(recording, active): Paused) {
+    pub(super) fn rows_resume(&mut self, Paused(recording, active, refer): Paused) {
         self.rows.recording = recording;
         self.rows.active = active;
+        self.rows.refer = refer;
     }
 
+    /// Whether `key` is the container walked for its scroller's rows.
     pub(super) fn rows_wrapper(&self, key: NodeKey) -> bool {
         self.rows.wrapper == Some(key)
     }
@@ -545,6 +603,9 @@ impl Painter {
             counters::add(Counter::ImagePatches, 1);
         }
         let row = self.rows.kept.get_mut(&key).expect("kept");
+        if !changed.is_empty() {
+            row.drawing = None;
+        }
         for (i, (id, ..)) in changed {
             row.images[i].1 = walk.scene.images.get(&id).map(Arc::downgrade);
         }
@@ -624,6 +685,9 @@ impl Painter {
         offset: (f32, f32),
         clip_rect: Option<Rect4>,
     ) {
+        if self.rows.refer.is_some() {
+            return self.row_referred(walk, id, ts, offset, clip_rect);
+        }
         // A transparent ancestor can replace the backend after rows_begin enabled reuse.
         if !self.backend.rows() || walk.hit_space.is_some() {
             return self.node(walk, id, ts, offset, clip_rect);
@@ -726,7 +790,12 @@ impl Painter {
         };
         self.backend.row_begin(self.rows.next, content, previous);
         self.rows.recording = Some(Capture::default());
+        let page = self.kept.to_page;
+        if local {
+            self.kept.to_page = page.pre_translate(origin.0, origin.1);
+        }
         self.node(walk, id, ts, walk_offset, None);
+        self.kept.to_page = page;
         let mut capture = self.rows.recording.take().expect("recording");
         if local {
             for b in &mut walk.boxes[start..] {
@@ -787,6 +856,14 @@ impl Painter {
             })
             .fold(None, |u, r| Some(union(u, r)))
             .unwrap_or((origin.0, origin.1, 0.0, 0.0));
+        let placed = sticky(walk.scene, id, offset);
+        let rect = paint_rect(node.frame, placed);
+        let p = (walk.scene.presented)(id);
+        let space =
+            ts.pre_concat(p.transform(rect, node.style.transform_origin.resolve(rect.2, rect.3)));
+        let covered = self
+            .kept_bounds(walk, &node, space, placed)
+            .map_or(covered, |bounds| union(Some(covered), bbox(space, bounds)));
         let bounds = (
             covered.0 - origin.0 - MARGIN,
             covered.1 - origin.1 - MARGIN,
@@ -818,6 +895,7 @@ impl Painter {
             node.key,
             Row {
                 id: rid,
+                drawing: None,
                 origin,
                 scale,
                 size: (node.frame.width, node.frame.height),
@@ -843,6 +921,87 @@ impl Painter {
                 order,
             },
         );
+    }
+}
+
+impl Painter {
+    /// A row in a drawing being kept apart: the kept row the walk drew this
+    /// frame, with its portable commands and a reference, if it was drawn
+    /// at the scale the drawing is placed at; any other is walked.
+    fn row_referred(
+        &mut self,
+        walk: &mut Walk<'_, '_>,
+        id: ViewId,
+        ts: Transform,
+        offset: (f32, f32),
+        clip_rect: Option<Rect4>,
+    ) {
+        let Some(node) = walk.scene.kernel.node(id) else {
+            return;
+        };
+        let Some((recorder, place)) = self.rows.refer.clone() else {
+            return;
+        };
+        let near = |a: f32, b: f32| (a - b).abs() <= 1e-4 * b.abs().max(1.0);
+        let drawn = (self.rows.kept.get(&node.key)).filter(|row| {
+            row.seen == self.rows.frame
+                && near(row.scale.0, place.0 * ts.sx)
+                && near(row.scale.1, place.1 * ts.sy)
+        });
+        let plain = self.backend.name() == "tape"
+            && ts.kx == 0.0
+            && ts.ky == 0.0
+            && walk.hit_space.is_none();
+        let Some((rid, bounds)) = drawn
+            .filter(|_| plain && !(walk.scene.hidden)(id))
+            .map(|row| (row.id, row.bounds))
+        else {
+            #[cfg(test)]
+            {
+                self.rows.referred.1 += 1;
+            }
+            return self.node(walk, id, ts, offset, clip_rect);
+        };
+        #[cfg(test)]
+        {
+            self.rows.referred.0 += 1;
+        }
+        let pin = match self.rows.pins.get(&rid).and_then(std::rc::Weak::upgrade) {
+            Some(pin) => pin,
+            None => {
+                let pin = Rc::new(RowPin(rid));
+                self.rows.pins.insert(rid, Rc::downgrade(&pin));
+                pin
+            }
+        };
+        let r = paint_rect(node.frame, offset);
+        let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
+        let drawing = match self
+            .rows
+            .kept
+            .get(&node.key)
+            .and_then(|row| row.drawing.clone())
+        {
+            Some(drawing) => drawing,
+            None => {
+                let commands = self.record_node(walk, id, ts, offset, false);
+                let normalized = Recorder::default();
+                normalized.nest(
+                    Rc::new(commands),
+                    Transform::from_translate(-origin.0, -origin.1),
+                );
+                let drawing = Rc::new(normalized.tape());
+                self.rows.kept.get_mut(&node.key).expect("kept").drawing = Some(drawing.clone());
+                drawing
+            }
+        };
+        recorder.row(pin, origin, bounds, place, drawing);
+    }
+
+    /// Rows drawings took by reference, and rows they walked again.
+    #[cfg(test)]
+    pub(crate) fn rows_referred(&self) -> (usize, usize) {
+        self.rows.referred
     }
 }
 

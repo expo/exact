@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 import CoreText
 @testable import ExactKit
+@testable import ExactImages
 
 final class ProfiledCoverageIOSTests: XCTestCase {
     private let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!

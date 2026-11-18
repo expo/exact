@@ -385,7 +385,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             .entry((k, fetch))
             .or_default()
             .push_back(Stage::Turn(token));
-        let mut request = Request::continuation(token);
+        let mut request = Request::continuation::<crate::host_work::OrderedTurn>(token);
         request.fetch = fetch;
         request.module = instance;
         Ok(Answer::Later(request))
@@ -412,9 +412,9 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         if self.child_placement(rust) == Placement::Worker {
             let mut scratch = Store::new(&grants, []);
             let answer = match recorded {
-                Recorded::WorkerTurn { child, .. } => {
-                    Ok(Answer::Later(Request::continuation(child)))
-                }
+                Recorded::WorkerTurn { child, .. } => Ok(Answer::Later(Request::continuation::<
+                    crate::host_work::WorkerTurn,
+                >(child))),
                 Recorded::Answer {
                     target,
                     source,
@@ -1244,7 +1244,9 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
                 let next = self.token()?;
                 self.deliveries.insert(next, (token, outcome));
                 self.delivery_phases.insert(token, false);
-                return Ok(Some(Request::continuation(next)));
+                return Ok(Some(
+                    Request::continuation::<crate::host_work::OrderedTurn>(next),
+                ));
             }
             Some(false) => {
                 let mut logs = Vec::new();

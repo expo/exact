@@ -216,6 +216,12 @@ const YIELDED: u64 = u64::MAX - 2;
 /// timers on main use `WAITING` so another turn can change their wait (LLP 1162 D3).
 const TIMER: u64 = u64::MAX - 3;
 
+/// A module's wait, timer, yield or background round, which the host's
+/// executor resumes: the TypeScript bake reports that the module can hand one
+/// out (`typescriptHostWork`), which links I/O (LLP 1047.001 D12).
+pub(crate) struct ModuleTurn;
+impl exact_runner::HostWork for ModuleTurn {}
+
 /// The prefix of a handler's name as the runner asks for it (LLP 1133.016 D9).
 const TOOL: &str = "tool:";
 
@@ -1147,7 +1153,7 @@ impl Module {
             }),
             Ok(Step::Pending { call, ticket, due }) => {
                 let request = if matches!(ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET) {
-                    timer_due(Request::continuation(call), ticket, due)
+                    timer_due(Request::continuation::<ModuleTurn>(call), ticket, due)
                 } else {
                     let Some(mut request) = self.take_request(ticket) else {
                         self.finish_let_go();

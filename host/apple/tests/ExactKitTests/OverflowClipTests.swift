@@ -126,12 +126,12 @@ class OverflowClipTests: XCTestCase {
             try withClip(x) { p, root, node, child in
                 XCTAssertEqual(try pixels(root)(CGPoint(x: 60, y: 60)), [255, 0, 0, 255], "static control")
                 let key = x ? "transform.translation.y" : "transform.translation.x"
-                p.svg.animations(child.id, ["specs": [["id": "move", "k": key, "s": 0.0, "d": 1.0,
+                p.boxAnimations.animations(child.id, ["specs": [["id": "move", "k": key, "s": 0.0, "d": 1.0,
                     "n": 1.0, "fill": 3, "t": [0.0, 1.0], "v": [0.0, 100.0]]]], layer: child.layer, clock: 0)
                 let box = try XCTUnwrap(node.clipBox)
                 XCTAssertGreaterThanOrEqual(x ? box.bounds.maxY : box.bounds.maxX, 120)
                 for clock in [250.0, 750.0] {
-                    p.svg.seek(clock: clock)
+                    p.svg?.seek(clock: clock); p.boxAnimations.seek(clock: clock)
                     CATransaction.flush()
                     let end = Date(timeIntervalSinceNow: 2)
                     func position() -> Double? {
@@ -148,7 +148,7 @@ class OverflowClipTests: XCTestCase {
                     let point = x ? CGPoint(x: 60, y: 60 + clock / 10) : CGPoint(x: 60 + clock / 10, y: 60)
                     XCTAssertEqual(try pixels(root)(point), [255, 0, 0, 255])
                 }
-                p.svg.animations(child.id, ["specs": [["id": "move", "k": key, "s": 0.0, "d": 1.0,
+                p.boxAnimations.animations(child.id, ["specs": [["id": "move", "k": key, "s": 0.0, "d": 1.0,
                     "n": 1.0, "fill": 3, "t": [0.0, 1.0], "v": [-100_000.0, 200_000.0]]]], layer: child.layer, clock: 0)
                 XCTAssertLessThanOrEqual(x ? box.bounds.minY : box.bounds.minX, -100_000)
                 XCTAssertGreaterThanOrEqual(x ? box.bounds.maxY : box.bounds.maxX, 200_020)
@@ -166,8 +166,8 @@ class OverflowClipTests: XCTestCase {
                     let shape: [String: Any] = ["id": 1, "n": 3, "o": 1,
                         "p": [0, dx, dy, 1, dx + 16, dy, 1, dx + 16, dy + 16, 1, dx, dy + 16, 3],
                         "f": [255, 0, 0, 255], "w": 0]
-                    p.svg.scene(child.id, ["scene": ["box": [0, 0, 20, 20], "t": [1, 0, 0, 1, 0, 0], "els": [shape]]],
-                                layer: child.layer, dark: false, clock: 0)
+                    p.svg?.scene(child.id, ["scene": ["box": [0, 0, 20, 20], "t": [1, 0, 0, 1, 0, 0], "els": [shape]]],
+                                layer: child.layer, dark: false, clock: 0, limit: nil, tint: nil)
                     let point = CGPoint(x: 50 + dx + 8, y: 50 + dy + 8)
                     XCTAssertEqual(child.frame, frame)
                     XCTAssertTrue(try XCTUnwrap(node.clipBox).bounds.contains(node.convert(point, from: root)))
@@ -320,8 +320,8 @@ class OverflowClipTests: XCTestCase {
                         shape["a"] = [["id": "spike", "k": "path", "s": 0.0, "d": 1.0, "n": 1.0, "fill": 3,
                                        "t": [0.0, 1.0], "v": [spike, spike]]]
                     }
-                    p.svg.scene(child.id, ["scene": ["box": [0, 0, 200, 200], "t": [1, 0, 0, 1, 0, 0], "els": [shape]]],
-                                layer: child.layer, dark: false, clock: 0)
+                    p.svg?.scene(child.id, ["scene": ["box": [0, 0, 200, 200], "t": [1, 0, 0, 1, 0, 0], "els": [shape]]],
+                                layer: child.layer, dark: false, clock: 0, limit: nil, tint: nil)
                     let tip = x ? CGPoint(x: 60, y: 50 + 130) : CGPoint(x: 50 + 130, y: 60)
                     XCTAssertTrue(try XCTUnwrap(node.clipBox).bounds.contains(node.convert(tip, from: root)),
                                   "clip x: \(x), animated: \(animated)")

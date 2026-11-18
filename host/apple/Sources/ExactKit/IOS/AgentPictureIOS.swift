@@ -24,7 +24,7 @@ extension Agent {
         // at the agent's clock first, as `clock` leaves it.
         if let now = session.clock, session.canvases.waitUntilReady() { session.canvases.settle(now: now) }
         presenter.canvas2d.waitForReplays()
-        SvgFilterLive.waitForDraws()
+        SvgLink.waitForDrawing?(1)
         let guests = session.webviews.snapshots().merging(session.natives.snapshots()) { web, _ in web }
         return AgentPicturePreparation(loading: loading, moving: moving, guests: guests)
     }

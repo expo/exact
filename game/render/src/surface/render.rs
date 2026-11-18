@@ -1,5 +1,6 @@
 //! World advancement and GPU frame ownership.
 use super::*;
+use crate::hooks::budget::{preparing, FramePeriod};
 
 pub(super) fn retain_primes<const ASSETS: bool>(
     render: &mut Option<(crate::renderer::RendererWithAssets<ASSETS>, Feed)>,
@@ -61,6 +62,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             idle_tick: None,
             samples: None,
             timing: Default::default(),
+            scheduled_cap: Default::default(),
             waiting: Default::default(),
             held_back: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -90,6 +92,110 @@ impl Later {
     }
     fn allows(&mut self) -> bool {
         !self.first && self.started.get_or_insert_with(Stamp::now).elapsed() < LATER_MS
+    }
+}
+
+struct Observer<'a, const ASSETS: bool> {
+    render: &'a mut Option<(crate::renderer::RendererWithAssets<ASSETS>, Feed)>,
+    placed: &'a mut crate::placed::Placements,
+    perf: &'a mut Perf,
+    trace: &'a mut Option<crate::trace::Trace>,
+    error: &'a mut Option<SurfaceError>,
+    hook_poses: &'a mut crate::hooks::Poses,
+    measure: Option<Clock>,
+    start: Option<Stamp>,
+}
+
+pub(super) fn observer<'a, const ASSETS: bool>(
+    render: &'a mut Option<(crate::renderer::RendererWithAssets<ASSETS>, Feed)>,
+    placed: &'a mut crate::placed::Placements,
+    perf: &'a mut Perf,
+    trace: &'a mut Option<crate::trace::Trace>,
+    error: &'a mut Option<SurfaceError>,
+    hook_poses: &'a mut crate::hooks::Poses,
+    measure: Option<Clock>,
+    start: Option<Stamp>,
+) -> impl exact_game::TickObserver + 'a {
+    Observer {
+        render,
+        placed,
+        perf,
+        trace,
+        error,
+        hook_poses,
+        measure,
+        start,
+    }
+}
+
+impl<const ASSETS: bool> exact_game::TickObserver for Observer<'_, ASSETS> {
+    fn before_tick(&mut self, left: u64) {
+        // Long advances only time the last 240 ticks. A live frame stamps its first before the advance.
+        if self.start.is_none() {
+            self.start = (self.measure.is_some() && left <= 240).then(Stamp::now);
+        }
+    }
+
+    fn after_tick(&mut self, world: &World, left: u32) {
+        let live = self.measure == Some(Clock::Live);
+        if let Some(start) = self.start.take() {
+            let ms = start.elapsed();
+            let hooks = self
+                .render
+                .as_mut()
+                .and_then(|(r, _)| r.hook_metrics.as_deref_mut());
+            self.perf.begin_cpu_sample(!live, hooks);
+            self.perf.tick.push(ms);
+            if live {
+                if let Some(report) = &mut self.perf.reporting {
+                    report.phases[0].push(ms);
+                }
+                if let Some(trace) = self.trace {
+                    trace.times[0] += ms;
+                }
+            }
+        }
+        if left >= 2 {
+            return;
+        }
+        if self.error.is_none() {
+            self.hook_poses.sync(world);
+            if let Err(e) = if ASSETS {
+                self.placed.feed(world)
+            } else {
+                self.placed.feed_primitive(world)
+            } {
+                *self.error = Some(SurfaceError(e.to_string()));
+            }
+            if let Some((renderer, feed)) = self.render {
+                if let Some(trace) = self.trace {
+                    trace.feed(world);
+                }
+                let timing = (self.measure == Some(Clock::Seekable) && !self.perf.rendering)
+                    .then(|| crate::perf::PipelineTiming::start(true));
+                let upload = self.measure.is_some().then(Stamp::now);
+                if let Err(e) = feed.feed(world, renderer) {
+                    *self.error = Some(SurfaceError(e.to_string()));
+                }
+                if let Some(upload) = upload {
+                    let ms = upload.elapsed();
+                    self.perf.feed.push(ms);
+                    if live {
+                        if let Some(report) = &mut self.perf.reporting {
+                            report.phases[1].push(ms);
+                        }
+                        if let Some(trace) = self.trace {
+                            trace.times[1] += ms;
+                        }
+                    }
+                }
+                if let Some(timing) = timing {
+                    drop(timing);
+                    self.perf.keep_pipeline_time(true);
+                }
+            }
+        }
+        retain_primes(self.render, self.placed, true);
     }
 }
 
@@ -139,6 +245,11 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             self.hooks.device_lost();
             self.ready_work = None;
             self.perf.pipeline_ready = crate::perf::timing().then_some(0.);
+            self.perf.pipeline_ready_seekable = if self.perf.rendering {
+                !self.perf.live
+            } else {
+                self.seekable
+            };
             self.render = Some((
                 crate::renderer::RendererWithAssets::<ASSETS>::configured(
                     device,
@@ -278,6 +389,17 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) -> bool {
+        let period = if H::ENABLED && H::ALLOWANCE > 0 && !frame.seekable {
+            FramePeriod::new(
+                frame.period_ms,
+                self.timing.interval_ms,
+                self.scheduled_cap.get(),
+            )
+        } else {
+            None
+        };
+        let frame_start = period.map(|_| Stamp::now());
+        let measure = self.perf.measure_frame;
         self.frame_ready = false;
         if !self.storage_fits(device) {
             return false;
@@ -315,14 +437,20 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         // The host's display period: the live scheduler looks ahead by it.
         sim.frame_period(frame.period_ms);
         // The first frame after a rest: the idle time runs no ticks.
+        let mut rest_ms = 0.0;
         if std::mem::take(&mut self.resting) && !frame.seekable {
+            self.perf.submitted_live = None;
             sim.wake(frame.now_ms);
+            rest_ms = self
+                .perf
+                .record_gap(sim.take_live_gap(), sim.picture_generation())
+                .idle_ms;
             // What woke it may change the pose: rest again only after it draws.
             self.idle_tick = None;
         }
         if !drawable {
             if frame.seekable {
-                sim.advance_with(
+                sim.advance_observed(
                     frame.now_ms,
                     Clock::Seekable,
                     observer(
@@ -332,8 +460,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                         &mut self.trace,
                         &mut self.error,
                         &mut self.hook_poses,
-                        false,
-                        0,
+                        measure.then_some(Clock::Seekable),
+                        None,
                     ),
                 );
             }
@@ -404,6 +532,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             self.format = Some(format);
             self.dirty = true;
             self.perf.pipeline_ready = crate::perf::timing().then_some(0.);
+            self.perf.pipeline_ready_seekable = frame.seekable;
         }
         if ASSETS {
             if let Some((renderer, _)) = &mut self.render {
@@ -449,14 +578,20 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         retain_primes(&mut self.render, &mut self.placed, true);
         self.perf.pixels = frame.pixels();
         self.perf.frame(frame.now_ms, frame.seekable);
-        let due = sim.ticks_due(frame.now_ms, Clock::Live);
-        let ticks = sim.advance_with(
+        let clock = if frame.seekable {
+            Clock::Seekable
+        } else {
+            Clock::Live
+        };
+        let picture = sim.picture_generation();
+        // Presentation owed and input stamping before a live frame's first tick are that tick's work.
+        let first = (measure
+            && clock == Clock::Live
+            && (1..=240).contains(&sim.ticks_due(frame.now_ms, Clock::Live)))
+        .then(Stamp::now);
+        let ticks = sim.advance_observed(
             frame.now_ms,
-            if frame.seekable {
-                Clock::Seekable
-            } else {
-                Clock::Live
-            },
+            clock,
             observer(
                 &mut self.render,
                 &mut self.placed,
@@ -464,8 +599,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 &mut self.trace,
                 &mut self.error,
                 &mut self.hook_poses,
-                !frame.seekable,
-                due,
+                measure.then_some(clock),
+                first,
             ),
         );
         self.presentation.sync(
@@ -474,7 +609,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             !G::paused(sim.args()),
             frame.seekable,
         );
-        self.perf.ticks.push(ticks as f64);
+        let mut gap = self.perf.record_gap(sim.take_live_gap(), picture);
+        gap.idle_ms += rest_ms;
+        crate::perf::warn_catch_up(self.perf.record_ticks::<G>(frame, ticks, gap));
         if self.error.is_some() {
             return false;
         }
@@ -497,10 +634,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return true;
         }
         let (renderer, feed) = self.render.as_mut().unwrap();
-        let start = (!frame.seekable).then(Stamp::now);
+        let start = measure.then(Stamp::now);
         self.hook_poses.track(self.hooks.entities(), sim.world());
         self.hook_poses.sync(sim.world());
-        let hook_time = if H::ENABLED {
+        let mut hook_time = if H::ENABLED {
             self.hook_clock.frame(
                 frame,
                 &self.timing,
@@ -510,6 +647,18 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         } else {
             crate::HookTime::default()
         };
+        if H::ENABLED && H::ALLOWANCE > 0 {
+            self.hook_clock
+                .budget
+                .get_or_insert_with(Box::default)
+                .frame(
+                    &mut hook_time,
+                    frame.now_ms,
+                    H::ALLOWANCE,
+                    period,
+                    frame_start,
+                );
+        }
         // The agent's armed timing keeps samples a snapshot's does not: arming
         // replaces the snapshot's, and with neither there is none.
         let armed = self.perf.armed();
@@ -574,7 +723,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             .quads
             .children(&renderer.device, &renderer.queue, &self.placed);
         let direct_frames = renderer.direct_frames;
-        self.perf.stats = match renderer.encode_hooked(
+        let encoded = renderer.encode_hooked(
             encoder,
             target,
             frame.pixels(),
@@ -583,7 +732,22 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             Some(sim.world()),
             hook_time,
             &self.hook_poses,
-        ) {
+            measure.then_some((&mut self.perf, frame.seekable)),
+        );
+        if let Some(end) = hook_time.deadline.map(|_| Stamp::now()) {
+            if let Some(prepare) = renderer
+                .hook_metrics
+                .as_mut()
+                .and_then(|m| m.prepare_budget.take())
+            {
+                let budget = self.hook_clock.budget.as_mut().unwrap();
+                budget.record(prepare.remaining_ms);
+                if encoded.is_ok() {
+                    budget.finish(prepare.end.elapsed_at(end));
+                }
+            }
+        }
+        self.perf.stats = match encoded {
             Ok(stats) => stats,
             Err(error) => {
                 self.error = Some(SurfaceError(error.to_string()));
@@ -591,18 +755,20 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             }
         };
         self.hook_poses.track(self.hooks.entities(), sim.world());
-        // Pipeline time, timed on live frames only, since the renderer was made.
-        // A seekable frame times nothing and leaves earlier live time pending.
-        let mut pipeline = crate::perf::pipeline_ms();
-        if start.is_some() {
-            pipeline += std::mem::take(&mut self.perf.pipeline_pending);
+        let pipeline = if measure {
+            self.perf
+                .begin_cpu_sample(frame.seekable, renderer.hook_metrics.as_deref_mut());
+            let pipeline = self.perf.frame_pipeline_time(frame.seekable);
             self.perf.pipeline.push(pipeline);
+            pipeline
+        } else {
+            0.
+        };
+        if !measure || self.perf.pipeline_ready_seekable != frame.seekable {
+            self.perf.pipeline_ready = None;
         }
         if let Some(ms) = &mut self.perf.pipeline_ready {
             *ms += pipeline;
-        }
-        if frame.seekable {
-            self.perf.pipeline_ready = None;
         }
         if !self.hooks.needs().contains(crate::Needs::PENDING)
             && self.hooks.error().is_none()
@@ -628,11 +794,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         if let Some(start) = start {
             let ms = start.elapsed();
             self.perf.encode.push(ms);
-            if let Some(report) = &mut self.perf.reporting {
-                report.phases[2].push(ms);
-            }
-            if let Some(trace) = &mut self.trace {
-                trace.times[2] = ms;
+            if !frame.seekable {
+                if let Some(report) = &mut self.perf.reporting {
+                    report.phases[2].push(ms);
+                }
+                if let Some(trace) = &mut self.trace {
+                    trace.times[2] = ms;
+                }
             }
         }
         if let Some(trace) = &mut self.trace {
@@ -667,9 +835,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             self.idle_tick = None;
             false
         };
-        let hooks = self.hooks.needs().contains(crate::Needs::ANIMATE)
-            || self.hooks.needs().contains(crate::Needs::PENDING);
+        let needs = self.hooks.needs();
+        let hooks = needs.contains(crate::Needs::ANIMATE) || preparing(needs, frame.seekable);
         self.resting = rests && !hooks && !asset_work;
+        if self.resting {
+            self.perf.submitted_live = None;
+        }
         (wants && !rests) || hooks || asset_work
     }
 
@@ -717,7 +888,11 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return;
         }
         sim.frame_period(frame.period_ms);
-        sim.advance_with(
+        let picture = sim.picture_generation();
+        let first = (1..=240)
+            .contains(&sim.ticks_due(frame.now_ms, Clock::Live))
+            .then(Stamp::now);
+        let ticks = sim.advance_observed(
             frame.now_ms,
             Clock::Live,
             observer(
@@ -727,10 +902,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 &mut self.trace,
                 &mut self.error,
                 &mut self.hook_poses,
-                true,
-                due,
+                Some(Clock::Live),
+                first,
             ),
         );
+        let gap = self.perf.record_gap(sim.take_live_gap(), picture);
+        crate::perf::warn_catch_up(self.perf.record_overload::<G>(frame.period_ms, ticks, gap));
         self.presentation
             .sync(sim.world(), sim.generation(), !G::paused(sim.args()), false);
     }
@@ -741,6 +918,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let Some(timed) = self.encoded.take() else {
             return;
         };
+        self.perf.submitted_live = self.sim.as_ref().and_then(|sim| {
+            (self.perf.live && !self.hidden && !self.resting && !G::paused(sim.args()))
+                .then(|| sim.picture_generation())
+        });
         let Some((renderer, _)) = &mut self.render else {
             return;
         };
@@ -751,9 +932,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         // `Game::PREPARE`'s pipelines, after the frame that sets their keys is
         // on its way: their time counts in the next frame's `pipelineMs`.
         if ASSETS && !G::PREPARE.is_empty() && self.ready_work.is_some() {
-            let _timing = crate::perf::PipelineTiming::start(self.perf.live);
+            let _timing = crate::perf::PipelineTiming::start(self.perf.measure_frame);
             renderer.warm_prepared(G::PREPARE);
-            self.perf.pipeline_pending += crate::perf::pipeline_ms();
+            self.perf.keep_pipeline_time(!self.perf.live);
         }
         let frame = self.sim.as_mut().map_or(0, Sim::trace_frame);
         if let Some(timing) = &mut self.gpu_timing {

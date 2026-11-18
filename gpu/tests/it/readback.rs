@@ -141,3 +141,96 @@ fn a_surface_polls_its_post_submit_map_until_it_can_rest() {
     assert_eq!(status.value, Some(37));
     assert!(status.pending.is_none());
 }
+
+#[derive(Default)]
+struct Reloading {
+    generation: u64,
+    phase: u8,
+}
+
+impl Surface for Reloading {
+    fn bind(&mut self, inputs: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+        if let Some(Value::Number(phase)) = inputs.first() {
+            self.phase = *phase as u8;
+            self.generation += 1;
+        }
+        Ok(())
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn is_empty(&self) -> bool {
+        self.phase == 0
+    }
+
+    fn frame_ready(&self) -> bool {
+        self.phase == 2
+    }
+
+    fn render(
+        &mut self,
+        _: &Frame,
+        _: &wgpu::Device,
+        _: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        _: wgpu::TextureFormat,
+    ) -> bool {
+        if self.phase != 2 {
+            return true;
+        }
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::RED),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        false
+    }
+}
+
+#[test]
+fn readback_retains_a_reloading_picture_but_discards_an_accepted_clear() {
+    static REGISTRY: exact_gpu::Registry = exact_gpu::Registry {
+        surfaces: &[("reloading", 1, || Box::<Reloading>::default())],
+        shaders: &[],
+    };
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut module = exact_gpu::Module::new(&REGISTRY);
+    module.set_gpu(gpu);
+    let id = module.create_headless("reloading").unwrap();
+    let frame = Frame {
+        width: 2.,
+        height: 2.,
+        scale: 1.,
+        now_ms: 0.,
+        seekable: true,
+        period_ms: 0.,
+        children_generation: 0,
+        shader_generation: 0,
+        headroom: 1.,
+    };
+    for (phases, expected) in [
+        (&[2.][..], [255, 0, 0, 255]),
+        (&[1.][..], [255, 0, 0, 255]),
+        (&[0., 1.][..], [0, 0, 0, 0]),
+        (&[2.][..], [255, 0, 0, 255]),
+        (&[0.][..], [0, 0, 0, 0]),
+    ] {
+        for phase in phases {
+            assert!(module.bind(id, &[Value::Number(*phase)], None));
+        }
+        let (pixels, _) = module.readback(id, &frame).unwrap();
+        assert_eq!(pixels.at(0, 0), expected, "phases {phases:?}");
+    }
+}

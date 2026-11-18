@@ -413,7 +413,7 @@ extension NodeView {
         }
         textRasterPending = false
         CATransaction.commit()
-        presenter?.boxFilters.changed(self)
+        presenter?.boxFilters?.changed(self)
         repaintThrough()
     }
 

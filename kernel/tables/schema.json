@@ -5165,7 +5165,7 @@
       "rare": true,
       "layout": true,
       "default": 0,
-      "_comment": "@ref LLP 1123 D4: `-exact-safe-area`, on a content owner's authored root (a route, a tab panel): the edges whose automatic clearance of the owner's chrome is off, as SwiftUI's `ignoresSafeArea(.container, edges:)`, as SafeArea's bits. `auto` (0) clears every edge, `none` none. Authored padding and the owner's allocation are unchanged; `var(--exact-safe-area-inset-*)` still reads the inset. Not inherited."
+      "_comment": "Main's model (expo/exact#36), which LLP 1123 replaces at activation with D4's `-exact-safe-area-ignore` (§\"What it replaces\"): `-exact-safe-area`, on a content owner's authored root (a route, a tab panel): the edges whose automatic clearance of the owner's chrome is off, as SwiftUI's `ignoresSafeArea(.container, edges:)`, as SafeArea's bits. `auto` (0) clears every edge, `none` none. Authored padding and the owner's allocation are unchanged; `var(--exact-safe-area-inset-*)` still reads the inset. Not inherited."
     },
     {
       "bit": 243,
@@ -5175,7 +5175,7 @@
       "inherited": true,
       "layout": true,
       "default": 0,
-      "_comment": "@ref LLP 1123 D9: an author's `--exact-safe-area-inset-top`, a length with no percentage, which this node's subtree reads through `var(--exact-safe-area-inset-top)` in place of the content owner's local inset. Inherited as its computed length (an `em` resolved where it is declared); one invalid at computed-value time (a `var()` cycle) is unset. The host's own value stands on each owner's root, below any authored one."
+      "_comment": "Main's model, which LLP 1123 replaces at activation with D5's captures (§\"What it replaces\"): an author's `--exact-safe-area-inset-top`, a length with no percentage, which this node's subtree reads through `var(--exact-safe-area-inset-top)` in place of the content owner's local inset. Inherited as its computed length (an `em` resolved where it is declared); one invalid at computed-value time (a `var()` cycle) is unset. The host's own value stands on each owner's root, below any authored one."
     },
     {
       "bit": 244,

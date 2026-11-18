@@ -43,7 +43,12 @@ pub(crate) fn read(
     let json: Value = serde_json::from_str(text).map_err(|e| refuse(format!("not JSON: {e}")))?;
     let kind = json["kind"].as_str().unwrap_or_default();
     let mut file = File {
-        shapes: shapes(&json, span).map_err(refuse)?,
+        shapes: shapes(
+            &json,
+            &json::shape_order(text).map_err(|e| refuse(e.to_string()))?,
+            span,
+        )
+        .map_err(refuse)?,
         ..File::default()
     };
     match kind {
@@ -150,14 +155,22 @@ fn groups(json: &Value, file: &File) -> Result<(), String> {
     Ok(())
 }
 
-/// Each shape, its fields in name order: `serde_json` here keeps no key
-/// order, and none is meant, since a record crosses the seam by name.
-fn shapes(json: &Value, span: Span) -> Result<Vec<ShapeDecl>, String> {
+/// Model-viewer input records cross the GPU boundary in LLP 1133.039 D1's order.
+fn shapes(
+    json: &Value,
+    order: &std::collections::BTreeMap<String, Vec<String>>,
+    span: Span,
+) -> Result<Vec<ShapeDecl>, String> {
     object(&json["shapes"])
         .iter()
         .map(|(name, fields_json)| {
             let fields = match keyed(fields_json) {
                 Some(keys) => keyed_fields(name, keys, span)?,
+                None if json["name"] == "@exact/model-viewer"
+                    && matches!(name.as_str(), "ModelNode" | "ModelHotspot") =>
+                {
+                    fields(order[name].iter().map(|key| (key, &fields_json[key])), span)?
+                }
                 None => fields(object(fields_json), span)?,
             };
             Ok(ShapeDecl {
@@ -210,8 +223,11 @@ fn keyed_fields(shape: &str, keys: &Map<String, Value>, span: Span) -> Result<Ve
         .collect()
 }
 
-fn fields(map: &Map<String, Value>, span: Span) -> Result<Vec<Field>, String> {
-    map.iter()
+fn fields<'a>(
+    map: impl IntoIterator<Item = (&'a String, &'a Value)>,
+    span: Span,
+) -> Result<Vec<Field>, String> {
+    map.into_iter()
         .map(|(name, ty)| {
             // A path option (LLP 1133.009 D10 item 4) is a string to Contract;
             // a list of them (`"list": true`, LLP 1133.024 D16: a mail's

@@ -64,7 +64,7 @@ impl Outcome {
         );
         if let Some(message) = &self.message {
             out.push_str(",\"message\":");
-            exact_runner::agent::quote(message, &mut out);
+            exact_runner::json::quote(message, &mut out);
         }
         out.push('}');
         out

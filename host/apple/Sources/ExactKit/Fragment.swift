@@ -78,7 +78,7 @@ extension Presenter {
         }
     }
 
-    func flushFragment(finishing: Bool = false) {
+    package func flushFragment(finishing: Bool = false) {
         guard let hold = fragmentHeld else { return }
         if finishing { hold.finishing = false }
         guard let route = hold.route, let target = hold.target,
@@ -105,7 +105,7 @@ extension Presenter {
             hold.started = true
             if target !== route, !startAtFragment(target, hold) { return }
         }
-        if session?.rasters.loading(inside: route) == true { return }
+        if session?.rasters?.loading(inside: route) == true { return }
         #if !os(macOS)
         if settlesElementScroll { return }
         #endif
@@ -192,15 +192,16 @@ extension Presenter {
         holdFragment(route, in: route, name: name)
     }
 
-    /// @ref LLP 1153 D5.1 — a page that arrived with no fragment: each scroller in the route where it opens, the
-    /// offsets its `scrollTop` and `scrollLeft` give, the end of a list that opens there, else its start; one under
-    /// `scroll-restoration="manual"` stays where it is.
+    /// @ref LLP 1153 D5.1 — no fragment: each scroller in the route starts over, at the offsets its `scrollTop` and
+    /// `scrollLeft` give, the end of a list that opens there, else its start, at once; one under
+    /// `scroll-restoration="manual"` stays where it is. The scrollers above the route bring its start into view.
     private func arrive(_ route: NodeView, among nodes: [NodeView], visit: String) {
         for node in nodes where (node === route || node.isDescendant(of: route)) && node.props["scrollRestoration"] != "manual" {
             #if os(macOS)
             guard node.scroll != nil else { continue }
             #else
             guard node.scrollView != nil else { continue }
+            if node.groupedOwner { node.scrollView?.layoutIfNeeded() }
             #endif
             if node.props["scrollStart"] == "end" {
                 node.pendingScrollTop = .greatestFiniteMagnitude
@@ -208,19 +209,9 @@ extension Presenter {
                 node.pendingScrollTop = node.props["scrollTop"].flatMap(Double.init) ?? 0
                 node.pendingScrollLeft = node.props["scrollLeft"].flatMap(Double.init) ?? 0
             }
-            #if os(macOS)
             collections.userIntent(node.id)
-            node.applyPendingScroll()
-            #endif
+            node.applyPendingScroll(instant: true)
         }
-        #if os(macOS)
-        let scrolls = route.scroll != nil
-        #else
-        finishScrollPositions(restoring: false)
-        let scrolls = route.scrollView != nil
-        #endif
-        // The scrollers that present the route, above it. A route that scrolls itself is placed already: aligning it
-        // would move its own scroller to its start.
-        if scrolls { cancelFragment() } else { holdFragment(route, in: route, name: route.props["id"] ?? "route \(visit)") }
+        holdFragment(route, in: route, name: route.props["id"] ?? "route \(visit)")
     }
 }

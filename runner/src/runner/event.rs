@@ -11,6 +11,7 @@ pub(super) mod frame_navigation;
 mod keyboard;
 mod view_event;
 pub use keyboard::KeyboardEvent;
+pub(in crate::runner) use view_event::absent_is_none;
 
 const BINDING_ARGS: usize = 8;
 const BINDING_STRING: usize = 1024;

@@ -168,6 +168,7 @@ fn manifest_compatibility_metadata_becomes_portal_filters() {
             "x86_64-unknown-linux-gnu",
             &manifest,
             Some(""),
+            false,
         )
         .unwrap();
         assert_eq!(

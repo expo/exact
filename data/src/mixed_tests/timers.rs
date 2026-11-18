@@ -1,5 +1,9 @@
 use super::{run, token, value_of};
 use crate::{Mixed, Placed};
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     Answer, DataError, DataSource, Dispatch, InFlight, Outcome, Placement, Request, Store, Target,
     Value,
@@ -25,7 +29,7 @@ impl DataSource for Clocked {
     ) -> Result<Answer, DataError> {
         if source == "sleep" {
             return Ok(Answer::Later(
-                Request::continuation(1).due(store.clock_ms() as u64 + 450),
+                Request::continuation::<TestWork>(1).due(store.clock_ms() as u64 + 450),
             ));
         }
         store.set("shared", &store.clock_ms().to_string())?;

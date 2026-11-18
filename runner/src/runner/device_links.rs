@@ -119,6 +119,12 @@ impl<D: DataSource> DeviceLinks<D> {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// This runner, linking every device capability: the plain boots'.
+    pub(crate) fn linking_every_device(mut self) -> Self {
+        self.device_links = DeviceLinks::ALL;
+        self
+    }
+
     /// What this runner links of the device capabilities: the web host's
     /// entry sets it after boot; the plain boots link every one.
     pub fn set_device_links(&mut self, links: DeviceLinks<D>) {

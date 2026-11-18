@@ -49,7 +49,7 @@ impl<D: DataSource> Bridge<D> {
             Err(reason) => return self.refuse(&reason),
         };
         data.bind(&plan);
-        let mut store = Store::new(data.grants(), []);
+        let mut store = Store::new_linked(data.grants(), [], self.links.runner.grants);
         let answer = exact_runner::time::launching_with(self.launch_facts.clone(), || {
             data.activate()?;
             data.answer(&mut store, plan.str(signature.name), &args)
@@ -57,7 +57,7 @@ impl<D: DataSource> Bridge<D> {
         let result = match answer {
             Ok(Answer::Now(value)) if value.conforms(&plan, signature.ty) => {
                 let mut json = String::new();
-                exact_runner::agent::typed_json(&plan, signature.ty, &value, &mut json);
+                exact_runner::json::typed_json(&plan, signature.ty, &value, &mut json);
                 serde_json::json!({"entryRefresh":"timeline", "timeline":serde_json::from_str::<serde_json::Value>(&json).unwrap()})
             }
             Ok(Answer::Now(_)) => {
@@ -196,6 +196,7 @@ impl<D: DataSource> Bridge<D> {
                     host.listen_io(&**executor, self.document_owner);
                 }
                 self.presenter_hooks(&mut host, &hooks);
+                self.wake = hooks.wake.map(|w| (w, hooks.wake_ctx));
                 self.executor = executor;
                 let batch = Host::ending(self.host.replace(host), batch);
                 self.launch_layout.insets = None;

@@ -184,7 +184,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The commit stood: the cursors of the answers it delivered hold.
-    pub(in crate::runner) fn samples_stood(&mut self) {
+    pub(super) fn samples_stood_linked(&mut self) {
         let s = &mut self.extensions.samples;
         for (reader, sequence) in s.landing.drain(..) {
             s.cursors.insert(reader, sequence);
@@ -192,12 +192,12 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The commit was refused: its answers delivered nothing.
-    pub(in crate::runner) fn samples_refused(&mut self) {
+    pub(super) fn samples_refused_linked(&mut self) {
         self.extensions.samples.landing.clear();
     }
 
     /// The page was hidden or shown at the session clock's now.
-    pub(in crate::runner) fn samples_visibility(&mut self, hidden: bool) {
+    pub(super) fn samples_visibility_linked(&mut self, hidden: bool) {
         let now = self.now_ms;
         let spans = &mut self.extensions.samples.hidden;
         match (hidden, spans.last_mut()) {
@@ -526,7 +526,7 @@ impl<D: DataSource> Runner<D> {
 
     /// The substitute's readers no resource holds any longer are let go, with
     /// their grids and cursors (a released source's acquisition stops).
-    pub(in crate::runner) fn release_sampled(&mut self) {
+    pub(super) fn release_sampled_linked(&mut self) {
         let keys: Vec<String> = (self.plan.modules.iter())
             .filter(|m| self.substitute_polls(m) && self.route(m) == Route::Substitute)
             .map(|m| self.key(m))
@@ -534,11 +534,12 @@ impl<D: DataSource> Runner<D> {
         let mut held = std::collections::BTreeSet::new();
         for key in keys {
             let resources = &self.resources;
-            let readers = self.extensions.readers.entry(key.clone()).or_default();
+            let ext = &mut *self.extensions;
+            let readers = ext.readers.entry(key.clone()).or_default();
             readers.retain(|i, _| resources.get(*i).is_some_and(|row| row.state.is_some()));
             held.extend(readers.keys().copied());
             let groups: Vec<String> = readers.values().cloned().collect();
-            let samples = &mut self.extensions.samples;
+            let samples = &mut ext.samples;
             // A data-code reader's grid is kept while its cursor is.
             let data = samples.data.lock().map(|d| d.clone()).unwrap_or_default();
             samples.grids.retain(|(k, g), _| {
@@ -625,7 +626,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Whether the substitute feeds a canvas input: a host advancing the
     /// agent's clock then steps each world a display frame at a time.
-    pub fn surface_sensor_inputs(&self) -> bool {
+    pub(super) fn surface_sensor_inputs_linked(&self) -> bool {
         !self.extensions.samples.inputs.is_empty() || !self.extensions.samples.ended.is_empty()
     }
 
@@ -635,7 +636,7 @@ impl<D: DataSource> Runner<D> {
     /// "dropped","at"}` or `{"t":"sensorEnded","sensor","at"}` (D6). Values
     /// are the declared `values` fields of the sensor's source, a list one
     /// spread, padded with zeros to four.
-    pub fn surface_sensor_events(&mut self, to_ms: f64) -> Vec<(String, String)> {
+    pub(super) fn surface_sensor_events_linked(&mut self, to_ms: f64) -> Vec<(String, String)> {
         let mut out: Vec<(f64, String, String)> = Vec::new();
         let inputs = self.extensions.samples.inputs.clone();
         let mut advanced = Vec::new();

@@ -43,7 +43,7 @@ function request(input, init, redirect, protocols) {
   const idle = init.exactIdleTimeout;
   if (idle !== undefined && (!Number.isInteger(idle) || idle < 1 || idle > 3600000)) throw new TypeError('exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000');
   if (idle !== undefined && (upload || init.exactLongPoll !== undefined || !(/^(wss?|https?):/i.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url)))) throw new TypeError('exactIdleTimeout: only a WebSocket, event or byte stream takes an idle timeout');
-  return { method, url, signal, headers: [...new Headers(init.headers ?? request?.headers ?? [])], raw, bodyFrom, cache: init.cache ?? request?.cache, mode: init.mode ?? request?.mode, redirect, maxResponseBytes: independent ?? 1048576, longPoll: longPollOf(init.exactLongPoll, method, url), upload, timeoutMs, idleTimeoutMs: idle, protocols };
+  return { method, url, signal, headers: [...new Headers(init.headers ?? request?.headers ?? [])], raw, bodyFrom, credentials: init.credentials ?? request?.credentials, cache: init.cache ?? request?.cache, mode: init.mode ?? request?.mode, redirect, maxResponseBytes: independent ?? 1048576, longPoll: longPollOf(init.exactLongPoll, method, url), upload, timeoutMs, idleTimeoutMs: idle, protocols };
 }
 // `exactUploadProgress` (LLP 1016.000 D10), as js/src/binary.js `uploadOf` checks it.
 function uploadOf(init, method, url, redirect) {
@@ -276,6 +276,7 @@ export function open({ input, init, redirect, protocols, origin }, conv, grantSe
   return streamed(req, grantSet, timed, controller, (path, set) => readBodyFile(path, set, controller), protocol)
     .then(o => {
       gate()?.ended(controller.streamName);
+      if (o.refused) return o;
       if (o.close) journal.push(`t=${clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
       return inOrder(() => value(o.close ? { type: 'close', data: '', lastEventId: '', coalesced: 0, ...o.close } : o.kind
       ? { type: 'error', data: '', lastEventId: '', coalesced: 0, kind: KINDS[o.kind], message: said.decode(o.body), status: 0 }

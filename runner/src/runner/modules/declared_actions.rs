@@ -8,7 +8,7 @@ use super::{Json, Runner};
 impl<D: DataSource> Runner<D> {
     /// What the app's literals declare, by `<extension>.<name>`: each row's
     /// `declared` (LLP 1133.004 stage 2), `{option: [value, …]}`.
-    pub fn declared_values(&self) -> Json {
+    pub(super) fn declared_values_linked(&self) -> Json {
         let mut out = serde_json::Map::new();
         for row in &self.plan.modules {
             let declared = &self.substitute(row)["declared"];
@@ -29,7 +29,7 @@ impl<D: DataSource> Runner<D> {
     /// a host whose platform hands back the record rather than its own
     /// registration (Android's, LLP 1133.004.000 D5) raises the action only
     /// then, so a button an update removed or changed raises nothing.
-    pub fn declares_action(&self, extension: &str, action: &Json) -> bool {
+    pub(super) fn declares_action_linked(&self, extension: &str, action: &Json) -> bool {
         declared_action(&self.declared_values(), extension, action)
     }
 }

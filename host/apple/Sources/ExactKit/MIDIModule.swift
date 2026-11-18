@@ -215,7 +215,7 @@ final class MIDIHub {
 
 /// One session's MIDI: the runner's ops to the hub, the hub's reports to
 /// the runner.
-final class MIDIOutput {
+final class MIDIOutput: AudioOutputting {
     private let log: (String) -> Void
     private let deliver: (String) -> Void
     private let library: () -> MIDILibrary?
@@ -313,4 +313,9 @@ final class MIDIOutput {
         fputs(line + "\n", stderr)
         log(line)
     }
+}
+
+extension MIDIOutput {
+    /// The agent reports no MIDI state.
+    var state: [String: Any] { [:] }
 }

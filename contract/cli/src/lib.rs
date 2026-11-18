@@ -87,7 +87,7 @@ pub use map::{plan_digest, SourceMap};
 pub use module_rust::module_rust;
 pub use preload::preload_expression;
 pub use resolve::Origin;
-pub use rust::{compile_path_for_rust, rust};
+pub use rust::{build_rust, compile_path_for_rust, rust};
 pub use sources::{
     code_beside, design_name_error, design_path, with_contract_texts, with_design_text, GraphBase,
     Package, Source, SourceGraph,
@@ -990,14 +990,19 @@ fn compile_loaded(
     let (mut plan, sites) = compiled.map_err(|all| {
         joined(
             all.into_iter()
-                .map(|e| sources.resolve(e))
+                .map(|e| {
+                    if e.file.is_some() {
+                        e
+                    } else {
+                        sources.resolve(e)
+                    }
+                })
                 .collect::<Vec<_>>(),
         )
     })?;
     if !surface.is_empty() {
         return Err(surface);
     }
-    package_gpu::check(&app_root, &plan).map_err(|e| vec![e])?;
     let placed = package_views::placed(&plan);
     for v in views.iter().filter(|v| placed.contains(&v.tag)) {
         let binds: Vec<&str> = v.binds.iter().map(String::as_str).collect();
@@ -1120,10 +1125,13 @@ fn compile_file_warned(
             // A component nothing uses is not lowered; its literal values
             // are checked as the lint checks them (LLP 1156.005 D3).
             let unused = contract_lower::lint_unused(file);
-            match unused.is_empty() {
-                true => Ok(built),
-                false => Err(each(unused, |e| e)),
+            if !unused.is_empty() {
+                return Err(each(unused, |e| e));
             }
+            if let Some(app) = asset_root {
+                package_gpu::check(app, &checked.expanded.root.view)?;
+            }
+            Ok(built)
         }),
         Err(all) => {
             if warned.is_some() {

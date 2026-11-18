@@ -82,7 +82,13 @@ impl<D: DataSource> Runner<D> {
         name: &str,
         asked: Option<CallOrigin>,
     ) -> Result<(), String> {
-        refusal(name, asked.unwrap_or_else(|| self.origin_for(None)))
+        let origin = asked.unwrap_or_else(|| self.origin_for(None));
+        match self.links.grants {
+            Some(link) => (link.process)(name, origin),
+            None => Err(format!(
+                "{name}: this archive links no I/O, which runs programs"
+            )),
+        }
     }
 
     /// The refusal of process request `request` by its kind and origin,
@@ -329,7 +335,7 @@ impl<D: DataSource> Runner<D> {
 /// Why `name` of `@exact/child-process` is refused from `origin`: a name
 /// its declaration does not list, or one whose `origin` is `app` called
 /// from a tool, a wake or the device (`person-required`, LLP 1133.007 D13).
-fn refusal(name: &str, origin: CallOrigin) -> Result<(), String> {
+pub(crate) fn refusal(name: &str, origin: CallOrigin) -> Result<(), String> {
     static NAMES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     let declaration = NAMES.get_or_init(|| serde_json::from_str(DECLARATION).unwrap_or_default());
     let declared =

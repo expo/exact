@@ -1,5 +1,5 @@
-//! A setting a launch may give (LLP 1153.002): the bake's checks of the
-//! launch module's name and of the module's `env.launch` grant lines.
+//! Resolved grant locations (LLP 1016 D6) and the launch settings they admit
+//! (LLP 1153.002), including the reserved launch module and grant lines.
 
 /// The launch module's name, whatever its extension, or a directory, in the
 /// app's captured files: the entry's and app.ts's `./__exact_launch` is the
@@ -31,6 +31,32 @@ pub(crate) fn settings(stage: &std::path::Path, grants: &str) -> Result<serde_js
     };
     self::grants(grants, &settings)?;
     Ok(settings)
+}
+
+/// Each resolved grant line and its source location (LLP 1016 D6).
+pub(crate) fn grant_sources(
+    stage: &std::path::Path,
+    grants: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let bytes = std::fs::read(stage.join("__exact_grants.json")).map_err(|e| e.to_string())?;
+    let mut sources: Vec<serde_json::Value> =
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let lines: Vec<_> = grants
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if sources.len() != lines.len() {
+        return Err("app.ts: resolved grants differ from the bundled grants".into());
+    }
+    for (source, line) in sources.iter_mut().zip(lines) {
+        let authored = source["grant"].as_str().ok_or("missing resolved grant")?;
+        if line != authored && line != format!("{authored} development") {
+            return Err("app.ts: resolved grants differ from the bundled grants".into());
+        }
+        source["grant"] = line.into();
+    }
+    Ok(sources)
 }
 
 /// A host answers a launch's value only for a name the module's grants carry

@@ -2,6 +2,8 @@ import IOSurface
 import QuartzCore
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// A live filter picture under load (LLP 1055.000 D14): two pictures
 /// updated from the main thread faster than their draws land, at sizes

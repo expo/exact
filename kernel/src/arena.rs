@@ -296,7 +296,7 @@ impl NodeArena {
         self.reserving.clear();
         self.ignoring.clear();
         self.readers.clear();
-        self.observations = Default::default();
+        self.observations = self.observations.after_reset();
         self.frag = Default::default();
         self.relative = Default::default();
         self.symbols_owed.clear();

@@ -9,7 +9,7 @@ export function sendRequest(t, land, out, data, inflight, say) {
     const done = (o, more) => {
       if (t.closed) return;
       if (t.waiting && !(more && t.upload)) { t.waiting = false; counted(t, inflight); } // an upload is in flight until its reply
-      // A render's storage refusal starts no work and leaves the source pending for adoption (LLP 1048.000 D9).
+      // A render's unavailable storage or visitor leaves the source pending for adoption (LLP 1048.000 D9).
       if (o.refused) { t.refused = o.refused; return; }
       t.elapsed = Math.max(0, Math.round(performance.now() - started));
       if (more) { const ms = o.streamed ?? [o]; t.messages += o.messages ?? ms.length; t.coalesced += ms.reduce((n, m) => n + (m.coalesced ?? 0), 0); o.more = true; } else { Open.delete(t); longPollEnded(t); }
@@ -41,7 +41,8 @@ export function sendRequest(t, land, out, data, inflight, say) {
       // longer the answer.
       t.late = open;
       if (globalThis.__exactRender) trackAnswer(t);
-      t.promise.then(v => t.stream || done({ v }), e => t.stream || done({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
+      t.promise.then(v => t.stream || done({ v }), e => t.stream || done(globalThis.__exactRender && e?.renderDeferred
+        ? { refused: e.message } : { error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
     }
   });
 }

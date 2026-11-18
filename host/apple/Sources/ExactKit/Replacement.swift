@@ -26,7 +26,7 @@ public enum ExactReplacementOutcome: Equatable {
 }
 
 /// The producer's final result, distinct from `apply`'s immediate answer.
-enum ReplacementCompletion: Equatable {
+package enum ReplacementCompletion: Equatable {
     case applied
     case ended(ExactReplacementOutcome, String)
 }
@@ -37,7 +37,7 @@ extension ExactApp {
     /// so no interaction holds it. `producer`: what brought it, which
     /// `ReplacementQueue.withdraw` names when it goes. `finished` hears a
     /// held one's end.
-    func applyTogether(_ bytes: Data, label: String, resolver candidateResolver: AssetResolver, token: UInt64, identity: String? = nil, module: ExactModule? = nil, development: Bool = false, now: Bool = false, producer: AnyObject? = nil, commit: @escaping () -> Bool, finished: @escaping (ReplacementCompletion) -> Void = { _ in }) -> ExactApplyResult {
+    package func applyTogether(_ bytes: Data, label: String, resolver candidateResolver: AssetResolver, token: UInt64, identity: String? = nil, module: ExactModule? = nil, development: Bool = false, now: Bool = false, producer: AnyObject? = nil, commit: @escaping () -> Bool, finished: @escaping (ReplacementCompletion) -> Void = { _ in }) -> ExactApplyResult {
         guard !transaction else { return .refused("a replacement is already committing") }
         var requestsSince: TimeInterval?
         return replacements.submit(token: token, now: now, producer: producer, attempt: { [unowned self] in

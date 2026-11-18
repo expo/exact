@@ -194,7 +194,7 @@ impl<D: super::DataSource> Runner<D> {
                     match arg.as_ref().and_then(Value::as_str) {
                         Some(s @ ("light" | "dark")) => {
                             let mut text = String::new();
-                            crate::agent::quote(s, &mut text);
+                            crate::json::quote(s, &mut text);
                             self.store.keep(SCHEME, text.into_bytes());
                         }
                         _ => self.store.forget_kept(SCHEME),

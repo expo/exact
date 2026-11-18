@@ -13,6 +13,81 @@ fn drawn_counter(s: &Sim<Counter>) -> f64 {
         (s.world().tick() - 1) as f64 + f64::from(s.alpha())
     }
 }
+
+#[test]
+fn live_gap_note_records_advance_pause_wake_and_timed_bind() {
+    let mut s = live(60.0);
+    assert_eq!(s.advance(300., Clock::Live), 15);
+    assert_eq!(
+        s.take_live_gap(),
+        Some(LiveGap::Advance {
+            excess_ms: 50.,
+            ticks_owed: 18,
+            paused: false
+        })
+    );
+    assert_eq!(s.take_live_gap(), None);
+    s.bind(&CounterArgs { paused: true }.values(), None)
+        .unwrap();
+    assert_eq!(s.advance(2300., Clock::Live), 0);
+    assert_eq!(
+        s.take_live_gap(),
+        Some(LiveGap::Advance {
+            excess_ms: 1750.,
+            ticks_owed: 120,
+            paused: true
+        })
+    );
+    s.bind(&CounterArgs::default().values(), None).unwrap();
+    s.wake(4300.);
+    assert_eq!(s.take_live_gap(), Some(LiveGap::Wake { excess_ms: 1750. }));
+    assert_eq!(s.advance(4300., Clock::Live), 0);
+    assert_eq!(s.take_live_gap(), None);
+    s.bind(&CounterArgs { paused: true }.values(), Some(4600.))
+        .unwrap();
+    assert_eq!(
+        s.take_live_gap(),
+        Some(LiveGap::Advance {
+            excess_ms: 50.,
+            ticks_owed: 18,
+            paused: false
+        })
+    );
+}
+
+#[test]
+fn live_gap_note_is_outside_saves_and_cleared_by_restore() {
+    let mut s = live(60.0);
+    key(&mut s, "KeyE", true, 130.0);
+    s.advance(300., Clock::Live);
+    let saved = s.save().unwrap();
+    assert!(s.take_live_gap().is_some());
+    assert_eq!(s.save().unwrap(), saved);
+    s.advance(600., Clock::Live);
+    s.restore(&saved).unwrap();
+    assert_eq!(s.take_live_gap(), None);
+}
+
+#[test]
+fn live_gap_note_starts_above_the_clamp_boundary() {
+    for gap in [249.999, 250.0, 250.001] {
+        let mut s = live(60.0);
+        let ticks = s.advance(gap, Clock::Live);
+        if gap > 250.0 {
+            assert_eq!(
+                s.take_live_gap(),
+                Some(LiveGap::Advance {
+                    excess_ms: gap - 250.0,
+                    ticks_owed: u64::from(ticks),
+                    paused: false,
+                })
+            );
+        } else {
+            assert_eq!(s.take_live_gap(), None);
+        }
+    }
+}
+
 #[test]
 fn unknown_period_has_no_lookahead_and_duplicates_preserve_the_pose() {
     let mut s = sim();

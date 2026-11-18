@@ -242,7 +242,11 @@ impl Module {
             }) if self.parked.iter().any(|(_, p)| p.call == call) => Ok(None),
             Ok(Step::Pending { call, ticket, due }) => {
                 let request = if matches!(ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET) {
-                    timer_due(Request::continuation(call), ticket, due)
+                    timer_due(
+                        Request::continuation::<crate::ModuleTurn>(call),
+                        ticket,
+                        due,
+                    )
                 } else {
                     let Some(mut request) = self.take_request(ticket) else {
                         self.finish_let_go();
@@ -430,7 +434,11 @@ impl Module {
             Step::Pending { call, ticket, due }
                 if matches!(ticket, WAITING | YIELDED | secrets::TICKET) =>
             {
-                let request = timer_due(Request::continuation(call), ticket, due);
+                let request = timer_due(
+                    Request::continuation::<crate::ModuleTurn>(call),
+                    ticket,
+                    due,
+                );
                 self.park(key, call, ticket, &request)?;
                 Ok(Answer::Later(request))
             }
