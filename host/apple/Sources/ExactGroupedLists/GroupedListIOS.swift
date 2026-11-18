@@ -225,7 +225,6 @@ final class GroupedListHost: GroupedLists {
     /// that changes only what is inside its rows gives the same JSON again.
     var reads: [UInt32: (json: Data, model: GroupedListModel?, rows: [UInt32: (NSDictionary, GroupedListModel.Row)])] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
-
     func rows(for id: UInt32) -> [[UInt32]]? {
         #if os(iOS)
         return model(id)?.sections.map { $0.rows.map(\.view) }
@@ -249,7 +248,6 @@ final class GroupedListHost: GroupedLists {
 
     /// After a batch. `changed` is the touched views and their ancestors; a
     /// list outside it keeps its model and only carries its rows again.
-
     func sync(changed: Set<UInt32>? = nil) {
         var live = Set<UInt32>()
         // A live edit of the theme's roles (LLP 1121 stage 5) changes no row,
@@ -275,7 +273,6 @@ final class GroupedListHost: GroupedLists {
         for id in Array(lists.keys) where !live.contains(id) { lists.removeValue(forKey: id)?.remove(); reads[id] = nil }
         tell()
     }
-
     func reset() {
         for list in lists.values { list.remove() }
         lists.removeAll()
@@ -470,7 +467,6 @@ final class GroupedListHost: GroupedLists {
     func hidSection(_ node: NodeView) -> Bool { lists.values.contains { $0.hiddenSection(node) } }
     func hides(_ node: NodeView) -> Bool { lists.values.contains { $0.hidesAuthored(node) } }
     func projects(_ view: UIView) -> Bool { lists.values.contains { $0.carried.keys.contains((view as? NodeView)?.id ?? 0) } }
-
     func projectedRect(for node: NodeView, in scroll: UIScrollView) -> CGRect? {
         lists.values.first { $0.collection === scroll }?.projectedRect(for: node)
     }

@@ -602,9 +602,8 @@ pub struct Runner<D: DataSource> {
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
     window_name: String,               // the page's `name` (LLP 1030.004 D2)
-    // What `exactPage().shownRoutes` answers, and the resources that read it (`refresh_shown_routes`).
-    shown_routes: Vec<String>,
-    shown_route_readers: Vec<usize>,
+    shown_routes: Vec<String>,         // what `exactPage().shownRoutes` answers
+    shown_route_readers: Vec<usize>,   // the resources that read it (`refresh_shown_routes`)
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
@@ -1447,8 +1446,7 @@ impl<D: DataSource> Runner<D> {
         self.reuse = on;
     }
 
-    /// Whether an update failed after the tree began to change (see
-    /// [`RunnerError::Poisoned`]).
+    /// Whether an update failed after the tree began to change ([`RunnerError::Poisoned`]).
     pub fn is_poisoned(&self) -> bool {
         self.poisoned
     }

@@ -908,7 +908,10 @@ fn the_sheet_names_the_platforms_metrics_and_an_author_cannot() {
     let r = boot(body);
     let row = r.kernel().node(id(&r, "row")).unwrap();
     let (s, points) = (&row.style, exact_kernel::Dimension::Points);
-    assert_eq!((&s.min_height, &s.padding_top), (&points(52.0), &points(15.0)));
+    assert_eq!(
+        (&s.min_height, &s.padding_top),
+        (&points(52.0), &points(15.0))
+    );
     assert_eq!(s.appearance, exact_kernel::Appearance::None);
     assert!(
         !s.mask.has(exact_kernel::StyleId::MarginLeft),

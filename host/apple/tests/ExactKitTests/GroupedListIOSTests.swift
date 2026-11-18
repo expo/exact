@@ -68,7 +68,6 @@ class GroupedListFixture: XCTestCase {
         l.collection.layoutIfNeeded()
         return try XCTUnwrap(l.cell(id) as? UICollectionViewListCell, "row \(id) has a cell")
     }
-
 }
 
 final class GroupedListIOSTests: GroupedListFixture {

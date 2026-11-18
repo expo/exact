@@ -16,6 +16,7 @@
 mod card;
 mod concepts;
 mod frames;
+mod navigation;
 mod notes;
 mod recipes;
 mod records;
@@ -494,8 +495,8 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         if name == "title" {
             println!("  on `head`, the document's title; elsewhere HTML's advisory text, the platform's tooltip (prop title, str)");
         }
-        if name == "navigationBar" {
-            println!("  on a route (LLP 1115.000 D5.2). \"none\": the screen has no navigation bar on iOS, a full-bleed screen that draws its own chrome and way back (a photo viewer, a header laid out by hand); its `header` paints as written and the edge swipe still goes back. \"auto\", the default, is the platform's bar: the route's `header` when it is one (`contract vocab header`), else the system Back button alone on a pushed route, and no bar on a stack's first route. A `navigationBack` control drawn in a pushed route's page without it is a second Back (warning `lower-back-twice`). On the navigation root or off a route it is refused. docs/recipes/navigation-stack.md");
+        if let Some(note) = navigation::note(name) {
+            println!("  {note}");
         }
         if name == "navigationDetent" {
             println!("  {DETENT}");
@@ -518,9 +519,6 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         if name == "glassInteractive" {
             println!("  on a box with `backgroundMaterial=\"glass\"` or `\"glass-clear\"`: whether its glass swells and lights under a finger (`UIGlassEffect.isInteractive`). Unset, it does when the box has a `press` and is not disabled; `false` keeps a pressable box's glass still, `true` makes a box without a press react. Only iOS and tvOS 26 have interactive glass; other hosts ignore it");
         }
-        if name == "navigationGrabber" {
-            println!("  on a sheet route (`navigationPresentation=\"modal\"`). \"visible\" shows the sheet's grabber, the short bar at its top edge, \"hidden\" hides it; \"auto\", the default, is the platform's: iOS shows one on a sheet with several detents (`navigationDetent=\"medium large\"`), which the grabber resizes, and none on a sheet of one height. UIKit's `prefersGrabberVisible`. Draw no grabber of your own: say this. Hosts whose sheets have none ignore it");
-        }
         if name == "wakelock" {
             println!("  on any element (LLP 1125 D11). \"screen\" keeps the display from dimming or locking for idleness while the element is mounted and displayed (no ancestor `display: none`, under no unselected tab and no screen a stack keeps under its top; the one a sheet covers is shown), so a screen kept in a hidden tab panel holds nothing; \"none\", the default, holds nothing. Bind it to state: `wakelock=(playing ? \"screen\" : \"none\")`. A literal other than the two is refused; a computed one is journaled and holds nothing. iOS's idle timer, a macOS display-sleep assertion, the web's Screen Wake Lock (asked again when the page is visible again), Android's `keepScreenOn`; Linux and Windows journal it as unavailable. The agent's `state.wakelock` is `{{held, by}}`; `expect wakelock held` or `expect wakelock released` asserts this holder record (displayed elements requesting the lock), not whether the OS or browser granted it.");
         }
@@ -529,12 +527,6 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         }
         if name == "navigationTabAccessory" {
             println!("  on the navigation root's tablist (LLP 1075.003 §9.17): the `id` of the element iOS 26 and later show as the tab bar's accessory, a media app's mini player (UIKit's `bottomAccessory`). Write the element after every tab panel the tablist links, usually just before the tablist, where the web shows it above the tab strip; it lies outside the tablist, every route, every tab panel, a popover and a `dialog`. UIKit places and sizes the accessory and backs it with its glass (on an iPhone 18 Pro with iOS 27, 48 points high above the bar, and inline where the bar was while the bar hides); the element's box is UIKit's whatever `height` it says, and the routes clear it. Show and remove it with `if` or `display`; `\"\"` names none. The web, the Mac and Android lay the element out where CSS puts it; iOS 17 to 25, which have no accessory, leave it there, hidden under the shown tab bar. Where the compiler can prove it, a literal id that no element carries, or one the rule refuses, is an error (`lower-tab-accessory`); otherwise a development build on iOS 26 and later journals the reason (`logs`) while Exact's own tab container shows the tabs. docs/recipes/mini-player.md");
-        }
-        if name == "navigationInspector" {
-            println!("  on a sheet route, true to show it as the inspector column of an expanded iOS split (LLP 1127 D14); on compact widths and other hosts it is a sheet.");
-        }
-        if name == "navigationSplit" {
-            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. On hosts that infer from the router write alone, an action that goes back or opens a sheet can also qualify. Say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a narrow window pushes. Across a foldable browser's fold, two viewport segments side by side, the list fills the segment at its start and the detail the other, whatever the window's width or a number says. On iOS the split is UIKit's split view (LLP 1127), in an untabbed stack. On iPad a tab keeps its stack unless its first route says `navigationSplit=\"split\"`: its tab then holds the split, including across a tab switch. On a tab route write the literal \"split\" or \"none\", or leave it out. For both presentations use two tabs or two routes. An untabbed route also accepts a binding or a positive column width. An untabbed iPad root can ask the same way for a custom primary at the platform width. On iOS a compact width (an iPhone, the iPhone Duo folded) collapses it to one stack, the detail over the list with Back, and a wide one (an iPad, the iPhone Duo open) shows the columns as UIKit decides: the list beside the detail at UIKit's width (a grouped list, `appearance=\"auto\"`, as UIKit's sidebar list, the row of the detail's first route selected), the detail alone, or the list over it; under the agent's own chrome (`--chrome agent`) and on tvOS the stack pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width off a fold and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
         }
         if matches!(
             name,

@@ -1393,8 +1393,7 @@ final class ContentOwnersIOSTests: XCTestCase {
             return CGFloat(x.doubleValue)
         }
         func wantedLeft() -> CGFloat {
-            if case .edges(let edges)? = p.navigationHost.covers[route.node.id] { return edges.left }
-            return 0
+            if case .edges(let edges)? = p.navigationHost.covers[route.node.id] { edges.left } else { 0 }
         }
         let insets = route.additionalSafeAreaInsets, frame = route.view.frame
         for extra in [CGFloat(31), 0] {

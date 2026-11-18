@@ -519,12 +519,11 @@ fn quiet_node(node: &NodeRef<'_>) -> bool {
             node.props.str(PropId::AccessibilityRole),
             Some("dialog" | "alertdialog" | "tablist" | "radiogroup")
         )
-        && !node
-            .style
-            .mask
-            .union(node.style.written)
-            .iter()
-            .any(|row| moving_row(row) || fragmenting_row(row) || matches!(row, StyleId::SafeAreaExtend | StyleId::SafeAreaReach))
+        && !node.style.mask.union(node.style.written).iter().any(|row| {
+            moving_row(row)
+                || fragmenting_row(row)
+                || matches!(row, StyleId::SafeAreaExtend | StyleId::SafeAreaReach)
+        })
         && ![overflow.0, overflow.1]
             .iter()
             .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto))

@@ -95,7 +95,7 @@ export const classifications = [
     ["runner:runner/src/runner/mode.rs",
       "Runner::check_modes Runner::is_boundary Runner::look_token Runner::looks_in Runner::modes Runner::modes_json Runner::modes_of_view Runner::modes_of_view_json " +
       "Runner::row_in Runner::row_token Runner::set_mode Runner::set_modes Runner::tuple_at Runner::view_sites_json"],
-    ["runner:runner/src/runner/page.rs", "Runner::page Runner::reads_page_field Runner::set_page"],
+    ["runner:runner/src/runner/page.rs", "Runner::current_shown_routes Runner::page Runner::reads_page_field Runner::refresh_shown_routes Runner::set_page Runner::shown_routes_commit Runner::with_shown_routes"],
     ["runner:runner/src/runner/resize.rs", "Runner::resize_delivered Runner::resize_due Runner::resize_settled"],
     ["runner:runner/src/native_geometry.rs", "chain geometry is_geometry project query templates unsettled"],
     ["runner:runner/src/runner/geometry_facts.rs", "Runner::deliver_geometry#chain:1"],
@@ -384,7 +384,7 @@ export const classifications = [
       "exact_answer_ticket exact_app_roots exact_declared exact_documents exact_ended_actions exact_frame_request exact_logs exact_must_finish exact_node " +
       "exact_outstanding exact_perf exact_picked_path exact_picker exact_share_file exact_show_picker exact_state exact_tags exact_tool exact_tree"],
     ["apple:host/apple/src/abi/exports.rs",
-      "exact_activities exact_agent exact_baked_compat exact_color_references exact_colors exact_command exact_confirmation_is_alert exact_design_digest " +
+      "exact_activities exact_agent exact_baked_compat exact_baked_plan exact_color_references exact_colors exact_command exact_confirmation_is_alert exact_design_digest " +
       "exact_design_rows exact_entry_timeline exact_evaluates_from_draw exact_field_decorations exact_gesture_constant exact_grouped_list exact_header_shape " +
       "exact_host_covers exact_intrinsics exact_layout_stamp exact_link_activities exact_list_covered exact_log exact_measure_block exact_measure_work " +
       "exact_measure_work_later exact_placement_box exact_plan_covers_viewport exact_plan_digest exact_preloads_begin exact_preloads_count exact_preloads_launched " +
@@ -800,7 +800,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/timers.rs", "CanvasHost::held_timer_waits CanvasHost::timer_observation"],
     ["painted:host/painted/src/content_region/presenter.rs", "Presenter::frame"],
     ["painted:host/painted/src/holds.rs", "Host::advance_retained_input"],
-    ["painted:host/painted/src/host.rs", "Host::advance Host::advance_effects Host::advance_until_request Host::commit_effects Host::frame Host::land_then Host::tick Host::timer_due_by Host::timer_due_ms"],
+    ["painted:host/painted/src/host.rs", "Host::advance Host::advance_effects Host::advance_until_request Host::commit Host::commit_effects Host::frame Host::land_then Host::tick Host::timer_due_by Host::timer_due_ms"],
     ["painted:host/painted/src/presence.rs", "Host::advance_in_layout_steps"],
     ["painted:host/painted/src/presenter.rs", "Presenter::tick"],
     ["painted:host/painted/src/presenter/clock.rs",

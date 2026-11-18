@@ -9,7 +9,7 @@ import os
 package final class Presenter {
     var documentLanguage = ""
     package var documentDirection = "ltr"
-    /// The direction Exact's controllers take (`turnChrome`): nil until the document is told its language.
+    /// Direction for native chrome once the document language is known.
     var chromeDirection: UITraitEnvironmentLayoutDirection?
     // A disabled signposter still allocates interval state; callers check its log first.
     static let signpostLog = OSLog(subsystem: "com.exact.host", category: .dynamicTracing)
@@ -29,17 +29,12 @@ package final class Presenter {
     var autofocusProcessed: Set<ObjectIdentifier> = []
     weak var autofocusedThisTurn: NodeView? // taken out of the window this turn, it has not had its autofocus (NodeViewIOS)
     package var pressHandoff: PressHandoff? // the press whose work may hand its control's focus on (PressHandoffIOS)
-    /// While a batch a person's input caused is presented, when it was marked
-    /// (`Batch.input`): a glass that joins a group then materializes.
+    /// Input timestamp for materializing glass that joins a group.
     var inputStarted: CFTimeInterval?
-    /// A booted session's autofocus waits for its first activation.
     var launchAutofocusReleased = false
     private var projectionSyncOwed = false
-    /// Nodes whose frame or content box applied since the batch or projection
-    /// sync last looked, those applied after a batch among them: their lists
-    /// redraw separators by them
+    /// Frames and content boxes applied since the last projection sync, for list separators.
     private var geometryApplied: [UInt32] = []
-    /// The views `children` ops put under a parent they were not under (`placeChildren`).
     private var placedAnew: [UInt32] = []
     /// Where each open context preview's source was (`ContextPositionIOS.swift`).
     var contextAnchors: [UInt32: ContextAnchor] = [:]
@@ -308,7 +303,6 @@ package final class Presenter {
         viewport.contentInsetAdjustmentBehavior = .never
         viewport.backgroundColor = .platformBackground(in: root)
     }
-
     func observeKeyboard() {
         #if !os(tvOS)
         let c = NotificationCenter.default
@@ -355,7 +349,6 @@ package final class Presenter {
         if ExactEnv.agentFreezes || duration <= 0 || UIView.inheritedAnimationDuration > 0 || navigation.hasInteractiveTransition { change(); return }
         UIView.animate(withDuration: duration, delay: 0, options: [UIView.AnimationOptions(rawValue: curve << 16), .beginFromCurrentState, .allowUserInteraction], animations: change)
     }
-
     func setKeyboardInset(_ overlap: CGFloat) {
         keyboardInset = overlap
         let amount = keyboardPolicy == "resizes-visual" && !documentFixed ? overlap : 0
@@ -892,7 +885,6 @@ package final class Presenter {
         collections.endBatch()
         return true
     }
-
     func apply(_ batch: Batch) {
         NodeView.scrollLayoutEpoch &+= 1
         defer { NodeView.scrollLayoutEpoch &+= 1 }
@@ -1388,8 +1380,7 @@ package final class Presenter {
         if parent === navigation.container { navigation.placeOwner() }
     }
 
-    /// The views a batch touched and every view above them, as the batch
-    /// left the hierarchy: what a pass reading a subtree must revisit.
+    /// Views and ancestors to revisit after a batch.
     private func touchedAndAbove(_ ids: [UInt32]) -> Set<UInt32> {
         var seen = Set<UInt32>()
         for id in ids {
@@ -1402,8 +1393,7 @@ package final class Presenter {
         return seen
     }
 
-    /// A frame, content box or scene, in a batch or after one (a flight
-    /// landing, FlightsIOS.swift; a route's edge moving, EdgeFramesIOS.swift).
+    /// A frame, content box or scene, including changes outside a batch.
     package func applyGeometry(_ op: BatchOp) {
         // Outside a batch, only the carried rows this op must read at home go back, by a batch's
         // rule: a box moved under a carried row is placed in its cell (`cellFrame`), and the

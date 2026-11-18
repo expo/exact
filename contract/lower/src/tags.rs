@@ -9,13 +9,11 @@
 //! A tag names a kernel node type plus fixed rows (`column` is a `View` with
 //! `flex-direction: column`); an attribute names one or more kernel style rows
 //! or one prop, or is a handler. Anything not in the table is a rejection
-//! with a stable id — there is no fallback attribute, and an old spelling
-//! (`size`, `fontSize`, `radius`, `label`) is refused with the CSS name it
-//! became.
+//! with a stable ID. Old spellings (`size`, `fontSize`, `radius`, `label`)
+//! are refused with their current CSS names.
 pub(crate) mod portal;
 
-/// The refusals of attributes that name another element by its `id`, which
-/// read the whole expansion: the tab bar's accessory and a `portal`.
+/// Validate ID references for the tab bar accessory and portals across the expansion.
 pub(crate) fn id_refusals(checked: &contract_types::Checked<'_>) -> Vec<crate::LowerError> {
     let mut out = crate::routes::tab_accessory::check(checked);
     out.extend(portal::check(checked));

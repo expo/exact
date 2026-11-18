@@ -33,7 +33,7 @@ Costs your Contract chooses:
 - A native view in list rows: `ExactNativeFactory(…, reuse: true)` and `prepareForReuse()`. Without `reuse`, which is
   for list rows, a native view is made each time its node is: when it first shows, as SwiftUI makes its map, so do
   not make one at launch or keep one hidden; and again when the key of a `for` around it changes while it stays
-  shown, a remake your Contract causes: keep that key stable and pass what changes as props.
+  shown: keep that key stable and pass what changes as props.
 
 Not evidence:
 
