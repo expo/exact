@@ -227,3 +227,77 @@ fn observation_cost_of_many_owners() {
         );
     }
 }
+
+/// What taking the band costs (LLP 1123 D4): a row's change among 1,000
+/// rows, then layout, under a wrapper of full or automatic height that
+/// takes the band or not; and 1,000 rows that each hold a box that ignores
+/// the bottom or not. Ignored, since it times; run it with
+/// `cargo test --release -p exact-kernel --lib ignore_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn ignore_cost() {
+    use std::time::{Duration, Instant};
+    const ROWS: u32 = 1_000;
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    // A row's change, then layout, the median of 41
+    let time = |k: &mut Kernel, row: ViewId| {
+        let times = (0..41).map(|run| {
+            let height = if run % 2 == 0 { "11" } else { "10" };
+            let t = Instant::now();
+            k.apply(
+                0,
+                2 + run,
+                &[style(row, vec![], &[(StyleId::Height, height)])],
+            )
+            .unwrap();
+            lay_out(k);
+            t.elapsed()
+        });
+        median(times.collect())
+    };
+    let root = [(StyleId::SafeAreaIgnore, "none"), (StyleId::Height, "100%")];
+    for (height, ignore) in [("100%", "container"), ("auto", "container top")] {
+        for ignore in ["none", ignore] {
+            let rows: Vec<ViewId> = (10..10 + ROWS).collect();
+            let mut ops = create(3..=3);
+            ops.extend(create(rows.iter().copied()));
+            for &r in &rows {
+                ops.push(style(r, vec![], &[(StyleId::Height, "10")]));
+            }
+            ops.push(style(2, vec![], &root));
+            let wrapper = [(StyleId::SafeAreaIgnore, ignore), (StyleId::Height, height)];
+            ops.push(style(3, vec![], &wrapper));
+            ops.extend([children(1, &[2]), children(2, &[3]), children(3, &rows)]);
+            let mut k = owner(390.0, 844.0, ops);
+            k.set_owner_band(2, Some([47.0, 0.0, 34.0, 0.0]), &[])
+                .unwrap();
+            lay_out(&mut k);
+            let t = time(&mut k, 510);
+            println!("ignore_cost: wrapper of height {height}, ignore {ignore}: {t:.2?}");
+        }
+    }
+    for ignore in ["none", "container bottom"] {
+        let mut ops = Vec::new();
+        let mut rows = Vec::new();
+        for row in 0..ROWS {
+            let (outer, inner) = (10 + row * 2, 11 + row * 2);
+            rows.push(outer);
+            ops.extend(create(outer..=inner));
+            ops.push(style(outer, vec![], &[(StyleId::Height, "10")]));
+            let held = [(StyleId::SafeAreaIgnore, ignore), (StyleId::Height, "5")];
+            ops.push(style(inner, vec![], &held));
+            ops.push(children(outer, &[inner]));
+        }
+        ops.push(style(2, vec![], &root));
+        ops.extend([children(1, &[2]), children(2, &rows)]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([47.0, 0.0, 34.0, 0.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        let t = time(&mut k, 1010);
+        println!("ignore_cost: 1,000 rows each holding a box, ignore {ignore}: {t:.2?}");
+    }
+}

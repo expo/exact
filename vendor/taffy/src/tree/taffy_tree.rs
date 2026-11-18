@@ -9,11 +9,14 @@ use std::rc::Rc;
 
 #[cfg(feature = "block_layout")]
 use crate::block::BlockContext;
-use crate::geometry::{Point, Size};
-use crate::style::{AvailableSpace, Display, Style};
+use crate::geometry::{Point, Rect, Size};
+use crate::style::{AvailableSpace, BoxSizing, Dimension, Display, LengthPercentage, Style};
+use crate::tree::LayoutPartialTreeExt;
+use crate::util::{MaybeResolve, ResolveOrZero};
 use crate::sys::DefaultCheapStr;
 use crate::tree::{
-    ClearState, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, PrintTree, RequestedAxis, RoundTree,
+    Baselines, ClearState, Layout, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, PrintTree, RequestedAxis,
+    RoundTree,
     RunMode,
     TraversePartialTree, TraverseTree, StaticPosition,
 };
@@ -207,6 +210,8 @@ pub struct TaffyTree<NodeContext = ()> {
     multicol_bounds: SecondaryMap<DefaultKey, (Option<f32>, Option<f32>)>,
     // EXACT PATCH 69: where each grid item's box was last placed from (`grid_origin`).
     grid_origins: SecondaryMap<DefaultKey, Point<f32>>,
+    /// EXACT PATCH 80: each outset box's padding as its subtree was last laid out with it.
+    outset_paddings: SecondaryMap<DefaultKey, Rect<f32>>,
 
     // EXACT PATCH 29: the layouts of marked roots, by what they read.
     memo: Memo,
@@ -308,6 +313,11 @@ impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
     }
 
     fn cache_store(&mut self, node_id: NodeId, input: &LayoutInput, layout_output: LayoutOutput) {
+        // EXACT PATCH 80: a box without a baseline keeps its answer as its parent sees it
+        let layout_output = match self.nodes[node_id.into()].style.rare.no_baseline {
+            true => LayoutOutput { baselines: Baselines::NONE, ..layout_output },
+            false => layout_output,
+        };
         if self.nodes[node_id.into()].replay_tracked {
             if let Some(replay) = self.layout_inputs.get_mut(node_id.into()) {
                 replay.record(input, layout_output);
@@ -424,7 +434,144 @@ where
             debug_log!("HIDDEN");
             return compute_hidden_layout(self, node_id);
         }
+        // EXACT PATCH 80 (LLP 1123 D4): a box that reaches past the box its parent places, or
+        // gives it no baseline. Its cached answer, stored as its parent sees it, comes first, so
+        // that a cached child costs no read of its rare style
+        if let Some(output) = self.taffy.cache_get(node_id, &inputs) {
+            return output;
+        }
+        let rare = &self.taffy.nodes[node_id.into()].style.rare;
+        let (outset, no_baseline) = (rare.outset, rare.no_baseline);
+        let output = match inputs.run_mode == RunMode::PerformLayout && outset != Rect::ZERO {
+            true => self.extended_layout(node_id, inputs, outset),
+            false => self.placed_layout(
+                node_id,
+                inputs,
+                #[cfg(feature = "block_layout")]
+                block_ctx,
+            ),
+        };
+        match no_baseline {
+            true => LayoutOutput { baselines: Baselines::NONE, ..output },
+            false => output,
+        }
+    }
 
+    /// EXACT PATCH 80: the final layout of a box whose subtree is laid out `outset` past the
+    /// box its parent places (LLP 1123 D4). Its parent places it with its own `padding`, which
+    /// is its `outset_padding` less what the outset fills; its subtree is then laid out, as a
+    /// formatting context of its own, in that box outset by `outset`, with `outset_padding`. An
+    /// axis its parent gave a size is laid out at that size outset; one it left unknown stays
+    /// automatic, at least the placed size outset, so its children's percentages stay as they
+    /// were. The parent is answered with the size it places, its own or the box's as sized apart
+    /// from its final layout, so that the children's final layouts stay cached, with the
+    /// scrollable overflow moved back to where it places the box and no baseline, since the
+    /// content moves where the padding does not fill the outset. The answer is stored for the
+    /// parent's inputs, so that its next ask is answered from the cache.
+    fn extended_layout(&mut self, node_id: NodeId, inputs: LayoutInput, outset: Rect<f32>) -> LayoutOutput {
+        if let Some(output) = self.taffy.cache_get(node_id, &inputs) {
+            return output;
+        }
+        let known = inputs.known_dimensions;
+        let size = match (known.width, known.height) {
+            (Some(width), Some(height)) => Size { width, height },
+            _ => {
+                let sizing = LayoutInput { run_mode: RunMode::ComputeSize, ..inputs };
+                self.placed_layout(
+                    node_id,
+                    sizing,
+                    #[cfg(feature = "block_layout")]
+                    None,
+                )
+                .size
+            }
+        };
+        let reach = Size {
+            width: size.width + outset.left + outset.right,
+            height: size.height + outset.top + outset.bottom,
+        };
+        let key = node_id.into();
+        // An aspect ratio sizes each axis from the other, so both are definite
+        let known = match self.taffy.nodes[key].style.aspect_ratio {
+            Some(_) => size.map(Some),
+            None => known,
+        };
+        let placed_style = Rc::clone(&self.taffy.nodes[key].style);
+        let mut style = (*placed_style).clone();
+        style.padding = style.rare.outset_padding;
+        // An unknown axis's least and greatest sizes, in the box's own sizing: the placed size
+        // and maximum outset, the maximum's border box less its whole padding and border
+        let basis = inputs.parent_size.width;
+        let inset = |side: LengthPercentage| side.resolve_or_zero(basis, |v, b| LayoutPartialTreeExt::calc(&*self, v, b));
+        let padding = style.padding.map(inset);
+        let sides = |s: &Style| {
+            let (p, b) = (s.padding.map(inset), s.border.map(inset));
+            Size { width: p.left + p.right + b.left + b.right, height: p.top + p.bottom + b.top + b.bottom }
+        };
+        let (whole, placed) = (sides(&style), sides(&placed_style));
+        let content = style.box_sizing == BoxSizing::ContentBox;
+        let own = |border: f32, sides: f32| Dimension::length(border - if content { sides } else { 0.0 });
+        let most = |max: Dimension, parent: Option<f32>, placed: f32, outset: f32, whole: f32| {
+            match max.maybe_resolve(parent, |v, b| LayoutPartialTreeExt::calc(&*self, v, b)) {
+                Some(max) => own(max + if content { placed } else { 0.0 } + outset, whole),
+                None => Dimension::auto(),
+            }
+        };
+        // A container clamps even a known size by its maximum, so both extend
+        let across = outset.left + outset.right;
+        style.max_size.width = most(placed_style.max_size.width, inputs.parent_size.width, placed.width, across, whole.width);
+        let down = outset.top + outset.bottom;
+        style.max_size.height = most(placed_style.max_size.height, inputs.parent_size.height, placed.height, down, whole.height);
+        if known.width.is_none() {
+            style.min_size.width = own(reach.width, whole.width);
+        }
+        if known.height.is_none() {
+            style.min_size.height = own(reach.height, whole.height);
+        }
+        self.taffy.outset_paddings.insert(key, padding);
+        self.taffy.nodes[key].style = Rc::new(style);
+        // The final entry may hold the parent's answer for inputs these equal
+        self.taffy.nodes[key].cache.invalidate_final_layout();
+        let extended = LayoutInput {
+            known_dimensions: Size { width: known.width.map(|_| reach.width), height: known.height.map(|_| reach.height) },
+            ..inputs
+        };
+        let output = self.placed_layout(
+            node_id,
+            extended,
+            #[cfg(feature = "block_layout")]
+            None,
+        );
+        self.taffy.nodes[key].style = placed_style;
+        // The overflow is measured from the inline-start edge, mirrored for RTL
+        let start = match self.taffy.nodes[key].style.direction.is_rtl() {
+            true => outset.right,
+            false => outset.left,
+        };
+        let o = output.scrollable_overflow_rect;
+        let placed = LayoutOutput {
+            size,
+            scrollable_overflow_rect: Rect {
+                left: o.left - start,
+                right: o.right - start,
+                top: o.top - outset.top,
+                bottom: o.bottom - outset.top,
+            },
+            baselines: Baselines::NONE,
+            ..output
+        };
+        self.taffy.cache_store(node_id, &inputs, placed);
+        placed
+    }
+
+    /// [`Self::compute_child_layout`] for a box laid out where its parent places it.
+    #[inline(always)]
+    fn placed_layout(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+        #[cfg(feature = "block_layout")] block_ctx: Option<&mut BlockContext<'_>>,
+    ) -> LayoutOutput {
         // We run the following wrapped in "compute_cached_layout", which will check the cache for an entry matching the node and inputs and:
         //   - Return that entry if exists
         //   - Else call the passed closure (below) to compute the result
@@ -473,6 +620,10 @@ where
             #[cfg(all(feature = "flexbox", feature = "grid", feature = "block_layout"))]
             if tree.taffy.nodes[node_key].memo_root
                 && has_children
+                // EXACT PATCH 80: an outset root is laid out twice, and a box without a baseline
+                // answers apart from its algorithm, neither of which a trace holds
+                && tree.taffy.nodes[node_key].style.rare.outset == Rect::ZERO
+                && !tree.taffy.nodes[node_key].style.rare.no_baseline
                 && !tree.memoizing
                 && !tree.taffy.memo.off
                 && matches!(display_mode, Display::Flex | Display::Grid)
@@ -557,6 +708,10 @@ where
             && node.style.display != Display::None
             && inputs.run_mode != RunMode::PerformHiddenLayout
             && !(node.style.item_is_replaced && node.has_context)
+            // EXACT PATCH 80: an outset box is laid out twice, and a box without a baseline
+            // answers apart from its algorithm, neither of which a trace holds
+            && node.style.rare.outset == Rect::ZERO
+            && !node.style.rare.no_baseline
     }
 
     /// A box's layout computed outside the trace being recorded: the trace
@@ -1018,7 +1173,13 @@ where
                 return None;
             }
             let location = node.unrounded_layout.location;
-            origin = Point { x: origin.x + location.x, y: origin.y + location.y };
+            // EXACT PATCH 80: an outset box places its children from its outset box, and a
+            // shifted one from where it is moved to
+            let (outset, shift) = (node.style.rare.outset, node.style.rare.shift);
+            origin = Point {
+                x: origin.x + location.x - outset.left + shift.x,
+                y: origin.y + location.y - outset.top + shift.y,
+            };
             at = (*taffy.parents.get(at.into())?)?;
         }
         Some((child, position, origin))
@@ -1271,6 +1432,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
             static_positions: SecondaryMap::new(),
             multicol_bounds: SecondaryMap::new(),
             grid_origins: SecondaryMap::new(),
+            outset_paddings: SecondaryMap::new(),
             memo: Memo::default(),
         }
     }
@@ -1364,6 +1526,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.static_positions.clear();
         self.multicol_bounds.clear();
         self.grid_origins.clear();
+        self.outset_paddings.clear();
     }
 
     /// Remove a specific node from the tree and drop it
@@ -1395,6 +1558,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.static_positions.remove(key);
         self.multicol_bounds.remove(key);
         self.grid_origins.remove(key);
+        self.outset_paddings.remove(key);
         if let Some(index) = self.changed_layout_indices.remove(key) {
             self.changed_layouts.swap_remove(index);
             if let Some(&moved) = self.changed_layouts.get(index) {
@@ -1726,6 +1890,12 @@ impl<NodeContext> TaffyTree<NodeContext> {
     /// an absolutely positioned child's grid area's origin; `None` for a node no grid placed.
     pub fn grid_origin(&self, node: NodeId) -> Option<Point<f32>> {
         self.grid_origins.get(node.into()).copied()
+    }
+
+    /// EXACT PATCH 80: the padding an outset box's subtree was last laid out with, which its
+    /// own layout's `padding`, the one its parent placed it with, is not.
+    pub fn outset_padding(&self, node: NodeId) -> Option<Rect<f32>> {
+        self.outset_paddings.get(node.into()).copied()
     }
 
     /// EXACT PATCH 34: forget recorded layouts when a calc handle's environment changes.

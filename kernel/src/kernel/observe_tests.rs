@@ -48,6 +48,7 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
         match row {
             StyleId::PaddingTop => patch.padding_top = d,
             StyleId::PaddingLeft => patch.padding_left = d,
+            StyleId::PaddingBottom => patch.padding_bottom = d,
             StyleId::MarginTop => patch.margin_top = d,
             StyleId::MarginLeft => patch.margin_left = d,
             StyleId::Width => patch.width = d,
@@ -1337,3 +1338,6 @@ mod content_root;
 
 #[path = "reservation_tests.rs"]
 mod reservation;
+
+#[path = "ignore_tests.rs"]
+mod ignore;

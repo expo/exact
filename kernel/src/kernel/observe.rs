@@ -8,23 +8,27 @@
 //! laid out with scroll offsets at zero, to its unsafe area's inner side,
 //! at least 0 and at most the area's depth. The area is its owner's band
 //! and what its ancestors reserve (D11); inside a scroller, which takes
-//! every band it overlaps into its content inset (D14), it is only what is
-//! reserved at or below the scroller. A box outside every owner, a
+//! the band it overlaps into its content inset on each edge it does not
+//! ignore (D14, D4), it is there only what is reserved at or below the
+//! scroller. A box outside every owner, a
 //! document top-layer box's content included, observes the session view's
 //! band on the viewport.
 //!
 //! A reader's border box depends on what it reads, so the kernel solves the
 //! readers after each layout ([`Kernel::solve_observations`]): each input
 //! comes within half a device pixel of its measurement, or the reader is
-//! left unsettled after a bounded number of rounds.
+//! left unsettled after a bounded number of rounds. The same rounds measure
+//! what each box that ignores the band takes past its place (D4) and lay it
+//! out again with it.
 
 use super::block::reservation;
+use super::ignore;
 use super::provenance::{self, Contribution};
 use super::Kernel;
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
 use crate::id::{IdMap, IdSet, Offer, ViewId};
-use crate::layout::LayoutReceipt;
+use crate::layout::{LayoutMirror, LayoutReceipt};
 use crate::{Overflow, StyleId};
 
 /// The rounds the solve lays its readers out in before it leaves the ones
@@ -64,6 +68,20 @@ pub(crate) struct Observations {
     /// What each box that reserves reserved and where its edges lay when
     /// its descendants were last measured (D11).
     reserving: IdMap<u32, (Option<reservation::Reserved>, [f32; 4])>,
+    /// What each box that ignores and touches takes past its place (D4).
+    taken: IdMap<u32, ignore::Taken>,
+    /// Each box that ignores's used margins as its layout last placed it, an
+    /// `auto` one 0, from whichever tree laid it out.
+    margins: IdMap<u32, [f32; 4]>,
+    /// The edges each box that ignores gave the band back on in this solve.
+    released: IdMap<u32, [bool; 4]>,
+    /// The boxes that ignore whose taking is current: their frames, their
+    /// styles and the area above them held since they were measured, so the
+    /// solve measures them again only when one of those moves.
+    measured: IdSet<u32>,
+    /// The edges on which each scroller that ignores passed the area to its
+    /// content when its readers were last measured.
+    passing: IdMap<u32, [bool; 4]>,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
 }
@@ -85,19 +103,29 @@ impl Observations {
     /// gaining or giving back a block.
     pub(crate) fn invalidate(&mut self) {
         self.readouts.clear();
+        self.measured.clear();
     }
 
-    /// Measure again the readers of `owner`'s band, the session's for `None`.
+    /// Measure again the readers of `owner`'s band, the session's for `None`,
+    /// and every box that ignores, which band changes are too rare to sort.
     fn invalidate_band(&mut self, owner: Option<u32>) {
         self.readouts.retain(|_, r| r.owner != owner);
+        self.measured.clear();
     }
 
     /// Measure the readers under `slot` again, which moved: what holds them,
-    /// an owner or a scroller, may have changed without their frames.
+    /// an owner or a scroller, may have changed without their frames. So
+    /// may what each box that ignores takes.
     pub(crate) fn moved(&mut self, slot: u32) {
         if !self.readouts.is_empty() {
             self.moved.push(slot);
         }
+        self.measured.clear();
+    }
+
+    /// Measure again what `slot`, which ignores and was restyled, takes.
+    pub(crate) fn restyled_taker(&mut self, slot: u32) {
+        self.measured.remove(&slot);
     }
 
     /// Measure `slot` again: it reads an edge it did not, whose input may
@@ -118,7 +146,32 @@ impl Observations {
         self.targets.forget(slot);
         self.bands.remove(&slot);
         self.spaces.remove(&slot);
+        self.forget_taken(slot);
+        self.passing.remove(&slot);
         self.stopped_reading(slot);
+    }
+
+    /// What `slot` takes past its place, if it ignores and touches.
+    pub(crate) fn taken(&self, slot: u32) -> Option<ignore::Taken> {
+        match self.taken.is_empty() {
+            true => None,
+            false => self.taken.get(&slot).copied(),
+        }
+    }
+
+    /// `slot` takes nothing until the solve measures it again.
+    pub(crate) fn forget_taken(&mut self, slot: u32) {
+        self.taken.remove(&slot);
+        self.margins.remove(&slot);
+        self.measured.remove(&slot);
+    }
+
+    /// Keep `slot`'s used margins, which a box that ignores touches by.
+    pub(crate) fn set_margins(&mut self, slot: u32, margins: [f32; 4]) {
+        // Measure it again where its margins moved and its frame need not
+        if self.margins.insert(slot, margins) != Some(margins) {
+            self.measured.remove(&slot);
+        }
     }
 }
 
@@ -131,8 +184,9 @@ impl Kernel {
     /// readers' observations guaranteed-invalid, so their fallbacks apply.
     /// The band less the contributions is what the owner's host clears for
     /// its content root (D3). Returns whether a layout is owed: that band
-    /// changed, and it moved the content root or some box reads an
-    /// observation. The update is refused whole, keeping the last, for
+    /// changed, and it moved the content root, or some box reads an
+    /// observation or ignores the band (D4). The update is refused whole,
+    /// keeping the last, for
     /// nonfinite or negative insets, a nonfinite effect, or a
     /// contribution's identity twice.
     pub fn set_owner_band(
@@ -157,7 +211,7 @@ impl Kernel {
         }
         observations.invalidate_band(Some(slot));
         let moved = super::block::clearance(&self.arena, slot) != cleared;
-        Ok(moved || !self.arena.readers.observers.is_empty())
+        Ok(moved || self.band_read())
     }
 
     /// Set the session view's band, top right bottom left in the document's
@@ -172,7 +226,16 @@ impl Kernel {
         }
         self.arena.observations.session = band;
         self.arena.observations.invalidate_band(None);
-        Ok(!self.arena.readers.observers.is_empty())
+        Ok(self.band_read())
+    }
+
+    /// Whether a band's change can move a layout though the content root
+    /// does not move: some box reads an observation, or some box inside a
+    /// root ignores the band (an owner's root's taking is its clearance).
+    fn band_read(&self) -> bool {
+        let arena = &self.arena;
+        !arena.readers.observers.is_empty()
+            || (arena.ignoring.iter()).any(|s| !super::block::owns(arena, s))
     }
 
     /// What `view` observes of its safe area, top right bottom left, as the
@@ -189,7 +252,8 @@ impl Kernel {
     }
 
     /// The readers the last layout left unsettled, whose inputs are not
-    /// within half a device pixel of their measurements (D9,
+    /// within half a device pixel of their measurements, and the boxes
+    /// whose taking of the band had not settled (D9, D4,
     /// `safeAreaUnsettled`).
     pub fn safe_area_unsettled(&self) -> Vec<ViewId> {
         let observations = &self.arena.observations;
@@ -213,7 +277,7 @@ impl Kernel {
         receipt: &mut LayoutReceipt,
     ) -> Result<(), KernelError> {
         self.arena.observations.rounds = 0;
-        if self.arena.readers.observers.is_empty() {
+        if self.arena.readers.observers.is_empty() && self.arena.ignoring.is_empty() {
             return Ok(());
         }
         let tolerance = 0.5 / self.arena.display_scale.unwrap_or(1.0);
@@ -229,13 +293,16 @@ impl Kernel {
                 moved.extend_from_slice(self.arena.children(s));
             }
         }
+        self.arena.observations.released.clear();
         self.check_spaces(receipt);
         self.check_reservations();
+        self.check_scrollers();
         let unsettled = std::mem::take(&mut self.arena.observations.unsettled);
         let (mine, others): (Vec<u32>, _) =
             (unsettled.into_iter()).partition(|&s| within(&self.arena, s, slot));
         self.arena.observations.unsettled = others;
         let mut candidates = self.readers_due(slot, receipt, mine, skip);
+        let mut takers = self.takers_due(slot, receipt);
         let mut solving: IdMap<u32, Samples> = IdMap::default();
         let mut off = Vec::new();
         for round in 0..=MAX_ROUNDS {
@@ -266,15 +333,25 @@ impl Kernel {
                     moved.push(s);
                 }
             }
-            if moved.is_empty() || round == MAX_ROUNDS {
+            // The boxes that took more or less lay out again with it (D4),
+            // and at the bound are left as they are, unsettled
+            let taking = self.check_taken(&takers, round < MAX_ROUNDS);
+            if round == MAX_ROUNDS {
+                off.extend(taking);
+                break;
+            }
+            if moved.is_empty() && taking.is_empty() {
                 break;
             }
             self.restyle_readers(&moved);
+            self.restyle_taken(&taking);
             let laid = relayout(self)?;
             self.check_spaces(&laid);
             self.check_reservations();
+            self.check_scrollers();
             let solving = solving.keys().copied();
             candidates = self.readers_due(slot, &laid, solving, skip);
+            takers = self.takers_due(slot, &laid);
             merge(receipt, laid);
             self.arena.observations.rounds += 1;
         }
@@ -313,7 +390,8 @@ impl Kernel {
                 .filter(|s| !observations.readouts.contains_key(s));
             out.extend(unmeasured.filter(mine));
         }
-        out.extend(also);
+        // A box listed for what it takes is no reader
+        out.extend(also.into_iter().filter(|&s| observers.contains(s)));
         out.sort_unstable();
         out.dedup();
         out.retain(|s| !skip.contains(s));
@@ -330,22 +408,8 @@ impl Kernel {
         };
         let arena = &self.arena;
         let branches = [binding.content.index, binding.pending.index];
-        // Stop at a box laid out on its own before a branch, as the region's tree is cut
-        let inside = |s: u32| {
-            let mut at = Some(s);
-            while let Some(s) = at {
-                if arena.blocks.holds(s) || crate::style::top_layer::is_box(arena, s) {
-                    return false;
-                }
-                if branches.contains(&s) {
-                    return true;
-                }
-                at = arena.parent(s);
-            }
-            false
-        };
         let withheld: Vec<u32> = (arena.readers.observers.iter())
-            .filter(|&s| inside(s))
+            .filter(|&s| in_branches(arena, branches, s))
             .collect();
         let mut changed = Vec::new();
         for &s in &withheld {
@@ -479,10 +543,273 @@ impl Kernel {
         let observations = &mut self.arena.observations;
         observations.reserving.retain(|s, _| reserving.contains(*s));
         observations.reserving.extend(changed);
+        observations.measured.clear();
         for r in readers {
             observations.readouts.remove(&r);
         }
     }
+
+    /// The boxes under `root` that ignore whose taking may have moved since
+    /// they were measured: those whose frames `receipt`'s layout moved and
+    /// those not measured since what they take from changed. In a content
+    /// region, whose passes lay its branches out apart from the receipt,
+    /// every one.
+    fn takers_due(&self, root: u32, receipt: &LayoutReceipt) -> Vec<u32> {
+        let arena = &self.arena;
+        if arena.ignoring.is_empty() {
+            return Vec::new();
+        }
+        let measured = &arena.observations.measured;
+        let mut due: Vec<u32> = match self.region.is_some() {
+            true => arena.ignoring.iter().collect(),
+            false => (receipt.changed.iter())
+                .map(|k| k.index)
+                .filter(|&s| arena.ignoring.contains(s))
+                .collect(),
+        };
+        // Skip the walk over every box that ignores while each is measured
+        if measured.len() < arena.ignoring.len() {
+            due.extend(arena.ignoring.iter().filter(|s| !measured.contains(s)));
+        }
+        due.sort_unstable();
+        due.dedup();
+        due.retain(|&s| within(arena, s, root));
+        due
+    }
+
+    /// Measure what each box in `due` takes (D4), keep each measurement
+    /// where `keep`, and return the boxes whose frames it moves by more than
+    /// half a device pixel.
+    fn check_taken(&mut self, due: &[u32], keep: bool) -> Vec<u32> {
+        if due.is_empty() {
+            return Vec::new();
+        }
+        let arena = &self.arena;
+        let tolerance = arena.observations.tolerance;
+        // Two agree where both extend or both move the box, by frames within tolerance
+        let near = |a: Option<ignore::Taken>, b: Option<ignore::Taken>| match (a, b) {
+            (Some(a), Some(b)) => {
+                let (x, y) = (a.frame(), b.frame());
+                a.offset.is_some() == b.offset.is_some()
+                    && (0..4).all(|e| (x[e] - y[e]).abs() <= tolerance)
+            }
+            (a, b) => a == b,
+        };
+        let measured: Vec<(u32, Option<ignore::Taken>, bool)> = (due.iter())
+            .map(|&s| {
+                let (t, held) = taking(self, s);
+                (s, t, held)
+            })
+            .collect();
+        // One within tolerance of what it took keeps that, so it does not drift
+        let changed: Vec<(u32, Option<ignore::Taken>)> = (measured.iter())
+            .filter(|&&(s, t, _)| !near(arena.observations.taken(s), t))
+            .map(|&(s, t, _)| (s, t))
+            .collect();
+        let observations = &mut self.arena.observations;
+        for &(s, _, held) in &measured {
+            match held && keep {
+                true => observations.measured.insert(s),
+                false => observations.measured.remove(&s),
+            };
+        }
+        if keep {
+            for &(s, t) in &changed {
+                if let Some(was) = observations.taken.get(&s) {
+                    let gave: [bool; 4] = std::array::from_fn(|e| {
+                        was.by[e] > tolerance && t.is_none_or(|t| t.by[e] <= tolerance)
+                    });
+                    let released = observations.released.entry(s).or_default();
+                    *released = std::array::from_fn(|e| released[e] || gave[e]);
+                }
+                match t {
+                    Some(t) => observations.taken.insert(s, t),
+                    None => observations.taken.remove(&s),
+                };
+            }
+        }
+        changed.into_iter().map(|(s, _)| s).collect()
+    }
+
+    /// Let the band fill again the padding each box kept whole where its
+    /// parent is to be laid out anew, since what moved the box clear may have
+    /// changed, so that the layout reaches what a fresh one of the tree does.
+    /// A content region's branches are laid out by trees of their own, which
+    /// it builds afresh, so a box in one is tested again only where its place
+    /// moves (`taking`).
+    pub(super) fn reopen_whole(&mut self) {
+        let taken = &self.arena.observations.taken;
+        if !taken.values().any(|t| t.whole.contains(&true)) {
+            return;
+        }
+        let Some(tree) = self.layout.as_deref().and_then(LayoutMirror::tree_ref) else {
+            return;
+        };
+        let arena = &self.arena;
+        let branches =
+            (self.region.as_ref()).map(|r| [r.binding.content.index, r.binding.pending.index]);
+        let laid_anew = |slot: u32| {
+            if branches.is_some_and(|b| in_branches(arena, b, slot)) {
+                return false;
+            }
+            let mut at = arena.parent(slot);
+            while let Some(p) = at {
+                if let Some(node) = arena.taffy(p) {
+                    return tree.is_dirty(node);
+                }
+                at = arena.parent(p);
+            }
+            true
+        };
+        let reopened: Vec<u32> = (taken.iter())
+            .filter(|(_, t)| t.whole.contains(&true))
+            .map(|(&s, _)| s)
+            .filter(|&s| laid_anew(s))
+            .collect();
+        for &s in &reopened {
+            if let Some(t) = self.arena.observations.taken.get_mut(&s) {
+                t.whole = [false; 4];
+            }
+        }
+        self.restyle_taken(&reopened);
+    }
+
+    /// Lay out and publish again each box that took more or less: an
+    /// extended one's engine style carries it, and publication places a
+    /// moved one.
+    fn restyle_taken(&mut self, taking: &[u32]) {
+        if taking.is_empty() {
+            return;
+        }
+        if let Some(r) = &mut self.region {
+            r.invalidate();
+        }
+        let mut unmirrored = crate::layout::Unmirrored;
+        let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+        for &s in taking {
+            self.arena.layout_dirty.insert(s);
+            if let Some(node) = self.arena.taffy(s) {
+                layout.restyle(&self.arena, s, node);
+            }
+        }
+    }
+}
+
+/// What `slot`, which ignores, takes past its place on the layout just made
+/// (D4): on each edge it names, where its margin box, an `auto` margin
+/// counting 0, meets the inner side of the area its parent passes it or
+/// lies inside the area, that area to its outer side; `None` where it
+/// takes nothing.
+fn taking(kernel: &Kernel, slot: u32) -> (Option<ignore::Taken>, bool) {
+    let arena = &kernel.arena;
+    let hidden = arena.flags(slot).has(crate::id::NodeFlags::HIDDEN);
+    if hidden
+        || arena.taffy(slot).is_none()
+        || arena.is_inline_run(slot)
+        || super::block::owns(arena, slot)
+    {
+        return (None, true);
+    }
+    let space = band_at(kernel, slot);
+    // One in a top-layer box can move in the viewport without its frame
+    let held = space.owner.is_some() || space.root.is_none();
+    let Some(band) = space.band else {
+        return (None, held);
+    };
+    let sides = area(arena, slot, &space, band);
+    let named = ignore::edges(arena, slot, crate::generated::SafeAreaIgnore::Container);
+    // Its edges where its parent placed it: its frame less what it took
+    let stored = arena.observations.taken(slot);
+    let [top, right, bottom, left] = space.edges(arena, slot);
+    let [x, y, width, height] = stored.map_or([0.0; 4], |t| t.frame());
+    let placed = [top - y, right + x + width, bottom + y + height, left - x];
+    let margins = (arena.observations.margins.get(&slot)).map_or([0.0; 4], |m| *m);
+    let tolerance = arena.observations.tolerance;
+    let at: [f32; 4] = std::array::from_fn(|e| placed[e] - margins[e]);
+    let by: [f32; 4] = std::array::from_fn(|e| {
+        let [outer, inner] = sides[e];
+        match named[e] && at[e] <= inner + tolerance {
+            true => (at[e] - outer).max(0.0),
+            false => 0.0,
+        }
+    });
+    // An edge it took, gave back and touches again in one solve keeps its
+    // padding whole, since filling it moved the box clear, until its place
+    // there moves
+    let released = (arena.observations.released.get(&slot)).map_or([false; 4], |r| *r);
+    let whole: [bool; 4] = std::array::from_fn(|e| {
+        let kept = stored.is_some_and(|t| t.whole[e] && (t.at[e] - at[e]).abs() <= tolerance);
+        by[e] > tolerance && (released[e] || kept)
+    });
+    let taken =
+        (by.iter().any(|&b| b > tolerance)).then(|| ignore::Taken::of(arena, slot, by, whole, at));
+    (taken, held)
+}
+
+impl Kernel {
+    /// Measure again the readers under each scroller that ignores whose
+    /// passing of the area to its content changed, which moves what they
+    /// observe though their own frames need not move.
+    fn check_scrollers(&mut self) {
+        let arena = &self.arena;
+        if arena.ignoring.is_empty() && arena.observations.passing.is_empty() {
+            return;
+        }
+        let mut moved = Vec::new();
+        for s in arena.ignoring.iter().filter(|&s| scroll_view(arena, s)) {
+            let space = band_at(self, s);
+            let now = space
+                .band
+                .map_or([false; 4], |b| passed(arena, s, &space, b));
+            if arena
+                .observations
+                .passing
+                .get(&s)
+                .map_or([false; 4], |p| *p)
+                != now
+            {
+                moved.push((s, now));
+            }
+        }
+        // A scroller that stopped ignoring or scrolling passes nothing
+        let gone = (arena.observations.passing.keys().copied())
+            .filter(|&s| !arena.ignoring.contains(s) || !scroll_view(arena, s));
+        moved.extend(gone.map(|s| (s, [false; 4])));
+        let readouts = &arena.observations.readouts;
+        let under: Vec<u32> = (arena.readers.observers.iter())
+            .filter(|&r| readouts.contains_key(&r))
+            .filter(|&r| moved.iter().any(|&(s, _)| arena.is_ancestor(s, r)))
+            .collect();
+        let observations = &mut self.arena.observations;
+        if !moved.is_empty() {
+            observations.measured.clear();
+        }
+        for (s, now) in moved {
+            match now.contains(&true) {
+                true => observations.passing.insert(s, now),
+                false => observations.passing.remove(&s),
+            };
+        }
+        for r in under {
+            observations.readouts.remove(&r);
+        }
+    }
+}
+
+/// Whether `slot` lies in one of a content region's `branches`, stopping at a
+/// box laid out on its own before one, as the region's tree is cut.
+fn in_branches(arena: &NodeArena, branches: [u32; 2], slot: u32) -> bool {
+    let mut at = Some(slot);
+    while let Some(s) = at {
+        if arena.blocks.holds(s) || crate::style::top_layer::is_box(arena, s) {
+            return false;
+        }
+        if branches.contains(&s) {
+            return true;
+        }
+        at = arena.parent(s);
+    }
+    false
 }
 
 fn within(arena: &NodeArena, slot: u32, root: u32) -> bool {
@@ -618,34 +945,37 @@ fn depth([outer, inner]: [f32; 2], at: f32) -> f32 {
 /// allocation's edge, with the band as its observation. A box's own
 /// reservations are not among them.
 fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2]; 4] {
-    let mut sides = band.map(|b| [0.0, b]);
+    let from = |open: [bool; 4]| -> [[f32; 2]; 4] {
+        std::array::from_fn(|e| [0.0, if open[e] { band[e] } else { 0.0 }])
+    };
     if arena.reserving.is_empty() {
-        if inside_scroller(arena, slot, space.root) {
-            sides = [[0.0; 2]; 4];
-        }
-        return sides;
+        return from(open_edges(arena, slot, space, band));
     }
     let mut reserving = Vec::new();
+    let mut open = [true; 4];
     let mut above = (space.root != Some(slot))
         .then(|| arena.parent(slot))
         .flatten();
     // What each box reserves this round, which `check_reservations` resolved
-    let held = &arena.observations.reserving;
+    let (held, tolerance) = (&arena.observations.reserving, arena.observations.tolerance);
     while let Some(s) = above {
         let r = match held.get(&s) {
             Some((r, _)) => *r,
             None => reservation::reserved(arena, s),
         };
         if let Some(r) = r {
-            reserving.push((s, r));
+            reserving.push((s, r, open));
         }
         if scroll_view(arena, s) {
-            sides = [[0.0; 2]; 4];
-            break;
+            open = scrolled(arena, s, space, band, open);
+            if !open.contains(&true) {
+                break;
+            }
         }
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
-    for (s, r) in reserving.into_iter().rev() {
+    let mut sides = from(open);
+    for (s, r, open) in reserving.into_iter().rev() {
         let edges = match space.owner == Some(s) {
             true => [0.0; 4],
             false => space.padding_edges(arena, s),
@@ -653,8 +983,9 @@ fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2
         let observed: [f32; 4] = std::array::from_fn(|e| depth(sides[e], edges[e]));
         let inside = r.inside(observed);
         for e in 0..4 {
-            if r.added[e] != 0.0 || r.padding[e] != 0.0 {
-                let outer = match observed[e] > 0.0 {
+            if open[e] && (r.added[e] != 0.0 || r.padding[e] != 0.0) {
+                // A padding edge at or past the area's inner side joins it
+                let outer = match edges[e] <= sides[e][1] + tolerance {
                     true => sides[e][0].min(edges[e]),
                     false => edges[e],
                 };
@@ -771,25 +1102,53 @@ pub(crate) fn holds(arena: &NodeArena, slot: u32) -> Option<Holder> {
     (arena.blocks.given(slot).is_some()).then_some(Holder::Owner(slot))
 }
 
-/// Whether a box between `slot` and its layout's root `root`, or that root
-/// itself, scrolls: a scroller takes the bands it overlaps into its content
-/// inset, so its content observes none (D9, D14). The root's own
-/// observation is the root's, whatever holds it.
-fn inside_scroller(arena: &NodeArena, slot: u32, root: Option<u32>) -> bool {
-    if Some(slot) == root {
-        return false;
+/// The edges, top right bottom left, on which the band reaches `slot` past
+/// every scroller between it and its layout's root: a scroller takes the
+/// band that reaches it on each edge it does not ignore (D14, D4).
+fn open_edges(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [bool; 4] {
+    let mut open = [true; 4];
+    if space.root == Some(slot) {
+        return open;
     }
     let mut at = arena.parent(slot);
     while let Some(s) = at {
         if scroll_view(arena, s) {
-            return true;
+            open = scrolled(arena, s, space, band, open);
+            if !open.contains(&true) {
+                break;
+            }
         }
-        if Some(s) == root {
-            return false;
+        if space.root == Some(s) {
+            break;
         }
         at = arena.parent(s);
     }
-    false
+    open
+}
+
+/// `open` less the edges the scroller `slot` takes the area on (D9).
+fn scrolled(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    band: [f32; 4],
+    open: [bool; 4],
+) -> [bool; 4] {
+    let passes = passed(arena, slot, space, band);
+    std::array::from_fn(|e| open[e] && passes[e])
+}
+
+/// The edges on which the scroller `slot` passes the area to its content:
+/// those it ignores where its box reaches the area that reaches it, so that
+/// what scrolls past an edge clear of the area does not reach it.
+fn passed(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [bool; 4] {
+    let ignored = ignore::edges(arena, slot, crate::generated::SafeAreaIgnore::Container);
+    if !ignored.contains(&true) {
+        return [false; 4];
+    }
+    let (sides, edges) = (area(arena, slot, space, band), space.edges(arena, slot));
+    let tolerance = arena.observations.tolerance;
+    std::array::from_fn(|e| ignored[e] && edges[e] <= sides[e][1] + tolerance)
 }
 
 /// Whether the host presents `slot` as a scroll view: an axis whose

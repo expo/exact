@@ -57,6 +57,13 @@ impl NodeArena {
             true => self.reserving.insert(slot),
             false => self.reserving.remove(slot),
         };
+        // And those that ignore, forgetting what one that stopped took
+        if crate::kernel::ignore::ignores(&style) {
+            self.ignoring.insert(slot);
+            self.observations.restyled_taker(slot);
+        } else if self.ignoring.remove(slot) {
+            self.observations.forget_taken(slot);
+        }
         self.styles[slot as usize] = style;
         if scrolled != crate::kernel::observe::scroll_view(self, slot) {
             self.observations.invalidate();

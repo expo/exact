@@ -1010,6 +1010,9 @@ fn publish(
         arena.set_content(s, f.content);
         let inset = facts.insets.get(&f.node).copied().unwrap_or_default();
         arena.set_inset(s, (!inline).then_some(inset));
+        if let Some(&margins) = facts.margins.get(&f.node) {
+            arena.observations.set_margins(s, margins);
+        }
         if let Some(&content) = facts.field_content.get(&f.node) {
             arena.field_content.insert(s, content);
         } else {

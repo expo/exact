@@ -11,11 +11,13 @@ enum Key {
         points: u32,
         floor: bool,
         added: u32,
+        clamp: bool,
     },
     Tree {
         tree: usize,
         floor: bool,
         added: u32,
+        clamp: bool,
     },
 }
 
@@ -74,6 +76,7 @@ pub(crate) fn calc_handle_in(percent: f32, points: f32, floor: bool, added: f32)
             points: points.to_bits(),
             floor,
             added: added.to_bits(),
+            clamp: false,
         },
         None,
     )
@@ -84,6 +87,7 @@ pub(crate) fn tree_handle(tree: Comparison, floor: bool, added: f32) -> *const (
             tree: tree.identity(),
             floor,
             added: added.to_bits(),
+            clamp: false,
         },
         Some(tree),
     )
@@ -101,6 +105,33 @@ pub(crate) fn plus(handle: *const (), points: f32) -> *const () {
     let (Key::Pair { added, .. } | Key::Tree { added, .. }) = &mut key;
     *added = (f32::from_bits(*added) + points).to_bits();
     intern(key, tree)
+}
+
+/// `side` less `points`, at least 0: a padding that the band a box takes
+/// fills first (LLP 1123 D4). An unknown handle stays.
+pub(crate) fn less(
+    side: taffy::style::LengthPercentage,
+    points: f32,
+) -> taffy::style::LengthPercentage {
+    use taffy::style::{CompactLength, LengthPercentage};
+    let raw = side.into_raw();
+    let handle = match raw.tag() {
+        CompactLength::LENGTH_TAG => {
+            return LengthPercentage::length((raw.value() - points).max(0.0))
+        }
+        CompactLength::PERCENT_TAG => calc_handle_in(raw.value() * 100.0, 0.0, false, 0.0),
+        _ => raw.calc_value(),
+    };
+    let found = (HANDLES.lock().unwrap_or_else(|e| e.into_inner()))
+        .get(handle as usize >> 3)
+        .map(|calc| (calc.key, calc.value.clone()));
+    let Some((mut key, tree)) = found else {
+        return side;
+    };
+    let (Key::Pair { added, clamp, .. } | Key::Tree { added, clamp, .. }) = &mut key;
+    *added = (f32::from_bits(*added) - points).to_bits();
+    *clamp = true;
+    LengthPercentage::calc(intern(key, tree))
 }
 
 std::thread_local! {
@@ -136,27 +167,33 @@ pub(crate) fn resolve_calc(handle: *const (), basis: f32) -> f32 {
         return 0.0;
     };
     let basis = f64::from(basis);
-    let (value, floor, added) = match calc.key {
-        Key::Tree { floor, added, .. } => {
+    let (value, floor, added, clamp) = match calc.key {
+        Key::Tree {
+            floor,
+            added,
+            clamp,
+            ..
+        } => {
             let value =
                 LAYOUT_ENV.with(|e| calc.value.as_ref().unwrap().wide(&e.borrow(), Some(basis)));
-            (value.unwrap_or(0.0), floor, added)
+            (value.unwrap_or(0.0), floor, added, clamp)
         }
         Key::Pair {
             percent,
             points,
             floor,
             added,
+            clamp,
         } => (
             basis * f64::from(f32::from_bits(percent)) / 100.0 + f64::from(f32::from_bits(points)),
             floor,
             added,
+            clamp,
         ),
     };
     let value = if value.is_nan() { 0.0 } else { value };
-    super::calc::narrow(
-        (if floor { value.max(0.0) } else { value }) + f64::from(f32::from_bits(added)),
-    )
+    let value = (if floor { value.max(0.0) } else { value }) + f64::from(f32::from_bits(added));
+    super::calc::narrow(if clamp { value.max(0.0) } else { value })
 }
 
 #[cfg(test)]

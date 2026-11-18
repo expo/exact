@@ -2465,3 +2465,45 @@ once whatever measure function a tree is laid out with.
 **Held by** the grid and table suites, unchanged, and Apple's production link
 proof (`host/apple/link.test.mjs`): a production hello names no
 `taffy::compute::grid`.
+
+## Patch 80: an outset box lays its subtree out past its place — Exact only
+
+LLP 1123 D4. A box that ignores the safe area and touches it reaches past
+the box its parent places, by `RareStyle::outset` on each edge, which the
+kernel measures from the last layout. The kernel gives it two paddings:
+`padding`, which its parent places it with, and `RareStyle::outset_padding`,
+the whole padding its subtree is laid out with; where the band fills the
+padding, the first is the second less the outset, at least 0. Its final
+layout (`compute_child_layout` under `RunMode::PerformLayout`) lays its
+subtree out, as a formatting context of its own, in that box outset by
+`outset`. An axis the parent gave a size is laid out at that size outset,
+as is either axis of a box with an aspect ratio, since each then follows
+from the other. An axis the parent left unknown stays automatic, its
+minimum the placed size outset, so the subtree's percentages and cached
+layouts are as they were. On both axes an authored maximum is extended by
+the outset, since a container clamps even a size it is given. The parent
+is answered with the size it places (its own, or a sizing pass's), with
+the scrollable overflow moved back to where it places the box and no
+baseline, and the answer is stored for the parent's inputs, so that its
+next ask is answered from the cache and the children's final layouts stay
+cached. The box's final cache entry is invalidated first, since it may
+hold the parent's answer for inputs the extended ones equal.
+`TaffyTree::outset_padding` returns the whole padding the subtree was laid
+out with, for publication. `RareStyle::no_baseline` gives the parent no
+baseline from any box the kernel marks, which it does for every box that
+ignores, touching or not. An absolute box hoisted through an outset box is
+placed from its outset box, and through a box the kernel moves instead of
+extending, by `RareStyle::shift`, from where it is moved to. A recorded
+layout (patch 29) answers an outset box and a box without a baseline
+whole, as it does a replaced box that holds children (patch 16), and an
+outset list row is laid out by its own algorithm, not replayed. A child's
+cached answer is returned before its rare style is read, so a cached child
+costs what it does without the patch, and a box without a baseline stores
+its answer without one, as its parent sees it.
+
+**Held by** `kernel/src/kernel/ignore_tests.rs`: extended flex items and
+blocks, the padding the band fills and the padding kept whole, automatic
+axes and a maximum on either axis, a ratio, a hoisted absolute box under
+an extended and under a moved box, a baseline-aligned row, list rows laid
+out by a replay and fresh, a clean box placed anew, and a row's change
+that lays out only its path.

@@ -25,6 +25,7 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         UserSelect => {}
         // Their values write nothing (css.rs, LLP 1123 D4, D11), so neither does a clear.
         SafeAreaIgnore
+        | SafeAreaIgnoreAlign
         | AdditionalSafeAreaTop
         | AdditionalSafeAreaRight
         | AdditionalSafeAreaBottom

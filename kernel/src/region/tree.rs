@@ -174,15 +174,19 @@ impl Derived {
             let hidden = hidden || arena.style(s).display == crate::Display::None;
             let l = self.tree.layout(node);
             let inline = arena.is_inline_run(s);
-            let frame = if inline {
-                Frame::default()
+            let o = l.scrollable_overflow_rect;
+            let (frame, content) = if inline {
+                (Frame::default(), (o.right, o.bottom))
             } else {
-                Frame {
+                let frame = Frame {
                     x: x + l.location.x,
                     y: y + l.location.y,
                     width: l.size.width,
                     height: l.size.height,
-                }
+                };
+                let (frame, _, content) =
+                    crate::kernel::ignore::place(arena, s, frame, (o.right, o.bottom));
+                (frame, content)
             };
             if ![
                 frame.x,
@@ -213,16 +217,13 @@ impl Derived {
                 frames.push(RegionFrame {
                     node: arena.key(s),
                     frame,
-                    content: (
-                        l.scrollable_overflow_rect.right,
-                        l.scrollable_overflow_rect.bottom,
-                    ),
+                    content,
                     height_measured: self.tree.height_measured(node),
                 });
                 offsets.push(RegionOffset {
                     parent,
-                    x: x - px + l.location.x,
-                    y: y - py + l.location.y,
+                    x: frame.x - px,
+                    y: frame.y - py,
                     inline,
                 });
                 ordinal
@@ -269,8 +270,12 @@ impl BoxFacts {
             self.button_bases.insert(key, basis);
         }
         let inset = crate::id::BoxInset::of(arena, s, tree.layout(n), tree.text_item(n));
+        let inset = crate::kernel::ignore::inset(arena, tree, s, n, inset);
         if inset != crate::id::BoxInset::default() {
             self.insets.insert(key, inset);
+        }
+        if arena.ignoring.contains(s) {
+            self.margins.insert(key, tree.margins(n));
         }
     }
 }
@@ -312,6 +317,9 @@ pub(super) fn shell(
             width: l.size.width,
             height: l.size.height,
         };
+        let o = l.scrollable_overflow_rect;
+        let (frame, _, content) =
+            crate::kernel::ignore::place(arena, s, frame, (o.right, o.bottom));
         if ![
             frame.x,
             frame.y,
@@ -329,10 +337,7 @@ pub(super) fn shell(
         frames.push(RegionFrame {
             node: arena.key(s),
             frame,
-            content: (
-                l.scrollable_overflow_rect.right,
-                l.scrollable_overflow_rect.bottom,
-            ),
+            content,
             height_measured: tree.height_measured(n),
         });
         if s != cut {

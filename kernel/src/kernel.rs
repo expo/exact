@@ -29,6 +29,7 @@ mod environment;
 mod geometry;
 mod history;
 use history::RetainedReceipt;
+pub(crate) mod ignore;
 mod intrinsic;
 pub(crate) mod observe;
 pub(crate) mod owner;
@@ -472,6 +473,7 @@ impl Kernel {
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
         }
         self.measure_symbols(true);
+        self.reopen_whole();
     }
 
     /// Live node count.
@@ -702,7 +704,12 @@ impl Kernel {
         self.imply_blocks();
         engine(&mut self.layout).present_heights(&self.arena, presented);
         // The root, then each subtree a host gave a block (LLP 1115.002 D8.2).
-        let result = match self.lay_out_roots(slot, offer) {
+        let first = self.lay_out_roots(slot, offer);
+        // Measure every observation again after a pass that failed, whose frames no receipt names
+        if first.is_err() {
+            self.arena.observations.invalidate();
+        }
+        let result = match first {
             ok @ Ok(_) => ok,
             Err(LayoutError::Engine(_)) => {
                 // The engine tree is derived state: rebuild it from the columns and retry once.
