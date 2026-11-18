@@ -572,7 +572,9 @@ macro_rules! module {
         pub fn gpu_render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 {
             $crate::web::render(id, width, height, scale, now_ms)
         }
-        #[wasm_bindgen::prelude::wasm_bindgen]
+
+        /// The instance's presentation policy, an explicitly empty picture included.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_presentation_flags(id: u32) -> u32 {
             $crate::web::presentation_flags(id)
         }
