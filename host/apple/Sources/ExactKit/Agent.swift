@@ -356,6 +356,12 @@ public final class Agent {
             #endif
             emit(session.canvases.decorate(req, tree))
         case "layout": emit(tagged(inspectLayout(req) ?? layout(req))) // LLP 1080.001: `native`, `agree`
+        #if os(iOS) || os(tvOS)
+        case "boxes": emit(tagged(boxes()))
+        #else
+        case "boxes": emit(["error": "boxes: only UIKit hosts list their boxes for a fresh-build comparison"])
+        #endif
+        case "rebuild": emit(tagged(session.app.rebuild() ? ["rebuilt": true] : ["error": "rebuild: the running plan did not boot again with the app's state"]))
         // A call that moved something settles the canvases before it
         // replies (LLP 1012's fixed point; LLP 1014 D5 reads placements
         // after a frame, so the frame is rendered here, not left to the

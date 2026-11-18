@@ -69,15 +69,10 @@ extension GroupedListView {
     }
 
     /// Before a batch: the carried rows it must read at home go back. A
-    /// carried row's own box (a `frame` op) and the order of the nodes it
-    /// was carried from (a `children` op, which `placing` follows) are kept
-    /// in its cell, as are those nodes' boxes and their props other than
-    /// `inert`: the shown rows of a list two rows are inserted into, or
-    /// whose `refreshing` changes, stay in their cells, as a collection
-    /// view's cells do under an insert. Any other op on a row takes it home
-    /// alone; any other op on a node it was carried from (a style its rows
-    /// inherit, an `inert`) takes every row home. Carried home and back,
-    /// each shown row's subtree took UIKit's move and trait passes twice.
+    /// row stays in its cell for frame and content-box updates. Its
+    /// ancestors can change geometry, children or props other than
+    /// `inert` while UIKit animates the column. Other writes to an
+    /// ancestor bring every carried row home before the batch.
     func prepare(_ ops: [BatchOp]) {
         guard !carried.isEmpty else { return }
         var above = Set<UInt32>(), walked = Set<ObjectIdentifier>()

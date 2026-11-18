@@ -255,6 +255,19 @@ Ordinary app launches keep their saved website data.
   the condition the product itself uses (`Agent.nativeInFlight()` on Apple, the
   agent's `clock settle`), not a hardcoded sleep timeout.
 
+- **The end of each test is compared with a fresh build.** On iOS, `test` reads
+  every shown node's box after a test's last step (`boxes`, in the content of the
+  nearest scroller, so scrolling does not count), boots the same state again with
+  every view built new (`rebuild`, the dev loop's restart with the app's state
+  carried), and reads them again. A box that differs by a point or more fails the
+  test: the host kept layout from what happened before, such as a fold and back,
+  which a person sees until something re-renders. Fix the host, not the test.
+  The restart keeps the focus but not a component's own `state`, so a test whose
+  tree is not the same after it (each node's type, props and focus) is not
+  compared, with a note, nor is one whose screen does not settle or whose plan
+  does not apply again. A component's own `state` that changes only styles is
+  not in the tree: when such a test fails, check that state before the host.
+
 For a `contextPopover` source, use `tap <source> drag 0 0 press 1000` under
 `--touch platform`, then `clock settle`. `tap <action>` selects UIKit's
 row. An explicit `tap <root> at <x> <y>` on UIKit's backdrop dismisses it;
