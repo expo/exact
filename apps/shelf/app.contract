@@ -1249,11 +1249,18 @@ shape ShelfWidgetProps
   count: number
   latest: string
 
-// A tap on the widget opens the Stats tab, where the count is.
+// The book a person chose in Edit Widget, by its id in the content index.
+shape ShelfWidgetChoice
+  book: option<string>
+
+// A tap on the widget opens the Stats tab, where the count is. The refresh
+// reads the chosen book, so the view shows the title it is given.
 component ShelfWidget
   props
     count: number
     latest: string
+  inject
+    snapshot_configuration: ShelfWidgetChoice
   view
     link href="/stats"
       column gap=8

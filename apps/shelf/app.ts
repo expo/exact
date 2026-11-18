@@ -146,10 +146,12 @@ function tagCause(e: unknown): string {
 }
 
 const sources: Sources = {
-  widgetLibrary: async ([date], _store, storage) => {
+  // A placement shows the book chosen for it. With none chosen, or one the
+  // library no longer has, it shows the latest addition.
+  widgetLibrary: async ([date, { book }], _store, storage) => {
     const { books } = await load(storage);
-    const latest = [...books].sort((a, b) => b.addedAt - a.addedAt)[0]?.title ?? 'Add your first book';
-    return [{ date, props: { count: books.length, latest } }];
+    const shown = books.find((b) => b.id === book) ?? [...books].sort((a, b) => b.addedAt - a.addedAt)[0];
+    return [{ date, props: { count: books.length, latest: shown?.title ?? 'Add your first book' } }];
   },
 
   library: async (_args, _store, storage) => {

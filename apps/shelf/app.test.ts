@@ -77,15 +77,18 @@ test('the goal stays between 1 and 365, and the average counts rated finished bo
 });
 
 
-test('a fresh widget reads the same library as the app, then follows edits', async () => {
+test('a fresh widget reads the same library as the app, then follows edits and its chosen book', async () => {
   const { call, reads } = await shelf();
-  const rows = await call('widgetLibrary', 1234);
+  const rows = await call('widgetLibrary', 1234, { book: null });
   const library = await call('library');
   expect(reads()).toBe(1);
   expect(rows).toEqual([{ date: 1234, props: { count: library.books.length, latest: library.books[0].title } }]);
   expect(rows[0].props.count).toBe(3); // The gallery's preview has seven.
   await call('removeBook', 'seed-3');
-  expect(await call('widgetLibrary', 5678)).toEqual([{ date: 5678, props: { count: 2, latest: 'Piranesi' } }]);
+  const shows = async (book: string | null) => (await call('widgetLibrary', 5678, { book }))[0].props;
+  expect(await shows(null)).toEqual({ count: 2, latest: 'Piranesi' });
+  expect(await shows('seed-1')).toEqual({ count: 2, latest: 'The Left Hand of Darkness' });
+  expect(await shows('seed-3')).toEqual({ count: 2, latest: 'Piranesi' }); // A book the library no longer has.
 });
 
 // Open Library's subjects carry no page count, so a discovered work's length

@@ -86,7 +86,7 @@
     {
       "kind": "library",
       "title": "Your Shelf",
-      "description": "Your book count and latest addition.",
+      "description": "Your book count, and your latest addition or a book you choose.",
       "families": [
         "systemSmall",
         "accessoryRectangular"
@@ -97,6 +97,13 @@
       "preview": {
         "count": 7,
         "latest": "The Dispossessed"
+      },
+      "configuration": {
+        "title": "Your Shelf",
+        "description": "Choose a book to keep in view.",
+        "parameters": [
+          { "name": "book", "title": "Book", "type": "entity", "entity": "book" }
+        ]
       }
     }
   ]
