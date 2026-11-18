@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 // LLP 1172.019 §3; the census precedes the capability migration in LLP 1172.005 E11–E12.
 import { readFileSync, readdirSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { classifications } from './completion-inventory-table.mjs';
+import { slashRelative } from './paths.mjs';
 import { swiftStringValue, swiftTokens } from './probes/seamcensus.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -155,7 +156,7 @@ export function swiftCExports(root = ROOT) {
   for (const path of files(join(root, 'host/apple'), '.swift')) {
     const source = readFileSync(path, 'utf8');
     if (!/@\s*_cdecl/.test(source)) continue;
-    const t = swiftTokens(source), file = relative(root, path);
+    const t = swiftTokens(source), file = slashRelative(root, path);
     for (let i = 0; i < t.length - 4; i++) {
       if (t[i].text !== '@' || t[i + 1].text !== '_cdecl' || t[i + 2].text !== '(') continue;
       const literal = t[i + 3];
@@ -177,7 +178,7 @@ export function discover(root = ROOT) {
   const hostDirs = readdirSync(join(root, 'host')).filter(n => /^web(?:-|$)/.test(n));
   for (const dir of ['runner/src', 'host/apple/src', 'host/render/src', 'host/painted/src', ...hostDirs.map(n => `host/${n}`)]) {
     for (const path of files(join(root, dir))) {
-      const file = relative(root, path), source = readFileSync(path, 'utf8');
+      const file = slashRelative(root, path), source = readFileSync(path, 'utf8');
       const parsed = rustFunctions(file, source);
       if (dir === 'runner/src') runner.push({ file, source, ...parsed });
       else hosts.push({ file, source, ...parsed });
@@ -187,7 +188,7 @@ export function discover(root = ROOT) {
   // newlines so diagnostics point at the template, not its generated file.
   for (const dir of hostDirs) {
     for (const path of files(join(root, 'host', dir), '.mjs').filter(p => !p.endsWith('.test.mjs'))) {
-      const file = relative(root, path), source = readFileSync(path, 'utf8');
+      const file = slashRelative(root, path), source = readFileSync(path, 'utf8');
       for (const match of source.matchAll(/\blib\s*:\s*`((?:\\[\s\S]|[^\\`])*)`/g)) {
         const start = match.index + match[0].indexOf('`') + 1;
         const code = source.slice(0, start).replace(/[^\n]/g, ' ') + match[1].replace(/\\`/g, '`');

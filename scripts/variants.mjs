@@ -1,10 +1,10 @@
 // App variants (LLP 1030.008): the app under another identity, installed beside it. `variants.<name>` in app.json
-// gives an `idSuffix`, a `name`, optionally `icons` and setting values (`env`); `--variant <name>` or EXACT_VARIANT
-// selects one for the app a verb resolves, and `readManifest` returns that app's manifest resolved as the variant, so
-// everything derived from `app.id` and `app.name` follows. contract/cli/src/manifest.rs resolves the same selection
-// for the Rust readers.
+// gives an `idSuffix`, a `name`, optionally its icons (`icons`, and an Icon Composer project per Apple platform) and
+// setting values (`env`); `--variant <name>` or EXACT_VARIANT selects one for the app a verb resolves, and
+// `readManifest` returns that app's manifest resolved as the variant, so everything derived from `app.id` and
+// `app.name` follows. contract/cli/src/manifest.rs resolves the same selection for the Rust readers.
 import { realpathSync } from 'node:fs';
-import { appIconProblems } from './app-icons.mjs';
+import { appIconProblems, projectName } from './app-icons.mjs';
 import { executableName } from './app.mjs';
 import { settingNames } from '../js/bake/src/__exact_env.mjs';
 
@@ -39,7 +39,7 @@ export function selectedVariant(dir, env = process.env) {
 
 /** What the manifest's `variants` get wrong beyond the schema, whether or not one is selected: a suffix or an installed
  * name another variant or the app has, a setting the manifest's `env` does not declare, an icon that is not there, an
- * App Clip id no suffix can make the variant's. */
+ * Icon Composer project named as an alternate icon is, an App Clip id no suffix can make the variant's. */
 export function variantProblems(manifest, dir) {
   const declared = settingNames(manifest.env), base = manifest.app?.id, clip = manifest.host?.ios?.appClip?.id;
   if (manifest.game !== undefined && manifest.variants) return ['variants: a game takes no variant (LLP 1030.008 §6)'];
@@ -47,12 +47,16 @@ export function variantProblems(manifest, dir) {
   // system may ignore case.
   const file = (name) => executableName({ displayName: name ?? '', id: base ?? '' }).toLowerCase();
   const suffixes = new Map(), files = new Map([[file(manifest.app?.name), 'app.name']]);
+  // Apple names the primary icon after its project, and a catalog holds one asset per name (LLP 1163.000 D1).
+  const alternates = new Map((manifest.alternate_icons ?? []).map((entry, i) => [entry.name.toLowerCase(), `alternate_icons[${i}] (${JSON.stringify(entry.name)})`]));
+  const namesake = (icon) => icon && alternates.get(projectName(icon).toLowerCase());
   return Object.entries(manifest.variants ?? {}).flatMap(([name, variant]) => [
     ...suffixes.has(variant.idSuffix) ? [`variants.${name}.idSuffix: variants.${suffixes.get(variant.idSuffix)} has ${variant.idSuffix} too`] : (suffixes.set(variant.idSuffix, name), []),
     ...files.has(file(variant.name)) ? [`variants.${name}.name: ${JSON.stringify(variant.name)} installs under the same name as ${files.get(file(variant.name))}`] : (files.set(file(variant.name), `variants.${name}.name`), []),
     ...Object.keys(variant.env ?? {}).filter((key) => !declared.includes(key))
       .map((key) => `variants.${name}.env.${key}: not a setting the manifest's "env" declares`),
     ...variant.icons ? appIconProblems({ icons: variant.icons }, dir).map((p) => `variants.${name}.${p}`) : [],
+    ...namesake(variant.host?.ios?.icon) ? [`variants.${name}.host.ios.icon: ${variant.host.ios.icon} gives the primary icon the name of ${namesake(variant.host.ios.icon)} on Apple; rename one`] : [],
     ...clip && !clip.startsWith(`${base}.`) ? [`variants.${name}: host.ios.appClip.id ${clip} does not begin with ${base}., so it cannot be this variant's App Clip`] : [],
   ]);
 }
@@ -75,5 +79,7 @@ export function resolveVariant(manifest, name) {
     if (resolved.color_scheme_dark?.icons) { const { icons: _, ...dark } = resolved.color_scheme_dark; resolved.color_scheme_dark = dark; }
     for (const platform of ['ios', 'macos']) if (host[platform]?.icon) { const { icon: _, ...rest } = host[platform]; host[platform] = rest; }
   }
+  // The variant's own Icon Composer project wins on its platform, as the app's does (LLP 1163 D4).
+  for (const platform of ['ios', 'macos']) if (variant.host?.[platform]?.icon) host[platform] = { ...host[platform], icon: variant.host[platform].icon };
   return resolved;
 }

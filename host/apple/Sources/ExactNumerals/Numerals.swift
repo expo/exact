@@ -62,8 +62,11 @@ private struct NumeralBody: View {
             .animation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(duration: 0.4, bounce: 0), value: model.version)
             // The baseline where Exact laid the line out, as the backgrounds under it are.
             .alignmentGuide(.top) { $0[.firstTextBaseline] - (model.baseline ?? 0) }
-            .frame(maxWidth: .infinity, maxHeight: .infinity,
-                   alignment: Alignment(horizontal: model.alignment, vertical: model.baseline == nil ? .center : .top))
+            // The frame keeps the view's size: one that grew to a text a fraction of a
+            // point larger would be centred on the view, off the line's start and baseline.
+            // A line with a baseline comes in its own box and starts where the box does.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity,
+                   alignment: model.baseline == nil ? Alignment(horizontal: model.alignment, vertical: .center) : .topLeading)
             // The node is the accessibility element; it reads the value once.
             .accessibilityHidden(true)
     }

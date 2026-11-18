@@ -49,7 +49,8 @@ pub(super) fn base_of(id: &str) -> Option<String> {
 
 /// `json` as the variant `name` has it: `app.id` and `host.android.id` with
 /// its `idSuffix`, `app.name` its `name`, an App Clip id under the new id,
-/// its `icons` in place of every icon source, and `variant: {name, base}`.
+/// its `icons` in place of every icon source, its own Icon Composer project
+/// on each platform it names one for, and `variant: {name, base}`.
 pub(super) fn resolve(json: &mut Value, name: &str) -> Result<(), String> {
     if json.get("variant").is_some() {
         return Ok(()); // resolved already, and never twice
@@ -107,6 +108,11 @@ pub(super) fn resolve(json: &mut Value, name: &str) -> Result<(), String> {
             }
         }
     }
+    for platform in ["ios", "macos"] {
+        if let Some(icon) = variant.pointer(&format!("/host/{platform}/icon")) {
+            json["host"][platform]["icon"] = icon.clone();
+        }
+    }
     json["variant"] = json!({ "name": name, "base": base });
     Ok(())
 }
@@ -116,16 +122,22 @@ mod tests {
     use super::resolve;
     use serde_json::json;
 
-    // The same fixture as `scripts/variants.test.mjs`, so the two readers are held to one answer.
+    // The same fixture as `scripts/app-manifest.test.mjs`, so the two readers are held to one answer.
     fn manifest() -> serde_json::Value {
         json!({
             "app": { "id": "com.example.v", "name": "V" },
             "icons": [{ "src": "assets/icon.png" }],
             "color_scheme_dark": { "background_color": "#000000", "icons": [{ "src": "assets/dark.png" }] },
-            "host": { "android": { "id": "com.example.v_android" }, "ios": { "appClip": { "id": "com.example.v.Clip" }, "icon": "assets/v.icon" } },
+            "host": {
+                "android": { "id": "com.example.v_android" },
+                "ios": { "appClip": { "id": "com.example.v.Clip" }, "icon": "assets/v.icon" },
+                "macos": { "icon": "assets/v-mac.icon" }
+            },
             "variants": {
                 "dev": { "idSuffix": ".dev", "name": "V Dev", "icons": [{ "src": "assets/dev.png" }] },
-                "plain": { "idSuffix": ".qa.two", "name": "V QA" }
+                "plain": { "idSuffix": ".qa.two", "name": "V QA" },
+                "project": { "idSuffix": ".project", "name": "V Project", "host": { "ios": { "icon": "assets/project.icon" } } },
+                "whole": { "idSuffix": ".whole", "name": "V Whole", "icons": [{ "src": "assets/whole.png" }], "host": { "macos": { "icon": "assets/whole.icon" } } }
             }
         })
     }
@@ -143,6 +155,7 @@ mod tests {
             m["host"]["ios"],
             json!({ "appClip": { "id": "com.example.v.dev.Clip" } })
         );
+        assert_eq!(m["host"]["macos"], json!({}));
         assert_eq!(m["icons"], json!([{ "src": "assets/dev.png" }]));
         assert_eq!(
             m["color_scheme_dark"],
@@ -164,11 +177,37 @@ mod tests {
     }
 
     #[test]
+    fn a_variants_icon_composer_project_replaces_the_apps_on_its_platform() {
+        let mut m = manifest();
+        resolve(&mut m, "project").unwrap();
+        assert_eq!(
+            m["host"]["ios"],
+            json!({ "appClip": { "id": "com.example.v.project.Clip" }, "icon": "assets/project.icon" })
+        );
+        assert_eq!(m["host"]["macos"], json!({ "icon": "assets/v-mac.icon" }));
+        assert_eq!(m["icons"], manifest()["icons"]);
+        assert_eq!(m["color_scheme_dark"], manifest()["color_scheme_dark"]);
+
+        let mut m = manifest();
+        resolve(&mut m, "whole").unwrap();
+        assert_eq!(m["icons"], json!([{ "src": "assets/whole.png" }]));
+        assert_eq!(
+            m["color_scheme_dark"],
+            json!({ "background_color": "#000000" })
+        );
+        assert_eq!(
+            m["host"]["ios"],
+            json!({ "appClip": { "id": "com.example.v.whole.Clip" } })
+        );
+        assert_eq!(m["host"]["macos"], json!({ "icon": "assets/whole.icon" }));
+    }
+
+    #[test]
     fn an_undeclared_variant_or_a_foreign_clip_id_is_refused() {
         let error = resolve(&mut manifest(), "preview").unwrap_err();
         assert_eq!(
             error,
-            "variant preview: app.json has no variants.preview (it declares dev, plain)"
+            "variant preview: app.json has no variants.preview (it declares dev, plain, project, whole)"
         );
         let mut m = manifest();
         m["host"]["ios"]["appClip"]["id"] = "com.other.Clip".into();

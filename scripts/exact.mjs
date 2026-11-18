@@ -334,9 +334,9 @@ export async function setup({check = false, platform = null, device = false, app
   const gameFailures = [], web = platform === 'web';
   if (!check && !web) { const room = freeSpace(homedir()); if (room && room.gb < ROOM_GB) console.warn(`exact setup: ${room.text}`); }
   const pin = Bun.TOML.parse(readFileSync(resolve(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain;
-  const run = (cmd, args) => {
+  const run = (cmd, args, options = {}) => {
     console.log([cmd, ...args].join(' '));
-    const result = spawnSync(cmd, args, {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment()});
+    const result = spawnSync(cmd, args, {cwd: ROOT, stdio: 'inherit', env: cargoEnvironment(), ...options});
     if (result.status !== 0) throw new Error(`${cmd} failed: ${result.error?.message ?? result.status}`);
   };
   const output = (cmd, args) => {
@@ -369,10 +369,10 @@ export async function setup({check = false, platform = null, device = false, app
         const archive = resolve(stage, name), sum = `${archive}.sha256`;
         run('curl', ['-fL', '--retry', '3', '-o', archive, url]);
         run('curl', ['-fL', '--retry', '3', '-o', sum, `${url}.sha256`]);
-        const expected = readFileSync(sum, 'utf8').trim().split(/\s+/)[0];
-        if (createHash('sha256').update(readFileSync(archive)).digest('hex') !== expected) throw new Error('Binaryen checksum mismatch');
+        const expected = readFileSync(sum, 'utf8').trim().split(/\s+/)[0], bytes = readFileSync(archive);
+        if (createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error('Binaryen checksum mismatch');
         mkdirSync(binaryen, {recursive: true});
-        run('tar', ['-xzf', archive, '--strip-components=1', '-C', binaryen]);
+        run('tar', ['-xzf', '-', '--strip-components=1'], {cwd: binaryen, input: bytes, stdio: ['pipe', 'inherit', 'inherit']});
         process.env.PATH = `${resolve(binaryen, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
       } finally { rmSync(stage, {recursive: true, force: true}); }
     }

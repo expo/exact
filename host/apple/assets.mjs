@@ -173,8 +173,10 @@ export function appleAssetCatalogInventory(app, platform) {
     }
     return { path: relative(app.dir, path), files: catalogFiles(path) };
   };
+  // A selected variant's own project (LLP 1030.008) is named as the author wrote it.
+  const variant = app.manifest?.variant?.name, field = `${app.manifest?.variants?.[variant]?.host?.[section]?.icon ? `variants.${variant}.` : ''}host.${section}.icon`;
   // `AppIcon` is the primary set's name (`iosAssets`), and a set named like the project would take its name.
-  const primary = selected && project(selected, `host.${section}.icon`, ['AppIcon.appiconset', `${basename(selected, '.icon')}.appiconset`], 'select one primary icon');
+  const primary = selected && project(selected, field, ['AppIcon.appiconset', `${basename(selected, '.icon')}.appiconset`], 'select one primary icon');
   // An alternate's project is compiled under the alternate's name (LLP 1163.000 D2), which a set of that name would take.
   const alternates = platform === 'ios' ? alternateIcons(app.manifest ?? {}).flatMap(({ name, manifest }, i) => manifest.host.ios?.icon
     ? [{ ...project(manifest.host.ios.icon, `alternate_icons[${i}].host.ios.icon`, [`${name}.appiconset`], 'select one icon for the alternate'), alternate: name }] : []) : [];

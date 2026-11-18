@@ -75,6 +75,11 @@ and its build and drive plumbing are deleted, and Android's knob does not grow
 per host. Still out: variants for games, on Windows, for `exact install` and
 its siblings, for `share`, and in the association files.
 
+**Expanded (Charlie, 2026-11-18, #872, “Approve icon overrides”; LLP 1030.008 D1):**
+A variant may name its own iOS or macOS Icon Composer project. The Expo
+Services preview build can select its layered icon without rewriting app.json.
+Charlie waived the scope trade for these two icon fields.
+
 **Expanded (Charlie, 2026-11-17, on #764: "write up an LLP … and then pursue
 the best path"; LLP 1163.000):** alternate app icons the person chooses, on iOS
 and iPadOS: app.json `alternate_icons`, built as the app's own icons are, and

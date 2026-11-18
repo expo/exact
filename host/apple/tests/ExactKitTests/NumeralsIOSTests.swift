@@ -67,13 +67,14 @@ final class NumeralsIOSTests: XCTestCase {
         return last ?? ([], 0)
     }
 
-    /// The window's pixels, two a point.
-    private func shot(_ window: UIWindow) throws -> Pixels {
+    /// The window's pixels, `per` a point, down to `height` where one is given.
+    private func shot(_ window: UIWindow, per: CGFloat = 2, height: CGFloat? = nil) throws -> Pixels {
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 2; format.opaque = true
+        format.scale = per; format.opaque = true
+        let bounds = CGRect(x: 0, y: 0, width: window.bounds.width, height: height ?? window.bounds.height)
         // The layers as they rest: `drawHierarchy` approximates the blur
         // filter SwiftUI's numeric text keeps, and smears the area under it.
-        let image = try XCTUnwrap(UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+        let image = try XCTUnwrap(UIGraphicsImageRenderer(bounds: bounds, format: format).image { context in
             window.layer.render(in: context.cgContext)
         }.cgImage)
         var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
@@ -92,13 +93,13 @@ final class NumeralsIOSTests: XCTestCase {
         let i = (Int(y * 2) * pixels.width + Int(x * 2)) * 4
         return Self.isGreen(pixels.bytes[i], pixels.bytes[i + 1], pixels.bytes[i + 2])
     }
-    private func ink(_ pixels: Pixels, in area: CGRect) -> Ink {
+    private func ink(_ pixels: Pixels, in area: CGRect, per: CGFloat = 2) -> Ink {
         var ink = Ink()
-        for y in Int(area.minY * 2)..<Int(area.maxY * 2) {
-            for x in Int(area.minX * 2)..<Int(area.maxX * 2) {
+        for y in Int(area.minY * per)..<Int(area.maxY * per) {
+            for x in Int(area.minX * per)..<Int(area.maxX * per) {
                 let i = (y * pixels.width + x) * 4
                 let (r, g, b) = (pixels.bytes[i], pixels.bytes[i + 1], pixels.bytes[i + 2])
-                let point = CGRect(x: CGFloat(x) / 2 - area.minX, y: CGFloat(y) / 2 - area.minY, width: 0.5, height: 0.5)
+                let point = CGRect(x: CGFloat(x) / per - area.minX, y: CGFloat(y) / per - area.minY, width: 1 / per, height: 1 / per)
                 if Self.isRed(r, g, b) { ink.glyphs = ink.glyphs.union(point); ink.inked += 1 }
                 if Self.isGreen(r, g, b) { ink.box = ink.box.union(point) }
             }
@@ -211,6 +212,54 @@ final class NumeralsIOSTests: XCTestCase {
                 XCTAssertTrue(isGreen(pixels, rolled.box.minX + 1, 20 + rolled.box.midY), "\(name): filled inside")
             }
             p.apply(wireBatch([["op": "destroy", "id": one], ["op": "destroy", "id": two], ["op": "roots", "ids": []]]))
+        }
+    }
+
+    /// The rolling line starts on the device pixel Exact's own drawing of
+    /// the paragraph starts on, at the same height, as its count grows:
+    /// centred, aligned to the end, and in a paragraph box off the pixel
+    /// grid. A 20 pt line is taller in SwiftUI than Exact lays it out.
+    func testTheRollingLineStartsOnThePixelExactDrawsItOn() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "SwiftUI draws only in a scene's window") }
+        let (p, window) = hosted("numerals-pixels", in: scene)
+        // A quarter of a device pixel: text between two pixels reads apart from text on one.
+        let per = 4 * window.screen.scale
+        let cases: [(String, [String: Any], [String: String])] = [
+            ("centred", ["text_align": "center"], [:]),
+            ("aligned to the end", ["text_align": "end"], [:]),
+            ("a box off the pixel grid", [:], ["textLeft": "10.25", "textOffset": "8.25"]),
+        ]
+        // Every case in one window, each a rolling paragraph over the same one drawn by Exact.
+        var creates: [[String: Any]] = [], frames: [[String: Any]] = [], ids: [Int] = [], areas: [(top: CGRect, bottom: CGRect)] = []
+        for (k, (_, style, props)) in cases.enumerated() {
+            let one = 100 * (k + 1) + 1, two = one + 50, y = Double(20 + 120 * k)
+            var paragraph: [String: Any] = ["font_size": 20.0]
+            paragraph.merge(style) { $1 }
+            var rolling = paragraph
+            rolling["content_transition"] = "numeric"
+            creates += [["op": "create", "id": one, "kind": "text", "style": rolling, "props": props],
+                        ["op": "create", "id": two, "kind": "text", "style": paragraph, "props": props]]
+            frames += [["op": "frame", "id": one, "x": 20.0, "y": y, "w": 360.0, "h": 40.0],
+                       ["op": "frame", "id": two, "x": 20.0, "y": y + 60, "w": 360.0, "h": 40.0]]
+            ids += [one, two]
+            areas.append((CGRect(x: 0, y: y, width: 400, height: 40), CGRect(x: 0, y: y + 60, width: 400, height: 40)))
+        }
+        p.apply(wireBatch(creates + [["op": "roots", "ids": ids]] + frames))
+        let views = try ids.map { try XCTUnwrap(p.views[UInt32($0)]) }
+        for count in ["8", "88", "8888"] {
+            p.apply(wireBatch(ids.map { ["op": "paragraph", "id": $0, "runs": runs($0, count)] }))
+            paint(p, views)
+            _ = still(window, inked: areas.flatMap { [$0.top, $0.bottom] }, count)
+            let pixels = try shot(window, per: per, height: areas[areas.count - 1].bottom.maxY)
+            for (k, (name, _, _)) in cases.enumerated() {
+                XCTAssertTrue(views[2 * k].rollsNumerals, "\(name), \(count)")
+                let rolled = ink(pixels, in: areas[k].top, per: per), drawn = ink(pixels, in: areas[k].bottom, per: per)
+                for (what, got, want) in [("the glyphs' left", rolled.glyphs.minX, drawn.glyphs.minX), ("the glyphs' top", rolled.glyphs.minY, drawn.glyphs.minY),
+                                          ("the glyphs' bottom", rolled.glyphs.maxY, drawn.glyphs.maxY), ("the box's left", rolled.box.minX, drawn.box.minX),
+                                          ("the box's top", rolled.box.minY, drawn.box.minY)] {
+                    XCTAssertEqual(got * window.screen.scale, want * window.screen.scale, accuracy: 0.25, "\(name), \(count): \(what), in device pixels")
+                }
+            }
         }
     }
 

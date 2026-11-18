@@ -49,7 +49,7 @@ final class ContentIndexTests: XCTestCase {
     /// kinds the widgets name, and answers a query as the mirror does.
     func testTheWidgetsListFollowsTheMirrorAndAnswersAsItDoes() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        ExactContentIndex.widgetKinds = ["book"]
+        ExactContentIndex.widgetKinds = []
         ExactContentIndex.widgetRoot = directory
         defer { ExactContentIndex.widgetKinds = []; ExactContentIndex.widgetRoot = nil }
         func published(_ kind: String, ids: [String]? = nil, matching: String? = nil) -> [String] {
@@ -57,6 +57,12 @@ final class ContentIndexTests: XCTestCase {
         }
         XCTAssertEqual(published("book"), [], "nothing before the app publishes")
         XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke"), book("2", "Dune", "Frank Herbert")]))
+        XCTAssertEqual(published("book"), [], "an app without widget entity parameters leaves its index private")
+        // An update adds the picker to an app that already indexed these books.
+        ExactContentIndex.widgetKinds = ["book"]
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(query("book"), ["1", "2"])
+        XCTAssertEqual(published("book"), ["1", "2"])
         XCTAssertNil(ExactContentIndex.set(kind: "shelf", [book("s", "Reading", "")]))
         for (ids, matching) in [(nil, nil), (["2", "9", "1"], nil), (nil, "HÉR"), (nil, "piran")] as [([String]?, String?)] {
             XCTAssertEqual(published("book", ids: ids, matching: matching), query("book", ids: ids, matching: matching))

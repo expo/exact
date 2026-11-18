@@ -4,7 +4,7 @@
 // carrier and installer stay loopback-only. Games serve HTTP during the first build.
 import { buildingServer } from '../../game/dev.mjs';
 import { acceptModuleReply, failedPhase, phased, phasedAsync } from './dev-phase.mjs';
-import { cacheBuildInputs, nativeWatchPaths, watchDirectoryInputs, watchModuleSources } from './dev-watch.mjs';
+import { cacheBuildInputs, readDevBuilds as readBuilds, nativeWatchPaths, watchDirectoryInputs, watchModuleSources } from './dev-watch.mjs';
 import { directoryInputNames } from '../../scripts/cargo-dep-info.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 let tuning = null;
@@ -19,7 +19,7 @@ import { slashRelative, within } from '../../scripts/paths.mjs';
 import { rustPackage, rustOutput, rustInputs, rustCards } from '../../scripts/rust.mjs';
 import { currentGpuModules, gpuView } from '../../scripts/app-shells.mjs';
 import { injectedProfiles, gpuModules, shaderWatchRoots, rustPolicy, rebuildPolicy } from '../../scripts/app.mjs';
-import { HOST_DEV, webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
+import { HOST_DEV, webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, resolveApp } from '../../scripts/app.mjs';
 import { developmentLinks } from '../apple/build.mjs';
 import { acceptsHTML, webRequestURL } from '../../scripts/origin.mjs';
 import { guardFlags } from '../../scripts/help.mjs';

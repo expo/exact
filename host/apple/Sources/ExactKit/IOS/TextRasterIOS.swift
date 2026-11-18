@@ -514,22 +514,30 @@ extension NodeView {
         return ink.isNull || bounds.contains(ink)
     }
     /// The paragraph as the Numerals capability draws it: its line at the
-    /// line's place and baseline. SwiftUI's
-    /// `Text` reads no inline box's background, so those are painted here,
-    /// under it, for the text as it now reads; they do not roll.
+    /// line's place and baseline, on the display's pixel grid as the raster
+    /// is. Its box is where `textPlace` puts the raster's, and its line
+    /// starts on the device pixel Core Graphics paints the raster's first
+    /// glyph on, the one at or before the line's start. SwiftUI rounds its
+    /// text to device pixels only within its own view, so a view that starts
+    /// between two leaves the glyphs there. SwiftUI's `Text` reads no inline
+    /// box's background, so those are painted here, under it, for the text
+    /// as it now reads; they do not roll.
     func showNumerals(_ ctx: CGContext) {
         guard let engine = text, let capability = NumeralLink.installed else { return }
         dropTextRaster()
-        let spec = paragraphSpec(), box = paragraphBox(), mode = style["content_transition"]?.string ?? "numeric"
+        let spec = paragraphSpec(), mode = style["content_transition"]?.string ?? "numeric"
         let shown = engine.attributed(spec)
         guard let p = paragraphLayout(), let line = p.lines.first else {
             return capability.show(self, attributed: shown, box: contentBox(), baseline: nil, align: spec.align, mode: mode)
         }
+        // The display's scale, not `ctx`'s: a picture of this layer at another scale draws it too.
+        let scale = max(1, window?.screen.scale ?? traitCollection.displayScale)
+        let box = CGRect(origin: textPlace(scale: scale), size: paragraphBox().size)
         TextEngine.draw(p, spec: spec, in: box, context: ctx, pass: .backgrounds)
-        let baseline = TextEngine.paintedLine(p.baselines[0], top: box.minY, scale: TextEngine.deviceScale(ctx), lineScale: p.lineScale)
+        let baseline = TextEngine.paintedLine(p.baselines[0], top: box.minY, scale: scale, lineScale: p.lineScale)
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        let lineBox = CGRect(x: box.minX + p.origin(0, align: spec.align, width: box.width), y: box.minY,
-                             width: max(1, width), height: max(1, p.height, baseline - box.minY))
+        let start = (p.origin(0, align: spec.align, width: box.width) * scale).rounded(.down) / scale
+        let lineBox = CGRect(x: box.minX + start, y: box.minY, width: max(1, width), height: max(1, p.height, baseline - box.minY))
         capability.show(self, attributed: shown, box: lineBox, baseline: baseline - box.minY, align: spec.align, mode: mode)
     }
     /// The whole paragraph's pixels are up for its current text and box: a
