@@ -1,5 +1,5 @@
-//! Observations of the safe area and the keyboard, per box (@ref LLP 1123
-//! D2's band, D7, D9).
+//! Observations of the safe area, the keyboard and the layout regions, per
+//! box (@ref LLP 1123 D2's band, D7, D8, D9, D10).
 //!
 //! A content owner's host gives its root a band: the owner view's raw
 //! `safeAreaInsets`, in its block's space, or none while it is unavailable.
@@ -14,8 +14,10 @@
 //! scroller. A box outside every owner, a
 //! document top-layer box's content included, observes the session view's
 //! band on the viewport. A box's readings of the keyboard are what UIKit
-//! gives a view as its keyboard guide (D7, `keyboard.rs`), each family of
-//! observations four components of a reader's input.
+//! gives a view as its keyboard guide (D7, `keyboard.rs`), and its layout
+//! regions what UIKit gives a view's margins and readable content (D8,
+//! `margins.rs`), each family of observations four components of a
+//! reader's input.
 //!
 //! A reader's border box depends on what it reads, so the kernel solves the
 //! readers after each layout ([`Kernel::solve_observations`]): each input
@@ -33,7 +35,7 @@ use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
 use crate::id::{IdMap, IdSet, Offer, ViewId};
 use crate::layout::LayoutReceipt;
-use crate::style::calc::{Family, COMPONENTS};
+use crate::style::calc::{Components, Family, COMPONENTS};
 
 /// The rounds the solve lays its readers out in before it leaves the ones
 /// still off unsettled (D9).
@@ -44,8 +46,8 @@ const MAX_ROUNDS: usize = 24;
 /// observation guaranteed-invalid.
 pub(crate) type Observed = [Option<f32>; COMPONENTS];
 
-// A reader's components are bits of a `u16` (`Readers::observed`)
-const _: () = assert!(COMPONENTS <= 16);
+// A reader's components are bits of a `Components` (`Readers::observed`)
+const _: () = assert!(COMPONENTS <= Components::BITS as usize);
 
 /// What a box reads of one family, top right bottom left; `None` where it is
 /// unavailable.
@@ -74,8 +76,10 @@ pub(crate) struct Observations {
     /// Each owner's used size when its readers were last measured, which
     /// its band edges.
     spaces: IdMap<u32, (f32, f32)>,
-    /// The readers last measured in a document top-layer box.
-    top_layer: IdSet<u32>,
+    /// The readers measured at every layout, whose readings move with no
+    /// change to their own frames: those last measured in a document
+    /// top-layer box, and those whose margins project a superview's (D8).
+    always: IdSet<u32>,
     /// Half a device pixel at the last solve, within which a reader is
     /// settled.
     tolerance: f32,
@@ -95,6 +99,8 @@ pub(crate) struct Observations {
     passing_keyboard: IdSet<u32>,
     /// The bars (D12): which boxes are styled as one, and their slots' depths.
     pub(crate) bars: super::bar::Bars,
+    /// What each owner's host reports of its margins (D8).
+    pub(crate) margins: IdMap<u32, super::margins::OwnerMargins>,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
     /// The keyboard each owner's host reports, and the policy (D7).
@@ -138,12 +144,24 @@ impl Observations {
     /// is each reader's components. Returns whether there were any.
     pub(super) fn forget_keyboard_readings(
         &mut self,
-        observed: &IdMap<u32, u16>,
+        observed: &IdMap<u32, Components>,
+        of: impl Fn(Option<u32>) -> bool,
+    ) -> bool {
+        let bits = Family::Keyboard.bits() | Family::KeyboardUndocked.bits();
+        self.forget_readings(observed, bits, of)
+    }
+
+    /// Forget the readouts of the readers of any of `families` (bits of
+    /// [`Family::bits`]) in the spaces `of` names, so the next solve
+    /// measures them again. Whether any was forgotten.
+    pub(super) fn forget_readings(
+        &mut self,
+        observed: &IdMap<u32, Components>,
+        families: Components,
         of: impl Fn(Option<u32>) -> bool,
     ) -> bool {
         let before = self.readouts.len();
-        let reads =
-            |slot: &u32| (observed.get(slot)).is_some_and(|&c| super::keyboard::reads_keyboard(c));
+        let reads = |slot: &u32| (observed.get(slot)).is_some_and(|&c| c & families != 0);
         self.readouts
             .retain(|slot, r| !(of(r.owner) && reads(slot)));
         self.readouts.len() != before
@@ -216,6 +234,7 @@ impl Observations {
         self.passing_keyboard.remove(&slot);
         self.bars.forget(slot);
         self.keyboards.forget(slot);
+        self.margins.remove(&slot);
         self.stopped_reading(slot);
     }
 
@@ -394,8 +413,8 @@ impl Kernel {
                 let readout = measure(&self.arena, s, &space);
                 let (measured, caps) = (readout.observed, readout.depths);
                 let observations = &mut self.arena.observations;
-                if readout.top_layer {
-                    observations.top_layer.insert(s);
+                if readout.top_layer || readout.projects {
+                    observations.always.insert(s);
                 }
                 observations.readouts.insert(s, readout);
                 let input = observations.input(s);
@@ -444,9 +463,10 @@ impl Kernel {
     }
 
     /// The readers under `slot` to measure after `receipt`'s layout, in
-    /// order: those whose frames it moved, those with no readout, those in a
-    /// top-layer box, whose place in the viewport can move without their
-    /// frames, and `also`; none of `skip`.
+    /// order: those whose frames it moved, those with no readout, those
+    /// measured at every layout (in a top-layer box, whose place in the
+    /// viewport can move without their frames, or whose margins project a
+    /// superview's), and `also`; none of `skip`.
     fn readers_due(
         &mut self,
         slot: u32,
@@ -457,8 +477,8 @@ impl Kernel {
         let observations = &mut self.arena.observations;
         let readouts = &observations.readouts;
         observations
-            .top_layer
-            .retain(|s| readouts.get(s).is_some_and(|r| r.top_layer));
+            .always
+            .retain(|s| readouts.get(s).is_some_and(|r| r.top_layer || r.projects));
         let (arena, observations) = (&self.arena, &self.arena.observations);
         let observers = &arena.readers.observers;
         let mut out: Vec<u32> = (receipt.changed.iter())
@@ -466,7 +486,7 @@ impl Kernel {
             .filter(|&s| observers.contains(s))
             .collect();
         let mine = |s: &u32| within(arena, *s, slot);
-        out.extend(observations.top_layer.iter().filter(|s| mine(s)));
+        out.extend(observations.always.iter().filter(|s| mine(s)));
         // Skip the walk over every reader while each has a readout
         if observations.readouts.len() < observers.len() {
             let unmeasured = observers
@@ -744,7 +764,7 @@ pub(super) fn within(arena: &NodeArena, slot: u32, root: u32) -> bool {
 /// Whether `input` is within `tolerance` of `measured` on each of the
 /// reader's `components`, an unavailable one matching only an unavailable
 /// one.
-fn settled(input: Observed, measured: Observed, tolerance: f32, components: u16) -> bool {
+fn settled(input: Observed, measured: Observed, tolerance: f32, components: Components) -> bool {
     (0..COMPONENTS)
         .filter(|e| components & 1 << e != 0)
         .all(|e| match (input[e], measured[e]) {
@@ -755,10 +775,17 @@ fn settled(input: Observed, measured: Observed, tolerance: f32, components: u16)
 }
 
 /// A reader's last sample on each component, for the secant step.
-#[derive(Default)]
 struct Samples {
     /// The input and residual of its round before last, per component.
     last: [Option<(f32, f32)>; COMPONENTS],
+}
+
+impl Default for Samples {
+    fn default() -> Self {
+        Samples {
+            last: [None; COMPONENTS],
+        }
+    }
 }
 
 impl Samples {
@@ -767,7 +794,8 @@ impl Samples {
     /// the residuals of this round and the one before, else plain
     /// substitution; a component it does not read keeps its input. A step
     /// lands within what an observation can be, 0 to its most `caps` (the
-    /// area's depth, or the keyboard's for its readings); one whose
+    /// area's depth, the keyboard's for its readings, and for the layout
+    /// regions their own margins with the area's depth); one whose
     /// candidate lies behind the input, against its residual, takes the end
     /// of that range the residual points to: the measurement outruns the
     /// line there, steeper than it, up to where it stops at that end. So
@@ -783,7 +811,7 @@ impl Samples {
         measured: Observed,
         caps: [f32; COMPONENTS],
         tolerance: f32,
-        components: u16,
+        components: Components,
     ) -> Observed {
         let mut next = input;
         for e in (0..COMPONENTS).filter(|e| components & 1 << e != 0) {
@@ -830,13 +858,17 @@ impl Samples {
 struct Readout {
     observed: Observed,
     /// The most each component can be, past which the solve tries none
-    /// (`Samples::step`): the unsafe area's depth on each edge, and the
-    /// keyboard's depth across it for its readings.
+    /// (`Samples::step`): the unsafe area's depth on each edge, the
+    /// keyboard's depth across it for its readings, and a layout region's
+    /// own margins with the area's depth, or a superview's, for its.
     depths: [f32; COMPONENTS],
     /// The owner whose band it measured, `None` for the session's.
     owner: Option<u32>,
     /// Whether it is in a document top-layer box.
     top_layer: bool,
+    /// Whether it reads margins that project a superview's, which move when
+    /// a box above it does (D8).
+    projects: bool,
 }
 
 impl Readout {
@@ -848,6 +880,7 @@ impl Readout {
             depths: [0.0; COMPONENTS],
             owner,
             top_layer: false,
+            projects: false,
         }
     }
 }
@@ -855,18 +888,43 @@ impl Readout {
 /// What `slot` observes on each edge of its `space` on the layout just
 /// made: of the safe area, as UIKit gives a view its `safeAreaInsets`, the
 /// distance from the box's edge to the unsafe area's inner side, at least 0
-/// and at most the area's depth, whatever the box's own size (D9); and of the
-/// keyboard, as UIKit gives a view its keyboard guide (D7).
+/// and at most the area's depth, whatever the box's own size (D9); of the
+/// keyboard, as UIKit gives a view its keyboard guide (D7); and of the layout
+/// regions, as UIKit gives a view's margins and readable content (D8).
 fn measure(arena: &NodeArena, slot: u32, space: &Space) -> Readout {
     let (mut observed, mut depths) = ([None; COMPONENTS], [0.0; COMPONENTS]);
     // Each family is measured only for a box that reads it
     let read = arena.readers.observed.get(&slot).copied().unwrap_or(0);
-    if let Some(band) = space.band.filter(|_| read & Family::SafeArea.bits() != 0) {
+    // The margins families follow D8's rule where the owner's host reports
+    // its margins, and resolve to the safe area where it reports none (D10,
+    // "Other hosts")
+    let reported = space.owner.and_then(|o| arena.observations.margins.get(&o));
+    if let (Some(owner), Some(band)) = (reported, space.band.filter(|_| read & margins_bits() != 0))
+    {
+        let regions = super::margins::regions(arena, slot, space, band, owner);
+        let families = Family::MARGINS.into_iter().chain([Family::SystemMinimum]);
+        for (i, family) in families.enumerate() {
+            let at = family as usize * 4;
+            for e in 0..4 {
+                observed[at + e] = Some(regions.readings[i][e]);
+                depths[at + e] = regions.caps[i][e];
+            }
+        }
+    }
+    let families = || {
+        std::iter::once(Family::SafeArea)
+            .chain(Family::MARGINS.into_iter().filter(|_| reported.is_none()))
+            .filter(|f| read & f.bits() != 0)
+    };
+    if let Some(band) = space.band.filter(|_| families().next().is_some()) {
         let sides = area(arena, slot, space, band);
         let edges = space.edges(arena, slot);
-        for e in 0..4 {
-            observed[e] = Some(depth(sides[e], edges[e]));
-            depths[e] = (sides[e][1] - sides[e][0]).max(0.0);
+        for family in families() {
+            let at = family as usize * 4;
+            for e in 0..4 {
+                observed[at + e] = Some(depth(sides[e], edges[e]));
+                depths[at + e] = (sides[e][1] - sides[e][0]).max(0.0);
+            }
         }
     }
     let keyboard = super::keyboard::reads_keyboard(read)
@@ -889,7 +947,17 @@ fn measure(arena: &NodeArena, slot: u32, space: &Space) -> Readout {
         depths,
         owner: space.owner,
         top_layer: space.root.is_some() && space.owner.is_none(),
+        projects: reported.is_some()
+            && read & margins_bits() != 0
+            && super::margins::preserves(arena, slot),
     }
+}
+
+/// The components of D8's families, the system minimum included.
+pub(crate) fn margins_bits() -> Components {
+    Family::MARGINS
+        .iter()
+        .fold(Family::SystemMinimum.bits(), |bits, f| bits | f.bits())
 }
 
 /// `into` with `round`'s frames, publication candidates and flow changes

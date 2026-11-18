@@ -622,6 +622,9 @@ fn enum_rows_resolve_names_and_others_do_not() {
                 | StyleId::SafeArea
                 | StyleId::SafeAreaIgnore
                 | StyleId::SafeAreaBar
+                | StyleId::LayoutMarginsPreserved
+                | StyleId::LayoutMarginsFromSafeArea
+                | StyleId::LayoutMarginsMinimum
         );
         assert_eq!(
             names.is_empty(),

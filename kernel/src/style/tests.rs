@@ -940,6 +940,7 @@ fn takes_text_is_what_set_dynamic_reads_on_a_number_row() {
         "none",
         "auto",
         "normal",
+        "true",
         "45deg",
         "thin",
         "medium",

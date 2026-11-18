@@ -287,6 +287,13 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-safe-area-bar", "exact LLP 1123 D12", AttrTarget::Shorthand),
     ("-exact-additional-safe-area", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::AdditionalSafeAreaTop, StyleId::AdditionalSafeAreaRight, StyleId::AdditionalSafeAreaBottom, StyleId::AdditionalSafeAreaLeft, ])),
     ("-exact-safe-area-padding", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::SafeAreaPaddingTop, StyleId::SafeAreaPaddingRight, StyleId::SafeAreaPaddingBottom, StyleId::SafeAreaPaddingLeft, ])),
+    // A box's margins as a UIView's (LLP 1123 D8): its own, physical or directional
+    // (top, leading, bottom, trailing), and how its safe area and superview raise them.
+    ("-exact-layout-margins", "exact LLP 1123 D8", AttrTarget::Styles(&[ StyleId::LayoutMarginTop, StyleId::LayoutMarginRight, StyleId::LayoutMarginBottom, StyleId::LayoutMarginLeft, ])),
+    ("-exact-directional-layout-margins", "exact LLP 1123 D8", AttrTarget::Styles(&[ StyleId::LayoutMarginTop, StyleId::LayoutMarginLeading, StyleId::LayoutMarginBottom, StyleId::LayoutMarginTrailing, ])),
+    ("-exact-preserves-superview-layout-margins", "exact LLP 1123 D8", AttrTarget::Styles(&[StyleId::LayoutMarginsPreserved])),
+    ("-exact-insets-layout-margins-from-safe-area", "exact LLP 1123 D8", AttrTarget::Styles(&[StyleId::LayoutMarginsFromSafeArea])),
+    ("-exact-respects-system-minimum-layout-margins", "exact LLP 1123 D8", AttrTarget::Styles(&[StyleId::LayoutMarginsMinimum])),
     ("--exact-safe-area-inset-top", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetTop])),
     ("--exact-safe-area-inset-right", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetRight])),
     ("--exact-safe-area-inset-bottom", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetBottom])),

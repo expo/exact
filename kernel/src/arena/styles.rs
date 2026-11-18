@@ -69,8 +69,18 @@ impl NodeArena {
         } else if self.ignoring.remove(slot) {
             self.observations.forget_taken(slot);
         }
+        // Measure the readers at and under a box whose margins changed again (D8): its own,
+        // what its safe area adds, which it preserves, and which side leading maps to
+        let old = &self.styles[slot as usize];
+        let margins = crate::kernel::margins::ROWS
+            .into_iter()
+            .chain([crate::StyleId::Direction]);
+        let restyled = margins.into_iter().any(|id| {
+            old.mask.has(id) != style.mask.has(id)
+                || style.mask.has(id) && old.get(id) != style.get(id)
+        });
         self.styles[slot as usize] = style;
-        if scrolled != crate::kernel::area::scroll_axes(self, slot) {
+        if restyled || scrolled != crate::kernel::area::scroll_axes(self, slot) {
             self.observations.moved(slot);
         }
         self.refresh_sticky(slot);

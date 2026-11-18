@@ -43,7 +43,7 @@ pub(crate) struct Readers {
     pub(crate) observers: SlotSet,
     /// The components each observer reads, as
     /// [`calc::Comparison::observed_components`] gives them.
-    pub(crate) observed: crate::id::IdMap<u32, u16>,
+    pub(crate) observed: crate::id::IdMap<u32, crate::style::calc::Components>,
     /// Nodes with a length that reads a native target's raw insets, and
     /// the targets each reads, each with the edges it reads as bits (LLP
     /// 1123 D9, "The native chain").
@@ -56,7 +56,7 @@ pub(crate) struct Readers {
     /// Nodes that declare one whose value reads a local inset: captures.
     captures: SlotSet,
     /// Nodes that declare one whose value reads the node's own observation,
-    /// today a keyboard reading (LLP 1123 D5): captures that the readers'
+    /// a keyboard reading or a layout region (LLP 1123 D5): captures that the readers'
     /// solve measures, as it measures a length that reads one.
     observing: SlotSet,
     /// Nodes that override a local inset.
@@ -221,7 +221,7 @@ fn put(set: &mut SlotSet, slot: u32, member: bool) {
 
 /// The components of its node's own observations a declared value reads
 /// (LLP 1123 D5): a capture of them.
-fn observed_components(value: &Dimension) -> u16 {
+fn observed_components(value: &Dimension) -> crate::style::calc::Components {
     match value {
         Dimension::Compare(c) => c.observed_components(),
         _ => 0,

@@ -1,0 +1,23 @@
+// Duo Lab's margins (LLP 1123 D8, D10): a route that lies under the bands, as a
+// controller's view does, preserves the controller view's margins. A plain box at
+// its top pads by its own margins, which its safe area adds to; a box that
+// preserves its superview's pads by the controller view's; and a column with
+// directional margins, 30 leading and 5 trailing, pads its sides by its readable
+// content, the box's width less its own margins, centred. The host reports each
+// margin from UIKit. It joins Duo Lab's stack when hosts report margins (LLP 1123
+// stage 3); until then `contract/cli/tests/it/duo_lab.rs` lays it out with what
+// an iPhone 18 Pro reports.
+routes nav
+  home "/"
+
+component Margins
+  view
+    main testId="root" navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column" row-gap=12 -exact-safe-area-ignore="container" -exact-preserves-superview-layout-margins="true"
+          column testId="plain" background-color="-exact-secondary-fill" padding-top="var(--exact-layout-margins-inset-top)" padding-right="var(--exact-layout-margins-inset-right)" padding-bottom="var(--exact-layout-margins-inset-bottom)" padding-left="var(--exact-layout-margins-inset-left)"
+            text "Padded by its margins: its own, and its safe area above"
+          column testId="preserving" background-color="-exact-secondary-fill" -exact-preserves-superview-layout-margins="true" padding-top="var(--exact-layout-margins-inset-top)" padding-right="var(--exact-layout-margins-inset-right)" padding-bottom="var(--exact-layout-margins-inset-bottom)" padding-left="var(--exact-layout-margins-inset-left)"
+            text "Padded by the controller view's margins, which it preserves"
+          column testId="readable" -exact-directional-layout-margins="0 30 0 5" padding-left="var(--exact-readable-content-inset-left)" padding-right="var(--exact-readable-content-inset-right)"
+            text "A readable column: its width less its own margins, centred"

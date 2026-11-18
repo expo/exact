@@ -987,15 +987,18 @@ pub(crate) fn computed_list<'e>(
     let Some(span) = lists(value, body, &mut Vec::new()) else {
         return Ok(());
     };
-    let longhands: Vec<String> = longhands(name).iter().map(|l| format!("`{l}`")).collect();
-    err(
-        "lower-css-shorthand",
-        format!(
-            "`{name}` is computed here as a list of values, which no host splits at run time; write {} (each may be computed), or a literal `{name}`",
-            longhands.join("/")
-        ),
-        span,
-    )
+    // Exact's box shorthands have no longhand attributes: only a literal value splits
+    let message = match name.starts_with("-exact-") {
+        true => format!("`{name}` is computed here as a list of values, which no host splits at run time; write a literal `{name}`, or one computed value for every side"),
+        false => {
+            let longhands: Vec<String> = longhands(name).iter().map(|l| format!("`{l}`")).collect();
+            format!(
+                "`{name}` is computed here as a list of values, which no host splits at run time; write {} (each may be computed), or a literal `{name}`",
+                longhands.join("/")
+            )
+        }
+    };
+    err("lower-css-shorthand", message, span)
 }
 
 /// A box shorthand (`padding: <length>{1,4}`, `border-color: <color>{1,4}`,
@@ -1022,6 +1025,7 @@ pub(crate) fn sides(name: &str, value: &Expr) -> Result<Option<Vec<Expr>>, Lower
                     let (count, order) = match name {
                         "border-radius" => ("one to four", "top-left, top-right, bottom-right, bottom-left; no `/` elliptical radii"),
                         "gap" => ("one or two", "row, column"),
+                        "-exact-directional-layout-margins" => ("one to four", "top, leading, bottom, trailing"),
                         _ if rows == 2 => ("one or two", "x, y"),
                         _ => ("one to four", "top, right, bottom, left"),
                     };

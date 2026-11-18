@@ -745,8 +745,9 @@ fn fallback_value(
 
 /// Whether `name` (after its `--`) is a custom property the host sets: a
 /// box's observation of a family on an edge, the safe area's
-/// (`exact-safe-area-inset-top`) or the keyboard's
-/// (`exact-keyboard-inset-bottom`, LLP 1123 D7, D9).
+/// (`exact-safe-area-inset-top`), the keyboard's
+/// (`exact-keyboard-inset-bottom`, LLP 1123 D7, D9) or a layout region's
+/// (`exact-layout-margins-inset-left`, D8, D10).
 fn host_property(name: &str) -> bool {
     exact_kernel::style::calc::Family::named(&format!("--{name}")).is_some()
 }

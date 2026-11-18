@@ -110,6 +110,11 @@ pub(crate) fn rederive(
 ) {
     let rows = node_rows(&arena.effective_style(slot));
     crate::txn::style_changed(arena, layout, slot, rows, receipt);
+    // Measure the box again where a margin reads what moved (D8): its own readings are the
+    // ones its margins reach, and a preserving box below it is measured at every layout
+    if super::margins::ROWS.iter().any(|&id| rows.has(id)) {
+        arena.observations.remeasure(slot);
+    }
     if let Some(node) = arena.taffy(slot).filter(|_| dirty) {
         layout.mark_dirty(node);
     }

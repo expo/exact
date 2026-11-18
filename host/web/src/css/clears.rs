@@ -23,10 +23,19 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         // A clear is unsaid, as `auto` is (selection.rs): no declaration, so the
         // page's sheet decides.
         UserSelect => {}
-        // Their values write nothing (css.rs, LLP 1123 D4, D11, D12), so neither does a clear.
+        // Their values write nothing (css.rs, LLP 1123 D4, D8, D11, D12), so neither does a clear.
         SafeAreaIgnore
         | SafeAreaIgnoreAlign
         | SafeAreaBar
+        | LayoutMarginTop
+        | LayoutMarginRight
+        | LayoutMarginBottom
+        | LayoutMarginLeft
+        | LayoutMarginLeading
+        | LayoutMarginTrailing
+        | LayoutMarginsPreserved
+        | LayoutMarginsFromSafeArea
+        | LayoutMarginsMinimum
         | AdditionalSafeAreaTop
         | AdditionalSafeAreaRight
         | AdditionalSafeAreaBottom

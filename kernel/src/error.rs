@@ -364,6 +364,8 @@ pub enum LayoutError {
     Contribution(&'static str),
     /// A host's report of an owner's keyboard refused (LLP 1123 D7).
     Keyboard(&'static str),
+    /// A host's report of an owner's margins refused (LLP 1123 D8).
+    Margins(&'static str),
     /// A definite available-space offer is infinite or NaN.
     InvalidOffer,
     /// The id is not live.

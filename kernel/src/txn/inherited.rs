@@ -73,6 +73,17 @@ pub(super) fn inherited_changed(
     if rows.has(crate::StyleId::Direction) && arena.ignoring.contains(slot) {
         arena.observations.restyled_taker(slot);
     }
+    // A box's leading and trailing margins take their sides by its direction (LLP 1123 D8)
+    let margins = crate::kernel::observe::margins_bits();
+    if rows.has(crate::StyleId::Direction)
+        && arena
+            .readers
+            .observed
+            .get(&slot)
+            .is_some_and(|c| c & margins != 0)
+    {
+        arena.observations.moved(slot);
+    }
     if rows.has(crate::StyleId::FontSize) {
         arena.relative.invalidate(slot);
     }

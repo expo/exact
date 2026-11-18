@@ -478,10 +478,10 @@ impl Calc {
     }
 
     /// `var(--exact-safe-area-inset-<edge>)`, the local inset (LLP 1123 D9),
-    /// without a fallback; or with an optional fallback, a length,
-    /// `var(--exact-keyboard-inset-<edge>)` and
-    /// `var(--exact-keyboard-undocked-inset-<edge>)`, the keyboard's readings
-    /// (D7), or `var(--name)`, an author's custom property (D5). A name is
+    /// without a fallback; or with an optional fallback, a length, another
+    /// family's reading, `var(--exact-<family>-inset-<edge>)`: the keyboard's
+    /// (D7) and the layout regions' (D8, D10); or `var(--name)`, an author's
+    /// custom property (D5). A name is
     /// matched as written, as a custom property's is.
     fn var<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
         self.count(p)?;
@@ -499,7 +499,7 @@ impl Calc {
             return Ok((Node::Env(EnvTerm::Local(edge)), Ty::Length));
         }
         // The safe area's name is the local inset above until activation
-        // retires it, so only the keyboard's readings are observations here
+        // retires it, so only the other families' readings are observations here
         let observed = super::Family::named(&name);
         if observed.is_none() && !crate::style::safe_area_properties::is_author_name(&name) {
             return why(p, refusal::VAR);

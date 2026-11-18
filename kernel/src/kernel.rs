@@ -35,6 +35,7 @@ use history::RetainedReceipt;
 pub(crate) mod ignore;
 mod intrinsic;
 mod keyboard;
+pub(crate) mod margins;
 pub(crate) mod observe;
 pub(crate) mod owner;
 mod provenance;
@@ -56,6 +57,7 @@ pub(crate) use cover::{
 };
 pub use cover::{credited_edges, HostCover};
 pub use keyboard::{Keyboard, KeyboardPolicy};
+pub use margins::OwnerMargins;
 pub use provenance::{Contribution, Operation};
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;

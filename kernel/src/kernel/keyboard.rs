@@ -407,7 +407,7 @@ fn check(keyboard: &Keyboard) -> Result<(), KernelError> {
 }
 
 /// Whether a reader's `components` read the keyboard.
-pub(crate) fn reads_keyboard(components: u16) -> bool {
+pub(crate) fn reads_keyboard(components: crate::style::calc::Components) -> bool {
     use crate::style::calc::Family;
     components & (Family::Keyboard.bits() | Family::KeyboardUndocked.bits()) != 0
 }

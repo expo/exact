@@ -496,7 +496,7 @@ fn style_value(
             if host {
                 return err(
                     "lower-attr-value",
-                    format!("`--exact-*` names are the host's own: a value reads only the observations `var(--exact-safe-area-inset-<edge>)`, `var(--exact-keyboard-inset-<edge>)` and `var(--exact-keyboard-undocked-inset-<edge>)`, and a style is the author's `-exact-` name: `{}=\"{v}\"`", a.name),
+                    format!("`--exact-*` names are the host's own: a value reads only the observations `var(--exact-<family>-inset-<edge>)`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, and a style is the author's `-exact-` name: `{}=\"{v}\"`", a.name),
                     span,
                 );
             }

@@ -108,9 +108,11 @@ pub struct Var {
     pub fallback: Option<Box<Node>>,
 }
 
-/// What an observation reads (LLP 1123 D10's families): the safe area, or
-/// the keyboard's guide, docked only or following an undocked keyboard too
-/// (D7).
+/// What an observation reads (LLP 1123 D10's families): the safe area; the
+/// keyboard's guide, docked only or following an undocked keyboard too (D7);
+/// the layout regions UIKit's `UIView.LayoutRegion` gives a view, with their
+/// corner variants, and the older readable guide (D8, D10); and the owner
+/// controller's system minimum, a raw observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Family {
@@ -122,11 +124,52 @@ pub enum Family {
     /// `--exact-keyboard-undocked-inset-*`: the guide that also follows an
     /// undocked keyboard.
     KeyboardUndocked = 2,
+    /// `--exact-safe-area-corners-inset-*`: `.safeArea(cornerAdaptation:)`.
+    SafeAreaCorners = 3,
+    /// `--exact-layout-margins-inset-*`: `.margins()`, the margins rectangle.
+    LayoutMargins = 4,
+    /// `--exact-layout-margins-corners-inset-*`: `.margins(cornerAdaptation:)`.
+    LayoutMarginsCorners = 5,
+    /// `--exact-readable-content-inset-*`: `.readableContent()`.
+    ReadableContent = 6,
+    /// `--exact-readable-content-corners-inset-*`:
+    /// `.readableContent(cornerAdaptation:)`.
+    ReadableContentCorners = 7,
+    /// `--exact-readable-content-guide-inset-*`: `readableContentGuide`.
+    ReadableContentGuide = 8,
+    /// `--exact-system-minimum-layout-margins-inset-*`: the owner controller's
+    /// `systemMinimumLayoutMargins`.
+    SystemMinimum = 9,
 }
+
+/// A reader's components, a bit each ([`Observe::component`]).
+pub(crate) type Components = u64;
 
 impl Family {
     /// Every family, in wire order.
-    pub const ALL: [Family; 3] = [Family::SafeArea, Family::Keyboard, Family::KeyboardUndocked];
+    pub const ALL: [Family; 10] = [
+        Family::SafeArea,
+        Family::Keyboard,
+        Family::KeyboardUndocked,
+        Family::SafeAreaCorners,
+        Family::LayoutMargins,
+        Family::LayoutMarginsCorners,
+        Family::ReadableContent,
+        Family::ReadableContentCorners,
+        Family::ReadableContentGuide,
+        Family::SystemMinimum,
+    ];
+
+    /// The families D8's margins rule gives a box, which a host that reports
+    /// no margins resolves to the box's safe area (D10, "Other hosts").
+    pub const MARGINS: [Family; 6] = [
+        Family::SafeAreaCorners,
+        Family::LayoutMargins,
+        Family::LayoutMarginsCorners,
+        Family::ReadableContent,
+        Family::ReadableContentCorners,
+        Family::ReadableContentGuide,
+    ];
 
     /// The name's part before the edge: `safe-area-inset-` and the like.
     pub fn infix(self) -> &'static str {
@@ -134,6 +177,13 @@ impl Family {
             Family::SafeArea => "safe-area-inset-",
             Family::Keyboard => "keyboard-inset-",
             Family::KeyboardUndocked => "keyboard-undocked-inset-",
+            Family::SafeAreaCorners => "safe-area-corners-inset-",
+            Family::LayoutMargins => "layout-margins-inset-",
+            Family::LayoutMarginsCorners => "layout-margins-corners-inset-",
+            Family::ReadableContent => "readable-content-inset-",
+            Family::ReadableContentCorners => "readable-content-corners-inset-",
+            Family::ReadableContentGuide => "readable-content-guide-inset-",
+            Family::SystemMinimum => "system-minimum-layout-margins-inset-",
         }
     }
 
@@ -154,8 +204,8 @@ impl Family {
     }
 
     /// Its components' bits among a reader's inputs ([`Observe::component`]).
-    pub(crate) const fn bits(self) -> u16 {
-        0b1111 << (self as u16 * 4)
+    pub(crate) const fn bits(self) -> Components {
+        0b1111 << (self as Components * 4)
     }
 }
 
@@ -578,9 +628,9 @@ fn text_properties(text: &str, out: &mut Vec<Arc<str>>) {
 
 /// The components of its box's own observations a text's `var()`s read, as
 /// [`Comparison::observed_components`] gives a tree's. The safe area's name
-/// is the local inset until activation (`parse.rs`), so only the keyboard's
-/// readings count.
-fn text_observations(text: &str) -> u16 {
+/// is the local inset until activation (`parse.rs`), so only the other
+/// families' readings count.
+fn text_observations(text: &str) -> Components {
     let mut components = 0;
     text_vars(text, &mut |name| {
         if let Some((family, edge)) = Family::named(name).filter(|(f, _)| *f != Family::SafeArea) {
@@ -826,14 +876,14 @@ impl Comparison {
 
     /// The components of its box's own observations it reads, fallbacks
     /// included: a bit per [`Observe::component`].
-    pub(crate) fn observed_components(&self) -> u16 {
+    pub(crate) fn observed_components(&self) -> Components {
         if let Some(components) = self.with(|e| match e {
             Entry::Text { text, .. } => Some(text_observations(text)),
             Entry::Tree(_) => None,
         }) {
             return components;
         }
-        let components = std::cell::Cell::new(0u16);
+        let components = std::cell::Cell::new(0 as Components);
         self.tree(|t| {
             t.any(&|n| {
                 if let Node::Observe(o) = n {

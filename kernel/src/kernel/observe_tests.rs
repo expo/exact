@@ -1471,6 +1471,9 @@ mod bar;
 #[path = "container_tests.rs"]
 mod container;
 
+#[path = "margins_tests.rs"]
+mod margins;
+
 #[path = "reservation_tests.rs"]
 mod reservation;
 

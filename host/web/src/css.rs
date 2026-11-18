@@ -571,10 +571,19 @@ fn css_text_in(
             // @ref LLP 1123 D4 — no host chrome covers a page the browser
             // lays out: nothing is cleared, so there is nothing to turn off.
             (StyleId::SafeArea | StyleId::SafeAreaIgnore | StyleId::SafeAreaIgnoreAlign, _) => {}
-            // @ref LLP 1123 D11, D12 — not CSS, and not written yet: a page's
-            // reservations and bars wait for the web's owners (D17)
+            // @ref LLP 1123 D8, D11, D12 — not CSS, and not written yet: a page's
+            // margins, reservations and bars wait for the web's owners (D17)
             (
                 StyleId::SafeAreaBar
+                | StyleId::LayoutMarginTop
+                | StyleId::LayoutMarginRight
+                | StyleId::LayoutMarginBottom
+                | StyleId::LayoutMarginLeft
+                | StyleId::LayoutMarginLeading
+                | StyleId::LayoutMarginTrailing
+                | StyleId::LayoutMarginsPreserved
+                | StyleId::LayoutMarginsFromSafeArea
+                | StyleId::LayoutMarginsMinimum
                 | StyleId::AdditionalSafeAreaTop
                 | StyleId::AdditionalSafeAreaRight
                 | StyleId::AdditionalSafeAreaBottom
