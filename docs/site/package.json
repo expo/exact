@@ -10,6 +10,7 @@
   "dependencies": {},
   "devDependencies": {
     "marked": "^18.1.2",
-    "shiki": "^4.6.0"
+    "shiki": "^4.6.0",
+    "wrangler": "4.164.0"
   }
 }
