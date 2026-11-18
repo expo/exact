@@ -27,6 +27,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var pushed = false
     weak var lifted: NodeView?
     var barNodes: [NodeView] = []
+    /// The pictures the bar's faces draw (`NodeView.drawnByBar`).
+    var barPictures: [UInt32] = []
     /// The filter tablist the search bar shows as its scope bar (LLP 1134).
     weak var scoped: NodeView?
     #if EXACT_INSPECT

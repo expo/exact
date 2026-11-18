@@ -62,6 +62,7 @@ final class NodeAside {
     var buttonRasterView: UInt32?
     var paintGhosts = 0
     weak var ghostParent: NodeView?
+    var drawnByBar = false
 }
 
 /// A box's gradient and shadows, apart from `NodeExtras`: most nodes that
@@ -285,6 +286,9 @@ extension NodeView {
     var loadGeneration: Int { get { aside?.loadGeneration ?? 0 } set { if newValue != 0 || aside != nil { asideMade.loadGeneration = newValue } } }
     var paintGhosts: Int { get { aside?.paintGhosts ?? 0 } set { if newValue != 0 || aside != nil { asideMade.paintGhosts = newValue } } }
     var ghostParent: NodeView? { get { aside?.ghostParent } set { if newValue != nil || aside != nil { asideMade.ghostParent = newValue } } }
+    /// A picture a bar item's face draws (`BadgeFace`): shown, though the
+    /// header that holds it is hidden while the bar stands for it.
+    var drawnByBar: Bool { get { aside?.drawnByBar ?? false } set { if newValue || aside != nil { asideMade.drawnByBar = newValue } } }
 
     var more: NodeExtras {
         if let extras { return extras }

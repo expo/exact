@@ -4029,9 +4029,11 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   one), is drawn as written, in its colours, as the
   item's image inside the bar's capsule (a "● Clock" chip in 12-point monospace).
   The button's left and right padding is room the face keeps inside that capsule
-  (`padding="0px 7px"`). A filled box holding a text or symbol (an avatar, a badge) is drawn without the
+  (`padding="0px 7px"`). A filled box holding a text, a symbol or a picture (an avatar, a badge) is drawn without the
   capsule; on a button that says `backgroundMaterial="glass"` (or `"glass-clear"`) it
-  sits in a glass capsule of its own, as a `buttonStyle="glass"` button does. Leave the font unsaid for an ordinary Edit or Done.
+  sits in a glass capsule of its own, as a `buttonStyle="glass"` button does. A picture
+  (`image url`, an avatar's photo) fills the box by its `object-fit`, clipped to the box's
+  corners; until it loads the face is the box's fill. Leave the font unsaid for an ordinary Edit or Done.
 - A readout nothing presses (a "● Clock" or "Saved" beside the title) is
   `role="status"` in the header, beside the buttons. (A `button disabled=true` is a
   dimmed bar item, UIKit's disabled one, which VoiceOver reads as a button that cannot

@@ -794,6 +794,8 @@ extension NavigationHost {
         // keeps the host's word apart: writing CSS's answer kept it hidden).
         for node in c.barNodes { node.isHidden = false }
         c.barNodes = []
+        for id in c.barPictures { presenter.views[id]?.drawnByBar = false }
+        c.barPictures = []
         if let lifted = c.lifted, lifted !== shape?.header || shape?.authored.isEmpty == false {
             lifted.isHidden = false
             c.lifted = nil
@@ -860,6 +862,20 @@ extension NavigationHost {
                 c.barNodes = shape.placed
                 for node in c.barNodes { node.isHidden = true }
             }
+            // A picture a face draws (an avatar's photo) loads although its header is hidden.
+            c.barPictures = (shape.leading + shape.trailing).compactMap { $0.badge?.pictureNode }
+            for id in c.barPictures { presenter.views[id]?.drawnByBar = true }
+            if !c.barPictures.isEmpty { presenter.session?.rasters.visibilityChanged() }
+        }
+    }
+
+    /// A picture a bar face draws (`BadgeFace`) arrived: its stack's bars
+    /// are projected again, with the picture in the face.
+    func barPictureArrived(_ node: NodeView) {
+        for current in ViewPresentation.controllers(for: node) {
+            guard let route = current as? RouteController, route.host === self, let stack = route.stack else { continue }
+            prepareRoutes(stack.stackRoutes.compactMap { $0 as? RouteController }, in: stack)
+            return
         }
     }
 

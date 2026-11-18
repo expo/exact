@@ -558,6 +558,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         self.setNeedsDisplay()
         if let c = canvasAbove { c.needsCapture = true; canvases?.scheduleCapture() }
         presenter.boxFilters.changed(self)
+        if drawnByBar { presenter.navigation.barPictureArrived(self) }
         return lease.image.naturalSize
     }
 

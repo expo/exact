@@ -76,6 +76,55 @@ final class BarFaceIOSTests: XCTestCase {
         XCTAssertFalse(items[1].sharesBackground, "and that glass is its own capsule")
     }
 
+    /// A box holding a picture (an avatar's photo) is a badge: its fill until the picture loads, then the
+    /// picture clipped to the box's corners. The header the bar draws is hidden, and the picture still loads.
+    func testABadgesPictureLoadsInAHeaderTheBarDraws() throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+        }.pngData())
+        let source = "data:image/png;base64," + png.base64EncodedString()
+        let p = Presenter(), loader = RasterLoader(), resolver = AssetResolver(root: URL(fileURLWithPath: NSTemporaryDirectory()))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        defer { loader.shutdown(); window.isHidden = true; p.reset() }
+        p.viewport.frame = window.bounds; window.addSubview(p.viewport); window.makeKeyAndVisible()
+        let round: [String: Any] = ["border_radius_top_left": 18, "border_radius_top_right": 18, "border_radius_bottom_left": 18, "border_radius_bottom_right": 18]
+        p.apply(wireBatch([
+            ["op": "create", "id": 100, "kind": "view", "props": ["semanticTag": "header"]],
+            ["op": "create", "id": 1, "kind": "button", "props": ["testId": "avatar"]],
+            ["op": "create", "id": 2, "kind": "view", "style": round.merging(["background_color": [0, 0, 255, 255], "width": 36, "height": 36]) { $1 }],
+            ["op": "create", "id": 3, "kind": "image", "props": ["imageSource": source], "style": ["object_fit": "cover", "width": 36, "height": 36]],
+            ["op": "children", "id": 2, "ids": [3]], ["op": "children", "id": 1, "ids": [2]],
+            ["op": "children", "id": 100, "ids": [1]], ["op": "roots", "ids": [100]],
+        ]))
+        let header = try XCTUnwrap(p.views[100]), box = try XCTUnwrap(p.views[2]), image = try XCTUnwrap(p.views[3])
+        defer { image.raster = nil }
+        image.frame = CGRect(x: 0, y: 0, width: 36, height: 36)
+        let pending = try XCTUnwrap(BadgeFace(box: box), "a box holding only a picture is a badge before it loads")
+        XCTAssertNil(pending.picture)
+        XCTAssertEqual(pending.pictureNode, 3)
+        // As the bar marks it when it stands for the header (`project`).
+        header.isHidden = true; image.drawnByBar = true
+        let fill = try XCTUnwrap(pending.image.cgImage)
+        let blue = try XCTUnwrap(SharePictureCase.rgba(fill, x: fill.width / 2, y: fill.height / 2))
+        XCTAssertGreaterThan(blue.2, 240, "the box's fill while the picture loads")
+
+        loader.load(image, source: source, resolver: resolver)
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while image.raster == nil, Date() < deadline { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02)) }
+        XCTAssertNotNil(image.raster, "a picture in a hidden header the bar draws loads")
+
+        let face = try XCTUnwrap(BadgeFace(box: box))
+        XCTAssertNotNil(face.picture)
+        XCTAssertNotEqual(face.source, pending.source, "the bar item is drawn again with the picture")
+        let drawn = try XCTUnwrap(face.image.cgImage)
+        let centre = try XCTUnwrap(SharePictureCase.rgba(drawn, x: drawn.width / 2, y: drawn.height / 2))
+        XCTAssertGreaterThan(centre.0, 240, "the picture fills the face")
+        XCTAssertLessThan(centre.2, 15)
+        let corner = try XCTUnwrap(SharePictureCase.rgba(drawn, x: 0, y: 0))
+        XCTAssertEqual(corner.3, 0, "the box's corners clip the picture")
+    }
+
     func testADotBesideALabelIsDrawnAsPainted() throws {
         let (p, node) = button([dot, label(["written": ["text_color"]])])
         let face = try XCTUnwrap(ChipFace(node, engine: TextEngine(resolve: { _ in nil })))

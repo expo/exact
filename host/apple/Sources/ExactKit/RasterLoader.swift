@@ -337,6 +337,9 @@ final class RasterLoader {
     /// lands, so an empty side counts as one point.
     private static func mayShow(_ view: NodeView) -> Bool {
         guard view.window != nil else { return false }
+        #if !os(macOS)
+        if view.drawnByBar { return true }
+        #endif
         let probe = CGRect(origin: view.bounds.origin, size: CGSize(width: max(1, view.bounds.width), height: max(1, view.bounds.height)))
         var root: MediaPlatformView = view
         while let parent = root.superview {
@@ -821,9 +824,10 @@ final class RasterLoader {
         let box = view.convert(view.bounds, to: root), port = root.bounds
         return max(0, box.minX - port.maxX, port.minX - box.maxX) + max(0, box.minY - port.maxY, port.minY - box.maxY)
     }
-    /// A scroll container moved: a parked view may be on screen now, and a
-    /// pass asks for its picture. Only the parked views are looked at.
-    private func scrolled() {
+    /// A scroll container moved, or the bar marked a picture it draws
+    /// (`NodeView.drawnByBar`): a parked view may show now, and a pass asks
+    /// for its picture. Only the parked views are looked at.
+    func visibilityChanged() {
         guard !parked.isEmpty else { return }
         // A held picture may have left the screen or come back (`hold`).
         if parked.contains(where: { interests[$0].map { $0.held || $0.retrying || $0.watching } == true }) { backend.wake(); return }
@@ -833,7 +837,7 @@ final class RasterLoader {
     /// Every clip view that posts its bounds (the viewport's, a node's
     /// scroller's), while a view is parked; none otherwise.
     private func watchScrolls() {
-        scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.scrolled() }
+        scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.visibilityChanged() }
     }
     private func stopWatchingScrolls() {
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
@@ -847,7 +851,7 @@ final class RasterLoader {
         var ancestor = view.superview
         while let current = ancestor {
             if let scroller = current as? UIScrollView, scrollWatches[ObjectIdentifier(scroller)] == nil {
-                scrollWatches[ObjectIdentifier(scroller)] = ScrollWatch(scroller, scroller.observe(\.contentOffset) { [weak self] _, _ in self?.scrolled() })
+                scrollWatches[ObjectIdentifier(scroller)] = ScrollWatch(scroller, scroller.observe(\.contentOffset) { [weak self] _, _ in self?.visibilityChanged() })
             }
             ancestor = current.superview
         }

@@ -637,6 +637,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         c.scoped = nil
         for node in c.barNodes { node.isHidden = false }
         c.barNodes = []
+        for id in c.barPictures { presenter.views[id]?.drawnByBar = false }
+        c.barPictures = []
         guard c.hatched else { return }
         c.hatched = false
         presenter.session?.natives.routeHatch(.ended, controller: c, navigation: nil, scroll: nil, key: c.key, dataset: c.node.props["dataset"])
