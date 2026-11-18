@@ -190,11 +190,16 @@ impl<D: DataSource> Host<D> {
             }
         }
         let (blocked, owed) = self.blocks_into(blocks, placements, owners);
-        // Liveness alone, once the blocks stand: the runner reads it, layout does not
-        for &(view, how) in shown {
-            self.runner.kernel_mut().set_host_block_shown(view, how);
-        }
         error = error.or(blocked);
+        let mut visibility_changed = false;
+        for &(view, how) in shown {
+            visibility_changed |= self.runner.kernel_mut().set_host_block_shown(view, how);
+        }
+        if visibility_changed {
+            let (shown, failed) = self.runner.shown_routes_commit(self.now_ms);
+            receipts.extend(shown);
+            error = error.or(failed);
+        }
         needs_layout |= owed;
         for &(view, list) in margins {
             if let Err(e) = self.runner.kernel_mut().set_grouped_margins(view, list) {

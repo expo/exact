@@ -13,7 +13,9 @@
 //! fixed at launch: [`crate::time::Launch`]), and whether a picture of the page has
 //! been presented (`presented`, kept apart from the wire's bits, which are all
 //! taken). The host observes them; the app reads them
-//! by field name from one reserved source. The word also carries the
+//! by field name from one reserved source. `shownRoutes` is the runner's own:
+//! the `navigationKey` of each route a person can see and use (LLP 1127 D8),
+//! from the host's report of how its columns show them. The word also carries the
 //! device's GPU tier, which an app reads as `exactViewport().gpuTier`.
 //! @ref LLP 1069.000 D2, D6; LLP 1003.001 D9; LLP 1069.003 D5; LLP 1069.010 D2, D8; LLP 1125 D12; LLP 1139.003 D2
 
@@ -38,6 +40,7 @@ pub const FIELDS: &[&str] = &[
     "iframePartition",
     "name",
     "presented",
+    "shownRoutes",
 ];
 
 /// The executor that owns the page. A renderer producing a web document runs

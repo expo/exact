@@ -134,6 +134,30 @@ pub(crate) fn activity(
     result
 }
 
+/// The `navigationKey` of each route a person can see and use (LLP 1127 D8), in tree order: every
+/// navigation root's routes, a tab panel's included, that are active: its selected route and a split's
+/// list beside it, none under a sheet or an overlaid pane.
+pub(crate) fn shown_routes(kernel: &Kernel, roots: &[ViewId]) -> Vec<String> {
+    let active = activity(kernel, roots);
+    let node = |id| kernel_node(kernel, id);
+    let (mut out, mut stack): (Vec<String>, Vec<ViewId>) =
+        (Vec::new(), roots.iter().rev().copied().collect());
+    while let Some(id) = stack.pop() {
+        let Some(at) = node(id) else { continue };
+        if at.1.str(PropId::NavigationBack).is_some() {
+            for route in route_stacks(&node, &at.2).1.into_iter().flatten() {
+                if active.get(&route).is_some_and(|flags| !flags.0) {
+                    if let Some(key) = node(route).and_then(|r| r.1.str(PropId::NavigationKey)) {
+                        out.push(key.to_owned());
+                    }
+                }
+            }
+        }
+        stack.extend(at.2.iter().rev());
+    }
+    out
+}
+
 impl<D: DataSource> Runner<D> {
     /// The active head of the current tree: one walk from the roots, which
     /// skips the routes a navigation root has not selected.
@@ -316,18 +340,7 @@ fn unselected<'a>(
         return Vec::new();
     };
     let key_of = |id: ViewId| node(id).and_then(|(_, p, _)| p.str(PropId::NavigationKey));
-    let routes = |ids: &Children<'_>| -> Vec<ViewId> {
-        ids.iter().filter(|r| key_of(*r).is_some()).collect()
-    };
-    let panels = tab_panels(node, &at.2);
-    let stacks: Vec<Vec<ViewId>> = if panels.is_empty() {
-        vec![routes(&at.2)]
-    } else {
-        panels
-            .iter()
-            .map(|p| node(*p).map(|(_, _, c)| routes(&c)).unwrap_or_default())
-            .collect()
-    };
+    let (panels, stacks) = route_stacks(node, &at.2);
     let Some(selected) = stacks
         .iter()
         .position(|rs| rs.iter().any(|r| key_of(*r) == Some(key)))
@@ -342,6 +355,29 @@ fn unselected<'a>(
         .collect();
     off.extend(stacks[selected].iter().filter(|r| key_of(**r) != Some(key)));
     off
+}
+
+/// A navigation root's tab panels, none without a tab bar, and its routes, each stack's: under a tab bar
+/// each panel's children with a `navigationKey`, else its own.
+fn route_stacks<'a>(
+    node: &impl Fn(ViewId) -> Option<HeadNode<'a>>,
+    children: &Children<'_>,
+) -> (Vec<ViewId>, Vec<Vec<ViewId>>) {
+    let routes = |ids: &Children<'_>| -> Vec<ViewId> {
+        ids.iter()
+            .filter(|r| node(*r).is_some_and(|(_, p, _)| p.str(PropId::NavigationKey).is_some()))
+            .collect()
+    };
+    let panels = tab_panels(node, children);
+    let stacks = if panels.is_empty() {
+        vec![routes(children)]
+    } else {
+        panels
+            .iter()
+            .map(|p| node(*p).map(|(_, _, c)| routes(&c)).unwrap_or_default())
+            .collect()
+    };
+    (panels, stacks)
 }
 
 /// The routes a navigation root's selected route covers when that route is a

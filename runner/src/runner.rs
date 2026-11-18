@@ -602,6 +602,9 @@ pub struct Runner<D: DataSource> {
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
     window_name: String,               // the page's `name` (LLP 1030.004 D2)
+    // What `exactPage().shownRoutes` answers, and the resources that read it (`refresh_shown_routes`).
+    shown_routes: Vec<String>,
+    shown_route_readers: Vec<usize>,
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
@@ -863,6 +866,7 @@ impl<D: DataSource> Runner<D> {
             !store.presence_names().is_empty(),
             links.lists.is_some(),
         );
+        let shown_route_readers = page::shown_route_readers(&plan);
         // The instance tree's list table runs only beside the runner's half.
         let links = RunnerLinks {
             lists: links.lists.filter(|_| seams.lists.linked()),
@@ -987,6 +991,8 @@ impl<D: DataSource> Runner<D> {
             viewport_geometry,
             geometry: Default::default(),
             presented: crate::page::Presented::at_boot(),
+            shown_routes: Vec::new(),
+            shown_route_readers,
             time: crate::time::launch_time(),
             live_times: Default::default(),
             text_axes: seams::TextAxesState(seams.text_axes.state()),
@@ -1162,6 +1168,7 @@ impl<D: DataSource> Runner<D> {
         }
         drop(booting);
         runner.roles.install();
+        runner.refresh_shown_routes()?;
         runner.origins.booted();
         Ok(runner)
     }

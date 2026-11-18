@@ -41,7 +41,9 @@ impl<D: DataSource> Host<D> {
         error: Option<String>,
         batch: Batch,
     ) -> String {
-        let (mut batch, error) = self.commit_tree(receipts, error, batch);
+        // A commit that moved the navigation changes the routes a person can see (LLP 1127 D8)
+        let (receipts, failed) = self.runner.with_shown_routes(receipts, self.now_ms);
+        let (mut batch, error) = self.commit_tree(&receipts, error.or(failed), batch);
         // A receipt can end an Arrange contact; its terminal runs at receipt time.
         let arrange = self.arrange_after_commit(&mut batch);
         self.group_after_commit(&mut batch);
