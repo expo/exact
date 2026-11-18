@@ -35,6 +35,7 @@ struct Anchor {
     viewport: (f32, f32),
     chain: Vec<(NodeKey, StyleProps)>,
     positioned: BTreeMap<NodeKey, bool>,
+    stamp: (u64, u64, u64),
     requested: Option<f64>,
     scroller: Option<(NodeKey, StyleProps)>,
 }
@@ -47,10 +48,16 @@ impl State {
         offsets: &[(ViewId, (f32, f32))],
         viewport: (f32, f32),
     ) {
+        let mut armed = std::mem::take(&mut self.anchors);
         self.anchors = offsets
             .iter()
             .filter_map(|&(id, offset)| {
-                capture(kernel, roots, id, offset, viewport).map(|anchor| (id, anchor))
+                // Only a commit changes positioning, and it moves the stamp.
+                let positioned = armed
+                    .remove(&id)
+                    .filter(|a| a.stamp == kernel.layout_stamp())
+                    .map(|a| a.positioned);
+                capture(kernel, roots, id, offset, viewport, positioned).map(|anchor| (id, anchor))
             })
             .collect();
     }
@@ -68,7 +75,7 @@ impl State {
                     offset.1 += shift;
                     *self.corrections.entry(id).or_default() += shift;
                 }
-                capture(kernel, roots, id, offset, anchor.viewport).map(|next| (id, next))
+                capture(kernel, roots, id, offset, anchor.viewport, None).map(|next| (id, next))
             })
             .collect();
     }
@@ -241,6 +248,7 @@ fn capture(
     id: ViewId,
     offset: (f32, f32),
     viewport: (f32, f32),
+    positioned: Option<BTreeMap<NodeKey, bool>>,
 ) -> Option<Anchor> {
     if offset.1 <= 0. {
         return None;
@@ -283,8 +291,11 @@ fn capture(
         chain.push((node.key, node.style.clone()));
         at = node.parent;
     }
-    let mut positioned = BTreeMap::new();
-    descendants(kernel, &nodes, &mut positioned);
+    let positioned = positioned.unwrap_or_else(|| {
+        let mut positioned = BTreeMap::new();
+        descendants(kernel, &nodes, &mut positioned);
+        positioned
+    });
     Some(Anchor {
         key,
         y,
@@ -292,6 +303,7 @@ fn capture(
         viewport,
         chain,
         positioned,
+        stamp: kernel.layout_stamp(),
         requested: requested(kernel, id),
         scroller,
     })
@@ -372,7 +384,56 @@ fn an_anchor_crossing_the_viewer_keeps_its_visible_half() {
     let clipped =
         crate::placement::clipped_bounds(&h, [[0., 0., 1.]; 2], (f.x, f.y, f.width, f.height));
     assert!(clipped.2 > 0. && clipped.3 > 0.);
-    let anchor = capture(kernel, &p.host().roots(), port, (0., 100.), (400., 400.)).unwrap();
+    let anchor = capture(
+        kernel,
+        &p.host().roots(),
+        port,
+        (0., 100.),
+        (400., 400.),
+        None,
+    )
+    .unwrap();
     assert_eq!(anchor.key, key);
     assert_eq!(anchor.y, clipped.1);
+}
+
+#[cfg(test)]
+#[test]
+fn a_rearm_walks_the_scroller_again_only_when_the_stamp_moved() {
+    let source = r#"component App
+  view
+    scroll testId="port" width=400 height=400
+      box height=1000
+"#;
+    let (p, error) = crate::presenter::Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (400., 400.),
+        1.,
+        std::path::PathBuf::new(),
+        crate::presenter::PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert_eq!(error, None);
+    let kernel = p.host().kernel();
+    let port = kernel
+        .node_by_key(kernel.find_by_test_id("port")[0])
+        .unwrap()
+        .id;
+    let arm = |state: &mut State| {
+        state.arm(
+            kernel,
+            &p.host().roots(),
+            &[(port, (0., 100.))],
+            (400., 400.),
+        )
+    };
+    let mut state = State::default();
+    arm(&mut state);
+    state.anchors.get_mut(&port).unwrap().positioned.clear();
+    arm(&mut state);
+    assert!(state.anchors[&port].positioned.is_empty());
+    state.anchors.get_mut(&port).unwrap().stamp.1 += 1;
+    arm(&mut state);
+    assert_eq!(state.anchors[&port].positioned.len(), 1);
 }
