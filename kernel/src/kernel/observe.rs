@@ -323,6 +323,14 @@ impl Kernel {
             let mut moved = Vec::new();
             off.clear();
             for &s in &candidates {
+                // A box with no layout box, `display: none` or under one, has
+                // nothing to measure: it keeps its input until it has a box
+                if self.arena.flags(s).has(crate::id::NodeFlags::HIDDEN) {
+                    let observations = &mut self.arena.observations;
+                    let kept = Readout::kept(observations.input(s));
+                    observations.readouts.insert(s, kept);
+                    continue;
+                }
                 let space = band_at(self, s);
                 let readout = measure(&self.arena, s, &space);
                 let (measured, caps) = (readout.observed, readout.depths);
@@ -720,6 +728,18 @@ struct Readout {
     owner: Option<u32>,
     /// Whether it is in a document top-layer box.
     top_layer: bool,
+}
+
+impl Readout {
+    /// The readout of a reader with no layout box: the input it keeps.
+    fn kept(input: Observed) -> Self {
+        Readout {
+            observed: input,
+            depths: [0.0; 4],
+            owner: None,
+            top_layer: false,
+        }
+    }
 }
 
 /// What `slot` observes on each edge of its `space` on the layout just

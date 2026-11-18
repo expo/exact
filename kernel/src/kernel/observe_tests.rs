@@ -1390,6 +1390,43 @@ fn a_height_target_is_measured_with_its_readers_solved() {
     assert_eq!(k.node(3).unwrap().frame.height, 67.0);
 }
 
+#[test]
+fn a_hidden_reader_keeps_its_input_until_it_has_a_box() {
+    // 4 lies 100 below the root's top in the owner 2 under a 47-point band
+    // and observes none of it; hidden with 3, it has no box to measure and
+    // keeps 0, with no layout added, while the band grows to 120, and shown
+    // again it observes the 20 that reach it, as in a fresh layout
+    let tree = |hidden: bool, band: f32| {
+        let mut ops = create(3..=5);
+        let pad = vec![(StyleId::PaddingTop, observed(Edge::Top, None))];
+        let display = if hidden { "none" } else { "block" };
+        ops.push(style(5, vec![], &[(StyleId::Height, "100")]));
+        ops.push(style(3, vec![], &[(StyleId::Display, display)]));
+        ops.push(style(4, pad, &[(StyleId::Height, "10")]));
+        ops.extend([children(1, &[2]), children(2, &[5, 3]), children(3, &[4])]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([band, 0.0, 0.0, 0.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k
+    };
+    let mut k = tree(false, 47.0);
+    assert_eq!(k.observation(4).unwrap()[0], Some(0.0));
+    k.apply(0, 2, &[style(3, vec![], &[(StyleId::Display, "none")])])
+        .unwrap();
+    lay_out(&mut k);
+    k.set_owner_band(2, Some([120.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.observation(4).unwrap()[0], Some(0.0));
+    assert_eq!(k.arena.observations.rounds, 0);
+    k.apply(0, 3, &[style(3, vec![], &[(StyleId::Display, "block")])])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.observation(4).unwrap()[0], Some(20.0));
+    assert_eq!(top(&k, 4), top(&tree(false, 120.0), 4));
+}
+
 #[path = "seam_tests.rs"]
 mod seams;
 
