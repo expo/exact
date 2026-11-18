@@ -5,6 +5,7 @@ use super::*;
 impl Raster {
     pub(super) fn split_window(&mut self, dst: Rect4, clips: &[Shape], ts: Transform) -> bool {
         if self.window_underlay.is_some()
+            || self.origin != (0., 0.)
             || !self.layers.is_empty()
             || !ts.is_identity()
             || dst
@@ -41,6 +42,7 @@ impl Raster {
     // whose every coverage byte would be 255.
     pub(super) fn viewport_clip(&self, shape: &Shape, ts: Transform) -> bool {
         ts.is_identity()
+            && self.origin == (0., 0.)
             && self.width <= 8191
             && self.height <= 8191
             && self.scale.is_finite()
@@ -65,6 +67,7 @@ impl Raster {
         };
         if dst.0 != 0.
             || dst.1 != 0.
+            || self.origin != (0., 0.)
             || dst.2 <= 0.
             || dst.3 <= 0.
             || image.width() != target.width()

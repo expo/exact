@@ -208,6 +208,51 @@ mod tests {
     }
 
     #[test]
+    fn the_cpu_chain_pictures_a_rows_filter_past_its_origin() {
+        use super::super::{IMAGE, IMAGE_RRECT};
+        // Too faint for HWUI's blur, the shadow keeps the CPU chain; it falls
+        // 60 points left of and above its row's origin, where the row is
+        // walked from.
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(
+                r##"component App
+  view
+    scroll width=300 height=300
+      column
+        box height=100 width=200 background-color="#2468ac" filter="drop-shadow(-60px -60px 0.4px #000000)"
+"##,
+            ),
+            (),
+            (300., 300.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.brush.replace_backend(Box::new(Recorder::new()));
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).expect("a frame");
+        let mut placed = None;
+        let mut at = 0;
+        while at < ops.len() {
+            if ops[at] == IMAGE || ops[at] == IMAGE_RRECT {
+                placed = Some([2, 3, 4, 5].map(|k| f32::from_bits(ops[at + k])));
+            }
+            at = match ops[at] {
+                ROW_BEGIN => at + 6,
+                _ => stream::end(&ops, at).expect("a valid stream"),
+            };
+        }
+        let [x, y, w, h] = placed.expect("the box is pictured");
+        assert!(
+            x <= -60.0 && y <= -60.0 && w >= 260.0 && h >= 160.0,
+            "the picture holds the shadow past the row's origin: {:?}",
+            (x, y, w, h)
+        );
+    }
+
+    #[test]
     fn a_filtered_row_records_its_chain_and_stays_kept() {
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(

@@ -63,6 +63,9 @@ pub struct Raster {
     /// The page's colour ([`Backend::page`]); white until one is told.
     page: Option<[u8; 4]>,
     scale: f32,
+    /// The device pixel at the frame's top-left: a picture of part of the
+    /// page (`paint/box_filter.rs`) starts where that part does.
+    origin: (f32, f32),
     width: u32,
     height: u32,
     clips: Vec<Option<Rc<Mask>>>,
@@ -97,12 +100,24 @@ impl Raster {
         }
     }
 
+    /// A transparent picture whose top-left is device pixel `origin`.
+    pub(crate) fn transparent_at(origin: (f32, f32)) -> Self {
+        Self {
+            origin,
+            ..Self::transparent()
+        }
+    }
+
     fn active_clip(&self) -> Option<&Rc<Mask>> {
         self.clips.last().and_then(Option::as_ref)
     }
 
     fn device(&self, ts: Transform) -> Transform {
-        Transform::from_scale(self.scale, self.scale).pre_concat(ts)
+        let dev = Transform::from_scale(self.scale, self.scale).pre_concat(ts);
+        match self.origin {
+            (0.0, 0.0) => dev,
+            (x, y) => dev.post_translate(-x, -y),
+        }
     }
 
     fn reset(&mut self, width: f32, height: f32, scale: f32) {

@@ -129,3 +129,40 @@ fn a_press_inside_a_filtered_box_reaches_what_is_drawn_there() {
     let text = k.node_by_key(k.find_by_test_id("picked")[0]).unwrap();
     assert_eq!(text.props.str(exact_kernel::PropId::Text), Some("inside"));
 }
+
+/// A filtered box more than twice the window's pixels is pictured only over
+/// the window, from what lies within the chain's reach of it: a blurred fill
+/// past the window's edge stays whole at the edge, and the shadow of a box
+/// left of the window falls into it.
+#[test]
+fn a_chain_past_the_window_reads_what_lies_past_its_edge() {
+    let mut fill = boot(
+        r##"component App
+  view
+    box width=600 height=600 margin-left=-250 margin-top=-250 background-color="#2468ac" filter="blur(10px)"
+"##,
+        (100., 100.),
+    );
+    let edge = rgba(&mut fill, 0, 50);
+    assert!(
+        edge.3 == 255 && (edge.0 as i32 - 0x24).abs() <= 3 && (edge.2 as i32 - 0xac).abs() <= 3,
+        "the fill is whole at the window's edge: {edge:?}"
+    );
+    let mut shadow = boot(
+        r##"component App
+  view
+    box width=280 height=90 margin-left=-300 margin-top=5 background-color="#ff0000" filter="drop-shadow(60px 0px 0px #000000)"
+"##,
+        (100., 100.),
+    );
+    assert_eq!(
+        rgba(&mut shadow, 10, 50),
+        (0, 0, 0, 255),
+        "the shadow of the box left of the window"
+    );
+    assert_eq!(
+        rgba(&mut shadow, 60, 50).0,
+        255,
+        "and only as far as it falls"
+    );
+}
