@@ -39,7 +39,9 @@ impl DataSource for Saving {
             return None;
         }
         self.out = true;
-        Some(Request::continuation(BACKGROUND))
+        Some(Request::continuation::<crate::host_work::TestWork>(
+            BACKGROUND,
+        ))
     }
 
     fn background_landed(

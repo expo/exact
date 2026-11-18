@@ -3,6 +3,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 final class SymbolColorMacTests: XCTestCase {
     private var window: NSWindow!

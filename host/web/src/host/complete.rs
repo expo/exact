@@ -175,6 +175,9 @@ mod tests {
     use crate::host::Host;
     use exact_plan::Value;
     use exact_runner::{Answer, DataError, DataSource, Dispatch, Event, Outcome, Request, Store};
+    /// The host work these tests hand out (LLP 1047.001 D12).
+    struct TestWork;
+    impl exact_runner::HostWork for TestWork {}
 
     /// Holds every call it is asked for until `release` names one.
     #[derive(Default)]
@@ -189,7 +192,7 @@ mod tests {
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
             self.asked += 1;
-            Ok(Answer::Later(Request::continuation(self.asked)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(self.asked)))
         }
         fn dispatch(&mut self, _: u64, _: &Store) -> Dispatch {
             Dispatch::Held

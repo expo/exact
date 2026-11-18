@@ -1,8 +1,13 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 @testable import ExactGroupedLists
 import UIKit
+
+private final class CheckPopoverDelegate: NSObject, UIPopoverPresentationControllerDelegate {
+    func adaptivePresentationStyle(for controller: UIPresentationController, traitCollection: UITraitCollection) -> UIModalPresentationStyle { .none }
+}
 
 private final class CheckScrollDecoration: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -36,6 +41,63 @@ final class AgentCheckIOSTests: XCTestCase {
         p.apply(wireBatch(ops))
         p.viewport.layoutIfNeeded()
         return Agent(session: session)
+    }
+
+    func testASystemAlertNamesTheCoverOverThePage() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "a system alert presents in a scene's window") }
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Profile"]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 16, "y": 78, "w": 370, "h": 33],
+        ])
+        let root = try XCTUnwrap(window?.rootViewController)
+        let alert = UIAlertController(title: "Remove Profile?", message: "This can't be undone.", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        let shown = expectation(description: "alert presented")
+        root.present(alert, animated: false) { shown.fulfill() }
+        wait(for: [shown], timeout: 5)
+        defer { root.dismiss(animated: false) }
+        let items = try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]])
+        let text = try XCTUnwrap(items.first { $0["id"] as? Int == 2 })
+        let cover = try XCTUnwrap(text["cover"] as? [String: Any], "\(text)")
+        XCTAssertEqual(cover["kind"] as? String, "alert")
+        XCTAssertEqual(cover["name"] as? String, "a system alert")
+    }
+
+    func testAnAlertPopoverCoversOnlyWhereItIsPresented() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "an alert popover presents in a scene's window") }
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Outside"]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "Underneath"]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 16, "y": 78, "w": 370, "h": 33],
+        ])
+        let root = try XCTUnwrap(window?.rootViewController)
+        let alert = UIAlertController(title: "Choose", message: nil, preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: "Remove", style: .destructive))
+        let popover = try XCTUnwrap(alert.popoverPresentationController), delegate = CheckPopoverDelegate()
+        popover.delegate = delegate
+        popover.sourceView = root.view
+        popover.sourceRect = CGRect(x: 190, y: 500, width: 20, height: 20)
+        let shown = expectation(description: "popover presented")
+        root.present(alert, animated: false) { shown.fulfill() }
+        wait(for: [shown], timeout: 5)
+        defer { root.dismiss(animated: false) }
+        let viewport = try XCTUnwrap(session?.presenter.viewport)
+        let box = alert.view.convert(alert.view.bounds, to: viewport)
+        session?.presenter.apply(wireBatch([
+            ["op": "frame", "id": 3, "x": Double(box.midX - 40), "y": Double(box.midY - 15), "w": 80, "h": 30],
+        ]))
+        let items = try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]])
+        let outside = try XCTUnwrap(items.first { $0["id"] as? Int == 2 })
+        XCTAssertNil(outside["cover"], "\(outside)")
+        let inside = try XCTUnwrap(items.first { $0["id"] as? Int == 3 })
+        XCTAssertEqual((inside["cover"] as? [String: Any])?["kind"] as? String, "alert", "\(inside)")
+        withExtendedLifetime(delegate) {}
     }
 
     func testCheckLeavesANativeMenusSubstituteOutAndStillReadsThePage() throws {
@@ -237,7 +299,7 @@ final class AgentCheckIOSTests: XCTestCase {
             ["op": "frame", "id": 5, "x": 20, "y": 400, "w": 200, "h": 30],
         ])
         let session = try XCTUnwrap(session), p = session.presenter, pop = try XCTUnwrap(p.views[3])
-        session.natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        session.nativeViews!.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
         let guest = NodeView(id: 10, kind: "native", presenter: p)
         guest.frame = CGRect(x: 0, y: 500, width: 20, height: 20)
         p.viewport.addSubview(guest); p.views[10] = guest

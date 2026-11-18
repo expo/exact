@@ -214,6 +214,7 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         reach: Value::Null,
         painter: None,
         game: false,
+        host_work: false,
     };
     emit(
         &mut compat,
@@ -346,7 +347,8 @@ fn rust_plan_receipts_require_the_baked_wasmi_executor() {
         .unwrap();
         let manifest = Manifest::read(&root).unwrap();
         let compat =
-            crate::compat::compatibility_id(&root, "linux", target, &manifest, Some("")).unwrap();
+            crate::compat::compatibility_id(&root, "linux", target, &manifest, Some(""), false)
+                .unwrap();
         let graph = artifact_graph(&plan, &compat.inputs, &[], false, target).unwrap();
         assert_eq!(
             graph["artifacts"][0]["requires"]["executors"], expected,
@@ -1161,6 +1163,7 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
         reach: Value::Null,
         painter: None,
         game: false,
+        host_work: false,
         embedded: json!({"seq":0,"genesis":true,"entryDigest":null,"plan":{"sha256":head.plan.sha256,"bytes":head.plan.bytes},"assets":assets}),
     };
     (

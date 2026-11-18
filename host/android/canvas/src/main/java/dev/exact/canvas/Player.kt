@@ -107,6 +107,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
     private val dstRect = RectF()
     private val matrix = Matrix()
     private val values = FloatArray(9)
+    /** Op 55's matrix, apart from [values], which holds the stream's current one. */
+    private val throughValues = FloatArray(9)
     private val rect = RectF()
     private val radii = FloatArray(8)
     private val inner = RectF()
@@ -1073,6 +1075,21 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         c.restore()
                     }
                     i += 4
+                }
+                55 -> {
+                    // A kept row drawn through a matrix: a kept drawing scaled or turned. It takes no touch.
+                    row(b.get(i + 1))?.let { r ->
+                        val t = throughValues
+                        t[0] = f(b, i + 2); t[3] = f(b, i + 3); t[1] = f(b, i + 4); t[4] = f(b, i + 5)
+                        t[2] = f(b, i + 6); t[5] = f(b, i + 7); t[6] = 0f; t[7] = 0f; t[8] = 1f
+                        c.save()
+                        matrix.setValues(t)
+                        if (shiftX != 0f || shiftY != 0f) matrix.postTranslate(-shiftX, -shiftY)
+                        c.setMatrix(matrix)
+                        c.drawRenderNode(r)
+                        c.restore()
+                    }
+                    i += 8
                 }
                 18 -> i += 2
                 19 -> { ring(c, b, i); i += 26 }

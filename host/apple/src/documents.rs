@@ -11,7 +11,7 @@
 //! recorded ([`kept::restore`]).
 
 use exact_data::documents::{self, kept};
-use exact_runner::agent::{error, field_num, field_str, quote};
+use exact_runner::json::{error, field_num, field_str, quote};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,6 +76,7 @@ pub fn answer<D: exact_runner::DataSource>(
         request,
         runner.data_ref(),
         &runner.native_slot(),
+        runner.covers("fs.read", "doc:/"),
     ))
 }
 
@@ -84,6 +85,7 @@ fn documents<D: exact_runner::DataSource>(
     request: &str,
     data: &D,
     native: &exact_runner::Native,
+    reads_documents: bool,
 ) -> String {
     let owner = field_num(request, "owner").unwrap_or(0.0) as u64;
     let path = field_str(request, "path").unwrap_or_default();
@@ -116,9 +118,7 @@ fn documents<D: exact_runner::DataSource>(
             documents::forget(owner);
             "{}".into()
         }
-        "openDocument" if !exact_runner::save_file::covered(data.grants(), "fs.read", "doc:/") => {
-            reply("path", &path)
-        }
+        "openDocument" if !reads_documents => reply("path", &path),
         "openDocument" => match documents::open_route(&path, owner) {
             Some(doc) => reply("path", &doc),
             None => reply("path", &path),

@@ -123,6 +123,53 @@ fn a_push_plays_the_entrance_over_the_route_beneath_and_the_pop_its_exit() {
 }
 
 #[test]
+fn an_offset_routes_exit_scales_its_bar_about_the_routes_centre() {
+    let source = ROUTES
+        .replace("to opacity=0 rotate=\"10deg\"", "to scale=0.5")
+        .replace(
+            "class=Slides testId=\"route-slide\" position=\"absolute\" inset=0",
+            "class=Slides testId=\"route-slide\" position=\"absolute\" left=40 top=100 right=0 bottom=0",
+        )
+        .replace(
+            "            text \"Slides\" testId=\"slide-body\"",
+            "            header\n              text \"Slides\" role=\"heading\"\n            text \"Slides\" testId=\"slide-body\"",
+        );
+    for transform in [
+        "",
+        "scale=0.8 transform-origin=\"0 0\"",
+        "rotate=5 transform-origin=\"0 0\"",
+    ] {
+        let source = source.replace("    main ", &format!("    main {transform} "));
+        let mut p = phone_source(&source);
+        tap(&mut p, "open-slide");
+        after(&mut p, 400.0);
+        let key = p.host().kernel().node(id(&p, "route-slide")).unwrap().key;
+        let route = rect(&mut p, "route-slide");
+        let bar = p.bars().0.unwrap().frame;
+        let page = p.chrome().frame;
+        let centre = (route.0 + route.2 / 2.0, route.1 + route.3 / 2.0);
+        back(&mut p);
+        after(&mut p, 200.0);
+        assert!(p.host().kernel().node_by_key(key).is_none());
+        let bar_ts = *p.brush.stage.bars.last().unwrap();
+        // Halfway to 0.5, both page and bar scale by 0.75 about the route's
+        // painted centre; its ancestors' transform does not shrink the bar.
+        let expected = Transform::from_row(
+            0.75,
+            0.0,
+            0.0,
+            0.75,
+            (bar[0] - page[0]) * 0.75 + centre.0 * 0.25,
+            (bar[1] - page[1]) * 0.75 + centre.1 * 0.25,
+        );
+        let parts = |t: Transform| [t.sx, t.kx, t.ky, t.sy, t.tx, t.ty];
+        for (actual, expected) in parts(bar_ts).into_iter().zip(parts(expected)) {
+            assert!((actual - expected).abs() < 0.001, "{transform}: {bar_ts:?}");
+        }
+    }
+}
+
+#[test]
 fn a_full_screen_route_fades_in_and_out() {
     let mut p = phone_source(ROUTES);
     tap(&mut p, "open-fade");

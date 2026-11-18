@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { buildPageFiles, writeCrawlerFiles } from './crawl.mjs';
+import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from './crawl.mjs';
 import { warmGameInputs, warmGameEnvironment, publishWarmGame } from '../web-js/module.mjs';
 import { generatedInputFiles } from '../../game/inputs.mjs';
 // Build the web app (LLP 1071): the JS target, `host/web-js/build.mjs`, the
@@ -39,7 +39,7 @@ import { sealEnvelope } from '../../scripts/deploy-signing.mjs';
 import { compilerWarnings, oneScheme, webInputDigests } from '../../scripts/agent-launch.mjs';
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
-import { packageGpuDir, packageGpuInputs, packageGpuManifest } from '../../scripts/app-shells.mjs';
+import { packageGpuDir, packageGpuInputs, packageGpuManifest, rustDataOf } from '../../scripts/app-shells.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
@@ -54,7 +54,7 @@ import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
 import { writeLinkFiles } from './association.mjs';
-import { cargoInputPaths, compilerPaths } from '../../scripts/cargo-dep-info.mjs';
+import { cargoInputPaths, compilerPaths, rustShapeInputs } from '../../scripts/cargo-dep-info.mjs';
 import { captureWebProducts, contractReadReceipt } from '../../scripts/web-build.mjs';
 
 const SDK_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -105,6 +105,8 @@ export function webSourceRoots(app, js, render = 'rust') {
   if (js && !set && rustMissing()) throw new RustMissing('exact-web-js');
   closure(recorded ?? webMetadata(SDK_ROOT), WEB_CRATES);
   const names = [], build = resolve(app.dir, 'web/build.rs');
+  const data = rustDataOf(app.manifest);
+  if (data) names.push(data.krate);
   const authored = existsSync(build) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build\w*\(/m.test(readFileSync(build, 'utf8'));
   if (app.crate) {
     if (!js || authored) names.push(app.crate('web'));
@@ -177,7 +179,10 @@ export function webSourceRoots(app, js, render = 'rust') {
         const name = entry.name === 'output' ? basename(dir).replace(/-[a-f0-9]+$/, '') : basename(dirname(dirname(dir)));
         for (const { packages } of workspaces) {
           const pkg = packages.find(pkg => pkg.name === name);
-          if (pkg) for (const input of cargoInputPaths(readFileSync(path, 'utf8'), dirname(pkg.manifest_path))) add(input, true);
+          if (pkg) {
+            const stdout = readFileSync(path, 'utf8');
+            for (const input of [...cargoInputPaths(stdout, dirname(pkg.manifest_path)), ...rustShapeInputs(stdout)]) add(input, true);
+          }
         }
       } else if (entry.name.endsWith('.json') && basename(dir) === 'kept') {
         const kept = JSON.parse(readFileSync(path, 'utf8'));
@@ -674,11 +679,9 @@ if (buildLocations.length && renderAt) {
   const rendered = spawnSync('cargo', ['run', '-q', '-p', renderCrate, '--bin', renderBin, '--', '--plan', planOut,
     '--name', webManifest.name, ...(app.origin ? ['--origin', app.origin] : []), '--shell', resolve(stage, 'index.html'), '--build'],
   { cwd: app.dir, env: renderEnv, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-  if (rendered.status !== 0) throw new Error(`${renderBin}: ${rendered.stderr}${rendered.stdout}`);
+  const pages = renderEntryPages(renderBin, rendered);
   const shell = readFileSync(resolve(stage, 'index.html'), 'utf8');
-  const pages = rendered.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   if (pages.length) writeFileSync(resolve(stage, 'shell.html'), shell);
-  for (const doc of pages) if (doc.error) throw new Error(`${renderBin} ${doc.location}: ${doc.error}`);
   // Each page's file as the JS target's writers choose it and the servers look it up (crawl.mjs `buildPageFiles`).
   const routeTable = planRouteTable(planBytes), files = buildPageFiles(stage, pages, routeTable);
   for (const [i, doc] of pages.entries()) {

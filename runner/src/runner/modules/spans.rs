@@ -235,7 +235,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The soonest span's end, for the clock's next wake.
-    pub(in crate::runner) fn span_due(&self) -> Option<f64> {
+    pub(super) fn span_due_linked(&self) -> Option<f64> {
         (self.extensions.held.iter())
             .filter(|h| h.waits == Waits::Span)
             .filter_map(|h| h.deadline)

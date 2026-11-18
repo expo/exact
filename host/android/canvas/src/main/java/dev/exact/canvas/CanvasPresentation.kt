@@ -1,8 +1,10 @@
 package dev.exact.canvas
 
-/** Readiness of one window attachment. The retained image covers it until its first present. */
+/** Readiness of one window attachment. A discarded picture shows the fallback until a fresh frame arrives. */
 internal class CanvasPresentation {
     var ready = false
+        private set
+    var awaitingFrame = false
         private set
     var failed = false
     private var submitted: Long? = null
@@ -17,13 +19,19 @@ internal class CanvasPresentation {
         submitted = null
     }
 
+    fun discard() {
+        clear()
+        awaitingFrame = true
+    }
+
     fun firstFrame() {
         ready = true
+        awaitingFrame = false
         failed = false
         submitted = null
     }
 
-    fun bufferFrame() { failed = false }
+    fun bufferFrame() { awaitingFrame = false; failed = false }
 
     /** -1: return to buffers; 0: keep the retained image; 1: reveal the surface.
      * Status 2 starts the deadline: a complete frame has been submitted. */

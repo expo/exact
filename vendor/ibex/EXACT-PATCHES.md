@@ -1185,3 +1185,40 @@ up its place.
 exact2's `host/executor/src/stream_quiet_tests.rs` holds an event stream and
 a byte stream quiet past each transport's limits against a loopback peer, on
 rustls and on URLSession. Replay on a refresh.
+
+## Local patch 49, one connection pool a transport
+
+exact2 runs its independent lane's six workers, its scoped requests and its
+launch preloads over one transport (LLP 1162 D5), so its reads share their
+connections.
+
+Darwin (`transport/darwin_http.mm`) ran each exchange on one of four
+sessions leased to it alone, because its delegate waits while the exchange's
+reader is behind, which would stall every task of a shared session; each
+session had its own connection pool. `Request::collected` says the caller
+reads the reply to its end as it arrives, into memory (exact2's plain reads
+and preloads, not a reply written to a file). Such an exchange, if not
+open-ended and its limit at most 64 MiB, a plain request's ceiling, now runs
+on one `shared` session per transport, whose delegate waits only while the
+reply is a mebibyte ahead of its reader, which a collecting reader never is
+for long: the session's other exchanges are not held, and what it holds of
+each reply stays bounded. The reader takes the reply from an offset and drops
+what it has taken once that is half the buffer. URLSession task suspension is
+no substitute: suspended in `didReceiveData`, a loopback task kept delivering
+its whole 8 MiB. The shared session's `HTTPMaximumConnectionsPerHost` is 32:
+URLSession's six (macOS) or four (iOS) would queue a read behind replies its
+origin holds, which sessions of their own never did, and 32 is more than
+exact2 runs at once on one transport (six workers, eight launch preloads,
+eight prefetches). HTTP/2 and HTTP/3
+carry an origin's exchanges on one connection. Any other exchange still
+leases a session of its own (local patch 48's kinds), so a stream, an unread
+reply or a slow file write never holds back the shared session.
+`transport/darwin_stream_tests.rs` has eight collected exchanges at once take
+their heads, which the peer sends only once all eight are in, beside four
+open-ended ones, and eight more after them open no connection.
+
+The portable transport (`transport/rustls_http.rs`) leases each exchange an
+idle agent of its own, each agent with its own pool. A lease now takes the
+newest idle agent whose last requests went to the request's origin (the
+eight it remembers), so a request finds a connection another left open to
+it. Replay on a refresh.

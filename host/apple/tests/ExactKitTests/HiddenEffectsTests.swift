@@ -88,7 +88,7 @@ final class HiddenEffectsTests: XCTestCase {
         let layer = try XCTUnwrap(node.layer)
         #endif
         XCTAssertNil(layer.animation(forKey: "paint"))
-        p.svg.seek(clock: 500)
+        p.svg?.seek(clock: 500); p.boxAnimations.seek(clock: 500)
         XCTAssertNil(layer.animation(forKey: "paint"))
         p.apply(wireBatch([["op": "style", "id": 1, "style": [:]]]))
         XCTAssertNotNil(layer.animation(forKey: "paint"))

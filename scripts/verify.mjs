@@ -7,7 +7,8 @@
 // `authoredTests`; agent-test.mjs `runTests`), launches the app on a fresh scratch store at a phone width and a desktop
 // width (iOS: the simulator's own size, with UIKit's bars), and runs `check` light and dark there, having read the screen's
 // accessibility tree once (verify-ax.mjs). Each test's end screen is checked the same way inside the test's own session (the web at both
-// widths, resized to each), so its secondary screens and populated states are in the report. Then the app
+// widths, resized to each), so its secondary screens and populated states are in the report. An end on a system alert
+// gets one finding asking the test to answer it; its screen is left unjudged, including at the largest text size. Then the app
 // relaunches once on the store a passing test left, on real time (at most REAL_MS) and under the zone, locale and seed
 // the test launched with and the date it had reached (its launch date plus its `clock` steps, as a `reload` relaunches,
 // LLP 1116.007 D3.4, LLP 1116.009 D1), and its first screen is compared with a fresh launch's under the same (the
@@ -423,7 +424,16 @@ const contentSize = (udid, size) => spawnSync('xcrun', ['simctl', 'ui', udid, 'c
  * own size is put back after, and when the process ends first. Null on iOS with no simulator to set. */
 /** Where the largest text size's pictures go, this run's (`deviceMain`): one per screen with a finding (LLP 1156.001 D3). */
 let largeShots = null;
+/** The host's presented alert: UIKit's confirmation, AppKit's NSAlert, or a painted host's alert surface.
+ * The web reports a modal alertdialog as a confirmation too. Anchored popovers and ordinary sheets remain app content. */
+export function systemAlert(state) {
+  const pop = state?.navigation?.popover;
+  return pop?.kind === 'confirmation' && (pop.presentation == null || pop.presentation === 'alert' || pop.presentation === 'sheet')
+    || state?.dialog?.kind === 'alert' || state?.surface?.kind === 'alert';
+}
+
 export async function largestText(s, screen) {
+  if (systemAlert(await s.state())) return null;
   const web = s.host === 'web', udid = s.carrier?.udid, was = web ? null : udid && contentSize(udid).stdout?.trim();
   if (!web && !was) return null;
   const started = Date.now(), body = async () => (await s.prefer({})).page?.['root-font-size'];
@@ -492,7 +502,7 @@ export function scaledEnd(runs, size) {
 
 /** runTests' `atEnd`: a test's last screen once its transitions end, checked in both schemes (the web: at both widths,
  * one capture kept at the width nearer the test's own; iOS: the simulator's), and what the relaunch chooses by. */
-const testEnd = (host, shots, persisted, capture = true) => async (s, t) => {
+export const testEnd = (host, shots, persisted, capture = true) => async (s, t) => {
   await s.clock('settle');
   const state = await s.state().catch(() => ({}));
   const facts = await seen(s, state);
@@ -504,6 +514,13 @@ const testEnd = (host, shots, persisted, capture = true) => async (s, t) => {
     WEB_SIZES.reduce((a, b) => (Math.abs(b[0] - own) < Math.abs(a[0] - own) ? b : a));
   const path = resolve(shots, shotName(host, t.index, t.name));
   const shot = (vp, scheme) => (scheme === 'light' && (host !== 'web' || vp.w === near[0]) ? path : undefined);
+  if (systemAlert(state)) {
+    const vp = (await s.layout()).viewport, scheme = (await s.prefer({})).media?.['prefers-color-scheme'] ?? 'light';
+    await s.screenshot(path);
+    const line = '  alert    the test ends on a system alert: the screen under it is not checked; answer the alert before the test ends to check it';
+    return { ...kept, shot: path, refusals: await refusalsIn(s, t.expectedRefusals), runs: [{ screen: t.name, size: [vp.w, vp.h], scheme, shot: path,
+      findings: [{ kind: 'alert', line }], accepted: [], lines: [line], hidden: 0, advice: [] }], reloaded: await reloadEnd(s, t, persisted) };
+  }
   const runs = await checkHere(s, { screen: t.name, sizes: host === 'web' ? WEB_SIZES : [null], shot, state });
   if (host === 'ios') scaledEnd(runs, t.size);
   const refusals = await refusalsIn(s, t.expectedRefusals);

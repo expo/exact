@@ -412,21 +412,6 @@ function detailRows(routes, found) {
     }
   }
 }
-// @ref LLP 1116.005 D3 — a route `replace` gives another path (a split's detail, another row's) keeps its id, so its node: it opens at its top, as a pushed one does; a new query keeps its place.
-const paths = new WeakMap(), freshPath = (route) => {
-  const path = last?.url?.split(/[?#]/)[0], was = paths.get(route);
-  paths.set(route, path);
-  if (was !== undefined && was !== path) {
-    for (const el of [route, ...route.querySelectorAll("*")]) {
-      if (el.scrollTop || el.scrollLeft) {
-        el.scrollTo(0, 0);
-      }
-    }
-    if (route.matches("[data-scrolldocument=\"true\"]:not([data-exact-offpage])") || route.querySelector("[data-scrolldocument=\"true\"]:not([data-exact-offpage])")) {
-      scrollTo(0, 0);
-    }
-  }
-};
 /** Whether a root's tablist is a bar whose placement the app left unsaid, read while the root is not yet a sidebar. */
 const unsaidBar = (nav, list) => viewParent(list) === nav && getComputedStyle(list).appearance !== "none" && list.getAttribute("aria-orientation") !== "vertical" && (([n, l]) => /flex/.test(n.display) && n.flexDirection.startsWith("column") && /^(static|relative)$/.test(l.position) && l.flexDirection.startsWith("row"))([getComputedStyle(nav), getComputedStyle(list)]);
 /** Routes and panels excluded from input or document fields. Only input keeps a visible split list live. */
@@ -1322,9 +1307,6 @@ export const navigation = {
           sheetFrame(routes, index, shownIn, inUse, selected);
           appBarBack(nav, routes, index, split > 0, active || covered, headers[index]);
           clearBar(route);
-          if (stack === at && index === selected) {
-            freshPath(route);
-          }
         }
         if (!SPLITS) {
           continue;

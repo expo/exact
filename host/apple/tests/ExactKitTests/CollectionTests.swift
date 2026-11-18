@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -67,14 +68,14 @@ final class CollectionTests: XCTestCase {
         XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 100)).error)
         let p = session.presenter
         let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
-        let before = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        let before = try XCTUnwrap(p.listHost.entries[node.id]?.snapshot)
         XCTAssertEqual(session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700), 30000)
         XCTAssertNil(session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700, distance: 19))
         XCTAssertEqual(session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700, distance: 20), 30000)
         XCTAssertNil(session.runtime.collectionSnap(node.id, proposed: 30000, port: 300, maximum: 149700, distance: 0))
         XCTAssertNil(session.runtime.collectionSnap(UInt32.max, proposed: 30020, port: 300, maximum: 149700))
-        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.rows.map(\.view), before.rows.map(\.view))
-        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.revision, before.revision)
+        XCTAssertEqual(p.listHost.entries[node.id]?.snapshot.rows.map(\.view), before.rows.map(\.view))
+        XCTAssertEqual(p.listHost.entries[node.id]?.snapshot.revision, before.revision)
     }
 
     /// An unmounted `always` row between a release and its rest holds a snap
@@ -209,8 +210,8 @@ final class CollectionTests: XCTestCase {
             ["op": "content", "id": 1, "w": 300, "h": 1000],
         ]))
         var reports: [Data] = []
-        p.collections.onFeedback = { reports.append($0) }
-        p.collections.settle()
+        p.listHost.onFeedback = { reports.append($0) }
+        p.listHost.settle()
         #if os(iOS) || os(tvOS)
         p.scrollPump.reset()
         #endif
@@ -222,22 +223,22 @@ final class CollectionTests: XCTestCase {
             if activity == .beforeWaiting {
                 guard !armed else { return }
                 // Spend both passes after this turn's queued continuations.
-                p.collections.pointer(nil)
-                p.collections.fillSlice(1, limit: 0)
+                p.listHost.pointer(nil)
+                p.listHost.fillSlice(1, limit: 0)
                 let before = reports.count
-                p.collections.pointer(2)
-                p.collections.pointer(nil)
+                p.listHost.pointer(2)
+                p.listHost.pointer(nil)
                 XCTAssertEqual(reports.count - before, 2)
                 armed = true
             } else if armed {
                 // Order 1 follows the budget observer, before native input
                 // and the main queue can run on this wake.
                 let before = reports.count
-                let refused = p.collections.budget.refusedSpent
-                p.collections.pointer(2)
+                let refused = p.listHost.budget.refusedSpent
+                p.listHost.pointer(2)
                 XCTAssertEqual(reports.count - before, 1, "the input reports its pin synchronously")
-                XCTAssertEqual(p.collections.budget.refusedSpent, refused)
-                XCTAssertEqual(p.collections.entries[1]?.lastFacts?.interaction, 2)
+                XCTAssertEqual(p.listHost.budget.refusedSpent, refused)
+                XCTAssertEqual(p.listHost.entries[1]?.lastFacts?.interaction, 2)
                 armed = false
                 wakes += 1
                 if wakes == 2 { done.fulfill() }
@@ -247,9 +248,9 @@ final class CollectionTests: XCTestCase {
         defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
         wait(for: [done], timeout: 5)
         XCTAssertEqual(wakes, 2)
-        XCTAssertTrue(p.collections.observingTurns)
-        p.collections.reset()
-        XCTAssertTrue(p.collections.observingTurns)
+        XCTAssertTrue(p.listHost.observingTurns)
+        p.listHost.reset()
+        XCTAssertTrue(p.listHost.observingTurns)
     }
 
     /// A rescue is never refused for the turn's passes, only while a pass

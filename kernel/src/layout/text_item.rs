@@ -25,7 +25,7 @@ pub(super) fn compute(
     }
     // The grid algorithm sizes and places the anonymous item; the arena
     // still owns one paragraph, with no authored child box.
-    let mut tree = taffy::TaffyTree::<()>::new();
+    let mut tree = taffy::TaffyTree::<()>::by_use();
     tree.disable_rounding();
     tree.set_calc_resolver(crate::style::resolve_calc);
     let item = tree.new_leaf(taffy::Style::default()).unwrap();

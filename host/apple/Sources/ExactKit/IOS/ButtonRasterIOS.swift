@@ -4,7 +4,7 @@ import CoreImage
 
 /// A face uses the same decoded lease and natural dimensions as an image node.
 enum ButtonRasterIOS {
-    static func image(_ face: ButtonFace, lease: NativeRasterLease?) -> UIImage? {
+    static func image(_ face: ButtonFace, lease: (any ImageLease)?) -> UIImage? {
         guard let declared = face.image else { return nil }
         if let pixels = lease?.image {
             let size = pixels.naturalSize, cg = pixels.image
@@ -30,7 +30,7 @@ extension ControlHost {
             owner.buttonRasterView = nil
             owner.imageSource = nil
             owner.loadGeneration += 1
-            presenter.session?.rasters.cancel(owner.id)
+            presenter.session?.rasters?.cancel(owner.id)
             owner.raster = nil
             return
         }

@@ -1,6 +1,7 @@
 import XCTest
 import ExactCore
 @testable import ExactKit
+@testable import ExactCollections
 #if os(macOS)
 import AppKit
 #else
@@ -13,7 +14,7 @@ final class CollectionFixedTests: XCTestCase {
     }
     private func settle(_ p: Presenter) {
         p.settlePump()
-        p.collections.settle()
+        p.listHost.settle()
     }
     private func move(_ p: Presenter, _ list: NodeView, to offset: CGFloat) {
         #if os(macOS)
@@ -26,7 +27,7 @@ final class CollectionFixedTests: XCTestCase {
         let maximum = max(-scroll.adjustedContentInset.top, scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
         scroll.setContentOffset(CGPoint(x: 0, y: min(maximum, max(-scroll.adjustedContentInset.top, offset))), animated: false)
         #endif
-        p.collections.changed(list.id, user: true)
+        p.listHost.changed(list.id, user: true)
         settle(p)
     }
     func testFixedContentMatchesEagerFlowAndFollowsAGrowingChatTrail() throws {
@@ -41,10 +42,10 @@ final class CollectionFixedTests: XCTestCase {
         let p = session.presenter, oracle = eager.presenter
         settle(p); settle(oracle)
         let list = try node(p, "chat"), eagerList = try node(oracle, "chat")
-        let initial = try XCTUnwrap(p.collections.entries[list.id]?.snapshot)
+        let initial = try XCTUnwrap(p.listHost.entries[list.id]?.snapshot)
         XCTAssertEqual(initial.fixed.count, 2)
         XCTAssertTrue(initial.rows.isEmpty, "the tall lead fills the initial data window")
-        XCTAssertTrue(p.collections.covers(list.id), "fixed content covers the port without a data row")
+        XCTAssertTrue(p.listHost.covers(list.id), "fixed content covers the port without a data row")
         XCTAssertEqual(try node(p, "trail").props["accessibilityElementsHidden"], "true")
         XCTAssertEqual(try node(p, "trail").props["inert"], "true")
         #if os(macOS)
@@ -57,8 +58,8 @@ final class CollectionFixedTests: XCTestCase {
             XCTAssertEqual(try node(p, name).laidOutFrame, try node(oracle, name).laidOutFrame)
         }
         move(p, list, to: 100_000)
-        let before = try XCTUnwrap(p.collections.geometry(list.id)).offset
-        XCTAssertTrue(p.collections.covers(list.id), "the tall trail covers the end with no mounted data")
+        let before = try XCTUnwrap(p.listHost.geometry(list.id)).offset
+        XCTAssertTrue(p.listHost.covers(list.id), "the tall trail covers the end with no mounted data")
         XCTAssertNotEqual(try node(p, "trail").props["accessibilityElementsHidden"], "true")
         XCTAssertNotEqual(try node(p, "trail").props["inert"], "true")
         #if os(macOS)
@@ -68,21 +69,21 @@ final class CollectionFixedTests: XCTestCase {
         XCTAssertFalse(try node(p, "trail").accessibilityElementsHidden)
         #endif
         p.press(try node(p, "grow").id); settle(p)
-        XCTAssertEqual(try XCTUnwrap(p.collections.geometry(list.id)).offset, before + 200, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(list.id)).offset, before + 200, accuracy: 0.5)
         XCTAssertEqual(try node(p, "trail").laidOutFrame.height, 1000)
         // Leave the followed end and read within the trail; older history keeps that place.
         move(p, list, to: CGFloat(before - 100))
-        let reading = try XCTUnwrap(p.collections.geometry(list.id)).offset
+        let reading = try XCTUnwrap(p.listHost.geometry(list.id)).offset
         p.press(try node(p, "prepend").id); settle(p)
-        XCTAssertEqual(try XCTUnwrap(p.collections.geometry(list.id)).offset, reading + 40, accuracy: 0.5)
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(list.id)).offset, reading + 40, accuracy: 0.5)
         XCTAssertEqual(list.content.height - list.layoutBounds.height, CGFloat(before + 240), accuracy: 0.5)
         XCTAssertEqual(eagerList.layoutBounds.height, 200)
         p.press(try node(p, "clear").id); settle(p)
-        let empty = try XCTUnwrap(p.collections.entries[list.id]?.snapshot)
+        let empty = try XCTUnwrap(p.listHost.entries[list.id]?.snapshot)
         XCTAssertEqual(empty.count, 0)
         XCTAssertTrue(empty.rows.isEmpty)
         XCTAssertEqual(empty.extent, 1620, accuracy: 0.5)
-        XCTAssertTrue(p.collections.covers(list.id))
+        XCTAssertTrue(p.listHost.covers(list.id))
         XCTAssertNotEqual(try node(p, "trail").props["accessibilityElementsHidden"], "true")
     }
     func testARejectedFixedMeasurementIsRetriedAfterANewerSnapshot() throws {
@@ -90,7 +91,7 @@ final class CollectionFixedTests: XCTestCase {
         _ = NSApplication.shared
         #endif
         let p = Presenter()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         func snapshot(_ revision: Int, _ sizes: [Double] = [0, 0]) -> Batch {
             let fixed: [[String: Any]] = [
                 ["view": 10, "roots": [2], "epoch": 1, "size": sizes[0]],
@@ -100,15 +101,15 @@ final class CollectionFixedTests: XCTestCase {
                 "count": 100, "totalExtent": 4000 + sizes.reduce(0, +), "rows": [], "fixed": fixed]
             return wireBatch([["op": "collections", "items": [item]]])
         }
-        p.collections.beginBatch(snapshot(1)); p.collections.endBatch()
-        let entry = try XCTUnwrap(p.collections.entries[1])
+        p.listHost.beginBatch(snapshot(1)); p.listHost.endBatch()
+        let entry = try XCTUnwrap(p.listHost.entries[1])
         entry.lastFacts = CollectionFacts(offset: 0, portMain: 200, portCross: 300, cross: 300,
             measurements: [.init(view: 10, epoch: 1, size: 600), .init(view: 11, epoch: 1, size: 800)],
             focus: nil, interaction: nil)
-        p.collections.beginBatch(snapshot(2)); p.collections.endBatch()
+        p.listHost.beginBatch(snapshot(2)); p.listHost.endBatch()
         XCTAssertTrue(entry.owed, "the newer index has not taken either fixed measurement")
         entry.owed = false
-        p.collections.beginBatch(snapshot(3, [600, 800])); p.collections.endBatch()
+        p.listHost.beginBatch(snapshot(3, [600, 800])); p.listHost.endBatch()
         XCTAssertFalse(entry.owed, "a snapshot that took both measurements needs no retry")
     }
 
@@ -122,24 +123,24 @@ final class CollectionFixedTests: XCTestCase {
         let p = session.presenter
         settle(p)
         let list = try node(p, "chat")
-        let measured = p.collections.fixedMeasurements(list.id)
+        let measured = p.listHost.fixedMeasurements(list.id)
         XCTAssertEqual(measured.map(\.size), [620, 800])
         Owner.shared.sync {
             Owner.shared.callMain {
                 XCTAssertNil(session.runtime.collectionFixedSizes(list.id, lead: 1, trail: 1))
-                XCTAssertTrue(p.collections.fixedMeasurements(list.id).isEmpty)
+                XCTAssertTrue(p.listHost.fixedMeasurements(list.id).isEmpty)
                 // A report now would lack the fixed sizes the runner requires.
-                p.collections.dataReady()
-                p.collections.settle()
-                XCTAssertEqual(p.collections.entries[list.id]?.owed, true, "an unmeasured fixed list stays owed")
+                p.listHost.dataReady()
+                p.listHost.settle()
+                XCTAssertEqual(p.listHost.entries[list.id]?.owed, true, "an unmeasured fixed list stays owed")
             }
         }
-        XCTAssertEqual(p.collections.fixedMeasurements(list.id), measured, "a later owner read supplies real measurements")
+        XCTAssertEqual(p.listHost.fixedMeasurements(list.id), measured, "a later owner read supplies real measurements")
         settle(p)
-        XCTAssertEqual(p.collections.entries[list.id]?.owed, false, "the next turn delivers the owed report")
+        XCTAssertEqual(p.listHost.entries[list.id]?.owed, false, "the next turn delivers the owed report")
         XCTAssertEqual(session.state, .ready, "the runner survived the unmeasured turn")
         p.press(try node(p, "grow").id); settle(p)
-        XCTAssertEqual(p.collections.fixedMeasurements(list.id).map(\.size), [620, 1000])
+        XCTAssertEqual(p.listHost.fixedMeasurements(list.id).map(\.size), [620, 1000])
     }
 
     #if os(macOS)
@@ -176,7 +177,7 @@ final class CollectionFixedTests: XCTestCase {
             window.contentView?.layoutSubtreeIfNeeded(); settle(p)
             let list = try node(p, "list")
             if leadHeight == 1200 {
-                XCTAssertTrue(try XCTUnwrap(p.collections.entries[list.id]?.snapshot).rows.isEmpty)
+                XCTAssertTrue(try XCTUnwrap(p.listHost.entries[list.id]?.snapshot).rows.isEmpty)
                 XCTAssertEqual(try node(p, "trail").props["inert"], "true")
             }
             let initial = fixed ? try node(p, "lead") : try node(p, "row-0")

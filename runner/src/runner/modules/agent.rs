@@ -15,7 +15,7 @@ impl<D: DataSource> Runner<D> {
     /// with their calls' origins, and its ceremonies and signals, each by
     /// name, RP ID, origin and outcome, never a response (LLP 1133.011 §9).
     /// `None` for a plan that names none.
-    pub fn extensions_json(&self) -> Option<String> {
+    pub(super) fn extensions_json_linked(&self) -> Option<String> {
         if self.plan.modules.is_empty() && self.plan.views.is_empty() {
             return None;
         }
@@ -172,7 +172,7 @@ impl<D: DataSource> Runner<D> {
     /// {…}|"clear"}}` sets a source's answer; `{"op":"prefer","permission":
     /// {"geolocation":"granted"}}` a permission's state. Readers are asked
     /// again. `None` for any other request.
-    pub fn extension_agent(
+    pub(super) fn extension_agent_linked(
         &mut self,
         request: &str,
     ) -> Option<(Vec<CommitReceipt>, Result<String, String>)> {

@@ -183,7 +183,7 @@ export function prepareWidgetCore({ directory, swiftBuildRoot, swiftArgs, swiftc
   const scratch = resolve(swiftBuildRoot, 'core');
   const args = swiftArgs.map(a => a === swiftBuildRoot ? scratch : a);
   const key = createHash('sha256').update(JSON.stringify([args, swiftc, triple, 'versioned-framework-module-bundles']));
-  for (const file of [resolve(pkg, 'Package.swift'), resolve(pkg, 'include/exact.h'), ...['ExactCore', 'ExactSnapshot', 'CExact'].flatMap(name => tree(resolve(pkg, 'Sources', name)))].sort()) key.update(file).update(readFileSync(file));
+  for (const file of [resolve(pkg, 'Package.swift'), ...readdirSync(resolve(pkg, 'include')).map((header) => resolve(pkg, 'include', header)), ...['ExactCore', 'ExactSnapshot', 'CExact'].flatMap(name => tree(resolve(pkg, 'Sources', name)))].sort()) key.update(file).update(readFileSync(file));
   const base = resolve(directory, key.digest('hex').slice(0, 20));
   return { base, scratch, args, triple, device, platform, framework: resolve(base, 'ExactCore.framework'), xcframework: resolve(base, 'ExactCore.xcframework') };
 }

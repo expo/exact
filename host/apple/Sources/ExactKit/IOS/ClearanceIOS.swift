@@ -3,7 +3,8 @@
 // already leaves out the route's padding above it, as if that padding cleared
 // the bar. Clearance adds to padding unless the padding reads the inset
 // itself, so the scroller's own `contentInset` makes up the rest: the
-// padding's points where it does not read the inset, up to the inset. An edge
+// route's padding's points where it does not read the inset, up to the
+// inset, and nothing for boxes laid out above the scroller. An edge
 // the route opts out of (`-exact-safe-area`) is not inset at all: the top as
 // under a transparent bar (`insetsNoTop`), the bottom by taking back what
 // UIKit adds there.
@@ -42,7 +43,11 @@ extension NavigationHost {
             // and that room is UIKit's inset, not padding.
             var padded: CGFloat = 0
             if case .edges(let e)? = covers[c.node.id] { padded = e.top }
-            return min(local.top, max(0, box.minY - padded))
+            // Only the route's own padding above the cover is made up: a box
+            // between the cover and the scroller (a control bar) is content,
+            // which UIKit's inset never counts either
+            let own = max(0, (c.node.kernelPadding?.first ?? nil).map { $0 - padded } ?? 0)
+            return min(local.top, max(0, min(box.minY - padded, own)))
         }
         if off & 4 != 0 { return -sv.safeAreaInsets.bottom }
         guard credit & 4 == 0 else { return 0 }

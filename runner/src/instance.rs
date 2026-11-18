@@ -24,8 +24,8 @@ mod owners;
 pub use owners::OwnerInst;
 mod rare;
 mod region;
+mod retire;
 pub mod tabs;
-mod text;
 pub mod theme;
 mod trapped;
 use trapped::Evaluated;
@@ -320,7 +320,7 @@ pub fn value_json(value: &Value, out: &mut String) {
         }
         Value::Number(_) | Value::Unit | Value::Option(None) => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        v @ exact_plan::str_value!() => crate::agent::quote(v.text(), out),
+        v @ exact_plan::str_value!() => crate::json::quote(v.text(), out),
         Value::Option(Some(v)) => value_json(v, out),
         Value::List(items) | Value::Record(items) => {
             out.push('[');
@@ -363,7 +363,7 @@ impl SurfaceUpdate {
                 out.push(',');
             }
             if named {
-                crate::agent::quote(&self.names[i], &mut out);
+                crate::json::quote(&self.names[i], &mut out);
                 out.push(':');
             }
             value_json(value, &mut out);
@@ -462,7 +462,7 @@ pub struct Update<'a> {
     /// them `renewed`.
     pub renewed: Vec<ViewId>,
     /// List rows mounted out of their port, and those that showed (LLP 1055 D13).
-    pub shown: collection::shown::RowsShown,
+    pub shown: crate::list_api::RowsShown,
     /// Rebind retiring list rows to new items (LLP 1078), as the runner was
     /// told ([`crate::Runner::set_row_reuse`]).
     pub reuse: bool,
@@ -1245,7 +1245,7 @@ impl NodeInst {
     fn destroy(self, u: &mut Update<'_>) {
         // Destroying the view destroys its subtree in the kernel; the instance
         // tree just drops.
-        collection::work::retire_node(u, &self);
+        retire::retire_node(u, &self);
         u.ops.push(Op::DestroyView { id: self.view });
     }
 }

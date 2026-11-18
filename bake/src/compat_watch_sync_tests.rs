@@ -44,6 +44,7 @@ fn sync(name: &str, liked: &str, other: &str) -> serde_json::Value {
         None,
         None,
         &serde_json::Value::Null,
+        false,
     )
     .unwrap()
     .inputs["watchSync"]

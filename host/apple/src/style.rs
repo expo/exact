@@ -444,10 +444,10 @@ pub(crate) fn style_json_rows(
             // and `pd` dark when that differs, the view picking by its own.
             RowValue::Filter(list) => {
                 let program = |dark| {
-                    exact_kernel::svg::scene::box_filter(list, style.text_color, dark)
+                    crate::link::families::box_filter(list, style.text_color, dark)
                         .map(|f| f.encode())
                 };
-                match exact_kernel::svg::scene::box_filter(list, style.text_color, false) {
+                match crate::link::families::box_filter(list, style.text_color, false) {
                     Some(f) => {
                         let light = f.encode();
                         let push = |out: &mut String, key: &str, p: &[f32]| {

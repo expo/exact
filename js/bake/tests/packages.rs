@@ -879,7 +879,7 @@ fn app_facts_are_read_without_running_the_module_and_aliases_replay() {
     for result in every(&app) {
         let error = result.expect_err("computed grants");
         assert!(
-            error.contains("grants must be a constant the build reads without running the module"),
+            error.contains("app.ts:6:23: grants cannot call code; only a literal array .join(separator) is allowed"),
             "{error}"
         );
     }

@@ -5,7 +5,7 @@
 //! the record holds, and the output. The runner says `"agent"`: under the
 //! driver no host plays, and a host that plays outside it fills in its own.
 
-use super::{field_str, num, quote};
+use crate::json::{field_str, num, quote};
 use crate::{DataSource, Runner};
 use std::fmt::Write as _;
 

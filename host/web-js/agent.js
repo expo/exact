@@ -320,6 +320,14 @@ export function install(exact) {
     images?.then(h => h.seek());
   };
   const seek = (sync = true) => { anim.register(exact.clock.now); anim.seek(exact.clock.now, sync); holdImages(); };
+  // Deliver world records before later timers (LLP 1012, LLP 1046.003).
+  const worldStep = to => {
+    const worlds = exact.gpu?.clock?.(false), now = exact.clock.now, next = worlds?.nextTickAt;
+    if (!worlds?.reply?.world?.length && !(next > now)) return to;
+    const due = [...(exact.clock.stopped ? [] : exact.clock.timers.map(t => t.due)),
+      ...(exact.mutations ?? []).flatMap(m => [m.due, m.next])].filter(t => t > now);
+    return Math.min(to, next > now ? next : to, ...due);
+  };
   // Whether this clock runs `a` (a refused tap's advice, scripts/agent-aim.mjs `pageOutside`): on the document's timeline,
   // and not held by its author, then or, not yet registered, at its registration.
   exact.clockRuns = anim.runs;
@@ -470,7 +478,7 @@ export function install(exact) {
           // (fired in its scroll wait or its frame) found no quiet round.
           let quiet = false, lastRound = exact.lists?.scrollsFired?.() ?? 0;
           const glide = { ms: GLIDE_BOUND_MS };
-          let moved = false;
+          let moved = false, world = {};
           for (let round = 0; round < 16; round++) {
             // A scroller still gliding from the last input moves on its own: it ends first (agent-input.js).
             if (!(await glidesSettled(glide))) return { clock: exact.clock.now, settled: false, reason: 'scroll' };
@@ -498,19 +506,25 @@ export function install(exact) {
             // round, so a run of sends never spends the rounds. Past the deadline,
             // or 4096 stops, the rest is one advance.
             // An answer's own timer (ts-fetch.js) is due as a task is: the settle goes to it, while its answer is live.
-            const at = exact.clock.now, epoch = exact.clock.epoch, to = Math.max(anim.settle(), ...exact.clock.timers.filter(t => t.data && t.live()).map(t => t.due));
+            const gpuPending = await settleGpu();
+            if (gpuPending.length) return gpuPendingReply(req, gpuPending);
+            world = exact.gpu?.clock?.(true) ?? {};
+            const at = exact.clock.now, epoch = exact.clock.epoch, to = Math.max(anim.settle(), world.settleAt ?? 0, ...exact.clock.timers.filter(t => t.data && t.live()).map(t => t.due));
             for (let stops = 0; ; stops++) {
               const before = exact.inflight.n, held = stops < 4096 && performance.now() < end;
-              const stopped = exact.advance(to, false, held ? () => exact.inflight.n > before : undefined);
+              const step = worldStep(to), stopped = exact.advance(step, false, held ? () => exact.inflight.n > before : undefined);
               if (typeof stopped === 'string') { seek(); return { error: `clock: ${stopped}`, clock: exact.clock.now }; }
-              if (!stopped) break;
+              if (!stopped && step >= to) break;
               while (exact.inflight.n > unwaited() && performance.now() < end) await new Promise(r => setTimeout(r, 1));
             }
             // Quiet, unless this round's work set a scroller moving: two frames tell (its first event comes at the
             // next frame's rendering step); then the next round waits for it and runs what it fired.
             if (!(to > at) && exact.clock.epoch === epoch) {
               if (!(await glidesSettled(glide))) return { clock: exact.clock.now, settled: false, reason: 'scroll' };
-              if (scrollsSeen() === scrolled) { quiet = true; break; }
+              if (scrollsSeen() === scrolled) {
+                if (!world.pending) { quiet = true; break; }
+                continue;
+              }
               moved = true;
               continue;
             }
@@ -528,7 +542,7 @@ export function install(exact) {
           if (!quiet && moved) return { clock: exact.clock.now, settled: false, reason: 'scroll' };
           const busy = busyIds();
           if (busy.length && !exact.inflight.n) return { clock: exact.clock.now, settled: false, reason: 'busy', busy };
-          return { clock: exact.clock.now, settled: !exact.inflight.n };
+          return { clock: exact.clock.now, settled: !exact.inflight.n && !world.pending, ...world.reply };
         }
         // A jump that crosses timers stops after each timer whose commit
         // sends, and its reply lands before the next fires, as the wasm
@@ -546,10 +560,10 @@ export function install(exact) {
         await exact.viewTransition?.();
         for (const end = performance.now() + 20000; ;) {
           while (due() && exact.inflight.n > unwaited() && performance.now() < end) await new Promise(r => setTimeout(r, 1));
-          const before = exact.inflight.n, stopped = exact.advance(req.to, false, () => exact.inflight.n > before);
+          const before = exact.inflight.n, step = worldStep(req.to), stopped = exact.advance(step, false, () => exact.inflight.n > before);
           // A refusal stops the jump at its time: the runner's error (a timer's, a `then`'s).
           if (typeof stopped === 'string') { seek(); return { error: `clock: ${stopped}`, clock: exact.clock.now }; }
-          if (!stopped) break;
+          if (!stopped && step >= req.to) break;
           // A reply is usually a task or two away: poll at the browser's
           // shortest timer, not a frame's worth (a 300 ms timer's minute
           // is 200 of these).

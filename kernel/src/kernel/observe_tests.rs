@@ -48,6 +48,7 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
         match row {
             StyleId::PaddingTop => patch.padding_top = d,
             StyleId::PaddingLeft => patch.padding_left = d,
+            StyleId::PaddingBottom => patch.padding_bottom = d,
             StyleId::MarginTop => patch.margin_top = d,
             StyleId::MarginLeft => patch.margin_left = d,
             StyleId::Width => patch.width = d,
@@ -1326,6 +1327,109 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
 #[path = "observe_cost_tests.rs"]
 mod cost;
 
+#[test]
+fn a_solve_reports_the_refusals_of_its_last_round() {
+    // Each pass lists every refusal under its root, so a later round's lists
+    // replace an earlier one's, and a box whose flow changed in two rounds
+    // is named once
+    let key = |index| crate::NodeKey {
+        index,
+        generation: 1,
+    };
+    let receipt = |changed: &[u32], skipped: &[u32]| LayoutReceipt {
+        epoch: 0,
+        root: key(1),
+        changed: Vec::new(),
+        updated: Vec::new(),
+        flow_changed: changed.iter().map(|&i| key(i)).collect(),
+        flow_skipped: skipped.iter().map(|&i| key(i)).collect(),
+        fragment_skipped: skipped.iter().map(|&i| key(i)).collect(),
+        flow_passes: 1,
+        flow_comparisons: 0,
+    };
+    let mut into = receipt(&[2], &[3, 4]);
+    merge(&mut into, receipt(&[2, 5], &[4]));
+    assert_eq!(into.flow_changed, vec![key(2), key(5)]);
+    assert_eq!(into.flow_skipped, vec![key(4)]);
+    assert_eq!(into.fragment_skipped, vec![key(4)]);
+    assert_eq!(into.flow_passes, 2);
+}
+
+#[test]
+fn a_height_target_is_measured_with_its_readers_solved() {
+    // The target 3, `border-box` of automatic height at the top of the owner
+    // 2 under a 47-point band, holds the 10-point 4; once 5 mounts in it,
+    // padding its top by its observation, the target measures what the next
+    // layout gives it, the 47 points included, and the kernel is unchanged
+    let mut ops = create(3..=4);
+    ops.push(style(3, vec![], &[(StyleId::BoxSizing, "border-box")]));
+    ops.push(style(4, vec![], &[(StyleId::Height, "10")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_band(2, Some([47.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
+    lay_out(&mut k);
+    let mut ops = create(5..=5);
+    let pad = vec![(StyleId::PaddingTop, observed(Edge::Top, None))];
+    ops.push(style(5, pad, &[(StyleId::Height, "10")]));
+    ops.push(children(3, &[5, 4]));
+    k.apply(0, 2, &ops).unwrap();
+    let before = k.export(None).unwrap();
+    let target = [k.arena.key(slot(&k, 3))];
+    let offer = Offer::definite(390.0, 844.0);
+    let measured = k.measure_height_targets(1, offer, &target).unwrap();
+    assert_eq!(measured[0].px, 67.0);
+    assert_eq!(k.export(None).unwrap(), before);
+    // An engine fault inside the copies rebuilds them, and the kernel's own
+    // tree rebuilds at its next layout
+    k.arena.set_taffy(slot(&k, 4), None);
+    let measured = k.measure_height_targets(1, offer, &target).unwrap();
+    assert_eq!(measured[0].px, 67.0);
+    assert_eq!(k.export(None).unwrap(), before);
+    lay_out(&mut k);
+    assert_eq!(k.node(3).unwrap().frame.height, 67.0);
+}
+
+#[test]
+fn a_hidden_reader_keeps_its_input_until_it_has_a_box() {
+    // 4 lies 100 below the root's top in the owner 2 under a 47-point band
+    // and observes none of it; hidden with 3, it has no box to measure and
+    // keeps 0, with no layout added, while the band grows to 120, and shown
+    // again it observes the 20 that reach it, as in a fresh layout
+    let tree = |hidden: bool, band: f32| {
+        let mut ops = create(3..=5);
+        let pad = vec![(StyleId::PaddingTop, observed(Edge::Top, None))];
+        let display = if hidden { "none" } else { "block" };
+        ops.push(style(5, vec![], &[(StyleId::Height, "100")]));
+        ops.push(style(3, vec![], &[(StyleId::Display, display)]));
+        ops.push(style(4, pad, &[(StyleId::Height, "10")]));
+        ops.extend([children(1, &[2]), children(2, &[5, 3]), children(3, &[4])]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([band, 0.0, 0.0, 0.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k
+    };
+    let mut k = tree(false, 47.0);
+    assert_eq!(k.observation(4).unwrap()[0], Some(0.0));
+    k.apply(0, 2, &[style(3, vec![], &[(StyleId::Display, "none")])])
+        .unwrap();
+    lay_out(&mut k);
+    k.set_owner_band(2, Some([120.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.observation(4).unwrap()[0], Some(0.0));
+    assert_eq!(k.arena.observations.rounds, 0);
+    k.apply(0, 3, &[style(3, vec![], &[(StyleId::Display, "block")])])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.observation(4).unwrap()[0], Some(20.0));
+    assert_eq!(top(&k, 4), top(&tree(false, 120.0), 4));
+}
+
+#[path = "seam_tests.rs"]
+mod seams;
+
 #[path = "targets_tests.rs"]
 mod targets;
 
@@ -1335,5 +1439,11 @@ mod provenance;
 #[path = "content_root_tests.rs"]
 mod content_root;
 
+#[path = "keyboard_tests.rs"]
+mod keyboard;
+
 #[path = "reservation_tests.rs"]
 mod reservation;
+
+#[path = "ignore_tests.rs"]
+mod ignore;

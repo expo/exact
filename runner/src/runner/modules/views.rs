@@ -3,7 +3,7 @@
 //! names, the runner keeps its displayed state, by `wakelock`'s rule
 //! (`crate::wakelock::displayed`), and the values of the props its
 //! declaration marks as binding a device, each with the origin of the commit
-//! that changed it (`admit.rs`, D12). Each change goes to the extension whose
+//! that changed it (`provenance.rs`, D12). Each change goes to the extension whose
 //! implementation makes the view, when the host composes it (bound as in
 //! production or under the agent), through the native slot:
 //!
@@ -50,20 +50,18 @@ struct Viewed {
 }
 
 impl<D: DataSource> Runner<D> {
-    pub(in crate::runner) fn collection_output_quiet(&self) -> bool {
+    /// The modules' part of [`Self::collection_output_quiet`]: no package
+    /// view, fed canvas or held call.
+    pub(super) fn modules_quiet_linked(&self) -> bool {
         self.plan.views.is_empty()
             && !self.fed_any()
             && self.extensions.held.is_empty()
             && self.extensions.released.is_empty()
-            && !self.has_work_clock()
-            && self.wake_due().is_none()
-            && self.call_due().is_none()
-            && self.presence_due_ms().is_none()
     }
 
     /// After a commit is applied: its origin is the one a change it made is
     /// reported with.
-    pub(in crate::runner) fn views_committed(&mut self) {
+    pub(super) fn views_committed_linked(&mut self) {
         if self.plan.views.is_empty() && !self.fed_any() {
             return;
         }
@@ -75,7 +73,7 @@ impl<D: DataSource> Runner<D> {
     /// A host calls this again after it changes what is displayed without a
     /// commit (a cover set as it lays the commit out), as it reads the wake
     /// lock's holders.
-    pub fn report_views(&mut self) {
+    pub(super) fn report_views_linked(&mut self) {
         // A canvas a package feeds, by the same rule (`fed.rs`).
         self.report_fed();
         let none_placed = !self.kernel.has_prop(PropId::NativeViewModuleName);
@@ -177,7 +175,7 @@ impl<D: DataSource> Runner<D> {
     /// The origin the runner reported for view `id`'s displayed state, or for
     /// its binding `prop`: what an acquisition the view makes is admitted
     /// with (LLP 1133.008 D3).
-    pub fn view_origin(&self, id: ViewId, prop: Option<&str>) -> Option<CallOrigin> {
+    pub(super) fn view_origin_linked(&self, id: ViewId, prop: Option<&str>) -> Option<CallOrigin> {
         let v = self.extensions.views.seen.get(&id)?;
         match prop {
             Some(prop) => v.bound.get(prop).map(|(_, by)| *by),

@@ -198,7 +198,7 @@ ${dependencies}
 exact-bake = ${dep('bake')}
 ${data.krate} = ${data.dependency}
 `,
-    'build.rs': `fn main() {\n    exact_bake::host::app(${JSON.stringify(kind)}, ${JSON.stringify(app)}, ${data.source});\n}\n`,
+    'build.rs': `fn main() {\n    let source = ${data.source};\n    let host_work = exact_bake::hands_out_work!(source);\n    exact_bake::host::app(${JSON.stringify(kind)}, ${JSON.stringify(app)}, source, host_work);\n}\n`,
     [['linux', 'windows'].includes(kind) ? 'src/main.rs' : 'src/lib.rs']: `//! ${title} on ${on}: the host over the Rust data crate (\`${data.ty}\`) and the baked plan.
 ${kind === 'windows' ? '#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]\n' : ''}
 include!(concat!(env!("OUT_DIR"), "/entry.rs"));
@@ -251,6 +251,7 @@ ${platform === 'apple' ? `    let platform = match std::env::var("CARGO_CFG_TARG
         std::path::Path::new(${JSON.stringify(app)}),
         ${platform === 'apple' ? 'platform' : JSON.stringify(platform)},
         &${data.source},
+        exact_js_bake::hands_out_work!(${data.source}),
         ${data.lib}::RUST_SOURCES,
         |javascript, typescript| {
             let app = exact_runner::DataSource::app_id(&javascript).to_owned();
@@ -945,7 +946,11 @@ export function ensurePackageGpu(app, module) {
       const req = typeof spec === 'string' ? spec : spec.version;
       if (!req || spec.path || spec.git || spec.workspace || !gpuVersionMatches(version, req)) throw new Error(`${module.package}: exact-gpu must require the checkout's ${version} from crates.io, without a path, git or workspace dependency`);
       usesGpu = true;
-    } else if (dep.startsWith('exact-') || dep === 'contract' || dep.startsWith('contract-') || SDK_CRATES.has(dep)) throw new Error(`${module.package}: a GPU package may depend on exact-gpu, not ${dep}`);
+    } else if (dep.startsWith('exact-') || dep === 'contract' || dep.startsWith('contract-') || SDK_CRATES.has(dep)) {
+      const path = typeof spec === 'object' && spec.path && realpathSync(resolve(source, spec.path));
+      const own = path && (path === module.root || path.startsWith(`${module.root}/`)) && !SDK_CRATES.has(dep);
+      if (!own) throw new Error(`${module.package}: a GPU package may depend on exact-gpu, not ${dep}`);
+    }
   }
   if (!usesGpu) throw new Error(`${module.package}: its GPU crate must depend on exact-gpu`);
   if (manifest.package?.workspace || Object.keys(manifest.workspace ?? {}).length) throw new Error(`${module.package}: its GPU crate must have a standalone Cargo.toml`);

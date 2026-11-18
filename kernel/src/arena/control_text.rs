@@ -86,7 +86,7 @@ static WEB_PROJECTED_BUTTON_START: std::sync::LazyLock<StyleProps> =
 /// own, D17) sizes the box the page draws. `[field, button, projected]`.
 static NEUTRAL_STARTS: std::sync::LazyLock<[StyleProps; 3]> = std::sync::LazyLock::new(|| {
     use crate::generated::{metric, MetricValue, METRICS};
-    let number = |index: usize| match METRICS[index].neutral {
+    let number = |index: usize| match METRICS[index].neutral() {
         MetricValue::Number(n) => n as f32,
         _ => unreachable!("the neutral look has this row"),
     };

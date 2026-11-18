@@ -95,7 +95,7 @@ extension CALayer {
 
     /// An HDR colour this layer paints asks for what `limit` allows; `deep`
     /// does the same for every sublayer (a shadow caster, an SVG scene).
-    func applyColorRange(limit: String?, deep: Bool = false) {
+    package func applyColorRange(limit: String?, deep: Bool = false) {
         setColorRange(hdr: ownColors.contains { ColorRange.isHDR($0) || ColorRange.needsExtendedComponents($0) }, limit: limit)
         if self is CAGradientLayer { mapsExtendedRange(ownColors.contains(where: ColorRange.isHDR)) }
         if deep { sublayers?.forEach { $0.applyColorRange(limit: limit, deep: true) } }
@@ -144,7 +144,7 @@ extension CALayer {
     /// An HDR bitmap's layer asks for what `limit` allows, with its headroom.
     /// Anything else stays standard: an EDR layer costs the compositor even
     /// when its content is SDR.
-    func applyDynamicRange(hdr: Bool, headroom: Float, limit: String?) {
+    package func applyDynamicRange(hdr: Bool, headroom: Float, limit: String?) {
         if #available(iOS 26, macOS 26, tvOS 26, *) {
             let range: CALayer.DynamicRange = hdr ? layerRange(limit) : .standard
             if preferredDynamicRange != range { preferredDynamicRange = range }
@@ -160,7 +160,7 @@ extension CALayer {
     }
 
     /// What the agent reports of a layer's range (LLP 1100 D12).
-    var dynamicRangeFacts: [String: Any] {
+    package var dynamicRangeFacts: [String: Any] {
         if #available(iOS 26, macOS 26, tvOS 26, *) {
             let names: [CALayer.DynamicRange: String] = [.standard: "standard", .constrainedHigh: "constrained", .high: "high", .automatic: "automatic"]
             return ["dynamicRange": names[preferredDynamicRange] ?? "\(preferredDynamicRange)", "contentsHeadroom": contentsHeadroom]
@@ -176,7 +176,7 @@ extension CALayer {
 extension NodeView {
     /// UIKit puts fitted bitmaps inside a clipping layer; flights and AppKit
     /// use the image layer itself.
-    var imageContentLayer: CALayer? {
+    package var imageContentLayer: CALayer? {
         #if os(iOS) || os(tvOS)
         return imageLayer?.contents != nil ? imageLayer : imageLayer?.sublayers?.first
         #else
@@ -190,7 +190,7 @@ extension NodeView {
         guard old["dynamic_range_limit"] != style["dynamic_range_limit"] else { return }
         applyColorRanges()
         guard kind == "image" else { return }
-        presenter?.session?.rasters.rangeChanged(self)
+        presenter?.session?.rasters?.rangeChanged(self)
         if let bitmap = raster?.image {
             imageContentLayer?.applyDynamicRange(hdr: bitmap.isHDR, headroom: bitmap.headroom, limit: style["dynamic_range_limit"]?.string)
         }
@@ -224,7 +224,7 @@ extension NodeView {
         #if os(macOS)
         if textRaster != nil && textRasterOverflowLayer == nil { own?.applyTextRange(limit: limit) }
         #endif
-        for l in own?.sublayers ?? [] where l.name == SvgHost.rootName { l.applyColorRange(limit: limit, deep: true) }
+        for l in own?.sublayers ?? [] where l.name == SvgLink.rootName { l.applyColorRange(limit: limit, deep: true) }
     }
 
     func paragraphHeadroom(drawing: Bool) -> Float {

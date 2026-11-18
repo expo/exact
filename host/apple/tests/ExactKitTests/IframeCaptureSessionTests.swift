@@ -2,6 +2,7 @@ import PDFKit
 import WebKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 #if os(macOS)
 import AppKit
 #endif
@@ -18,7 +19,7 @@ final class IframeCaptureSessionTests: XCTestCase {
         }
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "iframe-pdf")
-        session.webviews.moduleLocation = { module }
+        session.webHost.moduleLocation = { module }
         defer { session.destroy() }
         XCTAssertNil(session.boot(plan: try fixturePlan("IFRAME_PDF"), size: CGSize(width: 640, height: 500)).error)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
@@ -44,7 +45,7 @@ final class IframeCaptureSessionTests: XCTestCase {
         XCTAssertTrue(document.write(to: file))
         // A hatch's moments, counted by the host before it calls the app's
         // module; no module is loaded here, so none is called.
-        session.natives.hatchesConnected = true
+        session.nativeViews!.hatchesConnected = true
         session.presenter.press(try XCTUnwrap(node("show")).id)
         let mounted = try XCTUnwrap(node("doc"))
         // A missing local PDF starts on the PDF's view, as named (its read fails later).

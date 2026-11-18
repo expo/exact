@@ -131,13 +131,13 @@ impl PickerRequest {
             s.push_str(&format!("\"view\":{},", self.view));
         }
         s.push_str("\"id\":");
-        crate::agent::quote(id, &mut s);
+        crate::json::quote(id, &mut s);
         s.push_str(",\"accept\":[");
         for (i, t) in self.accept.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }
-            crate::agent::quote(t, &mut s);
+            crate::json::quote(t, &mut s);
         }
         s.push_str(&format!("],\"multiple\":{}}}", self.multiple));
         s

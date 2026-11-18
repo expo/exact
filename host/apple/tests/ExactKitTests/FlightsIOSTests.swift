@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// LLP 1013.000 D4 on UIKit: a flying image moves in points from where its
 /// leaver drew it to where it draws, the flight layer is above every ranked

@@ -9,6 +9,7 @@ mod content_region;
 mod controls;
 mod development;
 mod entry;
+mod firing_holds;
 mod fit_content;
 mod flights;
 mod font_runtime;

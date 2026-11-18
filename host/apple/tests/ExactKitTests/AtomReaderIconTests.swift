@@ -5,6 +5,7 @@ import IOSurface
 import CExact
 import ExactCore
 @testable import ExactKit
+@testable import ExactImages
 @testable import ExactMarkdown
 #if os(macOS)
 import AppKit

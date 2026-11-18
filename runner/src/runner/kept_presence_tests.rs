@@ -214,7 +214,7 @@ fn unlock_answers_behind_the_agent_s_ticket_and_never_for_a_tool() {
         br#"{"presence":"unlock","name":"token","reason":"reason.unlock"}"#.to_vec(),
     );
     // A tool's call fails before anything is asked (D12).
-    let refused = r.as_origin(super::modules::CallOrigin::Tool, |r| run(r, &unlock));
+    let refused = r.as_origin(super::provenance::CallOrigin::Tool, |r| run(r, &unlock));
     assert!(
         body(&refused).contains("person-required"),
         "{}",

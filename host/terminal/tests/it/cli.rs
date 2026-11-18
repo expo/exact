@@ -4,6 +4,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[cfg(unix)]
 #[test]
 fn termination_signals_restore_the_terminal() {
@@ -478,7 +482,7 @@ fn pending_data_child() {
         }
 
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(Request::continuation(7)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(7)))
         }
 
         fn continuation(&mut self, _: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {

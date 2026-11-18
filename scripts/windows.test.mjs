@@ -36,7 +36,7 @@ test('TypeScript captures accept physical path aliases and reject declarations o
     symlinkSync(stage,alias,linkType);
     symlinkSync(libraries,libraryAlias,linkType);
     writeFileSync(resolve(stage,'__exact_entry.ts'),"export const word: string = 'inside';\n");
-    configure(stage,false,parseSync);
+    await configure(stage,false,parseSync);
     await check(alias,resolve(libraries,'tsc'),libraryAlias);
     await check(stage,resolve(libraries,'tsc'),libraries);
     writeFileSync(resolve(sibling,'outside.d.ts'),'export type Outside = string;\n');

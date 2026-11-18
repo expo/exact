@@ -86,6 +86,7 @@ final class NativeTaskTimers {
     }
     #if DEBUG
     func timerForTests(_ index: UInt32) -> Timer? { entries[index]?.timer }
+    func pendingForTests(_ index: UInt32) -> Bool { entries[index]?.pending == true }
     #endif
 }
 
@@ -106,9 +107,9 @@ extension ExactSession {
     }
     /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
     /// viewless contents, LLP 1069.011 §9, page facts, or an orientation request that changes the lock or
-    /// turns the scene), asks for or lets go no canvas image, and leaves the motion, spatial, frame-task, canvas and owed-draw state as they stand.
+    /// turns the scene), asks for or lets go no canvas image, and leaves the motion (and whether it only awaits the page's present), spatial, frame-task, canvas and owed-draw state as they stand.
     func showsNothing(_ batch: Batch) -> Bool {
-        !batch.changesScreen && !presenter.orientationChangesScreen(batch) && batch.canvasImages.isEmpty && batch.canvasImagesDropped.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial
+        !batch.changesScreen && !presenter.orientationChangesScreen(batch) && batch.canvasImages.isEmpty && batch.canvasImagesDropped.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial && batch.presentOnly == frames.presentOnly
             && batch.canvasOwed == canvasOwed && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
     }
     func clockUnchanged(_ batch: Batch) -> Bool {
@@ -118,6 +119,12 @@ extension ExactSession {
         taskTimers.update(batch.nativeTimers, epoch: generation, enabled: clock == nil && !ExactEnv.agentFreezes && state != .destroyed)
         timerAdmissions.update(batch.timerWaits)
     }
+    /// A task's native firing that waited while a batch applied or owner work was in flight (`deliverNativeTimer`) is
+    /// asked for again once neither holds it, whatever ended the hold: an answer applied, held or stale, or a check
+    /// that withdrew its advance.
+    func releaseWaitingFirings() { if !applying, !ownerInFlight { taskTimers.resume() } }
+    /// A firing waits in its queue while a batch applies or owner work is in flight, and is asked for again once neither
+    /// holds it (`releaseWaitingFirings`).
     func deliverNativeTimer() {
         guard state != .destroyed, clock == nil, !ExactEnv.agentFreezes, !applying, !ownerInFlight,
               let timer = taskTimers.take() else { return }

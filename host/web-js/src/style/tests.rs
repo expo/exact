@@ -411,7 +411,8 @@ fn mapped(values: &[&str]) -> Vec<String> {
 /// `map` run by Bun over each value.
 pub(crate) fn run(map: &str, values: &[&str]) -> serde_json::Value {
     let script = format!(
-        "console.log(JSON.stringify({}.map({map})))",
+        "import {{cssNames}} from {:?};console.log(JSON.stringify({}.map({map})))",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/regions.js"),
         serde_json::to_string(values).unwrap(),
     );
     let out = std::process::Command::new(std::env::var("BUN").unwrap_or_else(|_| "bun".into()))
@@ -437,11 +438,20 @@ fn a_bound_text_style_is_its_rem() {
             " -Apple-System-Headline ",
             "1.5rem",
             "-exact-nope",
+            "min(-exact-subheadline, 14px)",
+            "clamp(12px, calc(-exact-title-1 / 2), 31px)",
         ],
     );
     assert_eq!(
         out,
-        serde_json::json!(["1.6875rem", "1rem", "1.5rem", "-exact-nope"])
+        serde_json::json!([
+            "1.6875rem",
+            "1rem",
+            "1.5rem",
+            "-exact-nope",
+            "min(0.875rem, 14px)",
+            "clamp(12px, calc(1.6875rem / 2), 31px)"
+        ])
     );
 }
 

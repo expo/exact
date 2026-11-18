@@ -3,6 +3,7 @@ fn main() {
         std::path::Path::new(".."),
         "linux",
         &fieldnotes_data::Backup::default(),
+        exact_js_bake::hands_out_work!(fieldnotes_data::Backup::default()),
         fieldnotes_data::RUST_SOURCES,
         |javascript| {
             Box::new(fieldnotes_data::mixed(

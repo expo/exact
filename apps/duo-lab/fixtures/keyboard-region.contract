@@ -1,0 +1,35 @@
+// Duo Lab's keyboard region (LLP 1123 D7, D4): four columns stand on the
+// bottom of a route's content, each ignoring a different region, and each says
+// where it ends. Under `resizes-content` the route's content ends at the
+// keyboard's top while the keyboard is up, and at the safe area's bottom while
+// it is down. It joins Duo Lab's stack when hosts report the keyboard (LLP 1123
+// stage 5); until then `contract/cli/tests/it/duo_lab.rs` lays it out with
+// each keyboard a host would report.
+routes nav
+  home "/"
+
+component KeyboardRegion
+  state note = ""
+  action write(value: string)
+    note = value
+  view
+    main testId="root" interactive-widget="resizes-content" navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column" row-gap=8
+          header
+            text "Keyboard region" role="heading" aria-level=1
+          text "Type in the field to raise the keyboard. The page then ends at the keyboard's top, and each column below ends where its words say." padding-left=16 padding-right=16
+          input value=note input=write placeholder="Type here" aria-label="Field" testId="field" margin-left=16 margin-right=16
+          row flex=1 min-height=0 align-items="flex-end" column-gap=4 testId="columns"
+            column flex=1 height=120 padding=6 background-color="-exact-secondary-fill" testId="neither"
+              text "Ignores nothing" font-weight=600
+              text "Ends at the keyboard's top, or above the home indicator"
+            column flex=1 height=120 padding=6 background-color="-exact-system-teal" -exact-safe-area-ignore="container bottom" testId="container"
+              text "Ignores the safe area" font-weight=600
+              text "Ends at the keyboard's top, or at the screen's bottom"
+            column flex=1 height=120 padding=6 background-color="-exact-system-orange" -exact-safe-area-ignore="keyboard bottom" testId="keyboard"
+              text "Ignores the keyboard" font-weight=600
+              text "Ends above the home indicator, under the keyboard"
+            column flex=1 height=120 padding=6 background-color="-exact-system-indigo" -exact-safe-area-ignore="bottom" testId="both"
+              text "Ignores both" font-weight=600
+              text "Ends at the screen's bottom"

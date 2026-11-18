@@ -86,6 +86,8 @@ impl Machine {
     ) {
         let timeout = request.timeout_ms;
         let mut req = fetch_request(request, forced);
+        // Collected as it arrives, unless a file takes it.
+        req.collected = destination.is_none();
         req.response_body = destination;
         super::super::cache::observe(&self.shared, &mut req);
         req.max_body = Some(limit);

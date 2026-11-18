@@ -55,6 +55,9 @@ pub mod hit_flash {}
 /// Read a tap whose down and up land inside one tick.
 #[doc = include_str!("../../recipes/same-tick-press.md")]
 pub mod same_tick_press {}
+/// Cover a canvas until its first complete frame.
+#[doc = include_str!("../../recipes/loading-cover.md")]
+pub mod loading_cover {}
 /// Export models from Blender for the bake.
 #[doc = include_str!("../../recipes/blender-export.md")]
 pub mod blender_export {}

@@ -6,6 +6,10 @@ use super::*;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 struct NoTransport;
 impl ibex2::stdlib::fetch::Transport for NoTransport {
     fn open(
@@ -101,7 +105,7 @@ fn cores_in_one_test_share_the_worker_limit_and_return_slots_to_their_owner() {
     assert!(!full.disabled);
     let (refused, _) = core();
     assert_eq!(
-        refused.run(tests::job(1, Request::continuation(1)), None),
+        refused.run(tests::job(1, Request::continuation::<TestWork>(1)), None),
         Err("native executor worker limit reached")
     );
     assert_eq!(budget.load(Ordering::Acquire), MAX_WORKERS);
@@ -111,7 +115,7 @@ fn cores_in_one_test_share_the_worker_limit_and_return_slots_to_their_owner() {
     let (replacement, woke) = core();
     replacement
         .run(
-            tests::job(2, Request::continuation(2)),
+            tests::job(2, Request::continuation::<TestWork>(2)),
             Some(Box::new(|| Outcome::Storage(vec![7]))),
         )
         .unwrap();
@@ -179,7 +183,7 @@ fn check_worker_start(core: &Core, woke: &std::sync::mpsc::Receiver<()>, bound: 
             class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "test".into(),
-            request: Request::continuation(1),
+            request: Request::continuation::<TestWork>(1),
             forced: false,
         },
         Some(Box::new(|| Outcome::Storage(vec![7]))),
@@ -227,7 +231,7 @@ fn an_idle_pool_is_not_woken() {
             class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "test".into(),
-            request: Request::continuation(1),
+            request: Request::continuation::<TestWork>(1),
             forced: false,
         },
         Some(Box::new(|| Outcome::Storage(vec![]))),
@@ -278,7 +282,7 @@ fn journal_drains_do_not_wake_workers_across_one_hundred_batches() {
         ),
         (
             4,
-            Request::continuation(4),
+            Request::continuation::<TestWork>(4),
             Some(Box::new(|| Outcome::Storage(vec![9])) as Work),
         ),
     ] {

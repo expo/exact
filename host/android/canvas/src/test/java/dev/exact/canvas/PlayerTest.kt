@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.HardwareRenderer
+import android.graphics.RectF
 import android.graphics.RenderNode
 import java.nio.IntBuffer
 import org.junit.Assert.*
@@ -172,5 +173,32 @@ class PlayerTest {
         val shadow = filtered(1, intArrayOf(2, f(1), f(10), 0, Color.BLACK))
         assertTrue("the box above its shadow", Color.blue(shadow.getPixel(45, 40)) > 200)
         assertTrue("the shadow beside it", Color.blue(shadow.getPixel(55, 40)) < 80)
+    }
+
+    /** Op 55, a kept row through a matrix: the reader draws the row's node, and the node's box through the matrix is
+     * what the op covers. */
+    @Test fun aKeptRowIsDrawnThroughItsMatrix() {
+        val node = RenderNode("row").apply {
+            setPosition(0, 0, 100, 50)
+            beginRecording().drawColor(Color.RED)
+            endRecording()
+        }
+        val through = floatArrayOf(0.5f, 0f, 0f, 0.5f, 10f, 20f).map { it.toRawBits() }
+        val ops = identity + intArrayOf(55, 9) + through
+        val buffer = IntBuffer.wrap(ops)
+        assertEquals(ops.size, Structure().end(buffer, identity.size))
+        val reads = ArrayList<Int>()
+        val player = Player(emptyMap()).apply {
+            width = 200; height = 200
+            row = { id -> reads.add(id); node }
+        }
+        val page = RenderNode("page").apply { setPosition(0, 0, 200, 200) }
+        player.replay(page.beginRecording(), buffer, 0, ops.size)
+        page.endRecording()
+        assertEquals(listOf(9), reads)
+        val bounds = RectF()
+        assertTrue(Bounds().apply { row = { node } }.measure(buffer, 0, ops.size, bounds))
+        // The node's 100×50 at half size from (10, 20), not its unscaled box.
+        assertTrue("$bounds", bounds.contains(RectF(10f, 20f, 60f, 45f)) && bounds.right < 70f && bounds.bottom < 50f)
     }
 }

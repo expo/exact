@@ -77,6 +77,15 @@ impl super::LayoutTree {
     }
 }
 #[cfg(test)]
+impl super::LayoutTree {
+    /// Count the engine's size computations and cache answers, which a test
+    /// build does and a shipping build does not; a timing test turns it off.
+    pub(crate) fn track_sizes(&mut self, on: bool) {
+        self.taffy.track_size_computations(on);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Kernel, Offer};

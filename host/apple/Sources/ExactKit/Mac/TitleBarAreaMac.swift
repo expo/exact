@@ -50,9 +50,7 @@ enum TitleBarAreaMac {
     /// ground drag the window, unless a `dblclick` listener takes it. True
     /// when it acted.
     static func doubleClicked(_ event: NSEvent, on hit: NSView?) -> Bool {
-        guard event.type == .leftMouseDown, event.clickCount == 2, let window = hit?.window,
-              window.styleMask.contains(.titled), window.styleMask.contains(.fullSizeContentView),
-              !window.styleMask.contains(.fullScreen), event.locationInWindow.y >= window.contentLayoutRect.maxY else { return false }
+        guard let window = hit?.window, secondClickInBand(event, window) else { return false }
         let node = hit.flatMap { sequence(first: $0, next: \.superview).lazy.compactMap { $0 as? NodeView }.first }
         if node?.dblclickListener != nil { return false }
         switch action(UserDefaults.standard) {
@@ -61,6 +59,38 @@ enum TitleBarAreaMac {
         case .none: break
         }
         return true
+    }
+
+    /// The second click's mouse-down, in the title bar's band where the page underlaps it.
+    private static func secondClickInBand(_ event: NSEvent, _ window: NSWindow) -> Bool {
+        event.type == .leftMouseDown && event.clickCount == 2 && window.styleMask.contains(.titled)
+            && window.styleMask.contains(.fullSizeContentView) && !window.styleMask.contains(.fullScreen)
+            && event.locationInWindow.y >= window.contentLayoutRect.maxY
+    }
+
+    /// The mouse-down whose release a `dblclick` listener in the band takes (`takesRelease`).
+    nonisolated(unsafe) private static weak var taken: NSEvent?
+    /// Whether `view`, the first node a second click in the band reaches, takes that click's release
+    /// itself (`release`), as a control tracks its own click: the window then never routes the
+    /// release, and an author's `dblclick` there is the only action. On macOS 27.0 AppKit's title
+    /// bar recognizes a double click from the releases the window routes and performs the person's
+    /// title-bar action (zoom, minimize or fill) over the page's handler; a button's click, which
+    /// its tracking takes, does nothing there (LLP 1039 D8).
+    static func takesRelease(of event: NSEvent, at view: NodeView) -> Bool {
+        guard taken !== event, let window = view.window, secondClickInBand(event, window), view.dblclickListener != nil else { return false }
+        taken = event
+        return true
+    }
+    /// The button's moves and its release, from the queue to `view`, as the window would send them.
+    /// With the button up and no release queued, something else took it, and nothing is waited for.
+    static func release(to view: NodeView) {
+        while let next = view.window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp],
+                                                 until: NSEvent.pressedMouseButtons & 1 == 0 ? .distantPast : .distantFuture,
+                                                 inMode: .eventTracking, dequeue: true) {
+            guard next.type == .leftMouseUp else { view.mouseDragged(with: next); continue }
+            view.mouseUp(with: next)
+            return
+        }
     }
 
     enum Action: Equatable { case zoom, minimize, none }

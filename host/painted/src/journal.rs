@@ -1,7 +1,7 @@
-//! The launch journal and launch parts, the Linux counterpart of ExactKit's `LaunchParts.swift`.
+//! The painted hosts' launch journal and parts, like ExactKit's `LaunchParts.swift`.
 //!
-//! Each module listed under `launch` in `app.json` provides `modules/<name>/linux/launch.rs`,
-//! compiled into the app and run at the start of `main`, before the display opens.
+//! Each module listed under `launch` in `app.json` provides `<host>/launch.rs`,
+//! compiled into the app and run before the host boots.
 //! A launch part only subscribes and installs hooks. File and network work goes
 //! through [`after_startup`] so it cannot delay the startup marks.
 //! Subscribers run synchronously on the thread draining the journal and must only
@@ -66,6 +66,15 @@ pub fn wall() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// A file's SHA-256, for a launch part identifying its packaged app build after startup.
+pub fn file_digest(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hash = Sha256::new();
+    std::io::copy(&mut file, &mut hash).ok()?;
+    Some(format!("{:x}", hash.finalize()))
 }
 
 /// Records an event. The first `startup` event starts the [`after_startup`] work.
@@ -201,16 +210,27 @@ impl LaunchContext {
     }
 
     /// `$XDG_STATE_HOME/exact/<app id>/<module>`, defaulting to `~/.local/state`.
+    /// Android uses its app cache directory (`XDG_CACHE_HOME`) instead.
     /// Not created here, because launch does no I/O.
     pub fn state_dir(&self) -> std::path::PathBuf {
         let app: Value = serde_json::from_str(self.app).unwrap_or_default();
         let id = app["id"].as_str().unwrap_or("app");
-        let base = std::env::var_os("XDG_STATE_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
+        let base = std::env::var_os(if cfg!(target_os = "android") {
+            "XDG_CACHE_HOME"
+        } else {
+            "XDG_STATE_HOME"
+        })
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| {
+                std::path::PathBuf::from(h).join(if cfg!(target_os = "android") {
+                    "cache"
+                } else {
+                    ".local/state"
+                })
             })
-            .unwrap_or_else(std::env::temp_dir);
+        })
+        .unwrap_or_else(std::env::temp_dir);
         base.join("exact").join(id).join(self.module)
     }
 }

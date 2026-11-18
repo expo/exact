@@ -31,6 +31,10 @@ pub use traits::LayoutGridContainer;
 #[cfg(feature = "block_layout")]
 pub use traits::LayoutBlockContainer;
 
+#[cfg(all(feature = "taffy_tree", feature = "grid"))]
+mod grid_link;
+#[cfg(all(feature = "taffy_tree", feature = "grid"))]
+pub use grid_link::link_grid;
 #[cfg(feature = "taffy_tree")]
 mod memo;
 #[cfg(feature = "taffy_tree")]

@@ -861,6 +861,7 @@ fn reserved_capacity_refuses_without_callback_and_cancel_retires_without_activat
         max_body: 16,
         timeout: None,
         speculative: false,
+        collected: false,
     };
     let (tx, rx) = mpsc::channel();
     let exchange = transport

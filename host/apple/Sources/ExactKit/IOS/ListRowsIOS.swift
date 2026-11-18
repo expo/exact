@@ -5,6 +5,11 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+extension NodeView {
+    /// A list whose rows are cells: Contract's mark (RowCellsIOS.swift).
+    package var hasRowCells: Bool { kind == "list" && props["listRows"] == "true" }
+}
+
 /// Stable projection inputs survive row fills; a batch that can change them
 /// discards the cache before and after it applies.
 final class ListRowDependencies {
@@ -49,7 +54,7 @@ final class ListRowDependencies {
         scrollers = presenter.scrollers
         nestedScrollers = presenter.scrollers.contains { id in
             guard let node = views[id] else { return false }
-            return presenter.collections.entries.keys.contains { owner in
+            return presenter.collections.listIDs.contains { owner in
                 owner != id && views[owner].map { node.isDescendant(of: $0) } == true
             }
         }

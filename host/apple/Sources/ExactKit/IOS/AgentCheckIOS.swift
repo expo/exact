@@ -3,7 +3,7 @@
 // in the window, a paragraph's text, ink and type and whether it fits its box
 // or a clip cuts it, a control and who sized it (UIKit's own controls at
 // their own size are the platform's), what a finger at its middle reaches at
-// rest (a bar, the keyboard, a sheet, another node) and whether a scroller
+// rest (a bar, the keyboard, a sheet, a system alert, another node) and whether a scroller
 // could move it clear, a filled box's fill and edge, how far a view runs
 // past the viewport's sides, and a percentage width its own padding pushes
 // past its parent (LLP 1116.009 D5). UIKit's own labels (a native button's title, a
@@ -32,6 +32,12 @@ extension Agent {
         NodeView.touchFallsToCellField = false
         defer { NodeView.touchFallsToCellField = falls }
         let port = vp.convert(vp.bounds, to: nil).intersection(win.bounds)
+        var controller = win.rootViewController
+        var alert: UIAlertController?
+        while let current = controller {
+            if let presented = current as? UIAlertController { alert = presented }
+            controller = current.presentedViewController
+        }
         // While a sheet is up, it is what is presented; the screen under it is not.
         let scope: UIView = presenter.modals.coordinateView ?? win
         // A dialog's sheet, and a popover over it, can be above a route's sheet and outside it.
@@ -204,6 +210,12 @@ extension Agent {
                 return reachable(v, hit: nil, above: false) ? nil : ["kind": "keyboard", "name": "the software keyboard"]
             }
             guard let hit = win.hitTest(p, with: nil), hit !== v, !hit.isDescendant(of: v), !v.isDescendant(of: hit), !inPlatformMenu(hit) else { return nil }
+            if let alert, !v.isDescendant(of: alert.view) {
+                // A modal alert's backdrop can lie outside its controller's view.
+                let confirmation = presenter.menus.confirmation
+                let modal = alert.preferredStyle == .alert || (confirmation?.alert === alert && confirmation?.style == .sheet)
+                if modal || hit.isDescendant(of: alert.view) { return ["kind": "alert", "name": "a system alert"] }
+            }
             var owner: UIView? = hit, bar: UIView? = nil, barBox: CGRect? = nil
             while let cur = owner, !(cur is NodeView) {
                 if cur.accessibilityIdentifier?.hasPrefix("exact.host.frame-health") == true { return nil }

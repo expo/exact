@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class CollectionMacTests: XCTestCase {
     private func snapshot(revision: Int = 1, correction: [String: Any]? = nil) -> [String: Any] {
@@ -149,45 +150,45 @@ final class CollectionMacTests: XCTestCase {
 
     func testMeasuresActualNestedClipViewWithoutAuthoredScrollHandler() throws {
         let (p, list) = fixture(estimatedItemHeight: "24")
-        defer { p.collections.reset() }
-        XCTAssertTrue(p.collections.owns(list.id))
+        defer { p.listHost.reset() }
+        XCTAssertTrue(p.listHost.owns(list.id))
         XCTAssertTrue(list.handlers.isEmpty)
         let clip = try XCTUnwrap(list.scroll?.contentView)
         clip.scroll(to: NSPoint(x: 0, y: 120))
-        let facts = try XCTUnwrap(p.collections.geometry(1))
+        let facts = try XCTUnwrap(p.listHost.geometry(1))
         XCTAssertEqual(facts.offset, 100)
         XCTAssertEqual(facts.portCross, Double(clip.bounds.width))
         XCTAssertEqual(facts.portMain, Double(clip.bounds.height))
         XCTAssertEqual(facts.cross, 280)
         XCTAssertNotEqual(facts.portMain, Double(p.viewportSize.height))
-        XCTAssertEqual(p.collections.size(2, horizontal: false), 72)
+        XCTAssertEqual(p.listHost.size(2, horizontal: false), 72)
         var feedback: [Data] = []
-        p.collections.onFeedback = { feedback.append($0) }
-        p.collections.flushIfNeeded()
+        p.listHost.onFeedback = { feedback.append($0) }
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(feedback.count, 1)
         XCTAssertEqual(feedback[0].count, 120)
-        p.collections.changed(1)
-        p.collections.flushIfNeeded()
+        p.listHost.changed(1)
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(feedback.count, 1, "identical layout must not reenter Rust")
     }
     func testSharedCollectionResizeUsesOnlyRevisionedFeedback() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var collectionReports = 0
-        p.collections.onFeedback = { _ in collectionReports += 1 }
+        p.listHost.onFeedback = { _ in collectionReports += 1 }
         p.apply(batch([
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 240.0]
         ]))
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(collectionReports, 1, "the resized collection still reports actual geometry")
     }
 
     func testFeedbackMembershipCommitsContinueOnLaterTurnsWithoutScroll() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let finished = expectation(description: "new row epochs measured after two passes")
         var reports = 0
-        p.collections.onFeedback = { _ in
+        p.listHost.onFeedback = { _ in
             reports += 1
             if reports < 7 {
                 var next = self.snapshot(revision: reports + 1)
@@ -195,7 +196,7 @@ final class CollectionMacTests: XCTestCase {
                 p.apply(self.batch([["op": "collections", "items": [next]]]))
             } else { finished.fulfill() }
         }
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 2, "two reports per turn, never recursive")
         wait(for: [finished], timeout: 2)
         XCTAssertEqual(reports, 7)
@@ -205,13 +206,13 @@ final class CollectionMacTests: XCTestCase {
     /// what was last sent, so only the owed rule reports the measurement again; a snapshot that acknowledges it owes nothing.
     func testAMeasurementANewerSnapshotLeavesUnacknowledgedIsReportedAgain() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var reports = 0
-        p.collections.onFeedback = { _ in reports += 1 }
-        p.collections.flushIfNeeded()
+        p.listHost.onFeedback = { _ in reports += 1 }
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 1, "the report the runner will turn away: row 2 measured at 72")
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 2)]]]))
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 2, "revision 2 leaves row 2 at epoch 7 unmeasured: its measurement is owed again")
         var acknowledged = snapshot(revision: 3)
         acknowledged["rows"] = [["view": 2, "root": 3, "epoch": 7, "size": 72.0, "measured": true]]
@@ -223,33 +224,33 @@ final class CollectionMacTests: XCTestCase {
         }
         nextTurn()
         p.apply(batch([["op": "collections", "items": [acknowledged]]]))
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 2, "a snapshot that measures it at that size owes nothing")
         // Within the runner's noise (it keeps a measured height a remeasure differs from by 0.01 or less): acknowledged.
         var denoised = snapshot(revision: 4)
         denoised["rows"] = [["view": 2, "root": 3, "epoch": 7, "size": 72.004, "measured": true]]
         nextTurn()
         p.apply(batch([["op": "collections", "items": [denoised]]]))
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 2, "a height within the runner's noise acknowledges the measurement")
     }
     func testActivationRetriesUnchangedFactsOnce() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var reports = 0
-        p.collections.onFeedback = { _ in reports += 1 }
-        p.collections.flushIfNeeded()
+        p.listHost.onFeedback = { _ in reports += 1 }
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 1)
-        p.collections.dataReady()
-        p.collections.flushIfNeeded()
+        p.listHost.dataReady()
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 2)
-        p.collections.changed(1)
-        p.collections.flushIfNeeded()
+        p.listHost.changed(1)
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(reports, 2)
     }
     func testCorrectionLandsBeforeDeferredAuthoredEvent() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let clip = try XCTUnwrap(list.scroll?.contentView)
         var received = false
         p.onViewportFit = { p.key(1, "x") }
@@ -263,7 +264,7 @@ final class CollectionMacTests: XCTestCase {
         ]))
         XCTAssertTrue(received)
         XCTAssertEqual(clip.bounds.minY, 220)
-        p.collections.userIntent(1)
+        p.listHost.userIntent(1)
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 3,
             correction: ["scrollSequence": 0, "offset": 900])]]]))
         XCTAssertEqual(clip.bounds.minY, 220, "stale correction must not replace newer user intent")
@@ -275,13 +276,13 @@ final class CollectionMacTests: XCTestCase {
     /// is stale.
     func testAnAnchorsCorrectionMovesTheOffsetByItsShiftWhateverWasSampled() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let clip = try XCTUnwrap(list.scroll?.contentView)
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 2, correction: ["scrollSequence": 0, "offset": 200])]]]))
         XCTAssertEqual(clip.bounds.minY, 220)
         // The reader moves 100 on; the report from before that move comes back corrected.
         clip.scroll(to: NSPoint(x: 0, y: 320)); list.scroll?.reflectScrolledClipView(clip)
-        p.collections.userIntent(1, travel: true)
+        p.listHost.userIntent(1, travel: true)
         let shifted: [String: Any] = ["scrollSequence": 0, "offset": 172, "from": 200]
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 3, correction: shifted)]]]))
         XCTAssertEqual(clip.bounds.minY, 292, "rows above came in 28 shorter: the port moves 28 back with them")
@@ -291,7 +292,7 @@ final class CollectionMacTests: XCTestCase {
             correction: ["scrollSequence": 0, "offset": 162, "from": 200])]]]))
         XCTAssertEqual(clip.bounds.minY, 282, "a grown correction moves only by what it adds")
         // An authored offset since the report: its correction is stale.
-        p.collections.userIntent(1)
+        p.listHost.userIntent(1)
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 6,
             correction: ["scrollSequence": 0, "offset": 100, "from": 200])]]]))
         XCTAssertEqual(clip.bounds.minY, 282, "not across an authored jump")
@@ -301,7 +302,7 @@ final class CollectionMacTests: XCTestCase {
     /// offset with them: the resize is not the reader moving (feed F14).
     func testAnAnchorsCorrectionLandsInTheBatchThatResizesThePort() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let clip = try XCTUnwrap(list.scroll?.contentView)
         clip.scroll(to: NSPoint(x: 0, y: 100)); list.scroll?.reflectScrolledClipView(clip)
         p.apply(batch([
@@ -318,25 +319,25 @@ final class CollectionMacTests: XCTestCase {
     }
     func testClearedSnapshotRetiresStateAndObserver() {
         let (p, _) = fixture()
-        p.collections.pointer(3)
+        p.listHost.pointer(3)
         p.apply(batch([["op": "collections", "items": []]]))
-        XCTAssertTrue(p.collections.entries.isEmpty)
-        XCTAssertNil(p.collections.interaction)
-        XCTAssertNil(p.collections.stopTracking)
+        XCTAssertTrue(p.listHost.entries.isEmpty)
+        XCTAssertNil(p.listHost.interaction)
+        XCTAssertNil(p.listHost.stopTracking)
     }
 
     func testResponderMousePathPinsWithoutDependingOnApplicationEventMonitor() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let row = try XCTUnwrap(p.views[3])
         row.handlers = ["press"]
         let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
             eventNumber: 1, clickCount: 1, pressure: 1))
         row.mouseDown(with: event)
-        XCTAssertEqual(p.collections.interaction, 3)
+        XCTAssertEqual(p.listHost.interaction, 3)
         list.mouseDown(with: event)
-        XCTAssertEqual(p.collections.interaction, 3, "bubbling must keep the original descendant")
+        XCTAssertEqual(p.listHost.interaction, 3, "bubbling must keep the original descendant")
     }
 
     func testPressOutsideEveryRowPinsNothing() throws {
@@ -345,13 +346,13 @@ final class CollectionMacTests: XCTestCase {
         // runner drops a report whose pin is outside its rows, so either pin
         // froze the window where it was (the web's liveView reports none).
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         p.apply(batch([
             ["op": "create", "id": 9, "kind": "view"],
             ["op": "children", "id": 1, "ids": [9, 2]]
         ]))
         var interactions: [UInt32] = []
-        p.collections.onFeedback = { bytes in
+        p.listHost.onFeedback = { bytes in
             interactions.append((0..<4).reduce(0) { $0 | UInt32(bytes[76 + $1]) << ($1 * 8) })
         }
         func drain() {
@@ -359,15 +360,15 @@ final class CollectionMacTests: XCTestCase {
             DispatchQueue.main.async { DispatchQueue.main.async { done.fulfill() } }
             wait(for: [done], timeout: 1)
         }
-        XCTAssertNil(p.collections.owningCollection(1), "the list itself is in no row")
-        XCTAssertNil(p.collections.owningCollection(9), "a spacer is in no row")
-        XCTAssertEqual(p.collections.owningCollection(2), 1, "a row wrapper pins its own row")
-        XCTAssertEqual(p.collections.owningCollection(3), 1)
+        XCTAssertNil(p.listHost.owningCollection(1), "the list itself is in no row")
+        XCTAssertNil(p.listHost.owningCollection(9), "a spacer is in no row")
+        XCTAssertEqual(p.listHost.owningCollection(2), 1, "a row wrapper pins its own row")
+        XCTAssertEqual(p.listHost.owningCollection(3), 1)
         for pressed: UInt32 in [1, 9] {
-            p.collections.pointer(pressed); drain()
+            p.listHost.pointer(pressed); drain()
             XCTAssertEqual(interactions.last, 0, "a press outside every row reports no pin")
         }
-        p.collections.pointer(3); drain()
+        p.listHost.pointer(3); drain()
         XCTAssertEqual(interactions.last, 3, "a press inside a row still pins it")
     }
 
@@ -378,7 +379,7 @@ final class CollectionMacTests: XCTestCase {
     func testARowListReportsAlongX() throws {
         _ = NSApplication.shared
         let p = Presenter()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         p.viewport.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
         var strip = snapshot()
         strip["axis"] = "x"
@@ -398,16 +399,16 @@ final class CollectionMacTests: XCTestCase {
             ["op": "content", "id": 1, "w": 3000.0, "h": 132.0]
         ]))
         let list = try XCTUnwrap(p.views[1])
-        XCTAssertTrue(p.collections.owns(1))
+        XCTAssertTrue(p.listHost.owns(1))
         let clip = try XCTUnwrap(list.scroll?.contentView)
         clip.scroll(to: NSPoint(x: 120, y: 0))
-        let facts = try XCTUnwrap(p.collections.geometry(1))
+        let facts = try XCTUnwrap(p.listHost.geometry(1))
         XCTAssertEqual(facts.offset, 120)
         XCTAssertEqual(facts.portMain, Double(clip.bounds.width))
         XCTAssertEqual(facts.portCross, Double(clip.bounds.height))
         XCTAssertEqual(facts.cross, 116)
-        XCTAssertEqual(p.collections.size(2, horizontal: true), 150)
-        p.collections.correct(1, top: 300, extent: 3000)
+        XCTAssertEqual(p.listHost.size(2, horizontal: true), 150)
+        p.listHost.correct(1, top: 300, extent: 3000)
         XCTAssertEqual(clip.bounds.minX, 300, "a correction moves x")
         XCTAssertEqual(clip.bounds.minY, 0)
     }
@@ -417,15 +418,15 @@ final class CollectionMacTests: XCTestCase {
         // once more; rows measured during the drag have changed the document's
         // height since, so that offset jumps. The reader keeps the last one.
         let (plain, plainList) = fixture(collection: false, estimatedItemHeight: "24")
-        defer { plain.collections.reset() }
+        defer { plain.listHost.reset() }
         XCTAssertNil(KnobDrag.of(try XCTUnwrap(plainList.scroll)), "a list that is not a collection keeps every offset")
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let scroll = try XCTUnwrap(list.scroll)
         let drag = try XCTUnwrap(KnobDrag.of(scroll))
         XCTAssertTrue(scroll.verticalScroller.map { type(of: $0) == NSScroller.self } ?? false, "AppKit's own scroller stays")
         var tops: [Double] = []
-        p.collections.onFeedback = { bytes in
+        p.listHost.onFeedback = { bytes in
             tops.append(Double(bitPattern: (0..<8).reduce(UInt64(0)) { $0 | UInt64(bytes[24 + $1]) << ($1 * 8) }))
         }
         let clip = scroll.contentView
@@ -468,9 +469,9 @@ final class CollectionMacTests: XCTestCase {
         document.setFrameSize(NSSize(width: document.frame.width, height: document.frame.height + 600))
         XCTAssertEqual(clip.bounds.minY, document.frame.height - clip.bounds.height, "a longer document keeps the held end in view")
         // An anchor correction keeps the rows in place, except at a held end.
-        p.collections.correcting = true
-        p.collections.correct(1, top: Double(end) + 40, extent: Double(document.frame.height) + 400)
-        p.collections.correcting = false
+        p.listHost.correcting = true
+        p.listHost.correct(1, top: Double(end) + 40, extent: Double(document.frame.height) + 400)
+        p.listHost.correcting = false
         let held = document.frame.height - clip.bounds.height
         XCTAssertEqual(clip.bounds.minY, held, "a correction keeps the held end in view")
         drag.currentEventType = { .leftMouseUp }
@@ -482,9 +483,9 @@ final class CollectionMacTests: XCTestCase {
         drag.currentEventType = { .leftMouseDown }
         drag.began()
         XCTAssertFalse(drag.holdsEnd, "a press short of the end does not hold it")
-        p.collections.correcting = true
-        p.collections.correct(1, top: 1200, extent: Double(document.frame.height) - 20)
-        p.collections.correcting = false
+        p.listHost.correcting = true
+        p.listHost.correct(1, top: 1200, extent: Double(document.frame.height) - 20)
+        p.listHost.correcting = false
         XCTAssertEqual(clip.bounds.minY, 1220, "away from the end the correction's anchor stands (content starts 20 below the clip)")
         drag.currentEventType = { .leftMouseUp }
         drag.ended()
@@ -493,7 +494,7 @@ final class CollectionMacTests: XCTestCase {
 
     func testNestedCollectionsOwnOnlyNearestPinsAndReleaseBeforeTransfer() throws {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let inner: [String: Any] = ["view": 4, "revision": 1, "scrollSequence": 0,
             "totalExtent": 1000, "rows": [["view": 5, "root": 6, "epoch": 8]]]
         p.apply(batch([
@@ -509,8 +510,8 @@ final class CollectionMacTests: XCTestCase {
             ["op": "frame", "id": 6, "x": 0.0, "y": 0.0, "w": 240.0, "h": 40.0],
             ["op": "content", "id": 4, "w": 240.0, "h": 1000.0]
         ]))
-        XCTAssertEqual(p.collections.owningCollection(6), 4)
-        XCTAssertEqual(p.collections.owningCollection(3), 1)
+        XCTAssertEqual(p.listHost.owningCollection(6), 4)
+        XCTAssertEqual(p.listHost.owningCollection(3), 1)
         let window = NSWindow(contentRect: p.viewport.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = p.viewport
@@ -519,7 +520,7 @@ final class CollectionMacTests: XCTestCase {
         func u32(_ bytes: Data, _ offset: Int) -> UInt32 {
             (0..<4).reduce(0) { $0 | UInt32(bytes[offset + $1]) << ($1 * 8) }
         }
-        p.collections.onFeedback = { bytes in
+        p.listHost.onFeedback = { bytes in
             accepted[u32(bytes, 4)] = (u32(bytes, 72), u32(bytes, 76))
             XCTAssertLessThanOrEqual(accepted.values.filter { $0.0 != 0 }.count, 1)
             XCTAssertLessThanOrEqual(accepted.values.filter { $0.1 != 0 }.count, 1)
@@ -530,39 +531,39 @@ final class CollectionMacTests: XCTestCase {
             wait(for: [done], timeout: 1)
         }
         XCTAssertTrue(window.makeFirstResponder(p.views[6]!))
-        p.collections.pointer(6); drain()
+        p.listHost.pointer(6); drain()
         XCTAssertEqual(accepted[4]?.0, 6)
         XCTAssertEqual(accepted[4]?.1, 6)
         XCTAssertEqual(accepted[1]?.0, 0)
         XCTAssertEqual(accepted[1]?.1, 0)
         // Outer id sorts before inner id: clearing must override normal order.
-        p.collections.pointer(3); drain()
+        p.listHost.pointer(3); drain()
         XCTAssertEqual(accepted[4]?.1, 0)
         XCTAssertEqual(accepted[1]?.1, 3)
         XCTAssertEqual(accepted[4]?.0, 6, "focus and interaction stay independent")
-        p.collections.beginBatch(batch([]))
+        p.listHost.beginBatch(batch([]))
         p.views[3]!.handlers = ["press"]
         XCTAssertTrue(window.makeFirstResponder(p.views[3]!))
-        p.collections.pointer(6)
-        p.collections.endBatch(); p.collections.flushIfNeeded(); drain()
+        p.listHost.pointer(6)
+        p.listHost.endBatch(); p.listHost.flushIfNeeded(); drain()
         XCTAssertEqual(accepted[1]?.0, 3)
         XCTAssertEqual(accepted[4]?.1, 6)
-        p.collections.pointer(nil); window.makeFirstResponder(nil)
-        p.collections.pinsChanged(); drain()
+        p.listHost.pointer(nil); window.makeFirstResponder(nil)
+        p.listHost.pinsChanged(); drain()
         XCTAssertTrue(accepted.values.allSatisfy { $0.0 == 0 && $0.1 == 0 })
     }
 
     func testNativeUpCannotReleasePinBeforeDeferredGestureCompletion() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
-        let lease = p.collections.holdPointer(3)
-        p.collections.releaseInteractionLater()
+        defer { p.listHost.reset() }
+        let lease = p.listHost.holdPointer(3)
+        p.listHost.releaseInteractionLater()
         let done = expectation(description: "gesture completion owns release")
         DispatchQueue.main.async {
-            XCTAssertEqual(p.collections.interaction, 3)
-            p.collections.releaseInteractionLater(ifCurrent: lease)
+            XCTAssertEqual(p.listHost.interaction, 3)
+            p.listHost.releaseInteractionLater(ifCurrent: lease)
             DispatchQueue.main.async {
-                XCTAssertNil(p.collections.interaction)
+                XCTAssertNil(p.listHost.interaction)
                 done.fulfill()
             }
         }
@@ -571,16 +572,16 @@ final class CollectionMacTests: XCTestCase {
 
     func testStaleGestureCompletionCannotClearAlreadyReplacedPin() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
-        let old = p.collections.holdPointer(3)
-        let current = p.collections.holdPointer(2)
-        p.collections.releaseInteractionLater(ifCurrent: old)
+        defer { p.listHost.reset() }
+        let old = p.listHost.holdPointer(3)
+        let current = p.listHost.holdPointer(2)
+        p.listHost.releaseInteractionLater(ifCurrent: old)
         let done = expectation(description: "old completion after pin transfer")
         DispatchQueue.main.async {
-            XCTAssertEqual(p.collections.interaction, 2)
-            p.collections.releaseInteractionLater(ifCurrent: current)
+            XCTAssertEqual(p.listHost.interaction, 2)
+            p.listHost.releaseInteractionLater(ifCurrent: current)
             DispatchQueue.main.async {
-                XCTAssertNil(p.collections.interaction)
+                XCTAssertNil(p.listHost.interaction)
                 done.fulfill()
             }
         }
@@ -589,13 +590,13 @@ final class CollectionMacTests: XCTestCase {
 
     func testOldReleaseDoesNotClearNewContactOnSameRow() {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
-        p.collections.pointer(3)
-        p.collections.releaseInteractionLater()
-        p.collections.pointer(3)
+        defer { p.listHost.reset() }
+        p.listHost.pointer(3)
+        p.listHost.releaseInteractionLater()
+        p.listHost.pointer(3)
         let done = expectation(description: "after old release callback")
         DispatchQueue.main.async {
-            XCTAssertEqual(p.collections.interaction, 3)
+            XCTAssertEqual(p.listHost.interaction, 3)
             done.fulfill()
         }
         wait(for: [done], timeout: 1)
@@ -694,7 +695,7 @@ final class CollectionMacTests: XCTestCase {
             p.apply(batch([["op": "children", "id": 1, "ids": ids]]))
             XCTAssertEqual(container.subviews.compactMap { ($0 as? NodeView)?.id }, ids.map(UInt32.init))
             XCTAssertTrue(window.firstResponder === paragraph)
-            XCTAssertEqual(p.collections.focusedView(), paragraph.id)
+            XCTAssertEqual(p.listHost.focusedView(), paragraph.id)
             XCTAssertEqual(p.selection.selectedText(), "A retained selection")
         }
         XCTAssertEqual(container.added, [6], "only the new row mounts")
@@ -709,7 +710,7 @@ final class CollectionMacTests: XCTestCase {
     /// over them (its paint rank), instead of trapping (mail F22).
     func testAnExitingRowKeepsARankWhileTheRowsReorder() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset(); p.reset() }
+        defer { p.listHost.reset(); p.reset() }
         p.apply(batch([
             ["op": "create", "id": 4, "kind": "view"],
             ["op": "create", "id": 5, "kind": "view"],
@@ -739,7 +740,7 @@ final class CollectionMacTests: XCTestCase {
             let parent = try XCTUnwrap(p.views[1])
             let container = MountObservedView()
             try XCTUnwrap(parent.scroll).documentView = container
-            XCTAssertFalse(p.collections.owns(parent.id))
+            XCTAssertFalse(p.listHost.owns(parent.id))
             p.apply(batch([
                 ["op": "children", "id": 1, "ids": [2, 3, 4]],
                 ["op": "roots", "ids": [1]],
@@ -821,17 +822,17 @@ final class CollectionMacTests: XCTestCase {
     /// planned on.
     func testTheReadersLiveScrollIsReportedAndARequestsLandingLands() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let scroll = try XCTUnwrap(list.scroll), clip = scroll.contentView
         var flags: [UInt32] = []
-        p.collections.onFeedback = { flags.append(Self.reportFlags($0)) }
+        p.listHost.onFeedback = { flags.append(Self.reportFlags($0)) }
         report(p)
         XCTAssertEqual(flags.last.map { $0 & 32 }, 0, "at rest")
         NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
         report(p)
         XCTAssertEqual(flags.last.map { $0 & 32 }, 32, "the reader's scroll is under way")
         clip.scroll(to: NSPoint(x: 0, y: 400)); scroll.reflectScrolledClipView(clip)
-        p.collections.userIntent(1, travel: true)
+        p.listHost.userIntent(1, travel: true)
         var landing = snapshot(revision: 2, correction: ["scrollSequence": 0, "offset": 900])
         landing["seeking"] = true; landing["request"] = 1
         p.apply(batch([["op": "collections", "items": [landing]]]))
@@ -849,11 +850,11 @@ final class CollectionMacTests: XCTestCase {
     /// request only.
     func testAFingerComingDownDuringARequestIsTheReadersGesture() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let document = try XCTUnwrap(list.scroll?.documentView as? FlippedView)
         XCTAssertFalse(document.allowedTouchTypes.contains(.indirect), "no touches outside a request")
         var flags: [UInt32] = []
-        p.collections.onFeedback = { flags.append(Self.reportFlags($0)) }
+        p.listHost.onFeedback = { flags.append(Self.reportFlags($0)) }
         var waiting = snapshot(revision: 2)
         waiting["waiting"] = true; waiting["request"] = 1
         p.apply(batch([["op": "collections", "items": [waiting]]]))
@@ -878,15 +879,15 @@ final class CollectionMacTests: XCTestCase {
     /// glue's quiet interval; the report after it says it ended.
     func testANotchOrAKeyKeepsTheReadersScrollUnderWayUntilItIsQuiet() throws {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var flags: [UInt32] = []
         let ended = expectation(description: "a report says the scroll ended")
-        p.collections.onFeedback = { bytes in
+        p.listHost.onFeedback = { bytes in
             let f = Self.reportFlags(bytes)
             if flags.last.map({ $0 & 32 }) == 32, f & 32 == 0 { ended.fulfill() }
             flags.append(f)
         }
-        p.collections.userIntent(1, travel: true)
+        p.listHost.userIntent(1, travel: true)
         report(p)
         XCTAssertEqual(flags.last.map { $0 & 32 }, 32, "under way after a notch")
         wait(for: [ended], timeout: 2)
@@ -898,12 +899,12 @@ final class CollectionMacTests: XCTestCase {
     /// to the event is not cancelled by it.
     func testAWheelOverAListIsHeardAsAGestureBeforeAnyHandler() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let window = NSWindow(contentRect: p.viewport.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = p.viewport
         defer { window.contentView = nil }
         var flags: [UInt32] = []
-        p.collections.onFeedback = { flags.append(Self.reportFlags($0)) }
+        p.listHost.onFeedback = { flags.append(Self.reportFlags($0)) }
         var waiting = snapshot(revision: 2)
         waiting["waiting"] = true; waiting["request"] = 1
         p.apply(batch([["op": "collections", "items": [waiting]]]))
@@ -920,16 +921,16 @@ final class CollectionMacTests: XCTestCase {
     /// begins a gesture, the travel is reported again.
     func testARequestUnderWayReportsNoTravelSampledBeforeIt() throws {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var velocities: [Double] = []
-        p.collections.onFeedback = { bytes in velocities.append(Double(bitPattern: (0..<8).reduce(UInt64(0)) { $0 | UInt64(bytes[80 + $1]) << ($1 * 8) })) }
-        p.collections.motion = { _ in 40 }
+        p.listHost.onFeedback = { bytes in velocities.append(Double(bitPattern: (0..<8).reduce(UInt64(0)) { $0 | UInt64(bytes[80 + $1]) << ($1 * 8) })) }
+        p.listHost.motion = { _ in 40 }
         var seeking = snapshot(revision: 2)
         seeking["seeking"] = true; seeking["request"] = 1
         p.apply(batch([["op": "collections", "items": [seeking]]]))
         report(p)
         XCTAssertEqual(velocities.last, 0, "a sample from before the request")
-        p.collections.gestureBegan(1)
+        p.listHost.gestureBegan(1)
         report(p)
         XCTAssertEqual(velocities.last, 40, "the reader's own, once a gesture began")
     }
@@ -938,10 +939,10 @@ final class CollectionMacTests: XCTestCase {
     /// the reader's scroll under way until 0.3 s after it.
     func testAMoveTheHostDidNotMakeKeepsTheReadersScrollUnderWay() throws {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
-        XCTAssertFalse(p.collections.readerScrolling(1))
-        p.collections.changed(1, user: true)
-        XCTAssertTrue(p.collections.readerScrolling(1))
+        defer { p.listHost.reset() }
+        XCTAssertFalse(p.listHost.readerScrolling(1))
+        p.listHost.changed(1, user: true)
+        XCTAssertTrue(p.listHost.readerScrolling(1))
     }
     /// A trackpad contact counts against the request under way when it
     /// began: fingers resting before the request (`mayBegin`) that start to
@@ -949,12 +950,12 @@ final class CollectionMacTests: XCTestCase {
     /// come down after it are.
     func testATrackpadContactCountsFromWhenItBegan() throws {
         let (p, list) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let window = NSWindow(contentRect: p.viewport.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = p.viewport
         defer { window.contentView = nil }
         var flags: [UInt32] = []
-        p.collections.onFeedback = { flags.append(Self.reportFlags($0)) }
+        p.listHost.onFeedback = { flags.append(Self.reportFlags($0)) }
         let at = list.convert(NSPoint(x: 50, y: 50), to: nil)
         // A trackpad's scroll event of `phase` (CGScrollPhase), stamped now, through the application
         func wheel(_ phase: Int64, _ dy: Int32) throws {
@@ -981,12 +982,12 @@ final class CollectionMacTests: XCTestCase {
     /// longer land whatever the port did, and the next report ends it.
     func testTheReadersMoveMakesAMovedRequestTheReaders() throws {
         let (p, _) = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         p.apply(batch([["op": "collections", "items": [snapshot(revision: 2).merging(["seeking": true, "request": 1]) { $1 }]]]))
-        XCTAssertEqual(p.collections.entries[1]?.authored, true)
-        p.collections.changed(1, user: true)
-        XCTAssertEqual(p.collections.entries[1]?.gesture, true)
-        XCTAssertEqual(p.collections.entries[1]?.authored, false)
+        XCTAssertEqual(p.listHost.entries[1]?.authored, true)
+        p.listHost.changed(1, user: true)
+        XCTAssertEqual(p.listHost.entries[1]?.gesture, true)
+        XCTAssertEqual(p.listHost.entries[1]?.authored, false)
     }
     /// A report's flags word (`CollectionFacts.encode`).
     private static func reportFlags(_ bytes: Data) -> UInt32 {
@@ -997,7 +998,7 @@ final class CollectionMacTests: XCTestCase {
         let turned = expectation(description: "a new turn")
         DispatchQueue.main.async { turned.fulfill() }
         wait(for: [turned], timeout: 2)
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
     }
 }
 

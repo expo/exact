@@ -34,8 +34,8 @@ public enum ExactDocuments {
     public static var declared: Bool { !types.isEmpty }
 
     /// Every `LSItemContentTypes` entry across the declared document types,
-    /// and the type this Mac gives each declared extension (`Picker`).
-    static var types: [UTType] { Picker.documentTypes }
+    /// and the type this Mac gives each declared extension (`DocumentTypes`).
+    static var types: [UTType] { DocumentTypes.documentTypes }
 
     /// The adapter that owns the windows hears of a document chosen in a
     /// session (a picker's open or save): the window shows it.
@@ -69,14 +69,14 @@ public enum ExactDocuments {
     /// Mac (`.board`, Freeform's) still counts when the manifest names it.
     public static func accepts(_ url: URL, metadata: [String: Any] = ExactEnv.appMetadata) -> Bool {
         let filename = url.lastPathComponent.lowercased()
-        if Picker.declarations(in: metadata).contains(where: {
+        if DocumentTypes.declarations(in: metadata).contains(where: {
             ($0["CFBundleTypeExtensions"] as? [String] ?? []).contains {
                 filename.hasSuffix("." + $0.lowercased())
             }
         }) { return true }
         let ext = url.pathExtension.lowercased()
         let type = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType) ?? UTType(filenameExtension: ext)
-        return type.map { t in Picker.types(in: metadata).contains { t.conforms(to: $0) } } ?? false
+        return type.map { t in DocumentTypes.types(in: metadata).contains { t.conforms(to: $0) } } ?? false
     }
 
     /// The paths in `arguments` that name something on disk, made absolute

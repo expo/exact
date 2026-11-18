@@ -51,9 +51,9 @@ extension NodeView {
     /// is read from its child views, whose ops do not name the button, so
     /// it is read each time.
     #if os(macOS)
-    var face: ButtonFace? { presenter?.buttonFace?(id) }
+    package var face: ButtonFace? { presenter?.buttonFace?(id) }
     #else
-    var face: ButtonFace? {
+    package var face: ButtonFace? {
         guard let presenter, presenter.buttonFace != nil else { return nil }
         return isNativeButton ? presenter.controls.face(id) : presenter.buttonFace?(id)
     }
@@ -105,7 +105,7 @@ extension NodeView {
             .filter { !$0.isEmpty }.joined(separator: " ")
         return text.isEmpty ? nil : text
     }
-    var accessibleName: String { authoredLabel ?? contentText(naming: true) }
+    package var accessibleName: String { authoredLabel ?? contentText(naming: true) }
     #if !os(macOS)
     /// Referenced labels can arrive or disappear without an image props update.
     func updateImageAccessibility() {
@@ -429,8 +429,8 @@ final class FieldCell: NSTextFieldCell {
         if let field = numberField {
             switch attribute {
             case .role: return NSAccessibility.Role.incrementor.rawValue
-            case .minValue: return field.accessibilityMinValue()
-            case .maxValue: return field.accessibilityMaxValue()
+            case .minValue: return field.numberBounds?.min
+            case .maxValue: return field.numberBounds?.max
             default: break
             }
         }
@@ -441,8 +441,8 @@ final class FieldCell: NSTextFieldCell {
     }
     override func accessibilityPerformAction(_ action: NSAccessibility.Action) {
         if let field = numberField {
-            if action == .increment { _ = field.accessibilityPerformIncrement(); return }
-            if action == .decrement { _ = field.accessibilityPerformDecrement(); return }
+            if action == .increment { _ = field.numberOwner?.step(up: true); return }
+            if action == .decrement { _ = field.numberOwner?.step(up: false); return }
         }
         super.accessibilityPerformAction(action)
     }

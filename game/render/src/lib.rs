@@ -19,6 +19,9 @@ mod cull;
 mod cull_tests;
 mod frame;
 pub mod hooks;
+/// Recipe: blended geometry in a hook stage.
+#[doc = include_str!("../../recipes/blended-hook-geometry.md")]
+pub mod blended_hook_geometry {}
 mod ibl;
 mod lights;
 mod local_shadows;
@@ -57,7 +60,8 @@ pub use exact_game;
 /// GPU surface ABI, also used by module! without a direct dependency.
 pub use exact_gpu;
 pub use hooks::{
-    FrameView, HookGpu, HookTime, HookWork, Hooks, Needs, PostInputs, RenderWorld, SceneCopy,
+    FrameView, FrameWork, HookGpu, HookTime, HookWork, Hooks, Needs, PostInputs, RenderWorld,
+    SceneCopy,
 };
 pub use models::ModelExecutor;
 pub use surface::{Executor, WorldSurface};

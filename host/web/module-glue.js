@@ -182,6 +182,7 @@ export async function prepare(payload, admitted, id = nextId++) {
     // (LLP 1069.006 D2, D4).
     if (op === 12) {
       context.externalRead = true;
+      if (name === 'host') return 'web';
       if (name === 'callback') return `${location.origin}/.exact/auth/callback`;
       if (name === 'auth-prepare') return prepareAuthWindow();
       if (name === 'auth-cancel') { cancelAuthWindow(value); return; }

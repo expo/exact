@@ -3,6 +3,7 @@ import UIKit
 import WebKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1075.003.000 Stage 1 over the native fixture: a node marked
 /// `hatch="badge"` — a leaf box that would otherwise be drawn flat into its
@@ -40,9 +41,9 @@ final class ElementHatchesIOSTests: XCTestCase {
         NativeViews.uninstallTable()
         let session = ExactApp.shared.makeSession(label: "scroll-hatch-recognizers")
         sessions.append(session)
-        session.natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
-        session.natives.hatchesConnected = true
-        session.natives.elementCall = { _, event, view, platform, _, _ in
+        session.nativeViews!.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        session.nativeViews!.hatchesConnected = true
+        session.nativeViews!.elementCall = { _, event, view, platform, _, _ in
             guard event != 2, let view, let platform else { return 0 }
             let node = Unmanaged<NodeView>.fromOpaque(view).takeUnretainedValue()
             let scroll = Unmanaged<UIScrollView>.fromOpaque(platform).takeUnretainedValue()
@@ -50,7 +51,7 @@ final class ElementHatchesIOSTests: XCTestCase {
             if node.props["dataset"] == #"{"add":true}"# { scroll.addGestureRecognizer(UIPinchGestureRecognizer()) }
             return 0
         }
-        let p = session.presenter, regions = p.elements.regions
+        let p = session.presenter, regions = p.hatchElements!.regions
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view", "props": ["hatch": "scroller"], "style": ["overflow_y": "auto"]],
             ["op": "roots", "ids": [1]],
@@ -84,7 +85,7 @@ final class ElementHatchesIOSTests: XCTestCase {
         XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 402, height: 874)).error)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
-        session.natives.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"]))
+        session.nativeViews!.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"]))
         let log = { session.agent(#"{"op":"logs","since":0}"#) }
         until("the badge's hatch built") { log().contains("hatch element badge #") && log().contains(": built") }
         let badge = try XCTUnwrap(node(session, "hatched-badge"), "a hatched leaf box is a view")
@@ -95,7 +96,7 @@ final class ElementHatchesIOSTests: XCTestCase {
         let compose = try XCTUnwrap(node(session, "compose-home"))
         session.presenter.press(compose.id)
         until("the badge's hatch heard its data change") { log().contains("hatch element badge #\(badge.id): changed") }
-        let hatches = try XCTUnwrap((session.presenter.elements.observation(session.hatchDiagnostics)["words"] as? [String: Any])?["badge"] as? [String: Any])
+        let hatches = try XCTUnwrap((session.presenter.elements.observation(session.hatchDiagnostics!)["words"] as? [String: Any])?["badge"] as? [String: Any])
         XCTAssertEqual((hatches["calls"] as? [String: Int])?["changed"], 1)
         XCTAssertEqual(hatches["live"] as? Int, 1)
         // The plan boots again in this session: the node ends, a new one is built.
@@ -115,7 +116,7 @@ final class ElementHatchesIOSTests: XCTestCase {
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env["EXACT_FIXTURE_PLAN"])))
         let session = ExactApp.shared.makeSession(label: "frame-configuration")
         sessions.append(session)
-        session.webviews.moduleLocation = { arm }
+        session.webHost.moduleLocation = { arm }
         let view = ExactView(session: session)
         let host = UIViewController()
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
@@ -128,7 +129,7 @@ final class ElementHatchesIOSTests: XCTestCase {
         XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 402, height: 874)).error)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
-        session.natives.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"]))
+        session.nativeViews!.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"]))
         until("the module connected") { session.natives.hatchesConnected }
         session.presenter.press(try XCTUnwrap(node(session, "show-frame")).id)
         until("the frame shows a web view") { (self.node(session, "hatched-frame")?.web as? WKWebView) != nil }
@@ -140,7 +141,7 @@ final class ElementHatchesIOSTests: XCTestCase {
         let configuring = try XCTUnwrap(log.range(of: "hatch element frame #\(frame.id): configuring"), log)
         let built = try XCTUnwrap(log.range(of: "hatch element frame #\(frame.id): built"))
         XCTAssertLessThan(configuring.lowerBound, built.lowerBound, "the configuration before the web view")
-        let word = try XCTUnwrap((session.presenter.elements.observation(session.hatchDiagnostics)["words"] as? [String: Any])?["frame"] as? [String: Any])
+        let word = try XCTUnwrap((session.presenter.elements.observation(session.hatchDiagnostics!)["words"] as? [String: Any])?["frame"] as? [String: Any])
         XCTAssertEqual(word["calls"] as? [String: Int], ["configuring": 1, "built": 1])
         // The fixture counts `built` when `isNew`, else `changed`.
         XCTAssertEqual(word["counters"] as? NSDictionary, ["configuring": 1, "built": 1] as NSDictionary, "\(word)")
@@ -155,9 +156,9 @@ final class ElementHatchesIOSTests: XCTestCase {
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env["EXACT_FIXTURE_PLAN"])))
         let session = ExactApp.shared.makeSession(label: "frame-waits")
         sessions.append(session)
-        session.webviews.moduleLocation = { arm }
+        session.webHost.moduleLocation = { arm }
         // The module made before first pixel: its hatches connect at first pixel.
-        session.natives.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"]))
+        session.nativeViews!.installArtifact(try XCTUnwrap(env["EXACT_FIXTURE_MODULE"]))
         let view = ExactView(session: session)
         let host = UIViewController()
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene

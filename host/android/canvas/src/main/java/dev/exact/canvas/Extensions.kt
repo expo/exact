@@ -314,7 +314,7 @@ class ExtensionContext internal constructor(val application: Context, private va
      * of one id are one wake, run with the wake's origin, and [ended] hears its outcome once, on the main thread:
      * `completed`, `expired`, `superseded`, `refused`, or `unheard` when no handler hears it. With no activity
      * showing, `completed` says the store's writes are on disk too, and a wake whose writes are not is `expired`.
-     * Its one channel to the runner is [changed], as on Apple (`exact-wake:`, `runner/src/runner/modules/wakes.rs`).
+     * Its one channel to the runner is [changed], as on Apple (`exact-wake:`, `runner/src/runner/wakes.rs`).
      */
     fun wake(event: String, args: JSONArray, id: String, ended: (String) -> Unit = {}) {
         this.ended[id] = ended

@@ -14,7 +14,7 @@
 //! one's late events.
 use super::{
     body, bounded_outcome, failed, fetch_failure, fetch_request, handoff, retained, scoped_grants,
-    Completed, Job, Running, Shared, State, StreamHost, BYTES, MAX_HEADERS,
+    Completed, Job, Running, Shared, State, BYTES, MAX_HEADERS,
 };
 use exact_runner::{FailureKind, Outcome, Reply, Request, Response, Work as OwnedWork};
 use ibex2::boundary::HostError;
@@ -327,7 +327,7 @@ impl Machine {
         shared: Arc<Shared>,
         owners: Vec<Option<ibex2::host::Bindings>>,
         grants: &str,
-        host: StreamHost,
+        lane: &super::Lane,
         lanes: &Lanes,
     ) -> Arc<Machine> {
         let parsed = || ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants));
@@ -340,7 +340,7 @@ impl Machine {
         let independent = owners
             .next()
             .flatten()
-            .or_else(|| super::independent_bindings(grants, &host));
+            .or_else(|| super::independent_bindings(grants, lane));
         let worker_budget = Arc::new(workers::Budget::default());
         let transport = |lane: usize, b: Option<ibex2::host::Bindings>| {
             b.map(|b| {

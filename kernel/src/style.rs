@@ -35,6 +35,7 @@ mod floor;
 mod keyword;
 pub use keyword::SizeKeyword;
 mod handles;
+pub(crate) use handles::less;
 mod intern;
 pub mod safe_area_properties;
 pub use calc::Comparison;
@@ -1438,6 +1439,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     table::apply(arena, slot, &mut s);
     // After the mirror and a table's padding: a reservation is physical
     crate::kernel::block::reservation::lay_out(arena, slot, &style, &env, &mut s);
+    crate::kernel::ignore::lay_out(arena, slot, &mut s);
     // @ref LLP 1115.002 D8.2 — the containing block a host gave the subtree.
     crate::kernel::apply_block(arena, slot, &mut s);
     // @ref LLP 1074 T1 — a root is the containing block of every absolutely

@@ -93,9 +93,11 @@ class NativesWindowFrameRateTest {
     class Host {
         companion object {
             val frames = HashMap<Int, Long>()
+            val readiness = HashMap<Int, Int>()
             @JvmStatic @Implementation fun __staticInitializer__() {}
             @JvmStatic @Implementation fun attachBuffers(view: Int, width: Int, height: Int) {}
             @JvmStatic @Implementation fun canvasFrame(view: Int) = frames[view] ?: -1L
+            @JvmStatic @Implementation fun canvasReady(view: Int) = readiness[view] ?: 0
             @JvmStatic @Implementation fun canvasBuffer(view: Int): HardwareBuffer? =
                 HardwareBuffer.create(8, 8, HardwareBuffer.RGBA_8888, 1, HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE)
         }
@@ -149,6 +151,7 @@ class NativesWindowFrameRateTest {
 
     @After fun finish() {
         Host.frames.clear()
+        Host.readiness.clear()
         ReflectionHelpers.setStaticField(View::class.java, voting, false)
     }
 

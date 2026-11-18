@@ -1,4 +1,4 @@
-// Tool calls on the JS target (LLP 1111 D4, LLP 1133.023 D7), as the runner's `modules/calls.rs`: a door hands
+// Tool calls on the JS target (LLP 1111 D4, LLP 1133.023 D7), as the runner's `calls.rs`: a door hands
 // `{tool, args, door}`, and the tool's action runs as one commit of origin `tool`, after any wake or earlier call
 // (waiting up to 5 s), done when the work it owns has settled, else `timeout` 10 s after its dispatch. `fails when`
 // and `returns` are read once, at the end. The runner refuses `busy` while either reads a resource with no value; here

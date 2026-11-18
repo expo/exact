@@ -22,7 +22,7 @@ pub(in crate::runner) struct Services {
 
 impl<D: DataSource> Runner<D> {
     /// A claim an implementation told: journaled, and listed while held.
-    pub(in crate::runner) fn foreground_service_told(&mut self, body: &str) {
+    pub(super) fn foreground_service_told_linked(&mut self, body: &str) {
         let v: Json = serde_json::from_str(body).unwrap_or_default();
         let (Some(extension), Some(kind)) = (v["extension"].as_str(), v["kind"].as_str()) else {
             self.log(format!("a foreground-service claim is unreadable: {body}"));

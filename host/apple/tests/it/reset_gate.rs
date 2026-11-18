@@ -179,6 +179,7 @@ fn held_calls(sources: &Path) -> BTreeMap<String, String> {
             "enter()",
             "post(done:",
             "post(count:",
+            "post(layout:",
             "post(prepare:",
         ] {
             for at in find_all(&src, guard) {
@@ -334,6 +335,7 @@ fn the_scan_reads_each_holding_form_and_no_other() {
     package func frame(now: Double) -> Batch { on { read(exact_frame(rt, now)) } }
     package func later(_ calls: [(Runtime) -> Batch], done: @escaping (Batch) -> Void) { post(count: calls.count, done: done) { calls[$0](self) } }
     package func pump(now: Double, done: @escaping (Batch) -> Void) { post(prepare: capture, done: done) { read(exact_pump(rt, now)) } }
+    package func still(now: Double, done: @escaping (Batch) -> Void) { post(layout: true, done: done) { read(exact_tick(rt)) } }
     package func generic<T>(_ x: T) -> Batch {
         return self.on {
             read(exact_g(rt))
@@ -376,6 +378,7 @@ extension ExactSession {
             "layout(_:)",
             "pump(now:done:)",
             "spaced(_:)",
+            "still(now:done:)",
             "tellSoon(_:)",
             "tickAsync(now:capture:done:)",
         ]

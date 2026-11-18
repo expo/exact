@@ -218,6 +218,10 @@ impl Ring {
         self.order.settle();
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.order.clear();
+    }
+
     /// Publish the oldest finished frame ([`Order::take`]) and return the
     /// published frame (as [`Ring::latest`]).
     pub(crate) fn take(&mut self) -> Option<([u32; 3], *mut c_void)> {
@@ -243,7 +247,11 @@ impl crate::Module {
         if let Some(gpu) = &self.gpu {
             let _ = gpu.device.poll(wgpu::PollType::Poll);
         }
-        let ring = self.instances.get_mut(&id)?.ring.as_mut()?;
+        let inst = self.instances.get_mut(&id)?;
+        if inst.surface.is_empty() {
+            return None;
+        }
+        let ring = inst.ring.as_mut()?;
         ring.settle();
         ring.take()
     }

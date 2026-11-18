@@ -786,53 +786,8 @@ fn platform_css(text: &str) -> String {
     out
 }
 
-/// A bound `font-size` naming a platform text style (LLP 1115 D3) as css.rs
-/// writes a literal one: the ramp's size at CSS's `medium`, in `rem`. Any
-/// other value is written as it is (a number takes the row's `px`).
-pub static TEXT_STYLE_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    use exact_kernel::style::relative::{Unit, MEDIUM};
-    let mut pairs = Vec::new();
-    for (i, s) in exact_kernel::TEXT_STYLES.iter().enumerate() {
-        let rem =
-            Unit::TextStyle(i as u8).basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default())
-                / MEDIUM;
-        let css = format!("{rem}rem");
-        pairs.push(format!("{:?}:{css:?}", format!("-exact-{}", s.name)));
-        if !s.alias.is_empty() {
-            pairs.push(format!("{:?}:{css:?}", s.alias));
-        }
-    }
-    format!(
-        r#"(M=>v=>typeof v==="string"?M[v.trim().toLowerCase()]??v:v)({{{}}})"#,
-        pairs.join(",")
-    )
-});
-
-/// A bound `font` shorthand's text style (LLP 1115.000 D12.2), the weight
-/// and the leading the web's column gives it, as the template writes a
-/// literal one's: `[weight, line-height]` maps, `null` for any other value.
-pub static TEXT_STYLE_ROWS: std::sync::LazyLock<[String; 2]> = std::sync::LazyLock::new(|| {
-    use exact_kernel::style::metrics::Column;
-    use exact_kernel::style::relative::{text_style_leading, text_style_weight};
-    let (mut weights, mut leadings) = (Vec::new(), Vec::new());
-    for (i, s) in exact_kernel::TEXT_STYLES.iter().enumerate() {
-        let weight = text_style_weight(i as u8, Column::Web).to_string();
-        let leading = text_style_leading(i as u8, Column::Web).css();
-        for name in [format!("-exact-{}", s.name), s.alias.to_string()] {
-            if !name.is_empty() {
-                weights.push(format!("{name:?}:{weight:?}"));
-                leadings.push(format!("{name:?}:{leading:?}"));
-            }
-        }
-    }
-    let map = |pairs: &[String]| {
-        format!(
-            r#"(M=>v=>typeof v==="string"?M[v.trim().toLowerCase()]??null:null)({{{}}})"#,
-            pairs.join(",")
-        )
-    };
-    [map(&weights), map(&leadings)]
-});
+mod lengths;
+pub use lengths::{length_value, TEXT_STYLE_MAP, TEXT_STYLE_ROWS};
 
 /// The custom property a bound `font` shorthand writes its style's
 /// `font-weight` or `line-height` to when that longhand is bound as well

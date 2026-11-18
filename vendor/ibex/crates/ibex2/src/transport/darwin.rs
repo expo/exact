@@ -42,6 +42,7 @@ extern "C" {
         max_body: usize,
         timeout_seconds: f64,
         open_ended: c_int,
+        collected: c_int,
         speculative: c_int,
         out_error: *mut *mut c_char,
     ) -> *mut std::ffi::c_void;
@@ -68,18 +69,21 @@ extern "C" {
 
 /// The platform transport on Apple platforms.
 ///
-/// Owns a lazy pool of at most four `NSURLSession`s. Each session has a serial
-/// delegate queue and is leased to one response until native completion.
-/// This bounds concurrent callbacks while keeping their order,
-/// connection reuse, and isolation between hosts. A fifth open waits cancellably
-/// for a lease; consumers must consume or drop large unfinished responses to
-/// return their leases. Small responses prefetch into the bounded queue and
-/// return their session when complete, even before the body is consumed.
+/// Owns a lazy pool of `NSURLSession`s (Exact patch 49). A collected
+/// exchange (`Request::collected`), up to 64 MiB and not open-ended, runs on
+/// one shared session, whose delegate waits only while a reply is a mebibyte
+/// ahead of its reader: every such exchange shares its connection pool, and
+/// HTTP/2 or HTTP/3 one connection an origin. Any other
+/// exchange leases one of at most four sessions of its own until native
+/// completion; a fifth open of that kind waits cancellably for a lease, so
+/// consumers must consume or drop large unfinished responses to return
+/// theirs. Small responses complete and return their session even before the
+/// body is consumed.
 ///
-/// Each body hands off through a 64 KiB queue. A full queue blocks only that
-/// lease's delegate, never callbacks for another leased session. Foundation may
-/// also own one callback's `NSData` and internal network buffers; their size is
-/// platform-controlled. There is no body-sized allocation in Ibex.
+/// A leased exchange hands its body off through a 64 KiB queue, and a full
+/// queue blocks only that lease's delegate. Foundation may also own one
+/// callback's `NSData` and internal network buffers; their size is
+/// platform-controlled.
 ///
 /// CFNetwork can defer its response callback until an initial body byte arrives,
 /// including with an explicit MIME type. `open` returns at that callback, before
@@ -325,6 +329,7 @@ impl Transport for DarwinTransport {
                 request.body_limit(),
                 request.timeout.map_or(0.0, |timeout| timeout.as_secs_f64()),
                 c_int::from(request.open_ended),
+                c_int::from(request.collected),
                 c_int::from(request.speculative),
                 &mut error,
             )

@@ -51,7 +51,7 @@ impl Painter {
         // of no size), in the box's space.
         let (x, y, w, h) = rect;
         let cap = (2.0 * w.max(h).max(64.0)).max(width.max(height));
-        let ((left, top, right, bottom), _) = space::reach(walk, node, rect, offset, cap);
+        let ((left, top, right, bottom), _) = space::reach(self, walk, node, rect, ts, offset, cap);
         let (rx, ry, rw, rh) = chain.region;
         let region = (
             x - left + rx,
@@ -71,6 +71,24 @@ impl Painter {
         }
         // A picture is not a retained row.
         self.row_refuse();
+        if let Some((recorder, inverse)) = self.recording().zip(ts.invert()) {
+            let drawing = self.record_layer(|painter| {
+                painter.content(walk, node, rect, ts, offset, clip_rect);
+            });
+            let normalized = tape::Recorder::default();
+            normalized.nest(Rc::new(drawing), inverse);
+            recorder.filter(
+                Filter {
+                    chain,
+                    region,
+                    viewport: self.viewport,
+                    scale: self.scale,
+                },
+                Rc::new(normalized.tape()),
+                ts,
+            );
+            return;
+        }
         // What the picture reads: the region on the device, in whole pixels,
         // within the window grown by how far the chain reaches (at most four
         // windows of pixels), so the window's pixels read what lies past its
@@ -173,4 +191,109 @@ fn crop(pixels: &Pixmap, (x, y, w, h): Rect4) -> Option<Pixmap> {
         dst.copy_from_slice(&pixels.data()[at..at + row]);
     }
     Some(out)
+}
+
+/// The filter belongs to removed paint; its source commands remain replayable.
+pub(super) struct Filter {
+    chain: exact_kernel::svg::filter::Filter,
+    region: Rect4,
+    viewport: (f32, f32),
+    scale: f32,
+}
+
+impl Filter {
+    pub(super) fn region(&self, drawing: &tape::Tape, scene: &Scene<'_>, scale: f32) -> Rect4 {
+        let bounds = drawing
+            .bounds(scene, scale, Transform::identity())
+            .map(|r| {
+                let (x, y, w, h) = self.chain.region;
+                (r.0 + x, r.1 + y, r.2 + w, r.3 + h)
+            });
+        bounds.map_or(self.region, |r| rows::union(Some(self.region), r))
+    }
+
+    pub(super) fn replay(
+        &self,
+        backend: &mut dyn Backend,
+        text: &mut TextEngine,
+        drawing: &tape::Tape,
+        ts: Transform,
+        live: Option<tape::Live<'_, '_>>,
+    ) {
+        let (viewport, scale) = live.map_or((self.viewport, self.scale), |l| (l.viewport, l.scale));
+        let mut raster = crate::raster::Raster::transparent();
+        raster.begin(viewport.0, viewport.1, scale);
+        drawing.replay_live(&mut raster, text, ts, live);
+        if let Ok(source) = raster.finish() {
+            let region = live.map_or(self.region, |l| self.region(drawing, l.scene, scale));
+            filtered(backend, source, self.chain.clone(), region, ts, scale);
+        }
+    }
+}
+
+fn filtered(
+    backend: &mut dyn Backend,
+    source: Pixmap,
+    chain: exact_kernel::svg::filter::Filter,
+    region: Rect4,
+    ts: Transform,
+    scale: f32,
+) {
+    let upright = ts.kx == 0.0 && ts.ky == 0.0 && ts.sx > 0.0 && ts.sy > 0.0;
+    let k = (ts.sx * ts.sy - ts.kx * ts.ky).abs().sqrt();
+    if !(k.is_finite() && k > 0.0) {
+        return;
+    }
+    // Its bounds on the device, whole pixels, within the frame.
+    let s = scale;
+    let b = bbox(ts, region);
+    let x0 = (b.0 * s).floor().max(0.0);
+    let y0 = (b.1 * s).floor().max(0.0);
+    let x1 = ((b.0 + b.2) * s).ceil().min(source.width() as f32);
+    let y1 = ((b.1 + b.3) * s).ceil().min(source.height() as f32);
+    if !(x1 > x0 && y1 > y0) {
+        return;
+    }
+    let (cw, ch) = ((x1 - x0) as u32, (y1 - y0) as u32);
+    let Some(mut pixels) = Pixmap::new(cw, ch) else {
+        return;
+    };
+    let stride = source.width() as usize * 4;
+    let row = cw as usize * 4;
+    for (line, out) in pixels.data_mut().chunks_exact_mut(row).enumerate() {
+        let at = (y0 as usize + line) * stride + x0 as usize * 4;
+        out.copy_from_slice(&source.data()[at..at + row]);
+    }
+    // Upright, a box unit is `ts`'s scale in pixels and the picture's
+    // corner is a point of the box's space; turned, only the scale is.
+    let (filter, space) = if upright {
+        (
+            exact_kernel::svg::filter::Filter {
+                region,
+                primitives: chain.primitives,
+            },
+            exact_svg_raster::filter::Space {
+                origin: ((x0 / s - ts.tx) / ts.sx, (y0 / s - ts.ty) / ts.sy),
+                scale: (ts.sx * s, ts.sy * s),
+            },
+        )
+    } else {
+        (
+            exact_kernel::svg::filter::Filter {
+                region: (0.0, 0.0, cw as f32 / (k * s), ch as f32 / (k * s)),
+                primitives: chain.primitives,
+            },
+            exact_svg_raster::filter::Space {
+                origin: (0.0, 0.0),
+                scale: (k * s, k * s),
+            },
+        )
+    };
+    exact_svg_raster::filter::run(&filter, pixels.data_mut(), cw as usize, ch as usize, space);
+    backend.island_image(
+        Arc::new(pixels),
+        (x0 / s, y0 / s, cw as f32 / s, ch as f32 / s),
+        Transform::identity(),
+        0,
+    );
 }

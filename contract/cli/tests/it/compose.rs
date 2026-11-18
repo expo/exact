@@ -384,16 +384,26 @@ fn a_mutation_clause_out_of_order_names_the_order() {
 
 #[test]
 fn a_runner_source_called_as_a_function_says_to_declare_it() {
-    for (call, declared) in [
-        ("exactTime().epochAtZero", "exactTime()"),
-        ("exactSurface(\"world\").score", "exactSurface(\"world\")"),
+    for (call, declared, owner) in [
+        (
+            "exactTime().epochAtZero",
+            "exactTime()",
+            "the root component",
+        ),
+        (
+            "exactSurface(\"world\").score",
+            "exactSurface(\"world\")",
+            "the root component",
+        ),
+        // A child declares the device's facts itself.
+        ("exactViewport().width", "exactViewport()", "this component"),
     ] {
         let src =
             format!("component App\n  derive today = {call}\n  view\n    text `${{today}}`\n");
         let error = contract::compile(&src).unwrap_err();
         assert_eq!(error.id, "type-unknown-function", "{error}");
         assert!(
-            error.message.ends_with(&format!("is a source the runner answers: declare `resource r = {declared} as shape S` in the root component, with a shape S of the fields you read, and read `r.field`")),
+            error.message.ends_with(&format!("is a source the runner answers: declare `resource r = {declared} as shape S` in {owner}, with a shape S of the fields you read, and read `r.field`")),
             "{error}"
         );
     }

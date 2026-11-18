@@ -151,6 +151,9 @@ struct GroupedListModel: Equatable {
     var sections: [Section] = []
     /// The space under the last section when its author set it.
     var spaceBelow: CGFloat?
+    /// Whether a row asks for motion (a layout transition or an exit
+    /// animation): the list then animates a change in its rows.
+    var animates = false
 
     init(style: String = "inset-grouped", sections: [Section] = []) { self.style = style; self.sections = sections }
     init?(json: Data) { var none: [UInt32: (NSDictionary, Row)] = [:]; self.init(json: json, rows: &none) }
@@ -188,6 +191,7 @@ struct GroupedListModel: Equatable {
                            spaceAbove: (s["spaceAbove"] as? NSNumber).map { CGFloat($0.doubleValue) })
         }
         spaceBelow = (o["spaceBelow"] as? NSNumber).map { CGFloat($0.doubleValue) }
+        animates = o["animates"] as? Bool ?? false
     }
     var appearance: UICollectionLayoutListConfiguration.Appearance {
         // tvOS has no inset grouped list.
@@ -295,6 +299,19 @@ final class GroupedListHost: GroupedLists {
         }
         return nil
     }
+
+    #if os(iOS)
+    /// UIKit has no call that only closes a list's revealed swipe actions;
+    /// a collection view entering editing closes them. The list enters
+    /// editing and leaves it in the same turn (`isEditing`:
+    /// https://developer.apple.com/documentation/uikit/uicollectionview/isediting).
+    func closeSwipe(row id: UInt32) {
+        guard let collection = scroller(for: id) as? UICollectionView, !collection.isEditing,
+              collection.visibleCells.contains(where: { $0.configurationState.isSwiped }) else { return }
+        collection.isEditing = true
+        collection.isEditing = false
+    }
+    #endif
 
     /// Whether a list draws `id` (a row, or a row's toggle or detail
     /// button): the agent finds it in UIKit's cell, not the hidden row.
@@ -761,7 +778,24 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // An unchanged snapshot can reset UIKit's estimated geometry and
         // adjust its offset after the core's pending scroll write. Remounting
         // still refreshes switches and custom boxes; changed parts reconfigure.
-        if previous != next || !changed.isEmpty { source.apply(snapshot, animatingDifferences: false) }
+        if previous != next || !changed.isEmpty {
+            // A UIKit list applies a snapshot at once unless its code asks
+            // (`apply(_:animatingDifferences: true)`); here its rows ask, with
+            // the motion a column's rows carry (a layout transition, an exit
+            // animation), before or after the change. Then a list that already
+            // shows rows animates a change in which rows it holds, or in their
+            // order: a row slides to its new place, one that comes or goes
+            // fades. Its first rows, a restyle, a list out of a window, and a
+            // change that keeps the same rows in the same order (parts
+            // configured again) still apply at once.
+            let shown = source.snapshot()
+            let moved = shown.sectionIdentifiers != snapshot.sectionIdentifiers
+                || shown.itemIdentifiers != snapshot.itemIdentifiers
+            let animate = (previous.animates || next.animates)
+                && moved && !shown.itemIdentifiers.isEmpty && !restyled
+                && collection.window != nil && UIView.areAnimationsEnabled
+            source.apply(snapshot, animatingDifferences: animate)
+        }
         if texts {
             for kind in [UICollectionView.elementKindSectionHeader, UICollectionView.elementKindSectionFooter] {
                 for path in collection.indexPathsForVisibleSupplementaryElements(ofKind: kind) {

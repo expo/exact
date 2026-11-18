@@ -381,6 +381,8 @@ export function applyProps(el, set, clear, adopting = false) {
       } else {
         writeValue(el, "");
       }
+    } else if (name === "scrollTop" || name === "scrollLeft") {
+      el["$" + name] = undefined;
     } else if (name === "checked") {
       el.exactChecked = undefined;
       el.checked = false;
@@ -408,6 +410,8 @@ export function applyProps(el, set, clear, adopting = false) {
       followScroll(el, value === "true");
     } else if (name === "scrollTop" || name === "scrollLeft") {
       const offset = Number(value);
+      // Where the scroller opens when its page arrives (fragment.js, LLP 1153 D5.1).
+      el["$" + name] = Number.isFinite(offset) ? offset : undefined;
       if (Number.isFinite(offset)) {
         pendingScrolls.set(el, {
           ...pendingScrolls.get(el),

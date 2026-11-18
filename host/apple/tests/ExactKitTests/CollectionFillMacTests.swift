@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1050.000 stage 1 on AppKit: a collection's scroll callback builds only
 /// what shows when a gap shows, defers the rest to the pump, and responsive
@@ -44,9 +45,9 @@ final class CollectionFillMacTests: XCTestCase {
 
     func testResponsiveScrollingIsPreparedOnlyAsFarAsTheBuiltRows() {
         let (p, _, document) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         // Padding above the first item counts; the fourth row ends at 308.
-        XCTAssertEqual(p.collections.preparedCover(1), NSRect(x: 0, y: 0, width: document.bounds.width, height: 308))
+        XCTAssertEqual(p.listHost.preparedCover(1), NSRect(x: 0, y: 0, width: document.bounds.width, height: 308))
         document.prepareContent(in: NSRect(x: 0, y: 0, width: 300, height: 1000))
         XCTAssertEqual(document.preparedContentRect.maxY, 308, "AppKit pauses where the built rows end")
         // A batch that builds more widens what AppKit asked for, up to them.
@@ -60,22 +61,22 @@ final class CollectionFillMacTests: XCTestCase {
 
     func testCoveredScrollDefersToThePumpAndAGapIsRescuedWithSlack() throws {
         let (p, list, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var wires: [Data] = []
-        p.collections.onFeedback = { wires.append($0) }
+        p.listHost.onFeedback = { wires.append($0) }
         let clip = try XCTUnwrap(list.scroll?.contentView)
         // 60…260 is inside 0…308: nothing is built in the callback.
         clip.scroll(to: NSPoint(x: 0, y: 60))
         XCTAssertTrue(wires.isEmpty)
-        XCTAssertTrue(p.collections.covers(1))
-        XCTAssertEqual(p.collections.fillPending, [1])
+        XCTAssertTrue(p.listHost.covers(1))
+        XCTAssertEqual(p.listHost.fillPending, [1])
         // A slice builds its limit.
-        p.collections.fillSlice(1, limit: 5)
+        p.listHost.fillSlice(1, limit: 5)
         XCTAssertEqual(wires.count, 1)
         XCTAssertEqual(limit(wires[0]), 5)
         // 200…400 shows a spacer: the rows it shows now, and two more.
         clip.scroll(to: NSPoint(x: 0, y: 200))
-        XCTAssertFalse(p.collections.covers(1))
+        XCTAssertFalse(p.listHost.covers(1))
         XCTAssertEqual(wires.count, 2)
         XCTAssertEqual(limit(wires[1]), 2)
     }
@@ -84,19 +85,19 @@ final class CollectionFillMacTests: XCTestCase {
     /// turn is still rescued, not left blank until the next slice.
     func testARescueAfterTwoReportsInOneTurnStillBuilds() throws {
         let (p, list, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var wires: [Data] = []
-        p.collections.onFeedback = { wires.append($0) }
+        p.listHost.onFeedback = { wires.append($0) }
         let clip = try XCTUnwrap(list.scroll?.contentView)
-        p.collections.fillSlice(1, limit: 1)
+        p.listHost.fillSlice(1, limit: 1)
         clip.scroll(to: NSPoint(x: 0, y: 60))
-        p.collections.changed(1)
-        p.collections.flushIfNeeded()
+        p.listHost.changed(1)
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(wires.count, 2, "the turn's two passes are spent")
         clip.scroll(to: NSPoint(x: 0, y: 200))
         XCTAssertEqual(wires.count, 3, "the gap is rescued in the same turn")
         XCTAssertEqual(limit(wires[2]), 2)
-        XCTAssertEqual(p.collections.budget.refusedSpent, 0)
+        XCTAssertEqual(p.listHost.budget.refusedSpent, 0)
     }
 
     private func flags(_ wire: Data) -> UInt32 {
@@ -108,35 +109,35 @@ final class CollectionFillMacTests: XCTestCase {
     /// owes one retire-only report from main, at the slice's limit.
     func testAnOffMainSliceBuildsOnlyAndLandsIntoARetireOnlyReport() throws {
         let (p, list, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var wires: [Data] = [], fills: [Data] = []
         var inFlight = false
-        p.collections.onFeedback = { wires.append($0) }
-        p.collections.onFill = { _, bytes in fills.append(bytes); inFlight = true }
-        p.collections.filling = { inFlight }
+        p.listHost.onFeedback = { wires.append($0) }
+        p.listHost.onFill = { _, bytes in fills.append(bytes); inFlight = true }
+        p.listHost.filling = { inFlight }
         let clip = try XCTUnwrap(list.scroll?.contentView)
         // A first report records the facts a slice must keep.
-        p.collections.fillSlice(1, limit: 1)
+        p.listHost.fillSlice(1, limit: 1)
         XCTAssertEqual(wires.count, 1, "no facts yet: the first report is immediate")
         clip.scroll(to: NSPoint(x: 0, y: 60))
-        p.collections.fillSlice(1, limit: 5)
+        p.listHost.fillSlice(1, limit: 5)
         XCTAssertEqual(fills.count, 1)
         XCTAssertEqual(flags(fills[0]) & 6, 2, "build only")
         XCTAssertEqual(limit(fills[0]), 5)
         // In flight: a slice stays owed and a report waits.
         clip.scroll(to: NSPoint(x: 0, y: 70))
-        XCTAssertEqual(p.collections.fillSlice(1, limit: 5), 0)
-        XCTAssertTrue(p.collections.fillPending.contains(1))
-        p.collections.flushIfNeeded()
+        XCTAssertEqual(p.listHost.fillSlice(1, limit: 5), 0)
+        XCTAssertTrue(p.listHost.fillPending.contains(1))
+        p.listHost.flushIfNeeded()
         XCTAssertEqual(wires.count, 1)
         XCTAssertEqual(fills.count, 1)
         // Landed: one retire-only report from main at the slice's limit, in
         // the pump's next frame, instead of that frame's slice.
         inFlight = false
-        p.collections.landed(1, at: 0)
+        p.listHost.landed(1, at: 0)
         XCTAssertEqual(wires.count, 1)
-        XCTAssertTrue(p.collections.fillPending.contains(1))
-        XCTAssertEqual(p.collections.fillSlice(1, limit: 5), 0)
+        XCTAssertTrue(p.listHost.fillPending.contains(1))
+        XCTAssertEqual(p.listHost.fillSlice(1, limit: 5), 0)
         XCTAssertEqual(wires.count, 2)
         XCTAssertEqual(flags(wires[1]) & 6, 4, "retire only")
         XCTAssertEqual(limit(wires[1]), 5)
@@ -146,71 +147,71 @@ final class CollectionFillMacTests: XCTestCase {
     /// in a continuation that queues itself every main-queue turn.
     func testAReportHeldByASliceInFlightWaitsForItsLandingWithoutSpinning() throws {
         let (p, list, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var wires: [Data] = []
         var inFlight = false
-        p.collections.onFeedback = { wires.append($0) }
-        p.collections.onFill = { _, _ in inFlight = true }
-        p.collections.filling = { inFlight }
+        p.listHost.onFeedback = { wires.append($0) }
+        p.listHost.onFill = { _, _ in inFlight = true }
+        p.listHost.filling = { inFlight }
         let clip = try XCTUnwrap(list.scroll?.contentView)
-        p.collections.fillSlice(1, limit: 1)
+        p.listHost.fillSlice(1, limit: 1)
         clip.scroll(to: NSPoint(x: 0, y: 60))
-        p.collections.fillSlice(1, limit: 5)
+        p.listHost.fillSlice(1, limit: 5)
         XCTAssertTrue(inFlight)
-        let before = p.collections.continuations
+        let before = p.listHost.continuations
         clip.scroll(to: NSPoint(x: 0, y: 70))
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertLessThanOrEqual(p.collections.continuations - before, 1, "no continuation queues itself while the slice is in flight")
+        XCTAssertLessThanOrEqual(p.listHost.continuations - before, 1, "no continuation queues itself while the slice is in flight")
         XCTAssertEqual(wires.count, 1, "the report waits")
         // Landed: the held report runs in the next main-queue turn.
         inFlight = false
-        p.collections.landed(1, at: 0)
+        p.listHost.landed(1, at: 0)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(wires.count, 2, "the held report ran after the landing")
     }
 
     func testASliceThatChangesThePortIsImmediate() throws {
         let (p, list, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var wires: [Data] = [], fills: [Data] = []
-        p.collections.onFeedback = { wires.append($0) }
-        p.collections.onFill = { _, bytes in fills.append(bytes) }
-        p.collections.filling = { false }
-        p.collections.fillSlice(1, limit: 1)
+        p.listHost.onFeedback = { wires.append($0) }
+        p.listHost.onFill = { _, bytes in fills.append(bytes) }
+        p.listHost.filling = { false }
+        p.listHost.fillSlice(1, limit: 1)
         p.apply(batch([["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 240.0]]))
         list.scroll?.contentView.scroll(to: NSPoint(x: 0, y: 30))
-        p.collections.fillSlice(1, limit: 5)
+        p.listHost.fillSlice(1, limit: 5)
         XCTAssertTrue(fills.isEmpty, "a new port may retire: it is reported on main")
         XCTAssertEqual(flags(wires.last!) & 6, 0)
     }
 
     func testAGapLandsTheSliceInFlightBeforeItsRescue() throws {
         let (p, list, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         var events: [String] = []
         var inFlight = false
-        p.collections.onFeedback = { _ in events.append("report") }
-        p.collections.onFill = { _, _ in events.append("fill"); inFlight = true }
-        p.collections.filling = { inFlight }
-        p.collections.drain = { events.append("drain"); inFlight = false }
+        p.listHost.onFeedback = { _ in events.append("report") }
+        p.listHost.onFill = { _, _ in events.append("fill"); inFlight = true }
+        p.listHost.filling = { inFlight }
+        p.listHost.drain = { events.append("drain"); inFlight = false }
         let clip = try XCTUnwrap(list.scroll?.contentView)
-        p.collections.fillSlice(1, limit: 1)
+        p.listHost.fillSlice(1, limit: 1)
         clip.scroll(to: NSPoint(x: 0, y: 60))
-        p.collections.fillSlice(1, limit: 5)
+        p.listHost.fillSlice(1, limit: 5)
         clip.scroll(to: NSPoint(x: 0, y: 200))
         XCTAssertEqual(events, ["report", "fill", "drain", "report"])
     }
 
     func testTravelLeadsTheSliceByTheRowsItWillUncover() {
         let (p, _, _) = fixture(rows: 4)
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         // At the 60-point offset the port reaches 260 of the cover's 308;
         // 200 points more travel needs ceil(152 / 72) = 3 rows.
         p.views[1]!.scroll!.contentView.scroll(to: NSPoint(x: 0, y: 60))
-        XCTAssertEqual(p.collections.rowsToCover(1, ahead: 200), 3)
-        XCTAssertEqual(p.collections.rowsToCover(1, ahead: -200), 0, "the first item is built")
-        XCTAssertEqual(p.collections.rowsToCover(1, ahead: 0), 0)
+        XCTAssertEqual(p.listHost.rowsToCover(1, ahead: 200), 3)
+        XCTAssertEqual(p.listHost.rowsToCover(1, ahead: -200), 0, "the first item is built")
+        XCTAssertEqual(p.listHost.rowsToCover(1, ahead: 0), 0)
     }
 }
 #endif

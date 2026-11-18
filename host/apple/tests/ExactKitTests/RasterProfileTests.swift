@@ -2,6 +2,7 @@ import XCTest
 import ImageIO
 import CoreGraphics
 @testable import ExactKit
+@testable import ExactImages
 
 final class RasterProfileTests: XCTestCase {
     private let dir = Bundle.module.resourceURL!.appendingPathComponent("ColorFixtures")

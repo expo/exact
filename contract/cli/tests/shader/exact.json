@@ -1,0 +1,14 @@
+{
+  "kind": "interface",
+  "name": "@fixture/fragment",
+  "version": "1.0.0",
+  "names": [],
+  "gpu": {
+    "crate": "rust",
+    "exactGpu": "0.3",
+    "surfaces": {
+      "fragment": { "arity": 3, "factory": "fixture::surface", "wgsl": "src" },
+      "unchecked": { "arity": 1, "factory": "fixture::surface" }
+    }
+  }
+}

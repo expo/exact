@@ -899,7 +899,7 @@ extension NavigationHost {
         if control.selectedSegmentIndex != selected, !pending { control.selectedSegmentIndex = selected }
         if control.selectedSegmentIndex == selected { segments.press.settled = selected }
         control.accessibilityIdentifier = list?.props["testId"]
-        control.segmentLabels = tabs.map(SegmentHost.segmentLabel)
+        control.segmentLabels = tabs.map(LabelledSegmentedControl.segmentLabel)
         control.segmentIDs = tabs.map { $0.props["testId"] }
         control.segmentOwners = tabs.map(\.id)
         control.segmentUnavailable = tabs.map { $0.disabled || $0.ariaUnavailable }

@@ -272,12 +272,37 @@ final class ResetGateTests: XCTestCase {
         if replays.contains(.activation) { XCTAssertNil(session.pendingActivation, "the held activation ran in the replay") }
     }
 
+    /// A task's native firing that waits for an advance in flight, whose answer lands held: it is asked for again as that
+    /// answer lands, and reaches the held runtime, which its queue keeps it for.
+    func testANativeFiringThatWaitsForAHeldAdvanceIsAskedAgainAsItLands() throws {
+        let (session, _) = try boot()
+        let row = try XCTUnwrap(session.taskTimers.rows.first, "the ticker's native timer")
+        let timer = try XCTUnwrap(session.taskTimers.timerForTests(row.index))
+        until("the timer runs, with nothing in flight, queued or pending") {
+            (try? ticks(session)) ?? 0 > 1 && !session.ownerInFlight && !session.applying && !session.taskTimers.hasReady
+                && !session.taskTimers.pendingForTests(row.index)
+        }
+        func fired() -> Bool { session.runtime.heldCalls.contains { $0.hasPrefix("fireNativeTimer") } }
+        _ = held(session) {
+            timer.fire()
+            XCTAssertTrue(session.taskTimers.hasReady, "the firing is queued, and the ask for it posted before the advance")
+            session.sendAdvance(now: session.now())
+            // Read the queue in the turn after the ask's: the advance's answer may land in the same drain and ask again
+            var afterAsk: (queued: Bool, fired: Bool)?
+            DispatchQueue.main.async { afterAsk = (session.taskTimers.hasReady, fired()) }
+            waitFor("the ask's turn") { afterAsk != nil }
+            XCTAssertEqual(afterAsk?.queued, true, "the ask found the advance in flight and left the firing queued")
+            XCTAssertEqual(afterAsk?.fired, false, "the ask found the advance in flight and left the firing queued")
+            waitFor("the firing reaches the held runtime", cap: 5) { fired() }
+        }
+    }
+
     /// A frame's tick sent to the owner while held: answered there, so the tick in flight ends; the advance replayed.
     func testATickSentWhileHeldEndsAndIsReplayed() throws {
         let (session, _) = try boot()
         until("no tick in flight") { !session.tickInFlight }
         let (held, replays, _) = held(session) { session.sendTick(now: session.now()) }
-        XCTAssertEqual(held, ["tickAsync(now:frame:capture:measureFrame:done:)"])
+        XCTAssertEqual(held, ["tickAsync(now:frame:capture:measureFrame:presentOnly:done:)"])
         XCTAssertEqual(replays, [.advance])
         until("the held tick's answer lands, ending the tick in flight") { !session.tickInFlight }
     }
@@ -357,7 +382,12 @@ final class ResetGateTests: XCTestCase {
             ExactSession.asyncFills = asynchronous
             let (session, plan) = try boot("RESET_GATE_ADMISSION")
             func count() -> Int? { (try? words(session))?.compactMap { Int($0) }.max() }
-            until("booted, and nothing in flight") { count() == 0 && !session.ownerInFlight && !session.applying && !session.advanceInFlight }
+            // Wait for the display link to stop as well. A still page's link runs until a tick hears its first present
+            // (LLP 1069.000 D2 r7); while it runs, `check` waits for its answer instead of posting it, and a tick that
+            // comes due in the hold is replayed as an advance.
+            until("booted and presented, with nothing in flight") {
+                count() == 0 && !session.ownerInFlight && !session.applying && !session.advanceInFlight && session.frames.link == nil
+            }
             // Past the minute timers' first due: only these checks admit them, not a real update callback, so a slow
             // boot (a loaded full suite's) has a minute's margin before the hold, where 100 ms timers had none.
             let cutoff = session.now() + 60_100
@@ -383,6 +413,28 @@ final class ResetGateTests: XCTestCase {
             #endif
             window = nil
         }
+    }
+
+    /// A timer admission check made while the display link runs, as it does for a still page's first present (LLP
+    /// 1069.000 D2 r7), with posted fills: the check waits for its answer instead of posting it, and a tick held beside
+    /// it, as the link's would be, is replayed as an advance; nothing is left pending.
+    func testAnAdmissionCheckWhileTheLinkRunsWaitsForItsAnswer() throws {
+        let wasAsync = ExactSession.asyncFills
+        defer { ExactSession.asyncFills = wasAsync }
+        ExactSession.asyncFills = true
+        let (session, _) = try boot("RESET_GATE_ADMISSION")
+        until("booted and presented, with nothing in flight") {
+            !session.ownerInFlight && !session.applying && !session.advanceInFlight && session.frames.link == nil
+        }
+        session.frames.run(true)
+        XCTAssertNotNil(session.frames.link, "the link runs")
+        let (held, replays, _) = held(session) {
+            session.timerAdmissions.check(update: true, at: session.now() + 60_100)
+            session.sendTick(now: session.now())
+        }
+        XCTAssertEqual(held, ["timerWaits(kinds:cutoff:mode:)", "tickAsync(now:frame:capture:measureFrame:presentOnly:done:)"])
+        XCTAssertEqual(replays, [.advance])
+        XCTAssertFalse(session.timerAdmissions.hasPendingForTests, "the held check left nothing pending")
     }
 
     /// A resize while a restart holds the runtime (another session's reset, a keyboard it ends): the view's fit is owed,

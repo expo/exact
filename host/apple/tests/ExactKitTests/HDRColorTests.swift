@@ -9,6 +9,9 @@ import IOSurface
 import AppKit
 #endif
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
+@testable import ExactImages
 
 /// LLP 1100 D2, D8: a colour in an extended or PQ/HLG space is tagged with
 /// its exposure over SDR white, and every layer a node paints an HDR colour

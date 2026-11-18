@@ -170,7 +170,7 @@ impl<D: DataSource> Runner<D> {
     /// The agent clock reached `now_ms`: each entry of a list with a due
     /// time that is now due fires, once; a list another session changed is
     /// announced to this one's readers.
-    pub(in crate::runner) fn listed_due(&mut self, now_ms: f64) {
+    pub(in crate::runner::modules) fn listed_due_linked(&mut self, now_ms: f64) {
         let now = self.time.epoch_at_zero + now_ms;
         let mut lists: Vec<(String, Json)> = Vec::new();
         for row in &self.plan.modules {

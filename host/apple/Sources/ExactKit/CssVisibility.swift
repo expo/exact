@@ -10,7 +10,7 @@ import UIKit
 
 extension NodeView {
     /// Computed visibility hides the box unless it is `visible`, the initial value.
-    var cssVisibilityHidden: Bool { (style["visibility"]?.string ?? "visible") != "visible" }
+    package var cssVisibilityHidden: Bool { (style["visibility"]?.string ?? "visible") != "visible" }
 
     /// A hidden paragraph that still has an inline run computing `visible`.
     /// A paragraph that is not hidden answers false without walking its runs,
@@ -44,7 +44,7 @@ extension NodeView {
         if hidden { materialView?.effect = nil }
         else if materialView != nil, materialView?.effect == nil { updateMaterial() }
         #endif
-        presenter?.svg.boxVisibility(id, hidden: hidden, clock: presenter?.session?.clock)
+        presenter?.boxAnimations.boxVisibility(id, hidden: hidden, clock: presenter?.session?.clock)
         symbolView?.isHidden = hidden
         web?.isHidden = hidden
         metal?.isHidden = hidden

@@ -15,7 +15,7 @@ function runtimeServer(overrides = {}) {
   } });
 }
 
-// A tool whose action's commit is refused ends `failed` `refused-commit` (the runner's `modules/calls.rs`), never
+// A tool whose action's commit is refused ends `failed` `refused-commit` (the runner's `calls.rs`), never
 // `ok` over the state the refusal put back, through the agent's door and through WebMCP's.
 test('a tool whose commit is refused does not report it applied', async () => {
   const server = runtimeServer();

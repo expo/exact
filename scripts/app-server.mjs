@@ -3,10 +3,12 @@ import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { constants, networkInterfaces } from 'node:os';
 import { takePort } from './port-lock.mjs';
-import { alive, ancestors, commandLine } from './processes.mjs';
+import { alive, ancestors, closeJob, commandLine, endJob, endRecord, jobActive, jobHas, jobName, openJob, recordedEnd } from './processes.mjs';
 import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
 import { importsOf, readsDB } from './app-imports.mjs';
@@ -128,27 +130,45 @@ export function recordedServerAddress(value) {
   return { url: value, port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)) };
 }
 
-/** A managed server needs this directory's launch record and the recorded process still listening. */
-function ownsServer(dir, server, expectedPid, child = null) {
+/** A managed server needs this directory's launch record and the recorded process still listening. The record is named
+ * by the server's group: on POSIX the id of the process group every listener the server starts is in, its keeper's pid;
+ * on Windows the pid of the supervisor whose job every listener is in, `group`'s (this invocation's launch) or the one
+ * the record names. */
+function ownsServer(dir, server, expectedPid, group = null) {
   const listeners = process.platform === 'win32'
     ? spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-NetTCPConnection -State Listen -LocalPort ${server.port} -ErrorAction SilentlyContinue).OwningProcess`], { encoding: 'utf8' }).stdout?.match(/\d+/g) ?? []
     : [...(spawnSync('lsof', ['-nP', `-iTCP:${server.port}`, '-sTCP:LISTEN', '-Fp'], { encoding: 'utf8' }).stdout?.matchAll(/^p(\d+)/gm) ?? [])].map(m => m[1]);
   const root = realpathSync(dir), lease = resolve(dir, '.exact/agent-server');
-  for (const pid of listeners) {
+  for (const listener of listeners) {
+    const pid = process.platform !== 'win32' ? spawnSync('ps', ['-o', 'pgid=', '-p', listener], { encoding: 'utf8' }).stdout?.trim()
+      : group?.job ? (jobHas(group.job, Number(listener)) ? String(group.pid) : null) : recordedJobOf(lease, Number(listener));
+    if (!pid) continue;
     if (expectedPid !== undefined && Number(pid) !== expectedPid) continue;
     let record; try { record = JSON.parse(readFileSync(resolve(lease, `server-${pid}`), 'utf8')); } catch { continue; }
-    if (!record || record.directory !== root || record.origin !== server.url || !alive(Number(pid))) continue;
+    if (!record || record.directory !== root || record.origin !== server.url || typeof record.token !== 'string' || !alive(Number(pid))) continue;
     const command = commandLine(pid);
-    if (!command.includes(server.entry)) continue;
-    // CIM exposes no cwd. A copied record cannot vouch for one; only this invocation's child can.
-    if (process.platform === 'win32') {
-      if (child?.pid === Number(pid) && child.exitCode == null) return true;
-      continue;
-    }
+    // On POSIX the pid is the keeper's, whose command line names its launch's token.
+    if (!command.includes(server.entry) || process.platform !== 'win32' && !command.includes(record.token)) continue;
+    // CIM exposes no cwd: the job, which only the recorded supervisor's tree is in, stands for it.
+    if (process.platform === 'win32') return true;
     const cwd = spawnSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8' }).stdout?.match(/^n(.+)$/m)?.[1];
     try { if (cwd && realpathSync(cwd) === root) return true; } catch { /* The process or its directory disappeared. */ }
   }
   return false;
+}
+
+/** The pid named by a `server-<pid>` record in `lease` whose launch's job, named by the record's token, holds
+ * `listener`, else null. A token names one launch: a record outlived by its server names no later launch's job. */
+function recordedJobOf(lease, listener) {
+  let names = []; try { names = readdirSync(lease); } catch {}
+  for (const name of names) {
+    const pid = /^server-(\d+)$/.exec(name)?.[1];
+    let token = null; try { token = pid && JSON.parse(readFileSync(resolve(lease, name), 'utf8')).token; } catch {}
+    const job = typeof token === 'string' && openJob(jobName(token));
+    if (!job) continue;
+    try { if (jobHas(job, listener)) return pid; } finally { closeJob(job); }
+  }
+  return null;
 }
 
 /** Runs `kill` when this process ends however it does (a signal ends it with the shell's code too); the function returned
@@ -193,89 +213,105 @@ export async function startServer(dir, server, name, { forward = false } = {}) {
   catch (e) { if (!owned) give(); throw e; }
 }
 
-// CreationDate distinguishes an observed Windows process from a later use of its PID.
-function windowsProcesses() {
-  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { if ($null -ne $_.CreationDate) { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().Ticks)" } }'], { encoding: 'utf8' });
-  const table = new Map();
-  for (const line of (r.stdout ?? '').split('\n')) {
-    const [pid, parent, created] = line.trim().split(/\s+/);
-    if (/^\d+$/.test(pid) && /^\d+$/.test(parent) && /^\d+$/.test(created)) table.set(Number(pid), { parent: Number(parent), created });
-  }
-  if (r.status !== 0 || !table.size) throw new Error('cannot read the Windows process table to stop the app server');
-  return table;
+const SUPERVISOR = fileURLToPath(new URL('processes.mjs', import.meta.url));
+/** A POSIX server's process group `pid`, whose id is its keeper's pid, held while `running` says the supervisor, which
+ * never reaps the keeper, runs. `end` asks the keeper to end what remains and exit; `release` waits for that and for its
+ * record of the end of launch `token` in `dir` (processes.mjs `recordedEnd`), which `close` removes once the whole stop
+ * has succeeded. On Linux the keeper also holds processes outside the group, so a keeper that exited without the
+ * record may have left one running; on macOS it holds none. */
+function supervisedGroup(pid, running, end, dir, token) {
+  return {
+    pid, running, ended: () => recordedEnd(dir, pid, token), end: () => { if (running()) end(); },
+    release: async (deadline) => {
+      if (running()) end();
+      while (running()) {
+        if (Date.now() >= deadline) throw new Error(`server shutdown did not finish: the keeper of process group ${pid} is still running, with a process the server started that it cannot end`);
+        await Bun.sleep(25);
+      }
+      if (process.platform === 'linux' && !recordedEnd(dir, pid, token))
+        throw new Error(`server shutdown cannot verify that the keeper of process group ${pid} ended every process the server started: it exited without recording it`);
+    },
+    close: () => rmSync(endRecord(dir, pid), { force: true }),
+  };
 }
-function posixGroup(pid) {
-  const r = spawnSync('ps', ['-A', '-o', 'pid=,pgid=,stat=,lstart='], { encoding: 'utf8' });
-  if (r.status !== 0) throw new Error('cannot read the process table to stop the app server');
-  return new Map((r.stdout ?? '').split('\n').flatMap(line => {
-    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
-    return m && Number(m[2]) === pid && !m[3].startsWith('Z') ? [[Number(m[1]), m[4]]] : [];
-  }));
-}
-const windowsIdentity = (pid, created) => `${pid}:${created}`;
-const windowsGroup = (pid, created) => ({ pid, members: new Map([[windowsIdentity(pid, created), { pid, created }]]) });
-const processGroup = pid => {
-  if (process.platform !== 'win32') return { pid, members: null, observed: posixGroup(pid) };
-  const root = windowsProcesses().get(pid);
-  if (!root) throw new Error(`cannot identify the Windows app server process ${pid}`);
-  return windowsGroup(pid, root.created);
-};
-// CIM can lag a new launch. A query error is different from a root not yet listed.
-async function launchedGroup(child) {
-  try {
-    if (process.platform !== 'win32') return processGroup(child.pid);
-    const deadline = Date.now() + 1000;
-    for (;;) {
-      const root = windowsProcesses().get(child.pid);
-      if (root) return windowsGroup(child.pid, root.created);
-      if (exitStatus(child) != null || Date.now() >= deadline) throw new Error(`cannot identify the Windows app server process ${child.pid}`);
-      await Bun.sleep(25);
-    }
-  } catch (e) {
-    if (exitStatus(child) == null) child.kill('SIGKILL');
-    await child.exited;
-    throw e;
-  }
-}
-function liveMembers(group) {
-  const table = windowsProcesses();
-  let added;
-  do {
-    added = false;
-    for (const [pid, { parent, created }] of table) {
-      const ancestor = table.get(parent), identity = windowsIdentity(pid, created);
-      if (ancestor && group.members.has(windowsIdentity(parent, ancestor.created)) && BigInt(created) >= BigInt(ancestor.created) && !group.members.has(identity)) {
-        group.members.set(identity, { pid, created }); added = true;
+/** A Windows server's job, `job` a handle to it (processes.mjs `openJob`); its supervisor `pid` is a member. */
+const jobGroup = (pid, job) => ({ pid, job, close: () => closeJob(job) });
+/** Starts the app server under its supervisor (processes.mjs `supervise`), in a session of its own: the handle is the
+ * supervisor's, whose exit status is the server's once reported, else its own; `started` is the server's group's id
+ * once the server runs (on Windows the supervisor's pid, which names its job), else null. `owner`: whether this
+ * process's end ends the server, through the supervisor's stdin, which only this process writes. `dir` takes the
+ * keeper's record of the end. */
+function spawnServer(server, dir, env, stderr, owner, records) {
+  const command = server.command ?? [process.execPath, server.entry, ...server.args], token = randomUUID();
+  const supervisor = Bun.spawn([process.execPath, SUPERVISOR, 'supervise', owner ? '1' : '0', records, token, ...command], { cwd: dir, env, detached: true, stdin: owner ? 'pipe' : 'ignore', stdout: 'pipe', stderr });
+  // Its lines: `started` with the group's id, then the server's exit status.
+  let reported = null, begun;
+  const started = new Promise((done) => { begun = done; });
+  (async () => {
+    let text = '';
+    for await (const chunk of supervisor.stdout) {
+      text += new TextDecoder().decode(chunk);
+      for (let at; (at = text.indexOf('\n')) >= 0; text = text.slice(at + 1)) {
+        const line = JSON.parse(text.slice(0, at));
+        if (line.started) begun(line.group); else reported ??= line;
       }
     }
-  } while (added);
-  return [...group.members.values()].filter(({ pid, created }) => table.get(pid)?.created === created);
+  })().catch(() => {}).finally(() => begun(null));
+  return {
+    pid: supervisor.pid, stderr: supervisor.stderr, exited: supervisor.exited, started, records, token,
+    // Held, so the pipe stays open while this process lives.
+    stdin: supervisor.stdin,
+    running: () => supervisor.exitCode === null && supervisor.signalCode === null,
+    get exitCode() { return (reported ?? supervisor).exitCode; },
+    get signalCode() { return (reported ?? supervisor).signalCode; },
+    kill: (signal) => supervisor.kill(signal),
+  };
 }
-function signalGroup(group, signal, deadline = Date.now() + 3000) {
+/** The group `pid` of a server another process started as launch `token`, with its records in `dir`: on POSIX the
+ * keeper's group, on Windows the supervisor's job. */
+const processGroup = (pid, dir, token) => {
+  // The keeper's command line names its launch's token: a later process given that pid does not.
+  const keeps = () => { const command = commandLine(pid); return command.includes(SUPERVISOR) && command.includes(token); };
+  if (process.platform !== 'win32') return supervisedGroup(pid, keeps, () => { if (keeps()) process.kill(pid, 'SIGTERM'); }, dir, token);
+  const job = openJob(jobName(token));
+  if (!job) throw new Error(`cannot find the job of the Windows app server's supervisor ${pid}`);
+  return jobGroup(pid, job);
+};
+/** The launch's group once its supervisor has started the server: before then it may not yet handle SIGTERM, or have
+ * its job; null if it exited first. A supervisor starts the server only in a job it created, never in an earlier
+ * launch's of the same name. */
+async function launchedGroup(child) {
+  const group = await child.started;
+  if (group == null) { await child.exited; return null; }
+  if (process.platform !== 'win32') {
+    return supervisedGroup(group, child.running, () => child.kill('SIGTERM'), child.records, child.token);
+  }
+  let job = null;
+  try { job = openJob(jobName(child.token)); } catch (e) { if (exitStatus(child) == null) child.kill('SIGKILL'); await child.exited; throw e; }
+  if (job) return jobGroup(group, job);
+  if (exitStatus(child) == null) child.kill('SIGKILL');
+  await child.exited;
+  throw new Error(`cannot find the job of the Windows app server's supervisor ${group}`);
+}
+/** A job has no signals: either signal ends it at once. */
+function signalGroup(group, signal) {
   if (!group) return;
-  if (group.members) {
-    const attempted = new Set();
-    for (;;) {
-      // Observation inserts parents before children. Stop one leaf, then observe children born during teardown.
-      const member = liveMembers(group).findLast(({ pid, created }) => !attempted.has(windowsIdentity(pid, created)));
-      if (!member) break;
-      if (Date.now() >= deadline) throw new Error(`server shutdown did not finish: process group ${group.pid} is still alive`);
-      const { pid, created } = member;
-      attempted.add(windowsIdentity(pid, created));
-      if (windowsProcesses().get(pid)?.created !== created) continue;
-      spawnSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore' });
-    }
-  } else if (groupAlive(group)) try { process.kill(-group.pid, signal); } catch (e) { if (e.code !== 'ESRCH') throw e; }
+  if (group.job) endJob(group.job);
+  else if (groupAlive(group)) try { process.kill(-group.pid, signal); } catch (e) { if (e.code !== 'ESRCH') throw e; }
 }
 function groupAlive(group) {
-  if (group.members) return liveMembers(group).length > 0;
-  const current = posixGroup(group.pid);
-  if (!current.size) return false;
-  if (![...current].some(([pid, created]) => group.observed.get(pid) === created))
-    throw new Error(`server shutdown cannot verify ownership of process group ${group.pid}: no observed member survives`);
-  group.observed = current;
-  return true;
+  if (group.job) return jobActive(group.job) > 0;
+  // Recorded once its keeper had emptied it: the id may since be another program's.
+  if (group.ended()) return false;
+  try { process.kill(-group.pid, 0); } catch (e) { if (e.code === 'ESRCH') return false; if (e.code !== 'EPERM') throw e; }
+  if (group.running()) return true;
+  // A keeper exits only once its group is empty, and nothing joins an empty group: asked again, that group has ended.
+  // One that is not empty has lost its keeper, and its id may now be another program's.
+  try { process.kill(-group.pid, 0); } catch (e) { if (e.code === 'ESRCH') return false; }
+  throw new Error(`server shutdown cannot verify ownership of process group ${group.pid}: its keeper exited`);
 }
+/** Kills the group at once and asks its supervisor to finish, for a process that is ending. */
+function killGroup(group) { try { signalGroup(group, 'SIGKILL'); } finally { group.end?.(); } }
 async function portFree(server) {
   const host = new URL(server.url).hostname.replace(/^\[|\]$/g, '');
   const hosts = host === 'localhost' ? ['127.0.0.1', '::1'] : [host];
@@ -289,17 +325,28 @@ async function portFree(server) {
   }
   return true;
 }
+/** Ends the server's group, then its supervisor (which on Linux ends the processes that left the group), and waits for
+ * the server's port. Retryable: it fails naming what survives, and closes the group's job handle only once all ended. */
 async function stopGroup(group, server) {
   if (!group) throw new Error('server shutdown cannot verify process ownership');
   const deadline = Date.now() + 3000;
-  if (groupAlive(group)) signalGroup(group, 'SIGTERM', deadline);
+  if (groupAlive(group)) signalGroup(group, 'SIGTERM');
   while (groupAlive(group) && Date.now() < deadline) await Bun.sleep(25);
   const forcedDeadline = Date.now() + 3000;
-  if (groupAlive(group)) signalGroup(group, 'SIGKILL', forcedDeadline);
-  while (groupAlive(group) || (server && !(await portFree(server)))) {
-    if (Date.now() >= forcedDeadline) throw new Error(`server shutdown did not finish: process group ${group.pid} is still alive or port ${server?.port} is still in use`);
+  if (groupAlive(group)) signalGroup(group, 'SIGKILL');
+  const unfinished = () => new Error(`server shutdown did not finish: ${group.job ? 'the job of supervisor' : 'process group'} ${group.pid} is still alive or port ${server?.port} is still in use`);
+  while (groupAlive(group)) {
+    if (Date.now() >= forcedDeadline) throw unfinished();
     await Bun.sleep(25);
   }
+  // The supervisor's end and the port's release each have their own time after the group's.
+  await group.release?.(Date.now() + 3000);
+  const portDeadline = Date.now() + 3000;
+  while (server && !(await portFree(server))) {
+    if (Date.now() >= portDeadline) throw unfinished();
+    await Bun.sleep(25);
+  }
+  group.close?.();
 }
 
 async function started(dir, server, name, forward, give, takeOwnership) {
@@ -308,6 +355,8 @@ async function started(dir, server, name, forward, give, takeOwnership) {
   const clearDB = () => { if (db) for (const end of ['', '-wal', '-shm', '-journal']) rmSync(`${db}${end}`, { force: true }); };
   mkdirSync(runDir, { recursive: true });
   clearDB();
+  // Its keepers' records of their ends; one left by a run that ended, its server with it, vouches for no later keeper.
+  for (const file of readdirSync(runDir)) if (file.startsWith('ended-')) rmSync(resolve(runDir, file), { force: true });
   writeFileSync(owner, `${process.pid}\n`);
   takeOwnership();
   let child = null, group = null, said = { text: '' }, used = false, stopped = false, recorded = false;
@@ -322,14 +371,16 @@ async function started(dir, server, name, forward, give, takeOwnership) {
   const launch = async () => {
     const buffer = { text: '' }; said = buffer; recorded = false;
     group = null;
-    child = Bun.spawn(server.command ?? [process.execPath, server.entry, ...server.args], { cwd: dir, env: serverEnv(server, db), detached: true, stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' });
+    child = spawnServer(server, dir, serverEnv(server, db), 'pipe', true, runDir);
     group = await launchedGroup(child);
     const launched = child;
     (async () => { for await (const chunk of launched.stderr) { if (child !== launched) continue; buffer.text = (buffer.text + new TextDecoder().decode(chunk)).slice(-4000); if (forward) process.stderr.write(chunk); } })().catch(() => {});
     const why = await untilAnswers(server, child, tail, group);
     if (why) { await endChild(); throw new Error(why); }
   };
-  const off = whenEnded(() => { if (child) { if (group) signalGroup(group, 'SIGKILL'); else child.kill('SIGKILL'); } });
+  // Before its supervisor has said it started, POSIX still has the launch's group; Windows has no job yet.
+  // Before the supervisor has said the server runs, it ends with the end of its stdin, as when this process exits.
+  const off = whenEnded(() => { if (child && group) killGroup(group); });
   const stop = async () => {
     if (stopped) return;
     await endChild();
@@ -374,23 +425,34 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     if (files('drive').length) return null;
     return files('server').flatMap(([file, pid]) => {
       // Overlapping drives may choose different ports; each record names the listener to validate.
-      let recordedServer = null;
+      let recordedServer = null, token = null;
       try {
-        const address = recordedServerAddress(JSON.parse(readIn(lease, file))?.origin);
-        if (address) recordedServer = { ...server, ...address };
+        const record = JSON.parse(readIn(lease, file)), address = recordedServerAddress(record?.origin);
+        if (address && typeof record.token === 'string') { recordedServer = { ...server, ...address }; token = record.token; }
       } catch { /* An unknown record grants no authority to stop a process. */ }
-      const ours = spawned?.pid === pid || recordedServer && ownsServer(dir, recordedServer, pid);
+      const mine = spawnedGroup?.pid === pid, ours = mine || recordedServer && ownsServer(dir, recordedServer, pid);
       if (!ours && alive(pid)) return [];
-      if (!ours) rmSync(file, { force: true });
-      return ours ? [{ file, group: spawned?.pid === pid ? spawnedGroup : processGroup(pid), server: recordedServer ?? server }] : [];
+      if (!ours) {
+        // Its keeper is gone. Kept, with the lease and its database, while what the server started may still run: its
+        // group has members, or on Linux the keeper did not record that it ended what left the group.
+        let members = false; try { process.kill(-pid, 0); members = true; } catch (e) { members = e.code === 'EPERM'; }
+        if (process.platform !== 'win32' && (members || process.platform === 'linux' && !recordedEnd(lease, pid, token))) return [];
+        // Or while something still listens where it served: on macOS a process that left its group may.
+        if (recordedServer && portHolder(recordedServer).pid) return [];
+        rmSync(file, { force: true }); rmSync(endRecord(lease, pid), { force: true });
+        return [];
+      }
+      return [{ file, group: mine ? spawnedGroup : processGroup(pid, lease, token), server: recordedServer ?? server }];
     });
   };
   const clean = () => {
     if (files('server').length) return;
     if (db) rmSync(lease, { recursive: true, force: true });
-    else { rmSync(resolve(lease, 'log'), { force: true }); try { rmdirSync(lease); } catch {} }
+    else { for (const [file] of [...files('ended'), [resolve(lease, 'log')]]) rmSync(file, { force: true }); try { rmdirSync(lease); } catch {} }
   };
-  const off = whenEnded(() => { if (spawned && !spawnedGroup) spawned.kill('SIGKILL'); const ending = leave(); for (const { file, group } of ending ?? []) try { signalGroup(group, 'SIGKILL'); rmSync(file, { force: true }); } catch {} if (ending) clean(); });
+  // A launch whose supervisor has not said the server runs is ended through it: the keeper ends with its supervisor.
+  // A launch in flight keeps the lease: its keeper, ending with its supervisor, may not yet have ended the server.
+  const off = whenEnded(() => { const launching = spawned && !spawnedGroup; if (launching) spawned.kill('SIGKILL'); const ending = leave(); for (const { file, group } of ending ?? []) try { killGroup(group); rmSync(file, { force: true }); } catch {} if (ending && !launching) clean(); });
   const stop = async () => {
     const ending = leave();
     for (const { file, group, server } of ending ?? []) {
@@ -428,19 +490,21 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
     if (db) mkdirSync(dirname(db), { recursive: true });
     if (db && (!storage || fresh)) for (const end of ['', '-wal', '-shm', '-journal']) rmSync(`${db}${end}`, { force: true });
     const log = openSync(resolve(lease, 'log'), 'a');
-    const child = Bun.spawn(server.command ?? [process.execPath, server.entry, ...server.args], { cwd: dir, env: serverEnv(server, db), detached: true, stdin: 'ignore', stdout: 'ignore', stderr: log });
+    // A drive's server outlives the drive that started it while another drive uses it, so it has no owner.
+    const child = spawnServer(server, dir, serverEnv(server, db), log, false, lease);
     closeSync(log);
     spawned = child;
-    try { spawnedGroup = await launchedGroup(child); }
-    catch (e) {
+    const failed = async (e) => {
       spawned = null;
       if (locked) { rmSync(starting, { force: true }); locked = false; }
       await stop(); throw e;
-    }
-    writeFileSync(resolve(lease, `server-${child.pid}`), JSON.stringify({ directory: realpathSync(dir), origin: server.url, db }));
+    };
+    try { spawnedGroup = await launchedGroup(child); } catch (e) { await failed(e); }
+    if (!spawnedGroup) await failed(new Error(`agent: ${await untilAnswers(server, child, () => lastError(readIn(lease, 'log') ?? ''), null)}`));
+    writeFileSync(resolve(lease, `server-${spawnedGroup.pid}`), JSON.stringify({ directory: realpathSync(dir), origin: server.url, db, token: child.token }));
     const why = await untilAnswers(server, child, () => lastError(readIn(lease, 'log') ?? ''), spawnedGroup);
     if (why) { await stop(); throw new Error(`agent: ${why}`); }
-    if (server.fixture && !ownsServer(dir, server, child.pid, child)) {
+    if (server.fixture && !ownsServer(dir, server, spawnedGroup.pid, spawnedGroup)) {
       await stop();
       throw new Error(`agent: ${server.url} answered before this checkout's fixture owned its port; choose another port with --backend or PORT`);
     }

@@ -9,10 +9,10 @@ import QuartzCore
 /// A path built off main, carried in an SVG element's payload under "p",
 /// with the digest of the numbers it was built from: what the scene hashes
 /// a shape's spec by (`SvgScene.drew`) in their place.
-final class PreparedPath {
-    let path: CGPath
+package final class PreparedPath {
+    package let path: CGPath
     let digest: Int
-    init(_ source: Any) {
+    package init(_ source: Any) {
         path = SvgGeometry.path(source)
         var h = Hasher()
         CssAnimations.digest(source, into: &h)
@@ -26,7 +26,7 @@ private func num(_ v: Any?) -> Double { (v as? NSNumber)?.doubleValue ?? 0 }
 /// the batch's dictionary once, on the owner as the batch is decoded
 /// (`SvgPrepare`), and kept for the agent clock's re-seek: kept as the
 /// dictionary, each animated box held about 1 KB.
-struct CssAnimation {
+package struct CssAnimation {
     let id: String
     /// The key path's name: a box's (`opacity`, `transform.scale`, …) or a
     /// shape's (`fillColor`, `path`, `r`).
@@ -43,7 +43,7 @@ struct CssAnimation {
     let held: Double?
 
     /// An SVG element's spec carries its reading under "#" (`SvgPrepare.spec`).
-    init?(_ spec: [String: Any]) {
+    package init?(_ spec: [String: Any]) {
         if let read = spec["#"] as? CssAnimation { self = read; return }
         guard let id = spec["id"] as? String else { return nil }
         self.id = id
@@ -58,7 +58,7 @@ struct CssAnimation {
     }
 
     /// A list as an op or an element carries it: read, or dictionaries.
-    static func list(_ value: Any?) -> [CssAnimation] {
+    package static func list(_ value: Any?) -> [CssAnimation] {
         value as? [CssAnimation] ?? (value as? [[String: Any]] ?? []).compactMap(CssAnimation.init)
     }
 }
@@ -133,8 +133,8 @@ extension Batch {
             case .create, .style:
                 ops[i].flat = FlatPaint(ops[i].style)
             case .svg:
-                if var scene = ops[i].payload["scene"] as? [String: Any] {
-                    SvgPrepare.scene(&scene)
+                if let prepare = SvgLink.prepare, var scene = ops[i].payload["scene"] as? [String: Any] {
+                    prepare(&scene)
                     ops[i].payload["scene"] = scene
                 }
             case .animations:
@@ -144,33 +144,5 @@ extension Batch {
             default: break
             }
         }
-    }
-}
-
-enum SvgPrepare {
-    /// A scene's element tree, in place: each shape's path, each animation.
-    static func scene(_ scene: inout [String: Any]) {
-        if let elements = scene["els"] as? [Any] { scene["els"] = elements.map(element) }
-    }
-
-    static func element(_ value: Any) -> Any {
-        guard var e = value as? [String: Any] else { return value }
-        if let p = e["p"], !(p is PreparedPath) { e["p"] = PreparedPath(p) }
-        if let children = e["c"] as? [Any] { e["c"] = children.map(element) }
-        if let list = e["a"] as? [[String: Any]] { e["a"] = list.map(spec) }
-        if var tf = e["tf"] as? [String: Any], let list = tf["a"] as? [[String: Any]] {
-            tf["a"] = list.map(spec)
-            e["tf"] = tf
-        }
-        return e
-    }
-
-    /// One CSS animation spec with its reading under "#": the scene's
-    /// readers (`SvgFilterLive`) look at the element's dictionaries.
-    static func spec(_ spec: [String: Any]) -> [String: Any] {
-        guard spec["#"] == nil, let read = CssAnimation(spec) else { return spec }
-        var out = spec
-        out["#"] = read
-        return out
     }
 }

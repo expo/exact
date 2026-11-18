@@ -2,7 +2,7 @@
 //! The MIT notice is ../../LICENSE-occlusion-viewer. LLP 1133.039 D11–D13.
 use crate::accessor::{integer, optional, required, slice, vector, Reader, Result};
 use crate::math::{
-    cross, mat_mul, norm, normal_matrix, sub, transform_normal, transform_point, trs, M4,
+    cross, dot, mat_mul, norm, normal_matrix, sub, transform_normal, transform_point, trs, M4,
 };
 use crate::scene::{AlphaMode, Bounds, Material, Node, Primitive, Scene, Vertex};
 use serde_json::Value as J;
@@ -438,6 +438,13 @@ fn append(
         vertex.p = transform_point(&node.world, vertex.p);
         if vertex.p.iter().any(|v| !v.is_finite()) {
             return Err(format!("accessor {ai}: transformed POSITION is not finite"));
+        }
+    }
+    let column = |c: usize| std::array::from_fn(|r| node.world[c][r]);
+    // Positions are in world space; preserve glTF fronts after a reflection.
+    if dot(column(0), cross(column(1), column(2))) < 0. {
+        for triangle in scene.indices[start as usize..].chunks_exact_mut(3) {
+            triangle.swap(1, 2);
         }
     }
     for &index in &scene.indices[start as usize..] {

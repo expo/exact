@@ -229,7 +229,7 @@ impl<D: DataSource> Runner<D> {
     /// A request held for the agent: a device's, or a module's (LLP 1133.002 §6).
     fn held_for_agent(&self, p: &PendingReq) -> bool {
         self.device_holds.iter().any(|h| h.ticket == p.ticket)
-            || self.extensions.holds_token(p.continuation)
+            || self.holds_token(p.continuation)
             || self.presence_holds(p.ticket)
     }
 

@@ -50,7 +50,7 @@ extension NodeView {
             // A virtualized list's rows past its mounted ones, as on iOS.
             let distance = areas.map { abs(min($0.to, max($0.from, wanted)) - wanted) }.min() ?? .infinity
             let toBox = vertical ? box.y : box.x
-            if distance > 0, let entry = presenter?.collections.entries[id], entry.snapshot.horizontal != vertical,
+            if distance > 0, let snapshot = presenter?.collections.snapshot(id), snapshot.horizontal != vertical,
                let position = presenter?.session?.runtime.collectionSnap(id, proposed: Double(wanted + toBox), port: Double(port),
                     minimum: Double(range.lowerBound + toBox), maximum: Double(range.upperBound + toBox), distance: Double(distance)) {
                 areas.append(ScrollSnap.Area(from: CGFloat(position) - toBox, to: CGFloat(position) - toBox, stop: false))
@@ -65,7 +65,7 @@ extension NodeView {
             }
             guard var rest = pick() else { continue }
             // An unmounted `always` row between the release and the rest holds it too.
-            if !keeping, abs(rest - release) > 0.5, presenter?.collections.entries[id]?.snapshot.horizontal == !vertical,
+            if !keeping, abs(rest - release) > 0.5, presenter?.collections.snapshot(id)?.horizontal == !vertical,
                let stop = presenter?.session?.runtime.collectionSnapStop(id, release: Double(release + toBox), rest: Double(rest + toBox), port: Double(port),
                                                                          minimum: Double(range.lowerBound + toBox), maximum: Double(range.upperBound + toBox)) {
                 areas.append(ScrollSnap.Area(from: CGFloat(stop) - toBox, to: CGFloat(stop) - toBox, stop: true))

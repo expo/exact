@@ -87,13 +87,6 @@ impl<D: DataSource> Runner<D> {
         value
     }
 
-    /// Whether the target places a `-exact-menu="status"` button outside
-    /// the window: macOS, in the menu bar, and Windows, in the notification
-    /// area (LLP 1133.025 D4).
-    pub fn places_status_items(&self) -> bool {
-        matches!(self.host_target(), "macos" | "windows")
-    }
-
     /// Whether `row` is answered by this file's forms, here.
     pub(in crate::runner) fn desktop_form(&self, row: &ModulesRow) -> bool {
         let sub = self.substitute(row);
@@ -145,7 +138,10 @@ impl<D: DataSource> Runner<D> {
 
     /// `--login`: this launch is the login item's (LLP 1133.025 §11), and
     /// `hidden` what its registration asked.
-    pub fn launch_login(&mut self, hidden: bool) -> Result<String, String> {
+    pub(in crate::runner::modules) fn launch_login_linked(
+        &mut self,
+        hidden: bool,
+    ) -> Result<String, String> {
         self.extensions.declared.login_launch = Some(hidden);
         self.log(format!(
             "launch --login{}",

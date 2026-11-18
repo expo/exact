@@ -114,7 +114,7 @@ impl<D: DataSource> Runner<D> {
     /// Read wait observations; caps remain visible through `timer_due_ms`.
     pub fn waits(&self) -> Waits {
         let mut result = Waits::default();
-        if !self.clock_live() || self.poisoned || self.wake_stops_timers() {
+        if !self.clock_live() || self.poisoned || self.invocation_stops_timers() {
             return result;
         }
         for (i, t) in self.timers.iter().enumerate() {
@@ -159,7 +159,7 @@ impl<D: DataSource> Runner<D> {
                 continuing: false,
             };
         }
-        let resumed = self.clock.admission == Some(cutoff) && !self.wake_stops_timers();
+        let resumed = self.clock.admission == Some(cutoff) && !self.invocation_stops_timers();
         if !resumed {
             let advanced = self.advance_timed(cutoff);
             if advanced.error.is_some() || !advanced.receipts.is_empty() {
@@ -175,7 +175,7 @@ impl<D: DataSource> Runner<D> {
             }
         }
         self.clock.admission = Some(cutoff);
-        let stopped = self.wake_stops_timers();
+        let stopped = self.invocation_stops_timers();
         let candidate = self
             .timers
             .iter()

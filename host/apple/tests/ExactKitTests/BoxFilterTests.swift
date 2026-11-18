@@ -7,7 +7,10 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactSvg
+@testable import ExactImages
 @testable import ExactSurfaces
+@testable import ExactEffects
 
 final class BoxFilterTests: XCTestCase {
     private var p: Presenter!
@@ -126,7 +129,7 @@ final class BoxFilterTests: XCTestCase {
     func testALoneDropShadowIsTheLayersShadow() throws {
         let box = node(1)
         box.applyStyle(["filter": dropShadow(dx: 0, dy: 2, sigma: 2, rgba: [0, 0, 0, 0.6])])
-        p.boxFilters.render()
+        p.boxFilters!.render()
         XCTAssertNotNil(box.boxFilter)
         XCTAssertNil(box.boxFilter?.picture.superlayer, "no picture stands in for the box")
         XCTAssertNil(box.layer.mask, "the box itself shows")
@@ -150,17 +153,17 @@ final class BoxFilterTests: XCTestCase {
 
         let shadow = dropShadow(dx: 0, dy: 2, sigma: 2, rgba: [0, 0, 0, 0.6])
         box.applyStyle(["filter": shadow, "overflow_x": "hidden", "overflow_y": "hidden"])
-        p.boxFilters.render()
+        p.boxFilters!.render()
         XCTAssertTrue(box.layer.masksToBounds)
         XCTAssertNotNil(box.boxFilter?.picture.superlayer, "a box that clips is pictured, its shadow past its bounds")
         XCTAssertEqual(box.layer.shadowOpacity, 0)
 
         box.applyStyle(["filter": shadow])
-        p.boxFilters.render()
+        p.boxFilters!.render()
         XCTAssertNil(box.boxFilter?.picture.superlayer)
         XCTAssertEqual(box.layer.shadowOpacity, 0.6, accuracy: 0.001)
         box.applyStyle([:])
-        XCTAssertTrue(p.boxFilters.isEmpty)
+        XCTAssertTrue(p.boxFilters!.isEmpty)
         XCTAssertEqual(box.layer.shadowOpacity, 0, "an unfiltered box casts nothing")
         XCTAssertNil(box.layer.mask)
     }
@@ -264,29 +267,29 @@ final class BoxFilterTests: XCTestCase {
         settle()
         let first = try picture(box)
         p.touched(3)
-        p.boxFilters.render()
-        XCTAssertFalse(p.boxFilters.drawing, "a batch that touched nothing in it draws nothing")
+        p.boxFilters!.render()
+        XCTAssertFalse(p.boxFilters!.drawing, "a batch that touched nothing in it draws nothing")
         p.touched(2)
-        p.boxFilters.render()
-        XCTAssertFalse(p.boxFilters.drawing, "nor does one that touched it and changed nothing it draws")
+        p.boxFilters!.render()
+        XCTAssertFalse(p.boxFilters!.drawing, "nor does one that touched it and changed nothing it draws")
         box.frame.origin = CGPoint(x: 10, y: 20)
-        p.boxFilters.render()
-        XCTAssertFalse(p.boxFilters.drawing)
+        p.boxFilters!.render()
+        XCTAssertFalse(p.boxFilters!.drawing)
         XCTAssertTrue(try picture(box) === first)
         let moved: CALayer? = box.layer
         XCTAssertEqual(box.boxFilter?.picture.position, moved?.position, "a box that moved is followed")
         let inner: CALayer? = p.views[2]?.layer
         inner?.backgroundColor = CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
         p.touched(2)
-        p.boxFilters.render()
-        XCTAssertTrue(p.boxFilters.drawing, "a change inside it draws it again, off the main thread")
+        p.boxFilters!.render()
+        XCTAssertTrue(p.boxFilters!.drawing, "a change inside it draws it again, off the main thread")
         XCTAssertTrue(try picture(box) === first, "the old picture shows until the new one lands")
         settle()
         let second = try picture(box)
         XCTAssertFalse(second === first)
         XCTAssertEqual(try pixel(second, x: 20, y: 20), [255,0,0,255])
         box.frame.size = CGSize(width: 50, height: 40)
-        p.boxFilters.render()
+        p.boxFilters!.render()
         settle()
         XCTAssertFalse(try picture(box) === second, "so does a new size")
     }
@@ -315,10 +318,10 @@ final class BoxFilterTests: XCTestCase {
         var style = style
         style["filter"] = ["p": try program(red: red)]
         show([["op": "style", "id": id, "style": style]])
-        return try XCTUnwrap(p.views[id]?.boxFilter?.lastDrawing)
+        return try XCTUnwrap((p.views[id]?.boxFilter as? BoxFilter)?.lastDrawing)
     }
 
-    private func drawing(_ id: UInt32) throws -> CGImage { try XCTUnwrap(p.views[id]?.boxFilter?.lastDrawing) }
+    private func drawing(_ id: UInt32) throws -> CGImage { try XCTUnwrap((p.views[id]?.boxFilter as? BoxFilter)?.lastDrawing) }
 
     private func bytes(_ image: CGImage) throws -> Data { try XCTUnwrap(image.dataProvider?.data as Data?) }
 
@@ -593,7 +596,7 @@ final class BoxFilterTests: XCTestCase {
         #if os(macOS)
         window.displayIfNeeded()
         #endif
-        p.boxFilters.render()
+        p.boxFilters!.render()
         let before = try picture(box)
         let ctx = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
@@ -621,8 +624,8 @@ final class BoxFilterTests: XCTestCase {
     /// in place, any later one off the main thread.
     private func settle() {
         let end = Date(timeIntervalSinceNow: 20)
-        repeat { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) } while p.boxFilters.drawing && Date() < end
-        XCTAssertFalse(p.boxFilters.drawing)
+        repeat { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01)) } while p.boxFilters!.drawing && Date() < end
+        XCTAssertFalse(p.boxFilters!.drawing)
     }
 
     func testALateTextRasterUpdatesItsFilteredAncestorWithoutABatch() throws {

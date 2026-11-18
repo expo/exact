@@ -357,14 +357,15 @@ pub(crate) struct RegionGeometry {
 
 /// What a few boxes of a pass have beside their frames, by node, so a region
 /// without them allocates nothing: a native field's editor box, a native
-/// button's containing width, and a padding or border other than none, each
-/// as this pass resolved it. They belong to the immutable pass, not every
-/// retained node.
+/// button's containing width, a padding or border other than none, and the
+/// margins of a box that ignores the band (LLP 1123 D4), each as this pass
+/// resolved it. They belong to the immutable pass, not every retained node.
 #[derive(Clone, Default)]
 pub(crate) struct BoxFacts {
     pub(crate) field_content: crate::id::IdMap<NodeKey, Frame>,
     pub(crate) button_bases: crate::id::IdMap<NodeKey, Option<f32>>,
     pub(crate) insets: crate::id::IdMap<NodeKey, crate::id::BoxInset>,
+    pub(crate) margins: crate::id::IdMap<NodeKey, [f32; 4]>,
 }
 impl RegionGeometry {
     fn validate(&self, origin: Frame) -> Result<(), LayoutError> {

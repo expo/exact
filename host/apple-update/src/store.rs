@@ -30,7 +30,7 @@
 //! `unsafe`; the one pointer that leaves is the line a finished check hands
 //! the callback, alive for that call only.
 
-use exact_runner::agent::field_str;
+use exact_runner::json::field_str;
 use exact_runner::Delivery;
 use exact_update::{Activate, Client, PreparedSelection, Status};
 use std::ffi::c_void;
@@ -78,7 +78,7 @@ fn pin(state: &mut Generations, selection: PreparedSelection) -> Pinned {
 
 fn quote(value: &str) -> String {
     let mut out = String::new();
-    exact_runner::agent::quote(value, &mut out);
+    exact_runner::json::quote(value, &mut out);
     out
 }
 

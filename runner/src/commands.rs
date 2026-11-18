@@ -5,7 +5,7 @@
 //! three pickers (D2) and `requestPermission` (LLP 1069.010.000 D7); and
 //! `openURL`'s answer, the element that hears whether the URL opened.
 
-use crate::agent::{error, field_str};
+use crate::json::{error, field_str};
 use crate::{DataSource, Runner};
 
 /// `{"command":"share"|"saveFile",…}`: the named command's ruling, as its

@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import UIKit
 
 /// Under platform timing (LLP 1035.003 D5) a smooth correction is an
@@ -39,7 +40,7 @@ final class SettleScrollAnimationIOSTests: XCTestCase {
         // The list follows its end smoothly: settle waits while it runs.
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 1700, "smooth": true])]))
         if ExactEnv.agentFreezes { throw XCTSkip("frozen agent timing sets a correction at once") }
-        XCTAssertTrue(p.collections.animating.contains(1), "the host animates the correction")
+        XCTAssertTrue(p.listHost.animating.contains(1), "the host animates the correction")
         XCTAssertTrue(agent.nativeInFlight(), "a running end-follow keeps settle waiting")
         let deadline = Date().addingTimeInterval(10)
         while agent.nativeInFlight(), Date() < deadline {
@@ -48,11 +49,11 @@ final class SettleScrollAnimationIOSTests: XCTestCase {
         XCTAssertFalse(agent.nativeInFlight(), "landed: settle may read the fixed point")
         XCTAssertEqual(scroll.contentOffset.y, 1700, accuracy: 0.5, "the correction reached its target")
         // A wheel before the next one's first tick interrupts it, as a drag does.
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([collections(revision: 3, correction: ["scrollSequence": seq, "offset": 1000, "smooth": true])]))
         XCTAssertTrue(agent.nativeInFlight())
         Agent.scroll(from: scroll, dx: 0, dy: -100)
-        XCTAssertFalse(p.collections.animating.contains(1))
+        XCTAssertFalse(p.listHost.animating.contains(1))
         XCTAssertEqual(scroll.contentOffset.y, 1600, accuracy: 0.5, "the wheel interrupts at the visible offset")
         XCTAssertFalse(agent.nativeInFlight(), "an interrupted correction does not keep settle waiting")
     }

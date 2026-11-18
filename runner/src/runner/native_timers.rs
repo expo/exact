@@ -42,7 +42,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Current native timer instances. Repeats retain their arming generation.
     pub fn native_timers(&self) -> Vec<NativeTimer> {
-        if self.poisoned || self.wake_stops_timers() {
+        if self.poisoned || self.invocation_stops_timers() {
             return Vec::new();
         }
         self.timers
@@ -141,7 +141,7 @@ impl<D: DataSource> Runner<D> {
         };
         let i = index as usize;
         if self.poisoned
-            || self.wake_stops_timers()
+            || self.invocation_stops_timers()
             || self
                 .timers
                 .get(i)

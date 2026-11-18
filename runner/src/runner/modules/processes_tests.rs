@@ -1,9 +1,8 @@
 //! The runner's refusals of process requests (LLP 1133.007 D12, D13): a
 //! model's tool handler starts no program, and a kind the package does not
 //! declare reaches no host, from any origin.
-use super::super::invoke::To;
 use super::*;
-use crate::{Answer, DataError, FailureKind, Outcome, Store};
+use crate::{Answer, DataError, FailureKind, Outcome, Request, Store};
 use exact_kernel::{Kernel, NodeType};
 use exact_plan::{builder::PlanBuilder, Plan, TypeKind};
 use std::sync::{Arc, Mutex};
@@ -53,7 +52,9 @@ fn runner() -> Runner<Source> {
     let r = b.resource("r", "r", &[], string, Some(&Value::str("")));
     b.set_resource_reader(r, true);
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
-    let plan: Plan = b.finish().unwrap();
+    let mut plan: Plan = b.finish().unwrap();
+    // A package's handlers are the module seam's: the plan names one.
+    plan.add_view("probe", ("probe", "@fixture/probe"), false, &[], "{}");
     Runner::boot(
         plan,
         Source,

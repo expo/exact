@@ -7,6 +7,7 @@ private typealias PropView = UIView
 #endif
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 final class NativePropsTests: XCTestCase {
     func testLargeAggregatesReachCreationAndUpdatesOnEitherSideOfThePaintGate() {

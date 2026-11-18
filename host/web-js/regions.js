@@ -5,13 +5,16 @@
 // escapes included, so the text is read as CSS Syntax §4 tokenizes it, after
 // its preprocessing (§3.3): comments, strings, numbers, hashes, at-keywords,
 // CDO and CDC and `url()` contents are passed over, and an identifier is compared with its
-// escapes decoded. Only `env()`'s first argument is renamed; everything else is
-// kept as written.
+// escapes decoded. `regions` renames only `env()`'s first argument; `cssNames`
+// also resolves named length identifiers from the literal CSS projection.
 const REGION = /^-exact-(?:safe-area-corners|layout-margins(?:-corners)?|readable-content(?:-corners)?)-inset-(top|right|bottom|left)$/;
 
-export function regions(text) {
-  // Return a value without a region's prefix spelled out or an escape as it is: almost every value
-  if (!text.includes("-exact-") && !text.includes("\\")) return text;
+export const regions = text => cssNames(text);
+
+/** Resolve named lengths and layout regions at CSS identifier boundaries. Strings, URLs and comments keep their text. */
+export function cssNames(text, names) {
+  // A named length needs a hyphen or an escape; most numeric values pass through.
+  if (!text.includes("-") && !text.includes("\\")) return text;
   const s = text.includes("\r") || text.includes("\f") ? text.replace(/\r\n?|\f/g, "\n") : text;
   let out = "", copied = 0, i = 0, argument = false; // whether the next token is `env()`'s first
   while (i < s.length) {
@@ -43,10 +46,12 @@ export function regions(text) {
         argument = name === "env";
         if (name === "url") i = urlEnd(s, i);
       } else {
-        const region = argument && REGION.exec(decode(s.slice(start, i)));
+        const name = decode(s.slice(start, i)), region = argument && REGION.exec(name);
+        const value = region ? `safe-area-inset-${region[1]}`
+          : names && Object.hasOwn(names, name.toLowerCase()) ? names[name.toLowerCase()] : null;
         argument = false;
-        if (region) {
-          out += s.slice(copied, start) + `safe-area-inset-${region[1]}`;
+        if (value != null) {
+          out += s.slice(copied, start) + value;
           copied = i;
         }
       }

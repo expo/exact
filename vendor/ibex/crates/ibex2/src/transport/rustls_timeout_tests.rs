@@ -71,7 +71,7 @@ fn assert_deadlines(context: &Context, exempt: bool) {
 fn transport_with_context() -> (RustlsHttpTransport, Context) {
     let mut transport = RustlsHttpTransport::new();
     transport.proxy = None;
-    let lease = transport.lease(&AbortSignal::default(), false, true);
+    let lease = transport.lease(&AbortSignal::default(), false, true, "");
     let context = lease.slot.as_ref().unwrap().context.clone();
     drop(lease);
     (transport, context)
@@ -230,7 +230,7 @@ fn bulk_transfers_bound_each_wait_and_restore_ordinary_timeouts_on_reuse() {
             assert_eq!(observed.inner.timeout.unwrap().after, expected);
         }
         drop(response);
-        let _lease = transport.lease(&AbortSignal::default(), false, true);
+        let _lease = transport.lease(&AbortSignal::default(), false, true, "");
         assert!(context.lock().unwrap().idle_timeout.is_none());
         assert_deadlines(&context, false);
         peer.join().unwrap();

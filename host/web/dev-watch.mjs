@@ -2,6 +2,19 @@ import { lstatSync, readdirSync, readlinkSync, statSync, watch } from 'node:fs';
 import { resolve } from 'node:path';
 import { within } from '../../scripts/paths.mjs';
 
+import { readBuilds } from '../../scripts/app.mjs';
+
+/** The receipts a dev loop admits native clients by. A resident loop (host/web-js
+ * `--serve-as`) bakes into its own EXACT_BAKE_OUTPUT, while `exact mac` / `exact ios`
+ * write to the app's usual folder, so its native receipts come from both, its own first. */
+export function readDevBuilds(app, env = process.env) {
+  const own = readBuilds(app, env);
+  if (!env.EXACT_BAKE_OUTPUT) return own;
+  const { EXACT_BAKE_OUTPUT, ...usual } = env;
+  const key = (r) => `${r.compat.inputs.platform}/${r.compat.target}`;
+  const seen = new Set(own.map(key));
+  return [...own, ...readBuilds(app, usual).filter((r) => r.compat.inputs.platform !== 'web' && !seen.has(key(r)))];
+}
 // Resource inventories include empty directories, hidden entries and links;
 // compiler directory filters would omit some of these binary inputs.
 export function nativeResourceInputs(build) {

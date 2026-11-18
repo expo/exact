@@ -29,17 +29,30 @@ let linkNames = ProcessInfo.processInfo.environment["EXACT_APPLE_LINK"] ?? "all"
 func links(_ capability: String) -> Bool {
     linkNames == "all" || linkNames.split(separator: ",").contains { $0 == Substring(capability) }
 }
-let capabilities: [(name: String, target: String, define: String)] = [
-    ("grouped_lists", "ExactGroupedLists", "EXACT_LINK_GROUPED_LISTS"),
-    ("markdown", "ExactMarkdown", "EXACT_LINK_MARKDOWN"),
-    ("surfaces", "ExactSurfaces", "EXACT_LINK_SURFACES"),
-    ("drag", "ExactDrag", "EXACT_LINK_DRAG"),
-    ("media_picker", "ExactMediaPicker", "EXACT_LINK_MEDIA_PICKER"),
-    ("auth_session", "ExactAuthSession", "EXACT_LINK_AUTH_SESSION"),
-    ("numerals", "ExactNumerals", "EXACT_LINK_NUMERALS"),
-    ("tips", "ExactTips", "EXACT_LINK_TIPS"),
-    ("presence", "ExactPresence", "EXACT_LINK_PRESENCE"),
-].filter { links($0.name) }
+// One row per capability, in the roster's order; every target and product
+// is declared whatever the app links.
+let allCapabilities: [(name: String, target: String)] = [
+    ("grouped_lists", "ExactGroupedLists"),
+    ("markdown", "ExactMarkdown"),
+    ("collections", "ExactCollections"),
+    ("surfaces", "ExactSurfaces"),
+    ("drag", "ExactDrag"),
+    ("media_picker", "ExactMediaPicker"),
+    ("auth_session", "ExactAuthSession"),
+    ("numerals", "ExactNumerals"),
+    ("tips", "ExactTips"),
+    ("presence", "ExactPresence"),
+    ("effects", "ExactEffects"),
+    ("svg", "ExactSvg"),
+    ("images", "ExactImages"),
+    ("native_views", "ExactNativeViews"),
+]
+// What a family imports beyond ExactKit and CExact: another family's product,
+// which the roster links with it, or ExactCore's package API. Surfaces' Canvas
+// 2D images fetch and decode through the images family's static API, which
+// needs no install.
+let capabilityNeeds: [String: [Target.Dependency]] = ["ExactCollections": ["ExactCore"], "ExactSvg": ["ExactCore", "ExactEffects"], "ExactSurfaces": ["ExactImages"]]
+let capabilities = allCapabilities.filter { links($0.name) }
 
 // `swift test` builds every target a package declares, and the two UIKit
 // executables cannot build for macOS. EXACT_TESTS=1 narrows the package to
@@ -56,8 +69,9 @@ let intentFileSettings: [SwiftSetting] = intentFiles ? [.define("EXACT_INTENT_FI
 // Core Animation's filter keys (`backdropRects`).
 let devTools: [SwiftSetting] = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == "production" ? [] : [.define("EXACT_INSPECT"), .define("EXACT_AGENT")]
 // A production trust bake cannot enter agent mode (LLP 1069.007 D2), so its
-// ExactKit target does not compile the carrier or inspection implementation.
-// Development keeps the same sources and API it has always had.
+// ExactKit target does not compile the carrier or inspection implementation,
+// nor hatch diagnostics (LLP 1047.001 D11). Development keeps the same
+// sources and API it has always had.
 let agentSources = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == "production" ? [
     "ActivityAgent.swift",
     "Agent.swift",
@@ -70,6 +84,7 @@ let agentSources = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == 
     "AgentScrollProbe.swift",
     "AgentSensors.swift",
     "AgentSocketStartup.swift",
+    "HatchDiagnostics.swift",
     "IOS/AgentAimIOS.swift",
     "IOS/AgentCheckIOS.swift",
     "IOS/AgentFlatIOS.swift",
@@ -118,21 +133,15 @@ let core: [Target] = [
     .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", exclude: agentSources + (intentFiles ? [] : ["IntentFiles.swift"]), swiftSettings: devTools + gallerySettings + intentFileSettings),
     .target(name: "ExactWatchSync", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactWatchSync"),
     .target(name: "ExactUpdates", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactUpdates"),
-    .target(name: "ExactGroupedLists", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactGroupedLists", swiftSettings: devTools),
-    .target(name: "ExactMarkdown", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactMarkdown", swiftSettings: devTools),
-    .target(name: "ExactSurfaces", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactSurfaces", swiftSettings: devTools),
-    .target(name: "ExactDrag", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactDrag", swiftSettings: devTools),
-    .target(name: "ExactMediaPicker", dependencies: ["ExactKit"], path: "Sources/ExactMediaPicker", swiftSettings: devTools),
-    .target(name: "ExactAuthSession", dependencies: ["ExactKit"], path: "Sources/ExactAuthSession", swiftSettings: devTools),
-    .target(name: "ExactNumerals", dependencies: ["ExactKit"], path: "Sources/ExactNumerals", swiftSettings: devTools),
-    .target(name: "ExactTips", dependencies: ["ExactKit"], path: "Sources/ExactTips", swiftSettings: devTools),
-    .target(name: "ExactPresence", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactPresence"),
+] + allCapabilities.map {
+    .target(name: $0.target, dependencies: ["ExactKit", "CExact"] + (capabilityNeeds[$0.target] ?? []), path: "Sources/\($0.target)", swiftSettings: devTools)
+} + [
     .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts,
             swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
     .target(name: "ExactComposition", dependencies: [.target(name: "ExactKit")] + (composition == "updating" ? [.target(name: "ExactUpdates")] : [])
                 + capabilities.map { .target(name: $0.target) } + watchSyncDependency,
-            path: composition == "updating" ? "Sources/ExactUpdating" : "Sources/ExactEmbedded",
-            swiftSettings: capabilities.map { .define($0.define) } + watchSyncSettings),
+            path: "Sources/ExactComposition",
+            swiftSettings: capabilities.map { .define("EXACT_LINK_" + $0.name.uppercased()) } + (composition == "updating" ? [.define("EXACT_APP_UPDATING")] : []) + watchSyncSettings),
 ]
 
 let executables: [Target] = [
@@ -166,7 +175,11 @@ let tests: [Target] = [
     .target(name: "ExactShare", path: "share", exclude: ["SharePage.js"], swiftSettings: [.define("EXACT_SHARE_PAGE")]),
     // The inbox as an app that maps no `url` compiles it, without `EXACT_SHARE_PAGE`.
     .target(name: "ExactSharePlain", path: "tests/ExactSharePlain"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactPresence", "ExactSoundRender", "ExactNowPlaying", "ExactShare", "ExactSharePlain"], path: "tests/ExactKitTests",
+    // The test bundle installs the composition as it loads, before any test
+    // (`ExactTestsInstall`, `TestsInstall.swift`).
+    .target(name: "ExactTestsInstall", path: "tests/ExactTestsInstall"),
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactComposition", "ExactTestsInstall"]
+                + allCapabilities.map { .target(name: $0.target) } + ["ExactSoundRender", "ExactNowPlaying", "ExactShare", "ExactSharePlain"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]
 
@@ -188,15 +201,7 @@ let package = Package(
     products: [.library(name: "ExactCore", type: widgetCore ? .dynamic : nil, targets: ["ExactCore"]), .library(name: "ExactSnapshot", type: widgetCore ? .static : nil, targets: ["ExactSnapshot"])] + (testing ? [.library(name: "ExactKit", targets: ["ExactKit"])] : [
         .library(name: "ExactKit", targets: ["ExactKit"]),
         .library(name: "ExactUpdates", targets: ["ExactUpdates"]),
-        .library(name: "ExactGroupedLists", targets: ["ExactGroupedLists"]),
-        .library(name: "ExactMarkdown", targets: ["ExactMarkdown"]),
-        .library(name: "ExactSurfaces", targets: ["ExactSurfaces"]),
-        .library(name: "ExactDrag", targets: ["ExactDrag"]),
-        .library(name: "ExactMediaPicker", targets: ["ExactMediaPicker"]),
-        .library(name: "ExactAuthSession", targets: ["ExactAuthSession"]),
-        .library(name: "ExactNumerals", targets: ["ExactNumerals"]),
-        .library(name: "ExactTips", targets: ["ExactTips"]),
-        .library(name: "ExactPresence", targets: ["ExactPresence"]),
+    ] + allCapabilities.map { .library(name: $0.target, targets: [$0.target]) } + [
         .executable(name: "ExactWatch", targets: ["ExactWatch"]),
         .executable(name: "ExactMac", targets: ["ExactMac"]),
         .executable(name: "ExactIOS", targets: ["ExactIOS"]),

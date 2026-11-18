@@ -1042,7 +1042,7 @@ fn data_matches(
         }
         if let (Some(id), Some(dataset)) = (props.str(PropId::Id), props.str(PropId::Dataset)) {
             if !id.is_empty()
-                && crate::agent::field_str(dataset, word)
+                && crate::json::field_str(dataset, word)
                     .is_some_and(|words| words.split_ascii_whitespace().any(|v| v == value))
                 && props.bool(PropId::Inert) != Some(true)
                 && inherited_hit_state(kernel, slot).is_some()

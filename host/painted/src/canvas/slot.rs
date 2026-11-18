@@ -373,3 +373,25 @@ mod tests {
         }
     }
 }
+
+impl Recorder {
+    /// Kept row `id` is drawn this frame, covering `bounds`.
+    pub(super) fn row_shown(&mut self, id: u32, bounds: Rect4) {
+        // Just recorded and in view: the reader makes it before this frame.
+        if let Some((_, at)) = self.recorded.take().filter(|(r, _)| *r == id) {
+            if !self.culled(Some(bounds)) {
+                self.ops[at + 2] |= 1 << 31;
+            }
+        }
+        // Its pictures are drawn too: the reader keeps them.
+        if let Some((_, images)) = self.kept.get(&id) {
+            for key in images {
+                if let Some(image) = self.images.get_mut(key) {
+                    image.2 = self.frames;
+                }
+            }
+        }
+        self.need(Some(bounds));
+        self.layers.row_drawn(id);
+    }
+}

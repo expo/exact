@@ -61,13 +61,13 @@ pub(crate) fn asset(name: &str) -> Option<&str> {
 pub(crate) fn push_json(source: Option<&str>, json: &mut String) {
     if let Some(svg) = source.and_then(asset) {
         json.push_str(",\"symbolAsset\":");
-        exact_runner::agent::quote(svg, json);
+        exact_runner::json::quote(svg, json);
         return;
     }
     let Some((d, view_box, even_odd)) = source.and_then(commands) else {
         return;
     };
-    let quote = exact_runner::agent::quote;
+    let quote = exact_runner::json::quote;
     json.push_str(",\"symbolPath\":");
     quote(&d, json);
     json.push_str(",\"symbolViewBox\":");

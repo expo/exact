@@ -599,7 +599,8 @@ pub fn readback(id: u32, width: f32, height: f32, scale: f32, now_ms: f64, out: 
     }
 }
 
-/// Current instance policy: bit 0 promises alpha one; bit 1 requests SDR.
+/// Current instance policy: bit 0 promises alpha one; bit 1 requests SDR;
+/// bit 2 discards the retained picture.
 /// Available before attachment, including for headless canvases.
 pub fn presentation_flags(id: u32) -> u32 {
     with(|m| m.presentation_flags(id)).unwrap_or(0)

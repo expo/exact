@@ -304,10 +304,13 @@ fn sdr_format(
 }
 
 impl crate::Module {
-    /// Instance policy before attachment: bit 0 promises alpha one; bit 1 requests SDR.
+    /// Instance policy: bit 0 promises alpha one; bit 1 requests SDR;
+    /// bit 2 discards any retained picture in favour of the canvas's fallback.
     pub fn presentation_flags(&self, id: u32) -> u32 {
         self.instances.get(&id).map_or(0, |i| {
-            u32::from(i.surface.opaque()) | (u32::from(!i.surface.high_dynamic_range()) << 1)
+            u32::from(i.surface.opaque())
+                | (u32::from(!i.surface.high_dynamic_range()) << 1)
+                | (u32::from(i.surface.is_empty()) << 2)
         })
     }
 }

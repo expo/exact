@@ -84,6 +84,10 @@ impl Live {
     }
 }
 
+/// Its runbook hands out Markdown Stress's parse, which runs on the host's
+/// worker (LLP 1047.001 D12).
+impl exact_runner::HostWork for Live {}
+
 impl DataSource for Live {
     fn app_id(&self) -> &str {
         "com.exact.live"

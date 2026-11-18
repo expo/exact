@@ -328,12 +328,12 @@ extension NodeView {
         tintPadBar()
         presenter?.controls.tintChanged(self)
         // An `svg`'s paints are resolved into its scene's layers.
-        if kind == "svg" { presenter?.svg.reappear(id, dark: drawsDark, clock: presenter?.session?.clock, tint: viewTint) }
+        if kind == "svg" { presenter?.svg?.reappear(id, dark: drawsDark, clock: presenter?.session?.clock, tint: viewTint) }
         guard style.values.contains(where: \.namesTint) || inlineText.contains(where: \.namesTint) else { return }
         paragraphOwner.invalidateText(); paragraphOwner.setNeedsDisplay()
         applyStyle(style)
         // The picture of a filtered box above it shows its colours
-        presenter?.boxFilters.changed(self)
+        presenter?.boxFilters?.changed(self)
         // The canvas, which shows the first root's background
         if superview === presenter?.root { presenter?.paintCanvas() }
     }
@@ -405,13 +405,13 @@ extension NodeView {
     }
 
     /// The colour of row `key` by `carriedTint`, in its own space
-    func carriedColor(_ key: String) -> UIColor? {
+    package func carriedColor(_ key: String) -> UIColor? {
         style[key].flatMap { $0.cgColor(dark: drawsDark, contrast: drawsHighContrast, elevated: drawsElevated, tint: $0.namesTint ? carriedTint : nil) }.map { UIColor(cgColor: $0) }
     }
 
     /// The node's `accent-color` by `carriedTint`, for a native button's configuration, which draws
     /// colours made from its value (`ButtonConfigurationIOS`)
-    var carriedAccent: UIColor? { carriedChannels("accent_color", dark: drawsDark).map { TextEngine.color($0) } }
+    package var carriedAccent: UIColor? { carriedChannels("accent_color", dark: drawsDark).map { TextEngine.color($0) } }
 
     /// The colour of row `key` for UIKit to draw, nil where it is unset: where it names the tint
     /// (`AccentColor`, `Highlight`), the tint as UIKit draws it (`SystemColor.tint`), which follows

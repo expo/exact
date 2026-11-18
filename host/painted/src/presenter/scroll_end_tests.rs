@@ -988,7 +988,7 @@ fn settle_includes_a_request_started_by_a_completions_final_command() {
             Err(DataError::UnknownSource(name.into()))
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(Request::continuation(1)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(1)))
         }
         fn dispatch(&mut self, _: u64, _: &Store) -> Dispatch {
             Dispatch::Run(Work::Later(Box::new(|reply| {

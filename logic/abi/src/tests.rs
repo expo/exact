@@ -1,5 +1,9 @@
 use super::*;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[test]
 fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
     struct Scoped;
@@ -187,7 +191,7 @@ impl DataSource for Fixture {
                 "https://example.com/",
                 &old,
             ))),
-            "continuation" => Ok(Answer::Later(Request::continuation(1))),
+            "continuation" => Ok(Answer::Later(Request::continuation::<TestWork>(1))),
             "storage" | "storage-empty-scope" | "storage-scoped" => {
                 let mut request = Request::storage(
                     br#"{"version":1,"op":"fs.readFile","args":{"path":"app:/data/note"}}"#

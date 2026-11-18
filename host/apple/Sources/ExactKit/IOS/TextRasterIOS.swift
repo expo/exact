@@ -647,7 +647,7 @@ extension NodeView {
         ink.applyTextRange(headroom: result.headroom, limit: style["dynamic_range_limit"]?.string)
         ink.applyTextCast(result.cast, headroom: result.castHeadroom, limit: style["dynamic_range_limit"]?.string, rolling: roll)
         textRasterLayer = ink
-        presenter?.boxFilters.changed(self)
+        presenter?.boxFilters?.changed(self)
         switch result.content {
         case .pixels(let pixels):
             TextRenderMetrics.shared.end(diagnostic, kind: .publishPixels, node: id, width: pixels.width, height: pixels.height,
@@ -691,7 +691,7 @@ extension NodeView {
         textMore.rasterInk = (.null, .null); textMore.rasterFrame = .zero; textMore.rasterScale = 1
         mountTextBox()
         CATransaction.commit()
-        presenter?.boxFilters.changed(self)
+        presenter?.boxFilters?.changed(self)
     }
 
     /// The paragraph's ink in the lines layer inside its text's box

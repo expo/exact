@@ -61,7 +61,13 @@ struct Written {
 struct Slot {
     agent: ureq::Agent,
     context: Context,
+    /// The origins its agent's last requests went to, newest first: where
+    /// it may hold a kept-alive connection (Exact patch 49).
+    origins: Vec<String>,
 }
+
+/// The origins a slot remembers.
+const SLOT_ORIGINS: usize = 8;
 struct Pool {
     plain_idle: Mutex<Vec<Slot>>,
     tls_idle: Mutex<Vec<Slot>>,
@@ -97,11 +103,27 @@ impl RustlsHttpTransport {
     pub fn roots(&self) -> Roots {
         tls_config().1
     }
-    /// An idle agent, or, when none is or `pooled` is false, a new one,
-    /// whose pool is empty.
-    fn lease(&self, signal: &AbortSignal, tls: bool, pooled: bool) -> Lease {
-        let idle = pooled.then(|| self.pool.idle(tls).lock().unwrap().pop());
-        let slot = idle.flatten().unwrap_or_else(|| {
+    /// An idle agent: of those that went to `origin`, the one that went
+    /// there most recently among its requests, the newest on a tie, so a
+    /// request finds a connection another request left open to it whichever
+    /// agent holds it (Exact patch 49); else the newest; or, when none is
+    /// idle or `pooled` is false, a new one, whose pool is empty.
+    fn lease(&self, signal: &AbortSignal, tls: bool, pooled: bool, origin: &str) -> Lease {
+        let idle = pooled
+            .then(|| {
+                let mut idle = self.pool.idle(tls).lock().unwrap();
+                let at = (idle.iter().enumerate())
+                    .filter_map(|(at, slot)| {
+                        let recent = slot.origins.iter().position(|o| o == origin)?;
+                        Some((recent, std::cmp::Reverse(at), at))
+                    })
+                    .min()
+                    .map(|(_, _, at)| at)
+                    .or(idle.len().checked_sub(1))?;
+                Some(idle.remove(at))
+            })
+            .flatten();
+        let slot = idle.unwrap_or_else(|| {
             let context = Arc::new(Mutex::new(Current::default()));
             let connector = ureq::unversioned::transport::ConnectProxyConnector::default()
                 .chain(CancellableConnector(context.clone()))
@@ -115,7 +137,11 @@ impl RustlsHttpTransport {
                 connector,
                 Resolver(context.clone()),
             );
-            Slot { agent, context }
+            Slot {
+                agent,
+                context,
+                origins: Vec::new(),
+            }
         });
         {
             let mut current = slot.context.lock().unwrap();
@@ -131,6 +157,7 @@ impl RustlsHttpTransport {
             slot: Some(slot),
             pool: self.pool.clone(),
             tls,
+            origin: String::new(),
         }
     }
 
@@ -197,6 +224,9 @@ struct Lease {
     slot: Option<Slot>,
     pool: Arc<Pool>,
     tls: bool,
+    /// Where a reply came from, once one has: the agent's next idle
+    /// preference (Exact patch 49).
+    origin: String,
 }
 impl Lease {
     /// Its request went out on a pooled connection, and none of the response arrived.
@@ -212,10 +242,16 @@ impl Lease {
 }
 impl Drop for Lease {
     fn drop(&mut self) {
-        let slot = self.slot.take().unwrap();
+        let mut slot = self.slot.take().unwrap();
         // Serialized with callbacks: a delayed callback from this lease cannot
         // shut down a connection after it has been handed to another request.
         slot.context.lock().unwrap().signal = None;
+        // An origin is remembered only when a reply came from it.
+        if !self.origin.is_empty() {
+            slot.origins.retain(|o| *o != self.origin);
+            slot.origins.insert(0, std::mem::take(&mut self.origin));
+            slot.origins.truncate(SLOT_ORIGINS);
+        }
         let mut idle = self.pool.idle(self.tls).lock().unwrap();
         if idle.len() < 8 {
             idle.push(slot);
@@ -818,7 +854,15 @@ impl Transport for RustlsHttpTransport {
                 told: 0,
             });
         };
-        let mut lease = self.lease(signal, tls, true);
+        // Where a kept-alive connection to the target would be: its scheme
+        // and authority, as ureq's pool keys it.
+        // Its scheme and authority, as ureq's pool keys a connection.
+        let origin = format!(
+            "{}://{}",
+            req.uri().scheme_str().unwrap_or(""),
+            req.uri().authority().map_or("", |a| a.as_str())
+        );
+        let mut lease = self.lease(signal, tls, true, &origin);
         watch(&lease);
         let mut reader = match file {
             Some(file) => Some(Counted {
@@ -846,7 +890,7 @@ impl Transport for RustlsHttpTransport {
             // The resend has what is left of the request's time, never a time of its own
             let left = limit.map(|limit| limit.saturating_sub(started.elapsed()));
             if left.is_none_or(|left| !left.is_zero()) {
-                lease = self.lease(signal, tls, false);
+                lease = self.lease(signal, tls, false, &origin);
                 // The body goes out again from its start, its bytes sent
                 // counted from zero (Exact patch 23), as Chrome resets its
                 // upload stream to resend.
@@ -863,6 +907,8 @@ impl Transport for RustlsHttpTransport {
         drop(reader);
         lease.slot.as_ref().unwrap().context.lock().unwrap().written = None;
         let response = result.map_err(failed)?;
+        // A reply came from the origin: the agent may hold its connection.
+        lease.origin = origin;
         let status = response.status();
         let mut headers = Headers::new();
         for (name, value) in response.headers() {
@@ -1278,7 +1324,7 @@ mod tests {
         };
         // Two agents, each idle on a kept connection: the first is held while the second is made
         assert_eq!(get("/one"), b"one");
-        let held = transport.lease(&AbortSignal::default(), false, true);
+        let held = transport.lease(&AbortSignal::default(), false, true, "");
         assert_eq!(get("/two"), b"two");
         drop(held);
         // The first agent's connection closes under the POST, unanswered
@@ -1645,6 +1691,48 @@ mod tests {
                 "{head}"
             );
         }
+    }
+
+    /// A request takes the idle agent whose connection is to its origin,
+    /// not the newest (Exact patch 49): after a request to `a`, one to `b`
+    /// and another to `a`, `a`'s peer has accepted one connection.
+    #[test]
+    fn a_request_takes_the_agent_that_holds_its_origins_connection() {
+        let peer = || {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let counted = accepted.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { return };
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    std::thread::spawn(move || {
+                        let (mut head, mut byte) = (Vec::new(), [0]);
+                        while stream.read_exact(&mut byte).is_ok() {
+                            head.push(byte[0]);
+                            if head.ends_with(b"\r\n\r\n") {
+                                head.clear();
+                                let reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+                                if stream.write_all(reply).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            (url, accepted)
+        };
+        let ((a, at_a), (b, _)) = (peer(), peer());
+        let transport = RustlsHttpTransport::new();
+        // Two agents idle, each holding a connection: one to `a`, the newer to `b`.
+        let held = transport.lease(&AbortSignal::default(), false, true, "");
+        assert_eq!(transport.send(&Request::get(&a)).unwrap().body, b"ok");
+        drop(held);
+        assert_eq!(transport.send(&Request::get(&b)).unwrap().body, b"ok");
+        assert_eq!(transport.send(&Request::get(&a)).unwrap().body, b"ok");
+        assert_eq!(at_a.load(Ordering::SeqCst), 1);
     }
 }
 

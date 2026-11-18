@@ -1,6 +1,6 @@
 //! Completing a module's answer: a field it left out, by its declaration
-//! (`fill`) or by its shape (`absent_is_none`); a permission's state written
-//! into a status at its path (`set_path`).
+//! (`fill`; by its shape, the core's `absent_is_none`); a permission's state
+//! written into a status at its path (`set_path`).
 
 use serde_json::{Map, Value as Json};
 
@@ -53,30 +53,5 @@ pub(super) fn set_path(value: &mut Json, path: &str, to: Json) {
         .try_fold(value, |at, part| at.get_mut(part));
     if let Some(object) = parent.and_then(Json::as_object_mut) {
         object.insert(last.into(), to);
-    }
-}
-
-/// A module's answer leaves out an option field it has nothing for (a
-/// platform's words where another platform answers, a declared default):
-/// absent is `none`, as an omitted word is (LLP 1133.002 D2).
-pub(super) fn absent_is_none(json: &mut Json, shape: &exact_js_value::Shape) {
-    use exact_js_value::Shape;
-    match (json, shape) {
-        (Json::Object(map), Shape::Record(fields)) => {
-            for (name, field) in fields {
-                match map.get_mut(name) {
-                    Some(value) => absent_is_none(value, field),
-                    None if matches!(field, Shape::Option(_)) => {
-                        map.insert(name.clone(), Json::Null);
-                    }
-                    None => {}
-                }
-            }
-        }
-        (Json::Array(items), Shape::List(item)) => {
-            items.iter_mut().for_each(|v| absent_is_none(v, item))
-        }
-        (value, Shape::Option(inner)) if !value.is_null() => absent_is_none(value, inner),
-        _ => {}
     }
 }

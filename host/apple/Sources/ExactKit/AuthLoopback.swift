@@ -96,7 +96,7 @@ extension ExactSession {
     /// The window that asked comes forward (LLP 1133.005 D10), best effort
     /// under macOS 14's cooperative activation.
     private func bringForward() {
-        guard let window = presenter.shareAnchor(nil).0?.window else { return }
+        guard let window = presenter.presentationAnchor(nil).0?.window else { return }
         if NSApp.isHidden { NSApp.unhide(nil) }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)

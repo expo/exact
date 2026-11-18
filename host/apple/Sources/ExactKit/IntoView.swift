@@ -162,7 +162,11 @@ final class ElementScrolls {
     /// The person took a scroller: a request it would move is dropped and
     /// stays dropped, so nothing scrolls it back once the gesture ends. A
     /// reveal running on it is over: UIKit stops the animation for the drag.
+    /// A swipe row open in it closes, as a table's does when it scrolls.
     func userScrolled(_ scroll: UIScrollView) {
+        #if os(iOS)
+        presenter.swipeActions.scrolling(scroll)
+        #endif
         FrameSampler.scrolled(scroll, in: presenter.session, person: true)
         presenter.personScrolls += 1 // a fragment's scroll not yet made stays unmade (Fragment.swift)
         reveals[ObjectIdentifier(scroll)] = nil

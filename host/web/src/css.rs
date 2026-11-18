@@ -570,7 +570,7 @@ fn css_text_in(
             (StyleId::Mode, _) => {}
             // @ref LLP 1123 D4 — no host chrome covers a page the browser
             // lays out: nothing is cleared, so there is nothing to turn off.
-            (StyleId::SafeArea | StyleId::SafeAreaIgnore, _) => {}
+            (StyleId::SafeArea | StyleId::SafeAreaIgnore | StyleId::SafeAreaIgnoreAlign, _) => {}
             // @ref LLP 1123 D11 — not CSS, and not written yet: a page's
             // reservations wait for the web's owners (D17)
             (

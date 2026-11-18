@@ -169,16 +169,6 @@ ExactRasterReady exact_raster_take_ready(uint64_t session, uint64_t request);
 void exact_raster_lease_release(uint64_t lease);
 ExactRasterStats exact_raster_stats(uint64_t session);
 
-/* An SVG file as an image (LLP 1011.001 D4). header: 1 when bytes begin an SVG,
- * writing its natural size (CSS pixels) into size[0..2]; else 0. scene: the
- * file resolved at width x height CSS pixels as the svg op's JSON, in a buffer
- * of *out_len bytes to free with exact_svg_image_free; *flags bit 0 means the
- * picture has text (drawn on the main thread, where the fonts are), bit 1 that
- * the file was refused, the buffer then holding the reason. */
-uint32_t exact_svg_image_header(const uint8_t *bytes, size_t len, double *size);
-uint8_t *exact_svg_image_scene(const uint8_t *bytes, size_t len, double width, double height, size_t *out_len, uint32_t *flags);
-void exact_svg_image_free(uint8_t *ptr, size_t len);
-
 /* Width/height offers below zero mean "as the content wants". */
 #define EXACT_MAX_CONTENT (-1.0f)
 #define EXACT_MIN_CONTENT (-2.0f)
@@ -1164,6 +1154,24 @@ uint32_t exact_grouped_list(ExactRuntime rt, uint32_t view);
  * buffer — JSON, not a batch. */
 uint32_t exact_agent(ExactRuntime rt, size_t len);
 
+/* The agent operations the core asks in a production build, each its own
+ * export (LLP 1047.001 D11). Each answers as exact_agent answers its
+ * operation, reading only the request fields named here, and returns the
+ * JSON reply's length in the output buffer: the runner's outstanding work;
+ * whether a quit waits ({"mustFinish":B}); the view tree ({"target"},
+ * {"shallow"}); the state; one view's rows ({"id":V}, {"plan":true}); the
+ * session's identity; the app's file roots; and the answer to a held
+ * device request ({"op":"tap"|"type","ticket":T,"choice"|"text"}). A
+ * family's own are in its header. */
+uint32_t exact_outstanding(ExactRuntime rt, size_t len);
+uint32_t exact_must_finish(ExactRuntime rt, size_t len);
+uint32_t exact_tree(ExactRuntime rt, size_t len);
+uint32_t exact_state(ExactRuntime rt, size_t len);
+uint32_t exact_node(ExactRuntime rt, size_t len);
+uint32_t exact_tags(ExactRuntime rt, size_t len);
+uint32_t exact_app_roots(ExactRuntime rt, size_t len);
+uint32_t exact_answer_ticket(ExactRuntime rt, size_t len);
+
 /* A host line for the runner's journal (LLP 1012 §3; LLP 1035.001 D6): the
  * input buffer's first len bytes — a refused intent and its reason. Returns 0. */
 uint32_t exact_log(ExactRuntime rt, size_t len);
@@ -1180,12 +1188,6 @@ uint32_t exact_orientation_applied(ExactRuntime rt, size_t len, uint8_t conflict
  * input buffer; the output is the runner's ruling, {"refused":…} /
  * {"ticket":N} (held for the agent) / {"present":true,…}. */
 uint32_t exact_command(ExactRuntime rt, size_t len);
-
-/* What SVG pixel work the live plan can need, as bits (0 before a boot):
- * 1 an island, a `mask` or a `filter` (LLP 1055.000 §8 ruling 4), when the
- * host should open its island module off the main thread now; 2 a filter,
- * when it should make its GPU filter pipelines now. */
-uint8_t exact_svg_islands(ExactRuntime rt);
 
 /* 1 when the data source's activation evaluates a TypeScript module on the
  * owner (exact_prepare_data), which the presenter then posts from the first

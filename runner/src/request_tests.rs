@@ -141,7 +141,7 @@ fn a_request_has_effects_only_when_its_method_is_unsafe_over_http() {
     assert!(!with(|r| r.socket = true));
     assert!(!with(|r| r.storage = Some(Vec::new())));
     assert!(!with(|r| r.surface = Request::capture_surface("x").surface));
-    assert!(!Request::continuation(7).has_effects());
+    assert!(!Request::continuation::<crate::host_work::TestWork>(7).has_effects());
 }
 
 #[test]

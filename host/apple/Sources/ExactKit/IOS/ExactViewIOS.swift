@@ -144,7 +144,7 @@ public final class ExactView: UIView {
         // suppression still applies to its layers without a re-decode (D9).
         #if os(iOS)
         if #available(iOS 26, *) {
-            registerForTraitChanges([UITraitHDRHeadroomUsageLimit.self]) { (view: ExactView, _: UITraitCollection) in view.session.rasters.displayChanged() }
+            registerForTraitChanges([UITraitHDRHeadroomUsageLimit.self]) { (view: ExactView, _: UITraitCollection) in view.session.rasters?.displayChanged() }
         }
         #endif
         // A hinge moving from flat to a book angle changes the division
@@ -293,7 +293,7 @@ public final class ExactView: UIView {
         #endif
         session.tellPage() // `hasFocus` is this window's scene's (#114)
         session.natives.scopesChanged()
-        session.rasters.setPaused(window == nil)
+        session.rasters?.setPaused(window == nil)
         session.canvases.refreshLifecycle()
         if window == nil {
             session.presenter.menus.unmounted()
@@ -617,11 +617,11 @@ public final class ExactView: UIView {
         // keyboard rising is not a smaller display, and a shrink trims
         // the cold cache and reduces queued decodes to fit.
         let scale = max(1, traitCollection.displayScale)
-        session.rasters.fit(size: bounds.size, scale: scale)
+        session.rasters?.fit(size: bounds.size, scale: scale)
         if scale != lastDisplayScale {
             lastDisplayScale = scale
             session.apply(session.runtime.canvasDisplay(scale: scale, memory: ProcessInfo.processInfo.physicalMemory))
-            session.rasters.displayChanged()
+            session.rasters?.displayChanged()
             session.tellDisplayScale() // a hairline is one device pixel of this display (LLP 1115.000 D10.3)
             session.presenter.regridAll()
         }

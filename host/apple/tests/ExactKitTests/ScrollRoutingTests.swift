@@ -19,6 +19,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class ScrollRoutingTests: XCTestCase {
     func testAScrollNodeStartingHiddenChangesOverflowWithoutLosingChildren() throws {
@@ -125,7 +126,7 @@ final class ScrollRoutingTests: XCTestCase {
                 ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 300, "h": 240],
                 ["op": "content", "id": 2, "w": width, "h": height]]))
             let outer = try XCTUnwrap(p.views[1]), port = try XCTUnwrap(p.views[2])
-            if kind == "list" { XCTAssertTrue(p.collections.owns(2)) }
+            if kind == "list" { XCTAssertTrue(p.listHost.owns(2)) }
             window.orderFrontRegardless()
             var heard: [String] = []
             p.onPointer = { id, kind, _ in heard.append("\(kind == .down ? "down" : kind == .up ? "up" : "move") \(id)") }

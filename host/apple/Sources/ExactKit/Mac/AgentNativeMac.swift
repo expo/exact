@@ -96,7 +96,7 @@ extension Presenter {
         }
         // A content region's surface (`RegionController.flush`): this
         // session's, by its controller; its interior is the region's own.
-        if let surface = sub as? RegionSurfaceMac, let regions = session?.regions, surface.owner === regions { return ("region", owner?.id) }
+        if session?.regions.ownsSurface(sub) == true { return ("region", owner?.id) }
         if menus.inspectionOwns(sub) { return ("menu", owner?.id) }
         if dialogs.inspectionOwns(sub) { return ("dialog", owner?.id) }
         if navigation.inspectionOwns(sub) { return ("ground", owner?.id) }
@@ -175,7 +175,7 @@ extension Presenter {
                 if report.views > AgreementReport.walkCap { report.incomplete("walk-cap"); break walk }
                 if judged { report.judged += 1 } else {
                     report.opaque += 1
-                    if let what = elements.regions.owner(of: sub) { report.opaqueBy[what, default: 0] += 1 }
+                    if let what = elements.regionOwner(of: sub) { report.opaqueBy[what, default: 0] += 1 }
                 }
                 if let n = sub as? NodeView {
                     // In the presenter's map is not alive: the kernel must

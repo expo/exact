@@ -23,7 +23,7 @@ pub(in crate::runner) struct Disclosed {
 
 impl<D: DataSource> Runner<D> {
     /// A disclosure an implementation said: its fields kept.
-    pub(in crate::runner) fn disclosed_told(&mut self, body: &str) {
+    pub(super) fn disclosed_told_linked(&mut self, body: &str) {
         let v: Json = serde_json::from_str(body).unwrap_or_default();
         let (Some(extension), Some(fields)) = (v["extension"].as_str(), v["state"].as_object())
         else {

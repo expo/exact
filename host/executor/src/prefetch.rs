@@ -68,7 +68,7 @@ impl Core {
             let mut set = Preloads::start_clock(
                 Vec::new(),
                 &self.grants,
-                self.stream_host.clone(),
+                self.lane.lock().unwrap().clone(),
                 cache.clock.clone(),
             );
             Arc::get_mut(&mut set.destination)

@@ -15,8 +15,8 @@ mod sensors;
 mod stdio;
 
 use crate::presenter::Presenter;
-use exact_runner::agent::{error, field_bool, field_num, field_str, num};
-use exact_runner::instance::collection::Align;
+use exact_runner::json::{error, field_bool, field_num, field_str, num};
+use exact_runner::Align;
 use exact_runner::DataSource;
 use std::io::Write;
 
@@ -93,7 +93,7 @@ pub fn serve<D: DataSource + Default>(
         p.node_count()
     );
     match boot_error {
-        Some(e) => exact_runner::agent::quote(e, &mut ready),
+        Some(e) => exact_runner::json::quote(e, &mut ready),
         None => ready.push_str("null"),
     }
     ready.push('}');
@@ -992,7 +992,7 @@ fn clock<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
         let reply = match e {
             Some(e) => {
                 let mut s = String::from("{\"error\":");
-                exact_runner::agent::quote(&format!("clock: {e}"), &mut s);
+                exact_runner::json::quote(&format!("clock: {e}"), &mut s);
                 format!("{s},\"clock\":{}}}", num(landed))
             }
             None => format!("{{\"clock\":{}}}", num(landed)),
@@ -1023,7 +1023,7 @@ fn land_data<D: DataSource>(p: &mut Presenter<D>, bound: std::time::Duration) ->
     };
     let refused = |p: &Presenter<D>, error: &str| {
         let mut s = String::from("{\"error\":");
-        exact_runner::agent::quote(&format!("clock data: {error}"), &mut s);
+        exact_runner::json::quote(&format!("clock data: {error}"), &mut s);
         format!("{s},\"clock\":{}}}", num(p.host().now()))
     };
     for _ in 0..16 {
@@ -1047,7 +1047,7 @@ fn land_data<D: DataSource>(p: &mut Presenter<D>, bound: std::time::Duration) ->
         p.sync_surfaces();
         if let Some(e) = e {
             let mut s = String::from("{\"error\":");
-            exact_runner::agent::quote(&format!("clock: {e}"), &mut s);
+            exact_runner::json::quote(&format!("clock: {e}"), &mut s);
             return format!("{s},\"clock\":{}}}", num(landed));
         }
         // A `then` that sent asks again; what it sends lands in the next round.
@@ -1112,7 +1112,7 @@ fn clock_within<D: DataSource>(
         let (landed, e) = sensors::clock_framed(p, to, deadline);
         if let Some(e) = e {
             let mut s = String::from("{\"error\":");
-            exact_runner::agent::quote(&format!("clock: {e}"), &mut s);
+            exact_runner::json::quote(&format!("clock: {e}"), &mut s);
             return format!("{s},\"clock\":{}}}", num(landed));
         }
         p.sync_surfaces();

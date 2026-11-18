@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
 import {within} from '../../../scripts/paths.mjs';
 import {open} from '../../../scripts/agent.mjs';
-import {compilerPaths, gpuModules, pendingBuildInputs} from '../../../scripts/app.mjs';
+import {bakeOutput, compilerPaths, gpuModules, pendingBuildInputs} from '../../../scripts/app.mjs';
 import {directoryInputNames} from '../../../scripts/cargo-dep-info.mjs';
 import {createHash} from 'node:crypto';
 import {runInNewContext} from 'node:vm';
@@ -17,7 +17,7 @@ import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {watchStaticTrees} from '../serve.mjs';
 import {acceptModuleReply} from '../dev-phase.mjs';
-import {cacheBuildInputs, nativeResourceInputs, nativeWatchPaths, watchDirectoryInputs, watchModuleSources} from '../dev-watch.mjs';
+import {readDevBuilds, cacheBuildInputs, nativeResourceInputs, nativeWatchPaths, watchDirectoryInputs, watchModuleSources} from '../dev-watch.mjs';
 import {nativeResourceInventory} from '../../apple/assets.mjs';
 import {cdpBrowser, chromium} from '../../../scripts/agent-launch.mjs';
 import {need} from '../../../scripts/coverage.mjs';
@@ -1205,4 +1205,26 @@ test('native receipt directories and missing inputs under skipped trees invalida
     check(() => { mkdirSync(resolve(optional, '..'), {recursive: true}); writeFileSync(optional, 'found'); }, 'an optional input appearing');
     watches.close(); quiet.tick(); quiet.closed();
   } finally { watches?.close(); rmSync(directory, {recursive: true, force: true}); }
+});
+
+test("a resident dev loop admits the native receipts `exact mac` writes to the app's usual bake folder", () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-dev-builds-'));
+  try {
+    const app = { dir: root, target: resolve(root, 'target'), id: 'dev.example' };
+    const receipt = (platform, target, sha) => ({ version: 1, compat: { id: sha, target, inputs: { app: app.id, platform } }, binary: { sha256: sha } });
+    const write = (dir, r) => { mkdirSync(dir, { recursive: true }); writeFileSync(resolve(dir, `${r.compat.inputs.platform}-${r.compat.target}.build.json`), JSON.stringify(r)); };
+    const usual = bakeOutput(app, {});
+    const own = resolve(root, 'resident-bake');
+    write(usual, receipt('macos', 'aarch64-apple-darwin', 'mac'));
+    write(usual, receipt('web', 'wasm32-unknown-unknown', 'usual-web'));
+    write(own, receipt('web', 'wasm32-unknown-unknown', 'resident-web'));
+    const names = (rs) => rs.map((r) => `${r.compat.inputs.platform}:${r.binary.sha256}`).sort();
+    // Its own web build, not the usual folder's; the Mac build from the usual folder.
+    assert.deepEqual(names(readDevBuilds(app, { EXACT_BAKE_OUTPUT: own })), ['macos:mac', 'web:resident-web']);
+    // Its own native receipt wins over the usual folder's for the same target.
+    write(own, receipt('macos', 'aarch64-apple-darwin', 'resident-mac'));
+    assert.deepEqual(names(readDevBuilds(app, { EXACT_BAKE_OUTPUT: own })), ['macos:resident-mac', 'web:resident-web']);
+    // Without its own folder, the usual one alone.
+    assert.deepEqual(names(readDevBuilds(app, {})), ['macos:mac', 'web:usual-web']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

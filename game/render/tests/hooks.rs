@@ -3,7 +3,8 @@
 use exact_game::Args;
 use exact_game::{Environment, Game, Input, World};
 use exact_game_render::{
-    FrameView, HookGpu, Hooks, Needs, PostInputs, RenderError, RenderWorld, SceneCopy, WorldSurface,
+    FrameView, FrameWork, HookGpu, HookWork, Hooks, Needs, PostInputs, RenderError, RenderWorld,
+    SceneCopy, WorldSurface,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use exact_gpu::fixture;
@@ -113,6 +114,7 @@ struct Gpu {
     device: wgpu::Device,
     compute: wgpu::ComputePipeline,
     compute_group: wgpu::BindGroup,
+    color: wgpu::Buffer,
     opaque: wgpu::RenderPipeline,
     opaque_group: wgpu::BindGroup,
     sampling: wgpu::BindGroupLayout,
@@ -131,8 +133,8 @@ impl Gpu {
         };
         let buffer = d.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hook compute result"),
-            size: 16,
-            usage: wgpu::BufferUsages::STORAGE,
+            size: 96,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let storage = |read_only| {
@@ -213,6 +215,7 @@ impl Gpu {
             device: d.clone(),
             compute,
             compute_group,
+            color: buffer,
             opaque: pipeline(d, &shader(DRAW), &read, "fs", samples),
             opaque_group,
             surface: pipeline(d, &shader(SAMPLE), &sampling, "surface", samples),
@@ -239,14 +242,20 @@ impl Gpu {
     }
 }
 #[derive(Default)]
-pub struct TestHooks<const SCENE: bool, const POST: bool, const DEPTH: bool> {
+pub struct TestHooks<
+    const SCENE: bool,
+    const POST: bool,
+    const DEPTH: bool,
+    const REPORT: bool = false,
+> {
     gpu: exact_game_render::hooks::Pipelines<Gpu>,
     stages: Vec<&'static str>,
     resets: u32,
     /// Each draw's (dt, reset).
     times: Vec<(f32, bool)>,
+    work: FrameWork,
 }
-impl<const S: bool, const P: bool, const D: bool> Hooks for TestHooks<S, P, D> {
+impl<const S: bool, const P: bool, const D: bool, const R: bool> Hooks for TestHooks<S, P, D, R> {
     fn prepare(
         &mut self,
         gpu: &HookGpu<'_>,
@@ -263,7 +272,18 @@ impl<const S: bool, const P: bool, const D: bool> Hooks for TestHooks<S, P, D> {
             .update(gpu.device, view.time.shader_generation, || {
                 Gpu::new(gpu, view.sample_count)
             });
+        if let Some(buffers) = self.gpu.get().filter(|_| R) {
+            let bytes = [0; 96];
+            gpu.queue.write_buffer(&buffers.color, 0, &bytes);
+            self.work.upload_bytes += bytes.len() as u64;
+        }
         Ok(())
+    }
+    fn frame_work(&self) -> Option<FrameWork> {
+        R.then_some(self.work)
+    }
+    fn item_name(&self) -> &'static str {
+        "batches"
     }
     fn needs(&self) -> Needs {
         let mut needs = Needs::ANIMATE;
@@ -309,15 +329,35 @@ impl<const S: bool, const P: bool, const D: bool> Hooks for TestHooks<S, P, D> {
         let gpu = self.gpu.get().unwrap();
         pass.set_pipeline(&gpu.opaque);
         pass.set_bind_group(0, &gpu.opaque_group, &[]);
-        pass.draw(0..3, 0..1);
+        if R {
+            for _ in 0..2 {
+                pass.draw(0..3, 0..12);
+                self.work.draws += 1;
+                self.work.triangles += 12;
+            }
+            self.work.items += 1;
+        } else {
+            pass.draw(0..3, 0..1);
+        }
         Ok(())
     }
     fn background(
         &mut self,
-        _: &mut wgpu::RenderPass<'_>,
-        _: &FrameView<'_>,
+        pass: &mut wgpu::RenderPass<'_>,
+        view: &FrameView<'_>,
     ) -> Result<(), RenderError> {
         self.stages.push("background");
+        if R {
+            let gpu = self.gpu.get().unwrap();
+            pass.set_pipeline(&gpu.opaque);
+            pass.set_bind_group(0, &gpu.opaque_group, &[]);
+            pass.draw(0..3, 0..12);
+            self.work.draws += 1;
+            self.work.triangles += 12;
+            if view.time.points.0 == FAILING_FRAME_WIDTH {
+                return Err(RenderError::Scene("fixture background failed".into()));
+            }
+        }
         Ok(())
     }
     fn surface(
@@ -505,6 +545,225 @@ fn a_look_frame_leaves_the_hook_clock_where_the_live_frames_left_it() {
     assert_eq!([&looked[..2], &looked[3..]].concat(), live);
     assert_eq!(live[2], (0.016, false), "{live:?}");
 }
+#[derive(Default)]
+struct Budgeted(Vec<(u32, bool)>);
+
+impl Hooks for Budgeted {
+    const ALLOWANCE: u32 = 64;
+
+    fn prepare(
+        &mut self,
+        _: &HookGpu<'_>,
+        view: &FrameView<'_>,
+        _: &RenderWorld<'_>,
+    ) -> Result<(), RenderError> {
+        self.0
+            .push((view.time.allowance, view.time.deadline.is_some()));
+        Ok(())
+    }
+}
+
+#[test]
+fn preparation_budget_follows_the_canvas_clock() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<TestGame, (), false, Budgeted>::default();
+    surface.bind(&[], None).unwrap();
+    surface.clock(true);
+    let mut frame = frame();
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    let look = surface
+        .agent(r#"{"op":"state","look":true,"now":0}"#)
+        .unwrap();
+    assert!(look.contains("\"look\""), "{look}");
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    surface.agent(r#"{"op":"state","perf":true}"#).unwrap();
+    frame.now_ms = 16.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(
+        surface.render_hooks().0,
+        [(0, false), (0, false), (0, false), (64, false), (0, false)]
+    );
+
+    surface.clock(false);
+    frame.seekable = false;
+    frame.now_ms = 32.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0.last(), Some(&(64, false)));
+
+    surface.clock(true);
+    frame.seekable = true;
+    frame.now_ms = 48.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0.last(), Some(&(0, false)));
+}
+
+#[test]
+fn preparation_budget_reports_and_resets_live_overshoot() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<TestGame, (), false, Budgeted>::default();
+    surface.bind(&[], None).unwrap();
+    surface.clock(false);
+    let mut frame = frame();
+    frame.seekable = false;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0, [(64, false)]);
+
+    // A positive period below the clock's resolution makes this frame late
+    // before prepare, without a sleep or a threshold tied to the GPU.
+    frame.period_ms = 2. * f64::MIN_POSITIVE;
+    frame.now_ms = 48.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert_eq!(surface.render_hooks().0.last(), Some(&(1, true)));
+    let mut budget = |request| {
+        let state = surface.agent(request).unwrap();
+        let mut state: serde_json::Value = serde_json::from_str(&state).unwrap();
+        state["world"]["renderHooks"]["budget"].take()
+    };
+    let before = budget(r#"{"op":"state"}"#);
+    assert_eq!(before["allowance"], 64);
+    assert_eq!(before["overFrames"], 1);
+    assert!(before["overMs"].as_f64().unwrap() > 0.);
+    for request in [r#"{"op":"state","perf_reset":true}"#, r#"{"op":"state"}"#] {
+        let after = budget(request);
+        assert_eq!(after["overFrames"], 0);
+        assert_eq!(after["overMs"], 0);
+    }
+}
+
+#[test]
+fn preparation_budget_stops_live_work_between_units() {
+    use std::time::{Duration, Instant};
+
+    #[derive(Default)]
+    struct Work(u32);
+    impl Hooks for Work {
+        const ALLOWANCE: u32 = 64;
+
+        fn prepare(
+            &mut self,
+            _: &HookGpu<'_>,
+            view: &FrameView<'_>,
+            _: &RenderWorld<'_>,
+        ) -> Result<(), RenderError> {
+            self.0 = 0;
+            if let Some(deadline) = view.time.deadline {
+                for _ in 0..view.time.allowance {
+                    let start = Instant::now();
+                    while start.elapsed() < Duration::from_millis(1) {
+                        std::hint::spin_loop();
+                    }
+                    self.0 += 1;
+                    if deadline.passed() {
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<TestGame<true>, (), false, Work>::default();
+    surface.bind(&[], None).unwrap();
+    let mut frame = Frame {
+        seekable: false,
+        ..frame()
+    };
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    frame.now_ms = 4.;
+    frame.period_ms = 4.;
+    fixture::render(&gpu, &mut surface, &frame).unwrap();
+    assert!((1..Work::ALLOWANCE).contains(&surface.render_hooks().0));
+}
+
+struct Running;
+impl Game for Running {
+    type Args = ();
+    const ID: &'static str = "running-under-pending-hooks";
+    const HZ: u32 = 120;
+    fn setup(_: &mut World, _: &()) {}
+    fn tick(_: &mut World, _: &Input, _: &()) {}
+}
+#[derive(Default)]
+struct Pending<const STARVED: bool = false, const UNITS: u32 = 0, const ANIMATE: bool = false>;
+impl<const STARVED: bool, const UNITS: u32, const ANIMATE: bool> Hooks
+    for Pending<STARVED, UNITS, ANIMATE>
+{
+    const ALLOWANCE: u32 = UNITS;
+
+    fn needs(&self) -> Needs {
+        let mut needs = Needs::PENDING;
+        if STARVED {
+            needs = needs | Needs::STARVED;
+        }
+        if ANIMATE {
+            needs = needs | Needs::ANIMATE;
+        }
+        needs
+    }
+}
+#[test]
+fn preparation_budget_settles_only_pending_work_that_can_progress() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut pending = WorldSurface::<TestGame, (), false, Pending<false, 64>>::default();
+    let mut starved = WorldSurface::<TestGame, (), false, Pending<true, 64>>::default();
+    let mut animated = WorldSurface::<TestGame, (), false, Pending<true, 64, true>>::default();
+    for (surface, settles, wants_more) in [
+        (&mut pending as &mut dyn Surface, true, true),
+        (&mut starved as &mut dyn Surface, false, false),
+        (&mut animated as &mut dyn Surface, false, true),
+    ] {
+        surface.bind(&[], None).unwrap();
+        surface.clock(true);
+        let (_, wants) = fixture::render(&gpu, surface, &frame()).unwrap();
+        assert_eq!(wants, wants_more);
+        assert_eq!(surface.preparing(), settles);
+        surface.clock(false);
+        assert!(surface.preparing());
+    }
+}
+
+// A loading phase is overload: its frames are submitted before the hooks are ready.
+#[test]
+fn a_long_gap_while_hooks_are_pending_is_clamp_not_idle() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut surface = WorldSurface::<Running, (), false, Pending>::default();
+    exact_gpu::Surface::clock(&mut surface, false);
+    surface.bind(&[], None).unwrap();
+    let mut f = frame();
+    f.seekable = false;
+    for (now, interval_ms) in [(0., 0.), (300., 300.), (600., 300.)] {
+        f.now_ms = now;
+        exact_gpu::Surface::timing(
+            &mut surface,
+            &exact_gpu::FrameTiming {
+                interval_ms,
+                ..Default::default()
+            },
+        );
+        fixture::render(&gpu, &mut surface, &f).unwrap();
+    }
+    let reply = surface.agent(r#"{"op":"state"}"#).unwrap();
+    let state: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(state["world"]["ready"], false, "{state}");
+    assert_eq!(
+        state["world"]["perf"]["catchUp"],
+        serde_json::json!({"clampFrames":2,"clampMs":100,"idleFrames":0,"idleMs":0,"overloadFrames":0}),
+        "{state}"
+    );
+    assert_eq!(state["world"]["perf"]["ticksOwed"]["max"], 36, "{state}");
+}
 #[test]
 fn all_stages_and_recovery() {
     check::<true, true, true>();
@@ -517,6 +776,136 @@ fn hdr_post_without_scene_copy() {
 #[test]
 fn opaque_hook_without_extra_attachments() {
     check::<false, false, false>();
+}
+
+#[derive(Default)]
+struct CreationsOnly;
+impl Hooks for CreationsOnly {
+    fn work(&self) -> Option<HookWork> {
+        Some(HookWork::default())
+    }
+}
+
+fn frame_work(surface: &mut dyn Surface, request: &str) -> serde_json::Value {
+    let json = surface.agent(request).unwrap();
+    let mut state: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(state.get("error").is_none(), "{state}");
+    state["world"]["renderHooks"]
+        .get_mut("frame")
+        .expect("missing renderHooks.frame")
+        .take()
+}
+
+type ReportingSurface = WorldSurface<TestGame, (), false, TestHooks<false, false, false, true>>;
+
+fn reporting_surface() -> ReportingSurface {
+    let mut reporter = ReportingSurface::default();
+    reporter.bind(&[], None).unwrap();
+    reporter.agent(r#"{"op":"state","perf":true}"#).unwrap();
+    reporter
+}
+
+const STATE: &str = r#"{"op":"state"}"#;
+const FAILING_FRAME_WIDTH: f32 = 65.;
+
+fn assert_frame_work(counts: &serde_json::Value, samples: usize) {
+    assert_eq!(counts["items"], "batches");
+    for (name, work) in [
+        ("draws", 3.),
+        ("triangles", 36.),
+        ("uploadBytes", 96.),
+        ("itemsDrawn", 1.),
+    ] {
+        let ring = &counts[name];
+        assert_eq!(ring["count"], samples, "{name}: {ring}");
+        assert_eq!(
+            ring["p50"].as_f64(),
+            (samples > 0).then_some(work),
+            "{name}: {ring}"
+        );
+        let total = if samples == 0 { 0. } else { work };
+        assert_eq!(ring["max"].as_f64(), Some(total), "{name}: {ring}");
+        assert_eq!(ring["mean"].as_f64(), Some(total), "{name}: {ring}");
+    }
+}
+
+#[test]
+fn state_reports_hook_frame_work_under_the_agent_clock() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut creation = WorldSurface::<TestGame, (), false, CreationsOnly>::default();
+    creation.bind(&[], None).unwrap();
+    fixture::render(&gpu, &mut creation, &frame()).unwrap();
+    assert!(frame_work(&mut creation, STATE).is_null());
+
+    let mut reporter = reporting_surface();
+    let mut f = frame();
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    assert_frame_work(&frame_work(&mut reporter, STATE), 0);
+    f.now_ms = 16.;
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    assert_frame_work(&frame_work(&mut reporter, STATE), 1);
+
+    let reset = frame_work(&mut reporter, r#"{"op":"state","perf_reset":true}"#);
+    assert_frame_work(&reset, 0);
+    f.now_ms = 32.;
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    assert_frame_work(&frame_work(&mut reporter, STATE), 1);
+}
+
+#[test]
+fn a_failed_encode_samples_its_own_hook_work() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut reporter = reporting_surface();
+    let mut f = frame();
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    let carry = reporter.carry().unwrap().unwrap();
+
+    f.now_ms = 16.;
+    f.width = FAILING_FRAME_WIDTH;
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    assert!(reporter
+        .error()
+        .unwrap()
+        .0
+        .contains("fixture background failed"));
+    assert_frame_work(&frame_work(&mut reporter, STATE), 1);
+
+    reporter.restore(&carry, exact_gpu::Restore::Carry).unwrap();
+    reporter.agent(r#"{"op":"state","perf":true}"#).unwrap();
+    f.now_ms = 32.;
+    f.width = 64.;
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    assert_frame_work(&frame_work(&mut reporter, STATE), 1);
+}
+
+#[test]
+fn look_does_not_sample_hook_frame_work() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let mut reporter = reporting_surface();
+    let mut f = frame();
+    for now in [0., 16.] {
+        f.now_ms = now;
+        fixture::render(&gpu, &mut reporter, &f).unwrap();
+    }
+    let before = frame_work(&mut reporter, STATE);
+    assert_frame_work(&before, 1);
+    let draws = reporter.render_hooks().work.draws;
+    let reply = reporter
+        .agent(r#"{"op":"state","look":true,"now":16}"#)
+        .unwrap();
+    assert!(reply.contains("\"look\""), "{reply}");
+    assert_eq!(reporter.render_hooks().work.draws, draws + 3);
+    assert_eq!(frame_work(&mut reporter, STATE), before);
+
+    f.now_ms = 32.;
+    fixture::render(&gpu, &mut reporter, &f).unwrap();
+    assert_frame_work(&frame_work(&mut reporter, STATE), 2);
 }
 #[test]
 fn scene_copy_without_post() {

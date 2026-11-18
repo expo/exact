@@ -8,6 +8,10 @@ use exact_runner::{agent, CallHow, Runner, Value, BACKGROUND};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const APP: &str = r#"shape Ack
   ok: bool
 
@@ -84,7 +88,7 @@ impl exact_runner::DataSource for Later {
     }
     fn background(&mut self, _: &exact_runner::Store) -> Option<exact_runner::Request> {
         (self.0.load(Ordering::Relaxed) > 0)
-            .then(|| exact_runner::Request::continuation(BACKGROUND))
+            .then(|| exact_runner::Request::continuation::<TestWork>(BACKGROUND))
     }
 }
 

@@ -508,7 +508,7 @@ impl<D: DataSource> Host<D> {
     /// and a resource's re-ask.
     /// CSS transitions are the browser's; the glue folds their end times in.
     pub fn agent(&self, request: &str) -> String {
-        if exact_runner::agent::field_str(request, "op").as_deref() == Some("settle") {
+        if exact_runner::json::field_str(request, "op").as_deref() == Some("settle") {
             // A re-ask after a turn over its budget: no I/O to wait on, so the
             // clock goes to it (exact-runner's `overrun.rs`).
             return match (self.springs.settle_time().map(|t| t * 1000.0))
@@ -518,13 +518,13 @@ impl<D: DataSource> Host<D> {
                 .chain(self.runner.data_timer_due_ms())
                 .reduce(f64::max)
             {
-                Some(t) => format!("{{\"settle\":{}}}", exact_runner::agent::num(t)),
+                Some(t) => format!("{{\"settle\":{}}}", exact_runner::json::num(t)),
                 None => "{\"settle\":null}".to_string(),
             };
         }
         match self.inspect {
             Some(inspect) => inspect(&self.runner, request),
-            None => exact_runner::agent::error("this build links no inspection (LLP 1047 D6)"),
+            None => exact_runner::json::error("this build links no inspection (LLP 1047 D6)"),
         }
     }
 

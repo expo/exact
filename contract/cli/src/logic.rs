@@ -367,17 +367,22 @@ pub fn linux_entry(
             inputs["rustMode"].as_str().ok_or("missing Rust policy")?,
             inputs
         )?,
-        launch_parts()?
+        {
+            let crate_dir = std::env::var_os("CARGO_MANIFEST_DIR").ok_or("not run by cargo")?;
+            let app_dir = std::path::Path::new(&crate_dir).join("..");
+            let manifest = crate::Manifest::read(&app_dir)?;
+            painted_launch_parts(&app_dir, &manifest, "linux")?
+        }
     ))
 }
 
-/// Each `app.json` `launch` module with a `linux/launch.rs` (the app's
-/// `modules/` first, then exact2's) becomes a module of the executable,
-/// called with its `moduleConfig` before the host starts.
-fn launch_parts() -> Result<String, String> {
-    let crate_dir = std::env::var_os("CARGO_MANIFEST_DIR").ok_or("not run by cargo")?;
-    let app_dir = std::path::Path::new(&crate_dir).join("..");
-    let manifest = crate::Manifest::read(&app_dir)?;
+/// Each launch module's part for `platform`, called with its configuration
+/// before the painted host starts. An app-local module shadows the SDK's whole module.
+pub(crate) fn painted_launch_parts(
+    app_dir: &std::path::Path,
+    manifest: &crate::Manifest,
+    platform: &str,
+) -> Result<String, String> {
     let shared = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules");
     let app = serde_json::json!({
         "id": manifest.id,
@@ -386,7 +391,14 @@ fn launch_parts() -> Result<String, String> {
     })
     .to_string();
     let (mut mods, mut calls) = (String::new(), String::new());
-    for name in manifest.json["launch"].as_array().into_iter().flatten() {
+    let names = match manifest.json.get("launch") {
+        Some(value) => value
+            .as_array()
+            .ok_or("app.json launch: expected a list of module names")?
+            .as_slice(),
+        None => &[],
+    };
+    for name in names {
         let name = name
             .as_str()
             .ok_or("app.json launch: a module name is a string")?;
@@ -398,13 +410,20 @@ fn launch_parts() -> Result<String, String> {
         {
             return Err(format!("app.json launch: invalid module name {name:?}"));
         }
-        let Some(file) = [app_dir.join("modules"), shared.clone()]
-            .iter()
-            .map(|base| base.join(name).join("linux/launch.rs"))
-            .find(|f| f.exists())
-        else {
-            continue;
-        };
+        let own = app_dir.join("modules").join(name);
+        let base = if own.exists() { own } else { shared.join(name) };
+        if !base.exists() {
+            return Err(format!(
+                "app.json launch: no module {name} (neither the app nor Exact provides it)"
+            ));
+        }
+        let file = base.join(platform).join("launch.rs");
+        if !file.is_file() {
+            return Err(format!(
+                "app.json launch: {name} has no {platform} launch part ({}); provide it or remove {name} from launch",
+                file.display()
+            ));
+        }
         println!("cargo:rerun-if-changed={}", file.display());
         let config = manifest.json["moduleConfig"]
             .get(name)
@@ -527,9 +546,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
     // input is the media picker, `auth` below is the sign-in sheet, and its
     // numerals roll in the runtime's text (LLP 1077 D15), its date and
     // time controls are the browser's own (LLP 1115.001.000 D2), and it
-    // shows no tips (LLP 1035.006.000 D4).
+    // shows no tips (LLP 1035.006.000 D4). The native roster's entries are
+    // never the web's.
     let names: Vec<&str> = uses
         .iter()
+        .filter(|c| !Uses::NATIVE.has(*c))
         .filter(|c| {
             !matches!(
                 c,
@@ -601,7 +622,15 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Numerals
             | Capability::Dates
             | Capability::Sqlite
-            | Capability::Tips => {}
+            | Capability::Tips
+            | Capability::Modules
+            | Capability::Tools
+            | Capability::Svg
+            | Capability::Images
+            | Capability::NativeViews
+            | Capability::ContentRegions
+            | Capability::Traces
+            | Capability::Controls => {}
         }
     }
     entry
@@ -630,6 +659,7 @@ pub fn apple_linked(uses: exact_runner::Uses, host: &str) -> String {
         (Capability::GroupedLists, "grouped_list_exports"),
         (Capability::Markdown, "markup_exports"),
         (Capability::Presence, "presence_exports"),
+        (Capability::Svg, "svg_exports"),
     ] {
         if uses.has(capability) {
             entry.push_str(&format!("{apple}::{group}!();\n"));
@@ -845,6 +875,8 @@ mod tests {
             "{update}"
         );
         assert!(!super::apple_linked(Uses::NONE, "exact_apple").contains("exports!"));
+        let svg = super::apple_linked(Uses::NONE.with(Capability::Svg), "exact_apple");
+        assert!(svg.contains("::exact_apple::svg_exports!();"), "{svg}");
         let markdown = super::apple_linked(Uses::NONE.with(Capability::Markdown), "exact_apple");
         assert!(
             markdown.contains("::exact_apple::markup_exports!();"),
@@ -866,5 +898,96 @@ mod tests {
         assert_eq!(web_rust_mode(&none), "off");
         let off = serde_json::json!({"rustMode": "off", "rustModule": "app-logic"});
         assert_eq!(web_rust_mode(&off), "off");
+    }
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use crate as contract;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    struct App(PathBuf);
+
+    impl App {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("launch-parts-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(dir.join("out")).unwrap();
+            Self(dir)
+        }
+
+        fn generate(&self, launch: serde_json::Value) -> Result<String, String> {
+            let manifest = contract::Manifest {
+                json: json!({"launch": launch, "moduleConfig": {"observe": {"projectId": "local"}}}),
+                id: "test.launch".into(),
+                name: "Launch".into(),
+                declared: true,
+            };
+            let plan = contract::compile("component App\n  view\n    text \"Launch\"\n").unwrap();
+            let out = self.0.join("out");
+            contract::native::android_entry(&self.0, &manifest, &plan, &out)?;
+            std::fs::read_to_string(out.join("launch.rs")).map_err(|e| e.to_string())
+        }
+    }
+
+    impl Drop for App {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn android_embeds_the_launch_list_and_refuses_missing_parts() {
+        let app = App::new();
+        let entry = app.generate(json!(["observe"])).unwrap();
+        assert!(entry.contains("/observe/android/launch.rs"), "{entry}");
+        assert!(entry.contains("launch_observe::launch("), "{entry}");
+        assert!(entry.contains("projectId\\\":\\\"local"), "{entry}");
+        assert!(entry.contains("test.launch"), "{entry}");
+        let second = app.0.join("modules/second/android");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(second.join("launch.rs"), "pub fn launch() {}").unwrap();
+        let entry = app.generate(json!(["second", "observe"])).unwrap();
+        assert!(
+            entry.find("launch_second::launch(").unwrap()
+                < entry.find("launch_observe::launch(").unwrap()
+        );
+        let own = app.0.join("modules/observe/linux");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(own.join("launch.rs"), "pub fn launch() {}").unwrap();
+        assert!(app
+            .generate(json!(["observe"]))
+            .unwrap_err()
+            .contains("observe has no android launch part"));
+        assert!(app
+            .generate(json!(["missing"]))
+            .unwrap_err()
+            .contains("no module missing"));
+        assert!(app
+            .generate(json!([]))
+            .unwrap()
+            .contains("fn launch_parts() {}"));
+        assert!(app
+            .generate(json!(["../observe"]))
+            .unwrap_err()
+            .contains("invalid module name"));
+        assert!(app
+            .generate(json!("observe"))
+            .unwrap_err()
+            .contains("expected a list"));
+        let manifest = contract::Manifest {
+            json: json!({"launch": ["observe"]}),
+            id: "test.launch".into(),
+            name: "Launch".into(),
+            declared: true,
+        };
+        let linux = super::painted_launch_parts(&app.0, &manifest, "linux").unwrap();
+        assert!(linux.contains("/modules/observe/linux/launch.rs"));
+        std::fs::remove_dir_all(own).unwrap();
+        assert!(super::painted_launch_parts(&app.0, &manifest, "linux")
+            .unwrap_err()
+            .contains("observe has no linux launch part"));
     }
 }

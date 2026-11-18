@@ -112,7 +112,7 @@ final class HeavyLeaves {
     private func make(_ node: NodeView) {
         guard node.kind == "video" || node.kind == "iframe" else { node.embedPlatformView(presenter); return }
         let started = CACurrentMediaTime()
-        if node.kind == "video" { node.video = VideoView(owner: node) } else { node.embedPlatformView(presenter) }
+        if node.kind == "video" { node.video = MediaLink.makeVideo?(node) } else { node.embedPlatformView(presenter) }
         Self.record(node.kind, CACurrentMediaTime() - started)
     }
 

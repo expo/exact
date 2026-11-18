@@ -125,9 +125,19 @@ pub(super) fn publish(
         };
         // Publish the padding and border with the frame for readers that
         // must not reach into a tree a content region's nodes are not in
+        let ignores = arena.ignoring.contains(slot);
         let inset = arena.taffy(slot).map(|node| {
-            crate::id::BoxInset::of(arena, slot, tree.layout(node), tree.text_item(node))
+            let inset =
+                crate::id::BoxInset::of(arena, slot, tree.layout(node), tree.text_item(node));
+            match ignores {
+                true => crate::kernel::ignore::inset(arena, tree, slot, node, inset),
+                false => inset,
+            }
         });
+        // A box that ignores keeps its margins, which say where it touches
+        if let Some(node) = arena.taffy(slot).filter(|_| ignores) {
+            arena.observations.set_margins(slot, tree.margins(node));
+        }
         let inset_changed = arena.inset(slot) != inset;
         arena.set_inset(slot, inset);
         let frame = if hidden {
@@ -175,6 +185,18 @@ pub(super) fn publish(
                 (ox + l.location.x, oy + l.location.y)
             }
             None => (frame.x, frame.y),
+        };
+        // A box that ignores takes the band past its place (LLP 1123 D4),
+        // its children placed from its extended or moved box
+        let (frame, fx, fy) = match ignores && !hidden && !inline {
+            true => {
+                let placed = arena.content(slot);
+                let (frame, (x, y), content) =
+                    crate::kernel::ignore::place(arena, slot, frame, placed);
+                arena.set_content(slot, content);
+                (frame, fx + x, fy + y)
+            }
+            false => (frame, fx, fy),
         };
         let republish = arena.frag.republish.remove(slot);
         let shift = if arena.frag.multicol.contains_key(&slot) {
@@ -301,6 +323,34 @@ pub(super) fn publish(
         fragment_skipped: crate::fragment::skipped(arena),
         flow_passes: 0,
         flow_comparisons: 0,
+    }
+}
+
+impl LayoutTree {
+    /// The padding `node`'s subtree was last laid out with where it is
+    /// outset (Taffy patch 80).
+    pub(crate) fn outset_padding(&self, node: NodeId) -> Option<taffy::geometry::Rect<f32>> {
+        self.taffy.outset_padding(node)
+    }
+
+    /// `node`'s used margins on its last layout, top right bottom left, an
+    /// `auto` one 0 since it only aligns the box (LLP 1123 D4).
+    pub(crate) fn margins(&self, node: NodeId) -> [f32; 4] {
+        let (m, style) = (self.layout(node).margin, self.taffy.style(node));
+        let Ok(style) = style else {
+            return [0.0; 4];
+        };
+        let s = style.margin;
+        let used = |side: taffy::style::LengthPercentageAuto, m: f32| match side.is_auto() {
+            true => 0.0,
+            false => m,
+        };
+        [
+            used(s.top, m.top),
+            used(s.right, m.right),
+            used(s.bottom, m.bottom),
+            used(s.left, m.left),
+        ]
     }
 }
 

@@ -777,12 +777,16 @@ impl Routing for RouterContext {
             .flat_map(|r| r.tabs)
             .flat_map(|t| t.stack)
             .collect();
-        // @ref LLP 1153 D5 — a new visit with a fragment, a fragment that
-        // changed, or a navigation to the top's fragment scrolls; a visit
-        // returned to keeps its place.
+        // @ref LLP 1153 D5, D5.1 — a new visit with a fragment, a fragment
+        // that changed, a navigation to the top's fragment, or the top at
+        // another path (a new page in the same visit) scrolls; a visit
+        // returned to, or given only a new query, keeps its place.
         let scroll = self.activates(value, top)
             || match before.iter().find(|e| e.id == top.id) {
-                Some(old) => old.fragment != top.fragment,
+                Some(old) => {
+                    old.fragment != top.fragment
+                        || old.url.split('?').next() != top.url.split('?').next()
+                }
                 None => !top.fragment.is_empty(),
             };
         let removed = before

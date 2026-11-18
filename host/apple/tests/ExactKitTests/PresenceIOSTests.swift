@@ -393,11 +393,11 @@ final class PresenceIOSTests: XCTestCase {
         XCTAssertGreaterThan(boundary, 85, "Temperature takes more than its half")
         let half = control.bounds.midX
         for x in stride(from: 2.0, to: 158.0, by: 4.0) where abs(x - half) > 1 {
-            let tab = p.segments.contextTab(at: CGPoint(x: x, y: control.bounds.midY), in: control)
+            let tab = p.segmentHost.contextTab(at: CGPoint(x: x, y: control.bounds.midY), in: control)
             XCTAssertEqual(tab?.id, x < half ? 31 : 32, "at x = \(x): equal shares, the segments meeting at \(boundary)")
         }
         let between = (half + boundary) / 2
-        XCTAssertEqual(p.segments.contextTab(at: CGPoint(x: between, y: control.bounds.midY), in: control)?.id, 32,
+        XCTAssertEqual(p.segmentHost.contextTab(at: CGPoint(x: between, y: control.bounds.midY), in: control)?.id, 32,
                        "past the half, though still on Temperature's segment: the share names Length")
     }
 
@@ -566,6 +566,44 @@ final class PresenceIOSTests: XCTestCase {
         XCTAssertEqual(parent.paintRank, parent.rank)
         XCTAssertNil(inner.superview?.superview)
         XCTAssertTrue(p.views[4] === sibling)
+    }
+
+    func testALeavingSvgIsDrawnUntilItsDestroy() throws {
+        let p = fixture()
+        let red = [255, 0, 0, 255]
+        let scene: [String: Any] = ["box": [0, 0, 50, 50], "t": [1, 0, 0, 1, 0, 0],
+            "els": [["id": 1, "n": 1, "o": 1, "p": [0, 0, 0, 1, 50, 0, 1, 50, 50, 1, 0, 50, 3], "f": red]]]
+        // 5 leaves inside 2; 6 leaves itself.
+        p.apply(wireBatch([
+            ["op": "create", "id": 5, "kind": "svg"],
+            ["op": "create", "id": 6, "kind": "svg"],
+            ["op": "children", "id": 2, "ids": [3, 5]],
+            ["op": "children", "id": 1, "ids": [2, 4, 6]],
+            ["op": "frame", "id": 5, "x": 100.0, "y": 0.0, "w": 50.0, "h": 50.0],
+            ["op": "frame", "id": 6, "x": 0.0, "y": 100.0, "w": 50.0, "h": 50.0],
+            ["op": "svg", "id": 5, "scene": scene],
+            ["op": "svg", "id": 6, "scene": scene],
+        ]))
+        let (inner, lone) = try (XCTUnwrap(p.views[5]), XCTUnwrap(p.views[6]))
+        func drawn(_ view: NodeView) throws -> [Int] {
+            let ctx = try XCTUnwrap(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            ctx.translateBy(x: -25, y: -25)
+            view.layer.render(in: ctx)
+            let bytes = try XCTUnwrap(ctx.data).assumingMemoryBound(to: UInt8.self)
+            return (0..<4).map { Int(bytes[$0]) }
+        }
+        XCTAssertEqual(try drawn(inner), red)
+        XCTAssertEqual(try drawn(lone), red)
+        p.apply(wireBatch([
+            ["op": "exit", "id": 2],
+            ["op": "exit", "id": 6],
+            ["op": "children", "id": 1, "ids": [4]],
+        ]))
+        XCTAssertEqual(try drawn(inner), red, "an svg inside a leaving view")
+        XCTAssertEqual(try drawn(lone), red, "a leaving svg")
+        p.apply(wireBatch([["op": "destroy", "id": 2], ["op": "destroy", "id": 6]]))
+        XCTAssertEqual(try drawn(inner), [0, 0, 0, 0], "the exit ended")
+        XCTAssertEqual(try drawn(lone), [0, 0, 0, 0])
     }
 
     func testALayoutPresentMovesTheBoxAndSizesOnlyItsSurface() throws {

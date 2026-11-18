@@ -498,7 +498,8 @@
     names = Object.getOwnPropertyNames;
   var symbols = Object.getOwnPropertySymbols,
     describe = Object.getOwnPropertyDescriptor;
-  var unbox = Function.prototype.call.bind(String.prototype.valueOf);
+  var unbox = Function.prototype.call.bind(String.prototype.valueOf),
+    hasOwn = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
   var PLAIN = [Object.prototype, Array.prototype, null],
     keptJson = new WeakMap();
   // Every Proxy made from here on, natively (the prelude's, then the app's): a trap can answer a later read
@@ -570,7 +571,9 @@
       if (kept !== undefined) out = "\u0000" + texts.push(kept);
       else if (step) out = step.call(this, key, item);
       if (!keeps) return out;
-      if (out !== null && typeof out === "object") {
+      // String boxes always own length, even with another prototype. Exclude Proxies before inspecting it,
+      // and arrays before the lookup; neither has the String brand.
+      if (out !== null && typeof out === "object" && !proxies.has(out) && !Array.isArray(out) && hasOwn(out, "length")) {
         // A boxed string: converted here, once, as JSON would (its own toString honored), so its text is known.
         var boxed = false;
         try {

@@ -206,6 +206,7 @@ mod tests {
             reach: Value::Null,
             painter: None,
             game: false,
+            host_work: false,
         }
     }
 

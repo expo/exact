@@ -227,7 +227,11 @@ impl<D: DataSource> Runner<D> {
 
     /// The entries of `kind` whose title or description contains `matching`,
     /// case- and diacritic-insensitive, in the index's order (D9).
-    pub fn index_entities(&self, kind: &str, matching: Option<&str>) -> Vec<Json> {
+    pub(in crate::runner::modules) fn index_entities_linked(
+        &self,
+        kind: &str,
+        matching: Option<&str>,
+    ) -> Vec<Json> {
         let folded = matching.map(fold);
         (self.extensions.declared.reach.index.iter())
             .filter(|e| e["kind"] == kind)

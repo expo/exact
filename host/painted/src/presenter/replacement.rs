@@ -457,6 +457,9 @@ mod tests {
     use super::*;
     use exact_runner::{Answer, DataError, Store, Value};
     use std::{cell::Cell, rc::Rc};
+    /// The host work these tests hand out (LLP 1047.001 D12).
+    struct TestWork;
+    impl exact_runner::HostWork for TestWork {}
 
     #[derive(Clone)]
     struct Loading(Rc<Cell<bool>>);
@@ -465,7 +468,9 @@ mod tests {
             Err(DataError::UnknownSource(name.into()))
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(exact_runner::Request::continuation(1)))
+            Ok(Answer::Later(
+                exact_runner::Request::continuation::<TestWork>(1),
+            ))
         }
         fn preload(&self) -> Result<bool, DataError> {
             Ok(self.0.get())

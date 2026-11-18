@@ -88,6 +88,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Runner<D>, RunnerError> {
         Runner::boot_checkpoint_linked(
             super::RunnerLinks::ALL,
+            super::ModuleLinks::ALL,
             plan,
             data,
             kernel,
@@ -105,6 +106,7 @@ impl<D: DataSource> Runner<D> {
     #[allow(clippy::too_many_arguments)] // the host boot facts
     pub fn boot_checkpoint_linked(
         links: super::RunnerLinks,
+        seams: super::ModuleLinks<D>,
         plan: impl Into<crate::Program>,
         data: D,
         kernel: Kernel,
@@ -117,6 +119,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Runner<D>, RunnerError> {
         Runner::boot_inner(
             links,
+            seams,
             plan,
             data,
             kernel,

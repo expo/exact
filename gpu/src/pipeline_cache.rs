@@ -44,9 +44,22 @@ impl Shared {
         for disk in &mut persistence.disks {
             let device = self._device.clone();
             let archive = archive.clone();
+            let path = disk.path.clone();
             disk.save(added, advance_frame, move || {
                 let _device = device;
-                archive.data()
+                let data = archive.data();
+                // Metal can refuse to serialize an archive restored from a file once
+                // pipelines were added to it (a state of its shader cache, macOS 27.2);
+                // the file would then never grow. Without it the next launch starts
+                // an archive afresh, which Metal serializes.
+                if data.is_none() && archive.restored() {
+                    if let Err(error) = std::fs::remove_file(&path) {
+                        if error.kind() != io::ErrorKind::NotFound {
+                            eprintln!("GPU module pipeline cache removal failed: {error}");
+                        }
+                    }
+                }
+                data
             });
         }
         true
@@ -115,6 +128,8 @@ struct Disk {
     attempts: u8,
     retry_frame: u32,
     writer: Option<JoinHandle<(u64, io::Result<()>)>>,
+    /// A file to remove once a snapshot is written (the marker of a discarded archive).
+    clears: Option<PathBuf>,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Disk {
@@ -128,6 +143,7 @@ impl Disk {
             attempts: 0,
             retry_frame: 0,
             writer: None,
+            clears: None,
         }
     }
 
@@ -139,6 +155,9 @@ impl Disk {
         {
             if let Ok((work, Ok(()))) = self.writer.take().unwrap().join() {
                 self.saved = work;
+                if let Some(clears) = self.clears.take() {
+                    let _ = std::fs::remove_file(clears);
+                }
             }
         }
     }
@@ -226,8 +245,27 @@ impl PipelineCache {
             .filter_map(Weak::upgrade)
             .find(|c| c.identity == identity)
             .unwrap_or_else(|| {
-                let disk = disk.take();
-                let bytes = disk.as_ref().and_then(|d| {
+                #[allow(unused_mut)]
+                let mut disk = disk.take();
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+                let marker = disk.as_mut().map(|d| {
+                    let marker = metal::marker(&d.path);
+                    // The launch before stopped inside an addition to the archive
+                    // it restored, which Metal can do to one it cannot use: the
+                    // archive goes, the seed is not read, and the marker stays
+                    // until a new archive is written, so that a cache costs one
+                    // stopped launch at most.
+                    if marker.exists() {
+                        eprintln!(
+                            "GPU module pipeline cache: discarded, a launch stopped adding to it"
+                        );
+                        let _ = std::fs::remove_file(&d.path);
+                        d.seed = None;
+                        d.clears = Some(marker.clone());
+                    }
+                    marker
+                });
+                let bytes = disk.as_ref().filter(|d| d.clears.is_none()).and_then(|d| {
                     [&Some(d.path.clone()), &d.seed]
                         .into_iter()
                         .flatten()
@@ -238,7 +276,7 @@ impl PipelineCache {
                 });
                 let data = bytes.as_deref();
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
-                let metal = metal::install(device, data);
+                let metal = metal::install(device, data, marker);
                 let handle = device
                     .features()
                     .contains(wgpu::Features::PIPELINE_CACHE)

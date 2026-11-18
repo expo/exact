@@ -1322,7 +1322,7 @@ export const answer: Answer = (name) => sources[name]();
     writeFileSync(resolve(dir, '__exact_entry.ts'), "export * from './app.ts';\n");
     writeFileSync(resolve(dir, 'app.contract.d.ts'), declarations);
     writeFileSync(resolve(dir, '__exact_paths.json'), JSON.stringify({app:dir, mounts:snapback ? [['adapter',resolve(root,'snapback4/online')]] : []}));
-    configure(dir, false, parseSync); // as build.mjs configures a stage
+    await configure(dir, false, parseSync); // as build.mjs configures a stage
     return check(dir, resolve(libraries, 'tsc'), libraries);
   };
   try {
