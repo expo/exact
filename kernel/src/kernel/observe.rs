@@ -133,14 +133,13 @@ impl Observations {
         }
     }
 
-    /// Measure the readers under `slot` again, which moved: what holds them,
-    /// an owner or a scroller, may have changed without their frames. So
-    /// may what each box that ignores takes.
+    /// Measure the readers and the boxes that ignore under `slot` again,
+    /// which moved: what holds them, an owner or a scroller, may have changed
+    /// without their frames.
     pub(crate) fn moved(&mut self, slot: u32) {
-        if !self.readouts.is_empty() {
+        if !self.readouts.is_empty() || !self.takings.measured.is_empty() {
             self.moved.push(slot);
         }
-        self.takings.measured.clear();
     }
 
     /// Measure again what `slot`, which ignores and was restyled, takes.
@@ -303,7 +302,9 @@ impl Kernel {
         let mut seen: IdSet<u32> = IdSet::default();
         while let Some(s) = moved.pop() {
             if seen.insert(s) && self.arena.is_live(s) {
-                self.arena.observations.readouts.remove(&s);
+                let observations = &mut self.arena.observations;
+                observations.readouts.remove(&s);
+                observations.takings.measured.remove(&s);
                 moved.extend_from_slice(self.arena.children(s));
             }
         }

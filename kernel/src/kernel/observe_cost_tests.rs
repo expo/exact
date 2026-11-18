@@ -407,10 +407,10 @@ fn mount_cost() {
     }
 }
 
-/// What opening or closing a popover costs where readers exist (D9
-/// "Cost"): 1,000 rows in an owner, each holding a box that pads by its
-/// left observation or none, and a popover 5 opened and closed by its
-/// prop; the median of 41 toggles with their layouts, with the test build's
+/// What opening or closing a popover costs where readers or boxes that
+/// ignore exist (D9 "Cost"): 1,000 rows in an owner, each holding a box that
+/// pads by its left observation, one that ignores the left edge, or neither,
+/// and a popover 5 opened and closed by its prop; the median of 41 toggles with their layouts, with the test build's
 /// size counting off. Run it with
 /// `cargo test --release -p exact-kernel --lib popover_toggle_cost -- --ignored --nocapture`.
 #[test]
@@ -421,16 +421,21 @@ fn popover_toggle_cost() {
         all.sort();
         all[all.len() / 2]
     };
-    for reading in [false, true] {
+    for rows_hold in ["nothing", "readers", "boxes that ignore"] {
         let rows: Vec<ViewId> = (10..1_010).collect();
         let mut ops = create([3, 5]);
         ops.extend(create(rows.iter().copied()));
         for &r in &rows {
-            let pad = match reading {
-                true => vec![(StyleId::PaddingLeft, observed(Edge::Left, None))],
-                false => vec![],
+            let pad = match rows_hold {
+                "readers" => vec![(StyleId::PaddingLeft, observed(Edge::Left, None))],
+                _ => vec![],
             };
-            ops.push(style(r, pad, &[(StyleId::Height, "10")]));
+            let ignore = match rows_hold {
+                "boxes that ignore" => "container left",
+                _ => "none",
+            };
+            let rows = [(StyleId::Height, "10"), (StyleId::SafeAreaIgnore, ignore)];
+            ops.push(style(r, pad, &rows));
         }
         ops.push(style(
             5,
@@ -457,6 +462,6 @@ fn popover_toggle_cost() {
             t.elapsed()
         });
         let t = median(times.collect());
-        println!("popover toggle beside 1,000 rows, readers {reading}: {t:.2?}");
+        println!("popover toggle beside 1,000 rows holding {rows_hold}: {t:.2?}");
     }
 }
