@@ -450,7 +450,7 @@ public final class ExactSession {
     private var pendingCommands: [(String, [Any], UInt32?)] = []
     /// The ids the batch being applied asks `scrollIntoView` of (LLP 1070.000 §15: they win over the end-follow).
     var pendingElementScrolls: [String] { pendingCommands.compactMap { $0.0 == "scrollIntoView" ? $0.1.first as? String : nil } }
-    private(set) var applying = false
+    private(set) var applying = false { didSet { releaseWaitingFirings() } }
     /// The chain of covers corrections the work running belongs to (`CoversChain`): work asked in one
     /// runs in it, at once or queued; a batch the owner publishes lands in none
     private(set) var coversCause: AnyObject?
@@ -458,7 +458,7 @@ public final class ExactSession {
     // one is in flight, work that would wait behind it on the owner (a
     // frame's tick, a timer, a reply, an intrinsic size, a report) waits on
     // main instead, and runs after the slice lands, in order.
-    private(set) var fillInFlight = false
+    private(set) var fillInFlight = false { didSet { releaseWaitingFirings() } }
     typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
     /// The work waiting, in the order asked (work asked while a slice lands, while work waits or while it runs joins the
     /// end, so nothing runs ahead of work asked before it), and whether a drain of it runs (`runWaitingWork`)
@@ -484,16 +484,16 @@ public final class ExactSession {
     /// slice's (with its list), a frame's tick's and a canvas draw's.
     let published = PublishedBatches()
     /// A frame's tick is on the owner (LLP 1072 §7.1): the next one waits.
-    var tickInFlight = false
+    var tickInFlight = false { didSet { releaseWaitingFirings() } }
     /// A timer advance is on the owner (LLP 1072.000): the next one waits.
-    var advanceInFlight = false
+    var advanceInFlight = false { didSet { releaseWaitingFirings() } }
     /// Canvas draws run in a turn of their own on the owner (LLP 1072 §8.5):
     /// the last batch applied says whether one is owed, one is in flight
     /// at a time, and one is asked for once per main-queue turn.
-    private(set) var canvasInFlight = false
+    private(set) var canvasInFlight = false { didSet { releaseWaitingFirings() } }
     /// A system notice's batches on the owner (`tellSoon`), each landing in its order.
-    var noticesInFlight = 0
-    var repliesInFlight = 0
+    var noticesInFlight = 0 { didSet { releaseWaitingFirings() } }
+    var repliesInFlight = 0 { didSet { releaseWaitingFirings() } }
     var replySubmissions: [Double] = []
     /// Owner work main did not wait for, whose batches land before any made later (T4).
     var ownerInFlight: Bool { fillInFlight || tickInFlight || advanceInFlight || canvasInFlight || noticesInFlight > 0 || repliesInFlight > 0 }

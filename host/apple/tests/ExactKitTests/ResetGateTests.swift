@@ -272,6 +272,31 @@ final class ResetGateTests: XCTestCase {
         if replays.contains(.activation) { XCTAssertNil(session.pendingActivation, "the held activation ran in the replay") }
     }
 
+    /// A task's native firing that waits for an advance in flight, whose answer lands held: it is asked for again as that
+    /// answer lands, and reaches the held runtime, which its queue keeps it for.
+    func testANativeFiringThatWaitsForAHeldAdvanceIsAskedAgainAsItLands() throws {
+        let (session, _) = try boot()
+        let row = try XCTUnwrap(session.taskTimers.rows.first, "the ticker's native timer")
+        let timer = try XCTUnwrap(session.taskTimers.timerForTests(row.index))
+        until("the timer runs, with nothing in flight, queued or pending") {
+            (try? ticks(session)) ?? 0 > 1 && !session.ownerInFlight && !session.applying && !session.taskTimers.hasReady
+                && !session.taskTimers.pendingForTests(row.index)
+        }
+        func fired() -> Bool { session.runtime.heldCalls.contains { $0.hasPrefix("fireNativeTimer") } }
+        _ = held(session) {
+            timer.fire()
+            XCTAssertTrue(session.taskTimers.hasReady, "the firing is queued, and the ask for it posted before the advance")
+            session.sendAdvance(now: session.now())
+            // Read the queue in the turn after the ask's: the advance's answer may land in the same drain and ask again
+            var afterAsk: (queued: Bool, fired: Bool)?
+            DispatchQueue.main.async { afterAsk = (session.taskTimers.hasReady, fired()) }
+            waitFor("the ask's turn") { afterAsk != nil }
+            XCTAssertEqual(afterAsk?.queued, true, "the ask found the advance in flight and left the firing queued")
+            XCTAssertEqual(afterAsk?.fired, false, "the ask found the advance in flight and left the firing queued")
+            waitFor("the firing reaches the held runtime", cap: 5) { fired() }
+        }
+    }
+
     /// A frame's tick sent to the owner while held: answered there, so the tick in flight ends; the advance replayed.
     func testATickSentWhileHeldEndsAndIsReplayed() throws {
         let (session, _) = try boot()
