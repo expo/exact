@@ -314,7 +314,7 @@ extension RouteController {
     /// person sees until UIKit nests the column again or expands the split
     /// (`SplitIOS.showsDetail`, LLP 1127 D5).
     var inStack: Bool {
-        guard let stack, stack.stackRoutes.contains(where: { $0 === self }) else { return false }
+        guard let stack, stack.shownStackRoutes.contains(where: { $0 === self }) else { return false }
         return host?.split.map { $0.detail !== stack || $0.showsDetail } ?? true
     }
 

@@ -222,8 +222,10 @@ extension NavigationHost {
             // A lifted header takes no room, on a stack yet or not (`coverLifted`).
             for node in c.coveredBarNodes { wanted[node.id] = NavigationHost.cover(of: node, in: c) }
             // Include the departing route until UIKit finishes its transition
-            let nav = c.navigationController
-            let stacked = c.stack?.stackRoutes.contains(c) == true || nav?.transitionCoordinator?.viewController(forKey: .from) === c
+            let nav = c.navigationController ?? popCoordinator(of: c).flatMap { coordinator in
+                allNavigations.first { $0.transitionCoordinator === coordinator }
+            }
+            let stacked = c.stack?.shownStackRoutes.contains(c) == true || nav?.transitionCoordinator?.viewController(forKey: .from) === c
             guard stacked else { continue }
             // A presented route's controller takes its sheet's whole view, and
             // the document's insets (`env()`) are not the sheet's: its route is

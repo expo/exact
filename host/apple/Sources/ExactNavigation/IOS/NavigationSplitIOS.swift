@@ -97,6 +97,15 @@ extension NavigationHost {
                 session.hostGo(location)
             }
         }
+        split.resultsOnTop = { [weak self, weak split] in
+            guard let self, let split,
+                  let list = split.list.stackRoutes.first as? RouteController,
+                  let route = controllers.values.first(where: { $0.key == selectedKey }) else { return false }
+            return resultsRoute(of: list.search?.field, in: [route]) === route
+        }
+        split.listWillBeCovered = { [weak split] in
+            (split?.list.stackRoutes.first as? RouteController)?.search?.resign()
+        }
         split.willPush = { [weak self] route, beneath in self?.prepareRoutePush(route, beneath: beneath) }
         split.baseChanged = { [weak self, weak split] base in
             guard let self, let split else { return }
@@ -134,7 +143,10 @@ extension NavigationHost {
     /// The stack in the split's columns, its routes projected into each,
     /// while UIKit moves neither them nor the columns (`changing`). Returns
     /// whether a lifted header or a column move holds the projection.
-    func syncSplit(_ split: SplitIOS, _ stack: [RouteController], animated: Bool) -> Bool {
+    func syncSplit(_ split: SplitIOS, _ wanted: [RouteController], animated: Bool) -> Bool {
+        let stack = placingResults(wanted, on: split.controller.isCollapsed ? split.list : nil,
+                                   inPlace: !split.settledExpanded, collapsed: split.settledCollapsed)
+        if let results = resultsInPlace { prepareRoutes([results], in: split.list) }
         prepareRoutes(Array(stack.prefix(1)), in: split.list)
         prepareRoutes(Array(stack.dropFirst()), in: split.detail)
         let top = split.detailRoutes.last
@@ -235,7 +247,8 @@ extension NavigationHost {
         presenter.owners.publish()
         // Beside the detail the list is UIKit's sidebar list, collapsed its authored style (LLP 1127 D7)
         presenter.groupedLists?.sync(changed: nil)
-        if split.inspecting != nil || presenter.modalHost.routes.last?.node.props["navigationInspector"] == "true" {
+        if split.inspecting != nil || presenter.modalHost.routes.last?.node.props["navigationInspector"] == "true"
+            || split.resultsOnTop() || resultsInPlace != nil {
             projectionHeld = true
         }
         runHeldSync()

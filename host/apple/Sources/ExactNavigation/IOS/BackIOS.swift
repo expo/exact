@@ -24,6 +24,13 @@ extension NavigationHost {
     /// beneath its top (a sheet's own root is the sheet's); "" when it went,
     /// else why not.
     func agentBack() -> String? {
+        // At a search's results with no Back button of UIKit's (drawn in their list, or the detail's first route), the
+        // way out is the search's close, as the ✕ makes it
+        if let results = controllers.values.first(where: { $0.key == selectedKey }), let search = search(over: results), search.controller.isActive,
+           resultsInPlace === results || (split?.controller.isCollapsed == false && split?.detail.viewControllers.first === results) {
+            search.controller.isActive = false
+            return ""
+        }
         if let more = moreListBack {
             more.popViewController(animated: !ExactEnv.agentFreezes)
             return ""
@@ -59,6 +66,7 @@ extension NavigationHost {
     /// The platform's Back, completed: the authored control pressed, else
     /// the root's `navigate` with the location beneath (LLP 1115 D5).
     func goBack() {
+        endEditingLeavingResults()
         switch back {
         case .press(let id)?: presenter.press(id)
         case .navigate(let location)?:
@@ -124,14 +132,4 @@ extension NavigationHost {
     }
 }
 
-#if os(tvOS)
-extension NavigationHost {
-    /// Whether the Siri Remote's Menu goes back: a route to pop and a Back control.
-    var menuGoesBack: Bool { (navigation?.viewControllers.count ?? 0) > 1 && canInvokeBack }
-    func menuBack() {
-        guard menuGoesBack, !changing else { return }
-        goBack()
-    }
-}
-#endif
 #endif

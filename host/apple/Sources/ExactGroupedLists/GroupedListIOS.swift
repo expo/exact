@@ -517,6 +517,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// The theme's roles this list last drew with (LLP 1095 D4): a new table
     /// (an update, a dev reload) configures every row and the layout again.
     private var theme = ThemeRoles.generation
+    /// UIKit's top inset of the first section while the route's bar search is closed, kept while it is open, where UIKit adds
+    /// the grouped list's top padding (35 points on iOS 27) in one frame; a sidebar's rows move in the search's animation.
+    private var topWithSearchClosed: CGFloat?
     #if !os(tvOS)
     private var switches: [UInt32: UISwitch] = [:]
     #endif
@@ -702,6 +705,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             // the web's space, all of it above the later section; a footer's
             // bottom inset is its own gap under the rows, and stays.
             var insets = section.contentInsets
+            if index == 0, !self.sidebar { if self.host.presenter.navigation.barSearchOpen(around: self.owner) { insets.top = self.topWithSearchClosed ?? insets.top } else { self.topWithSearchClosed = insets.top } }
             // A fold's half band, as a hand-built split view's card stands
             // clear of it, and the list's padding. The section's leading
             // inset is on the left in either direction, as UIKit lays it.
@@ -748,6 +752,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         theme = ThemeRoles.generation
         let writes = owner.wrote("background_color"), flipped = followSidebar()
         let restyled = next.style != previous.style || rethemed || writes != writesGround || flipped
+        collection.followsBar = sidebar
         writesGround = writes
         model = next
         rows = Dictionary(next.sections.flatMap { $0.rows }.map { ($0.view, $0) }, uniquingKeysWith: { a, _ in a })

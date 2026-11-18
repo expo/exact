@@ -158,6 +158,9 @@ final class NodeExtras {
     var fieldWaits = false
     package weak var headerField: UITextField?
     #if os(iOS)
+    weak var headerSearch: (any BarSearch)?
+    #endif
+    #if os(iOS)
     /// A number input's stepper (`NumberStepperIOS.swift`).
     var stepper: FieldStepper?
     #endif
@@ -411,8 +414,22 @@ extension NodeView {
     /// An `input` whose field waits for its closed box (`makeWaitingField`).
     var fieldWaits: Bool { get { extras?.fieldWaits ?? false } set { if newValue || extras != nil { more.fieldWaits = newValue } } }
     /// UIKit's field standing in for this one while it shows: the bar's
-    /// search field (`HeaderSearch`), a prompt's (`PromptField`).
-    package var headerField: UITextField? { get { extras?.headerField } set { if newValue != nil || extras != nil { more.headerField = newValue } } }
+    /// search field (`HeaderSearch`), a prompt's (`PromptField`). The bar's is
+    /// read from its search at each use: UIKit can give the bar another field
+    /// as the split's columns move.
+    package var headerField: UITextField? {
+        get {
+            #if os(iOS)
+            if let search = extras?.headerSearch { return search.shownField }
+            #endif
+            return extras?.headerField
+        }
+        set { if newValue != nil || extras != nil { more.headerField = newValue } }
+    }
+    #if os(iOS)
+    /// The bar's search this field is (`HeaderSearch.field`).
+    package var headerSearch: (any BarSearch)? { get { extras?.headerSearch } set { if newValue != nil || extras != nil { more.headerSearch = newValue } } }
+    #endif
     var selectionField: UITextField? { headerField ?? field }
     /// The editor's text as the app was last told it; nil once the app has set the value since (`FieldComposition.swift`).
     var toldText: String? { get { extras?.toldText } set { if newValue != nil || extras != nil { more.toldText = newValue } } }

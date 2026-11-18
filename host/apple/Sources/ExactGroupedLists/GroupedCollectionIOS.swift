@@ -72,9 +72,33 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
     /// An inset UIKit moves outside a layout of the list reaches the arrangement, as a plain scroller's does
     /// (`ScrollView.adjustedContentInsetDidChange`).
+    /// The list is UIKit's sidebar (`GroupedListView.sidebar`), whose rows follow its bar as it comes back.
+    var followsBar = false
+    private var top: CGFloat?
+    /// UIKit brings a sidebar's bar back in one step as a search floated over the keys closes, and changes the list's
+    /// top inset with UIView animations off (`performWithoutAnimation`), the rows dropping by the bar's height in one
+    /// frame; it moves them on a spring as a search in the bar itself closes (measured on iOS 27.1: damping ratio 0.8,
+    /// 0.36 s). Rows at the top follow a bar that comes back that way on that spring, a Core Animation one, which the
+    /// switched-off UIView animations do not stop: the offset is UIKit's at once, and the rows are drawn from where
+    /// they were to there.
+    private func followBar(from was: CGFloat?) {
+        top = adjustedContentInset.top
+        guard followsBar, let was, let top, top > was + 1, UIView.inheritedAnimationDuration == 0, window != nil,
+              abs(contentOffset.y + top) < 0.5 else { return }
+        let spring = CASpringAnimation(keyPath: "bounds.origin.y")
+        (spring.mass, spring.stiffness, spring.damping) = (1, 306, 28) // ω 17.5 per second, ζ 0.8
+        spring.fromValue = top - was
+        spring.toValue = 0
+        spring.isAdditive = true
+        spring.duration = spring.settlingDuration
+        layer.add(spring, forKey: "exact.followsBar")
+    }
+
     override func adjustedContentInsetDidChange() {
+        let was = top
         super.adjustedContentInsetDidChange()
         owner?.scrollInsetMoved(self)
+        followBar(from: was)
     }
     /// The safe area at the sides the collection reaches over: the kernel's
     /// side reach once it has given one (LLP 1123 D13), else the list's own

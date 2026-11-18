@@ -16,6 +16,20 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+#if os(iOS)
+/// A bar's search, as its field's node reaches it (`HeaderSearch`).
+package protocol BarSearch: AnyObject {
+    /// The field UIKit's bar shows now, which it can replace as a split's columns move.
+    var shownField: UITextField { get }
+    /// Whether UIKit is moving the bar into search.
+    var presenting: Bool { get }
+    /// Keep the field the person's through a focus asked for while an end of editing waits.
+    func keepEditing()
+    /// Exact's own end of the field's editing.
+    func resign()
+}
+#endif
+
 /// A route's controller as the core sees it: its node and the views it draws in.
 package protocol RouteSurface: UIViewController {
     var node: NodeView { get }
@@ -66,6 +80,12 @@ extension UIViewController {
     package var stackRoutes: [UIViewController] {
         if let nav = self as? UINavigationController { return Array(nav.viewControllers.drop { !($0 is RouteSurface) }) }
         return ((self as? BootHolding)?.routeSurface).map { [$0] } ?? []
+    }
+
+    /// The routes the stack shows: `stackRoutes`, which UIKit holds, each with the search results drawn in its
+    /// controller on top of it (`placingResults`).
+    package var shownStackRoutes: [UIViewController] {
+        stackRoutes.flatMap { c in [c] + (c is RouteSurface ? c.children.filter { $0 is RouteSurface } : []) }
     }
 
     /// What UIKit keeps before a navigation controller's routes in
@@ -377,6 +397,12 @@ package protocol NavigationHosting: AnyObject {
     func adjustedInsetChanged(_ node: NodeView)
     /// The correction a route's opted-out edges hold in `scroll`'s insets (`RouteSafeArea`).
     func safeAreaCorrection(_ scroll: UIScrollView) -> UIEdgeInsets
+    /// Whether a header search's field edits over `route`, its results among the stack's levels.
+    func searchEdits(over route: any RouteSurface) -> Bool
+    /// Ends the editing of the search in use, through its search, which holds the end back while UIKit moves the bar
+    /// into search (`HeaderSearch.resign`); whether there was one.
+    func resignSearch() -> Bool
+    func barSearchOpen(around view: UIView) -> Bool
 
     // Scrolling.
     var scrollsToTopSelection: UIScrollView? { get set }
@@ -698,6 +724,9 @@ package final class NoNavigation: NavigationHosting {
     /// No route turns an edge's clearance off without navigation.
     package func adjustedInsetChanged(_ node: NodeView) {}
     package func safeAreaCorrection(_ scroll: UIScrollView) -> UIEdgeInsets { .zero }
+    package func searchEdits(over route: any RouteSurface) -> Bool { false }
+    package func resignSearch() -> Bool { false }
+    package func barSearchOpen(around view: UIView) -> Bool { false }
 
     package func shownScroll(_ node: NodeView?) -> UIScrollView? { node?.scrollView }
     package func scrollBackendChanged(_ node: NodeView) {
