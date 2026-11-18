@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { branchOf, mismatch, parseLink, plan, sourceOf } from './share.mjs';
+import { branchOf, mismatch, numbers, parseLink, plan, sourceOf, withBuildNumber } from './share.mjs';
 
 const url = 'https://appdrop.app/d/k3m9x2p7qa';
 const record = { url, branch: 'main', source: 'a b', revision: 4 };
@@ -28,6 +28,21 @@ test('a share from another branch refuses, unless --force publishes over it', ()
     + "Pass --new-link to give feat/onboarding its own link, or --force to publish over main's.");
   // Forced, it publishes even when the source matches: the branch the link records changes.
   expect(plan(record, { branch: 'feat/onboarding', source: 'a b', force: true }).action).toBe('update');
+});
+
+test('a build takes the app\'s version and the next build number past the committed one and the link\'s', () => {
+  expect(numbers({ version: '0.2.0', buildNumber: 15 }, 15)).toEqual({ version: '0.2.0', build: 16 });
+  // A link published past the committed number, from another checkout, still rises
+  expect(numbers({ version: '0.2.0', buildNumber: 9 }, 15).build).toBe(16);
+  // An app that commits no numbers keeps the build's default version and the link's next revision
+  expect(numbers({}, 3)).toEqual({ version: null, build: 4 });
+  expect(numbers({}).build).toBe(1);
+});
+
+test('the share writes the build number back into app.json as written, and nothing else', () => {
+  const manifest = '{\n  "name": "Gallery",\n  "version": "0.2.0",\n  "buildNumber": 15,\n  "icons": []\n}\n';
+  expect(withBuildNumber(manifest, 16)).toBe(manifest.replace('15', '16'));
+  expect(withBuildNumber('{ "name": "Gallery" }', 16)).toBe('{ "name": "Gallery" }');
 });
 
 test('only a share link is a link; its update key never is', () => {

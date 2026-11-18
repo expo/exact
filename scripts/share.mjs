@@ -15,11 +15,15 @@
 // exact2's are clean and at the commits of the last share, nothing is built and
 // the same link is printed.
 //
-// The upload is the appdrop CLI's (`npx appdrop`, or EXACT_APPDROP_CLI), run in
-// the app's directory, so the link is labelled with the branch. Its update key
-// stays in the CLI's own ~/.appdrop/drops.json and never reaches stdout.
+// The build carries the app's version (`version` in app.json) and the next build
+// number past `buildNumber` and the link's last build, which AppDrop shows in its
+// version fields; the share writes that number back to app.json, to be committed.
+// The upload is the appdrop CLI's (`npx appdrop`, or EXACT_APPDROP_CLI), run
+// outside any git checkout, so the link carries no branch label beside them. Its
+// update key stays in the CLI's own ~/.appdrop/drops.json and never reaches stdout.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { guardFlags } from './help.mjs';
@@ -63,6 +67,19 @@ export function plan(record, { branch, source, newLink = false, force = false })
   if (record.branch && branch && record.branch !== branch && !force) return { action: 'refuse', ...link, from: record.branch };
   if (source && record.source === source && record.branch === branch) return { action: 'current', ...link, revision: record.revision };
   return { action: 'update', ...link };
+}
+
+/** The version and build number a share gives the app, which AppDrop shows: `manifest.version` (null for the
+ *  build's default), and the next number past both `manifest.buildNumber` and `published`, the link's last build,
+ *  since AppDrop refuses a build number it already published. */
+export function numbers(manifest, published = 0) {
+  return { version: manifest.version ?? null, build: Math.max(manifest.buildNumber ?? 0, published) + 1 };
+}
+
+/** `text`, an app.json, with its `buildNumber` set to `build`, the rest as written; `text` unchanged when it names
+ *  no `buildNumber`, as an app that does not commit its numbers. */
+export function withBuildNumber(text, build) {
+  return text.replace(/("buildNumber"\s*:\s*)\d+/, `$1${build}`);
 }
 
 /** Why `share` cannot build `manifest`'s app, or null. A tester's build starts the app's own update stream when it
@@ -109,14 +126,18 @@ async function main(argv) {
   const unsigned = unsignedStore(app.manifest);
   if (unsigned) return fail('update_keys_missing', unsigned);
 
-  // AppDrop refuses a build number it already published: the next one is its revision + 1.
-  let revision = 0;
+  // AppDrop refuses a build number it already published: the link's last, or its revision for a link whose builds
+  // were numbered by it
+  let revision = 0, published = 0;
   if (step.action === 'update') {
     const drop = await fetch(`${step.origin}/api/drops/${step.id}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) }).catch((e) => ({ ok: false, status: e.message }));
     if (drop.status === 404) return fail('link_gone', `share: ${step.url} no longer exists (deleted?). Pass --new-link to make another.`);
     if (!drop.ok) return fail('appdrop_unavailable', `share: AppDrop answered ${drop.status} for ${step.url}; try again.`);
-    revision = (await drop.json()).revision ?? 1;
+    const last = await drop.json();
+    revision = last.revision ?? 1;
+    published = Math.max(revision, Number.parseInt(last.version, 10) || 0);
   }
+  const { version, build } = numbers(app.manifest, published);
 
   const ipa = resolve(app.dir, '.exact/share', `${app.name}.ipa`);
   rmSync(ipa, { force: true });
@@ -124,18 +145,19 @@ async function main(argv) {
   // The bake bundles app.ts with rolldown from this checkout's node_modules; without it Bun spins silently.
   if (!['rolldown', 'rolldown.exe'].some((bin) => existsSync(resolve(ROOT, 'node_modules/.bin', bin))))
     return fail('node_modules_missing', `share: exact's node_modules is missing: run \`bun install --frozen-lockfile\` in ${ROOT} (every build's type check imports rolldown from it)`);
-  say(`share: building ${app.displayName ?? app.name} for iPhone (build ${revision + 1}); the first build takes minutes.`);
+  say(`share: building ${app.displayName ?? app.name} ${version ?? '0.1.0'} (${build}) for iPhone; the first build takes minutes.`);
   // An app with an update store starts its own stream: this build is a tester's, not a release in one.
   const streamed = app.manifest.deploy?.store?.ios !== '0';
   const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', app.crate('apple'), '--archive', ipa, '--unsigned'], {
     cwd: ROOT, stdio: ['ignore', 2, 2],
-    env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(revision + 1), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
+    env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(build), ...(version ? { EXACT_VERSION: version } : {}), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
   });
   if (built.status !== 0 || !existsSync(ipa)) return fail('build_failed', `share: the iPhone build failed (${built.error?.message ?? `exit ${built.status}`}); its errors are above.`);
 
   say(step.action === 'create' ? 'share: uploading to a new AppDrop link' : `share: uploading to ${step.url}`);
+  // Run outside the app's checkout, whose branch the CLI would take as the link's label
   const uploaded = spawnSync('npx', ['--yes', CLI, ipa, ...(step.action === 'update' ? ['--update', step.url] : []), '--json'], {
-    cwd: app.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: tmpdir(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
   // The CLI prints a new link's update link, which holds its key: keep that line out.
   for (const line of (uploaded.stderr ?? '').split('\n')) if (line && !line.includes('/manage#')) say(`  appdrop: ${line}`);
@@ -147,8 +169,13 @@ async function main(argv) {
   const url = parseLink(result.url).url;
   writeFileSync(recordPath, `${JSON.stringify({ url, branch, source, revision: result.revision ?? revision + 1, at: new Date().toISOString() }, null, 2)}\n`);
   rmSync(ipa, { force: true });
+  const manifestPath = resolve(app.dir, 'app.json'), written = readFileSync(manifestPath, 'utf8');
+  if (withBuildNumber(written, build) !== written) {
+    writeFileSync(manifestPath, withBuildNumber(written, build));
+    say(`share: app.json's buildNumber is ${build} now; commit it with the change this build ships.`);
+  }
   say(`share: open this on an iPhone to install ${app.displayName ?? app.name}; it installs with that person's own Apple ID.`);
-  console.log(json ? JSON.stringify({ url, revision: result.revision ?? revision + 1, branch, action: step.action === 'create' ? 'created' : 'updated' }) : url);
+  console.log(json ? JSON.stringify({ url, revision: result.revision ?? revision + 1, version: version ?? '0.1.0', build, branch, action: step.action === 'create' ? 'created' : 'updated' }) : url);
   return 0;
 }
 

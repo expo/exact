@@ -214,6 +214,16 @@
       "description": "The name where space is short: a home screen, a dock tile.",
       "type": "string"
     },
+    "version": {
+      "description": "The version people see: iOS's `CFBundleShortVersionString` and Android's `versionName`, which `exact share` gives its builds and AppDrop shows. Bump it by hand for a release; without it a build is 0.1.0.",
+      "type": "string",
+      "minLength": 1
+    },
+    "buildNumber": {
+      "description": "The last build number `exact share` published: iOS's `CFBundleVersion` and Android's `versionCode`. Each share takes the next number past it and past the link's last build, which AppDrop requires to rise, and writes it back here to be committed with the change it ships.",
+      "type": "integer",
+      "minimum": 1
+    },
     "description": {
       "description": "What the app does, in a sentence: the web manifest's `description`, which an install prompt or a store listing can show.",
       "type": "string"

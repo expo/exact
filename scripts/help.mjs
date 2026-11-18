@@ -285,7 +285,9 @@ Ports    none. Runs to completion (--run too); --prebuild returns at once, the b
     body: `Run it when the app is ready for a person to try on their phone, and send them the link
 (stdout's last line). They open it on their iPhone, and AppDrop installs the app with their
 own Apple ID. The first share makes the link; later ones publish a new version to it, and
-an installed copy offers the update. With the app's and exact2's trees clean and unchanged
+an installed copy offers the update. Each build is app.json's version, and the next build
+number past its buildNumber and the link's last build, which the share writes back to
+app.json to commit; AppDrop shows both. With the app's and exact2's trees clean and unchanged
 since the last share it rebuilds nothing and prints the same link. A share from another git
 branch than the last stops with code link_branch_mismatch: pass --new-link or --force.
 The link is kept in .exact/appdrop.json; the iPhone build takes minutes the first time.
