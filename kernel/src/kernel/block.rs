@@ -432,10 +432,11 @@ impl Kernel {
             }
         }
         let before = self.arena.blocks.get(slot);
-        // Measure every reader again when a box gains or gives back a block, which
-        // changes the band its readers observe
+        // Measure the readers under a box that gains or gives back a block again, which
+        // changes the band they observe; a reader elsewhere that this moves has a frame
+        // that moved
         if self.arena.blocks.given(slot).is_some() != block.is_some() {
-            self.arena.observations.invalidate();
+            self.arena.observations.moved(slot);
         }
         self.arena.blocks.set(slot, block);
         self.block_changed(slot, before);

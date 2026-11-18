@@ -406,3 +406,57 @@ fn mount_cost() {
         }
     }
 }
+
+/// What opening or closing a popover costs where readers exist (D9
+/// "Cost"): 1,000 rows in an owner, each holding a box that pads by its
+/// left observation or none, and a popover 5 opened and closed by its
+/// prop; the median of 41 toggles with their layouts, with the test build's
+/// size counting off. Run it with
+/// `cargo test --release -p exact-kernel --lib popover_toggle_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn popover_toggle_cost() {
+    use std::time::{Duration, Instant};
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    for reading in [false, true] {
+        let rows: Vec<ViewId> = (10..1_010).collect();
+        let mut ops = create([3, 5]);
+        ops.extend(create(rows.iter().copied()));
+        for &r in &rows {
+            let pad = match reading {
+                true => vec![(StyleId::PaddingLeft, observed(Edge::Left, None))],
+                false => vec![],
+            };
+            ops.push(style(r, pad, &[(StyleId::Height, "10")]));
+        }
+        ops.push(style(
+            5,
+            vec![],
+            &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+        ));
+        ops.extend([children(1, &[2]), children(2, &[3, 5]), children(3, &rows)]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([0.0, 0.0, 0.0, 44.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k.tree_mut().track_sizes(false);
+        let times = (0..41).map(|run| {
+            let toggle = match run % 2 == 0 {
+                true => popover(5),
+                false => Op::ClearProp {
+                    id: 5,
+                    prop: crate::PropId::Popover,
+                },
+            };
+            let t = Instant::now();
+            k.apply(0, 2 + run, &[toggle]).unwrap();
+            lay_out(&mut k);
+            t.elapsed()
+        });
+        let t = median(times.collect());
+        println!("popover toggle beside 1,000 rows, readers {reading}: {t:.2?}");
+    }
+}

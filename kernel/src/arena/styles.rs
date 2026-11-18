@@ -49,8 +49,8 @@ impl NodeArena {
         if read.is_some() && reads.is_none() {
             self.observations.stopped_reading(slot);
         }
-        // Measure every reader again when a box starts or stops scrolling, which changes
-        // what its content observes
+        // Measure the readers under a box that starts or stops scrolling again, since that
+        // changes what its content observes
         let scrolled = crate::kernel::area::scroll_view(self, slot);
         // Keep the boxes that reserve, which the solve checks (`check_reservations`)
         match crate::kernel::block::reservation::reserves(&style) {
@@ -66,7 +66,7 @@ impl NodeArena {
         }
         self.styles[slot as usize] = style;
         if scrolled != crate::kernel::area::scroll_view(self, slot) {
-            self.observations.invalidate();
+            self.observations.moved(slot);
         }
         self.refresh_sticky(slot);
     }

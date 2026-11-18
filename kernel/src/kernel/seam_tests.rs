@@ -171,3 +171,37 @@ fn a_measure_over_a_box_that_takes_the_band_leaves_the_kernel() {
     lay_out(&mut k);
     assert_eq!(picture(&k, &[2, 3]), shown);
 }
+
+#[test]
+fn a_popover_opened_and_closed_leaves_its_readers_as_a_fresh_layout_does() {
+    // 3 holds the reader 4 and becomes a popover, then not, above the reader
+    // 5 in the owner 2 under a 44-point left band: 4 changes holder, 5 moves
+    // with 3's room, and both read what a fresh layout of each tree gives
+    let tree = |open: bool| {
+        let mut ops = create(3..=5);
+        let pad = || vec![(StyleId::PaddingLeft, observed(Edge::Left, None))];
+        ops.push(style(3, vec![], &[(StyleId::Height, "100")]));
+        ops.push(style(4, pad(), &[(StyleId::Height, "10")]));
+        ops.push(style(5, pad(), &[(StyleId::Height, "10")]));
+        if open {
+            ops.push(popover(3));
+        }
+        ops.extend([children(1, &[2]), children(2, &[3, 5]), children(3, &[4])]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([0.0, 0.0, 0.0, 44.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k
+    };
+    let mut k = tree(false);
+    k.apply(0, 2, &[popover(3)]).unwrap();
+    lay_out(&mut k);
+    assert_eq!(picture(&k, &[3, 4, 5]), picture(&tree(true), &[3, 4, 5]));
+    let close = Op::ClearProp {
+        id: 3,
+        prop: crate::PropId::Popover,
+    };
+    k.apply(0, 3, &[close]).unwrap();
+    lay_out(&mut k);
+    assert_eq!(picture(&k, &[3, 4, 5]), picture(&tree(false), &[3, 4, 5]));
+}
