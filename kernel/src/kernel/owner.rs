@@ -553,8 +553,9 @@ impl<'a> Resolver<'a> {
         let local = local_at(self.arena, key.0);
         let value = tree
             .and_then(|tree| {
-                // A declaration holds no observation before D10's lowering, which
-                // brings its capture: one here takes its fallback
+                // A declaration holds no observation until captures are built
+                // (LLP 1123 D5): one here, a keyboard reading included, takes
+                // its fallback
                 let leaves = calc::Leaves {
                     local: &|edge| local[edge as usize],
                     observed: &|_| None,

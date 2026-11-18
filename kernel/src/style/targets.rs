@@ -12,7 +12,8 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Target {
     /// The box itself: its incoming safe area, measured on its final box
-    /// (`--exact-safe-area-inset-*`).
+    /// (`--exact-safe-area-inset-*`), or its keyboard readings
+    /// (`--exact-keyboard-inset-*`).
     Box,
     /// The `n`th entry of the native chain, from 1
     /// (`--exact-native-<n>-safe-area-inset-*`).
@@ -28,8 +29,9 @@ pub enum Target {
 
 impl Target {
     /// The custom property's name up to its edge, as an author writes it:
-    /// `--exact-native-2-safe-area-inset-` for the second chain entry.
-    pub fn prefix(&self, out: &mut String) {
+    /// `--exact-native-2-safe-area-inset-` for the second chain entry's
+    /// safe area.
+    pub fn prefix(&self, family: super::calc::Family, out: &mut String) {
         out.push_str("--exact-");
         match self {
             Target::Box => {}
@@ -52,7 +54,7 @@ impl Target {
                 out.push('-');
             }
         }
-        out.push_str("safe-area-inset-");
+        out.push_str(family.infix());
     }
 }
 

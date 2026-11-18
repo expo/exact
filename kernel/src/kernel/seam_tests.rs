@@ -6,7 +6,7 @@ use super::*;
 use crate::Frame;
 
 /// What a layout shows of `ids`: each frame, padding and observation.
-fn picture(k: &Kernel, ids: &[ViewId]) -> Vec<(ViewId, Frame, [f32; 4], Option<Observed>)> {
+fn picture(k: &Kernel, ids: &[ViewId]) -> Vec<(ViewId, Frame, [f32; 4], Option<super::Reading>)> {
     let padding = |id| {
         let (l, t, r, b) = k.resolved_padding(k.arena.key(slot(k, id))).unwrap();
         [t, r, b, l]

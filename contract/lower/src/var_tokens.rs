@@ -2,7 +2,8 @@
 //! this order:
 //!
 //! - The host's own custom property (`var(--exact-safe-area-inset-top)`,
-//!   LLP 1123 D9), which is left for the kernel.
+//!   `var(--exact-keyboard-inset-bottom)`, LLP 1123 D7, D9), which is left
+//!   for the kernel.
 //! - The design's token `name`, written as the name before anything reads
 //!   the row (scoping, the types, the design's retention): by the loader for
 //!   a file, and by `contract::compile` for a source text. It lowers exactly
@@ -657,7 +658,13 @@ fn text(
                 name,
                 fallback,
             } => {
+                // The host's observation stays for the kernel, and its
+                // fallback is checked as an author property's is (LLP 1123 D5)
                 if host_property(&name) {
+                    if let Some(f) = fallback {
+                        let written = (&mut out, &mut fallbacks, &mut undeclared, &mut at);
+                        fallback_value(text, f, tokens, runtime, written)?;
+                    }
                     continue;
                 }
                 if !tokens.declares(&name) {
@@ -675,21 +682,8 @@ fn text(
                     }
                     // The call stays for the kernel, its fallback a value of its own
                     if let Some(f) = fallback {
-                        let inner = (self::text)(
-                            &text[f.clone()],
-                            tokens,
-                            false,
-                            &mut None,
-                            runtime,
-                            true,
-                        )?;
-                        if let Some((inner, mut dropped, mut unknown)) = inner {
-                            out.push_str(&text[at..f.start]);
-                            out.push_str(&inner);
-                            at = f.end;
-                            fallbacks.append(&mut dropped);
-                            undeclared.append(&mut unknown);
-                        }
+                        let written = (&mut out, &mut fallbacks, &mut undeclared, &mut at);
+                        fallback_value(text, f, tokens, runtime, written)?;
                     }
                     continue;
                 }
@@ -722,12 +716,39 @@ fn text(
     Ok(Some((out, fallbacks, undeclared)))
 }
 
-/// Whether `name` (after its `--`) is a custom property the host sets.
+/// Check the fallback `f` of a call that stays for the kernel as a value of
+/// its own, writing what it lowers to in place of its bytes of `text`: the
+/// output, the dropped fallbacks, the undeclared calls and the position
+/// written to.
+fn fallback_value(
+    text: &str,
+    f: std::ops::Range<usize>,
+    tokens: &Tokens,
+    runtime: bool,
+    (out, fallbacks, undeclared, at): (
+        &mut String,
+        &mut Vec<String>,
+        &mut Vec<Undeclared>,
+        &mut usize,
+    ),
+) -> Result<(), Why> {
+    let inner = (self::text)(&text[f.clone()], tokens, false, &mut None, runtime, true)?;
+    if let Some((inner, mut dropped, mut unknown)) = inner {
+        out.push_str(&text[*at..f.start]);
+        out.push_str(&inner);
+        *at = f.end;
+        fallbacks.append(&mut dropped);
+        undeclared.append(&mut unknown);
+    }
+    Ok(())
+}
+
+/// Whether `name` (after its `--`) is a custom property the host sets: a
+/// box's observation of a family on an edge, the safe area's
+/// (`exact-safe-area-inset-top`) or the keyboard's
+/// (`exact-keyboard-inset-bottom`, LLP 1123 D7, D9).
 fn host_property(name: &str) -> bool {
-    let prefix = exact_kernel::style::env::LOCAL_PREFIX.trim_start_matches('-');
-    name.strip_prefix(prefix)
-        .and_then(exact_kernel::style::Edge::from_name)
-        .is_some()
+    exact_kernel::style::calc::Family::named(&format!("--{name}")).is_some()
 }
 
 /// Each `var(` in `text` outside a quoted string, in order.

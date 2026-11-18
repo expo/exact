@@ -1,6 +1,6 @@
-//! The keyboard region (LLP 1123 D7): what an owner's root clears of the
-//! keyboard (D3) and what a box inside the root takes of its layer (D4, D9),
-//! with the values UIKit's guides give, measured on iOS 27.0 and 27.1
+//! The keyboard (LLP 1123 D7): what an owner's root clears of it (D3), what
+//! a box inside the root takes of its layer (D4, D9), and what a box reads
+//! of it, with the values UIKit's guides give, measured on iOS 27.0 and 27.1
 //! (§"Evidence: measured on expo/exact").
 use super::*;
 use crate::kernel::{Keyboard, KeyboardPolicy};
@@ -365,4 +365,400 @@ fn a_keyboard_change_owes_a_layout_where_it_lays_something_out() {
     k.set_owner_keyboard(2, docked(UP)).unwrap();
     lay_out(&mut k);
     assert_eq!(bottom(&k, 2), UP);
+}
+
+/// The box's own keyboard reading of `family` on `edge` (D7).
+fn reads(family: calc::Family, edge: Edge) -> Node {
+    Node::Observe(calc::Observe {
+        target: Target::Box,
+        family,
+        edge,
+        fallback: None,
+    })
+}
+
+/// `id`'s reading of `family`, top right bottom left.
+fn reading(k: &Kernel, id: ViewId, family: calc::Family) -> super::Reading {
+    k.observation_of(id, family).unwrap()
+}
+
+/// `id`'s resolved padding, top right bottom left.
+fn padding(k: &Kernel, id: ViewId) -> [f32; 4] {
+    let (left, top, right, bottom) = k.resolved_padding(k.arena.key(slot(k, id))).unwrap();
+    [top, right, bottom, left]
+}
+
+/// Under the column, 3 (0 to 710) pads its left by its docked reading's
+/// bottom, written as an author writes it with a fallback for where it is
+/// unavailable, and 4 (710 to 810) its right by the one that follows an
+/// undocked keyboard too. Neither padding moves a frame.
+fn reading_column(policy: KeyboardPolicy, keyboard: Option<Keyboard>) -> Kernel {
+    let mut k = column(&[], &[], None);
+    let docked = [(
+        StyleId::PaddingLeft,
+        "var(--exact-keyboard-inset-bottom, 5px)",
+    )];
+    let followed = vec![(
+        StyleId::PaddingRight,
+        reads(calc::Family::KeyboardUndocked, Edge::Bottom),
+    )];
+    let held = [(StyleId::Height, "100")];
+    let ops = [style(3, vec![], &docked), style(4, followed, &held)];
+    k.apply(0, 9, &ops).unwrap();
+    k.set_keyboard_policy(Some(policy));
+    k.set_owner_keyboard(2, keyboard).unwrap();
+    lay_out(&mut k);
+    k
+}
+
+#[test]
+fn a_box_reads_how_far_the_docked_keyboard_reaches_into_it() {
+    use calc::Family::{Keyboard as Docked, KeyboardUndocked as Followed};
+    // Over content that keeps its size, the keyboard's top at 516 lies 194
+    // points above 3's bottom and 294 above 4's, more than 4's 100 points,
+    // as UIKit's guide is the keyboard's frame in each view, not clipped to
+    // it; the other edges read 0
+    let k = reading_column(KeyboardPolicy::OverlaysContent, docked(UP));
+    assert_eq!(
+        reading(&k, 3, Docked),
+        [Some(0.0), Some(0.0), Some(710.0 - UP), Some(0.0)]
+    );
+    assert_eq!(
+        reading(&k, 4, Followed),
+        [Some(0.0), Some(0.0), Some(810.0 - UP), Some(0.0)]
+    );
+    assert_eq!(
+        (padding(&k, 3)[3], padding(&k, 4)[1]),
+        (710.0 - UP, 810.0 - UP)
+    );
+    // Where the content root ends at the keyboard's top, nothing in it reads it
+    let k = reading_column(KeyboardPolicy::ResizesContent, docked(UP));
+    assert_eq!(reading(&k, 3, Docked)[2], Some(0.0));
+    // Dismissed, it reads 0, not its fallback, and UIKit's default guide, the
+    // deeper of it and the bottom safe area, is composed in a length: a box at
+    // the allocation's edge pads by the band's 34 points, and with the
+    // keyboard up by its 328, as UIKit's full-size view's guide does
+    let mut k = reading_column(KeyboardPolicy::OverlaysContent, None);
+    assert_eq!(reading(&k, 3, Docked)[2], Some(0.0));
+    assert_eq!(padding(&k, 3)[3], 0.0);
+    let guide = Node::Max(vec![
+        reads(Docked, Edge::Bottom),
+        observed(Edge::Bottom, None),
+    ]);
+    let rows = [(StyleId::SafeAreaIgnore, "bottom")];
+    k.apply(
+        0,
+        10,
+        &[style(4, vec![(StyleId::PaddingBottom, guide)], &rows)],
+    )
+    .unwrap();
+    lay_out(&mut k);
+    assert_eq!(padding(&k, 4)[2], 34.0);
+    assert!(k.set_owner_keyboard(2, docked(UP)).unwrap());
+    lay_out(&mut k);
+    assert_eq!(padding(&k, 4)[2], 844.0 - UP);
+}
+
+#[test]
+fn a_box_reads_an_undocked_keyboard_only_where_it_follows_it() {
+    use calc::Family::{Keyboard as Docked, KeyboardUndocked as Followed};
+    let floating = |frame| {
+        Some(Keyboard {
+            frame,
+            docked: false,
+        })
+    };
+    let at = |frame| {
+        let k = reading_column(KeyboardPolicy::OverlaysContent, floating(frame));
+        (reading(&k, 3, Docked), reading(&k, 4, Followed))
+    };
+    // Across 4's top (650 to 750 over 4's 710 to 810) it reaches 40 points
+    // in from the top for the guide that follows it, and the docked guide
+    // reads nothing of it
+    let (docked, followed) = at([100.0, 650.0, 200.0, 100.0]);
+    assert_eq!(followed, [Some(40.0), Some(0.0), Some(0.0), Some(0.0)]);
+    assert_eq!(docked, [Some(0.0); 4]);
+    // Across its bottom-left corner it reaches in from the left and the
+    // bottom, each to its far side, and across its right edge from the right
+    let (_, followed) = at([-50.0, 780.0, 150.0, 100.0]);
+    assert_eq!(followed, [Some(0.0), Some(0.0), Some(30.0), Some(100.0)]);
+    let (_, followed) = at([340.0, 730.0, 100.0, 60.0]);
+    assert_eq!(followed, [Some(0.0), Some(50.0), Some(0.0), Some(0.0)]);
+    // As wide as the box, it enters from neither side
+    let (_, followed) = at([0.0, 760.0, 390.0, 100.0]);
+    assert_eq!(followed, [Some(0.0), Some(0.0), Some(50.0), Some(0.0)]);
+    // Wholly inside it, or clear of it, it crosses no edge
+    for frame in [[100.0, 730.0, 200.0, 60.0], [100.0, 300.0, 200.0, 100.0]] {
+        assert_eq!(at(frame).1, [Some(0.0); 4], "{frame:?}");
+    }
+}
+
+#[test]
+fn the_docked_reading_places_the_keyboard_as_the_occupancy_does() {
+    // A keyboard beside the owner occupies nothing, and nothing reads it
+    let beside = Some(Keyboard {
+        frame: [390.0, UP, 300.0, 328.0],
+        docked: true,
+    });
+    let k = reading_column(KeyboardPolicy::OverlaysContent, beside);
+    assert_eq!(
+        reading(&k, 4, calc::Family::KeyboardUndocked),
+        [Some(0.0); 4]
+    );
+    // A fitted sheet that grows over the keyboard measures it up from its
+    // bottom, as its occupancy is: its 300-point content, on the keyboard's
+    // top, reads none of it
+    let mut ops = create(3..=3);
+    ops.push(style(2, vec![], &[(StyleId::SafeAreaIgnore, "none")]));
+    let pad = vec![(
+        StyleId::PaddingLeft,
+        reads(calc::Family::Keyboard, Edge::Bottom),
+    )];
+    ops.push(style(3, pad, &[(StyleId::Height, "300")]));
+    ops.extend([children(1, &[2]), children(2, &[3])]);
+    let mut k = owner(390.0, 844.0, ops);
+    let sheet = block(BlockAxis::Is(390.0), BlockAxis::AtMost(800.0));
+    k.set_host_block(2, Some(sheet)).unwrap();
+    k.set_owner_band(2, Some([0.0, 0.0, 34.0, 0.0]), &[])
+        .unwrap();
+    k.set_keyboard_policy(Some(KeyboardPolicy::ResizesContent));
+    lay_out(&mut k);
+    let keyboard = Keyboard {
+        frame: [0.0, 6.0, 390.0, 328.0],
+        docked: true,
+    };
+    k.set_owner_keyboard(2, Some(keyboard)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.host_block_size(2), Some((390.0, 628.0)));
+    assert_eq!(reading(&k, 3, calc::Family::Keyboard)[2], Some(0.0));
+}
+
+#[test]
+fn a_reader_that_grows_by_its_reading_settles_at_once() {
+    // At the column's end over content that keeps its size, a composer that
+    // pads its bottom by its reading, and an empty spacer as tall as its
+    // reading, each take the keyboard's 294 points over the content root's
+    // end in the solve's first layout: the reading is not limited by the
+    // box's size, so it does not climb with it
+    let grows = |row: StyleId, rows: &[(StyleId, &'static str)]| {
+        let mut ops = create(3..=4);
+        let column = [
+            (StyleId::SafeAreaIgnore, "none"),
+            (StyleId::Display, "flex"),
+            (StyleId::FlexDirection, "column"),
+            (StyleId::Height, "100%"),
+        ];
+        ops.push(style(2, vec![], &column));
+        ops.push(style(3, vec![], &[(StyleId::FlexGrow, "1")]));
+        let reader = vec![(row, reads(calc::Family::Keyboard, Edge::Bottom))];
+        ops.push(style(4, reader, rows));
+        ops.extend([children(1, &[2]), children(2, &[3, 4])]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([0.0, 0.0, 34.0, 0.0]), &[])
+            .unwrap();
+        k.set_keyboard_policy(Some(KeyboardPolicy::OverlaysContent));
+        lay_out(&mut k);
+        k.set_owner_keyboard(2, docked(UP)).unwrap();
+        lay_out(&mut k);
+        assert_eq!(k.arena.observations.rounds, 1, "{row:?}");
+        assert!(k.safe_area_unsettled().is_empty(), "{row:?}");
+        k
+    };
+    let k = grows(StyleId::PaddingBottom, &[(StyleId::PaddingTop, "8")]);
+    assert_eq!(padding(&k, 4)[2], 810.0 - UP);
+    assert_eq!(frame(&k, 4).3, 8.0 + 810.0 - UP);
+    let k = grows(StyleId::Height, &[(StyleId::FlexShrink, "0")]);
+    assert_eq!(frame(&k, 4).3, 810.0 - UP);
+}
+
+#[test]
+fn a_reader_whose_edge_moves_by_its_reading_takes_the_keyboards_depth() {
+    // 4 follows 3 (526 tall) in flow and is as tall as its reading: its top
+    // lies 10 points below the keyboard's top at 516, so each round its
+    // bottom moves one for one with its input, and the solve takes the
+    // keyboard's depth, the only fixed point, as UIKit's guide is 328 tall
+    // wherever its view lies
+    let mut ops = create(3..=4);
+    ops.push(style(2, vec![], &[(StyleId::SafeAreaIgnore, "none")]));
+    ops.push(style(3, vec![], &[(StyleId::Height, "526")]));
+    let tall = vec![(StyleId::Height, reads(calc::Family::Keyboard, Edge::Bottom))];
+    ops.push(style(4, tall, &[]));
+    ops.extend([children(1, &[2]), children(2, &[3, 4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_band(2, Some([0.0, 0.0, 34.0, 0.0]), &[])
+        .unwrap();
+    k.set_keyboard_policy(Some(KeyboardPolicy::OverlaysContent));
+    lay_out(&mut k);
+    k.set_owner_keyboard(2, docked(UP)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(frame(&k, 4).3, 844.0 - UP);
+    assert_eq!(k.arena.observations.rounds, 2);
+    assert!(k.safe_area_unsettled().is_empty());
+}
+
+#[test]
+fn a_scroller_that_takes_the_keyboard_gives_its_content_none() {
+    // 5, at rest below 3's fold, lies under the keyboard and pads its left
+    // by its reading: over content that keeps its size nothing takes it;
+    // under `resizes-visual` 3 takes the keyboard as its content inset and
+    // under `resizes-content` 3 ends at its top, and 5 reads none of it.
+    // Each restyle of the scroller writes every row it varies, since a style
+    // patch keeps the rows it does not name
+    let scroller = |rows: &[(StyleId, &'static str)]| {
+        let mut all = vec![
+            (StyleId::OverflowX, "visible"),
+            (StyleId::OverflowY, "scroll"),
+            (StyleId::FlexGrow, "1"),
+            ignore("none"),
+        ];
+        all.extend_from_slice(rows);
+        style(3, vec![], &all)
+    };
+    let mut k = {
+        let mut ops = create(3..=5);
+        let column = [
+            (StyleId::SafeAreaIgnore, "none"),
+            (StyleId::Display, "flex"),
+            (StyleId::FlexDirection, "column"),
+            (StyleId::Height, "100%"),
+        ];
+        ops.push(style(2, vec![], &column));
+        ops.push(scroller(&[]));
+        ops.push(style(4, vec![], &[(StyleId::Height, "700")]));
+        let reader = vec![(
+            StyleId::PaddingLeft,
+            reads(calc::Family::Keyboard, Edge::Bottom),
+        )];
+        ops.push(style(5, reader, &[(StyleId::Height, "100")]));
+        ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([0.0, 0.0, 34.0, 0.0]), &[])
+            .unwrap();
+        k.set_keyboard_policy(Some(KeyboardPolicy::OverlaysContent));
+        k.set_owner_keyboard(2, docked(UP)).unwrap();
+        lay_out(&mut k);
+        k
+    };
+    let read = |k: &Kernel| reading(k, 5, calc::Family::Keyboard)[2];
+    // 5 lies from 700 to 800, its bottom 284 points below the keyboard's top
+    assert_eq!(read(&k), Some(800.0 - UP));
+    // A policy that lays nothing else out still owes the reading's layout,
+    // as `resizes-visual` does after `overlays-content`
+    for policy in [
+        KeyboardPolicy::ResizesVisual,
+        KeyboardPolicy::ResizesContent,
+    ] {
+        assert!(k.set_keyboard_policy(Some(policy)), "{policy:?}");
+        lay_out(&mut k);
+        assert_eq!(read(&k), Some(0.0), "{policy:?}");
+    }
+    k.set_keyboard_policy(Some(KeyboardPolicy::ResizesVisual));
+    lay_out(&mut k);
+    // A scroller that comes to ignore the keyboard region passes it, though
+    // no frame moves, and so does one that scrolls only sideways
+    let sideways = [
+        (StyleId::OverflowX, "scroll"),
+        (StyleId::OverflowY, "hidden"),
+    ];
+    for (n, rows) in [&[ignore("keyboard bottom")][..], &sideways]
+        .into_iter()
+        .enumerate()
+    {
+        k.apply(0, 10 + n as u64, &[scroller(rows)]).unwrap();
+        lay_out(&mut k);
+        assert_eq!(read(&k), Some(800.0 - UP), "{rows:?}");
+    }
+    // And one that stops ignoring it takes it again
+    k.apply(0, 12, &[scroller(&[])]).unwrap();
+    lay_out(&mut k);
+    assert_eq!(read(&k), Some(0.0));
+}
+
+#[test]
+fn a_box_outside_every_owner_reads_the_sessions_keyboard() {
+    // 3 lies in the document, beside the owner; it reads the session's
+    // keyboard in the document's space
+    let mut ops = create(3..=3);
+    let reader = vec![(
+        StyleId::PaddingLeft,
+        reads(calc::Family::Keyboard, Edge::Bottom),
+    )];
+    ops.push(style(3, reader, &[(StyleId::Height, "844")]));
+    ops.push(children(1, &[2, 3]));
+    let mut k = owner(390.0, 844.0, ops);
+    lay_out(&mut k);
+    assert_eq!(reading(&k, 3, calc::Family::Keyboard)[2], Some(0.0));
+    assert!(k.set_session_keyboard(docked(UP)).unwrap());
+    lay_out(&mut k);
+    assert_eq!(reading(&k, 3, calc::Family::Keyboard)[2], Some(844.0 - UP));
+}
+
+#[test]
+fn a_popover_its_host_places_reads_no_keyboard() {
+    // The popover 3, whose host gives it a block and shows it where the
+    // kernel is not told, reads its keyboard with a 7-point fallback, which
+    // applies: no keyboard frame can be placed in a space the kernel does
+    // not know
+    let mut ops = create(3..=3);
+    let pad = vec![(
+        StyleId::PaddingTop,
+        Node::Observe(calc::Observe {
+            fallback: Some(Box::new(Node::Value(7.0, calc::Unit::Px))),
+            ..match reads(calc::Family::Keyboard, Edge::Bottom) {
+                Node::Observe(o) => o,
+                _ => unreachable!(),
+            }
+        }),
+    )];
+    ops.extend([style(3, pad, &[(StyleId::Height, "10")]), popover(3)]);
+    ops.extend([children(1, &[2]), children(2, &[3])]);
+    let mut k = owner(390.0, 844.0, ops);
+    let block = block(BlockAxis::Is(200.0), BlockAxis::Is(100.0));
+    k.set_host_block(3, Some(block)).unwrap();
+    k.set_session_keyboard(docked(UP)).unwrap();
+    lay_out(&mut k);
+    assert!(k.is_top_layer(3));
+    assert_eq!(reading(&k, 3, calc::Family::Keyboard), [None; 4]);
+    assert_eq!(padding(&k, 3)[0], 7.0, "the fallback");
+}
+
+#[test]
+fn a_reading_in_a_value_held_as_text_is_read() {
+    // A value whose `env()` has a fallback is held as text and parsed once
+    // substituted; its keyboard reading is a reading all the same
+    let mut k = reading_column(KeyboardPolicy::OverlaysContent, docked(UP));
+    let text = "max(env(safe-area-inset-bottom, 0px), var(--exact-keyboard-inset-bottom))";
+    k.apply(0, 10, &[style(3, vec![], &[(StyleId::PaddingRight, text)])])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(padding(&k, 3)[1], 710.0 - UP);
+}
+
+#[test]
+fn a_keyboard_leaf_crosses_the_wire_where_the_parser_reads_it() {
+    // The box's own reading, with a fallback, round-trips through its text,
+    // `var(--exact-keyboard-inset-bottom, 3px)`; a chain entry's names no
+    // host name, so the decoder refuses it
+    let leaf = |target| {
+        Node::Observe(calc::Observe {
+            target,
+            family: calc::Family::Keyboard,
+            edge: Edge::Bottom,
+            fallback: Some(Box::new(Node::Value(3.0, calc::Unit::Px))),
+        })
+    };
+    let decoded = |node: Node| {
+        let mut w = crate::wire::codec::Writer::new();
+        calc::Comparison::intern(node).encode(&mut w);
+        let bytes = w.into_vec();
+        let mut r = crate::wire::codec::Reader::new(&bytes);
+        calc::Comparison::decode(&mut r, StyleId::PaddingBottom).map(|c| {
+            let mut text = String::new();
+            c.css(&mut text);
+            text
+        })
+    };
+    let text = decoded(leaf(Target::Box)).unwrap();
+    assert_eq!(text, "var(--exact-keyboard-inset-bottom, 3px)");
+    assert!(decoded(leaf(Target::Chain(2))).is_err());
 }

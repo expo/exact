@@ -99,6 +99,13 @@ pub(super) struct Space {
 }
 
 impl Space {
+    /// Whether the kernel knows where this space lies: an owner's block, or
+    /// the viewport; not a top-layer box whose host places it (a painted
+    /// `position-area` popover), whose band is unavailable too ([`band_at`]).
+    pub(super) fn placed(&self) -> bool {
+        self.owner.is_some() || self.band.is_some()
+    }
+
     /// How far in from this space's edges each of `slot`'s edges lies, top
     /// right bottom left.
     pub(super) fn edges(&self, arena: &NodeArena, slot: u32) -> [f32; 4] {
@@ -243,6 +250,13 @@ pub(super) fn passed(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]
 /// `overflow-y`. A `hidden` box only clips, and UIKit passes the safe area
 /// through a clipping view to its subviews.
 pub(crate) fn scroll_view(arena: &NodeArena, slot: u32) -> bool {
+    let (x, y) = scroll_axes(arena, slot);
+    x || y
+}
+
+/// Whether `slot` scrolls sideways and vertically, each axis as
+/// [`scroll_view`] reads it.
+pub(crate) fn scroll_axes(arena: &NodeArena, slot: u32) -> (bool, bool) {
     let s = arena.style(slot);
     let default = !s.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default();
     let y = if default {
@@ -251,5 +265,8 @@ pub(crate) fn scroll_view(arena: &NodeArena, slot: u32) -> bool {
         s.overflow_y
     };
     let scrolls = |o| matches!(o, Overflow::Auto | Overflow::Scroll);
-    scrolls(s.overflow_x.computed(y)) || scrolls(y.computed(s.overflow_x))
+    (
+        scrolls(s.overflow_x.computed(y)),
+        scrolls(y.computed(s.overflow_x)),
+    )
 }

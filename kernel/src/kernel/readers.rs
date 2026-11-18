@@ -37,11 +37,12 @@ pub(crate) struct Readers {
     pub(crate) local: SlotSet,
     /// Nodes with a length that reads an author's custom property.
     pub(crate) properties: SlotSet,
-    /// Nodes with a length that reads an observation of its safe area.
+    /// Nodes with a length that reads an observation, of its safe area or
+    /// the keyboard.
     pub(crate) observers: SlotSet,
-    /// The edges each observer reads, as
-    /// [`calc::Comparison::observed_edges`] gives them.
-    pub(crate) observed_edges: crate::id::IdMap<u32, u8>,
+    /// The components each observer reads, as
+    /// [`calc::Comparison::observed_components`] gives them.
+    pub(crate) observed: crate::id::IdMap<u32, u16>,
     /// Nodes with a length that reads a native target's raw insets, and
     /// the targets each reads, each with the edges it reads as bits (LLP
     /// 1123 D9, "The native chain").
@@ -79,7 +80,7 @@ impl Readers {
             if let RowValue::Dimension(Dimension::Compare(c)) = style.get(id) {
                 local |= c.reads_local();
                 properties |= c.reads_custom();
-                observes |= c.observed_edges();
+                observes |= c.observed_components();
                 targets.extend(c.targets_read());
             }
         }
@@ -89,8 +90,8 @@ impl Readers {
         put(&mut self.properties, slot, properties);
         put(&mut self.observers, slot, observes != 0);
         match observes {
-            0 => self.observed_edges.remove(&slot),
-            edges => self.observed_edges.insert(slot, edges),
+            0 => self.observed.remove(&slot),
+            components => self.observed.insert(slot, components),
         };
         match targets.is_empty() {
             true => self.targets.remove(&slot),
@@ -113,7 +114,7 @@ impl Readers {
         ] {
             set.remove(slot);
         }
-        self.observed_edges.remove(&slot);
+        self.observed.remove(&slot);
         self.targets.remove(&slot);
     }
 

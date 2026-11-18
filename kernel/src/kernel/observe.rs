@@ -1,4 +1,5 @@
-//! Observations of the safe area, per box (@ref LLP 1123 D2's band, D9).
+//! Observations of the safe area and the keyboard, per box (@ref LLP 1123
+//! D2's band, D7, D9).
 //!
 //! A content owner's host gives its root a band: the owner view's raw
 //! `safeAreaInsets`, in its block's space, or none while it is unavailable.
@@ -12,7 +13,9 @@
 //! ignore (D14, D4), it is there only what is reserved at or below the
 //! scroller. A box outside every owner, a
 //! document top-layer box's content included, observes the session view's
-//! band on the viewport.
+//! band on the viewport. A box's readings of the keyboard are what UIKit
+//! gives a view as its keyboard guide (D7, `keyboard.rs`), each family of
+//! observations four components of a reader's input.
 //!
 //! A reader's border box depends on what it reads, so the kernel solves the
 //! readers after each layout ([`Kernel::solve_observations`]): each input
@@ -30,14 +33,23 @@ use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
 use crate::id::{IdMap, IdSet, Offer, ViewId};
 use crate::layout::LayoutReceipt;
+use crate::style::calc::{Family, COMPONENTS};
 
 /// The rounds the solve lays its readers out in before it leaves the ones
 /// still off unsettled (D9).
 const MAX_ROUNDS: usize = 24;
 
-/// What a reader observes on each edge, top right bottom left; `None` where
-/// its band is unavailable, which makes the observation guaranteed-invalid.
-pub(crate) type Observed = [Option<f32>; 4];
+/// What a reader observes, each family on each edge top right bottom left
+/// (`Observe::component`); `None` where it is unavailable, which makes the
+/// observation guaranteed-invalid.
+pub(crate) type Observed = [Option<f32>; COMPONENTS];
+
+// A reader's components are bits of a `u16` (`Readers::observed`)
+const _: () = assert!(COMPONENTS <= 16);
+
+/// What a box reads of one family, top right bottom left; `None` where it is
+/// unavailable.
+pub type Reading = [Option<f32>; 4];
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Observations {
@@ -74,6 +86,9 @@ pub(crate) struct Observations {
     /// The edges on which each scroller that ignores passed the area to its
     /// content when its readers were last measured.
     passing: IdMap<u32, [bool; 4]>,
+    /// The scrollers that ignore and passed a docked keyboard to their
+    /// content when its readers were last measured (D7).
+    passing_keyboard: IdSet<u32>,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
     /// The keyboard each owner's host reports, and the policy (D7).
@@ -82,9 +97,12 @@ pub(crate) struct Observations {
 
 impl Observations {
     /// What `slot`'s lengths read of its observations: its input, 0 on
-    /// every edge before the solve gives one.
+    /// every component before the solve gives one.
     pub(crate) fn input(&self, slot: u32) -> Observed {
-        self.inputs.get(&slot).copied().unwrap_or([Some(0.0); 4])
+        self.inputs
+            .get(&slot)
+            .copied()
+            .unwrap_or([Some(0.0); COMPONENTS])
     }
 
     pub(crate) fn band(&self, owner: u32) -> Option<[f32; 4]> {
@@ -108,6 +126,23 @@ impl Observations {
         self.takings.measured.clear();
     }
 
+    /// Measure again the boxes that read the keyboard and whose owner,
+    /// `None` outside every owner, is `of`: a change to the keyboard or the
+    /// policy moves their readings, though it lays nothing out. `observed`
+    /// is each reader's components. Returns whether there were any.
+    pub(super) fn forget_keyboard_readings(
+        &mut self,
+        observed: &IdMap<u32, u16>,
+        of: impl Fn(Option<u32>) -> bool,
+    ) -> bool {
+        let before = self.readouts.len();
+        let reads =
+            |slot: &u32| (observed.get(slot)).is_some_and(|&c| super::keyboard::reads_keyboard(c));
+        self.readouts
+            .retain(|slot, r| !(of(r.owner) && reads(slot)));
+        self.readouts.len() != before
+    }
+
     /// Half a device pixel at the last solve, within which a measurement is
     /// settled.
     pub(super) fn tolerance(&self) -> f32 {
@@ -126,8 +161,9 @@ impl Observations {
     }
 
     /// What a reset keeps: what the host reported for the session, its band,
-    /// its view's targets, the registered targets and the keyboard policy, as
-    /// the arena keeps the environment. What the tree held goes with it.
+    /// its view's targets, the registered targets, its keyboard and the
+    /// keyboard policy, as the arena keeps the environment. What the tree
+    /// held goes with it.
     pub(crate) fn after_reset(&mut self) -> Self {
         Observations {
             session: self.session,
@@ -171,6 +207,7 @@ impl Observations {
         self.spaces.remove(&slot);
         self.forget_taken(slot);
         self.passing.remove(&slot);
+        self.passing_keyboard.remove(&slot);
         self.keyboards.forget(slot);
         self.stopped_reading(slot);
     }
@@ -256,15 +293,23 @@ impl Kernel {
 
     /// What `view` observes of its safe area, top right bottom left, as the
     /// last layout measured it (D9's readout); `None` for a box that reads
-    /// no observation, or that a content region's layout withholds them
-    /// from.
-    pub fn observation(&self, view: ViewId) -> Option<Observed> {
+    /// none of it, or that a content region's layout withholds its
+    /// observations from.
+    pub fn observation(&self, view: ViewId) -> Option<Reading> {
+        self.observation_of(view, Family::SafeArea)
+    }
+
+    /// What `view` reads of `family`, as [`Kernel::observation`] reads the
+    /// safe area: the keyboard's readings among them (D7).
+    pub fn observation_of(&self, view: ViewId, family: Family) -> Option<Reading> {
         let slot = self.arena.slot_of(view)?;
-        self.arena
-            .observations
-            .readouts
-            .get(&slot)
-            .map(|r| r.observed)
+        let read = self.arena.readers.observed.get(&slot).copied().unwrap_or(0);
+        if read & family.bits() == 0 {
+            return None;
+        }
+        let readout = self.arena.observations.readouts.get(&slot)?;
+        let at = family as usize * 4;
+        Some(std::array::from_fn(|e| readout.observed[at + e]))
     }
 
     /// The readers the last layout left unsettled, whose inputs are not
@@ -332,8 +377,9 @@ impl Kernel {
                 // A box with no layout box, `display: none` or under one, has
                 // nothing to measure: it keeps its input until it has a box
                 if self.arena.flags(s).has(crate::id::NodeFlags::HIDDEN) {
+                    let owner = band_at(self, s).owner;
                     let observations = &mut self.arena.observations;
-                    let kept = Readout::kept(observations.input(s));
+                    let kept = Readout::kept(observations.input(s), owner);
                     observations.readouts.insert(s, kept);
                     continue;
                 }
@@ -346,8 +392,8 @@ impl Kernel {
                 }
                 observations.readouts.insert(s, readout);
                 let input = observations.input(s);
-                let edges = self.arena.readers.observed_edges[&s];
-                if settled(input, measured, tolerance, edges) {
+                let components = self.arena.readers.observed[&s];
+                if settled(input, measured, tolerance, components) {
                     continue;
                 }
                 off.push(s);
@@ -355,7 +401,7 @@ impl Kernel {
                     continue;
                 }
                 let samples = solving.entry(s).or_default();
-                let next = samples.step(input, measured, caps, tolerance, edges);
+                let next = samples.step(input, measured, caps, tolerance, components);
                 if next != input {
                     self.arena.observations.inputs.insert(s, next);
                     moved.push(s);
@@ -443,7 +489,7 @@ impl Kernel {
         for &s in &withheld {
             let observations = &mut self.arena.observations;
             observations.readouts.remove(&s);
-            if observations.inputs.insert(s, [None; 4]) != Some([None; 4]) {
+            if observations.inputs.insert(s, [None; COMPONENTS]) != Some([None; COMPONENTS]) {
                 changed.push(s);
             }
         }
@@ -593,42 +639,54 @@ impl Kernel {
 
 impl Kernel {
     /// Measure again the readers under each scroller that ignores whose
-    /// passing of the area to its content changed, which moves what they
-    /// observe though their own frames need not move.
+    /// passing of the area, or of a docked keyboard, to its content changed,
+    /// which moves what they observe though their own frames need not move.
     fn check_scrollers(&mut self) {
         let arena = &self.arena;
-        if arena.ignoring.is_empty() && arena.observations.passing.is_empty() {
+        let observations = &arena.observations;
+        if arena.ignoring.is_empty()
+            && observations.passing.is_empty()
+            && observations.passing_keyboard.is_empty()
+        {
             return;
         }
-        let mut moved = Vec::new();
+        let (mut moved, mut keyboard) = (Vec::new(), Vec::new());
         for s in arena.ignoring.iter().filter(|&s| scroll_view(arena, s)) {
             let space = band_at(self, s);
             let now = space
                 .band
                 .map_or([false; 4], |b| passed(arena, s, &space, b));
-            if arena
-                .observations
-                .passing
-                .get(&s)
-                .map_or([false; 4], |p| *p)
-                != now
-            {
+            if observations.passing.get(&s).map_or([false; 4], |p| *p) != now {
                 moved.push((s, now));
+            }
+            let passes = super::keyboard::passing(arena, s, &space);
+            if passes != observations.passing_keyboard.contains(&s) {
+                keyboard.push((s, passes));
             }
         }
         // A scroller that stopped ignoring or scrolling passes nothing
-        let gone = (arena.observations.passing.keys().copied())
-            .filter(|&s| !arena.ignoring.contains(s) || !scroll_view(arena, s));
-        moved.extend(gone.map(|s| (s, [false; 4])));
-        if moved.is_empty() {
+        let gone = |s: &u32| !arena.ignoring.contains(*s) || !scroll_view(arena, *s);
+        let stopped = (observations.passing.keys()).filter(|s| gone(s));
+        moved.extend(stopped.map(|&s| (s, [false; 4])));
+        let stopped = (observations.passing_keyboard.iter()).filter(|s| gone(s));
+        keyboard.extend(stopped.map(|&s| (s, false)));
+        if moved.is_empty() && keyboard.is_empty() {
             return;
         }
-        let roots: IdSet<u32> = moved.iter().map(|&(s, _)| s).collect();
+        let roots: IdSet<u32> = (moved.iter().map(|&(s, _)| s))
+            .chain(keyboard.iter().map(|&(s, _)| s))
+            .collect();
         let observations = &mut self.arena.observations;
         for (s, now) in moved {
             match now.contains(&true) {
                 true => observations.passing.insert(s, now),
                 false => observations.passing.remove(&s),
+            };
+        }
+        for (s, passes) in keyboard {
+            match passes {
+                true => observations.passing_keyboard.insert(s),
+                false => observations.passing_keyboard.remove(&s),
             };
         }
         self.forget_under(&roots);
@@ -656,10 +714,11 @@ pub(super) fn within(arena: &NodeArena, slot: u32, root: u32) -> bool {
 }
 
 /// Whether `input` is within `tolerance` of `measured` on each of the
-/// reader's `edges`, an unavailable edge matching only an unavailable one.
-fn settled(input: Observed, measured: Observed, tolerance: f32, edges: u8) -> bool {
-    (0..4)
-        .filter(|e| edges & 1 << e != 0)
+/// reader's `components`, an unavailable one matching only an unavailable
+/// one.
+fn settled(input: Observed, measured: Observed, tolerance: f32, components: u16) -> bool {
+    (0..COMPONENTS)
+        .filter(|e| components & 1 << e != 0)
         .all(|e| match (input[e], measured[e]) {
             (Some(i), Some(m)) => (i - m).abs() <= tolerance,
             (None, None) => true,
@@ -667,22 +726,26 @@ fn settled(input: Observed, measured: Observed, tolerance: f32, edges: u8) -> bo
         })
 }
 
-/// A reader's last sample on each edge, for the secant step.
+/// A reader's last sample on each component, for the secant step.
 #[derive(Default)]
 struct Samples {
-    /// The input and residual of its round before last, per edge.
-    last: [Option<(f32, f32)>; 4],
+    /// The input and residual of its round before last, per component.
+    last: [Option<(f32, f32)>; COMPONENTS],
 }
 
 impl Samples {
     /// The next input, from this round's `input` and `measured`: on each of
-    /// the reader's `edges` not within `tolerance`, the secant step on the
-    /// residuals of this round and the one before, else plain substitution;
-    /// an edge it does not read keeps its input. A step lands within what
-    /// an observation can be, 0 to the area's depth `caps`; one whose
+    /// the reader's `components` not within `tolerance`, the secant step on
+    /// the residuals of this round and the one before, else plain
+    /// substitution; a component it does not read keeps its input. A step
+    /// lands within what an observation can be, 0 to its most `caps` (the
+    /// area's depth, or the keyboard's for its readings); one whose
     /// candidate lies behind the input, against its residual, takes the end
     /// of that range the residual points to: the measurement outruns the
-    /// line there, steeper than it, up to where it stops at that end.
+    /// line there, steeper than it, up to where it stops at that end. So
+    /// does a residual that repeats while the input moved: the measurement
+    /// moves one for one with the input, as a box's reading does where its
+    /// own edge moves by it, and stops only at that end.
     /// Telling a round that crosses a layout breakpoint (a wrap, a track
     /// change), which D9 also has substitute, needs a signal from layout
     /// that it does not give yet.
@@ -690,14 +753,14 @@ impl Samples {
         &mut self,
         input: Observed,
         measured: Observed,
-        caps: [f32; 4],
+        caps: [f32; COMPONENTS],
         tolerance: f32,
-        edges: u8,
+        components: u16,
     ) -> Observed {
         let mut next = input;
-        for e in (0..4).filter(|e| edges & 1 << e != 0) {
+        for e in (0..COMPONENTS).filter(|e| components & 1 << e != 0) {
             let (Some(x), Some(m)) = (input[e], measured[e]) else {
-                // Take an unavailable edge as measured: its band is unavailable throughout
+                // Take an unavailable component as measured: its band is unavailable throughout
                 next[e] = measured[e];
                 self.last[e] = None;
                 continue;
@@ -706,7 +769,11 @@ impl Samples {
             next[e] = Some(match self.last[e] {
                 // Keep a settled edge's input while another moves
                 _ if r.abs() <= tolerance => x,
-                Some((x0, r0)) if x != x0 && r != r0 => {
+                Some((x0, r0)) if x != x0 && r == r0 => match r > 0.0 {
+                    true => caps[e],
+                    false => 0.0,
+                },
+                Some((x0, r0)) if x != x0 => {
                     let candidate = x - r * (x - x0) / (r - r0);
                     // Whether the step goes the way the residual points
                     let ahead = if r > 0.0 {
@@ -734,9 +801,10 @@ impl Samples {
 #[derive(Debug, Clone, Copy)]
 struct Readout {
     observed: Observed,
-    /// The unsafe area's depth on each edge, past which no observation
-    /// reaches and the solve tries none (`Samples::step`).
-    depths: [f32; 4],
+    /// The most each component can be, past which the solve tries none
+    /// (`Samples::step`): the unsafe area's depth on each edge, and the
+    /// keyboard's depth across it for its readings.
+    depths: [f32; COMPONENTS],
     /// The owner whose band it measured, `None` for the session's.
     owner: Option<u32>,
     /// Whether it is in a document top-layer box.
@@ -744,34 +812,50 @@ struct Readout {
 }
 
 impl Readout {
-    /// The readout of a reader with no layout box: the input it keeps.
-    fn kept(input: Observed) -> Self {
+    /// The readout of a reader with no layout box: the input it keeps, in
+    /// its `owner`.
+    fn kept(input: Observed, owner: Option<u32>) -> Self {
         Readout {
             observed: input,
-            depths: [0.0; 4],
-            owner: None,
+            depths: [0.0; COMPONENTS],
+            owner,
             top_layer: false,
         }
     }
 }
 
 /// What `slot` observes on each edge of its `space` on the layout just
-/// made, as UIKit gives a view its `safeAreaInsets`: the distance from the
-/// box's edge to the unsafe area's inner side, at least 0 and at most the
-/// area's depth, whatever the box's own size (D9).
+/// made: of the safe area, as UIKit gives a view its `safeAreaInsets`, the
+/// distance from the box's edge to the unsafe area's inner side, at least 0
+/// and at most the area's depth, whatever the box's own size (D9); and of the
+/// keyboard, as UIKit gives a view its keyboard guide (D7).
 fn measure(arena: &NodeArena, slot: u32, space: &Space) -> Readout {
-    let (observed, depths) = match space.band {
-        None => ([None; 4], [0.0; 4]),
-        Some(band) => {
-            let sides = area(arena, slot, space, band);
-            let edges = space.edges(arena, slot);
-            let observed = std::array::from_fn(|e| Some(depth(sides[e], edges[e])));
-            (
-                observed,
-                sides.map(|[outer, inner]| (inner - outer).max(0.0)),
-            )
+    let (mut observed, mut depths) = ([None; COMPONENTS], [0.0; COMPONENTS]);
+    // Each family is measured only for a box that reads it
+    let read = arena.readers.observed.get(&slot).copied().unwrap_or(0);
+    if let Some(band) = space.band.filter(|_| read & Family::SafeArea.bits() != 0) {
+        let sides = area(arena, slot, space, band);
+        let edges = space.edges(arena, slot);
+        for e in 0..4 {
+            observed[e] = Some(depth(sides[e], edges[e]));
+            depths[e] = (sides[e][1] - sides[e][0]).max(0.0);
         }
-    };
+    }
+    let keyboard = super::keyboard::reads_keyboard(read)
+        .then(|| super::keyboard::readings(arena, slot, space))
+        .flatten();
+    if let Some((readings, caps)) = keyboard {
+        for (family, reading) in [Family::Keyboard, Family::KeyboardUndocked]
+            .into_iter()
+            .zip(readings)
+        {
+            let at = family as usize * 4;
+            for e in 0..4 {
+                observed[at + e] = Some(reading[e]);
+                depths[at + e] = caps[e];
+            }
+        }
+    }
     Readout {
         observed,
         depths,

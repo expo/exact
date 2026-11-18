@@ -481,14 +481,20 @@ fn style_value(
                 );
             }
             // @ref LLP 1081 D5 — `--exact-*` names are the web host's own,
-            // but for the safe area an author reads (LLP 1123 D9).
-            let read = ["top", "right", "bottom", "left"]
-                .map(|edge| format!("{}{edge}", exact_kernel::style::env::LOCAL_PREFIX));
-            let others = read.iter().fold(v.clone(), |v, name| v.replace(name, ""));
-            if others.to_ascii_lowercase().contains("--exact-") {
+            // but for the observations an author reads (LLP 1123 D7, D9),
+            // which `Family::named` matches as written
+            let lower = v.to_ascii_lowercase();
+            let host = lower.match_indices("--exact-").any(|(at, _)| {
+                let name = &v[at..];
+                let end = (name
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')))
+                .unwrap_or(name.len());
+                exact_kernel::style::calc::Family::named(&name[..end]).is_none()
+            });
+            if host {
                 return err(
                     "lower-attr-value",
-                    format!("`--exact-*` names are the host's own; write the author's `-exact-` name: `{}=\"{v}\"`", a.name),
+                    format!("`--exact-*` names are the host's own: a value reads only the observations `var(--exact-safe-area-inset-<edge>)`, `var(--exact-keyboard-inset-<edge>)` and `var(--exact-keyboard-undocked-inset-<edge>)`, and a style is the author's `-exact-` name: `{}=\"{v}\"`", a.name),
                     span,
                 );
             }

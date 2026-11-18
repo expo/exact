@@ -38,20 +38,20 @@ impl NodeArena {
         } else {
             self.frag.containers.remove(slot);
         }
-        let read = self.readers.observed_edges.get(&slot).copied();
+        let read = self.readers.observed.get(&slot).copied();
         self.readers
             .update(slot, &self.styles[slot as usize], &style);
-        // Measure a reader again when it reads a new edge, whose input may be stale
-        let reads = self.readers.observed_edges.get(&slot).copied();
+        // Measure a reader again when it reads a new component, whose input may be stale
+        let reads = self.readers.observed.get(&slot).copied();
         if reads.unwrap_or(0) & !read.unwrap_or(0) != 0 {
             self.observations.remeasure(slot);
         }
         if read.is_some() && reads.is_none() {
             self.observations.stopped_reading(slot);
         }
-        // Measure the readers under a box that starts or stops scrolling again, since that
-        // changes what its content observes
-        let scrolled = crate::kernel::area::scroll_view(self, slot);
+        // Measure the readers under a box that starts or stops scrolling on either axis
+        // again, since that changes what its content observes, the keyboard included
+        let scrolled = crate::kernel::area::scroll_axes(self, slot);
         // Keep the boxes that reserve, which the solve checks (`check_reservations`)
         match crate::kernel::block::reservation::reserves(&style) {
             true => self.reserving.insert(slot),
@@ -65,7 +65,7 @@ impl NodeArena {
             self.observations.forget_taken(slot);
         }
         self.styles[slot as usize] = style;
-        if scrolled != crate::kernel::area::scroll_view(self, slot) {
+        if scrolled != crate::kernel::area::scroll_axes(self, slot) {
             self.observations.moved(slot);
         }
         self.refresh_sticky(slot);

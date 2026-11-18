@@ -108,21 +108,85 @@ pub struct Var {
     pub fallback: Option<Box<Node>>,
 }
 
-/// An observation of the safe area (LLP 1123 D9, D10's leaf) on `edge`:
-/// the reading box's own, as the solve gives it, or a native target's raw
-/// insets ([`Env::observation`]); else `fallback`, guaranteed-invalid
-/// without one. Its family is the safe area. Only the kernel builds one
-/// until D10's lowering reads `var(--exact-safe-area-inset-*)` and the
-/// target names as it, which the wire's round trip through the text
-/// refuses until then.
+/// What an observation reads (LLP 1123 D10's families): the safe area, or
+/// the keyboard's guide, docked only or following an undocked keyboard too
+/// (D7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Family {
+    /// `--exact-safe-area-inset-*`.
+    SafeArea = 0,
+    /// `--exact-keyboard-inset-*`: UIKit's guide with `usesBottomSafeArea`
+    /// and `followsUndockedKeyboard` off.
+    Keyboard = 1,
+    /// `--exact-keyboard-undocked-inset-*`: the guide that also follows an
+    /// undocked keyboard.
+    KeyboardUndocked = 2,
+}
+
+impl Family {
+    /// Every family, in wire order.
+    pub const ALL: [Family; 3] = [Family::SafeArea, Family::Keyboard, Family::KeyboardUndocked];
+
+    /// The name's part before the edge: `safe-area-inset-` and the like.
+    pub fn infix(self) -> &'static str {
+        match self {
+            Family::SafeArea => "safe-area-inset-",
+            Family::Keyboard => "keyboard-inset-",
+            Family::KeyboardUndocked => "keyboard-undocked-inset-",
+        }
+    }
+
+    /// The family by wire index.
+    pub fn from_index(i: u8) -> Option<Family> {
+        Family::ALL.get(i as usize).copied()
+    }
+
+    /// The family and edge a host's observation name reads
+    /// (`--exact-safe-area-inset-top`, `--exact-keyboard-inset-bottom`); `None`
+    /// for any other name.
+    pub fn named(name: &str) -> Option<(Family, Edge)> {
+        let observed = name.strip_prefix("--exact-")?;
+        Family::ALL.into_iter().find_map(|family| {
+            let edge = observed.strip_prefix(family.infix())?;
+            Some((family, Edge::from_name(edge)?))
+        })
+    }
+
+    /// Its components' bits among a reader's inputs ([`Observe::component`]).
+    pub(crate) const fn bits(self) -> u16 {
+        0b1111 << (self as u16 * 4)
+    }
+}
+
+/// How many values a reader's input holds: four edges a family, each at
+/// [`Observe::component`].
+pub const COMPONENTS: usize = Family::ALL.len() * 4;
+
+/// An observation (LLP 1123 D9, D10's leaf) of a family on `edge`: the
+/// reading box's own, as the solve gives it, or a native target's raw
+/// safe-area insets ([`Env::observation`]); else `fallback`,
+/// guaranteed-invalid without one. The keyboard's readings are lowered from
+/// their names (`var(--exact-keyboard-inset-*)`); the safe area's are built
+/// by the kernel until D10's lowering reads `var(--exact-safe-area-inset-*)`
+/// and the target names as observations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observe {
-    /// Whose safe area: the box's own, or a native target's.
+    /// Whose: the box's own, or a native target's.
     pub target: super::targets::Target,
+    /// What it reads.
+    pub family: Family,
     /// The edge observed.
     pub edge: Edge,
     /// What stands in where the observation is unavailable.
     pub fallback: Option<Box<Node>>,
+}
+
+impl Observe {
+    /// Its index among a reader's inputs: four edges a family.
+    pub(crate) fn component(&self) -> usize {
+        self.family as usize * 4 + self.edge as usize
+    }
 }
 
 /// `node` with every local inset (`EnvTerm::Local`) replaced by its points
@@ -490,8 +554,34 @@ pub(crate) fn substitute(
 /// included, by CSS's tokens: a function's name in any case, a property's
 /// as written.
 fn text_properties(text: &str, out: &mut Vec<Arc<str>>) {
+    text_vars(text, &mut |name| {
+        if crate::style::safe_area_properties::is_author_name(name)
+            && !out.iter().any(|n| &**n == name)
+        {
+            out.push(name.into());
+        }
+    });
+}
+
+/// The components of its box's own observations a text's `var()`s read, as
+/// [`Comparison::observed_components`] gives a tree's. The safe area's name
+/// is the local inset until activation (`parse.rs`), so only the keyboard's
+/// readings count.
+fn text_observations(text: &str) -> u16 {
+    let mut components = 0;
+    text_vars(text, &mut |name| {
+        if let Some((family, edge)) = Family::named(name).filter(|(f, _)| *f != Family::SafeArea) {
+            components |= 1 << (family as usize * 4 + edge as usize);
+        }
+    });
+    components
+}
+
+/// Each name a text's `var()`s read, fallbacks included, by CSS's tokens: a
+/// function's name in any case, a property's as written.
+fn text_vars(text: &str, each: &mut dyn FnMut(&str)) {
     use cssparser::{Parser, ParserInput, Token};
-    fn walk(p: &mut Parser<'_, '_>, out: &mut Vec<Arc<str>>) {
+    fn walk(p: &mut Parser<'_, '_>, each: &mut dyn FnMut(&str)) {
         while let Ok(token) = p.next() {
             let var = matches!(token, Token::Function(name) if name.eq_ignore_ascii_case("var"));
             if !matches!(token, Token::Function(_) | Token::ParenthesisBlock) {
@@ -500,21 +590,16 @@ fn text_properties(text: &str, out: &mut Vec<Arc<str>>) {
             let _ = p.parse_nested_block(|p| {
                 if var {
                     if let Ok(Token::Ident(name)) = p.next() {
-                        let name: &str = name;
-                        if crate::style::safe_area_properties::is_author_name(name)
-                            && !out.iter().any(|n| &**n == name)
-                        {
-                            out.push(name.into());
-                        }
+                        each(name);
                     }
                 }
-                walk(p, out);
+                walk(p, each);
                 Ok::<_, cssparser::ParseError<'_, ()>>(())
             });
         }
     }
     let mut input = ParserInput::new(text);
-    walk(&mut Parser::new(&mut input), out);
+    walk(&mut Parser::new(&mut input), each);
 }
 
 /// A calculation a row holds: a handle to its interned entry.
@@ -717,28 +802,36 @@ impl Comparison {
         })
     }
 
-    /// Whether it reads an observation of the safe area, its box's own or a
-    /// native target's (LLP 1123 D9).
+    /// Whether it reads an observation, its box's own or a native target's
+    /// (LLP 1123 D7, D9), a text's as it will be parsed included.
     pub(crate) fn reads_observed(&self) -> bool {
-        self.tree(|t| t.any(&|n| matches!(n, Node::Observe(_))))
-            .unwrap_or(false)
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Observe(_))),
+            Entry::Text { text, .. } => text_observations(text) != 0,
+        })
     }
 
-    /// The edges of its box's own safe area it reads, fallbacks included: a
-    /// bit per edge, as [`Edge`] numbers them.
-    pub(crate) fn observed_edges(&self) -> u8 {
-        let edges = std::cell::Cell::new(0u8);
+    /// The components of its box's own observations it reads, fallbacks
+    /// included: a bit per [`Observe::component`].
+    pub(crate) fn observed_components(&self) -> u16 {
+        if let Some(components) = self.with(|e| match e {
+            Entry::Text { text, .. } => Some(text_observations(text)),
+            Entry::Tree(_) => None,
+        }) {
+            return components;
+        }
+        let components = std::cell::Cell::new(0u16);
         self.tree(|t| {
             t.any(&|n| {
                 if let Node::Observe(o) = n {
                     if o.target == super::targets::Target::Box {
-                        edges.set(edges.get() | 1 << o.edge as u8);
+                        components.set(components.get() | 1 << o.component());
                     }
                 }
                 false
             })
         });
-        edges.get()
+        components.get()
     }
 
     /// The native targets it reads raw insets from, fallbacks included, each

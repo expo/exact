@@ -1,0 +1,25 @@
+// Duo Lab's keyboard guide (LLP 1123 D7): under `overlays-content` the
+// keyboard lays nothing out, so a composer places its field by reading it, as a
+// UIKit view pins its content to its `keyboardLayoutGuide`. The composer stays
+// above the home indicator, and its bottom padding is the keyboard's reach into
+// it: its field rests on the keyboard while it is up. It joins Duo Lab's stack
+// when hosts report the keyboard (LLP 1123 stage 5); until then
+// `contract/cli/tests/it/duo_lab.rs` lays it out with each keyboard a host
+// would report.
+routes nav
+  home "/"
+
+component KeyboardGuide
+  state note = ""
+  action write(value: string)
+    note = value
+  view
+    main testId="root" interactive-widget="overlays-content" navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+          header
+            text "Keyboard guide" role="heading" aria-level=1
+          column flex=1 min-height=0 overflow-y="scroll" padding=16
+            text "The keyboard lays nothing out here. The bar below pads itself by how far the keyboard reaches into it, so its field rests on the keyboard while you type."
+          row testId="composer" padding-top=8 padding-left=16 padding-right=16 padding-bottom="var(--exact-keyboard-inset-bottom)" background-color="-exact-secondary-fill"
+            input value=note input=write placeholder="Type here" aria-label="Field" testId="field" flex=1

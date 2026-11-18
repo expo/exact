@@ -19,6 +19,7 @@ fn observed(edge: Edge, fallback: Option<f64>) -> Node {
 fn observe(target: Target, edge: Edge, fallback: Option<f64>) -> Node {
     Node::Observe(Observe {
         target,
+        family: calc::Family::SafeArea,
         edge,
         fallback: fallback.map(|px| Box::new(Node::Value(px, Unit::Px))),
     })
@@ -48,6 +49,7 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
         match row {
             StyleId::PaddingTop => patch.padding_top = d,
             StyleId::PaddingLeft => patch.padding_left = d,
+            StyleId::PaddingRight => patch.padding_right = d,
             StyleId::PaddingBottom => patch.padding_bottom = d,
             StyleId::MarginTop => patch.margin_top = d,
             StyleId::MarginLeft => patch.margin_left = d,
@@ -1068,8 +1070,9 @@ fn a_content_region_solves_its_shell_and_withholds_its_content() {
     // the text 4, the reader 7 and the popover 9, and the placeholder text
     // 5), the reader 6 in the shell and the popover 8, each reading its top
     // observation with a 7-point fallback under the session's 40-point
-    // band. The shell and the popovers, laid out apart from the region,
-    // observe it, and the content takes its fallback until the region goes
+    // band, and 6 and 7 the keyboard's on their bottom with a 5-point one.
+    // The shell and the popovers, laid out apart from the region, observe
+    // it, and the content takes its fallbacks until the region goes
     let mut k = Kernel::with_monospace();
     let mut ops = create([1, 2, 3, 6, 7, 8, 9]);
     for id in [4, 5] {
@@ -1088,7 +1091,16 @@ fn a_content_region_solves_its_shell_and_withholds_its_content() {
     ops.push(style(2, vec![], &REGION));
     ops.push(style(5, vec![], &[(StyleId::PositionType, "absolute")]));
     for id in [6, 7] {
-        let pad = vec![(StyleId::PaddingTop, observed(Edge::Top, Some(7.0)))];
+        let keyboard = Node::Observe(Observe {
+            target: Target::Box,
+            family: calc::Family::Keyboard,
+            edge: Edge::Bottom,
+            fallback: Some(Box::new(px(5.0))),
+        });
+        let pad = vec![
+            (StyleId::PaddingTop, observed(Edge::Top, Some(7.0))),
+            (StyleId::PaddingBottom, keyboard),
+        ];
         ops.push(style(id, pad, &[(StyleId::Height, "10")]));
     }
     for id in [8, 9] {
@@ -1113,9 +1125,18 @@ fn a_content_region_solves_its_shell_and_withholds_its_content() {
     for id in [8, 9] {
         assert_eq!(left(&k, id), 40.0, "the popover {id}");
     }
-    // The content's lengths read no observation, and take the fallback
-    assert_eq!(k.arena.observations.input(slot(&k, 7)), [None; 4]);
+    // The content's lengths read no observation, the keyboard's included, and
+    // take the fallbacks; the shell's read the keyboard's 0, with none
+    // reported
+    assert_eq!(
+        k.arena.observations.input(slot(&k, 7)),
+        [None; calc::COMPONENTS]
+    );
     assert_eq!(k.observation(7), None);
+    let padding = k.resolved_padding(k.arena.key(slot(&k, 6))).unwrap();
+    assert_eq!(padding.3, 0.0);
+    let withheld = &k.arena.style(slot(&k, 7)).padding_bottom;
+    assert_eq!(withheld.at_basis(&k.env_of(7), 0.0), 5.0);
     k.set_content_region(None).unwrap();
     lay_out(&mut k);
     assert_eq!(top(&k, 6), 40.0);
@@ -1292,6 +1313,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     let fallback = Node::Sum(vec![px(2.0), px(3.0)]);
     let leaf = Node::Observe(Observe {
         target: Target::Box,
+        family: calc::Family::SafeArea,
         edge: Edge::Top,
         fallback: Some(Box::new(fallback)),
     });
@@ -1303,6 +1325,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     // A fallback that reads another edge, unavailable too
     let nested = Node::Observe(Observe {
         target: Target::Box,
+        family: calc::Family::SafeArea,
         edge: Edge::Top,
         fallback: Some(Box::new(observed(Edge::Left, Some(6.0)))),
     });

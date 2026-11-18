@@ -358,11 +358,10 @@ pub struct Env {
     /// 1123 D5), set, as `local` is, only in an environment made for that
     /// node.
     pub properties: Option<crate::style::safe_area_properties::Resolved>,
-    /// What one node's observations of its safe area are, top right bottom
-    /// left, `None` where one is unavailable (LLP 1123 D9): the solve's
-    /// inputs, set, as `local` is, only in an environment made for that
-    /// node.
-    pub observed: Option<[Option<f32>; 4]>,
+    /// What one node's observations are, each family top right bottom left,
+    /// `None` where one is unavailable (LLP 1123 D7, D9): the solve's inputs,
+    /// set, as `local` is, only in an environment made for that node.
+    pub observed: Option<[Option<f32>; crate::style::calc::COMPONENTS]>,
     /// The native targets one node reads raw insets from (LLP 1123 D9),
     /// set, as `local` is, only in an environment made for a node that reads
     /// one.
@@ -421,13 +420,15 @@ impl Env {
         }
     }
 
-    /// What `leaf` observes at the node (LLP 1123 D9): its own safe area as
-    /// the solve gives it, or its target's raw insets; `None` where that is
-    /// unavailable, or the environment was made for no node.
+    /// What `leaf` observes at the node (LLP 1123 D7, D9): its own safe area
+    /// or keyboard as the solve gives it, or its target's raw insets; `None`
+    /// where that is unavailable, or the environment was made for no node.
     pub fn observation(&self, leaf: &crate::style::calc::Observe) -> Option<f32> {
         let edge = leaf.edge as usize;
         match &leaf.target {
-            crate::style::targets::Target::Box => self.observed.and_then(|o| o[edge]),
+            crate::style::targets::Target::Box => self.observed.and_then(|o| o[leaf.component()]),
+            // A native target reports its safe area alone
+            _ if leaf.family != crate::style::calc::Family::SafeArea => None,
             target => self.targets.as_ref()?.insets(target).map(|i| i[edge]),
         }
     }

@@ -19,10 +19,10 @@ pub(crate) mod refusal {
     pub(crate) const RELATIVE: &str =
         "em is not supported inside calc(), min(), max() or clamp(); write rem or px";
     pub(crate) const UNITLESS: &str = "a number where a length goes inside calc(), min(), max() or clamp() takes a unit, as CSS requires, zero too: 0px, 15px";
-    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-safe-area-inset-*), viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
+    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-safe-area-inset-*), var(--exact-keyboard-inset-*), var(--exact-keyboard-undocked-inset-*), viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
     pub(crate) const FUNCTION: &str =
         "inside a length the functions are calc(), min(), max(), clamp(), env() and var()";
-    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)) or the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left); other --exact- names are the host's and none is defined";
+    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)), the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left), or the keyboard's reach into the box (var(--exact-keyboard-inset-top), -right, -bottom or -left, and var(--exact-keyboard-undocked-inset-*) for a keyboard undocked too); other --exact- names are the host's and none is defined";
     pub(crate) const VAR_LENGTH: &str =
         "a custom property here is a length, so its fallback is a length too";
     pub(crate) const VAR_FALLBACK: &str =
@@ -478,9 +478,11 @@ impl Calc {
     }
 
     /// `var(--exact-safe-area-inset-<edge>)`, the local inset (LLP 1123 D9),
-    /// without a fallback; or `var(--name, <fallback>)`, an author's custom
-    /// property, a length (D5). A name is matched as written, as a custom
-    /// property's is.
+    /// without a fallback; or with an optional fallback, a length,
+    /// `var(--exact-keyboard-inset-<edge>)` and
+    /// `var(--exact-keyboard-undocked-inset-<edge>)`, the keyboard's readings
+    /// (D7), or `var(--name)`, an author's custom property (D5). A name is
+    /// matched as written, as a custom property's is.
     fn var<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
         self.count(p)?;
         let name = match p.expect_ident_cloned() {
@@ -496,7 +498,10 @@ impl Calc {
             }
             return Ok((Node::Env(EnvTerm::Local(edge)), Ty::Length));
         }
-        if !crate::style::safe_area_properties::is_author_name(&name) {
+        // The safe area's name is the local inset above until activation
+        // retires it, so only the keyboard's readings are observations here
+        let observed = super::Family::named(&name);
+        if observed.is_none() && !crate::style::safe_area_properties::is_author_name(&name) {
             return why(p, refusal::VAR);
         }
         let fallback = match p.is_exhausted() {
@@ -513,8 +518,23 @@ impl Calc {
                 Some(Box::new(fallback))
             }
         };
-        let name = name.as_ref().into();
-        Ok((Node::Var(super::Var { name, fallback }), Ty::Length))
+        let node = match observed {
+            Some((family, edge)) => {
+                let target = crate::style::targets::Target::Box;
+                let leaf = super::Observe {
+                    target,
+                    family,
+                    edge,
+                    fallback,
+                };
+                Node::Observe(leaf)
+            }
+            None => Node::Var(super::Var {
+                name: name.as_ref().into(),
+                fallback,
+            }),
+        };
+        Ok((node, Ty::Length))
     }
 
     /// `env(<name> <index>*)`: the variable. One with a fallback makes the

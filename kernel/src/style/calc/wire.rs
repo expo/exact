@@ -28,12 +28,14 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// a list's `u8` count; clamp's three presence bytes, each before its
 /// argument; 10 an author's custom property (LLP 1123 D5), its name as the
 /// codec's string, then its fallback's presence byte and the fallback; 11
-/// an observation of the safe area (LLP 1123 D10's leaf): its target (0 the
-/// box itself; 1 a chain entry, then its number from 1; 2 a chain kind and
-/// 3 a relation, then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a
-/// registered target, then its name as the codec's string), its edge, then
-/// its fallback's presence byte and the fallback, which the round trip
-/// through the text refuses until the parser reads the leaf.
+/// an observation (LLP 1123 D10's leaf): its target (0 the box itself; 1 a
+/// chain entry, then its number from 1; 2 a chain kind and 3 a relation,
+/// then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a registered
+/// target, then its name as the codec's string), its family's index in
+/// [`super::Family::ALL`] (0 the safe area, 1 the keyboard, 2 the keyboard followed
+/// undocked), its edge, then its fallback's presence byte and the fallback.
+/// The round trip through the text admits only the leaves the parser reads:
+/// the box's own keyboard readings, until activation reads the rest.
 pub(super) fn encode(entry: &Entry, w: &mut Writer) {
     match entry {
         Entry::Tree(n) => node_out(n, w),
@@ -103,6 +105,7 @@ fn node_out(n: &Node, w: &mut Writer) {
         Node::Observe(o) => {
             w.u8(11);
             target_out(&o.target, w);
+            w.u8(o.family as u8);
             w.u8(o.edge as u8);
             optional(o.fallback.as_deref(), w);
         }
@@ -241,6 +244,7 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
         }
         11 => Node::Observe(super::Observe {
             target: target(r)?,
+            family: super::Family::from_index(r.u8().ok()?)?,
             edge: Edge::from_index(r.u8().ok()?)?,
             fallback: optional(r, nodes)?.map(Box::new),
         }),
@@ -302,9 +306,13 @@ mod tests {
             Target::Relation(Relation::Screen),
             Target::Registered("map".into()),
         ];
-        for target in targets {
+        for (target, family) in targets
+            .into_iter()
+            .flat_map(|t| super::super::Family::ALL.map(|f| (t.clone(), f)))
+        {
             let leaf = Node::Observe(super::super::Observe {
                 target,
+                family,
                 edge: Edge::Left,
                 fallback: Some(Box::new(Node::Value(7.0, Unit::Px))),
             });
@@ -313,11 +321,20 @@ mod tests {
             let bytes = w.into_vec();
             assert_eq!(node(&mut Reader::new(&bytes), 0, &mut 0), Some(leaf));
         }
+        // A family past the list is refused
+        let mut w = Writer::new();
+        w.u8(11);
+        target_out(&Target::Box, &mut w);
+        w.u8(super::super::Family::ALL.len() as u8);
+        w.u8(Edge::Top as u8);
+        w.u8(0);
+        assert!(node(&mut Reader::new(&w.into_vec()), 0, &mut 0).is_none());
         // A chain entry 0, an index past its list, a name no target has, an unknown target
         let refused = |write: &dyn Fn(&mut Writer)| {
             let mut w = Writer::new();
             w.u8(11);
             write(&mut w);
+            w.u8(super::super::Family::SafeArea as u8);
             w.u8(Edge::Top as u8);
             w.u8(0);
             let bytes = w.into_vec();
