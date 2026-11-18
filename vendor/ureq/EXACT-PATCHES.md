@@ -3,7 +3,10 @@
 The crates.io archive's source, licenses, README and `.cargo_vcs_info.json`.
 The source is unchanged. `Cargo.toml` names the package `exact-ureq`, lets
 the library take that name, and drops the examples and dev-dependencies,
-which the archive's manifest names but this copy does not carry.
+which the archive's manifest names but this copy does not carry. Its
+optional `brotli-decompressor` is 6.0 rather than 5.0, the version the
+workspace already locks for `brotli`; `Decompressor::new(reader, buffer_size)`,
+the one call `src/body/brotli.rs` makes, is the same in both.
 
 - Upstream: https://github.com/algesten/ureq
 - Release archive: https://static.crates.io/crates/ureq/ureq-3.4.0.crate

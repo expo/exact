@@ -1595,6 +1595,53 @@ mod tests {
             other => panic!("unknown proxy child mode {other}"),
         }
     }
+
+    /// A body sent with a content coding arrives decoded, as a browser's fetch
+    /// gives it (Fetch, "HTTP-network fetch": the codings of `Content-Encoding`
+    /// are undone), and the request names the codings it takes. A server may
+    /// send a stored coding unasked, as Cloud Storage sends a `br` object.
+    #[test]
+    fn a_gzip_or_brotli_body_arrives_decoded() {
+        const GZIP: &[u8] = &[
+            0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x13, 0x4b, 0x54, 0x48, 0x49,
+            0x4d, 0xce, 0x4f, 0x49, 0x4d, 0x51, 0x48, 0xca, 0x4f, 0xa9, 0x04, 0x00, 0x83, 0xbb,
+            0xad, 0xe5, 0x0e, 0x00, 0x00, 0x00,
+        ];
+        const BROTLI: &[u8] = &[
+            0x8b, 0x06, 0x80, 0x61, 0x20, 0x64, 0x65, 0x63, 0x6f, 0x64, 0x65, 0x64, 0x20, 0x62,
+            0x6f, 0x64, 0x79, 0x03,
+        ];
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let peer = std::thread::spawn(move || {
+            [("gzip", GZIP), ("br", BROTLI)].map(|(coding, body)| {
+                let (mut socket, _) = listener.accept().unwrap();
+                let head = request_head(&mut socket);
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Encoding: {coding}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .unwrap();
+                socket.write_all(body).unwrap();
+                head
+            })
+        });
+        let transport = RustlsHttpTransport::new();
+        for path in ["/gzip", "/br"] {
+            let reply = transport
+                .send(&Request::get(&format!("{url}{path}")))
+                .unwrap();
+            assert_eq!(reply.body, b"a decoded body", "{path}");
+        }
+        for head in peer.join().unwrap() {
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains("accept-encoding: gzip, br"),
+                "{head}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

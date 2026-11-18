@@ -1151,3 +1151,13 @@ redirection before a Windows app drive claims the cell. Append
 as OpenSSL and curl read the variable. `exact setup` then works behind a
 TLS-intercepting proxy whose CA is private. The pinned SHA-256 still decides
 what is extracted. Replay on a refresh.
+
+## Content codings off Apple
+
+The rustls transport builds ureq with `gzip` and `brotli`: a request names
+`Accept-Encoding: gzip, br`, and a response with that `Content-Encoding` reaches
+`fetch` decoded, as NSURLSession gives it on Apple and Fetch requires
+([HTTP-network fetch](https://fetch.spec.whatwg.org/#http-network-fetch)). A server may
+send a stored coding unasked: Cloud Storage serves a `br` object to a request that
+names only `identity`. Without the features Android, Linux and Windows handed the
+coded bytes to `text()`. Replay on a refresh.

@@ -30,7 +30,7 @@ ibex2-sqlite = { path = "../ibex2-sqlite" }
 mio = { version = "1", features = ["os-poll", "net"] }
 socket2 = "0.6"
 libc = "0.2"
-ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls"] }
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "gzip", "brotli"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.7"
 webpki-roots = "1"
@@ -41,12 +41,13 @@ cc = "1"
 
 # HTTP/1.1 and WebSockets off Apple use rustls. Android delegates certificate
 # verification to its trust manager; other hosts read native roots and fall back
-# to webpki roots only when none are usable.
+# to webpki roots only when none are usable. ureq undoes `gzip` and `br` content
+# codings, as NSURLSession does on Apple and a browser's fetch does.
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
 mio = { version = "1", features = ["os-poll", "net"] }
 socket2 = "0.6"
 libc = "0.2"
-ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls"] }
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "gzip", "brotli"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.7"
 # The compiled-in roots for a socket's own TLS where the machine has none
@@ -54,7 +55,7 @@ rustls-native-certs = "0.7"
 webpki-roots = "1"
 
 [target.'cfg(target_os = "android")'.dependencies]
-ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "platform-verifier"] }
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "platform-verifier", "gzip", "brotli"] }
 # android/ implements the 0.7 JNI interface (CertificateVerifierTest checks it).
 rustls-platform-verifier = "0.7.1"
 jni = { version = "0.22.4", default-features = false }
@@ -65,7 +66,7 @@ windows-sys = { version = "0.61.2", features = ["Wdk_Foundation", "Wdk_Storage_F
 [target.'cfg(target_vendor = "apple")'.dependencies]
 mio = { version = "1", features = ["os-poll", "net"], optional = true }
 socket2 = { version = "0.6", optional = true }
-ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls"], optional = true }
+ureq = { package = "exact-ureq", path = "../../../ureq", default-features = false, features = ["rustls", "gzip", "brotli"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 rustls-native-certs = { version = "0.7", optional = true }
 webpki-roots = { version = "1", optional = true }
