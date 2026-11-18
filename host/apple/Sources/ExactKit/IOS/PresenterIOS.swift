@@ -1242,9 +1242,10 @@ package final class Presenter {
 
     /// Everything kept for `id` goes, the view out of the map (not out of
     /// the window): `leaving` forgets it (a destroy) or recycles it (a
-    /// parked row, `NodePool`).
+    /// parked row, `NodePool`). An `exiting` view stays to play its exit
+    /// (LLP 1063), so its `svg` scene stays drawn until `endExit`.
     @discardableResult
-    func release(_ id: UInt32, _ leaving: (NodeView) -> Void) -> NodeView? {
+    func release(_ id: UInt32, exiting: Bool = false, _ leaving: (NodeView) -> Void) -> NodeView? {
         #if os(iOS)
         if #available(iOS 27.1, *) { arrangements.remove(id) }
         #endif
@@ -1252,7 +1253,8 @@ package final class Presenter {
         listRowDependencies?.rowOwners.removeValue(forKey: id)
         focusEvents.removed(id)
         session?.canvases.destroy(view: id)
-        svg?.forget(id); boxAnimations.forget(id)
+        if !exiting { svg?.forget(id) }
+        boxAnimations.forget(id)
         canvas2d.forget(id)
         if let view = views[id] { autofocusProcessed.remove(ObjectIdentifier(view)); leaving(view) }
         listViews.removeValue(forKey: id)

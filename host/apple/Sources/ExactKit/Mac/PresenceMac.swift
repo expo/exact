@@ -61,6 +61,7 @@ extension Presenter {
         for member in ended.members {
             member.setGhost(false)
             if navigation.split.holds(member) { navigation.split.retire(member) }
+            svg?.forget(member.id)
             member.forget()
         }
         ended.view.removeFromSuperview()

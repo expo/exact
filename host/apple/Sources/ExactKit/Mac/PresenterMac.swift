@@ -816,7 +816,8 @@ package final class Presenter {
         mouseDrags.transform.retire(id)
         mouseDrags.reorder.retire(id)
         session?.canvases.destroy(view: id)
-        svg?.forget(id); boxAnimations.forget(id)
+        if forget { svg?.forget(id) }
+        boxAnimations.forget(id)
         canvas2d.forget(id)
         if forget { views[id]?.forget() }
         // Out of the map before out of the window: the editing-ended

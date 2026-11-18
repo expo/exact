@@ -41,7 +41,7 @@ extension Presenter {
         for member in members where member === view || displaced.contains(ObjectIdentifier(member)) { _ = member.endEditing(true) }
         for member in members { member.holdGone() }
         for member in members {
-            release(member.id) { _ in }
+            release(member.id, exiting: true) { _ in }
             member.isUserInteractionEnabled = false
             member.accessibilityElementsHidden = true
             member.accessibilityViewIsModal = false
@@ -54,7 +54,7 @@ extension Presenter {
     func endExit(_ id: UInt32) -> Bool {
         guard let ended = leaving.removeValue(forKey: id) else { return false }
         ended.view.setGhost(false)
-        for member in ended.members { member.forget() }
+        for member in ended.members { svg?.forget(member.id); member.forget() }
         ended.view.removeFromSuperview()
         return true
     }
