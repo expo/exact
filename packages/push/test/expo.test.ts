@@ -82,3 +82,34 @@ test('HTTP failures include the status and at most 500 characters of the reply, 
     await expect(getExpoPushTokenAsync(subscription, app)).rejects.toMatchObject({ message });
   }
 });
+
+const apple = { apple: { deviceToken: '0a1b2c3d'.repeat(8), appId: 'dev.guard' } };
+const sent = (fetch: ReturnType<typeof mock>, call: number) => JSON.parse((fetch.mock.calls[call] as unknown as [string, RequestInit])[1].body as string);
+
+test('Expo receives its APNs token exchange request for the environment the caller names', async () => {
+  const fetch = mock(async () => Response.json({ data: { expoPushToken: 'ExponentPushToken[guard]' } }));
+  globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+  expect(await getExpoPushTokenAsync(apple, app, { development: true })).toEqual({ type: 'expo', data: 'ExponentPushToken[guard]' });
+  expect(fetch).toHaveBeenCalledWith('https://exp.host/--/api/v2/push/getExpoPushToken', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'apns', deviceId: '0cfedaa9-5512-435c-9930-1e6d8d1cbe7c', development: true,
+      appId: 'dev.guard', deviceToken: apple.apple.deviceToken, projectId: 'project-id' }),
+  });
+  await getExpoPushTokenAsync({ apple: { ...apple.apple, appId: 'dev.guard.dev' } }, app, { development: false });
+  expect(sent(fetch, 1)).toMatchObject({ development: false, appId: 'dev.guard.dev', deviceId: '0cfedaa9-5512-435c-9930-1e6d8d1cbe7c' });
+  await getExpoPushTokenAsync({ apple: { ...apple.apple, deviceToken: '4e5f6071'.repeat(8) } }, app, { development: false });
+  expect(sent(fetch, 2).deviceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(sent(fetch, 2).deviceId).not.toBe(sent(fetch, 0).deviceId);
+  await getExpoPushTokenAsync(subscription, app, { development: true });
+  expect(sent(fetch, 3)).toMatchObject({ type: 'fcm', development: false });
+});
+
+test('an APNs exchange without a named environment, bundle id, token or project makes no request', async () => {
+  const fetch = mock();
+  globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+  await expect(getExpoPushTokenAsync(apple, app)).rejects.toThrow('development');
+  await expect(getExpoPushTokenAsync({ apple: { ...apple.apple, appId: '' } }, app, { development: true })).rejects.toThrow('application id');
+  await expect(getExpoPushTokenAsync({ apple: { ...apple.apple, deviceToken: '' } }, app, { development: true })).rejects.toThrow('APNs device token');
+  await expect(getExpoPushTokenAsync(apple, { ...app, extra: { eas: { projectId: '' } } }, { development: true })).rejects.toThrow('extra.eas.projectId');
+  expect(fetch).not.toHaveBeenCalled();
+});

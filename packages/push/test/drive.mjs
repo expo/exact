@@ -7,9 +7,10 @@
 //   is the answer and the live value; a value preferred later is a rotation.
 // - Bound (`--bound`): the system's prompt, allowed through SpringBoard,
 //   then the system's answer to the registration: the call answers a
-//   subscription and the live value shows its token, or the call fails with
-//   the system's own failure (never the package's 60 s bound); then a
-//   relaunch that only reads `pushSubscription()` answers the same token.
+//   subscription and the live value shows its token, each with the bundle
+//   id the token was issued to, or the call fails with the system's own
+//   failure (never the package's 60 s bound); then a relaunch that only
+//   reads `pushSubscription()` answers the same token.
 //
 // - On this Mac (`word.swift`, `service-reference.swift`): the branch `subscribePush()` takes for each
 //   notification authorization, from the function it switches on, and the
@@ -133,6 +134,8 @@ if (argv.includes('--bound')) {
     const failed = state.failed?.subscribed ?? '';
     if (/^[0-9a-f]+$/.test(token ?? '')) {
       check(`bound, the call answers the system's token (${token.length / 2} bytes) and the live value shows it`, answered === 'answered' && state.slots?.subscribed?.apple?.deviceToken === token, JSON.stringify([answered, state.slots?.subscribed]));
+      const named = [state.slots?.subscribed?.apple?.appId, state.resources?.subscription?.apple?.appId];
+      check('bound, the call\'s answer and the live value name the installed bundle id', named.every((appId) => appId === id), JSON.stringify(named));
     } else {
       // A failure the system forwarded carries its own message; the package's bound is no answer at all.
       const bounded = /no answer to the registration/.test(journal + failed);
