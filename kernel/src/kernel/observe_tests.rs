@@ -1390,6 +1390,9 @@ fn a_height_target_is_measured_with_its_readers_solved() {
     assert_eq!(k.node(3).unwrap().frame.height, 67.0);
 }
 
+#[path = "seam_tests.rs"]
+mod seams;
+
 #[path = "targets_tests.rs"]
 mod targets;
 
