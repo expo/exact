@@ -154,6 +154,15 @@ extension Presenter {
         guard let sv = v.scrollView else { return Bands() }
         let r = v.convert(v.bounds, to: route)
         let top = judge.bars(of: v, in: route, top: true), bottom = judge.bars(of: v, in: route, top: false)
+        // More than bars over the scroller keeps its top where it is; an open
+        // foot over the route's bottom cover (a tab bar), apart from a title's
+        // collapse, still reaches it, as a hand-built table under a fixed
+        // header runs under its tab bar. Bars under it keep both edges.
+        if top == nil, apart, bottom?.isEmpty == true, case .edges(let e)? = navigation.covers[route.id],
+           e.bottom > 0.5, route.bounds.height - r.maxY > 0.5 {
+            let band = UIEdgeInsets(top: 0, left: 0, bottom: route.bounds.height - r.maxY, right: 0)
+            return Self.drawn(band, v, sv) ? Bands(band: band) : Bands()
+        }
         guard let top, apart || bottom != nil else { return Bands() }
         let underBar = apart && top.isEmpty && r.minY > 0.5
         var overCover = false
