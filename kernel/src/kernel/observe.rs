@@ -113,6 +113,17 @@ impl Observations {
         self.measured.clear();
     }
 
+    /// What a reset keeps: what the host reported for the session, its band,
+    /// its view's targets and the registered targets, as the arena keeps the
+    /// environment. What the tree held goes with it.
+    pub(crate) fn after_reset(&mut self) -> Self {
+        Observations {
+            session: self.session,
+            targets: self.targets.after_reset(),
+            ..Default::default()
+        }
+    }
+
     /// Measure the readers under `slot` again, which moved: what holds them,
     /// an owner or a scroller, may have changed without their frames. So
     /// may what each box that ignores takes.
@@ -1168,18 +1179,19 @@ pub(crate) fn scroll_view(arena: &NodeArena, slot: u32) -> bool {
     scrolls(s.overflow_x.computed(y)) || scrolls(y.computed(s.overflow_x))
 }
 
-/// `into` with `round`'s frames and publication candidates added, each
-/// node once, and its passes counted.
+/// `into` with `round`'s frames, publication candidates and flow changes
+/// added, each node once, its refusals `round`'s, and its passes counted.
 fn merge(into: &mut LayoutReceipt, round: LayoutReceipt) {
-    let mut seen: IdSet<_> = into.changed.iter().copied().collect();
-    into.changed
-        .extend(round.changed.into_iter().filter(|k| seen.insert(*k)));
-    let mut seen: IdSet<_> = into.updated.iter().copied().collect();
-    into.updated
-        .extend(round.updated.into_iter().filter(|k| seen.insert(*k)));
-    into.flow_changed.extend(round.flow_changed);
-    into.flow_skipped.extend(round.flow_skipped);
-    into.fragment_skipped.extend(round.fragment_skipped);
+    let union = |into: &mut Vec<_>, round: Vec<_>| {
+        let mut seen: IdSet<_> = into.iter().copied().collect();
+        into.extend(round.into_iter().filter(|k| seen.insert(*k)));
+    };
+    union(&mut into.changed, round.changed);
+    union(&mut into.updated, round.updated);
+    union(&mut into.flow_changed, round.flow_changed);
+    // Each pass lists every refusal under its root, so the last round's stand
+    into.flow_skipped = round.flow_skipped;
+    into.fragment_skipped = round.fragment_skipped;
     into.flow_passes += round.flow_passes;
     into.flow_comparisons += round.flow_comparisons;
 }

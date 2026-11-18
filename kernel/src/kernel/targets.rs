@@ -31,6 +31,17 @@ pub(crate) struct Targets {
     pub(crate) moved: Vec<u32>,
 }
 
+impl Targets {
+    /// The session's reports and the registry, which a reset keeps.
+    pub(crate) fn after_reset(&mut self) -> Self {
+        Targets {
+            session: std::mem::take(&mut self.session),
+            registered: self.registered.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 /// An owner's or the session's last report, and the highest generation any
 /// report gave each target, which refuses a stale report even after its
 /// target left the reports.

@@ -1327,6 +1327,34 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
 #[path = "observe_cost_tests.rs"]
 mod cost;
 
+#[test]
+fn a_solve_reports_the_refusals_of_its_last_round() {
+    // Each pass lists every refusal under its root, so a later round's lists
+    // replace an earlier one's, and a box whose flow changed in two rounds
+    // is named once
+    let key = |index| crate::NodeKey {
+        index,
+        generation: 1,
+    };
+    let receipt = |changed: &[u32], skipped: &[u32]| LayoutReceipt {
+        epoch: 0,
+        root: key(1),
+        changed: Vec::new(),
+        updated: Vec::new(),
+        flow_changed: changed.iter().map(|&i| key(i)).collect(),
+        flow_skipped: skipped.iter().map(|&i| key(i)).collect(),
+        fragment_skipped: skipped.iter().map(|&i| key(i)).collect(),
+        flow_passes: 1,
+        flow_comparisons: 0,
+    };
+    let mut into = receipt(&[2], &[3, 4]);
+    merge(&mut into, receipt(&[2, 5], &[4]));
+    assert_eq!(into.flow_changed, vec![key(2), key(5)]);
+    assert_eq!(into.flow_skipped, vec![key(4)]);
+    assert_eq!(into.fragment_skipped, vec![key(4)]);
+    assert_eq!(into.flow_passes, 2);
+}
+
 #[path = "targets_tests.rs"]
 mod targets;
 
