@@ -277,6 +277,70 @@ mod tests {
         assert!(r.filter_open(&blur(5.0), region, ts), "row 1 let go");
     }
 
+    /// Chains the reader runs, each over a box and what it holds: the
+    /// reader's JVM tests replay this stream through HWUI and hold it to the
+    /// CPU chain's pixels (`FilterTest.kt`). The first box's blur reaches
+    /// past the page's corner; the rest put a chain's order, a drop shadow
+    /// under what it shadows, opacity, an ancestor's clip and the box's own
+    /// `clip-path` after the filter.
+    const PARITY: &str = r##"component App
+  view
+    box width=320 height=240 background-color="#ffffff"
+      box width=60 height=40 background-color="#ef4444" filter="blur(6px)"
+        box width=20 height=20 margin=10 background-color="#2563eb"
+      row margin-top=24 margin-left=24 gap=40
+        box width=40 height=40 background-color="#0ea5e9" filter="invert(1) sepia(1) contrast(3) brightness(0.5)"
+        box width=40 height=40 background-color="#22c55e" filter="drop-shadow(6px 8px 3px #0f172a) hue-rotate(90deg) saturate(1.5)"
+          box width=16 height=16 margin=12 background-color="#fde047"
+        box width=40 height=40 background-color="#a855f7" opacity=0.5 filter="drop-shadow(10px 10px 0px #0f172a) blur(2px)"
+      row margin-top=40 margin-left=24 gap=40
+        box width=60 height=60 overflow="hidden" border-radius=12 background-color="#e2e8f0"
+          box width=40 height=40 margin=10 background-color="#f97316" filter="drop-shadow(14px 14px 2px #000000)"
+        box width=40 height=40 background-color="#14b8a6" clip-path="inset(0px 0px 0px 0px)" filter="drop-shadow(12px 0px 0px #000000)"
+        box width=40 height=40 background-color="#64748b" filter="grayscale(1) brightness(1.4) opacity(0.6)"
+"##;
+
+    #[test]
+    fn the_reader_is_held_to_the_cpu_chain_on_this_stream() {
+        let boot = |choice| {
+            let (p, error) = Presenter::boot_with_fixture_fonts(
+                &crate::test_plan(PARITY),
+                (),
+                (320., 240.),
+                1.,
+                std::path::PathBuf::new(),
+                choice,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p
+        };
+        let mut p = boot(PainterChoice::Cpu);
+        p.brush.replace_backend(Box::new(Recorder::new()));
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).expect("a frame");
+        let mut filters = 0;
+        let mut at = 0;
+        while at < ops.len() {
+            assert_ne!(ops[at], IMAGE_DEF, "every chain is the reader's");
+            filters += usize::from(ops[at] == FILTER);
+            at = stream::end(&ops, at).expect("a valid stream");
+        }
+        assert_eq!(filters, 7);
+        // When the stream changes, these two are written again from `ops`
+        // and the CPU frame (`Pixmap::encode_png`).
+        let bytes: Vec<u8> = ops.iter().flat_map(|n| n.to_le_bytes()).collect();
+        assert_eq!(
+            bytes,
+            include_bytes!("../../../android/canvas/src/test/resources/box-filter.ops")
+        );
+        let reference = tiny_skia::Pixmap::decode_png(include_bytes!(
+            "../../../android/canvas/src/test/resources/box-filter.png"
+        ))
+        .unwrap();
+        assert_eq!(boot(PainterChoice::Cpu).frame().data(), reference.data());
+    }
+
     #[test]
     fn the_cpu_chain_pictures_a_rows_filter_past_its_origin() {
         use super::super::{IMAGE, IMAGE_RRECT};
