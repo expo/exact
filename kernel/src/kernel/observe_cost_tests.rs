@@ -301,3 +301,57 @@ fn ignore_cost() {
         println!("ignore_cost: 1,000 rows each holding a box, ignore {ignore}: {t:.2?}");
     }
 }
+
+/// What measuring a height target costs (`measure_height_targets`) where a
+/// reader exists, which measures in a layout of copies with the solve, and
+/// where none does: a `border-box` target of 1,000 rows in an owner, a row's
+/// change pending, then the measurement and the layout after it, the
+/// medians of 41, with the test build's size counting off. Run it with
+/// `cargo test --release -p exact-kernel --lib height_targets_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn height_targets_cost() {
+    use std::time::{Duration, Instant};
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    for reader in [false, true] {
+        let rows: Vec<ViewId> = (10..1_010).collect();
+        let mut ops = create(3..=3);
+        ops.extend(create(rows.iter().copied()));
+        ops.push(style(3, vec![], &[(StyleId::BoxSizing, "border-box")]));
+        for &r in &rows {
+            let reads = reader && r == 10;
+            let pad = match reads {
+                true => vec![(StyleId::PaddingTop, observed(Edge::Top, None))],
+                false => vec![],
+            };
+            ops.push(style(r, pad, &[(StyleId::Height, "10")]));
+        }
+        ops.extend([children(1, &[2]), children(2, &[3]), children(3, &rows)]);
+        let mut k = owner(390.0, 844.0, ops);
+        k.set_owner_band(2, Some([47.0, 0.0, 0.0, 0.0]), &[])
+            .unwrap();
+        lay_out(&mut k);
+        k.tree_mut().track_sizes(false);
+        let (target, offer) = ([k.arena.key(slot(&k, 3))], Offer::definite(390.0, 844.0));
+        let (mut measures, mut layouts) = (Vec::new(), Vec::new());
+        for run in 0..41 {
+            let height = if run % 2 == 0 { "11" } else { "10" };
+            let change = [style(510, vec![], &[(StyleId::Height, height)])];
+            k.apply(0, 2 + run, &change).unwrap();
+            let t = Instant::now();
+            k.measure_height_targets(1, offer, &target).unwrap();
+            measures.push(t.elapsed());
+            let t = Instant::now();
+            lay_out(&mut k);
+            layouts.push(t.elapsed());
+        }
+        println!(
+            "height target of 1,000 rows, a reader {reader}: measure {:.2?}, the layout after {:.2?}",
+            median(measures),
+            median(layouts)
+        );
+    }
+}

@@ -1355,6 +1355,41 @@ fn a_solve_reports_the_refusals_of_its_last_round() {
     assert_eq!(into.flow_passes, 2);
 }
 
+#[test]
+fn a_height_target_is_measured_with_its_readers_solved() {
+    // The target 3, `border-box` of automatic height at the top of the owner
+    // 2 under a 47-point band, holds the 10-point 4; once 5 mounts in it,
+    // padding its top by its observation, the target measures what the next
+    // layout gives it, the 47 points included, and the kernel is unchanged
+    let mut ops = create(3..=4);
+    ops.push(style(3, vec![], &[(StyleId::BoxSizing, "border-box")]));
+    ops.push(style(4, vec![], &[(StyleId::Height, "10")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_band(2, Some([47.0, 0.0, 0.0, 0.0]), &[])
+        .unwrap();
+    lay_out(&mut k);
+    let mut ops = create(5..=5);
+    let pad = vec![(StyleId::PaddingTop, observed(Edge::Top, None))];
+    ops.push(style(5, pad, &[(StyleId::Height, "10")]));
+    ops.push(children(3, &[5, 4]));
+    k.apply(0, 2, &ops).unwrap();
+    let before = k.export(None).unwrap();
+    let target = [k.arena.key(slot(&k, 3))];
+    let offer = Offer::definite(390.0, 844.0);
+    let measured = k.measure_height_targets(1, offer, &target).unwrap();
+    assert_eq!(measured[0].px, 67.0);
+    assert_eq!(k.export(None).unwrap(), before);
+    // An engine fault inside the copies rebuilds them, and the kernel's own
+    // tree rebuilds at its next layout
+    k.arena.set_taffy(slot(&k, 4), None);
+    let measured = k.measure_height_targets(1, offer, &target).unwrap();
+    assert_eq!(measured[0].px, 67.0);
+    assert_eq!(k.export(None).unwrap(), before);
+    lay_out(&mut k);
+    assert_eq!(k.node(3).unwrap().frame.height, 67.0);
+}
+
 #[path = "targets_tests.rs"]
 mod targets;
 

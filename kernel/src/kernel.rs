@@ -27,6 +27,7 @@ mod cover;
 mod document;
 mod environment;
 mod geometry;
+mod height_targets;
 mod history;
 use history::RetainedReceipt;
 pub(crate) mod ignore;
@@ -736,96 +737,6 @@ impl Kernel {
             self.provisional_layouts += 1;
         }
         Ok(receipt)
-    }
-
-    /// Measure current authored border-box heights without publishing layout.
-    /// Active presentations are temporarily removed for this pass and restored
-    /// before returning, including after failure. Frames, overflow, flags,
-    /// authored styles, receipts and epoch remain unchanged, but for what the
-    /// next layout at `offer` would set first: the viewport, and each
-    /// popover's block in it (`imply_blocks`). Results are used
-    /// border-box sizes after constraints, not unconstrained CSS intrinsic sizes.
-    ///
-    /// Call when a target's content or offer changes, not on every motion tick.
-    /// This does not register owners or define an automatic `height: auto`
-    /// transition policy. The caller still chooses which targets to animate.
-    pub fn measure_height_targets(
-        &mut self,
-        root: ViewId,
-        offer: Offer,
-        owners: &[NodeKey],
-    ) -> Result<Vec<PresentedHeight>, KernelError> {
-        self.mirror();
-        let slot = self.layout_root_slot(root, offer)?;
-        for (i, owner) in owners.iter().enumerate() {
-            self.validate_presented_height(
-                slot,
-                PresentedHeight {
-                    node: *owner,
-                    epoch: self.epoch,
-                    px: 0.0,
-                },
-            )?;
-            if self.arena.style(owner.index).box_sizing != BoxSizing::BorderBox {
-                return Err(LayoutError::UnsupportedHeightMeasurement(*owner).into());
-            }
-            if owners[..i].contains(owner) {
-                return Err(LayoutError::DuplicatePresentedHeight(*owner).into());
-            }
-        }
-        if owners.is_empty() {
-            return Ok(Vec::new());
-        }
-        // The offer's viewport, as the layout that follows will have it: a
-        // popover's block is that viewport (`imply_blocks`).
-        self.replace_env(self.arena.env().with_viewport(offer))?;
-        self.imply_blocks();
-        let previous = engine(&mut self.layout).height_samples(self.epoch);
-        engine(&mut self.layout).present_heights(&self.arena, &[]);
-        let measure = |kernel: &mut Self| {
-            let root = kernel
-                .arena
-                .taffy(slot)
-                .ok_or_else(|| LayoutError::Engine("root has no engine node".into()))?;
-            engine(&mut kernel.layout).compute(
-                root,
-                offer,
-                &kernel.arena,
-                kernel.measurer.as_mut(),
-            )?;
-            kernel.lay_out_blocks_unpublished(slot)?;
-            owners
-                .iter()
-                .map(|node| {
-                    let engine_node = kernel.arena.taffy(node.index).ok_or_else(|| {
-                        LayoutError::Engine("height target has no engine node".into())
-                    })?;
-                    let px = engine(&mut kernel.layout).layout(engine_node).size.height;
-                    if !px.is_finite() || px < 0.0 {
-                        return Err(LayoutError::InvalidPresentedHeight);
-                    }
-                    Ok(PresentedHeight {
-                        node: *node,
-                        epoch: kernel.epoch,
-                        px,
-                    })
-                })
-                .collect()
-        };
-        let result = match measure(self) {
-            Err(LayoutError::Engine(_)) => {
-                self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
-                measure(self)
-            }
-            result => result,
-        };
-        if result.is_err() {
-            // A contained invalid metric may have populated Taffy's cache with
-            // zero. Rebuild so the next measurement actually invokes the host.
-            self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
-        }
-        engine(&mut self.layout).present_heights(&self.arena, &previous);
-        result.map_err(KernelError::from)
     }
 
     fn layout_root_slot(&self, root: ViewId, offer: Offer) -> Result<u32, KernelError> {
