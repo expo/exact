@@ -1,0 +1,44 @@
+# Deletes a pull request's docs preview (docs-preview-publish.yml) when the request closes or loses its
+# `docs-preview` label.
+#
+# This workflow holds the Cloudflare token, so it runs none of the pull request's code. GitHub runs a
+# pull_request_target workflow as the base branch has it, and the checkout below is the base branch's.
+name: docs preview cleanup
+
+on:
+  pull_request_target:
+    types: [closed, unlabeled]
+
+jobs:
+  cleanup:
+    if: >-
+      github.repository == 'expo/exact' && github.event.pull_request.head.repo.full_name == github.repository &&
+      ((github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'docs-preview')) ||
+      (github.event.action == 'unlabeled' && github.event.label.name == 'docs-preview'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: docs
+    # Nothing but another cleanup of the same pull request shares this group. A publish that outlasts this
+    # deletes its own preview (docs-preview-publish.yml, "Check the pull request again").
+    concurrency:
+      group: docs-preview-cleanup-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          sparse-checkout: docs/site/tools
+
+      # no-cache: a cache is written by workflows that run other code.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+
+      - name: Delete the preview's deployments
+        env:
+          CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PULL: ${{ github.event.pull_request.number }}
+        run: bun docs/site/tools/prune-cloudflare-deployments.mjs --project=exact-docs --branch="pr-$PULL" --keep=0
