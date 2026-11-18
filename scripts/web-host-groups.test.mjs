@@ -3,17 +3,67 @@
 // group or base (or a group that always ships with it). documents-glue.js (base) importing storage-environment.js (then storage only) left an app with no
 // storage capability without its drops and pastes on the wasm page (the module 404'd; conform's synthetic-file-drag).
 import { expect, test } from 'bun:test';
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { webHostFiles } from './app.mjs';
+import { suiteBrowser } from './agent-launch.mjs';
+import { engineTests } from './coverage.mjs';
 import { buildHostGlue, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 import { glueDeclarations } from '../host/web/tests/glue-fixture.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const engineTest = await engineTests(['chromium']);
 const GROUPS = ['base', 'module', 'storage', 'rust', 'gpu', 'gpuModules', 'native', 'development'];
 // Groups that always ship with another: storage ships whenever module does (an app with app.ts; scripts/app.mjs).
 const WITH = { module: ['storage'] };
+
+engineTest.chromium('built wasm storage saves across reloads without declared documents', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-web-storage-'));
+  let server, browser;
+  try {
+    await buildHostGlue(ROOT, { out: dir });
+    for (const [name, source] of Object.entries(webHostFiles('base', 'storage'))) {
+      if (!source.startsWith('target/web-host/')) copyFileSync(join(ROOT, source), join(dir, name));
+    }
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/') return new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } });
+      if (!/^\/[\w.-]+\.js$/.test(path)) return new Response(null, { status: 404 });
+      return new Response(readFileSync(join(dir, path.slice(1))), { headers: { 'content-type': 'text/javascript' } });
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    for (const write of [true, false]) {
+      const result = await page.evaluate(async write => {
+        globalThis.exact = {};
+        const { createStorageRequests } = await import('/storage-request.js');
+        const { createGrantSet } = await import('/grant-admission.js');
+        const grants = createGrantSet({ version: 1, entries: [
+          [1, 'fs.read app:/data', ['fs-read', 'app:', 'data'], null],
+          [2, 'fs.write app:/data', ['fs-write', 'app:', 'data'], null],
+        ], error: null, seal: '855d78ac7052db66' });
+        const storage = createStorageRequests('test.web-storage', grants);
+        const run = async (op, args) => JSON.parse(new TextDecoder().decode(await storage.run(JSON.stringify({ version: 1, op, args }))));
+        try {
+          if (write) {
+            const saved = await run('fs.atomicWriteFile', { path: 'app:/data/save', text: 'saved game' });
+            if (saved !== null) throw new Error(JSON.stringify(saved));
+          }
+          return await run('fs.readFile', { path: 'app:/data/save' });
+        } finally { storage.dispose(); }
+      }, write);
+      expect(result).toEqual({ base64: btoa('saved game') });
+      if (write) await page.reload();
+    }
+  } finally {
+    await browser?.close();
+    server?.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test.each([false, true])('built wasm host admits agent parameters only in development (production: %s)', async production => {
   const root = mkdtempSync(join(ROOT, 'target/web-host-agent-'));

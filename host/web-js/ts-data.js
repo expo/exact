@@ -20,6 +20,7 @@ import { rt } from './rt-link.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
 // What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
+import { knownFolderPath } from './grant-admission.js';
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.
 const appId = source.appId;
@@ -540,6 +541,9 @@ function storageOf(grants) {
         const wrongExpect = expectRefusal(m, args);
         if (wrongExpect) return Promise.reject(wrongExpect);
         const captured = structuredClone(args);
+        if (captured.slice(0, /^(rename|copyFile)$/.test(m) ? 2 : 1).some(knownFolderPath)) {
+          return Promise.reject(Object.assign(new Error('NotSupportedError: well-known folders are unavailable on this host'), { name: 'NotSupportedError', code: 'failed' })).catch(refused);
+        }
         // With no storage grant no tab of the app writes a file, so a refused call watches no topic and tells none.
         if (!admitted) return denied(`fs.${m}`, isDocument(captured) && !copiesIn(m, captured)).catch(refused);
         const run = () => copiesIn(m, captured) ? documents().then(files).then(f => globalThis.exact.documents.copyFile(captured[0], captured[1], grants, f))

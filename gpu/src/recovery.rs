@@ -1,4 +1,4 @@
-use crate::{json, load_gpu, DeviceFailure, Module};
+use crate::{json, load_gpu_with_requirements, DeviceFailure, Module};
 use std::sync::atomic::Ordering;
 
 pub(crate) struct RecoveryFailure {
@@ -46,7 +46,7 @@ impl Module {
             return Ok("{\"status\":\"healthy\",\"instances\":[]}".into());
         }
         // No adapter request may consult a surface owned by the lost device.
-        let gpu = load_gpu(instance, None)
+        let gpu = load_gpu_with_requirements(instance, None, self.requirements)
             .await
             .map_err(RecoveryFailure::device)?;
         self.set_gpu(gpu);
@@ -68,6 +68,9 @@ impl Module {
     fn reattach_layers(&mut self) -> Result<(), String> {
         let gpu = self.gpu.as_ref().ok_or("no device")?;
         for inst in self.instances.values_mut() {
+            if self.refused.contains_key(inst.name.as_str()) {
+                continue;
+            }
             let (Some(layer), Some(config)) = (inst.layer, inst.config.as_mut()) else {
                 continue;
             };
@@ -83,7 +86,8 @@ impl Module {
             inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
             inst.alpha_modes = caps.alpha_modes;
             target.configure(&gpu.device, config);
-            inst.surface.device_ready(gpu.device.features());
+            inst.surface
+                .device_ready(gpu.device.features(), gpu.device.limits());
             inst.surface
                 .color_space_granted(crate::target::granted(Some(config)));
             inst.surface

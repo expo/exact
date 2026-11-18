@@ -33,35 +33,8 @@ fn checked(status: NTSTATUS) -> io::Result<()> {
     }
 }
 fn name(value: &str) -> io::Result<Vec<u16>> {
-    let base = value
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    let device = matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$")
-        || ["COM", "LPT"].iter().any(|prefix| {
-            base.strip_prefix(prefix).is_some_and(|suffix| {
-                matches!(
-                    suffix,
-                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
-                )
-            })
-        });
-    if value.is_empty()
-        || value == "."
-        || value == ".."
-        || value.contains(['/', '\\', ':', '\0', '*', '?', '"', '<', '>', '|'])
-        || value.chars().any(|c| c < ' ')
-        || value.ends_with(['.', ' '])
-        || device
-    {
-        return Err(refuse("not a relative filesystem name"));
-    }
-    let encoded: Vec<_> = value.encode_utf16().collect();
-    if encoded.len() > 255 {
-        return Err(refuse("filesystem name too long"));
-    }
-    Ok(encoded)
+    super::windows_path::validate_name(value)?;
+    Ok(value.encode_utf16().collect())
 }
 pub fn validate_name(value: &str) -> io::Result<()> {
     name(value).map(|_| ())
@@ -73,6 +46,94 @@ fn validate(file: &File) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Walk {
+    App,
+    Known,
+}
+
+fn open_known(file: File, access: u32) -> io::Result<File> {
+    let info = attributes(&file)?;
+    super::windows_path::open_known(file, info.FileAttributes, info.ReparseTag, |file| {
+        reopen_known(file, access)
+    })
+}
+fn attributes(file: &File) -> io::Result<FILE_ATTRIBUTE_TAG_INFO> {
+    let mut info = FILE_ATTRIBUTE_TAG_INFO::default();
+    // SAFETY: the held handle and correctly sized output live through the query.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
+            (&mut info as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(info)
+}
+fn known_identity(file: &File) -> io::Result<(u64, [u8; 16])> {
+    let mut info = FILE_ID_INFO::default();
+    // SAFETY: a live handle and correctly sized output remain valid for the query.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut info as *mut FILE_ID_INFO).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    } != 0
+    {
+        let id = info.FileId.Identifier;
+        if id == [0; 16] || id == [0xff; 16] {
+            return Err(refuse("filesystem did not identify the placeholder"));
+        }
+        return Ok((info.VolumeSerialNumber, id));
+    }
+    let error = io::Error::last_os_error();
+    if !matches!(
+        error.raw_os_error().map(|code| code as u32),
+        Some(ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION | ERROR_NOT_SUPPORTED)
+    ) {
+        return Err(error);
+    }
+    let (volume, id) = identity(file)?;
+    if id == 0 || id == u64::MAX {
+        return Err(refuse("filesystem did not identify the placeholder"));
+    }
+    let mut bytes = [0; 16];
+    bytes[..8].copy_from_slice(&id.to_le_bytes());
+    Ok((volume, bytes))
+}
+fn reopen_known(file: &File, access: u32) -> io::Result<File> {
+    let before = known_identity(file)?;
+    // Normal reparse processing lets the cloud filter recall the placeholder.
+    // Reopen the held object, without OPEN_REPARSE_POINT or OPEN_NO_RECALL.
+    // https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-reopenfile
+    let handle = unsafe {
+        ReOpenFile(
+            file.as_raw_handle(),
+            access | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_FLAG_BACKUP_SEMANTICS,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: ReOpenFile returned a new owned handle.
+    let reopened = unsafe { File::from_raw_handle(handle) };
+    let info = attributes(&reopened)?;
+    if !super::windows_path::known_entry(info.FileAttributes, info.ReparseTag)
+        || known_identity(&reopened)? != before
+    {
+        return Err(refuse("known-folder placeholder changed during recall"));
+    }
+    Ok(reopened)
 }
 fn open(
     parent: &Directory,
@@ -88,6 +149,7 @@ fn open(
         disposition,
         directory,
         parent.1,
+        parent.2,
     )
 }
 fn open_encoded(
@@ -97,6 +159,7 @@ fn open_encoded(
     disposition: u32,
     directory: bool,
     insensitive: bool,
+    walk: Walk,
 ) -> io::Result<File> {
     let mut unicode = UNICODE_STRING {
         Length: (encoded.len() * 2) as u16,
@@ -133,8 +196,13 @@ fn open_encoded(
     })?;
     // SAFETY: a successful NtCreateFile transfers ownership of a new handle.
     let file = unsafe { File::from_raw_handle(handle) };
-    validate(&file)?;
-    Ok(file)
+    match walk {
+        Walk::App => {
+            validate(&file)?;
+            Ok(file)
+        }
+        Walk::Known => open_known(file, access),
+    }
 }
 pub fn identity(file: &File) -> io::Result<(u64, u64)> {
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
@@ -148,14 +216,32 @@ pub fn identity(file: &File) -> io::Result<(u64, u64)> {
     ))
 }
 #[derive(Debug)]
-pub struct Directory(pub File, bool);
+pub struct Directory(pub File, bool, Walk);
 impl Directory {
+    /// The OS-selected root is trusted as named, including UNC and redirected
+    /// roots. Below it, only name-surrogate reparse tags are refused (LLP 1173 D4).
+    pub(crate) fn known(path: &Path, held: Option<File>) -> io::Result<Self> {
+        let file = match held {
+            Some(file) => file,
+            None => OpenOptions::new()
+                .access_mode(
+                    FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                )
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)?,
+        };
+        if !file.metadata()?.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::NotADirectory, "ENOTDIR"));
+        }
+        Ok(Self(file, true, Walk::Known))
+    }
     pub(crate) fn selected(file: &File) -> io::Result<Self> {
         validate(file)?;
         if !file.metadata()?.is_dir() {
             return Err(refuse("document root must be a directory"));
         }
-        Ok(Self(file.try_clone()?, true))
+        Ok(Self(file.try_clone()?, true, Walk::App))
     }
     pub(crate) fn document_read(&self, leaf: &str) -> io::Result<Vec<u8>> {
         super::fs::read_result(self.document_file(leaf)?)
@@ -173,7 +259,7 @@ impl Directory {
         Ok(file)
     }
     pub fn try_clone(&self) -> io::Result<Self> {
-        Ok(Self(self.0.try_clone()?, self.1))
+        Ok(Self(self.0.try_clone()?, self.1, self.2))
     }
     /// A native path operation pins its drive once. Case-sensitive directories
     /// keep their own lookup policy; the grant comparison is separately exact.
@@ -230,7 +316,7 @@ impl Directory {
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
             .open(format!("{drive}:\\"))?;
         validate(&file)?;
-        let mut dir = Self(file, true);
+        let mut dir = Self(file, true, Walk::App);
         for part in parts {
             match part {
                 Component::Normal(part) => {
@@ -252,7 +338,17 @@ impl Directory {
             if create { FILE_OPEN_IF } else { FILE_OPEN },
             true,
         )
-        .map(|file| Self(file, self.1))
+        .map(|file| Self(file, self.1, self.2))
+    }
+    pub(crate) fn create_child(&self, leaf: &str) -> io::Result<Self> {
+        open(
+            self,
+            leaf,
+            FILE_LIST_DIRECTORY | FILE_TRAVERSE,
+            FILE_CREATE,
+            true,
+        )
+        .map(|file| Self(file, self.1, self.2))
     }
     pub fn parent(&self, relative: &str, create: bool) -> io::Result<(Self, String)> {
         let parts: Vec<_> = relative.split('/').collect();
@@ -324,6 +420,7 @@ impl Directory {
             FILE_OPEN,
             true,
             self.1,
+            self.2,
         )?;
         let mut storage = vec![0u64; 8192];
         let mut names = Vec::new();
@@ -411,6 +508,12 @@ impl Directory {
         })
     }
     pub fn rename(&self, file: &File, leaf: &str) -> io::Result<()> {
+        self.rename_using(file, leaf, true)
+    }
+    pub(crate) fn rename_new(&self, file: &File, leaf: &str) -> io::Result<()> {
+        self.rename_using(file, leaf, false)
+    }
+    fn rename_using(&self, file: &File, leaf: &str, replace: bool) -> io::Result<()> {
         let leaf = name(leaf)?;
         let length = (offset_of!(FILE_RENAME_INFORMATION, FileName) + leaf.len() * 2)
             .max(size_of::<FILE_RENAME_INFORMATION>());
@@ -418,7 +521,7 @@ impl Directory {
         // SAFETY: aligned allocation includes the complete variable name field.
         unsafe {
             let info = &mut *buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
-            info.Anonymous.ReplaceIfExists = true;
+            info.Anonymous.ReplaceIfExists = replace;
             info.RootDirectory = self.0.as_raw_handle();
             info.FileNameLength = (leaf.len() * 2) as u32;
             std::ptr::copy_nonoverlapping(leaf.as_ptr(), info.FileName.as_mut_ptr(), leaf.len());
@@ -468,5 +571,36 @@ impl Directory {
         drop(file);
         let _ = self.unlink(&temp);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recall_reopens_the_held_directory_after_its_name_is_replaced() {
+        let base = std::env::temp_dir().join(format!("ibex-known-recall-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("original")).unwrap();
+        let root = Directory::known(&base, None).unwrap();
+        let directory = root.child("original", false).unwrap();
+        std::fs::rename(base.join("original"), base.join("held")).unwrap();
+        std::fs::create_dir(base.join("original")).unwrap();
+        let recalled = Directory(
+            reopen_known(&directory.0, FILE_LIST_DIRECTORY | FILE_TRAVERSE).unwrap(),
+            true,
+            Walk::Known,
+        );
+        recalled
+            .file("shot", libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)
+            .unwrap()
+            .write_all(b"png")
+            .unwrap();
+        assert_eq!(std::fs::read(base.join("held/shot")).unwrap(), b"png");
+        assert!(!base.join("original/shot").exists());
+        drop(recalled);
+        drop(directory);
+        drop(root);
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

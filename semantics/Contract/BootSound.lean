@@ -352,9 +352,9 @@ theorem boot_sound {p : Program} (hp : WellTyped p) (o : Oracle) : OutcomeOK (bo
   obtain ⟨hs, hkeys⟩ := hl
   have htimers : TimersOK p timers := by
     intro tm htm
-    obtain ⟨t, htk, ha, hg, hk⟩ := startTimers_tasks ht tm htm
-    refine ⟨by rw [ha]; exact hp.taskActions t htk, ?_⟩
-    rw [hg, hk]; exact hp.taskGates t htk
+    obtain ⟨t, htk, ha, hg, hk, ho⟩ := startTimers_tasks ht tm htm
+    refine ⟨by rw [ha]; exact (hp.taskActions t htk).imp fun _ h => h.1, ?_⟩
+    rw [hg, hk, ho]; exact hp.taskGates t htk
   -- A late resource's settlement, once the late slots exist (LLP 1035.005.004 D2).
   split
   · next e he =>
@@ -374,9 +374,14 @@ theorem boot_sound {p : Program} (hp : WellTyped p) (o : Oracle) : OutcomeOK (bo
   · next e he =>
     exact ofW (gateStep_good hp
       (EnvGood.envOKE hp ⟨rfl, hs, hpres.of_keys hkeys, RowsOK.nil, hok.1, hok.2⟩ hc) htimers) he
+  next timers' ht' =>
   dsimp only
   split
-  · trivial
+  · split
+    · next e he =>
+      exact ofW (gateStep_good hp
+        (EnvGood.envOKE hp ⟨rfl, hs, hpres.of_keys hkeys, RowsOK.nil, hok.1, hok.2⟩ hc) (htimers.gateStep ht')) he
+    · trivial
   · next e he =>
     exact ofW (renderTabs_good hp (E := Strict) (fun _ h hn => ⟨h, hn⟩) fuel
       (cx := { env := { prog := p, slots, derives := st₂.derives, resources := st₂.resources, now := 0, idle := st₂.idle },

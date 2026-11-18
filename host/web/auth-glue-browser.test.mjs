@@ -60,7 +60,7 @@ const tabPage = url => html(`<button id="start">Start</button><script type="modu
           url: ${JSON.stringify(url.searchParams.get('provider'))},
           callback: location.origin + '/.exact/auth/callback',
           state: ${JSON.stringify(url.searchParams.get('state'))},
-          logout: true,
+          logout: ${url.searchParams.get('logout') !== 'false'},
           prepared,
         } } : {};
       },
@@ -110,14 +110,14 @@ afterAll(() => {
   provider?.stop(true);
 });
 
-function heldRoundTrip(state = '') {
+function heldRoundTrip(state = '', fragment = false) {
   const run = crypto.randomUUID();
   const lease = gate(), heldProvider = gate();
   leaseGates.set(run, lease);
   providerGates.set(run, heldProvider);
-  const callbackURL = appURL(`/.exact/auth/callback${state ? `?state=${encodeURIComponent(state)}` : ''}`);
+  const callbackURL = appURL(`/.exact/auth/callback${fragment ? `?tracking=1#state=${encodeURIComponent(state)}&id_token=fixture-token&code=hybrid` : state ? `?state=${encodeURIComponent(state)}` : ''}`);
   const providerPage = providerURL(`/provider?run=${encodeURIComponent(run)}&callback=${encodeURIComponent(callbackURL)}`);
-  const tab = appURL(`/tab?run=${encodeURIComponent(run)}&state=${encodeURIComponent(state || 'logout')}&provider=${encodeURIComponent(providerPage)}`);
+  const tab = appURL(`/tab?run=${encodeURIComponent(run)}&state=${encodeURIComponent(state || 'logout')}&provider=${encodeURIComponent(providerPage)}&logout=${!fragment}`);
   return { run, lease, provider: heldProvider, callbackURL, tab };
 }
 
@@ -223,3 +223,30 @@ need('chromium', await browserMissing('chromium'))('real Chrome: COOP closure do
     await context.close();
   }
 }, 30_000);
+
+for (const engine of ['chromium', 'firefox', 'webkit']) {
+  need(engine, await browserMissing(engine))(`${engine}: a sign-in fragment survives a cross-site COOP round trip`, async () => {
+    const browser = await suiteBrowser(engine);
+    const context = await browser.newContext();
+    const roundTrip = heldRoundTrip('sign-in +😀', true);
+    try {
+      const page = await context.newPage();
+      await page.goto(roundTrip.tab);
+      await page.click('#start');
+      await roundTrip.lease.arrived;
+      roundTrip.lease.release();
+      await roundTrip.provider.arrived;
+      roundTrip.provider.release();
+      await page.waitForFunction(() => done.length === 1 && openerObservations.length === 1);
+      expect(await page.evaluate(() => done)).toEqual([{ op: 'done', ticket: 1, url: roundTrip.callbackURL }]);
+      expect(await page.evaluate(() => openerObservations)).toEqual([true]);
+      expect(await page.evaluate(() => openerMessages)).toEqual([]);
+    } finally {
+      roundTrip.lease.release();
+      roundTrip.provider.release();
+      leaseGates.delete(roundTrip.run);
+      providerGates.delete(roundTrip.run);
+      await context.close();
+    }
+  }, 30_000);
+}

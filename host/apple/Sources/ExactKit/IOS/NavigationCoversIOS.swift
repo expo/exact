@@ -460,39 +460,39 @@ extension NavigationHost {
         func say(_ what: String, _ now: AnyObject?, _ effect: String) {
             presenter.session?.log("\(what): delegate changed outside Exact, which owns it (now \(now.map { "\(type(of: $0))" } ?? "nil")); \(effect)")
         }
-        // `stacks` holds a record for each slot Exact keeps: `registerStack` writes the slot, `retireStack` drops it
+        // `stacks` holds a record for each slot Exact keeps: `registerStack` fills the slot, `retireStack` retires it
         for stack in stacks.values.sorted(by: { $0.order < $1.order }) {
             guard let nav = stack.controller else { continue }
-            let written = nav.delegate !== stack.proxy
-            if written, !stack.slotNamed {
+            let written = !stack.proxy.fillsSlot
+            if written, !stack.proxy.slotNamed {
                 if nav === adoptedMore {
                     say("navigation More", nav.delegate, "Exact hears none of More's calls, and More has no forwarded delegate")
                 } else {
                     say("navigation \(stack.label)", nav.delegate, "Exact hears none of this stack's calls: set ExactNavigation.delegate, which Exact forwards to")
                 }
             }
-            stack.slotNamed = written
+            stack.proxy.slotNamed = written
         }
-        guard let tabs = tabController else { return }
-        if tabs.delegate === tabProxy {
-            tabSlotNamed = nil
-        } else if tabSlotNamed !== tabs {
-            tabSlotNamed = tabs
+        guard let tabs = tabController, let proxy = tabProxy else { return }
+        let written = !proxy.fillsSlot
+        if written, !proxy.slotNamed {
             say("tabs", tabs.delegate, "Exact hears none of the tab container's calls: set ExactTabs.delegate, which Exact forwards to")
         }
+        proxy.slotNamed = written
     }
 
-    /// Before each batch: compare what Exact owns on each hatched object with
-    /// what Exact last wrote, and UIKit's stacks and selection at rest with
-    /// the router's (`restDifference`), and journal a difference once, by
-    /// name. It is detection, not enforcement; a change made and undone
-    /// between two batches is not seen.
+    /// Before each batch: compare what Exact owns on each hatched object and
+    /// the tabs of its own tab container with what Exact last wrote or made,
+    /// and UIKit's stacks and selection at rest with the router's
+    /// (`restDifference`), and journal a difference once, by name. It is
+    /// detection, not enforcement; a change made and undone between two
+    /// batches is not seen.
     func checkOwned() {
         guard NavigationHost.checksOwnership else { return }
         checkDelegates()
+        checkTabs()
         if let difference = restDifference { reportOnce("navigation: at rest, \(difference)") }
         guard !changing, !syncing, presenter.session?.natives.hatchesConnected == true else { return }
-        func say(_ what: String, _ property: String) { reportOnce("\(what): \(property) changed outside Exact, which owns it") }
         // `allNavigations` leaves out a tab's own navigation controller while UIKit holds its routes in More; More has
         // no hatch, so the `hatched` guard skips it
         for nav in allNavigations {
@@ -511,6 +511,36 @@ extension NavigationHost {
             for property in NavigationHost.ownedChanges(scroll, of: node, insetByUIKit: insetByUIKit(node)) { say("route \(c.key)", property) }
         }
     }
+
+    /// The tabs and their controllers Exact made with its container, hooked
+    /// or not (LLP 1075.003 §3.7): Exact never replaces a tab's controller,
+    /// and makes a container's `UITab`s again only when an app's
+    /// `tabContainer` took their stacks and returned no container
+    /// (`restoreBuiltTabs`). They are compared as members, since More's Edit
+    /// reorders them as UIKit lets a person do. A container built from
+    /// `UITab`s holds them in its `tabs`, and its `viewControllers` reads nil,
+    /// so it is compared by its tabs. One built from controllers is compared
+    /// by its `viewControllers`, which reads nil once the app sets `tabs` on it.
+    private func checkTabs() {
+        // Skip during a sync, which can set `builtTabs` before the container's tabs: the next batch checks them
+        guard !syncing, let tabs = tabController, tabOwner === tabs else { return }
+        // Compare by identity as sets: Exact's are distinct, so equal counts and equal sets are the same members
+        func same(_ shown: [AnyObject], _ made: [AnyObject]) -> Bool {
+            shown.count == made.count && Set(shown.map(ObjectIdentifier.init)) == Set(made.map(ObjectIdentifier.init))
+        }
+        if #available(iOS 18.0, tvOS 18.0, *), !builtTabs.isEmpty {
+            if !same(tabs.tabs, builtTabs) { say("tabs", "tabs") }
+        } else if #available(iOS 18.0, tvOS 18.0, *), tabs.viewControllers == nil {
+            // Name `tabs` for a container built from controllers that now holds `UITab`s: a cleared
+            // `viewControllers` reads back as no controllers, not nil (measured on iOS 27)
+            say("tabs", "tabs")
+        } else if !same(tabs.viewControllers ?? [], tabPanels.compactMap { tabStacks[$0] }) {
+            say("tabs", "viewControllers")
+        }
+    }
+
+    /// Journal that `what`'s `property`, which Exact owns, changed outside it, the first time the check finds it.
+    private func say(_ what: String, _ property: String) { reportOnce("\(what): \(property) changed outside Exact, which owns it") }
 
     /// Journal `line` the first time the development check finds it.
     private func reportOnce(_ line: String) {

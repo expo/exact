@@ -48,8 +48,9 @@ open class ExactActivity : Activity() {
 
     /** The app's Kotlin hatches (LLP 1115.001.000 D4), made the first time exact2 tells a moment, which is after
      * first pixel; one for the process, as exact2's host is, and given each activity made again. */
-    internal fun hatches(): HatchReader? {
+    internal fun hatches(required: Boolean = false): HatchReader? {
         if (!hatchesLooked) { hatchesLooked = true; hatchReader = HatchReader.make(this) }
+        if (required && hatchReader == null) hatchReader = HatchReader(this, object : ExactHatches() {})
         return hatchReader
     }
 
@@ -152,10 +153,10 @@ open class ExactActivity : Activity() {
     }
 
     /** The location a push Firebase showed opens: `navigate` from the intent its tap starts, which carries the
-     * message's `data` and Firebase's `google.message_id` (LLP 1133.004.000 D7). Nothing else of it is read; `navigate`
-     * has a link's trust, as any app could start the activity with a link. */
+     * message's `data` and Firebase's `google.message_id` (LLP 1133.004.000 D7). [PushLocation] also reads Expo's
+     * `body.navigate`. The location has a link's trust, as any app could start the activity with a link. */
     private fun pushed(intent: android.content.Intent): String? =
-        intent.takeIf { it.hasExtra("google.message_id") }?.getStringExtra("navigate")?.takeIf { it.isNotEmpty() }
+        intent.takeIf { it.hasExtra("google.message_id") }?.let { PushLocation.of(it::getStringExtra) }
 
     /** Whether an accessibility service is on (LLP 1115.001 D13). The reader answers one through its root
      * ([Root], [Access]) and asks exact2 for the tree only while one is on: with none, exact2 is never asked and
@@ -653,6 +654,7 @@ open class ExactActivity : Activity() {
      * item 2). */
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (Auth.result(this, requestCode, resultCode, data)) return
         Extensions.activityResult(requestCode, resultCode, data)
     }
 

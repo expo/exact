@@ -1111,6 +1111,8 @@ test('ts-data always supplies storage, refusing ungranted operations without loa
 export function answer(name, args, store, storage) {
   if (name === 'work') return storage.work(Promise.resolve('done'));
   if (name === 'document') return storage.fs.readFile('doc:/picked/file').catch(error => error.kind + ':' + error.code);
+  if (name === 'known-folder') return storage.fs.writeFile('pictures:/Shot.png', new Uint8Array([1])).catch(e => e.name + ':' + e.kind + ':' + e.code);
+  if (name === 'known-copy') return storage.fs.copyFile('app:/tmp/capture.png', 'documents:/Shot.png').catch(e => e.name + ':' + e.kind + ':' + e.code);
   if (name === 'directories') return JSON.stringify(storage.fs.directories);
   return (name === 'open' ? storage.sqlite.open('app:/data/test.db')
     : storage.fs[name]('app:/data/file', new Uint8Array([1])))
@@ -1120,7 +1122,7 @@ export function answer(name, args, store, storage) {
       .replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
     writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();'); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
     writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
-    writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes=${JSON.stringify(Object.fromEntries([...methods, 'open', 'work', 'directories', 'document'].map(n => [n, [[], 's']])))};`);
+    writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes=${JSON.stringify(Object.fromEntries([...methods, 'open', 'work', 'directories', 'document', 'known-folder', 'known-copy'].map(n => [n, [[], 's']])))};`);
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'").replaceAll("'../web/faults.js'", "'./faults.js'").replaceAll("'../web/address-space.js'", "'./address-space.js'"));
     writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(normalized(spec))});`);
     for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'http-body.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
@@ -1131,6 +1133,7 @@ export function answer(name, args, store, storage) {
       ts.install(data);
       for (const name of [...methods, 'open']) expect(await data.answer(name, [], new Map()).promise, name).toBe(query === '?agent=1' ? 'Unavailable:agent' : 'Unavailable:denied');
       expect(await data.answer('document', [], new Map()).promise).toBe('Unavailable:denied');
+      for (const name of ['known-folder', 'known-copy']) expect(await data.answer(name, [], new Map()).promise).toBe('NotSupportedError:Unavailable:failed');
       expect(await data.answer('work', [], new Map()).promise).toBe('done');
       expect(JSON.parse(data.answer('directories', [], new Map()).v)).toEqual({ data: 'app:/data', cache: 'app:/cache', temporary: 'app:/tmp' });
     } finally {
@@ -1148,6 +1151,7 @@ test('storage re-homes an answer\'s writes to the background before retiring it'
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-rehome-'));
   try {
     cpSync(resolve(ROOT, 'host/web/storage.js'), resolve(dir, 'storage.js'));
+    writeFileSync(resolve(dir, 'grant-admission.js'), hostFixtureFile(resolve(ROOT, 'host/web/grant-admission.js')));
     writeFileSync(resolve(dir, 'storage-environment.js'), "export const directories = {}; export const agentStorageRefusal = 'no store'; export const agentReads = []; export const emptyRead = () => []; export const storageKey = () => 'k';");
     // Each write lands when the test says.
     writeFileSync(resolve(dir, 'storage-fs.js'), 'export const createFileSystem = () => ({ writeFile: () => new Promise(ok => globalThis.landWrite.push(ok)) });');
@@ -1261,6 +1265,7 @@ try {
   readFile: () => new Promise(ok => globalThis.land.push(() => ok('contents'))),
 });`);
   cpSync(resolve(ROOT, 'host/web/storage.js'), resolve(dir, 'storage.js'));
+  writeFileSync(resolve(dir, 'grant-admission.js'), hostFixtureFile(resolve(ROOT, 'host/web/grant-admission.js')));
   const worker = new Worker(pathToFileURL(workerPath), { type: 'module' });
   try {
     const verdict = await new Promise((resolve, reject) => {
@@ -1319,6 +1324,7 @@ ${body}
   readFile: () => new Promise(ok => globalThis.land.push(() => ok('contents'))),
 });`);
   cpSync(resolve(ROOT, 'host/web/storage.js'), resolve(dir, 'storage.js'));
+  writeFileSync(resolve(dir, 'grant-admission.js'), hostFixtureFile(resolve(ROOT, 'host/web/grant-admission.js')));
   const worker = new Worker(pathToFileURL(resolve(dir, 'worker.mjs')), { type: 'module' });
   try {
     return await new Promise((resolve, reject) => {

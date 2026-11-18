@@ -266,9 +266,11 @@ impl Directory {
                     )
                 };
                 if linked < 0 {
-                    if io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST)
-                        && self.read(leaf)? == bytes
-                    {
+                    let error = io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::EEXIST) {
+                        return Err(error);
+                    }
+                    if self.read(leaf)? == bytes {
                         return Ok("present");
                     }
                     return Err(refuse("immutable file exists with other bytes"));

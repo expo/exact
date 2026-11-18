@@ -1076,18 +1076,22 @@ impl<D: DataSource> Presenter<D> {
         self.retire_scroll_ends();
         let (focus_sent, focus_error) = self.clear_removed_focus();
         error = error.or(focus_error);
-        if focus_sent {
-            return error;
+        if !focus_sent {
+            self.sync_zoom();
+            self.sync_authored_scroll();
+            self.dirty |= self.clamp_scroll();
+            self.retire_pointer();
+            self.arrange_settled();
+            self.dirty |= error.is_some();
+            // The focus a commit leaves: its `autofocus`, then the route's.
+            error = error.or(self.autofocus());
+            self.arrive();
         }
-        self.sync_zoom();
-        self.sync_authored_scroll();
-        self.dirty |= self.clamp_scroll();
-        self.retire_pointer();
-        self.arrange_settled();
-        self.dirty |= error.is_some();
-        // The focus a commit leaves: its `autofocus`, then the route's.
-        error = error.or(self.autofocus());
-        self.arrive();
+        // Hidden windows service commits without painting. Invalidate kept rows
+        // and maintain measured text here so neither waits for a display frame.
+        let dirty = self.host.row_dirty.take_changes();
+        self.brush.rows_dirty(self.host.kernel(), dirty);
+        self.text.borrow_mut().maintain();
         error
     }
 

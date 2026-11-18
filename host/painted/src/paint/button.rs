@@ -11,8 +11,11 @@ use exact_kernel::{
 use std::rc::Rc;
 use tiny_skia::Transform;
 
+#[path = "icon_button.rs"]
+mod icon_button;
 #[path = "segment.rs"]
 mod segment;
+use icon_button::material_icon;
 
 pub(crate) fn look(name: &str) -> &'static str {
     exact_kernel::generated::button_style(name).map_or("ua", |s| s.look)
@@ -142,6 +145,7 @@ fn tab_length(rows: &ButtonFaceStyle, id: usize, em: f32) -> f32 {
 fn face_typography(
     rows: &ButtonFaceStyle,
     filled: bool,
+    icon: bool,
 ) -> (StyleProps, Option<StyleProps>, StyleProps) {
     let neutral = look::neutral();
     let segment = rows.segment.is_some() && look::material();
@@ -203,6 +207,9 @@ fn face_typography(
     if let Some((_, size)) = rows.neutral_bar_symbol {
         symbol_style.font_size = size;
     }
+    if icon && !symbol_style.mask.has(StyleId::FontSize) {
+        symbol_style.font_size = material_dp(metric::ICON_BUTTON_ICON) * scale;
+    }
     (title_style, subtitle_style, symbol_style)
 }
 
@@ -221,8 +228,9 @@ pub(crate) fn image_size(kernel: &exact_kernel::Kernel, image: &NodeRef<'_>) -> 
     let rows = kernel.button_face_style(parent.id)?;
     let face = kernel.press_face(parent.id)?;
     face.symbol.as_ref()?;
-    let filled = material_filled(parent.props.str(PropId::ButtonStyle));
-    let (_, _, style) = face_typography(&rows, filled);
+    let said = parent.props.str(PropId::ButtonStyle);
+    let icon = material_icon(said, &face, &rows).is_some();
+    let (_, _, style) = face_typography(&rows, material_filled(said) && !icon, icon);
     Some(style.font_size * symbol_scale(&face, &rows))
 }
 
@@ -251,16 +259,17 @@ pub(super) fn face_layout(
     width: AxisOffer,
     filled: bool,
     bordered: bool,
+    icon: bool,
 ) -> FaceLayout {
     let neutral = look::neutral();
-    // A radio of a segmented group (`exact_kernel::segmented`): Material's
+    // A member of a segmented group (`exact_kernel::segmented`): Material's
     // segmented button, or the neutral look's segment.
     let segment = rows.segment.is_some() && look::material();
     let neutral_segment = rows.segment.is_some() && neutral;
     let tab_root = rows.neutral_tab_root;
     let tab_length = |id, em| tab_length(rows, id, em);
     let scale = control_scale(rows.button.control_size);
-    let (title_style, subtitle_style, symbol_style) = face_typography(rows, filled);
+    let (title_style, subtitle_style, symbol_style) = face_typography(rows, filled, icon);
     let mut column = matches!(
         face.placement,
         ButtonImagePlacement::Top | ButtonImagePlacement::Bottom
@@ -286,7 +295,7 @@ pub(super) fn face_layout(
     // on that axis. The more specific narrow-tab rule keeps its rem padding
     // and minimum until those properties themselves are authored.
     let em = title_style.font_size;
-    let said = |id| (neutral || filled || segment) && rows.button.written.has(id);
+    let said = |id| (neutral || filled || segment || icon) && rows.button.written.has(id);
     let (said_width, said_height) = (said(StyleId::Width), said(StyleId::Height));
     let padding_block = neutral
         && !rows.neutral_role_floor
@@ -294,8 +303,13 @@ pub(super) fn face_layout(
     let padding_inline = neutral
         && !rows.neutral_role_floor
         && (said(StyleId::PaddingLeft) || said(StyleId::PaddingRight));
+    // An icon button's icon sits in the middle of its container.
+    let icon_pad =
+        (material_dp(metric::ICON_BUTTON_SIZE) - material_dp(metric::ICON_BUTTON_ICON)) / 2.0;
     let inline = if tab_root.is_some() {
         tab_length(metric::TABBAR_PADDING_INLINE, em)
+    } else if icon {
+        icon_pad * scale
     } else if filled {
         material_dp(metric::FILLED_BUTTON_PADDING_INLINE) * scale
     } else if segment {
@@ -311,6 +325,8 @@ pub(super) fn face_layout(
     };
     let block = if tab_root.is_some() {
         tab_length(metric::TABBAR_PADDING_BLOCK, em)
+    } else if icon {
+        icon_pad * scale
     } else if filled {
         material_dp(metric::FILLED_BUTTON_PADDING_BLOCK) * scale
     } else if segment {
@@ -371,7 +387,7 @@ pub(super) fn face_layout(
         };
         edge + if rows.button.mask.has(id) || (tab_root.is_some() && rows.button.written.has(id)) {
             points(d)
-        } else if neutral || filled || segment {
+        } else if neutral || filled || segment || icon {
             look
         } else {
             default * scale
@@ -449,6 +465,8 @@ pub(super) fn face_layout(
     let floor = |said: bool| {
         if neutral && !said {
             look::px(metric::CONTROL_HEIGHT, em)
+        } else if icon && !said {
+            material_dp(metric::ICON_BUTTON_SIZE) * scale
         } else if filled && !said {
             material_dp(metric::FILLED_BUTTON_HEIGHT) * scale
         } else if segment && !said {
@@ -545,14 +563,16 @@ pub(super) fn face_layout(
 }
 
 pub(crate) fn measure(engine: &mut TextEngine, request: &ButtonMeasureRequest) -> ButtonMeasure {
-    let filled = material_filled(request.button_style.as_deref());
+    let said = request.button_style.as_deref();
+    let icon = material_icon(said, &request.face, &request.style).is_some();
     let face = face_layout(
         engine,
         &request.face,
         &request.style,
         request.width,
-        filled,
-        request.button_style.as_deref().unwrap_or("bordered") == "bordered",
+        material_filled(said) && !icon,
+        said.unwrap_or("bordered") == "bordered",
+        icon,
     );
     ButtonMeasure {
         width: face.width,
@@ -602,10 +622,10 @@ impl Painter {
         );
         let background = active_background(node, dark, pressed);
         if let Some(palette) = look::contrast().filter(|_| authored.is_none()) {
-            // A segment's checked radio is the selected item, disabled or
+            // A segment's chosen member is the selected item, disabled or
             // not, and a pointer over one gives it none of that pair, as the
             // web's sheet has it under forced colours (`SelectedItem`).
-            let chosen = segment && node.props.bool(PropId::AccessibilityChecked) == Some(true);
+            let chosen = segment && segment::chosen(node);
             let active = chosen || (!segment && !disabled && (pressed || hover || style == "fill"));
             let ink = if chosen {
                 palette.highlighted_text
@@ -754,17 +774,18 @@ impl Painter {
         let dark = self.dark;
         let neutral = look::neutral();
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
-        let filled = material_filled(node.props.str(PropId::ButtonStyle));
-        // A radio of a segmented group: this face with the segment's chrome.
+        let icon = material_icon(node.props.str(PropId::ButtonStyle), face, rows);
+        let filled = material_filled(node.props.str(PropId::ButtonStyle)) && icon.is_none();
+        // A member of a segmented group: this face with the segment's chrome.
         let material_segment = rows.segment.filter(|_| look::material());
-        let checked = node.props.bool(PropId::AccessibilityChecked) == Some(true);
+        let checked = segment::chosen(node);
         let rtl =
             node.computed_row(StyleId::Direction, |s| s.direction) == exact_kernel::Direction::Rtl;
         // The neutral look's disabled button is the grey ink, not a fade;
         // Material's is its own colours (below).
         let dim = |mut c: [u8; 4]| {
             // A Material segment's disabled colours are its own (`segment.rs`).
-            if disabled && !neutral && !filled && material_segment.is_none() {
+            if disabled && !neutral && !filled && material_segment.is_none() && icon.is_none() {
                 c[3] = (c[3] as f32 * 0.45) as u8;
             }
             c
@@ -797,6 +818,9 @@ impl Painter {
         .map(|(id, radius)| {
             if rows.button.mask.has(id) {
                 points(radius)
+            } else if icon.is_some() {
+                // `IconButtonDefaults`' shapes are round.
+                rect.3 / 2.0
             } else if filled
                 && matches!(
                     rows.button.control_corner_style,
@@ -842,7 +866,7 @@ impl Painter {
         };
         // Compose lays its button out in whole pixels: Material's is drawn
         // with its edges on the pixel grid.
-        let drawn = match filled || material_segment.is_some() {
+        let drawn = match filled || material_segment.is_some() || icon.is_some() {
             true => {
                 let grid = |v, vertical| super::material::on_grid(v, ts, vertical, self.scale);
                 let (x0, y0) = (grid(rect.0, false), grid(rect.1, true));
@@ -861,6 +885,10 @@ impl Painter {
             // (`ButtonDefaults.buttonColors`).
             _ if material_segment.is_some() => {
                 self.material_segment(node, &shape, checked, focused, background, ts)
+            }
+            _ if icon.is_some() => {
+                let kind = icon.expect("an icon button");
+                self.material_icon_button(node, &shape, kind, accent, on_accent, background, ts)
             }
             _ if filled && disabled && authored_accent.is_none() => {
                 let at = |role: &str, index: usize| {
@@ -959,6 +987,7 @@ impl Painter {
             AxisOffer::Definite(rect.2),
             filled,
             name == "bordered",
+            icon.is_some(),
         );
         let (x, y, w, h) = rect;
         let [pt, pr, pb, pl] = layout.padding;

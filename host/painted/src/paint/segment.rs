@@ -1,4 +1,4 @@
-//! The chrome of a radio of a segmented `radiogroup`
+//! The chrome of a tab or radio of a segmented group
 //! (`exact_kernel::segmented`), under the ordinary button's face: under
 //! the Material look one of Material 3's segmented buttons, under the
 //! neutral look a segment of the web's neutral segmented control
@@ -9,6 +9,16 @@ use crate::presenter::Material;
 use exact_kernel::generated::metric;
 use exact_kernel::{NodeRef, PropId, SegmentPlace, StyleProps};
 use tiny_skia::Transform;
+
+/// Tabs select panels; radios check a value. Their paint shares the same state.
+pub(super) fn chosen(node: &NodeRef<'_>) -> bool {
+    let state = if node.props.str(PropId::AccessibilityRole) == Some("tab") {
+        PropId::AccessibilitySelected
+    } else {
+        PropId::AccessibilityChecked
+    };
+    node.props.bool(state) == Some(true)
+}
 
 /// Material's check (`Icons.Filled.Check`), in 24 units.
 const CHECK: &str = "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
@@ -54,7 +64,7 @@ fn material_role(role: Material, nearest: &str, dark: bool) -> [u8; 4] {
 
 /// A box's outline as a path, `by` inside its edge, each corner round by
 /// its radius less `by` (top left, top right, bottom right, bottom left).
-fn outline_path(rect: Rect4, radii: [f32; 4], by: f32) -> String {
+pub(super) fn outline_path(rect: Rect4, radii: [f32; 4], by: f32) -> String {
     let (l, t) = (rect.0 + by, rect.1 + by);
     let (r, b) = (rect.0 + rect.2 - by, rect.1 + rect.3 - by);
     let [tl, tr, br, bl] = radii.map(|v| (v - by).max(0.0));
@@ -172,7 +182,7 @@ impl Painter {
     ) -> [u8; 4] {
         let dark = self.dark;
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
-        let checked = node.props.bool(PropId::AccessibilityChecked) == Some(true);
+        let checked = chosen(node);
         let em = super::super::neutral::em(node);
         if checked {
             let (x, y, w, h) = shape.rect;

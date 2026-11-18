@@ -165,7 +165,7 @@ def advanceTrace (p : Program) (o : Oracle) (c : Config) (t : F64) : (Config × 
         if tm.change && n + 1 < timerFireLimit then ((c, .ok), []) else
         let timers := c.timers.set i tm.fired
         let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
-        match runAction p o c tm.action [] [] with
+        match timerCommit p o c tm with
         | (c, .ok) =>
           let (result, ran) := if tm.change then ((c, .ok), []) else go n c
           (result, ⟨"task", tm.action, .ok⟩ :: ran)
@@ -217,7 +217,7 @@ def land (p : Program) (o : Oracle) (c : Config) : (Config × Outcome) × List R
         | .some (tm, i) =>
           if n + 1 < timerFireLimit then ((c, .ok), []) else
           let c := { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
-          let (c, out) := runAction p o c tm.action [] []
+          let (c, out) := timerCommit p o c tm
           ((c, out), [⟨"task", tm.action, out⟩])
   go timerFireLimit c
 

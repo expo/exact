@@ -45,8 +45,11 @@ same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
 --platform ios --device` checks the archive's prerequisites; `--platform
 android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
 actual compiler paths. A scoped check fails when a prerequisite is missing
-and does not check unrelated web tools. Native `--platform` scopes are check-only;
-install commands are in the platform's CI recipe. `setup --platform web` installs
+and does not check unrelated web tools. Run from an app's directory, a check
+requires a Hermes bundle only when the app links Hermes, as that platform's build
+decides: iOS by `app.ts`, Android, macOS and Linux by the cargo graph of the app's
+crate. Elsewhere it reports the bundles as needed for TypeScript apps.
+Native `--platform` scopes are check-only; install commands are in the platform's CI recipe. `setup --platform web` installs
 [web prerequisites](#web-ci-preparation). The general check still reports
 optional tools separately (LLP 1086 D6).
 
@@ -681,9 +684,10 @@ the installed app is one declaration in Web App Manifest vocabulary:
 `handle_links: "preferred"` claims `app.origin` narrowed to `scope` (absent:
 `start_url`'s directory, `/` for most apps) and each `scope_extensions` origin
 whole. `"auto"` (what an absent member means) and `"not-preferred"` claim
-nothing natively. Exact's own paths under `/.exact/` (the web's sign-in
-callback page) and an https `auth.callback` on a claimed origin are never
-claimed, so a sign-in that returns there in a browser stays in the browser.
+nothing natively. These navigation claims exclude Exact's own paths under
+`/.exact/` and HTTPS auth callbacks. Android registers a separate exact-path
+App Link for a native `auth.callback`, so a browser without Auth Tab can return
+to the app. The web popup's `/.exact/auth/callback` stays in the browser.
 A link that opens the app arrives as any incoming URL does: its path is the
 launch location, or one `navigate` event while the app runs.
 
@@ -699,8 +703,10 @@ The web build (either target) writes `app.origin`'s files into the build:
 `/.well-known/apple-app-site-association`, whose `applinks` `components`
 exclude `/.exact/*` and each callback path before `<scope>*`, and
 `/.well-known/assetlinks.json` with a `delegate_permission/common.handle_all_urls`
-statement beside any passkeys' `get_login_creds` (the JS target writes no
-credential entries). They need `host.ios.team` and `host.android.certificates`;
+statement beside any passkeys' `get_login_creds`. A JavaScript build without a
+bake writes `webcredentials` for an HTTPS auth callback on `app.origin`, but no
+passkey `get_login_creds`. A production JavaScript build that copies a bake keeps
+the bake's credential entries. The files need `host.ios.team` and `host.android.certificates`;
 the build line names a missing one. For every other origin a claim names, the
 build prints the files it must serve, including each extension origin's
 `/.well-known/web-app-origin-association`, keyed by the manifest's processed
@@ -1182,13 +1188,51 @@ Each platform selects independently; tvOS keeps its asset catalogs and does
 not inherit the iOS selection. There is no `.icon` discovery. The selected
 project must be inside the app and cannot coexist with a primary
 `AppIcon.appiconset`, or a set with the project's name, in that platform's
-catalogs. On iOS, other `.appiconset` sets in the catalogs compile as alternate
-icons, also with a raster primary. Pass the set's basename, without the extension,
-to `UIApplication.setAlternateIconName`; `nil` restores the primary. Missing paths
-and paths that are not `.icon` directories fail by name. The project and its
-layers compile in the same `actool` pass as the app's catalogs; changing them
-requires a new native build. `icons` still supplies the web and the native
-raster fallback when the platform has no `icon` selection.
+catalogs. Missing paths and paths that are not `.icon` directories fail by name.
+The project and its layers compile in the same `actool` pass as the app's
+catalogs; changing them requires a new native build. `icons` still supplies the
+web and the native raster fallback when the platform has no `icon` selection.
+
+An app may ship icons the person chooses for the Home Screen instead
+(LLP 1163.000). `alternate_icons` in `app.json` lists them in the order a
+picker shows them, each a `name` (ASCII letters and digits, starting with a
+letter, at most 32, unique regardless of case) and the icons it is made from,
+written and picked as the app's own are: `icons` with at least one square `any`
+or `maskable`, `color_scheme_dark.icons`, a `monochrome` glyph for the tinted
+icon. iOS and iPadOS build each one: from its own `host.ios.icon` project, else
+an `.appiconset` of its name in the app's catalogs, else its icons. It is the
+only roster: a catalog `.appiconset` that no entry names, other than the
+primary's, is refused, as is a name that is `AppIcon`, the primary project's
+or another asset's in the catalogs. Alternates need a primary. The names are in
+the iOS compatibility id, so adding, removing, renaming or reordering one needs
+a new binary; other hosts build none. `@exact/app-icon` reads the choice and
+asks for another:
+
+```
+use appIcon, setAppIcon, AppIconStatus from "@exact/app-icon"
+
+  resource shown = appIcon() as shape AppIconStatus else empty()
+  mutation chosen as shape AppIconStatus refreshes shown
+  action pick(name: string)
+    send chosen = setAppIcon(icon=name)
+  action pickPrimary
+    send chosen = setAppIcon()
+```
+
+`appIcon()` answers `available` (the platform switches icons, and the binary
+ships an alternate or one still shows), `icon` (the alternate shown, `none` for
+the primary; it may name one an update removed) and `icons` (the roster when
+available). `setAppIcon(icon=)` is a request: call it only from the action a
+person's choice runs, never from a timer, a resource's answer or launch, since
+iOS shows its own alert for each change and the runner does not enforce this.
+The icon already shown answers at once with no alert, and `setAppIcon()`, with
+no icon, always restores the primary. It refuses `NotAllowedError` (`person-required` from a tool or a
+wake, or the app not in the foreground), `NotSupportedError` where `available`
+is false (every target but iOS and iPadOS), `NotFoundError` for a name the
+binary does not ship, and `UnknownError` with `apple: {domain, code}` when iOS
+refuses. Under the agent the roster is the word `app-icon.icons` (`prefer`),
+and each change holds an `app-icon` ticket standing for iOS's alert
+(`docs/recipes/alternate-app-icons.md`).
 
 What shows before the first frame is `app.json`'s Web App Manifest
 `background_color`, and in a dark scheme `color_scheme_dark.background_color`
@@ -2060,6 +2104,22 @@ publish whose file would pass its bound is refused with the same numbers.
 Every client checks the index against the envelope's card before it reads a
 card, and a signed head covers the index through its digest.
 
+Agent replies carry `generation`, `epoch`, `incarnation` and `clock` (LLP 1029.000.002 D10).
+`generation` starts at 1 and advances once for each committed replacement or
+reboot, including a return to an earlier plan. A refused candidate leaves it unchanged.
+The JS target carries it through its development document reload. `epoch` counts commits
+that change the kernel and continues across replacements. `incarnation` counts resets
+of one kernel; a replacement creates another kernel, so its incarnation can repeat.
+Use `generation` to wait for a replacement. The terminal's JSON inspection replies
+(`layout`, `plan`, `runner-tree` and `node`) carry these tags too.
+
+`state.replacement` is null before a replacement. Afterwards it reports `at`, the
+replacement's clock in milliseconds, and `dropped`, the root slots that could not carry.
+Each entry has `what: "state"`, `name`, and `why`: `"no place"` when the slot is gone,
+or `"type changed"` when its value does not fit the new declaration. The replacement's
+first journal line gives the same report. Component state, view identity, scroll,
+selection, composition and Undo preservation are later pieces of that LLP.
+
 Agent sessions use `exactTime()` launch facts `seed: 1` (LLP 1069.007), `locale: "en-US"`,
 `timeZone: "UTC"` and `epochAtZero` 2026-01-01T00:00:00Z (LLP 1027.000.000 D3, with the
 zone's `utcOffset` at that instant, answered again when the virtual date crosses a DST change) on every host. Override them at session setup with
@@ -2259,7 +2319,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 
 | Available on every executor | Notes on Hermes |
 | --- | --- |
-| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host opens it when it sends the request, under `fs.read` as `readFile` is, and streams it from disk as the request goes out, with the size it had when opened as its `Content-Length`; the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing, and a 300 MB video costs half a megabyte of memory (LLP 1133.008.000 D4). Exact sets no bound on its size; the server answers 413 for one it will not take. A file cut shorter while it is sent fails the request, naming the path; a file changed in place while it is sent sends a mix, so leave it alone until the reply. Two hosts still read the file whole and refuse one over 64 MiB, naming why: the web, for a file the app wrote with `writeFile` or `appendFile` (a picked file, a recorded video or an `exactBodyTo` reply is the browser's own Blob, and streams), and the asynchronous executor (`EXACT_HTTP_ASYNC`), with kind `Unsupported`. With `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file or a denied path rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
+| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. Natively a request holds at most 4 MiB, its URL, headers and body together: a larger one is refused before anything is sent (`FetchError`, kind `Refused`, `native request exceeds 4 MiB …`), so send a larger body from a file with `exactBodyFrom`. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host opens it when it sends the request, under `fs.read` as `readFile` is, and streams it from disk as the request goes out, with the size it had when opened as its `Content-Length`; the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing, and a 300 MB video costs half a megabyte of memory (LLP 1133.008.000 D4). Exact sets no bound on its size; the server answers 413 for one it will not take. A file cut shorter while it is sent fails the request, naming the path; a file changed in place while it is sent sends a mix, so leave it alone until the reply. Two hosts still read the file whole and refuse one over 64 MiB, naming why: the web, for a file the app wrote with `writeFile` or `appendFile` (a picked file, a recorded video or an `exactBodyTo` reply is the browser's own Blob, and streams), and the asynchronous executor (`EXACT_HTTP_ASYNC`), with kind `Unsupported`. With `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file or a denied path rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
 | `structuredClone` | No transfer list |
 | `ReadableStream`, `WritableStream`, `TransformStream`, their readers, writers and controllers, `CountQueuingStrategy`, `ByteLengthQueuingStrategy` | WHATWG Streams, with `pipeTo`, `pipeThrough`, `tee`, `for await` and `ReadableStream.from`. No byte streams: `type: "bytes"` and a BYOB reader are a `TypeError` |
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
@@ -2609,9 +2669,67 @@ that reads storage or calls the native module; show a placeholder), `'agent'` (a
 no scratch store, `--storage <name>`), `'unsupported'` (a host with no app
 storage). The operation was refused: `'denied'` (the grants do not cover it),
 the filesystem's POSIX name (`'ENOENT'`, `'EEXIST'`, `'ENOTDIR'`, `'EISDIR'`,
-`'ENOTEMPTY'`, `'EBUSY'`), `'full'` (256 operations already wait behind the
+`'ENOTEMPTY'`, `'EBUSY'`, `'EACCES'`), `'full'` (256 operations already wait behind the
 one in flight: the module's storage queue is full, LLP 1097), else `'failed'`. Branch on the code, never the
 message: `catch (e) { if (e.code === 'ENOENT') return empty; throw e; }`.
+
+On macOS, Linux and Windows, `desktop:/`, `documents:/`, `downloads:/`, `music:/`,
+`pictures:/`, `videos:/` and `screenshots:/` name the person's well-known
+folders (LLP 1173 D4). Declare `fs.write pictures:/` for the whole folder, or
+`fs.write pictures:/Exports` for a subtree. `fs.read` and `sqlite.open` lines
+on these namespaces are refused at build.
+
+These paths take only `writeFile`, `atomicWriteFile`, `mkdir`, `realpath`, and
+`copyFile` from an `app:/` file with `fs.read` on its source. Files are created
+exclusively: an existing name returns `'EEXIST'`, including an atomic write or
+copy. For `mkdir`, every component below the root must be new; an existing
+component returns `'EEXIST'` without creating anything below it. Retry with
+another name. `realpath` uses the write grant and returns the
+native path of an existing item. Reads, listing, watching, appending, replacing,
+renaming and removal are refused. No link below the resolved root is followed.
+On macOS and Linux, a link at or above the root is followed only where the
+app's write grants cannot replace it. Windows opens the OS-selected root,
+including UNC paths, and refuses name-surrogate reparse tags below it while
+admitting cloud placeholders.
+
+```ts
+export const grants = 'fs.read app:/tmp\nfs.write screenshots:/';
+await storage.fs.copyFile('app:/tmp/capture.png', 'screenshots:/Shot.png');
+```
+
+Each operation resolves the folder again. A role whose settings the app can
+write returns `'EACCES'`, including after relaunch: those settings may already
+contain the app's changes. This covers all seven roles on Linux and only
+`screenshots:` on macOS. Settings with multiple hard links also refuse, since
+another name may be app-writable. Storage and process admission share this
+resolver and retain every session's restrictions across sessions and reloads.
+This prevents a write to the settings from widening the folder grant. macOS uses the account's folders
+(`videos:` is Movies); `screenshots:` reads Screenshot's `location-screenshot`
+preference, then `location`, then defaults to Desktop. A destination that is
+not an existing folder returns `'ENOENT'`. Linux reads `$XDG_CONFIG_HOME/user-dirs.dirs`
+(default `~/.config`), expanding only `$HOME`; unset, relative and disabled
+entries return `'ENOENT'`. Linux's `screenshots:` is the Pictures folder's
+untranslated `Screenshots`, and returns `'ENOENT'` when absent. Under the agent,
+all seven resolve inside `--home`, or its temporary home, never the person's folders.
+Links below the drive's home are refused. Windows asks `SHGetKnownFolderPath`
+on each use, following redirected folders, and creates Screenshots if Pictures
+exists. Controlled folder access may refuse a write with `'EACCES'`.
+
+Windows folder writes are implemented but remain unqualified on Windows.
+Run `cargo run -p exact-windows --example known-folders` there with a
+OneDrive-backed Pictures and a UNC-redirected folder. The probe reports each
+folder's path, attributes, reparse tag, exclusive creation and no-replace
+rename, and removes its temporary subdirectories. Append `-- pictures OnlineOnly`
+with the name of an existing online-only child to exercise placeholder recall.
+Claim the Windows cell only
+after that probe and an app drive copying an `app:/` capture into `screenshots:/`,
+retrying the same name (`'EEXIST'`) and confirming the first file's bytes.
+
+The web, Apple mobile platforms and Android refuse these paths with
+`NotSupportedError` (`code: 'failed'`):
+`well-known folders are unavailable on this host`. Platform access denial is
+`'EACCES'`. A sandboxed Mac build admits Downloads, Pictures, Music and Movies
+through their entitlements and refuses Desktop, Documents and Screenshots.
 
 A drive's app storage is a scratch store it names (`--storage <name>`), on a
 native host `default` when it names none, or none (a web drive naming none).
@@ -2847,7 +2965,7 @@ on messages waiting behind an unsettled mapper still applies. The body's end is 
 stream ended`. A 204, a 205 and a `HEAD` have no body and stay the one answer.
 The request carries `Accept: text/event-stream`, as every stream's does, unless
 the source names an `accept` header; name one where the server negotiates by
-it. The web JS target, macOS, iOS and Linux read it; the web's wasm host, Rust
+it. The web JS target, macOS, iOS, Linux and Android read it; the web's wasm host, Rust
 sources and worker-placed sources still take such a body as the one answer.
 A caller's abort signal maps an `error` with kind `Aborted` while the resource
 is still held. New arguments, `refresh` or the resource leaving the view close
@@ -3148,9 +3266,15 @@ allow an immediate retry. Returning focus to the app does not end the wait.
 
 `openAuthSession` answers 501 on the headless Linux host and Windows, and on Android
 when no system browser resolves or `ephemeral: true` is requested (this build has no
-ephemeral browser API). Android supports custom-scheme callbacks from
-`auth.callback` grants; HTTPS App Links and loopback callbacks answer 501. Returning
-to the activity after it stopped, without a callback, cancels with 499, whether by
+ephemeral session support). Android supports custom-scheme and claimed HTTPS callbacks
+from `auth.callback` grants. HTTPS uses Auth Tab when the selected browser supports
+it, otherwise a verified App Link on the callback's exact path. The bake writes
+the filter; the callback host must serve `assetlinks.json` with the app's package
+and signing fingerprints. See the [OAuth recipe](recipes/oauth.md) for the domain
+associations and publishing. HTTP loopback and reserved `/.exact/auth/callback`
+web popup callbacks answer 501. An Auth Tab wait ends on its result or the ten-minute
+bound; returning to the activity alone keeps it. For a custom-scheme or App Link wait,
+returning after the activity stopped without a callback cancels with 499, whether by
 Back or another link that brings the activity forward. A pause without a stop,
 such as a permission dialog or a multi-window focus change, keeps the wait. Callbacks
 are routed by endpoint and state: a stale, wrong-state or missing-state callback is
@@ -3407,8 +3531,12 @@ bundle id), APNs's own `aps` dictionary and one key of Exact's:
 
 The system shows it, with the app in front too. Its tap opens the top-level
 `navigate` string, warm or at launch, as a local notification's `navigate=`
-opens: reduced by `location_of` to the app's own location whatever its scheme
-or origin, never through the app's `protocol_handlers`. Nothing else of the
+opens. A push sent through the Expo push service (its payload has Expo's
+`experienceId` or `scopeKey`) carries the message's `data` in a `body` object,
+so there a `navigate` in `data` is opened; a top-level one comes first. Another
+sender's `body` is not read. Either way `location_of` reduces the location to one of the
+app's own, whatever its scheme or origin, never through the app's
+`protocol_handlers`. Nothing else of the
 payload is read and no event is raised; without `navigate` the app only comes
 forward. A server writes that string, so a route must not act on being opened.
 On Apple, Exact runs no Contract or TypeScript when a push arrives: `content-available`
@@ -3486,7 +3614,11 @@ shows it), on its `channel_id` when the app declares that channel
 icon. Leave out `icon` and `color`: Firebase honours them for a notification it
 shows. A `tag` replaces a shown notification with that tag, a local one
 included, and `closeNotification(tag)` closes it. Its tap opens `navigate`,
-warm or at launch, as on Apple; the other `data` keys are not read.
+warm or at launch, as on Apple. The top-level `navigate` takes precedence.
+When it is absent and `data` carries Expo's `experienceId` or `scopeKey`,
+Exact reads `navigate` from the JSON object encoded in `body` by the Expo push
+service. A blank or non-string location, or a malformed body, opens nothing.
+Another sender's `body` and the other `data` keys are not read.
 
 A data-only message raises `push` on the root with `PushEvent = {data: string}`:
 `JSON.parse(e.data)` reads the FCM `data` map. It uses the live session, or
@@ -3502,8 +3634,13 @@ policy; a server must keep alerts available for the app to reconcile.
 exchanges `android.token` through Expo's service. Pass the app's imported
 `app.json`: `extra.eas.projectId` names its EAS project. The subscription's
 `android.appId` supplies the installed package id, including normalization and
-the selected variant's suffix. It returns
-`{type: "expo", data: "ExponentPushToken[…]"}`.
+the selected variant's suffix. Expo's `deviceId` is a UUID derived from the
+first 16 bytes of the case-sensitive Firebase installation ID's SHA-256,
+with the v4 version and variant bits set. It stays the same while the
+installation ID does, including across FCM token rotations, without separate
+storage. It returns `{type: "expo", data: "ExponentPushToken[…]"}`. An HTTP
+refusal throws with Expo's status and the first 500 characters of its reply;
+if the reply cannot be read, the error still carries the status.
 Grant `net.fetch https://exp.host`, exchange again when the live subscription
 changes, and send the Expo token to your server. The [push recipe](recipes/push.md)
 includes the handler, channel and backend send.
@@ -4199,6 +4336,7 @@ display, in display-list order, without a picker or window activation
 (LLP 1178). It answers `{captures: [{path, width, height, type, screen}]}`:
 physical pixel sizes and the corresponding `ScreenDetailed`, with
 `clientRect` in the session window's CSS pixels (null without a window).
+`directory` is an `app:/` root such as `app:/tmp` or a directory below one.
 The default is one `screen-<n>.png` per display. Encoding options follow
 `captureCanvas`. The grants are `device.screen-recording <usage-key>` and
 `fs.write <directory>`; drawing a file also needs `fs.read`.
@@ -5664,6 +5802,32 @@ generates the module bindings. For a build script,
 pass to `contract::rust`; the names are compiler metadata, outside the binary
 plan. Both map scoped names such as `Point__exact` to `PointExact`.
 `Value::Number`, `Value::str`, `Value::Bool` and `Value::list` are the rest.
+
+### GPU device requirements
+
+A package declares `gpu.limits.required` and `gpu.limits.optional` as objects of
+WebGPU limit names to integer values in its main `exact.json`. It declares
+`gpu.features.required` and `gpu.features.optional` as lists of WebGPU feature names.
+The Contract compiler validates names and bounds in the declaration. A package
+artifact requests its own requirements before its device is created. Optional values
+are clamped to the adapter, with alignment minima ordered in reverse. Buffer binding
+sizes also raise `maxBufferSize`; workgroup dimensions also raise
+`maxComputeInvocationsPerWorkgroup`. A required value that exceeds either adapter
+limit is refused; an optional value is clamped to both. An unavailable required limit or
+feature refuses the owning package's surfaces while the other surfaces keep drawing.
+The web backend does not expose `subgroups`, `primitive-index` or `immediates`:
+optional requests omit them and required requests refuse the package's surfaces;
+native grants them where the adapter offers them.
+An app without requirements retains the existing device request.
+
+`Surface::device_ready(&mut self, features: wgpu::Features, limits: wgpu::Limits)`
+receives the actual grant, including on recovery and target reattachment. A fixture
+requests the same grant through `exact_gpu::fixture::device_with_requirements`.
+An authored GPU module passes a static `&[exact_gpu::grants::Requirements]` as the
+second argument to `exact_gpu::module!`. See [the GPU module recipe](recipes/gpu-module.md)
+for a declaration and [package GPU surfaces](contract-for-agents.md#a-packages-gpu-surfaces)
+for packaging. `exact-gpu` 0.3 adds the limits argument; packages declare `exactGpu: "0.3"`
+and depend on `exact-gpu = "0.3"`.
 
 ### An authored workspace
 

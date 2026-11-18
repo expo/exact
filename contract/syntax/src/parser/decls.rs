@@ -154,6 +154,7 @@ impl Parser {
         } else {
             None
         };
+        self.resource_clause_in_order(&["with", "when"])?;
         self.expect_word("as")?;
         self.expect_word("shape")?;
         let shape = self.type_expr()?;
@@ -194,6 +195,7 @@ impl Parser {
         if keep {
             self.next();
         }
+        self.resource_clause_in_order(&["with", "when", "else", "transient"])?;
         self.newline()?;
         Ok(ResourceDecl {
             name,
@@ -208,6 +210,18 @@ impl Parser {
             gate,
             span,
         })
+    }
+
+    /// Refuses one of `late`, a clause whose place has passed, naming the order:
+    /// otherwise it reads as a bare "expected `as`" or "expected end of line".
+    fn resource_clause_in_order(&self, late: &[&str]) -> R<()> {
+        match self.peek_kind() {
+            TokenKind::Ident(w) if late.contains(&w.as_str()) => self.err(
+                "syntax-resource-clause-order",
+                format!("`{w}` is out of place: a resource's clauses come in the order `with ...`, `when ...`, `as shape ...`, `else ...`, then `transient` or `keep`"),
+            ),
+            _ => Ok(()),
+        }
     }
 
     /// Whether the next clause is `word`, on this line or on a continued

@@ -47,8 +47,12 @@ export function androidToolchainEnv(env = process.env, platform = process.platfo
 export function androidHermesDir(env = process.env, local = hermesAndroidBundle(), target = ANDROID_TARGET) {
   const named = env[`HERMES_LEAN_SYS_DIR_${target.replaceAll('-', '_')}`] ?? (target === ANDROID_TARGET ? local : null);
   if (named) return named;
-  // The pinned release has no x86_64 Android bundle; never substitute the arm64 or host bundle.
-  if (target !== ANDROID_TARGET) return null;
-  const { HERMES_LEAN_SYS_DIR, ...unhosted } = env, pinned = hermesBundle(target, unhosted);
-  return pinned.installed ? pinned.root : null;
+  const { HERMES_LEAN_SYS_DIR, ...unhosted } = env;
+  try {
+    const pinned = hermesBundle(target, unhosted);
+    return pinned.installed ? pinned.root : null;
+  } catch (error) {
+    if (error.message !== `hermes-lean-sys has no pinned bundle for ${target}`) throw error;
+    return null;
+  }
 }

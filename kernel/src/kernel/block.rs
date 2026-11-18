@@ -37,6 +37,9 @@ use crate::Direction;
 use taffy::style::{BoxSizing, LengthPercentageAuto as Lpa, Position};
 use taffy::util::{MaybeResolve, ResolveOrZero};
 
+#[path = "reservation.rs"]
+pub(crate) mod reservation;
+
 /// One axis of a host's containing block.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BlockAxis {
@@ -101,9 +104,10 @@ impl HostBlock {
 
 /// What the host clears of `slot`'s allocation for its content root, top
 /// right bottom left (@ref LLP 1123 D3): a content owner's incoming band,
-/// less each edge whose container region the root takes (D4). None while
-/// the band is unavailable, as UIKit gives a view outside a window zero
-/// safe-area insets, and none for a box that is no content owner.
+/// none of it on each edge whose container region the root takes (D4), and
+/// the root's reservations (D11). No band while it is unavailable, as
+/// UIKit gives a view outside a window zero safe-area insets; and nothing
+/// for a box that is no content owner.
 pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
     arena
         .blocks
@@ -113,13 +117,23 @@ pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
 
 /// [`clearance`] for `held`'s root, with no search of the blocks.
 fn cleared(arena: &NodeArena, held: &Held) -> [f32; 4] {
-    // A top-layer box is no owner, whatever block it has (D2)
-    let owner = held.given.is_some() && !arena.top_layer_slots.contains(held.slot);
-    let Some(band) = owner.then(|| arena.observations.band(held.slot)).flatten() else {
+    if !is_owner(arena, held) {
         return [0.0; 4];
-    };
+    }
+    let band = arena.observations.band(held.slot).unwrap_or([0.0; 4]);
     let taken = taken_edges(arena, held.slot, SafeAreaIgnore::Container);
-    std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] })
+    let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
+    reservation::reserved(arena, held.slot).map_or(band, |r| r.inside(band))
+}
+
+/// Whether `slot` is a content owner's root: a box its host gave a block
+/// that is no top-layer box, which is no owner whatever block it has (D2).
+pub(crate) fn owns(arena: &NodeArena, slot: u32) -> bool {
+    arena.blocks.held(slot).is_some_and(|b| is_owner(arena, b))
+}
+
+fn is_owner(arena: &NodeArena, held: &Held) -> bool {
+    held.given.is_some() && !arena.top_layer_slots.contains(held.slot)
 }
 
 /// The edges, top right bottom left, on which `slot` takes `region`'s
@@ -739,21 +753,30 @@ impl Kernel {
             .filter(|(_, b)| under(b))
             .map(|(i, b)| (i, cleared(arena, b)))
             .collect();
-        let mut out = Vec::with_capacity(clears.len());
-        for (i, clear) in clears {
-            let held = &mut self.arena.blocks.0[i];
-            let (slot, inner) = (held.slot, held.block.less(clear));
-            let was = std::mem::replace(&mut held.cleared, clear);
-            if was != clear {
-                self.restyle_block(slot);
-            }
-            if (was[0], was[3]) != (clear[0], clear[3]) {
-                self.arena.flags_mut(slot).insert(NodeFlags::ATTACHED);
-            }
-            let offer = Offer::definite(inner.width.length(), inner.height.length());
-            out.push((slot, offer));
+        let clears = clears.into_iter();
+        clears
+            .map(|(i, clear)| self.clear_block(i, clear))
+            .collect()
+    }
+
+    /// Give the `i`th block its clearance `clear`, and return its root and
+    /// offer: the block less the clearance. A clearance that changed
+    /// restyles the block, and one that moved the content root's corner
+    /// publishes it whole.
+    fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
+        let held = &mut self.arena.blocks.0[i];
+        let (slot, inner) = (held.slot, held.block.less(clear));
+        let was = std::mem::replace(&mut held.cleared, clear);
+        if was != clear {
+            self.restyle_block(slot);
         }
-        out
+        if (was[0], was[3]) != (clear[0], clear[3]) {
+            self.arena.flags_mut(slot).insert(NodeFlags::ATTACHED);
+        }
+        (
+            slot,
+            Offer::definite(inner.width.length(), inner.height.length()),
+        )
     }
 
     /// Lay `root` out under `offer`, then each subtree with a block under
@@ -852,8 +875,9 @@ impl Kernel {
     ///
     /// The subtree is laid out as its block's root is, by the same path
     /// (`layout::compute`: the engine, flow and fragment settling, fitting,
-    /// publication), in a copy of the arena and engine tree that is dropped
-    /// after: no block, frame or engine record the kernel holds changes,
+    /// publication, then the solve of the observations read under it), in a
+    /// copy of the arena and engine tree that is dropped after: no block,
+    /// frame, observation or engine record the kernel holds changes,
     /// and the next layout does what it would have done. Only the text
     /// measurer, whose answers are a pure function of their inputs, may
     /// remember what it was asked. `view` must hold a block (its host's, or
@@ -882,27 +906,80 @@ impl Kernel {
             return Err(LayoutError::HostBlock("not laid out yet").into());
         };
         // What only the kernel's next layout prepares, before it lays out,
-        // is not a trial's to do: a block to imply or restyle, a symbol to
-        // size; nor is a change under the root since the last layout (a
-        // text edit), which a measurer holding what that layout showed
-        // would take as the text it shows. Until that layout the host
-        // places by the last one.
+        // is not a trial's to do: a block to imply or restyle (one whose
+        // band moved its content root), a reader to measure (one whose band
+        // changed), a symbol to size; nor is a change under the root since
+        // the last layout (a text edit), which a measurer holding what that
+        // layout showed would take as the text it shows. Until that layout
+        // the host places by the last one.
         let (wants, moved) = self.implied_changes();
-        if !wants.is_empty() || !moved.is_empty() || self.symbols_pending() || tree.is_dirty(node) {
+        let clear = clearance(&self.arena, slot);
+        let restyle = (self.arena.blocks.held(slot)).is_some_and(|b| b.cleared != clear);
+        if restyle
+            || !self.readers_measured(slot)
+            || !wants.is_empty()
+            || !moved.is_empty()
+            || self.symbols_pending()
+            || tree.is_dirty(node)
+        {
             return Err(LayoutError::HostBlock("a layout is due first").into());
         }
         let (mut arena, mut trial) = (self.arena.trial_copy(), tree.clone());
         arena.blocks.set(slot, Some(block));
         trial.restyle(&arena, slot, node);
         trial.mark_dirty(node);
-        let clear = clearance(&arena, slot);
-        let inner = block.less(clear);
-        let offer = Offer::definite(inner.width.length(), inner.height.length());
-        layout::compute(&mut arena, &mut trial, self.measurer.as_mut(), slot, offer)?;
-        if arena.flags(slot).has(NodeFlags::HIDDEN) {
+        // Lay the copies out in place of the kernel's own, so that the
+        // readers under the root solve as a layout solves them (LLP 1123
+        // D9), and with no content region, whose accepted content a
+        // reader's restyle would invalidate
+        let kept = (
+            std::mem::replace(&mut self.arena, arena),
+            self.layout.replace(Box::new(trial)),
+            self.region.take(),
+        );
+        let measured = self.measure_trial(slot, node, block);
+        let trial = std::mem::replace(&mut self.arena, kept.0);
+        (self.layout, self.region) = (kept.1, kept.2);
+        // A measurer may hold what the trial measured under the text
+        // revisions it gave, so no later revision may give one again
+        self.arena.spend_text_revisions(&trial);
+        measured
+    }
+
+    /// `measure_block`'s trial, on the copies in place of the kernel's own:
+    /// the root `slot` laid out in `block` as a layout lays out each block,
+    /// with its readers solved.
+    fn measure_trial(
+        &mut self,
+        slot: u32,
+        node: taffy::NodeId,
+        block: HostBlock,
+    ) -> Result<BlockMeasure, KernelError> {
+        let key = self.arena.key(slot);
+        // Each pass clears what the root's reservations then say, which can
+        // read the observations the solve moves
+        let relayout = &mut |k: &mut Kernel| -> Result<LayoutReceipt, KernelError> {
+            let i = (k.arena.blocks.0.iter()).position(|b| b.slot == slot);
+            let i = i.expect("the measured root holds its block");
+            let clear = cleared(&k.arena, &k.arena.blocks.0[i]);
+            let (_, offer) = k.clear_block(i, clear);
+            let tree = engine(&mut k.layout);
+            let mut receipt =
+                layout::compute(&mut k.arena, tree, k.measurer.as_mut(), slot, offer)?;
+            // Measure the readers again where the block's used size moved
+            // while its root's frame is unchanged
+            if !receipt.updated.contains(&key) {
+                receipt.updated.push(key);
+            }
+            Ok(receipt)
+        };
+        let mut receipt = relayout(self)?;
+        self.solve_observations(slot, relayout, &[], &mut receipt)?;
+        if self.arena.flags(slot).has(NodeFlags::HIDDEN) {
             return Ok(BlockMeasure::default());
         }
-        let l = trial.layout(node);
+        let l = engine(&mut self.layout).layout(node);
+        let clear = self.arena.blocks.held(slot).map_or([0.0; 4], |b| b.cleared);
         Ok(BlockMeasure {
             used: used_in(block, clear, &l),
             border: (l.size.width, l.size.height),

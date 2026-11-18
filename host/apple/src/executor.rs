@@ -113,6 +113,7 @@ impl Executor {
             ibex2::stdlib::fs::set_roots(ibex2::stdlib::fs::Roots {
                 home: None,
                 bundle: declared_resources(launch.executable),
+                known_folder: None,
             });
         }
         Self { core }

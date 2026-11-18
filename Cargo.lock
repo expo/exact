@@ -1630,6 +1630,7 @@ dependencies = [
  "same-file",
  "serde_json",
  "sha2 0.10.9",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1686,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "exact-gpu"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "exact-gpu-reflect",
  "exact-plan",
@@ -2045,6 +2046,7 @@ dependencies = [
  "png",
  "raw-window-handle",
  "roxmltree",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2310,10 +2312,13 @@ dependencies = [
  "accesskit_windows",
  "accesskit_winit",
  "contract",
+ "exact-data",
+ "exact-grants",
  "exact-ink",
  "exact-kernel",
  "exact-painted",
  "exact-runner",
+ "ibex2",
  "png",
  "serde_json",
  "sha2 0.10.9",

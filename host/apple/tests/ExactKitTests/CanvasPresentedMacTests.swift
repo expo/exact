@@ -44,7 +44,7 @@ final class CanvasPresentedMacTests: XCTestCase {
         w.contentView = ExactView(session: s)
         let canvas = NodeView(id: 100, kind: "canvas", presenter: s.presenter)
         s.presenter.root.addSubview(canvas); s.presenter.views[100] = canvas
-        let e = CanvasesHost.Entry(view: canvas, name: "world", values: []); e.id = 1; e.module = m
+        let e = CanvasesHost.Entry(view: canvas, name: "world", values: Data("[]".utf8)); e.id = 1; e.module = m
         s.surfaceHost.entries[100] = e
 
         if s.surfaceHost.publishers["world"] == nil { s.surfaceHost.claimPublisher(e) }

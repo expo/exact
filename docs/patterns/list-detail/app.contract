@@ -1,5 +1,5 @@
-// Starter: a list that pushes a detail, a sheet to add, an alert to delete, kept in a file.
-// The items are app.ts's (app:/data/items.json). A phone pushes the detail; a wide window
+// Starter: a list that pushes a detail, a sheet to add, an alert to delete, kept in SQLite.
+// The items are app.ts's (app:/data/items.db). A phone pushes the detail; a wide window
 // shows the list beside it by itself, because a row draws the disclosure chevron
 // (`contract vocab navigationSplit`). A row deletes by swipe and opens a menu on a long press
 // (`contract vocab swipe`, `menu`): a swipe or the menu's Delete deletes at once, as Mail and
@@ -112,8 +112,8 @@ component App
               // The bar's search field (iOS: UIKit's search controller), filtering as you type.
               input type="search" value=query input=search placeholder="Search" aria-label="Search Items"
                 testId="search" width="100%"
-            // In place of the list: a failed read, no items, no match. Before the file's first
-            // answer the list is blank, a moment too short for a spinner.
+            // In place of the list: a failed read, no items, no match. The list is blank
+            // until the first read answers.
             if failed(lib)
               EmptyState(symbol="symbol:alert", title="Can’t Open Items", message="Something went wrong reading them.")
                 button press=reload testId="retry"

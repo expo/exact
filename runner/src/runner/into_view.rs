@@ -55,11 +55,13 @@ impl<D: DataSource> Runner<D> {
             return Ok(None);
         };
         let mut found = false;
-        let receipt = self.update_tree(false, |tree, u| {
+        let checkpoint = self.checkpoint();
+        let result = self.update_tree(false, |tree, u| {
             found = (lists.reveal_index)(tree, u, view, index)?;
             Ok(())
-        })?;
-        Ok(found.then_some(receipt))
+        });
+        self.conclude(checkpoint, &result, false);
+        result.map(|receipt| found.then_some(receipt))
     }
 
     /// Bring a virtualized list's row into view by key, as the agent's `tap

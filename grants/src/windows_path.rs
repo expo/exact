@@ -1,4 +1,4 @@
-//! Pure Windows drive-path grammar; no host filesystem access.
+//! Pure Windows path spellings; no host filesystem access.
 //! @ref LLP 1027.001#proposed-windows-native-filesystem-grant-integration — one lexical authority.
 use std::io;
 
@@ -14,6 +14,65 @@ pub struct WindowsPath {
     pub parts: Vec<String>,
 }
 impl WindowsPath {
+    /// A shell path as UTF-16, without changing the file a verbatim spelling names.
+    /// Refuse paths beyond MAX_PATH and names Win32 would normalize or treat as devices.
+    /// https://learn.microsoft.com/windows/win32/fileio/naming-a-file
+    pub fn shell_path(path: &[u16]) -> io::Result<Vec<u16>> {
+        let wide = |text: &str| text.encode_utf16().collect::<Vec<_>>();
+        let ordinary = match path.strip_prefix(wide(r"\\?\").as_slice()) {
+            Some(rest) => match rest.strip_prefix(wide(r"UNC\").as_slice()) {
+                Some(unc) => [wide(r"\\").as_slice(), unc].concat(),
+                None => rest.to_vec(),
+            },
+            None => path.to_vec(),
+        };
+        if ordinary.len() >= 260 {
+            return Err(refuse("path is too long for the Windows shell (MAX_PATH)"));
+        }
+        // Validate a decoded copy, but return the original UTF-16, including lone surrogates.
+        let text = String::from_utf16_lossy(&ordinary);
+        let bytes = text.as_bytes();
+        let parts = if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'\\'
+        {
+            &text[3..]
+        } else if let Some(unc) = text.strip_prefix(r"\\") {
+            if unc.split('\\').filter(|s| !s.is_empty()).count() < 2 {
+                return Err(refuse("a Windows shell UNC path needs a server and share"));
+            }
+            unc
+        } else {
+            return Err(refuse(
+                "path has no drive or UNC spelling for the Windows shell",
+            ));
+        };
+        if !parts.is_empty() {
+            for part in parts.strip_suffix('\\').unwrap_or(parts).split('\\') {
+                if part.ends_with(['.', ' ']) {
+                    return Err(refuse("a Windows shell name cannot end in a dot or space"));
+                }
+                Self::validate_component(part).map_err(|error| {
+                    refuse(&format!(
+                        "path has no equivalent Windows shell name: {error}"
+                    ))
+                })?;
+                let base = part
+                    .split('.')
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end_matches(' ');
+                if (!base.is_empty() && Self::validate_component(base).is_err())
+                    || matches!(base.to_ascii_uppercase().as_str(), "CONIN$" | "CONOUT$")
+                {
+                    return Err(refuse("path contains a reserved Windows shell name"));
+                }
+            }
+        }
+        Ok(ordinary)
+    }
+
     /// Validate a native leaf before either grant admission or an NT open.
     pub fn validate_component(value: &str) -> io::Result<()> {
         let base = value
@@ -88,5 +147,78 @@ impl WindowsPath {
         let mut result = vec![format!("win:{}", self.drive as char)];
         result.extend(self.parts);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shell(path: &str) -> io::Result<String> {
+        let path = WindowsPath::shell_path(&path.encode_utf16().collect::<Vec<_>>())?;
+        Ok(String::from_utf16(&path).unwrap())
+    }
+
+    #[test]
+    fn shell_paths_remove_only_the_drive_or_unc_verbatim_prefix() {
+        for (input, expected) in [
+            (r"\\?\C:\samples", r"C:\samples"),
+            (r"\\?\c:\café\图像", r"c:\café\图像"),
+            (r"\\?\C:\", r"C:\"),
+            (r"\\?\UNC\server\share\samples", r"\\server\share\samples"),
+            (r"\\?\UNC\server\share", r"\\server\share"),
+            (r"C:\samples", r"C:\samples"),
+            (r"\\server\share\samples", r"\\server\share\samples"),
+        ] {
+            assert_eq!(shell(input).unwrap(), expected);
+        }
+        let mut path: Vec<_> = r"\\?\C:\".encode_utf16().collect();
+        path.push(0xd800);
+        assert_eq!(WindowsPath::shell_path(&path).unwrap(), path[4..]);
+    }
+
+    #[test]
+    fn shell_paths_refuse_names_whose_ordinary_spelling_can_change_the_target() {
+        for path in [
+            r"\\?\C:\NUL.txt",
+            r"\\?\C:\con",
+            r"\\?\C:\COM¹.log\child",
+            r"\\?\C:\CON .txt",
+            r"\\?\C:\CONIN$",
+            r"\\?\C:\CONOUT$",
+            r"\\?\C:\trailing.\child",
+            r"\\?\C:\trailing \child",
+            r"\\?\UNC\server\share\LPT9",
+            r"\\?\UNC\server\share\name.",
+            r"\\?\C:\a\..\b",
+            r"\\?\C:\a/child",
+            r"\\?\C:\a:stream",
+            r"\\?\Volume{1234}\samples",
+            r"\\.\C:\samples",
+            r"C:relative",
+            r"\rooted",
+            r"\\server",
+            "C:\\a\0b",
+        ] {
+            assert!(shell(path).is_err(), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn shell_paths_count_the_ordinary_utf16_spelling_and_its_terminator() {
+        for prefix in [r"\\?\C:\", r"\\?\UNC\server\share\"] {
+            let short = format!("{prefix}{}\\", "a".repeat(120));
+            let ordinary = if prefix.contains("UNC") {
+                short.len() - 6
+            } else {
+                short.len() - 4
+            };
+            let limit = format!("{short}{}", "b".repeat(259 - ordinary));
+            assert_eq!(shell(&limit).unwrap().encode_utf16().count(), 259);
+            assert!(shell(&format!("{limit}x")).is_err());
+        }
+        let short = format!(r"\\?\C:\{}\", "é".repeat(120));
+        assert!(shell(&format!("{short}{}", "😀".repeat(67))).is_ok());
+        assert!(shell(&format!("{short}{}", "😀".repeat(68))).is_err());
     }
 }

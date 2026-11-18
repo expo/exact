@@ -5,7 +5,8 @@
 // invocation and origin of the commit that sent it, and is asked under them in a `next` commit of its own once the
 // mutation is free: no ticket, no `then` or `next` armed, not stalled.
 // A gated task is in `clock.timers` only while its gate holds; a new key re-arms it from the commit's time.
-import { Mutations, Tasks, commit, recommit, M, journal, clock, drive, paint, order, write, eq, untracked, useSchedule, refused, Refusal, armedAt, Invocation, Origin } from "./rt.js";
+import { Mutations, Tasks, commit, recommit, M, journal, clock, drive, paint, order, write, eq, untracked, useSchedule, refused, Refusal, armedAt, Invocation, Origin, onEnd, taskRegions, owner, taskScopeLive, PrepareTasks } from "./rt.js";
+import { timerOrder } from './beat.js';
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const BOUND = 64; // runner QUEUE_BOUND: the 65th waiter refuses its action
 let Asked = new Set(), State = [];
@@ -22,11 +23,11 @@ const Q = {
   // arms or drops (rt.js `commit`).
   save() {
     Asked = new Set();
-    return [Mutations.map(m => m.wait && [m, m.wait.slice(), m.stall]), Gates.length ? [clock.timers.slice(), Gates.map(g => [g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready])] : null];
+    return [Mutations.map(m => m.wait && [m, m.wait.slice(), m.stall]), Gates.length ? [clock.timers.slice(), Gates.map(g => [g, g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready])] : null];
   },
   restore([queues, timers]) {
     for (const q of queues) if (q) { q[0].wait = q[1]; q[0].stall = q[2]; }
-    if (timers) { clock.timers.splice(0, Infinity, ...timers[0]); Gates.forEach((g, k) => { [g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready] = timers[1][k]; }); }
+    if (timers) { clock.timers.splice(0, Infinity, ...timers[0]); for (const [g, ...state] of timers[1]) [g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready] = state; }
   },
   /** D8's step, inside the commit after its settlement: each gate and key over the settled state, at the commit's
    * time. A key that is no key refuses the commit (`TaskKey`); else a false gate drops its timer, a gate turned true
@@ -34,6 +35,7 @@ const Q = {
   gates() {
     if (!Gates.length) return;
     const seen = untracked(() => Gates.map(g => {
+      if (!taskScopeLive(g.scope)) return [false, undefined];
       const on = g.gate() === true, kt = on && g.key ? keyText(g.key()) : undefined;
       if (kt === null) throw new Refusal(`TaskKey { task: ${JSON.stringify(g.name)} }`);
       return [on, kt];
@@ -50,9 +52,9 @@ const Q = {
   },
   /** The scan, after every commit, stood or refused: a stall a standing commit moved is let go, and a free queue with
    * a send waiting is due now — off the agent, on the wall clock's `drive`, `then` or no `then`. */
-  changed(saved) { return Gates.map((g, i) => g.gen !== saved?.[1]?.[1]?.[i]?.[5] ? g.gen : undefined); },
+  changed(saved) { return Gates.map((g, i) => g.gen !== saved?.[1]?.[1]?.find(s => s[0] === g)?.[6] ? [g, g.gen] : undefined); },
   scan(stood, generations) {
-    if (stood) Gates.forEach((g, i) => { if (g.change && g.armed && !g.ready && generations?.[i] === g.gen) { g.ready = true; if (!clock.agent) drive(); } });
+    if (stood) Gates.forEach((g, i) => { if (g.change && g.armed && !g.ready && generations?.some(s => s?.[0] === g && s[1] === g.gen)) { g.ready = true; if (!clock.agent) drive(); } });
     for (const m of Mutations) if (m.wait) {
       if (stood && m.stall && untracked(() => moved(m.stall))) m.stall = null;
       if (m.wait.length && idle(m)) { m.next = armedAt(); if (!clock.agent) drive(); }
@@ -90,6 +92,8 @@ const Q = {
     return false;
   },
 };
+/** Prepare owning instances inside the commit's refusal boundary. */
+export function ownedTasks() { taskRegions(); useSchedule(Q); }
 /** Install the queues: every `mut(…, queue)` gets its wait list; `state` is the root's slots, derives, resources. */
 export function queues(state) {
   State = state;
@@ -104,17 +108,27 @@ function step(g, on, kt) {
   if (g.armed && kt === g.kt) return;
   g.armed = true; g.ready = !g.change; g.kt = kt; g.gen = (g.gen ?? 0) + 1; // a new instance, which a live advance tells from the one that fired
   if (g.frame) { g.base = clock.now; g.k = 1; g.due = clock.now + 1000 / 60; } else g.due = clock.now + g.ms;
-  if (at < 0) { const i = clock.timers.findIndex(t => t.i > g.i); clock.timers.splice(i < 0 ? clock.timers.length : i, 0, g); }
+  if (at < 0) { const i = clock.timers.findIndex(t => timerOrder(t, g) > 0); clock.timers.splice(i < 0 ? clock.timers.length : i, 0, g); }
   if (!clock.agent && !g.change) g.frame ? paint() : drive();
 }
 /** `task name when gate key=key` (LLP 1092 D7): idle until its gate holds over the state at mount or at a commit. */
-export function gated(ms, action, once, frame, gate, key, name, wait = 0, max = 0, tolerance = 0, change = false) {
-  const g = { ms, action, wait, max, tolerance, change: !!change, once: !!once, frame: !!frame, gate, key: key || null, name, i: order(), armed: false, kt: undefined, due: Infinity };
+export function gated(ms, action, once, frame, gate, key, name, wait = 0, max = 0, tolerance = 0, change = false, index = order(), path = null) {
+  const g = { ms, action, wait, max, tolerance, change: !!change, once: !!once, frame: !!frame, gate, key: key || null, name: path === null ? name : name + "@" + path, i: index, path, scope: path === null ? null : owner(), armed: false, kt: undefined, due: Infinity };
+  g.instance = path === null ? 0 : order();
   Gates.push(g); Tasks.push(g);
+  if (path !== null) onEnd(() => {
+    for (const list of [Gates, Tasks, clock.timers]) {
+      const at = list.indexOf(g);
+      if (at >= 0) list.splice(at, 1);
+    }
+    g.armed = false; g.due = Infinity; g.gen = (g.gen ?? 0) + 1;
+  });
   useSchedule(Q);
+  if (path !== null && PrepareTasks) return;
   const on = untracked(() => gate() === true), kt = on && g.key ? keyText(untracked(g.key)) : undefined;
   if (kt === null) throw new Refusal(`TaskKey { task: ${JSON.stringify(name)} }`);
   step(g, on, kt);
-  // The compiler installs tasks after mount has applied its tree and commands.
-  if (g.change && g.armed) { g.ready = true; if (!clock.agent) drive(); }
+  // Root tasks are installed after mount. A child's change waits for its
+  // mounting commit's scan, after the prepared view and commands are applied.
+  if (g.change && g.armed && path === null) { g.ready = true; if (!clock.agent) drive(); }
 }

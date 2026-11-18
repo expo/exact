@@ -825,6 +825,136 @@ impl<B: Brush> LayoutData<B> {
             max: max_width,
         }
     }
+
+    /// Exact patch 19: where `BreakLines` may end a line before its first
+    /// forced break (a newline cluster, which `break_next` ends a line
+    /// after), in logical order, the last that break or the layout's end. A
+    /// text boundary is one as `break_next` marks it (wrapping, outside a
+    /// ligature, past the layout's start); an in-flow inline box has one
+    /// before it and one after. Read from clusters no line breaking has
+    /// changed (`Layout::break_lines`).
+    pub(crate) fn break_opportunities(&self) -> Vec<BreakOpportunity> {
+        let mut out: Vec<BreakOpportunity> = Vec::new();
+        let mut push = |opportunity: BreakOpportunity| {
+            if out
+                .last()
+                .is_none_or(|last| last.place() != opportunity.place())
+            {
+                out.push(opportunity);
+            }
+        };
+        // The advance from the layout's start, and where the white space
+        // that would hang at a break here begins.
+        let (mut x, mut end) = (0.0_f32, 0.0_f32);
+        let mut text_wrap_mode = TextWrapMode::Wrap;
+        let mut cluster_idx = 0;
+        // Where the lines end: the layout's end, or past the first newline
+        // cluster, which stays on the line it ends.
+        let mut last = BreakOpportunity {
+            item: self.items.len(),
+            cluster: self.clusters.len(),
+            end: 0.0,
+            next: 0.0,
+            hyphen: false,
+        };
+        'items: for (item_idx, item) in self.items.iter().enumerate() {
+            match item.kind {
+                LayoutItemKind::TextRun => {
+                    let run = &self.runs[item.index];
+                    for index in run.cluster_range.clone() {
+                        let cluster = &self.clusters[index];
+                        if cluster.info.whitespace() == Whitespace::Newline {
+                            last.item = item_idx;
+                            last.cluster = index + 1;
+                            // An inline box's break just before it would
+                            // leave the next line only the newline.
+                            if out.last().is_some_and(|o| o.place() == (item_idx, index)) {
+                                out.pop();
+                            }
+                            break 'items;
+                        }
+                        let wrapped = text_wrap_mode == TextWrapMode::Wrap;
+                        text_wrap_mode = self.styles[cluster.style_index as usize].text_wrap_mode;
+                        if cluster.info.boundary() == Boundary::Line
+                            && wrapped
+                            && !cluster.is_ligature_component()
+                            && x != 0.0
+                        {
+                            let hyphen = index.checked_sub(1).and_then(|i| self.soft_hyphen(i));
+                            push(BreakOpportunity {
+                                item: item_idx,
+                                cluster: index,
+                                end: end + hyphen.map_or(0.0, |h| h.1),
+                                next: x,
+                                hyphen: hyphen.is_some(),
+                            });
+                        }
+                        x += cluster.advance;
+                        if cluster.info.whitespace() == Whitespace::None {
+                            end = x;
+                        }
+                    }
+                    cluster_idx = run.cluster_range.end;
+                }
+                LayoutItemKind::InlineBox => {
+                    let ibox = &self.inline_boxes[item.index];
+                    if ibox.kind != InlineBoxKind::InFlow {
+                        continue;
+                    }
+                    if text_wrap_mode == TextWrapMode::Wrap && x != 0.0 {
+                        push(BreakOpportunity {
+                            item: item_idx,
+                            cluster: cluster_idx,
+                            end,
+                            next: x,
+                            hyphen: false,
+                        });
+                    }
+                    x += ibox.width;
+                    end = x;
+                    push(BreakOpportunity {
+                        item: item_idx + 1,
+                        cluster: cluster_idx,
+                        end,
+                        next: x,
+                        hyphen: false,
+                    });
+                }
+            }
+        }
+        (last.end, last.next) = (end, x);
+        if out.last().is_some_and(|o| o.place() == last.place()) {
+            out.pop();
+        }
+        out.push(last);
+        out
+    }
+}
+
+/// Exact patch 19: a place a line may end ([`BreakLines::opportunities`]),
+/// which [`BreakLines::break_next_at`] ends a line at.
+///
+/// [`BreakLines::opportunities`]: crate::BreakLines::opportunities
+/// [`BreakLines::break_next_at`]: crate::BreakLines::break_next_at
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BreakOpportunity {
+    /// The breaker's place before what the next line starts with.
+    item: usize,
+    cluster: usize,
+    /// Where a line that ends here ends, as an advance from the layout's
+    /// start (`text-indent` apart): the white space that hangs left out, a
+    /// soft hyphen's shown hyphen included.
+    pub end: f32,
+    /// Where the next line's content starts, as that advance.
+    pub next: f32,
+    /// Whether a line that ends here shows a soft hyphen's hyphen.
+    pub hyphen: bool,
+}
+
+impl BreakOpportunity {
+    pub(crate) fn place(&self) -> (usize, usize) {
+        (self.item, self.cluster)
+    }
 }
 
 /// Processes shaped glyphs from `HarfRust` and converts them into `ClusterData` and `Glyph`.

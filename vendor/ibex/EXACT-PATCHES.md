@@ -11,8 +11,11 @@ keep the receipt’s VM, ICU, then platform-runtime order. Ibex supplies
 NumberFormat and DateTimeFormat; Hermes's ICU backend supplies Collator.
 Stub builds emit empty Intl bytecode beside the other binding placeholders.
 
-The pinned Android bundle targets API 29. A local development bundle can be
-selected through `HERMES_LEAN_SYS_DIR_aarch64_linux_android`.
+The pinned Android bundle targets API 29. The resolver applies Android's ICU
+layout and receipt requirements to arm64 and x86_64. Local development bundles
+can be selected through `HERMES_LEAN_SYS_DIR_aarch64_linux_android` and
+`HERMES_LEAN_SYS_DIR_x86_64_linux_android`; the pinned v6 release supplies only
+Android arm64.
 
 The installer’s `--check-dir <directory> <rust-triple>` validates a local cross
 bundle with the build resolver and cached host compiler, without installing or
@@ -1038,8 +1041,8 @@ upstream; replay on a refresh until it lands.
 ureq 3.4.0 vendored under another name (`vendor/ureq/EXACT-PATCHES.md`): the
 portable transport implements ureq's `unversioned` traits, which change
 between minor releases, and an app's own `ureq` must resolve apart from it
-(LLP 1153.003 D6.5). `hermes-lean-sys` and its installer call only `ureq::get`
-and require `"3"`. The atomics call `try_update`, Rust's current name for the
+(LLP 1153.003 D6.5). `hermes-lean-sys` and its installer use only ureq's
+stable API (an agent and its TLS roots, local patch 47) and require `"3"`. The atomics call `try_update`, Rust's current name for the
 deprecated `fetch_update`. Replay on a refresh.
 
 ## Local patch 46, a request body streamed from a file
@@ -1120,3 +1123,31 @@ this through the same endowed fetch binding as ordinary requests (LLP
 renames a completed host-owned file into it on the same filesystem. Recovery
 recognizes an already-published destination; storage errors preserve the source
 for retry. This avoids requiring another response-sized allocation at publication.
+
+## Windows known folders
+
+LLP 1173 D4's create-only namespaces use an OS-selected root, UNC included,
+and retain handles below it. Their walk refuses name-surrogate reparse tags
+and reopens admitted directories with normal reparse processing so cloud
+filters can recall placeholders. The reopened handle must identify the same
+object; tags are checked again before use. Every directory is reopened because
+Windows can hide cloud tags. The app and native drive walks keep refusing all
+reparse points. Leaf validation shares the native path rule. Exclusive
+creation uses `FILE_CREATE`; atomic publication uses the retained parent and
+`FileRenameInformation` with `ReplaceIfExists` false. Known-folder `mkdir`
+creates every component exclusively, with `FILE_CREATE` on Windows and
+`mkdirat` on Unix; app walks keep their open-or-create behavior. Replay on a refresh.
+
+The portable tag and name tests run on macOS. Windows tests cover collisions,
+retained parents and agent roots. Native qualification remains pending:
+`cargo run -p exact-windows --example known-folders` probes OneDrive and UNC
+redirection before a Windows app drive claims the cell. Append
+`-- pictures OnlineOnly` to exercise an existing dehydrated child directory.
+
+## Local patch 47, the Hermes download trusts `SSL_CERT_FILE`
+
+`build_support.rs` downloads a pinned bundle with Mozilla's roots, or, when
+`SSL_CERT_FILE` names a PEM file, with that file's certificates in their place,
+as OpenSSL and curl read the variable. `exact setup` then works behind a
+TLS-intercepting proxy whose CA is private. The pinned SHA-256 still decides
+what is extracted. Replay on a refresh.

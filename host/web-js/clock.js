@@ -1,11 +1,11 @@
 // The runtime's clock (LLP 1005 §6): timers fire on a clock the host moves (`advance`), each at its own time; on
 // the wall clock `drive` and `paint` move it, under the agent the driver does.
 import { rt as Link } from './rt-link.js';
-import { beatAfter } from './beat.js';
+import { beatAfter, timerOrder } from './beat.js';
 import { commit, journal, say, Poisoned, Rev, Sched, Clocked, Writes, Listener, Now, read, Invocation, Origin } from './rt.js';
 import { Mutations, Ticket } from './resources.js';
 import { start } from './mount.js';
-export const clock = { now: 0, timers: [], agent: false, epoch: 0 };
+export const clock = { now: 0, timers: [], agent: false, generation: 1, epoch: 0 };
 let Timing = false,
   Instant = null;
 // Where a `then` or queue `next` armed now is due: on the wall clock, a callback's own place (the timers RFC, D2).
@@ -25,10 +25,9 @@ let Order = 0;
 export const order = () => Order++,
   // every task, for the agent's `state.tasks`
   Tasks = [];
-/** A timer: `every(ms, action, once)`, due from mount; `i` its plan order, which breaks ties (schedule.js inserts by
- * it). */
-export function every(ms, action, once, name, wait = 0, max = 0, tolerance = 0) {
-  clock.timers.push({ due: clock.now + ms, ms, action, once, name, wait, max, tolerance, i: Order++ });
+/** A timer: `every(ms, action, once)`, due from mount; `i` its declaration order. */
+export function every(ms, action, once, name, wait = 0, max = 0, tolerance = 0, index = order()) {
+  clock.timers.push({ due: clock.now + ms, ms, action, once, name, wait, max, tolerance, i: index });
   Tasks.push(clock.timers.at(-1));
   if (!clock.agent) drive();
 }
@@ -38,8 +37,8 @@ export function every(ms, action, once, name, wait = 0, max = 0, tolerance = 0) 
 // `virtual_frame`: sixty frames are exactly a second.
 const vf = (base, k) => base + (k * 1000) / 60;
 /** `every(frame, action)`. */
-export function frames(action, name) {
-  clock.timers.push({ due: vf(clock.now, 1), base: clock.now, k: 1, frame: true, action, name, i: Order++ });
+export function frames(action, name, index = order()) {
+  clock.timers.push({ due: vf(clock.now, 1), base: clock.now, k: 1, frame: true, action, name, i: index });
   Tasks.push(clock.timers.at(-1));
   if (!clock.agent) paint();
 }
@@ -74,7 +73,8 @@ export function advance(to, wall, stop, timers = true) {
           (!next ||
             execution(t) < execution(next) ||
             (execution(t) === execution(next) &&
-              (priority(t) < priority(next) || (priority(t) === priority(next) && t.due < next.due))))
+              (priority(t) < priority(next) || (priority(t) === priority(next) &&
+                (t.due < next.due || (t.due === next.due && timerOrder(t, next) < 0))))))
         )
           next = t;
     // An answer's `then` goes before a timer due at the same time: the answer landed first; a queue's `next` between
@@ -197,7 +197,7 @@ export function paint() {
       ticket = Ticket;
     NowRead = false;
     // A frame task's commit may arm or drop one (a gate, LLP 1092 D10): each armed at the frame's start fires once.
-    for (const t of clock.timers.filter(t => t.frame).sort((a, b) => !!a.hatch - !!b.hatch))
+    for (const t of clock.timers.filter(t => t.frame).sort((a, b) => !!a.hatch - !!b.hatch || timerOrder(a, b)))
       if (clock.timers.includes(t)) {
         t.base = at;
         t.k = 1;

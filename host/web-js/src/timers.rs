@@ -12,61 +12,94 @@ use crate::code::{self, Scope};
 use std::fmt::Write as _;
 
 pub(super) fn timers(em: &mut Em<'_>, body: &mut String) -> Result<(), String> {
-    let plan = em.plan;
-    let top = Scope::default();
-    if plan.timers.iter().any(|t| t.wait != 0) {
+    if em.plan.timers.iter().any(|t| t.wait != 0) {
         let install = em.uses.rt("timerWaits");
         let _ = write!(body, "{install}();");
     }
-    for t in plan.timers.iter() {
-        let name = serde_json::to_string(plan.str(t.name)).unwrap();
-        if t.gated || t.keyed {
-            let mut f = |c, role: &str| {
-                code::expression(
-                    plan,
-                    plan.code(c),
-                    &code::evaluation(&top, format!("task {name} {role}"), false),
-                    &mut em.uses,
-                )
-            };
-            let gate = f(t.gate, "gate").map_err(|e| format!("task {name}: {e}"))?;
-            let key = if t.keyed {
-                format!(
-                    "()=>{}",
-                    f(t.key, "key").map_err(|e| format!("task {name}: {e}"))?
-                )
-            } else {
-                "0".into()
-            };
-            let gated = em.uses.rt("gated");
-            let _ = write!(
-                body,
-                "{gated}({},a_{},{},{},()=>{gate},{key},{name},{},{},{},{});",
-                t.interval_ms,
-                t.action.0,
-                t.once as u8,
-                t.frame as u8,
-                t.wait,
-                t.max_ms,
-                t.tolerance_ms,
-                t.change as u8
-            );
-            continue;
+    for (i, t) in em.plan.timers.iter().enumerate() {
+        if t.owner.is_none() {
+            body.push_str(&task(em.plan, i, &Scope::default(), &mut em.uses)?);
         }
-        if t.frame {
-            // LLP 1073: once per presented frame, virtual frames on a seek.
-            let frames = em.uses.rt("frames");
-            let _ = write!(body, "{frames}(a_{},{name});", t.action.0);
-            continue;
-        }
-        let every = em.uses.rt("every");
-        let _ = write!(
-            body,
-            "{every}({},a_{},{},{name},{},{},{});",
-            t.interval_ms, t.action.0, t.once as u8, t.wait, t.max_ms, t.tolerance_ms
-        );
     }
     Ok(())
+}
+
+/// A task created with its owner's scope. Its action reads captured props at firing time.
+pub(super) fn task(
+    plan: &exact_plan::Plan,
+    i: usize,
+    scope: &Scope,
+    uses: &mut code::Uses,
+) -> Result<String, String> {
+    let t = &plan.timers[i];
+    let name = serde_json::to_string(plan.str(t.name)).unwrap();
+    let mut args = Vec::new();
+    if code::touches_rows(plan, plan.code(plan.actions[t.action.0 as usize].body)) {
+        args.push(scope.rows.clone().unwrap_or_else(|| "{}".into()));
+    }
+    for a in t.args.iter() {
+        args.push(code::expression(
+            plan,
+            plan.code(plan.arg(a).expr),
+            scope,
+            uses,
+        )?);
+    }
+    let action = if args.is_empty() {
+        format!("a_{}", t.action.0)
+    } else {
+        format!("()=>a_{}({})", t.action.0, args.join(","))
+    };
+    if t.gated || t.keyed || plan.timers.iter().any(|t| t.owner.is_some()) {
+        let gate = if t.gated {
+            code::expression(
+                plan,
+                plan.code(t.gate),
+                &code::evaluation(scope, format!("task {name} gate"), false),
+                uses,
+            )?
+        } else {
+            "true".into()
+        };
+        let key = if t.keyed {
+            format!(
+                "()=>{}",
+                code::expression(
+                    plan,
+                    plan.code(t.key),
+                    &code::evaluation(scope, format!("task {name} key"), false),
+                    uses
+                )?
+            )
+        } else {
+            "0".into()
+        };
+        let gated = uses.rt("gated");
+        let path = if t.owner.is_some() {
+            scope.path.as_deref().unwrap_or("\"\"")
+        } else {
+            "null"
+        };
+        return Ok(format!(
+            "{gated}({},{action},{},{},()=>{gate},{key},{name},{},{},{},{},{i},{path});",
+            t.interval_ms,
+            t.once as u8,
+            t.frame as u8,
+            t.wait,
+            t.max_ms,
+            t.tolerance_ms,
+            t.change as u8
+        ));
+    }
+    if t.frame {
+        let frames = uses.rt("frames");
+        return Ok(format!("{frames}({action},{name},{i});"));
+    }
+    let every = uses.rt("every");
+    Ok(format!(
+        "{every}({},{action},{},{name},{},{},{},{i});",
+        t.interval_ms, t.once as u8, t.wait, t.max_ms, t.tolerance_ms
+    ))
 }
 
 /// The `exactMIDI` readers, each its fields and a port list's port fields,

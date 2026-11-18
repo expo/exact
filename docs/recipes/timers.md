@@ -1,6 +1,6 @@
 # Recipe: timers
 
-A `task`, the root's ([a child's](timer-in-a-component.md)), is the only timer: `every(ms,
+A `task`, in the root or [a child at a bounded use](timer-in-a-component.md), is the only timer: `every(ms,
 action)` repeats, `after(ms, action)` fires once, `when cond` arms it while it holds, so
 start and stop are a state. A countdown, its readout and button in the list's first row:
 

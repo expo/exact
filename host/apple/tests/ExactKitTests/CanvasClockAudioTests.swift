@@ -90,7 +90,7 @@ final class CanvasClockAudioTests: XCTestCase {
         s.surfaceHost.modules[""] = module
         s.surfaceHost.attempted = [""]
         let view = NodeView(id: 100, kind: "canvas", presenter: s.presenter)
-        let entry = CanvasesHost.Entry(view: view, name: "fixture", values: [])
+        let entry = CanvasesHost.Entry(view: view, name: "fixture", values: Data("[]".utf8))
         entry.id = 1
         entry.module = module
         s.surfaceHost.entries[100] = entry

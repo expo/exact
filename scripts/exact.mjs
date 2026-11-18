@@ -52,7 +52,7 @@ const { freeSpace, ROOM_GB } = await import('./filesystem.mjs');
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { grantAdvice } from './grant-advice.mjs';
-import { installIn } from './package-manager.mjs';
+import { addOutside, installIn, outsideSpecifier } from './package-manager.mjs';
 import { builtContract, contractTool, launch, toolEnv } from './tools.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, readManifest, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
@@ -65,7 +65,7 @@ const { builtAppMatches, jsTargetBuild } = await import('../host/web/serve.mjs')
 const { signRelease } = await import('../host/apple/assets.mjs');
 const { appleCrossReport, CROSS_IOS_ROWS, hasCrossSdk, iosSimulatorTarget } = await import('../host/apple/sdk.mjs');
 const { chromium } = await import('./agent-launch.mjs');
-const { androidLockCommand, androidSdk, androidSdkPackages, androidSdkFix, androidJavaEnv, androidJavaFix, androidJavaRisk, androidToolchainEnv } = await import('./agent-android.mjs');
+const { androidLockCommand, usesHermes, crateManifest, androidSdk, androidSdkPackages, androidSdkFix, androidJavaEnv, androidJavaFix, androidJavaRisk, androidToolchainEnv } = await import('./agent-android.mjs');
 const { hermesAndroidBundle } = await import('./hermes-android.mjs');
 const { guardFlags, helpText } = await import('./help.mjs');
 const { backendOrigin, literalBackendOrigin } = await import('../js/bake/src/typescript.mjs');
@@ -328,8 +328,8 @@ export function binaryenArchive(version, os = process.platform, cpu = process.ar
   if (!platform || !arch) throw new Error(`no Binaryen setup for ${os}/${cpu}`);
   return `binaryen-${version}-${arch}-${platform}.tar.gz`;
 }
-/** Install the versions declared by the SDK, once per machine. */
-export async function setup({check = false, platform = null, device = false} = {}) {
+/** Install the versions declared by the SDK, once per machine. `appDir`: the app whose platform build is checked. */
+export async function setup({check = false, platform = null, device = false, appDir = process.env.EXACT_APP_DIR ?? (existsSync('app.contract') ? process.cwd() : null)} = {}) {
   // Steps only a game needs (its SDK lock, the engine's rustdoc for `game vocab`): a failure is named, not fatal.
   const gameFailures = [], web = platform === 'web';
   if (!check && !web) { const room = freeSpace(homedir()); if (room && room.gb < ROOM_GB) console.warn(`exact setup: ${room.text}`); }
@@ -344,6 +344,9 @@ export async function setup({check = false, platform = null, device = false} = {
     return result.status === 0 ? result.stdout.trim() : '';
   };
   if (!check && !output('rustup', ['--version'])) throw new Error('rustup is not on PATH, so setup installed nothing: install it from https://rustup.rs, then rerun exact setup');
+  // Whether the app links Hermes as its build decides: iOS by app.ts (host/apple/build.mjs), the rest by their crate's cargo graph; null outside an app.
+  const app = appDir && ['android', 'ios', 'macos', 'linux'].includes(platform) ? resolveApp(resolve(appDir)) : null, kind = platform === 'macos' ? 'apple' : platform;
+  const hermes = !app ? null : platform === 'ios' ? existsSync(resolve(app.dir, 'app.ts')) : app.manifest.game || crateManifest(app, kind) ? usesHermes(app, kind, platform === 'android' ? undefined : hermesTarget()) : null;
   if (!check) {
     run('rustup', ['toolchain', 'install', pin.channel, '--profile', pin.profile,
       ...pin.components.flatMap(c => ['--component', c]), ...pin.targets.flatMap(t => ['--target', t])]);
@@ -419,7 +422,7 @@ export async function setup({check = false, platform = null, device = false} = {
     }
   }
   const rows = sdkReport(process.env, { only: platform, device });
-  const report = [...(platform ? (await platformReport(platform, rows, { device })).map(row => ({ ...row, required: true })) : rows), cratesRow()];
+  const report = [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
   if (platform === 'android') report.push(...rows.filter(row => row.name === 'Android JDK JIT'));
   printReport(report);
   const missing = report.filter(row => row.required && !row.ok);
@@ -448,7 +451,7 @@ export function cratesRow(env = process.env, manifest = resolve(ROOT, 'Cargo.tom
  * its wasm tools, Bun, node_modules and Chrome; native platforms add their SDKs, Hermes and Rust targets. */
 export function platformRowNames(platform, { os = process.platform, cpu = process.arch, device = false } = {}) {
   const host = `Hermes bundle (${hermesTarget(os, cpu)})`, ios = device ? 'aarch64-apple-ios' : appleCrossTargets(os, cpu)[0]?.target;
-  const rows = platform === 'android' ? [...androidSdkPackages().map(p => p.name), 'Android NDK', 'Android JDK'] : ({
+  const rows = platform === 'android' ? [...androidSdkPackages().map(p => p.name), 'Android NDK', 'Android JDK', 'Hermes bundle (aarch64-linux-android)'] : ({
     web: ['web nightly', 'web nightly wasm32', 'wasm-bindgen', 'wasm-opt', 'Chrome'],
     ios: [...(os === 'linux' ? CROSS_IOS_ROWS : ['Xcode', 'iOS SDK']), `Hermes bundle (${ios})`, `Rust ${ios}`],
     macos: ['Xcode', host],
@@ -457,10 +460,11 @@ export function platformRowNames(platform, { os = process.platform, cpu = proces
   return [...new Set(['rustup', 'Rust', 'Bun', 'node_modules', ...rows])];
 }
 /** The rows of `rows` a platform's build reads (`device`: an iOS build for a phone, whose Hermes bundle is the device's),
- * and for Android its Rust target, NDK and Hermes bundle (scripts/agent-android.mjs finds them, or says
- * what to install). */
-export async function platformReport(platform, rows, { device = false } = {}) {
-  const own = rows.filter(row => platformRowNames(platform, { device }).includes(row.name));
+ * and for Android its Rust target (scripts/agent-android.mjs finds them, or says what to install). A Hermes row holds
+ * back only an app that links Hermes (`hermes`); outside an app (null) it is needed only for TypeScript apps. */
+export async function platformReport(platform, rows, { device = false, hermes = null } = {}) {
+  const linked = row => !row.name.startsWith('Hermes bundle') || hermes ? row : hermes === false ? { ...row, ok: true, have: 'not linked by this app', fix: '' } : { ...row, required: false, need: 'TypeScript apps' };
+  const own = rows.filter(row => platformRowNames(platform, { device }).includes(row.name)).map(row => linked({ ...row, required: true }));
   const row = (name, ok, have, want, fix) => ({ name, have, want, ok, fix, required: true, need: null });
   // The pinned toolchain's targets: the workspace builds with it, and the app directory pins none of its own.
   const pin = Bun.TOML.parse(readFileSync(resolve(ROOT, 'rust-toolchain.toml'), 'utf8')).toolchain.channel;
@@ -472,8 +476,6 @@ export async function platformReport(platform, rows, { device = false } = {}) {
   if (platform !== 'android') return own;
   const android = /^aarch64-linux-android$/m.test(targets());
   own.push(row('Rust target aarch64-linux-android', android, android ? 'installed' : 'missing', 'aarch64-linux-android', `rustup target add aarch64-linux-android --toolchain ${pin}`));
-  const bundle = androidHermes();
-  own.push(row('Hermes bundle (aarch64-linux-android)', bundle.ok, bundle.have, 'the Android Hermes bundle a TypeScript app links', bundle.fix));
   return own;
 }
 /** Every row, or with `only` a platform's rows alone (`platformRowNames`), the others' checks skipped. `device` and
@@ -603,7 +605,7 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
     try { ndk = androidToolchainEnv(env).ANDROID_NDK_HOME; } catch (error) { fault = error.message; }
     rows.push(row('Android NDK', ndk, 'NDK with the aarch64 toolchain', !!ndk, fault, 'Android'));
   }
-  if (!only && existsSync(androidSdk(env))) {
+  if (only === 'android' || !only && existsSync(androidSdk(env))) {
     const target = output('rustup', ['target', 'list', '--installed', '--toolchain', pin.channel]).split('\n').includes('aarch64-linux-android');
     rows.push(row('Rust aarch64-linux-android', target ? 'installed' : '', pin.channel, target, 'exact setup', 'Android'));
     const bundle = androidHermes(env);
@@ -837,7 +839,7 @@ const USAGE = `exact — run an Exact app from the command line (macOS)
   exact setup --platform web   install pinned stable/nightly Rust, wasm-bindgen,
                                Binaryen, node_modules, Chromium and the locked
                                crates for web builds and test web
-  exact add <module> [<app>]   a standard module (geolocation): its dependency, installed
+  exact add <module> [<app>]   a standard module (geolocation) or another package: its dependency, installed
   exact hatch <word> [<app>]   an access hatch: a stub for each target the app builds (Kotlin for android/)
                                (--app, --window for those scopes), and app.json's entry
   exact list                   the apps in this repo
@@ -896,10 +898,11 @@ export function add(args, say = console.log) {
   // A standard module (an interface), or a TypeScript library of exact2's own (`@exact/oauth`, LLP 1146 D5).
   const standard = readdirSync(resolve(ROOT, 'packages')).filter((p) => read(resolve(ROOT, 'packages', p, 'exact.json'))?.kind === 'interface'
     || read(resolve(ROOT, 'packages', p, 'package.json'))?.exports?.['.']?.types !== undefined);
-  if (!standard.includes(short)) throw new Error(`add: ${module ? `no standard module ${module}` : 'name a module'}; exact2's are ${standard.join(', ')} (bun exact.mjs add geolocation)`);
+  if (!standard.includes(short) && !outsideSpecifier(module)) throw new Error(`add: ${module ? `no standard module ${module}` : 'name a module'}; exact2's are ${standard.join(', ')} (bun exact.mjs add geolocation), and another package is a directory or a registry name with its scope or version (bun exact.mjs add ../maplibre-exact)`);
   if (!name && !process.env.EXACT_APP_DIR) throw new Error('add: name the app (bun scripts/exact.mjs add geolocation <app>), or run bun exact.mjs add in it');
   const app = resolveApp(name), at = resolve(app.dir, 'package.json'), manifest = read(at);
   if (!manifest) throw new Error(`add: ${app.dir} has no package.json; an app exact new made has one`);
+  if (!standard.includes(short)) return say(addOutside(app.dir, module, !args.includes('--no-install')));
   const key = `@exact/${short}`, spec = packageSpecifier(app.dir, short);
   if (manifest.dependencies?.[key] !== spec) writeFileSync(at, JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, [key]: spec } }, null, 2) + '\n');
   const { manager, installed } = installIn(app.dir, `add: ${key} is in its package.json`, !args.includes('--no-install'));
@@ -1383,7 +1386,7 @@ async function main(argv) {
     const at = flags.indexOf('--platform'), platform = at < 0 ? null : flags[at + 1];
     const rest = flags.filter((_, i) => i !== at && i !== at + 1 || at < 0);
     if (rest.some(flag => !['--check', '--device'].includes(flag)) || at >= 0 && (!flags.includes('--check') && platform !== 'web' || !['ios', 'macos', 'android', 'web', 'linux', 'windows'].includes(platform)) || flags.includes('--device') && platform !== 'ios')
-      throw new Error('Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]], or exact setup --platform web');
+      throw new Error(`Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]], or exact setup --platform web${platform && platform !== 'web' ? `\n  --platform ${platform} only checks: run exact setup, then exact setup --check --platform ${platform}, which names what is left to install` : ''}`);
     // iOS also builds on Linux with the cross SDK, whose rows the check reports (app-shells.mjs bringPlatform agrees).
     if (platform === 'macos' && process.platform !== 'darwin' || platform === 'ios' && !['darwin', 'linux'].includes(process.platform)) throw new Error(`${platform} needs a Mac with Xcode${platform === 'ios' ? ', or Linux with the Apple cross SDK' : ''}`);
     return setup({check:flags.includes('--check'), platform, device:flags.includes('--device')});

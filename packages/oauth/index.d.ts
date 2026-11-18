@@ -110,6 +110,8 @@ export interface OAuthAuthorization {
 }
 
 export interface OAuthSignIn {
+  /** OIDC nonce for this sign-in, requiring openid: a non-empty string checked against the ID token. Omit to generate one. Use a fresh value for each sign-in. */
+  nonce?: string;
   /** Extra authorization parameters for this press, overriding authorizationParams. The package's own fields (response_type, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, nonce and max_age) are refused with TypeError. */
   params?: Record<string, string>;
   /** For an app that signs the person in with its own screens (LLP 1146 D8): sends the authorization request as the provider documents, and answers the URL it redirected to. Throw an `OAuthError` to say why it could not. */

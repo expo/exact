@@ -374,9 +374,13 @@ private final class Answering: NSObject, UINavigationControllerDelegate {
 /// A tab delegate whose answer for the orientation method can change, counting UIKit's questions and calls.
 final class TabAnswering: NSObject, UITabBarControllerDelegate {
     var answers = true, queries = 0, calls = 0
+    /// Run once, the first time UIKit asks whether it answers for the orientations
+    var asked: (() -> Void)?
     override func responds(to selector: Selector!) -> Bool {
-        if selector == #selector(UITabBarControllerDelegate.tabBarControllerSupportedInterfaceOrientations(_:)) { queries += 1; return answers }
-        return super.responds(to: selector)
+        guard selector == #selector(UITabBarControllerDelegate.tabBarControllerSupportedInterfaceOrientations(_:)) else { return super.responds(to: selector) }
+        queries += 1
+        if let asked { self.asked = nil; asked() }
+        return answers
     }
     func tabBarControllerSupportedInterfaceOrientations(_ tabBarController: UITabBarController) -> UIInterfaceOrientationMask {
         calls += 1

@@ -300,7 +300,10 @@ fn skinned_bounds_follow_the_palette_on_the_blended_and_direct_routes() {
         }
         model.textures.clear();
         let mut s = WorldSurface::<Deformed, crate::ModelExecutor, true>::default();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.bind(&[exact_gpu::Value::Bool(blend)], None).unwrap();
         s.asset(
             "deformed.model",

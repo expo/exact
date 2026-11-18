@@ -132,6 +132,24 @@ final class GpuModule {
     var period: PeriodFn?
 
     typealias SeekableFn = @convention(c) (Bool) -> Void
+    private var reducedMotion: SeekableFn?
+    private var lastReducedMotion: Bool?
+    private var preferenceObservers: [NSObjectProtocol] = []
+
+    func followReducedMotion(_ send: @escaping SeekableFn) {
+        reducedMotion = send
+        tellReducedMotion()
+        preferenceObservers = DisplayPreferences.observe { [weak self] in self?.tellReducedMotion() }
+    }
+
+    private func tellReducedMotion() {
+        let reduce = DisplayPreferences.reducedMotion
+        guard lastReducedMotion != reduce else { return }
+        lastReducedMotion = reduce
+        reducedMotion?(reduce)
+        for owner in canvases.allObjects { owner.session?.frames.requestCanvas() }
+    }
+
     typealias PeriodFn = @convention(c) (Double) -> Void
     typealias HostFrameFn = @convention(c) (Double, Double, Double, UInt32) -> Void
     typealias DueFn = @convention(c) (UInt32, Double) -> UInt32
@@ -245,6 +263,7 @@ final class GpuModule {
     }
 
     deinit {
+        DisplayPreferences.forget(preferenceObservers)
         #if os(macOS)
         if let deviceObserver { MTLRemoveDeviceObserver(deviceObserver) }
         #endif
@@ -305,7 +324,7 @@ final class GpuModule {
             guard let p = dlsym(handle, name) else { return nil }
             return unsafeBitCast(p, to: T.self)
         }
-        guard let load = sym("gpu_load", LoadFn.self), let create = sym("gpu_create", CreateFn.self), let bind = sym("gpu_bind", BindFn.self),
+        guard let load = sym("gpu_load", LoadFn.self), let reducedMotion = sym("gpu_reduced_motion", SeekableFn.self), let create = sym("gpu_create", CreateFn.self), let bind = sym("gpu_bind", BindFn.self),
               let render = sym("gpu_render", RenderFn.self), let flush = sym("gpu_flush", SyncFn.self), let dirty = sym("gpu_dirty", DirtyFn.self), let destroy = sym("gpu_destroy", DestroyFn.self),
               let texture = sym("gpu_texture", TextureFn.self), let childrenMode = sym("gpu_children_mode", WantsFn.self),
               let readback = sym("gpu_readback", ReadbackFn.self),
@@ -318,11 +337,28 @@ final class GpuModule {
         module.performanceReporting = sym("gpu_performance_reporting", PerformanceReportingFn.self)
         module.performance = sym("gpu_performance", PerformanceFn.self)
         module.flushFn = flush
+        if artifact.isEmpty,
+           let owners = (bakedCompatibility["inputs"] as? [String: Any])?["gpuModules"] as? [String: [String]], !owners.isEmpty {
+            guard let roster = sym("gpu_surfaces", ErrorFn.self), let pointer = sym("gpu_out_ptr", ErrorPtrFn.self) else {
+                return .failure(GpuLoadError(message: "GPU ABI lacks gpu_surfaces or gpu_out_ptr"))
+            }
+            let count = Int(roster())
+            if let bytes = pointer(), let names = try? JSONSerialization.jsonObject(with: Data(bytes: bytes, count: count)) as? [String] {
+                for (owner, surfaces) in owners {
+                    let conflicts = names.filter { surfaces.contains($0) }
+                    if conflicts.isEmpty { continue }
+                    let message = "GPU surfaces \(conflicts.joined(separator: ", ")) are registered by the primary and owned by module \(owner)"
+                    if !BakedCompatibility.production(bakedCompatibility) { return .failure(GpuLoadError(message: message)) }
+                    NSLog("%@", message)
+                }
+            }
+        }
         // The GPU tier (LLP 1139.003 D2): the drive's, told before the device
         // is made, under the agent; else the module's own from its device.
         let tier = sym("gpu_tier", TierFn.self)
         if PageFacts.substituted { _ = tier?(PageFacts.agentGpuTier) }
         if load() != 0 { return .failure(GpuLoadError(message: "gpu_load: \(module.error())")) }
+        module.followReducedMotion(reducedMotion)
         if let tier, !PageFacts.substituted { PageFacts.gpuTier = tier(3) }
         if let tier, let retier = sym("gpu_retier", RetierFn.self) {
             PageFacts.retiers[artifact] = { code in _ = tier(code); retier() }

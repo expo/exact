@@ -257,6 +257,35 @@ fn process_lease_excludes_parent_and_survives_abandoned_effect() {
     assert_eq!(backend.read("oauth").unwrap(), None);
 }
 
+/// The first save (revision 1) writes slot 1; slot 0 was never written and
+/// reads as zeros. A crash that tears that first write leaves no valid slot,
+/// but the last durable record is the empty marker the file began as.
+#[test]
+fn a_torn_first_marker_write_keeps_the_empty_marker() {
+    let (temp, namespace, backend, coordinator) = fixture();
+    let first = Marker {
+        revision: 1,
+        epoch: 1,
+        poison: false,
+        active: true,
+    }
+    .bytes();
+    std::fs::create_dir_all(&temp.0).unwrap();
+    for torn in [&first[..20], &[0u8; 32][..], &[0xa5u8; 32][..]] {
+        let mut file = vec![0u8; 32];
+        file.extend_from_slice(torn);
+        std::fs::write(temp.0.join(filename("oauth")), &file).unwrap();
+        let stamp = namespace.stamp("oauth");
+        assert!(matches!(stamp.0, Ok(Some((0, false)))), "{:?}", stamp.0);
+        namespace
+            .write("oauth", &stamp, || backend.write("oauth", Some("written")))
+            .unwrap();
+    }
+    let lease = acquire(&coordinator);
+    assert_eq!(lease.read().unwrap().as_deref(), Some("written"));
+    lease.finish().unwrap();
+}
+
 #[test]
 fn ordinary_stamp_does_not_create_persistence_files() {
     let temp = Temp::new();

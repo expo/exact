@@ -91,11 +91,32 @@ async function inChrome(test, html = page) {
       return reply.result.value;
     };
     await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
-    await test(evaluate, call);
+    await test(evaluate, call, cdp);
   } finally {
     await suite.close();
     server.close();
   }
+}
+
+/** How many times Chrome laid the page out while `expression` ran, from a trace of it. */
+async function layoutsDuring(evaluate, call, cdp, expression) {
+  const events = [];
+  let complete;
+  const ended = new Promise(resolve => { complete = resolve; });
+  const listener = message => {
+    if (message.method === 'Tracing.dataCollected') events.push(...message.params.value);
+    if (message.method === 'Tracing.tracingComplete') complete();
+  };
+  cdp.listeners.push(listener);
+  try {
+    await call('Tracing.start', { categories: 'devtools.timeline,blink.user_timing', transferMode: 'ReportEvents' });
+    await evaluate(`performance.mark('traced-start'); ${expression}; performance.mark('traced-end')`);
+    await call('Tracing.end');
+    await ended;
+  } finally { cdp.listeners.splice(cdp.listeners.indexOf(listener), 1); }
+  const start = events.find(e => e.name === 'traced-start'), end = events.find(e => e.name === 'traced-end');
+  if (!start || !end) throw new Error('the trace holds no mark for the traced expression');
+  return events.filter(e => e.name === 'Layout' && e.pid === start.pid && e.tid === start.tid && e.ts >= start.ts && e.ts < end.ts).length;
 }
 
 check('a pushed route draws Back at its app bar\'s leading edge, and goes back as the browser\'s Back does', () => inChrome(async (evaluate, call) => {
@@ -383,6 +404,44 @@ check('an app bar Back control remains live inside a modal beneath an inert ance
     .toEqual(['log app bar: Back refused: its id="back" control is disabled or inert']);
 }), 60000);
 
+// Focus leaves a route the projection hides, and the blur handler commits: `leave(key, change)` shows route `key`
+// from the focused field's route, the handler making `change` and projecting it as a commit does.
+const leaving = page.match(/^<style>[\s\S]*?<\/style>/)[0] + `
+<div id="exact-root">
+  <main id="nav" navigationKey="4" navigationBack="back">
+    <section navigationKey="1" id="under">Underneath</section>
+    <section navigationKey="2" id="cover" navigationPresentation="fullscreen">Cover</section>
+    <section navigationKey="3" id="detail"><header style="display:none"><button id="back" data-exact-on="press">Go Back</button><h2 role="heading" data-exact-text>Detail</h2></header></section>
+    <section navigationKey="4"><input id="field"></section>
+  </main>
+</div>
+<script type="module">
+  import { navigation } from './navigation.js';
+  const root = document.getElementById('exact-root'), nav = document.getElementById('nav'), field = document.getElementById('field');
+  navigation.connect(root, () => false, () => {});
+  const project = () => navigation.project(root, () => {});
+  window.leave = (key, change) => {
+    nav.setAttribute('navigationKey', '4'); project(); field.focus();
+    field.onblur = () => { change(); project(); };
+    nav.setAttribute('navigationKey', key); project();
+    return document.activeElement === document.body;
+  };
+  project();
+  window.ready = true;
+</script>`;
+
+check('a commit made as focus leaves a hidden route keeps its projection', () => inChrome(async evaluate => {
+  // The handler writes a full-screen route's background, so the page beneath it shows.
+  const beneath = await evaluate(`[leave('2', () => { document.getElementById('cover').style.backgroundColor = 'rgba(255, 0, 0, .5)'; }), getComputedStyle(document.getElementById('under')).visibility]`);
+  // The handler shows the header that holds the route's Back, so the bar draws Back and hides the author's.
+  const backs = await evaluate(`[leave('3', () => { document.querySelector('#detail > header').style.display = 'flex'; }),
+    ...[document.querySelector('#detail > header').shadowRoot?.querySelector('button'), document.getElementById('back')].map(b => !!b?.checkVisibility({ visibilityProperty: true }))]`);
+  // The handler goes on to another route, which is the one shown.
+  const onward = await evaluate(`[leave('2', () => document.getElementById('nav').setAttribute('navigationKey', '1')),
+    getComputedStyle(document.getElementById('cover')).visibility, document.getElementById('under').inert]`);
+  expect([beneath, backs, onward]).toEqual([[true, 'visible'], [true, true, false], [true, 'hidden', false]]);
+}, leaving), 60000);
+
 // A route that says `navigationBar="transparent"` lays its bar over its top, clear, as iOS draws the bar's scroll-edge
 // appearance: its content starts under the bar and reads the bar's height in its top inset, and the bar's ground and
 // line come while its scroller's content is under it. A header drawn as written keeps its place.
@@ -411,9 +470,88 @@ const clear = page.match(/^<style>[\s\S]*?<\/style>/)[0] + `
   window.ready = true;
 </script>`;
 
-check('a transparent bar lies clear over its route until the content scrolls under it', () => inChrome(async evaluate => {
-  const none = 'rgba(0, 0, 0, 0)', top = await evaluate('look()');
+check('nested transparent bars retain inherited insets through resize and projection', () => inChrome(async evaluate => {
+  const measured = `new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(look()))))`;
+  await evaluate(`document.getElementById('photo').insertAdjacentHTML('beforeend',
+    '<main navigationKey="inner" navigationBack="inner-back"><section id="inner" navigationKey="inner" data-navigationbar="transparent"><header><h2>Inner</h2></header><span id="inner-below" style="position:absolute;top:var(--exact-safe-area-inset-top)"></span></section></main>');
+    window.nested = () => ({
+      inset: parseFloat(getComputedStyle(document.getElementById('inner-below')).top),
+      heights: document.querySelector('#photo > header').offsetHeight + document.querySelector('#inner > header').offsetHeight
+    }); project()`);
+  await evaluate(measured);
+  const initial = await evaluate('nested()');
+  expect(initial.inset).toBe(initial.heights);
+  await evaluate(`document.querySelector('#inner > header').style.minHeight = '90px'`);
+  await evaluate(measured);
+  const resized = await evaluate('nested()');
+  expect(resized.inset).toBe(resized.heights);
+  await evaluate('project()');
+  await evaluate(measured);
+  expect(await evaluate('nested()')).toEqual(resized);
+  // Width-only resize reports do not remove and rewrite either route's unchanged inset.
+  expect(await evaluate(`(async () => {
+    const photo = document.getElementById('photo');
+    photo.style.width = '590px';
+    let writes = 0;
+    const seen = new MutationObserver(records => { writes += records.length; });
+    seen.observe(photo, { subtree: true, attributes: true, attributeFilter: ['style'] });
+    await ${measured};
+    writes += seen.takeRecords().length;
+    seen.disconnect();
+    return writes;
+  })()`)).toBe(0);
+}, clear), 60000);
+
+for (const narrow of [true, false]) {
+  check(`nested transparent bars update inherited insets when ${narrow ? 'their width transitions' : 'only the outer bar grows'}`, () => inChrome(async evaluate => {
+    await evaluate(`
+      const photo = document.getElementById('photo');
+      photo.style.width = '600px';
+      photo.querySelector('h2').textContent = 'A long outer title whose words wrap onto more lines as the route becomes narrower';
+      photo.querySelector('h2').style.whiteSpace = 'normal';
+      photo.insertAdjacentHTML('beforeend',
+        '<main navigationKey="inner" navigationBack="inner-back"><section id="inner" navigationKey="inner" data-navigationbar="transparent"><header><h2>Inner</h2></header><span id="inner-below" style="position:absolute;top:var(--exact-safe-area-inset-top)"></span></section></main>');
+      window.nested = () => ({
+        inset: parseFloat(getComputedStyle(document.getElementById('inner-below')).top),
+        outer: photo.querySelector('header').offsetHeight,
+        inner: document.querySelector('#inner > header').offsetHeight
+      });
+      window.measured = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(nested()))));
+      project();
+    `);
+    const before = await evaluate('measured()');
+    expect(before.inset).toBe(before.outer + before.inner);
+    if (narrow) {
+      await evaluate(`new Promise(resolve => {
+        photo.style.transition = 'width 80ms linear';
+        photo.addEventListener('transitionend', resolve, { once: true });
+        photo.style.width = '300px';
+      })`);
+    } else {
+      await evaluate(`photo.querySelector('header').style.minHeight = '193px'`);
+    }
+    const after = await evaluate('measured()');
+    expect(after.outer).toBeGreaterThan(before.outer);
+    expect(after.inner).toBe(before.inner);
+    expect(after.inset).toBe(after.outer + after.inner);
+  }, clear), 60000);
+}
+
+check('a transparent bar lies clear over its route until the content scrolls under it', () => inChrome(async (evaluate, call, cdp) => {
+  const measured = `new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(look()))))`;
+  const none = 'rgba(0, 0, 0, 0)', top = await evaluate(measured);
   expect([top.ground, top.line, top.content, top.below === top.header && top.header > 0]).toEqual([none, none, 0, true]);
+  // The bar is measured in the next frame: the task that projects a route whose header grew lays nothing out.
+  expect(await layoutsDuring(evaluate, call, cdp, `document.querySelector('#photo > header').style.minHeight = '90px'; project()`)).toBe(0);
+  const taller = await evaluate(measured);
+  expect(taller.header).toBeGreaterThan(top.header);
+  expect([taller.below, taller.content]).toEqual([taller.header, 0]);
+  await evaluate(`document.getElementById('photo').style.setProperty('--exact-safe-area-inset-top', '7px'); project(); project()`);
+  expect((await evaluate(measured)).below).toBe(taller.header + 7);
+  await evaluate(`project(); project()`);
+  expect((await evaluate(measured)).below).toBe(taller.header + 7);
+  await evaluate(`document.getElementById('photo').style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column'; project()`);
+  expect((await evaluate(measured)).below).toBe(taller.header);
   const under = await evaluate('scrolled(200)');
   expect([under.ground, under.line].map(c => c !== none)).toEqual([true, true]);
   expect((await evaluate('scrolled(0)')).ground).toBe(none);
@@ -422,5 +560,21 @@ check('a transparent bar lies clear over its route until the content scrolls und
     const plain = await evaluate(`${change}; project(); look()`);
     expect([plain.content === plain.header, plain.below]).toEqual([true, 0]);
     await evaluate(`document.getElementById('photo').setAttribute('data-navigationbar', 'transparent'); document.querySelector('#photo > header').removeAttribute('data-exact-said'); project()`);
+    await evaluate(measured);
   }
+  // A bar shown again is measured once, and its inset written once with its height: the observer's first report of
+  // the header finds that height written.
+  expect(await evaluate(`(async () => {
+    let writes = 0;
+    const photo = document.getElementById('photo'), seen = new MutationObserver(records => { writes += records.length; });
+    photo.removeAttribute('data-navigationbar'); project();
+    seen.observe(photo, { attributes: true, attributeFilter: ['style'] });
+    photo.setAttribute('data-navigationbar', 'transparent'); project();
+    await ${measured};
+    return writes + seen.takeRecords().length;
+  })()`)).toBe(2);
+  // An inline header in a block route has a height in layout, and none a ResizeObserver reports.
+  await evaluate(`document.getElementById('photo').style.display = 'block'; document.querySelector('#photo > header').style.cssText = 'display:inline'; project()`);
+  const inline = await evaluate(measured);
+  expect([inline.header > 0, inline.below]).toEqual([true, inline.header]);
 }, clear), 60000);

@@ -345,6 +345,11 @@ pub(super) fn run<D: DataSource + Default + 'static>(
     // A launch from here on is the app's next instance, not this ending one's.
     state.instance.take();
     exact_painted::set_event_waker(None);
+    if let Some(p) = &mut state.presenter {
+        for failure in p.drain_file_exports() {
+            eprintln!("exact: {failure}");
+        }
+    }
     // However the loop ended (the window closed, a bounded run, a failure): the store's writes, made on a thread of
     // their own, are on disk before the process ends, and what failed is said.
     if !exact_painted::host::drain_store_writes(std::time::Duration::from_secs(5)) {

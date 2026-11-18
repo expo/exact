@@ -27,6 +27,8 @@
 //! in over the rest. Predictive Back previews a pop or a sheet's dismissal
 //! as Material's guidance has it (`stage/touch.rs`). A route that declares
 //! its own entrance or exit plays that instead (`stage/authored.rs`).
+//! A route with a visible `navigationSource` grows from it by Material's
+//! container transform (`stage/zoom.rs`), and returns into it on Back.
 //! Nothing moves while the person asks for less motion.
 //!
 //! A shell with no bars (desktop Linux, a headless run) shows a modal
@@ -45,6 +47,7 @@ mod authored;
 #[cfg(test)]
 mod tests;
 mod touch;
+mod zoom;
 
 use authored::{Authored, Top};
 use exact_kernel::StyleId;
@@ -72,20 +75,18 @@ enum Curve {
     Decelerate,
     Accelerate,
     Standard,
+    Emphasized,
 }
 
 impl Curve {
-    fn points(self) -> (f32, f32, f32, f32) {
-        match self {
+    /// The curve's progress at `t`, both 0 to 1.
+    fn ease(self, t: f32) -> f32 {
+        let (x1, y1, x2, y2) = match self {
             Curve::Decelerate => (0.05, 0.7, 0.1, 1.0),
             Curve::Accelerate => (0.3, 0.0, 0.8, 0.15),
             Curve::Standard => (0.2, 0.0, 0.0, 1.0),
-        }
-    }
-
-    /// The curve's progress at `t`, both 0 to 1.
-    fn ease(self, t: f32) -> f32 {
-        let (x1, y1, x2, y2) = self.points();
+            Curve::Emphasized => return zoom::emphasized(t),
+        };
         let at = |a: f32, b: f32, s: f32| {
             let u = 1.0 - s;
             3.0 * u * u * s * a + 3.0 * u * s * s * b + s * s * s
@@ -214,6 +215,7 @@ struct Shift {
     authored: Option<Authored>,
     /// Only that route is drawn: the other is a sheet's, drawn as the sheet.
     alone: bool,
+    container: Option<zoom::Container>,
 }
 
 /// How a route is drawn, about its own box.
@@ -227,8 +229,10 @@ pub(super) struct Pose {
     /// The point it scales and turns about, in its own box.
     origin: (f32, f32),
     opacity: f32,
-    /// Its corners' radius while a predictive Back shrinks it.
+    /// Its corners' radius while Back shrinks it or a container grows.
     radius: f32,
+    /// A width-fitted container clips the route to this local height.
+    height: Option<f32>,
 }
 
 impl Pose {
@@ -240,6 +244,7 @@ impl Pose {
         origin: (0.0, 0.0),
         opacity: 1.0,
         radius: 0.0,
+        height: None,
     };
 
     /// Its box's own space to the page's, the box at `at`.
@@ -270,6 +275,7 @@ pub(super) struct State {
     bar: Option<(NodeKey, Rc<Tape>, Rect4)>,
     /// The routes given a block of the stage's.
     blocks: Vec<ViewId>,
+    zooms: Vec<zoom::Source>,
 }
 
 /// What a sheet's heights are computed from: its `navigationDetent`, the
@@ -399,6 +405,7 @@ impl<D: DataSource> Presenter<D> {
         self.stage.seen = keys.clone();
         let top_was = self.stage.top.take();
         self.sync_shift(&before, &stack, &keys, &kinds, top_was, now);
+        self.sync_sources();
         self.stage.top = self.top_of(&stack, &kinds);
         // Sheets that went slide out from where they were.
         let (x, width) = self.sheet_span();
@@ -527,6 +534,10 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         self.stage.closing.retain(|c| c.top.moving(now));
+        if self.motion_off() {
+            self.stage.shift = None;
+            self.stage.preview = None;
+        }
         if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now)) {
             self.stage.shift = None;
         }
@@ -634,9 +645,13 @@ impl<D: DataSource> Presenter<D> {
         if old == new {
             return;
         }
+        // A second route change ends the first transition (LLP 1013.001 D6):
+        // whatever this one chooses, a cut included, starts from rest.
+        self.stage.shift = None;
         let pushed = now_keys.len() > before.len() && now_keys.starts_with(before);
         let popped = before.len() > now_keys.len() && before.starts_with(now_keys);
         let top = now_keys.len() - 1;
+        let returning_fullscreen = top_was.as_ref().is_some_and(|t| t.key == *old && !t.pushed);
         if now_keys.len().abs_diff(before.len()) == 1 {
             let part = match (pushed, popped) {
                 (true, _) => (self.entrance(stack, kinds, top))
@@ -655,7 +670,13 @@ impl<D: DataSource> Presenter<D> {
             return;
         }
         let still = self.motion_off();
+        let returning_source = self.stage.zooms.iter().any(|z| z.route == *old);
+        let container = self.navigation_container(before, stack, now_keys, kinds);
+        if popped && returning_source && returning_fullscreen && container.is_none() {
+            return;
+        }
         let (forward, within) = match (pushed, popped) {
+            (true, _) if container.is_some() => (true, None),
             // The route pushed is a page, or pushed inside a sheet.
             (true, _) if kinds[top] == Presented::Pushed && now_keys.len() == before.len() + 1 => {
                 (true, sheet_of(kinds, top))
@@ -673,7 +694,7 @@ impl<D: DataSource> Presenter<D> {
         };
         let sheet = within.map(|i| now_keys[i]);
         // A pop out of a sheet's first route closes the sheet instead.
-        if !forward && within.is_none() && kinds[top] != Presented::Pushed {
+        if !forward && within.is_none() && kinds[top] != Presented::Pushed && !returning_source {
             return;
         }
         let size = match sheet {
@@ -692,11 +713,15 @@ impl<D: DataSource> Presenter<D> {
             outgoing: *old,
             incoming: *new,
             sheet,
-            progress: Glide::new(0.0, 1.0, now, AXIS_MS, Curve::Standard),
+            progress: match container {
+                Some(_) => zoom::progress(forward, now),
+                None => Glide::new(0.0, 1.0, now, AXIS_MS, Curve::Standard),
+            },
             bar,
             from,
             authored: None,
             alone: false,
+            container,
         });
     }
 
@@ -771,6 +796,16 @@ impl<D: DataSource> Presenter<D> {
     pub(super) fn stage_paint(&mut self) -> Stage {
         let mut stage = Stage::default();
         let kernel = self.host.kernel();
+        for source in &mut self.stage.zooms {
+            if let Some(n) = kernel.node_by_key(source.route) {
+                source.bounds = (
+                    n.frame.x - self.page.0,
+                    n.frame.y - self.page.1,
+                    n.frame.width,
+                    n.frame.height,
+                );
+            }
+        }
         let stack: Vec<ViewId> = self
             .host
             .shown_stack()
@@ -812,7 +847,10 @@ impl<D: DataSource> Presenter<D> {
                     .map_or(Presented::Pushed, |n| Presented::of(&n))
             })
             .collect();
-        let pops = stack.len() > 1 && kinds[stack.len() - 1] == Presented::Pushed;
+        let zoomed = kernel
+            .node(top)
+            .is_some_and(|n| self.stage.zooms.iter().any(|z| z.route == n.key));
+        let pops = stack.len() > 1 && (kinds[stack.len() - 1] == Presented::Pushed || zoomed);
         if pops && !self.motion_off() && sheet_of(&kinds, stack.len() - 1).is_none() {
             stage.tape.push(top);
         }
@@ -891,17 +929,27 @@ impl<D: DataSource> Presenter<D> {
             (Some(n), None) => (n.frame.x - self.page.0, n.frame.y - self.page.1),
             (None, None) => self.taped_at(key),
         };
+        let kept_size = self
+            .stage
+            .shift
+            .as_ref()
+            .filter(|s| s.outgoing == key)
+            .and_then(|s| s.container)
+            .map_or(self.viewport, |c| (c.route.2, c.route.3));
         let size = live
             .as_ref()
-            .map_or(self.viewport, |n| (n.frame.width, n.frame.height));
+            .map_or(kept_size, |n| (n.frame.width, n.frame.height));
         let ts = pose.transform(at);
         let fades = pose.opacity < 1.0;
         if fades {
             stage.items.push(Item::Opacity(pose.opacity));
         }
-        let rounded = pose.radius > 0.0;
+        let rounded = pose.radius > 0.0 || pose.height.is_some();
         if rounded {
-            let shape = Shape::new((0.0, 0.0, size.0, size.1), [pose.radius; 4]);
+            let shape = Shape::new(
+                (0.0, 0.0, size.0, pose.height.unwrap_or(size.1)),
+                [pose.radius; 4],
+            );
             stage.items.push(Item::Clip(shape, ts));
         }
         match live {
@@ -1079,6 +1127,13 @@ impl<D: DataSource> Presenter<D> {
                 shift.progress.at(now).clamp(0.0, 1.0),
                 shift.progress.linear(now),
             );
+            if let Some(container) = shift.container {
+                let pose = container.pose(shift.forward, t, linear, shift.from);
+                return match shift.forward {
+                    true => (Pose::REST, pose),
+                    false => (pose, Pose::REST),
+                };
+            }
             let way = if shift.forward { 1.0 } else { -1.0 };
             // The fades go by the clock, the moves by the curve.
             let out_fade = (1.0 - linear / AXIS_FADE).clamp(0.0, 1.0);

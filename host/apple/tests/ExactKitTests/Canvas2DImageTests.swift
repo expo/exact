@@ -94,6 +94,46 @@ final class Canvas2DImageTests: XCTestCase {
         }
     }
 
+    func testAHandleWhoseFileWasMissingDecodesItOncePublished() throws {
+        let host = Canvas2DHost()
+        var bytes: Data?
+        host.assetBytes = { _ in bytes }
+        let missing = expectation(description: "missing file reported")
+        host.onImage = { _, image in XCTAssertNil(image); missing.fulfill() }
+        host.load(["p"])
+        wait(for: [missing], timeout: 10)
+        let color: [UInt8] = [0, 0, 255, 255]
+        let image = try XCTUnwrap(Canvas2DSpace.srgb8.image(color, width: 1, height: 1))
+        bytes = try XCTUnwrap(canvas2DEncode(image, type: "image/png", quality: nil))
+        let loaded = expectation(description: "published pixels decoded")
+        host.onImage = { _, image in XCTAssertNotNil(image); loaded.fulfill() }
+        host.pictureChanged("p")
+        wait(for: [loaded], timeout: 10)
+        let canvas = try draw(host, XCTUnwrap(host.canvasImage("p")))
+        XCTAssertEqual(try pixel(canvas, x: 0, y: 0), color)
+    }
+
+    /// A handle the runtime let go, failed or decoded, is not decoded when its file changes.
+    func testADroppedHandleIsNotDecodedWhenItsFileChanges() throws {
+        let host = Canvas2DHost()
+        let image = try XCTUnwrap(Canvas2DSpace.srgb8.image([0, 0, 255, 255], width: 1, height: 1))
+        let png = try XCTUnwrap(canvas2DEncode(image, type: "image/png", quality: nil))
+        var published = false
+        host.assetBytes = { src in src == "decoded" || published ? png : nil }
+        let answered = expectation(description: "both answered")
+        answered.expectedFulfillmentCount = 2
+        host.onImage = { _, _ in answered.fulfill() }
+        host.load(["failed", "decoded"])
+        wait(for: [answered], timeout: 10)
+        XCTAssertNotNil(host.canvasImage("decoded"))
+        host.drop(["failed", "decoded"])
+        XCTAssertNil(host.canvasImage("decoded"))
+        published = true
+        host.pictureChanged("failed")
+        host.pictureChanged("decoded")
+        XCTAssertEqual(host.loadingCount, 0)
+    }
+
     func testImageHandlesReportAndDrawAllExifOrientationsAtFullSize() throws {
         let quadrants = [[0, 1, 2, 3], [0, 1, 2, 3], [1, 0, 3, 2], [3, 2, 1, 0], [2, 3, 0, 1],
                          [0, 2, 1, 3], [2, 0, 3, 1], [3, 1, 2, 0], [1, 3, 0, 2]]

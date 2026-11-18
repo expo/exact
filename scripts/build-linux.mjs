@@ -4,7 +4,7 @@
 //   bun scripts/build-linux.mjs <app>      then: bun scripts/agent.mjs linux --app <app> …
 // An app outside this checkout is named by EXACT_APP_DIR, as its exact.mjs sets it.
 import { spawnSync } from 'node:child_process';
-import { bakeTarget, bakeWatchEnv, cargoEnvironment, linuxBinary, linuxBuild, resolveApp } from './app.mjs';
+import { bakeTarget, bakeWatchEnv, buildBake, cargoEnvironment, gpuModules, HOST_DEV, linuxBinary, linuxBuild, resolveApp } from './app.mjs';
 import { placeLibrary, prepareLibrary } from './package-libraries.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
 import { desktopEntry } from './desktop-entry.mjs';
@@ -23,7 +23,11 @@ const app = resolveApp(name), [cmd, ...args] = linuxBuild(app);
 let library;
 try { library = prepareLibrary(app.dir, bakeTarget('linux')); } catch (error) { console.error(error.message); process.exit(1); }
 // With what its bake watches named (`bakeWatchEnv`): unset, an absent settings file is a watched input that is gone.
-const built = spawnSync(cmd, args, { cwd: app.workspace ?? app.dir, env: cargoEnvironment({ ...process.env, ...bakeWatchEnv(app), CARGO_TARGET_DIR: app.target }), stdio: 'inherit' });
+let built;
+if (app.hasGpu || gpuModules(app.manifest, 'linux').length) {
+  try { buildBake(app, 'linux', bakeTarget('linux'), { profile: HOST_DEV }); built = { status: 0 }; }
+  catch (error) { console.error(error.message); built = { status: 1 }; }
+} else built = spawnSync(cmd, args, { cwd: app.workspace ?? app.dir, env: cargoEnvironment({ ...process.env, ...bakeWatchEnv(app), CARGO_TARGET_DIR: app.target }), stdio: 'inherit' });
 if (built.status === 0) {
   // Its desktop entry beside it, with the manifest's shortcuts as actions (LLP 1133.023 D17).
   const binary = linuxBinary(app), entry = resolve(dirname(binary), `${app.id}.desktop`);

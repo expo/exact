@@ -12,6 +12,10 @@ impl Em<'_> {
             // A surface the app's GPU module draws (the build names them)
             // goes to it; any other is a Canvas 2D surface, drawn by the data module and replayed by the web host's own glue.
             let name = plan.str(sf.name);
+            // A surface nothing draws (the build names them) is neither: its canvas is only the box Contract paints.
+            if commands::unregistered_surfaces().iter().any(|s| s == name) {
+                return Ok(());
+            }
             let gpu = commands::gpu_surfaces().iter().any(|s| s == name);
             let named = sf.mode == exact_plan::SurfaceArgsMode::Named;
             if !gpu {

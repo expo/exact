@@ -1,0 +1,39 @@
+shape EventScreen
+  screen: string
+
+shape EventDetails
+  screen: string
+  count: number
+  active: bool
+  previous: EventScreen
+
+component App
+  state screen = "overview"
+  state count = 0
+  action navigate(next: string)
+    screen = next
+    observeAttributes(EventScreen(screen=screen))
+  action record
+    observe("opened")
+    observe("visited", EventScreen(screen=screen))
+    observe("changed", EventDetails(active=true, count=count, previous=EventScreen(screen="home"), screen=screen), "warn")
+    observeAttributes(EventDetails(count=count, screen=screen, previous=EventScreen(screen="home"), active=false))
+    observeError("unavailable")
+    observeError("unavailable", "ScreenError")
+    count = count + 1
+  view
+    column
+      button "Overview" press=navigate("overview") testId="overview"
+      button "Details" press=navigate("details") testId="details"
+      button "Record" press=record testId="record"
+
+test "observe attributes"
+  tap "overview"
+  tap "details"
+  expect state screen == "details"
+
+test "observe command arguments"
+  tap "record"
+  tap "details"
+  tap "record"
+  expect state count == 2

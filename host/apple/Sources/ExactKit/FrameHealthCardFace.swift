@@ -73,28 +73,38 @@ enum FrameHealthCardFace {
         /// Without the chart area or Charts/Table control
         var compact = false
         var minimized = false
-        /// iOS keeps Minimize in the toolbar, beside compact pacing, or below Details.
+        /// iOS offers Minimize, beside Close.
         var minimizable = false
         /// With Details in place of the figures and charts
         var showsDetails = false
         /// The radii of the card's corners, top left first and clockwise, which round with the screen's in a corner of it
         var corners: (topLeft: CGFloat, topRight: CGFloat, bottomRight: CGFloat, bottomLeft: CGFloat) = (12, 12, 12, 12)
-        /// Close and Share sit in the card's top corners, and Details beside Share. Close moves in from a rounder
-        /// top-left corner as far as the room the title leaves it.
+        /// Close and Share sit in the card's top corners, and Minimize beside Close, as a window's controls are together.
+        /// Close moves in from a rounder top-left corner as far as the room the title leaves it, and Minimize with it.
         var close: CGRect { CGRect(x: 6 + min(Self.adaptation(corners.topLeft), closeRoom), y: 6, width: 32, height: 32) }
+        var minimize: CGRect { close.offsetBy(dx: 36, dy: 0) }
         var share: CGRect { CGRect(x: width - 38 - trailingInset, y: 6, width: 32, height: 32) }
-        var details: CGRect { CGRect(x: width - 74 - trailingInset, y: 6, width: 32, height: 32) }
+        /// Details sits at the end of the line under the header, above what it swaps out, and Done takes its place while
+        /// Details shows.
+        var details: CGRect {
+            let width = showsDetails ? Self.doneWidth : 32
+            return CGRect(x: self.width - 6 - width, y: 47, width: width, height: 32)
+        }
+        private static let doneWidth = ceil(FrameHealthCardDrawing.width("Done", FrameHealthCardFace.strong)) + 16
+        /// The line under the header: the requested rate and the display, and Details
+        var context: CGRect { CGRect(x: 0, y: 44, width: width, height: 38) }
         /// The title is the definitions button, with 4 points of fill on either side of its text. It stands 2 points plus
-        /// Close's room from Close, so Close can move in without moving it.
-        var title: CGRect { CGRect(x: 40 + closeRoom, y: 6, width: Self.titleWidth, height: 32) }
+        /// Close's room from Close or Minimize, so Close can move in without moving it.
+        var title: CGRect { CGRect(x: leading + closeRoom, y: 6, width: Self.titleWidth, height: 32) }
+        private var leading: CGFloat { minimizable ? 76 : 40 }
         private static let titleWidth = ceil(FrameHealthCardDrawing.width("Frame health", FrameHealthCardFace.title)) + 8
         /// How far Close can move in from a rounded corner before it would come within 2 points of the title: 6 points of
         /// the header's slack, or as much as a narrower card has
         var closeRoom: CGFloat { min(6, slack) }
-        /// How far Details and Share move in from a rounder top-right corner, within the slack Close's room leaves
+        /// How far Share moves in from a rounder top-right corner, within the slack Close's room leaves
         var trailingInset: CGFloat { min(Self.adaptation(corners.topRight), slack - closeRoom) }
-        /// The header's spare width, with the title 2 points from Close and the status 2 points from Details
-        private var slack: CGFloat { max(0, (width - 74) - (40 + Self.titleWidth + 4 + 79) - 2) }
+        /// The header's spare width, with the title 2 points from Close or Minimize and the status 2 points from Share
+        private var slack: CGFloat { max(0, (width - 38) - (leading + Self.titleWidth + 4 + 79) - 2) }
         /// How far a corner rounder than 12 points moves the controls beside it in: 0.29 of the difference, as UIKit's
         /// corner adaptation moves content (`edgeInsets(for: .margins(cornerAdaptation:))`), since Apple's curve
         /// crosses a corner's diagonal 0.29 radii in from each edge
@@ -112,17 +122,9 @@ enum FrameHealthCardFace {
             if minimized { return minimizedHeight }
             return compact ? compactHeight : height
         }
-        /// Below Details or beside compact pacing, Minimize sits in the bottom-right corner and moves in from a rounder one
-        var minimize: CGRect {
-            let bottom = showsDetails || compact
-            return CGRect(x: width - 100 - (bottom ? Self.adaptation(corners.bottomRight) : 0), y: bottom ? cardHeight - 38 : 170, width: 88, height: 32)
-        }
-        var pacingArea: CGRect {
-            let right = compact && minimizable ? minimize.minX - 8 : width - 12
-            return CGRect(x: 12, y: 126, width: right - 12, height: 40)
-        }
-        /// Details scrolls below the header, leaving room for Minimize where offered.
-        var detailsArea: CGRect { CGRect(x: 0, y: 44, width: width, height: max(0, cardHeight - 44 - (minimizable ? 44 : 0))) }
+        var pacingArea: CGRect { CGRect(x: 12, y: 126, width: width - 24, height: 40) }
+        /// Details scrolls below the line under the header.
+        var detailsArea: CGRect { CGRect(x: 0, y: context.maxY, width: width, height: max(0, cardHeight - context.maxY)) }
 
         /// The card's outline 2 points in, which a button's fill keeps within
         var inner: CGPath {
@@ -138,11 +140,11 @@ enum FrameHealthCardFace {
         func control(at point: CGPoint) -> Control? {
             func target(_ rect: CGRect) -> CGRect { rect.insetBy(dx: min(0, (rect.width - 44) / 2), dy: min(0, (rect.height - 44) / 2)) }
             func distance(_ rect: CGRect) -> CGFloat { max(rect.minX - point.x, point.x - rect.maxX, 0) + max(rect.minY - point.y, point.y - rect.maxY, 0) }
+            var buttons = [(Control.close, close), (.title, title), (.status, status), (.share, share), (.details, details)]
             #if os(iOS)
             if minimized { return CGRect(x: 0, y: 0, width: width, height: cardHeight).contains(point) ? .minimize : nil }
-            if minimizable, target(minimize).contains(point) { return .minimize }
+            if minimizable { buttons.append((.minimize, minimize)) }
             #endif
-            var buttons = [(Control.close, close), (.title, title), (.status, status), (.details, details), (.share, share)]
             if !compact, !showsDetails { buttons += [(.charts, segments.0), (.table, segments.1)] }
             return buttons.filter { target($0.1).contains(point) }.min { distance($0.1) < distance($1.1) }?.0
         }
@@ -182,6 +184,34 @@ enum FrameHealthCardFace {
     /// §7.2). On iOS the overlay also keeps it above the keyboard.
     static func restingArea(in bounds: CGRect) -> CGRect { bounds.insetBy(dx: 8, dy: 8) }
 
+    /// Where `frame` rests clear of the screen's corners, rounded `radius` points. A card's own corners follow the screen's
+    /// 8 points in, unless that takes a radius over half its shorter side, as for the minimized card: then it moves along
+    /// the edge it rests on, the top or bottom one when `horizontal`, until its corner, at that half, keeps 8 points from
+    /// the screen's.
+    static func clearing(_ frame: CGRect, cornersOf radius: CGFloat, in bounds: CGRect, horizontal: Bool) -> CGPoint {
+        let own = min(frame.width, frame.height) / 2, reach = radius - 8 - own
+        guard reach > 0 else { return frame.origin }
+        // How far along the edge the card goes for its corner, `across` points from the edge it rests on, to keep its centre
+        // within `reach` of the screen corner's
+        func along(_ across: CGFloat) -> CGFloat {
+            let rise = radius - own - across
+            return rise > 0 ? radius - own - (reach * reach - min(rise * rise, reach * reach)).squareRoot() : 0
+        }
+        // A card too long to clear both corners, as larger text makes it, stays where it is
+        func clear(_ at: CGFloat, _ low: CGFloat, _ high: CGFloat, _ length: CGFloat, inset: CGFloat) -> CGFloat {
+            low + inset <= high - inset - length ? min(max(at, low + inset), high - inset - length) : at
+        }
+        var origin = frame.origin
+        if horizontal {
+            let inset = along(min(frame.minY - bounds.minY, bounds.maxY - frame.maxY))
+            origin.x = clear(origin.x, bounds.minX, bounds.maxX, frame.width, inset: inset)
+        } else {
+            let inset = along(min(frame.minX - bounds.minX, bounds.maxX - frame.maxX))
+            origin.y = clear(origin.y, bounds.minY, bounds.maxY, frame.height, inset: inset)
+        }
+        return origin
+    }
+
     /// Store fractions of the card's available travel to preserve its position along an edge when the window
     /// or card resizes.
     struct Position {
@@ -189,8 +219,11 @@ enum FrameHealthCardFace {
         init(x: CGFloat = 0, y: CGFloat = 0) { (self.x, self.y) = (x, y) }
 
         init(nearest origin: CGPoint, velocity: CGVector, size: CGSize, in area: CGRect) {
-            // Project the release using normal scroll deceleration: 0.998 of the velocity each millisecond
-            let glide = 0.998 / (1 - 0.998) / 1000
+            // The card slides to a stop at a constant 2,000 points/s², so a release at speed v carries v² / 4,000 points:
+            // a gentle one stays by its nearest edge and a fling reaches another. Scroll deceleration, which carries every
+            // release half a second of its speed, would land even a slow one well past where it was let go, as the card
+            // rests anywhere along an edge.
+            let glide = hypot(velocity.dx, velocity.dy) / (2 * 2000)
             let width = max(0, area.width - size.width), height = max(0, area.height - size.height)
             let dx = min(width, max(0, origin.x + velocity.dx * glide - area.minX))
             let dy = min(height, max(0, origin.y + velocity.dy * glide - area.minY))
@@ -243,17 +276,25 @@ enum FrameHealthCardFace {
             return
         }
         if bands.contains(.header) { header(ctx, layout, state: state, palette: p) }
-        guard !state.showsDetails else { return }
         if bands.contains(.context) {
-            // Context: the request and any system limit, then the display
+            // Context: the request and any system limit, then the display, short of Details
+            let right = layout.details.minX - 8
             let request = state.request.0 + (state.request.1.isEmpty ? "" : " ")
-            D.text(ctx, request, x: 12, y: 52, body, p.label, .left, limit: width - 24)
+            D.text(ctx, request, x: 12, y: 52, body, p.label, .left, limit: right - 12)
             if !state.request.1.isEmpty {
-                D.text(ctx, "· " + state.request.1, x: 12 + D.width(request, body), y: 52, body, p.secondary, .left)
+                let x = 12 + D.width(request, body)
+                D.text(ctx, "· " + state.request.1, x: x, y: 52, body, p.secondary, .left, limit: max(0, right - x))
             }
-            D.text(ctx, state.display, x: 12, y: 68, body, p.secondary, .left, limit: width - 24)
+            D.text(ctx, state.display, x: 12, y: 68, body, p.secondary, .left, limit: right - 12)
+            fill(ctx, layout, .details, layout.details, state: state, palette: p)
+            if state.showsDetails {
+                D.text(ctx, "Done", x: layout.details.midX - D.width("Done", strong) / 2, y: layout.details.midY, strong, p.label, .left)
+            } else {
+                Symbol.details.draw(ctx, in: layout.details.insetBy(dx: 6.6, dy: 6.6), color: p.secondary)
+            }
             separator(ctx, y: 80, width: width, p)
         }
+        guard !state.showsDetails else { return }
         if bands.contains(.figures) {
             // One row per window, digits right-aligned in reserved tabular columns so nothing moves
             let digits = D.width("000", strong), count = D.width("0000", strong)
@@ -296,46 +337,31 @@ enum FrameHealthCardFace {
         }
     }
 
-    #if os(iOS)
-    /// Minimize, at `layout.minimize`. Its fill keeps 2 points within the card's outline, as the header buttons' do, so
-    /// in a rounder bottom-right corner its outer corner follows the card's.
-    static func minimize(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette) {
-        typealias D = FrameHealthCardDrawing
-        let rect = layout.minimize
-        if let fill = state.pressed == .minimize ? p.iconPressed : state.hovered == .minimize ? p.iconHover : nil {
-            ctx.saveGState()
-            ctx.addPath(layout.inner)
-            ctx.clip()
-            ctx.setFillColor(fill)
-            ctx.addPath(D.continuous(rect, radius: 8))
-            ctx.fillPath()
-            ctx.restoreGState()
-        }
-        D.text(ctx, "Minimize", x: rect.midX - D.width("Minimize", body) / 2, y: rect.midY, body, p.label, .left)
-    }
-    #endif
-
-    /// The header: Close, the title, the status, Details and Share.
-    private static func header(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette) {
-        typealias D = FrameHealthCardDrawing
-        // A button's fill keeps 2 points within the card's outline, so in a rounded corner its outer corner follows the card's
+    /// A pressed or hovered button's fill, which keeps 2 points within the card's outline, so in a rounded corner its outer
+    /// corner follows the card's
+    private static func fill(_ ctx: CGContext, _ layout: Layout, _ control: Control, _ rect: CGRect, state: State,
+                             palette p: FrameHealthCardDrawing.Palette) {
+        guard let fill = state.pressed == control ? p.iconPressed : state.hovered == control ? p.iconHover : nil else { return }
         ctx.saveGState()
         ctx.addPath(layout.inner)
         ctx.clip()
-        for (control, rect) in [(Control.close, layout.close), (.title, layout.title), (.details, layout.details), (.share, layout.share)] {
-            // Details keeps the status's fill while it shows, as a toggled button does
-            let shown = control == .details && state.showsDetails
-            let fill = state.pressed == control ? shown ? p.statusPressed : p.iconPressed
-                : state.hovered == control ? shown ? p.statusHover : p.iconHover : shown ? p.statusFill : nil
-            guard let fill else { continue }
-            ctx.setFillColor(fill)
-            ctx.addPath(D.continuous(rect, radius: 8))
-            ctx.fillPath()
-        }
+        ctx.setFillColor(fill)
+        ctx.addPath(FrameHealthCardDrawing.continuous(rect, radius: 8))
+        ctx.fillPath()
         ctx.restoreGState()
+    }
+
+    /// The header: Close, Minimize where offered, the title, the status and Share.
+    private static func header(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette) {
+        typealias D = FrameHealthCardDrawing
+        var buttons = [(Control.close, layout.close), (.title, layout.title), (.share, layout.share)]
+        #if os(iOS)
+        if layout.minimizable { buttons.append((.minimize, layout.minimize)) }
+        #endif
+        for (control, rect) in buttons { fill(ctx, layout, control, rect, state: state, palette: p) }
         Symbol.close.draw(ctx, in: layout.close.insetBy(dx: 6.6, dy: 6.6), color: p.secondary)
+        if layout.minimizable { Symbol.minimize.draw(ctx, in: layout.minimize.insetBy(dx: 6.6, dy: 6.6), color: p.secondary) }
         D.text(ctx, "Frame health", x: layout.title.minX + 4, y: 22, title, p.label, .left)
-        Symbol.details.draw(ctx, in: layout.details.insetBy(dx: 6.6, dy: 6.6), color: p.secondary)
         Symbol.share.draw(ctx, in: layout.share.insetBy(dx: 6.6, dy: 6.6), color: p.secondary)
         // The status is the pause button: its symbol and word say the state
         let status = layout.status
@@ -420,7 +446,7 @@ enum FrameHealthCardFace {
 
     /// Exact's symbol roles as 24-unit paths, stroked at 1.85 with round caps and joins.
     enum Symbol {
-        case live, paused, close, details, share, restore
+        case live, paused, close, details, share, restore, minimize
 
         func draw(_ ctx: CGContext, in rect: CGRect, color: CGColor) {
             let path = CGMutablePath()
@@ -441,6 +467,12 @@ enum FrameHealthCardFace {
             case .restore:
                 lines([(4, 10), (4, 4), (10, 4)])
                 lines([(14, 20), (20, 20), (20, 14)])
+                lines([(4, 4), (10, 10)])
+                lines([(14, 14), (20, 20)])
+            case .minimize:
+                // Restore's arrows turned inward, as the system's arrow.down.right.and.arrow.up.left
+                lines([(10, 4), (10, 10), (4, 10)])
+                lines([(14, 20), (14, 14), (20, 14)])
                 lines([(4, 4), (10, 10)])
                 lines([(14, 14), (20, 20)])
             case .details:

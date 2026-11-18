@@ -43,6 +43,15 @@ impl<D: DataSource> Host<D> {
         }
         let live = self.runner.canvas_views();
         self.canvas2d.retain(&live);
+        // An image no mounted canvas's latest draw asked for is let go.
+        let runner = &mut self.runner;
+        self.canvas2d.images.retain(|src, _| {
+            let named = runner.canvas_image_named(src);
+            if !named {
+                runner.canvas_image_released(src);
+            }
+            named
+        });
         changed
     }
 
@@ -68,8 +77,18 @@ impl<D: DataSource> Host<D> {
         self.runner.canvas_wants_frame()
     }
 
+    /// Whether the decoded `src` is held for the canvases.
+    #[cfg(test)]
+    pub(crate) fn canvas_image_cached(&self, src: &str) -> bool {
+        self.canvas2d.images.contains_key(src)
+    }
+
+    /// `source` changed: forgotten, decoded or not, and decoded again
+    /// when a mounted canvas's latest draw asked for it.
     pub(crate) fn canvas_picture_changed(&mut self, source: &str, assets: &crate::image::Assets) {
-        if self.canvas2d.images.remove(source).is_some() {
+        self.canvas2d.images.remove(source);
+        self.runner.canvas_image_released(source);
+        if self.runner.canvas_image_named(source) {
             self.load_canvas_picture(source, assets);
         }
     }

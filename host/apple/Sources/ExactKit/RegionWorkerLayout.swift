@@ -145,8 +145,13 @@ final class RegionWorkerLayout {
         func removed(_ line: CTLine, _ room: CGFloat) -> CGFloat {
             TextEngine.uncountedTrailingWidth(line, whiteSpace: source.whiteSpace, source: attributed, room: room)
         }
+        // The line `TextEngine.layout` measures and `line(at:)` draws, its rooms placed.
+        func made(_ range: CFRange) -> CTLine {
+            TextEngine.finishedLine(CTTypesetterCreateLine(typesetter, range), source: attributed, range: range, justify: nil)
+        }
         let balanced = source.balance && spec.lineClamp == 0 && width.isFinite && width > 0
-            ? plan.balance(limit, length: length, inset: { Double(source.insets.at($0).width) }, removed: removed,
+            ? plan.balance(limit, length: length, fontSize: source.strut.map { CTFontGetSize($0.value) } ?? 0, justified: spec.align == 3,
+                           insets: source.insets, line: made, removed: removed,
                            next: next, typesetter: typesetter, source: attributed) : nil
         while start < length {
             if lineCount % 128 == 0 { try beforeMetadata() }
@@ -157,13 +162,13 @@ final class RegionWorkerLayout {
                 count = length - start
             } else if source.whiteSpace == 4 {
                 count = CTTypesetterSuggestLineBreak(typesetter, start, Double.greatestFiniteMagnitude)
+            } else if let balanced, lineCount < balanced.counts.count {
+                count = balanced.counts[lineCount]
             } else {
-                let room = (balanced.map { start < $0.until ? $0.room : limit } ?? limit) - Double(inset.width)
-                count = next(&plan, start, room)
+                count = next(&plan, start, limit - Double(inset.width))
             }
             if count <= 0 { count = length - start }
-            var line = TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, CFRangeMake(start, count)),
-                                                  source: attributed, range: CFRangeMake(start, count))
+            var line = made(CFRangeMake(start, count))
             var clamps = false
             let room = limit - Double(inset.width)
             var natural: CGFloat? // as TextEngine.layout: a too-long word keeps its width

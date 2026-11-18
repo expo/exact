@@ -1,7 +1,7 @@
 // @exact/recording on Android (LLP 1133.009 D1, D2, D6, D8, §10): a track `@exact/media-capture` opened, reached
 // through the session's track table, recorded to a file and metered.
 //
-// - A recorder is a consumer of its stream's audio track, so it holds the track's lease while it is not `inactive`;
+// - An audio recorder is a consumer of its stream's track, so it holds the track's lease while it is not `inactive`;
 //   its start is a start (D6). A level reader is a consumer too, and never a start.
 // - `audio/mp4` (the unsaid default, D2) is AAC from `MediaCodec` in an MP4 from `MediaMuxer`, whose index is
 //   written at `stop()`, so a take whose process ended is unreadable (D6: the recipe says so); `audio/wav` is 16-bit
@@ -18,8 +18,8 @@
 //   since the last.
 // - `<audio-waveform>` (D13) draws a bar's height as the level in decibels, as a recorder's meter shows it
 //   (`WaveformBars`).
-// - Under the agent (§10) nothing records: the level is the synthetic signal on the session clock, and a stopped
-//   recorder's file is WAV of a tone that follows it, answered as `audio/wav`.
+// - Under the agent (§10) no device records: the level is the synthetic signal on the session clock, and a stopped
+//   audio recorder's file is WAV of a tone that follows it, answered as `audio/wav`.
 package exact.recording
 
 import android.content.Context
@@ -59,7 +59,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val recorders = LinkedHashMap<String, Recorder>()
+    private val recorders = LinkedHashMap<String, MediaTake>()
     private val meters = HashMap<String, Meter>()
     private var next = 0
     /** A take may outlive the screen: the app's lines declare the `capture` service (LLP 1133.033 D5). */
@@ -89,7 +89,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
                 .put("mimeType", "").put("path", "").put("duration", 0) else r?.info() ?: error("NotFoundError"))
             "isTypeSupported" -> {
                 val type = args.optString("type")
-                reply(JSONObject().put("type", type).put("supported", if (context.agent) type == "audio/wav" else type in TYPES))
+                reply(JSONObject().put("type", type).put("supported", if (context.agent) type in listOf("audio/wav", "video/mp4") else type == "video/mp4" || type in TYPES))
             }
             "audioLevel" -> reply(level(args))
             else -> reply(error("NotSupportedError"))
@@ -99,6 +99,26 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
     private fun start(args: JSONObject): JSONObject {
         val entry = context.tracks.lookup(args.optString("stream"))
         if (entry?.kind != "stream") return error("NotFoundError")
+        if (args.has("maxDuration") && (!args.optDouble("maxDuration").isFinite() || args.optDouble("maxDuration") <= 0)) return error("TypeError")
+        val videos = entry.tracks.filter { context.tracks.lookup(it)?.kind == "video" }
+        if (videos.isNotEmpty()) {
+            if (entry.tracks.size != 1) return error("NotSupportedError")
+            val type = args.optString("mimeType").ifEmpty { "video/mp4" }
+            if (!context.agent && type != "video/mp4") return error("NotSupportedError")
+            val path = pathFor(args.optString("path"), "video/mp4") ?: return error("NotSupportedError")
+            val file = context.file(path) ?: return error("NotSupportedError")
+            val r = VideoTake("recorder-${context.session}-${++next}", path, file, context, args.optDouble("maxDuration", 0.0), ::announce)
+            try {
+                r.leave = context.tracks.subscribe(videos.single(), r, true, context.origin)
+                r.arm()
+            } catch (e: Exception) {
+                r.finish("error", e.message) {}
+                return error((e as? TrackError)?.code ?: "NotReadableError")
+            }
+            recorders[r.id] = r
+            announce()
+            return r.info()
+        }
         val track = entry.tracks.firstOrNull { context.tracks.lookup(it)?.kind == "audio" } ?: return error("NotSupportedError")
         val type = if (context.agent) "audio/wav" else args.optString("mimeType").ifEmpty { "audio/mp4" }
         if (type !in TYPES) return error("NotSupportedError")
@@ -106,9 +126,10 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         val path = pathFor(args.optString("path"), type) ?: return error("NotSupportedError")
         val file = context.file(path) ?: return error("NotSupportedError")
         next += 1
-        val r = Recorder("recorder-${context.session}-$next", type, form, path, file, args.optDouble("audioBitsPerSecond", 0.0))
+        val r = Recorder("recorder-${context.session}-$next", type, form, path, file, args.optDouble("audioBitsPerSecond", 0.0), args.optDouble("maxDuration", 0.0))
         try {
             r.leave = context.tracks.subscribe(track, r, true, context.origin)
+            r.arm()
         } catch (e: TrackError) {
             return error(e.code)
         }
@@ -120,7 +141,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** The path with its container's extension: added when the app wrote none, null when it disagrees. */
     private fun pathFor(path: String, type: String): String? {
-        val ext = mapOf("audio/mp4" to ".m4a", "audio/wav" to ".wav", "audio/ogg" to ".ogg", "audio/webm" to ".webm")[type] ?: ""
+        val ext = mapOf("audio/mp4" to ".m4a", "audio/wav" to ".wav", "audio/ogg" to ".ogg", "audio/webm" to ".webm", "video/mp4" to ".mp4")[type] ?: ""
         val name = path.substringAfterLast('/')
         val dot = name.lastIndexOf('.')
         if (dot <= 0) return path + ext
@@ -211,15 +232,15 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun destroy(done: () -> Unit) {
         meters.values.forEach { it.stop() }
-        val left = recorders.values.filter { it.state != "inactive" }
+        val left = recorders.values.toList()
         if (left.isEmpty()) return done()
         val count = AtomicInteger(left.size)
         left.forEach { it.finish("session-ended", null) { if (count.decrementAndGet() == 0) done() } }
     }
 
     /** One recorder: a consumer of its track, encoding on a thread of its own. */
-    private inner class Recorder(val id: String, val type: String, val form: Form, val path: String, val file: File, val bitRate: Double) : TrackConsumer {
-        var state = "recording"
+    private inner class Recorder(override val id: String, val type: String, val form: Form, val path: String, val file: File, val bitRate: Double, val maxDuration: Double) : TrackConsumer, MediaTake {
+        override var state = "recording"
         var reason: String? = null
         var error: String? = null
         var result: JSONObject? = null
@@ -227,6 +248,13 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
          * written. */
         private var answer: JSONObject? = null
         var leave: (() -> Unit)? = null
+        private var limit: (() -> Unit)? = null
+        fun arm() {
+            limit?.invoke(); limit = null
+            if (maxDuration > 0 && state == "recording") {
+                limit = context.after(maxOf(0.0, maxDuration - duration)) { finish("max-duration", null) {} }
+            }
+        }
         private var recorded = 0.0
         private var since: Double? = context.now()
         private val spans = mutableListOf(doubleArrayOf(context.now(), Double.NaN))
@@ -240,7 +268,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
         val duration get() = recorded + if (state == "recording") since?.let { maxOf(0.0, context.now() - it) } ?: 0.0 else 0.0
 
-        fun info(): JSONObject {
+        override fun info(): JSONObject {
             val out = JSONObject().put("id", id).put("state", state).put("mimeType", type).put("path", path).put("duration", duration)
             if (bitRate > 0) out.put("audioBitsPerSecond", bitRate)
             reason?.let { out.put("reason", it) }
@@ -249,18 +277,20 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
             return out
         }
 
-        fun pause(why: String) {
+        override fun pause(why: String) {
             if (state != "recording") return
             recorded = duration; since = null; taking = false
             if (context.agent) spans.last()[1] = context.now()
             state = "paused"; reason = why
+            limit?.invoke(); limit = null
             context.log("recording: $id paused ($why)")
             announce()
         }
 
-        fun resume() {
+        override fun resume() {
             state = "recording"; reason = null; since = context.now(); taking = true
             if (context.agent) spans += doubleArrayOf(context.now(), Double.NaN)
+            arm()
             announce()
         }
 
@@ -293,13 +323,14 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         override fun unmuted() {}
         override fun ended() = finish("track-ended", null) {}
 
-        fun finish(why: String, failure: String?, done: (JSONObject) -> Unit) {
+        override fun finish(why: String, failure: String?, done: (JSONObject) -> Unit) {
             answer?.let { return done(it) }
             waiting += done
             if (state == "inactive") return
             recorded = duration; since = null; taking = false
             if (context.agent && spans.last()[1].isNaN()) spans.last()[1] = context.now()
             state = "inactive"; reason = why; error = failure
+            limit?.invoke(); limit = null
             untap?.invoke(); untap = null
             announce()
             val duration = recorded

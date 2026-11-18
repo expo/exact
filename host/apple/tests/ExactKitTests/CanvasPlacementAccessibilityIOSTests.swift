@@ -53,7 +53,7 @@ final class CanvasPlacementAccessibilityIOSTests: XCTestCase {
             overlay.addSubview(card); p.views[card.id] = card
             return card
         }
-        let e = CanvasesHost.Entry(view: canvas, name: "deck", values: []); e.id = 7; e.module = m; e.each = true
+        let e = CanvasesHost.Entry(view: canvas, name: "deck", values: Data("[]".utf8)); e.id = 7; e.module = m; e.each = true
         host.entries[100] = e
 
         var posts = 0

@@ -110,6 +110,31 @@ class PushServiceTest {
         assertTrue("a completed message is not later expired", Session.expired.isEmpty())
     }
 
+    @Test fun anExpoNotificationShownInFrontOpensItsNavigateOnTap() {
+        val service = Robolectric.buildService(PushService::class.java).get()
+        val manager = app.getSystemService(android.app.NotificationManager::class.java)
+        for ((key, top) in listOf("experienceId" to null, "scopeKey" to null, "scopeKey" to "/top")) {
+            val payload = android.os.Bundle().apply {
+                putString("google.message_id", "expo-42")
+                putString("gcm.n.e", "1")
+                putString("gcm.n.title", "Alert")
+                putString("gcm.n.body", "House 12")
+                putString(key, "@owner/app")
+                putString("body", """{"id":"alert-42","navigate":"/urgencies"}""")
+                top?.let { putString("navigate", it) }
+            }
+            service.onMessageReceived(RemoteMessage(payload))
+            val notification = shadowOf(manager).allNotifications.single()
+            val tap = shadowOf(notification.contentIntent).savedIntent
+            assertEquals(android.content.Intent.ACTION_VIEW, tap.action)
+            assertEquals(top ?: "/urgencies", tap.dataString)
+            assertEquals("dev.exact.app.Notify", tap.component?.className)
+            manager.cancelAll()
+        }
+        assertTrue("a visible push raises no arrival event", Session.wakes.isEmpty())
+        assertEquals(0, Session.boots)
+    }
+
     @Test fun aRunningSessionIsReusedAndItsUnfinishedWakeExpires() {
         var ready = false
         dev.exact.canvas.ExtensionContext.session(app) { ready = it }

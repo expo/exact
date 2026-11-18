@@ -15,11 +15,14 @@
     }
   },
   "names": [],
-  "views": ["audio-waveform"],
+  "views": [
+    "audio-waveform"
+  ],
   "hatches": [],
   "sources": {
     "swift": [
-      "Recording.swift"
+      "Recording.swift",
+      "VideoRecorder.swift"
     ]
   },
   "artifacts": [],

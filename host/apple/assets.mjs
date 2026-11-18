@@ -8,7 +8,7 @@ import { basename, dirname, relative, resolve, isAbsolute } from 'node:path';
 import { chmodSync, closeSync, lstatSync, openSync, readlinkSync, readSync, copyFileSync, realpathSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 // The build's stamp, which build.mjs merges into Info.plist beside the icon keys.
 export { buildInfo } from './buildinfo.mjs';
-import { iconDigests, pickIcon, placeRgba, writeTinted } from '../../scripts/app-icons.mjs';
+import { alternateIcons, iconDigests, pickIcon, placeRgba, writeTinted } from '../../scripts/app-icons.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 
 const run = (cmd, args, opts = {}) => {
@@ -66,23 +66,7 @@ export function appIcon(app, dir, platform, { catalog = false } = {}) {
   const light = icon(app, platform);
   if (!light) return {};
   if (platform === 'ios' || platform === 'watchos') {
-    if (!catalog) return {};
-    const set = resolve(catalog, 'AppIcon.appiconset');
-    mkdirSync(set, { recursive: true });
-    const images = [];
-    const add = (filename, appearance) => images.push({ ...(appearance ? { appearances: [{ appearance: 'luminosity', value: appearance }] } : {}), filename, idiom: 'universal', platform, size: '1024x1024' });
-    sized(light.path, 1024, 1024, resolve(set, 'icon.png'));
-    add('icon.png');
-    const dark = platform === 'ios' && icon(app, platform, 'dark');
-    if (dark) { sized(dark.path, 1024, 1024, resolve(set, 'icon-dark.png')); add('icon-dark.png', 'dark'); }
-    const tinted = platform === 'ios' && icon(app, platform, 'tinted');
-    if (tinted) {
-      sized(tinted.path, 1024, 1024, resolve(set, 'glyph.png'));
-      writeTinted(resolve(set, 'glyph.png'), resolve(set, 'icon-tinted.png'));
-      rmSync(resolve(set, 'glyph.png'));
-      add('icon-tinted.png', 'tinted');
-    }
-    writeFileSync(resolve(set, 'Contents.json'), JSON.stringify({ images, info: { author: 'exact', version: 1 } }));
+    if (catalog) appIconSet(app, catalog, 'AppIcon', platform, light);
     return {};
   }
   const work = mkdtempSync(resolve(tmpdir(), 'exact-icns-')), set = resolve(work, 'AppIcon.iconset');
@@ -95,6 +79,27 @@ export function appIcon(app, dir, platform, { catalog = false } = {}) {
     run('iconutil', ['-c', 'icns', set, '-o', resolve(dir, 'AppIcon.icns')], { stdio: 'ignore' });
   } finally { rmSync(work, { recursive: true, force: true }); }
   return { CFBundleIconFile: 'AppIcon' };
+}
+
+/** `<name>.appiconset` in `catalog` from `app`'s manifest, or from an alternate's fragment
+ * (LLP 1163.000 D2): the `light` image and, on iOS, the dark and tinted ones where it has them. */
+function appIconSet(app, catalog, name, platform, light) {
+  const set = resolve(catalog, `${name}.appiconset`);
+  mkdirSync(set, { recursive: true });
+  const images = [];
+  const add = (filename, appearance) => images.push({ ...(appearance ? { appearances: [{ appearance: 'luminosity', value: appearance }] } : {}), filename, idiom: 'universal', platform, size: '1024x1024' });
+  sized(light.path, 1024, 1024, resolve(set, 'icon.png'));
+  add('icon.png');
+  const dark = platform === 'ios' && icon(app, platform, 'dark');
+  if (dark) { sized(dark.path, 1024, 1024, resolve(set, 'icon-dark.png')); add('icon-dark.png', 'dark'); }
+  const tinted = platform === 'ios' && icon(app, platform, 'tinted');
+  if (tinted) {
+    sized(tinted.path, 1024, 1024, resolve(set, 'glyph.png'));
+    writeTinted(resolve(set, 'glyph.png'), resolve(set, 'icon-tinted.png'));
+    rmSync(resolve(set, 'glyph.png'));
+    add('icon-tinted.png', 'tinted');
+  }
+  writeFileSync(resolve(set, 'Contents.json'), JSON.stringify({ images, info: { author: 'exact', version: 1 } }));
 }
 
 /** tvOS's brand assets from the manifest (`TV_BRAND` in `catalog`), returning their name, or
@@ -155,20 +160,26 @@ export function appleAssetCatalogInventory(app, platform) {
     return { path: relative(app.dir, path), files: catalogFiles(path) };
   });
   const section = platform === 'watchos' ? 'ios' : platform, selected = ['ios', 'macos'].includes(section) && app.manifest?.host?.[section]?.icon;
-  if (selected) {
-    const path = resolve(app.dir, selected), field = `host.${section}.icon: ${selected}`;
+  /** A selected project, checked; `taken`, the catalog sets that would take its name. */
+  const project = (selected, field, taken, refusal) => {
+    const path = resolve(app.dir, selected);
+    field = `${field}: ${selected}`;
     if (!existsSync(path)) throw new Error(`${field} does not exist`);
     if (!selected.endsWith('.icon') || !lstatSync(path).isDirectory()) throw new Error(`${field} must name an .icon directory`);
     if (isAbsolute(selected) || !path.startsWith(resolve(app.dir) + '/') || !realpathSync(path).startsWith(realpathSync(app.dir) + '/')) throw new Error(`${field} must be inside the app`);
-    // `AppIcon` is the primary set's name (`iosAssets`), and a set named like the project would take its name;
-    // any other `.appiconset` is an alternate icon, which actool compiles beside the project.
-    const taken = new Set(['AppIcon.appiconset', `${basename(selected, '.icon')}.appiconset`]);
     for (const entry of catalogs) {
-      const primary = readdirSync(resolve(app.dir, entry.path), { recursive: true }).sort().find(name => taken.has(basename(name)));
-      if (primary) throw new Error(`${field} conflicts with ${entry.path}/${primary}; select one primary icon`);
+      const set = readdirSync(resolve(app.dir, entry.path), { recursive: true }).sort().find(name => taken.includes(basename(name)));
+      if (set) throw new Error(`${field} conflicts with ${entry.path}/${set}; ${refusal}`);
     }
-    if (composerIcon(app, platform)) catalogs.push({ path: relative(app.dir, path), files: catalogFiles(path) });
-  }
+    return { path: relative(app.dir, path), files: catalogFiles(path) };
+  };
+  // `AppIcon` is the primary set's name (`iosAssets`), and a set named like the project would take its name.
+  const primary = selected && project(selected, `host.${section}.icon`, ['AppIcon.appiconset', `${basename(selected, '.icon')}.appiconset`], 'select one primary icon');
+  // An alternate's project is compiled under the alternate's name (LLP 1163.000 D2), which a set of that name would take.
+  const alternates = platform === 'ios' ? alternateIcons(app.manifest ?? {}).flatMap(({ name, manifest }, i) => manifest.host.ios?.icon
+    ? [{ ...project(manifest.host.ios.icon, `alternate_icons[${i}].host.ios.icon`, [`${name}.appiconset`], 'select one icon for the alternate'), alternate: name }] : []) : [];
+  if (primary && composerIcon(app, platform)) catalogs.push(primary);
+  catalogs.push(...alternates);
   for (const icon of platform === 'watchos' ? [] : app.appleIcons ?? []) {
     const path = `assets/${icon.svg}`;
     const bytes = readFileSync(resolve(app.dir, path));
@@ -215,31 +226,67 @@ function catalogFiles(root) {
   return files;
 }
 
-/** The alternate icons among an iOS app's catalogs: each `.appiconset` but
- * the primary, which is `AppIcon` or the selected Icon Composer project's. */
-const alternates = catalogs => {
-  const selected = catalogs.find(entry => entry.path.endsWith('.icon'));
-  return [...new Set(catalogs.flatMap(entry => entry.files
-    .map(file => /(?:^|\/)([^/]+)\.appiconset\/Contents\.json$/.exec(file.name)?.[1])
-    .filter(name => name && name !== 'AppIcon' && name !== (selected && basename(selected.path, '.icon')))))].sort();
-};
+/** The selected Icon Composer project among `appleAssetCatalogInventory`'s entries, which is the primary. */
+const primaryProject = catalogs => catalogs.find(entry => entry.path.endsWith('.icon') && !entry.alternate);
+/** The named assets in the app's own catalogs: each one's name, its kind (its directory's
+ * suffix) and where it is. */
+const catalogAssets = catalogs => catalogs.filter(entry => !entry.kind && !entry.path.endsWith('.icon')).flatMap(entry => entry.files.flatMap(file => {
+  const m = /(?:^|\/)([^/]+)\.([a-z]+)\/Contents\.json$/.exec(file.name);
+  return m && m[2] !== 'xcassets' ? [{ name: m[1], kind: m[2], at: `${entry.path}/${file.name.slice(0, -'/Contents.json'.length)}` }] : [];
+}));
+
+/** The app's alternate icons on iOS (LLP 1163.000 D2), in the manifest's order: each one's
+ * `name`, `fragment` (the app with the alternate's icon members as its manifest), and where its
+ * art comes from: its `project`'s inventory entry, else a `catalog` set of its name, else its
+ * icons, written as a set of its name (`generated`). */
+function iosAlternates(app, catalogs) {
+  const sets = new Set(catalogAssets(catalogs).filter(asset => asset.kind === 'appiconset').map(asset => asset.name));
+  return alternateIcons(app.manifest).map(({ name, manifest }) => {
+    const project = catalogs.find(entry => entry.alternate === name) ?? null;
+    return { name, fragment: { ...app, manifest }, project, catalog: !project && sets.has(name), generated: !project && !sets.has(name) };
+  });
+}
 
 /** Why an iOS bundle cannot have its primary icon, or null: a manifest icon
  * the slots refuse (`icon`), or none where one is needed. A distributed
  * bundle (`catalog`) needs one in Assets.car, and so do alternate icons;
- * the primary is `host.ios.icon` or the manifest's. `catalogs` is
- * `appleAssetCatalogInventory`'s. */
+ * the primary is `host.ios.icon` or the manifest's. Then the alternates'
+ * (`alternateRefusal`). `catalogs` is `appleAssetCatalogInventory`'s. */
 function iconRefusal(app, catalogs, catalog) {
-  let primary;
+  let primary = Boolean(primaryProject(catalogs));
   try {
     // The watch app's icon is built with the phone's, from the same manifest.
     if (app.manifest.watch) icon(app, 'watchos');
-    if (catalogs.some(entry => entry.path.endsWith('.icon'))) return null;
-    primary = icon(app, 'ios'); icon(app, 'ios', 'dark'); icon(app, 'ios', 'tinted');
+    if (!primary) { primary = Boolean(icon(app, 'ios')); icon(app, 'ios', 'dark'); icon(app, 'ios', 'tinted'); }
   } catch (e) { return `host/apple: ${app.name}: ${e.message}`; }
-  if (primary) return null;
-  if (catalog) return `host/apple: ${app.name}'s distribution bundle requires an AppIcon; declare host.ios.icon or a square icon of at least 1024 px`;
-  if (alternates(catalogs).length) return `host/apple: ${app.name}'s alternate icons require a primary; declare host.ios.icon or a square icon of at least 1024 px`;
+  if (!primary && catalog) return `host/apple: ${app.name}'s distribution bundle requires an AppIcon; declare host.ios.icon or a square icon of at least 1024 px`;
+  return alternateRefusal(app, catalogs, primary);
+}
+
+/** Why the app's alternate icons cannot be built (LLP 1163.000 D1, D2), or null: a catalog app
+ * icon set that no alternate names, since `alternate_icons` is the only roster; a name another
+ * asset of the catalogs has, regardless of case, since a catalog holds one asset per name; an
+ * alternate whose light iOS icon nothing fills, or whose files its slots refuse; and alternates
+ * with no primary. */
+function alternateRefusal(app, catalogs, primary) {
+  const alternates = iosAlternates(app, catalogs), declared = new Set(alternates.map(alternate => alternate.name));
+  const project = primaryProject(catalogs), own = ['AppIcon', ...(project ? [basename(project.path, '.icon')] : [])];
+  const assets = catalogAssets(catalogs);
+  for (const set of assets.filter(asset => asset.kind === 'appiconset'))
+    if (!own.includes(set.name) && !declared.has(set.name))
+      return `host/apple: ${app.name}'s ${set.at} is an app icon that no alternate_icons entry names; declare it there ({ "name": "${set.name}", "icons": [...] }) or remove it`;
+  for (const [i, alternate] of alternates.entries()) {
+    const at = `alternate_icons[${i}]`, name = alternate.name.toLowerCase();
+    const other = assets.find(asset => asset.name.toLowerCase() === name && !(asset.kind === 'appiconset' && asset.name === alternate.name));
+    if (other) return `host/apple: ${app.name}'s ${at}.name "${alternate.name}" is also the name of ${other.at}, and a catalog holds one asset per name; rename one`;
+    if (!alternate.generated) continue;
+    try {
+      const light = icon(alternate.fragment, 'ios');
+      icon(alternate.fragment, 'ios', 'dark'); icon(alternate.fragment, 'ios', 'tinted');
+      if (!light) return `host/apple: ${app.name}'s ${at} ("${alternate.name}") has no iOS icon; give it an opaque square icon of at least 1024 px, a host.ios.icon project, or an ${alternate.name}.appiconset in the app's catalogs`;
+    } catch (e) { return `host/apple: ${app.name}: ${e.message}`; }
+  }
+  if (alternates.length && !primary) return `host/apple: ${app.name}'s alternate icons require a primary; declare host.ios.icon or a square icon of at least 1024 px`;
   return null;
 }
 
@@ -286,7 +333,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
   // tvOS takes the manifest's iOS section.
   const minimum = platform === 'watchos' ? WATCH_MINIMUM_OS : app.manifest.host?.[platform === 'tvos' ? 'ios' : platform]?.minimumOS ?? (platform === 'macos' ? '14.0' : '17.0');
   const catalogs = appleAssetCatalogInventory({ ...app, appleIcons: icons }, platform);
-  const selected = catalogs.find(entry => entry.path.endsWith('.icon'));
+  const selected = primaryProject(catalogs);
   if (expected !== undefined && JSON.stringify(catalogs) !== JSON.stringify(expected))
     throw new Error('Apple asset catalogs changed after the bake; rebuild before packaging');
   const launchImage = platform === 'ios' ? launchImageInventory(app) : null;
@@ -301,7 +348,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       // What the compile itself writes: a cache from before `--accent-color` named no accent,
       // one from before `ExactLaunchImageSource` no launch image's source or digest,
       // one from before `digest` launch assets under fixed names
-      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components'])).digest('hex').slice(0, 16);
+      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components', 'declared-alternate-icons'])).digest('hex').slice(0, 16);
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;
@@ -322,7 +369,8 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
   try {
     const rasterIcons = catalogs.filter(entry => entry.kind === 'svg-icon-v1');
     const sources = catalogs.filter(entry => !entry.kind).map(entry => {
-      const copied = resolve(work, 'app', entry.path);
+      // actool names a project's icon by its directory's stem, so an alternate's is staged under its name.
+      const copied = entry.alternate ? resolve(work, 'alternates', `${entry.alternate}.icon`) : resolve(work, 'app', entry.path);
       cpSync(resolve(app.dir, entry.path), copied, { recursive: true });
       if (JSON.stringify(catalogFiles(copied)) !== JSON.stringify(entry.files))
         throw new Error('Apple asset catalogs changed while capturing them; rebuild before packaging');
@@ -338,16 +386,18 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       picture = { path: resolve(work, 'launch.png'), width: launchImage.width, sha256: launchImage.sha256 };
       writeFileSync(picture.path, bytes);
     }
-    const alternateIcons = platform === 'ios' ? alternates(catalogs) : [];
+    const alternates = platform === 'ios' ? iosAlternates(app, catalogs) : [];
     // The icon is compiled in every build: only Assets.car carries its dark and tinted appearances, and actool
-    // writes the bundle's fallback PNGs and CFBundleIcons from it (LLP 1163 D6).
+    // writes the bundle's fallback PNGs and CFBundleIcons from it (LLP 1163 D6). So is each alternate drawn
+    // from its icons, as a set of its name (LLP 1163.000 D2).
     const keys = platform === 'ios' ? { ...appIcon(app, dir, 'ios', { catalog: assets }), ...launchScreen(app, assets, launch, picture) }
       : platform === 'watchos' ? appIcon(app, dir, 'watchos', { catalog: assets }) : {};
+    for (const alternate of alternates.filter(alternate => alternate.generated)) appIconSet(alternate.fragment, assets, alternate.name, 'ios', icon(alternate.fragment, 'ios'));
     // tvOS's icon is the brand assets of the app's catalogs, else the manifest's.
     const own = platform === 'tvos' ? brandAssets(catalogs)[0] : null, brand = platform === 'tvos' && !own ? tvIcon(app, assets) : null;
     const hasIcon = existsSync(resolve(assets, 'AppIcon.appiconset'));
     const iconName = selected ? basename(selected.path, '.icon') : own ?? brand ?? (hasIcon ? 'AppIcon' : null);
-    if (hasIcon || brand || keys.UILaunchScreen || rasterIcons.length) {
+    if (hasIcon || brand || keys.UILaunchScreen || rasterIcons.length || alternates.some(alternate => alternate.generated)) {
       writeFileSync(resolve(assets, 'Contents.json'), JSON.stringify({ info: { author: 'exact', version: 1 } }));
       sources.push(assets);
     }
@@ -362,24 +412,41 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       run('xcrun', ['actool', ...sources, '--compile', dir, '--platform', target, '--minimum-deployment-target', minimum,
         ...{ macos: [], ios: ['iphone', 'ipad'], tvos: ['tv'], watchos: ['watch'] }[platform].flatMap(family => ['--target-device', family]),
         ...(iconName ? ['--app-icon', iconName] : []),
-        ...(selected && platform === 'ios' && process.platform === 'linux' ? (() => {
-          const fallback = (app.manifest.icons ?? []).find(icon => /^([0-9]+)x\1$/.test(icon.sizes ?? '') && Number(icon.sizes.split('x')[0]) >= 512 && icon.src?.toLowerCase().endsWith('.png'));
-          return fallback ? ['--exact-icon-fallback', resolve(app.dir, fallback.src)] : [];
-        })() : []),
-        ...alternateIcons.flatMap(name => ['--alternate-app-icon', name]),
+        // The portable compiler (`car.mjs`, on Linux) draws each project's icon for older iOS from a PNG of its own icons.
+        ...(platform === 'ios' && process.platform === 'linux' ? [[iconName, selected && app.manifest], ...alternates.map(alternate => [alternate.name, alternate.project && alternate.fragment.manifest])]
+          .flatMap(([name, manifest]) => {
+            const fallback = manifest && composerFallback(manifest, app.dir);
+            return fallback ? ['--exact-icon-fallback', `${name}=${fallback}`] : [];
+          }) : []),
+        ...alternates.flatMap(alternate => ['--alternate-app-icon', alternate.name]),
         ...(accent ? ['--accent-color', 'AccentColor'] : []),
         '--output-partial-info-plist', partial, '--output-format', 'human-readable-text'], { stdio: 'ignore' });
       Object.assign(keys, JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', partial], { encoding: 'utf8', stdio: 'pipe' }).stdout));
     }
+    // The roster in its order, which @exact/app-icon answers (LLP 1163.000 D3).
+    if (alternates.length) keys.ExactAlternateIcons = alternates.map(alternate => alternate.name);
     // actool reports an icon it cannot compile and still succeeds, so a distributed bundle's is looked for in Assets.car:
-    // on tvOS under the name of the brand assets' app icon stack, which the partial plist gives.
-    if (catalog && (platform === 'ios' || platform === 'tvos') && iconName) {
-      const name = platform === 'tvos' ? keys.CFBundleIcons?.CFBundlePrimaryIcon : iconName;
+    // on tvOS under the name of the brand assets' app icon stack, which the partial plist gives. Every alternate is
+    // looked for in every build, in the partial plist's roster for both idioms and in Assets.car.
+    const distributed = catalog && (platform === 'ios' || platform === 'tvos') && iconName;
+    if (distributed || alternates.length) {
       const contents = JSON.parse(run('xcrun', ['assetutil', '--info', resolve(dir, 'Assets.car')], { encoding: 'utf8', stdio: 'pipe' }).stdout);
-      if (!name || !contents.some(asset => asset.Name === name)) throw new Error(`host/apple: ${dir}/Assets.car has no ${name ?? iconName}`);
+      const name = platform === 'tvos' ? keys.CFBundleIcons?.CFBundlePrimaryIcon : iconName;
+      if (distributed && (!name || !contents.some(asset => asset.Name === name))) throw new Error(`host/apple: ${dir}/Assets.car has no ${name ?? iconName}`);
+      const missing = alternates.map(alternate => alternate.name).filter(name => !contents.some(asset => asset.Name === name)
+        || ['CFBundleIcons', 'CFBundleIcons~ipad'].some(key => !keys[key]?.CFBundleAlternateIcons?.[name]));
+      if (missing.length) throw new Error(`host/apple: actool did not compile the alternate icon${missing.length > 1 ? 's' : ''} ${missing.join(', ')} into ${dir}; its log names why`);
     }
     return keys;
   } finally { rmSync(work, { recursive: true, force: true }); }
+}
+
+/** The PNG an Icon Composer project's icon is drawn from for older iOS by the portable compiler
+ * (`car.mjs`, `--exact-icon-fallback`): the square `maskable`, else `any`, PNG of `manifest`'s
+ * icons (the app's, or an alternate's fragment) of at least 512 px, its size read from the file
+ * as every slot's is. Null when there is none. */
+export function composerFallback(manifest, dir) {
+  return pickIcon(manifest, dir, { purposes: ['maskable', 'any'], px: 512, formats: ['png'], native: true, name: 'the older-iOS fallback' })?.path ?? null;
 }
 
 /** The launch screen in the app's own background, light and dark

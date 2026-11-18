@@ -1303,8 +1303,10 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   may scroll and send `pointercancel`, ending its moves. The web drag reply names
   observed cancellation and scrolling, with the named node’s `touch-action` and
   the effective intersection through its ancestors at contact start. Changing
-  `touch-action` during a contact does not change the browser's decision for it.
-  `drag … mouse` exercises the mouse path.
+  `touch-action` in that touch's `pointerdown` does not change the browser's
+  decision. On iOS, UIKit decides when the pan is recognized, so that write
+  applies there. For the same behavior on every host, set `none` before the
+  touch starts. `drag … mouse` exercises the mouse path.
 
 - **A `pan` hears nothing from a finger on the web.** A drag with
   `tap <id> drag dx dy` (or a real touch) moves nothing and logs nothing. Cause:
@@ -2040,6 +2042,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Working on Exact itself
 
+- **SwiftPM imports need more than Swift module paths.** An App Intents
+  typecheck with only `-I` and `-F` loses C and Objective-C module maps and
+  headers. Preserve the shared dependency target's compiler import flags when
+  compiling consumers and gathering their constants. A roster probe also needs
+  its own executable beside the package's resource bundles: `Bundle.main` in
+  Bun refers to Bun's bundle.
+
 - **An Android regression test still runs the temporarily reverted code after
   the source is restored.** A revert and restore close together can leave
   Gradle reporting `compileDebugKotlin UP-TO-DATE` and reusing the class from
@@ -2434,3 +2443,9 @@ once, then reports it again only after its valid bindings disappear and return. 
   1133.037 D3). Read such a name from `app.ts`, choosing it or its other target's name by
   the status (`attachedList ? attachedPorts({}) : getPorts({})`), as
   `docs/recipes/usb-hid-serial.md` does.
+
+- **A cached JSON collection can lose another tab’s edits.** `atomicWriteFile`
+  protects the replacement, not the read that produced it. Even a fresh read races
+  another writer. Use SQLite statements and constraints for shared collections
+  (`pattern list-detail`); close each connection in `finally` so other web tabs
+  can acquire it.

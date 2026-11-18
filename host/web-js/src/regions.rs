@@ -183,7 +183,18 @@ impl Em<'_> {
             .filter(|(_, m)| m.owner.is_some_and(|a| a.0 == arm))
             .map(|(i, _)| i)
             .collect();
-        if self.answers.slots(arm).is_empty() && requests.is_empty() && sends.is_empty() {
+        let tasks: Vec<usize> = plan
+            .timers
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.owner.is_some_and(|a| a.0 == arm))
+            .map(|(i, _)| i)
+            .collect();
+        if self.answers.slots(arm).is_empty()
+            && requests.is_empty()
+            && sends.is_empty()
+            && tasks.is_empty()
+        {
             return self.unsettled(Some(arm), scope);
         }
         let mut decl = match &scope.rows {
@@ -250,6 +261,9 @@ impl Em<'_> {
                 scope,
                 &mut self.uses,
             )?);
+        }
+        for i in tasks {
+            decl.push_str(&super::timers::task(plan, i, scope, &mut self.uses)?);
         }
         Ok(decl)
     }

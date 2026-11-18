@@ -801,7 +801,6 @@ fn lower_body(
         );
     }
     l.tools(file)?;
-    l.timers(&root.tasks, &scope)?;
     l.sequences(&root.sequences, &scope)?;
     // The view, inlined (by `expand`, above).
     let view = &root.view;
@@ -851,6 +850,7 @@ fn lower_body(
     }
     l.owned_resource_args(root, ex, &scope)?;
     l.owned_mutations(root, ex, &scope)?;
+    l.timers(&root.tasks, ex, &scope)?;
     // Child state (LLP 1017 P4c): each lifted state is initialized where its
     // instance is created — in its owning arm's scope, now that the arms
     // exist, or, for a use outside every region, at the boot render.

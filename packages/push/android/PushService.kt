@@ -3,10 +3,10 @@
 // - While the app is in the background Firebase shows a notification message itself, and none of this runs: on its
 //   `channel_id`, else the default channel (the manifest's meta-data), with the app's small icon unless the message
 //   names an `icon`. Its tap starts the launcher activity with the message's `data` as extras, of which the host reads
-//   only `navigate` (`ExactActivity`).
+//   `navigate`, including Expo's `body.navigate` (`ExactActivity`, `PushLocation`).
 // - In front Firebase hands the message to [onMessageReceived] instead, which shows it the same way: the channel if
 //   the app declares it, the tag (Firebase's key: the tag, id 0, so a local post and `closeNotification` meet it), and
-//   a tap through the app's alias that opens `data.navigate`, or the app.
+//   a tap through the app's alias that opens the same location, or the app.
 // - A data-only message raises `push` through the headless session (LLP 1133.017 D7–D9). The callback keeps FCM's
 //   process custody until the handler settles or ten seconds pass, including boot and time queued behind a wake.
 package exact.push
@@ -19,6 +19,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dev.exact.canvas.Channels
 import dev.exact.canvas.ExtensionContext
+import dev.exact.canvas.PushLocation
 import org.json.JSONArray
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -50,7 +51,7 @@ class PushService : FirebaseMessagingService() {
         }
         val app = applicationContext
         val channel = shown.channelId?.takeIf { id -> Channels.declared(app)?.any { it.id == id } == true } ?: Channels.DEFAULT
-        val navigate = message.data["navigate"]?.takeIf { it.isNotEmpty() }
+        val navigate = PushLocation.of(message.data::get)
         val tap = if (navigate != null) ExtensionContext.activation(app, "push", "navigate", JSONArray(), navigate)
             else app.packageManager.getLaunchIntentForPackage(app.packageName) ?: return
         val tag = shown.tag

@@ -81,7 +81,7 @@ final class CanvasLayerPoolIOSTests: XCTestCase {
         s.presenter.root.addSubview(canvas); s.presenter.views[100] = canvas
         let metal = try XCTUnwrap(canvas.canvasMetal)
         XCTAssertTrue(metal.metalLayer === layer && layer.isHidden, "the row's canvas took the spare layer, hidden")
-        let e = CanvasesHost.Entry(view: canvas, name: "wave", values: []); e.id = 7; e.module = m
+        let e = CanvasesHost.Entry(view: canvas, name: "wave", values: Data("[]".utf8)); e.id = 7; e.module = m
         s.surfaceHost.entries[100] = e
 
         // Frames recorded, submitted, even presented for other canvases: not this one's word.

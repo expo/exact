@@ -576,15 +576,11 @@ impl Canvases {
         errors
     }
 
-    /// Drop the canvases whose nodes are gone, and the images when no
-    /// canvas is left.
+    /// Drop the canvases whose nodes are gone.
     pub(crate) fn retain(&mut self, live: &[ViewId]) {
         self.completed.retain(|v, _| live.contains(v));
         self.replayers.retain(|v, _| live.contains(v));
         self.snapshots.retain(|v, _| live.contains(v));
-        if live.is_empty() {
-            self.images.clear();
-        }
     }
 
     /// The painters' view of every canvas.

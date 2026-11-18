@@ -5,6 +5,7 @@ use crate::generated::StyleProps;
 use crate::kernel::{BlockAxis, HostBlock};
 use crate::style::calc::{self, Node, Observe, Unit};
 use crate::style::targets::Target;
+use crate::style::Edge;
 use crate::wire::Op;
 use crate::{NodeType, StyleId, StyleValue};
 
@@ -37,6 +38,7 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
     for (row, text) in texts {
         let value = match text.parse::<f64>() {
             Ok(n) => StyleValue::Number(n),
+            Err(_) if *text == "auto" => StyleValue::Auto,
             Err(_) => StyleValue::Text((*text).into()),
         };
         patch.set_dynamic(*row, &value).unwrap();
@@ -50,6 +52,8 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
             StyleId::MarginLeft => patch.margin_left = d,
             StyleId::Width => patch.width = d,
             StyleId::Height => patch.height = d,
+            StyleId::AdditionalSafeAreaTop => patch.rare.additional_safe_area_top = d,
+            StyleId::SafeAreaPaddingTop => patch.rare.safe_area_padding_top = d,
             other => panic!("no field for {other:?}"),
         }
         patch.mask.set(row);
@@ -141,6 +145,12 @@ fn left(k: &Kernel, id: ViewId) -> f32 {
 
 fn slot(k: &Kernel, id: ViewId) -> u32 {
     k.arena.slot_of(id).unwrap()
+}
+
+/// `id`'s frame: x, y, width and height in its layout's space.
+fn frame(k: &Kernel, id: ViewId) -> (f32, f32, f32, f32) {
+    let f = k.node(id).unwrap().frame;
+    (f.x, f.y, f.width, f.height)
 }
 
 #[test]
@@ -443,6 +453,91 @@ fn a_reader_follows_its_owner_growing_around_it() {
         Some(0.0),
         "4 stays at 50 as the band moves to 170"
     );
+}
+
+#[test]
+fn a_measure_solves_the_readers_under_its_block() {
+    // 2 fits its width to 3 and pads its left by what it observes at the
+    // bottom: nothing in a 200-point block, 50 in a 100-point one, where
+    // its bottom lies under the 50-point band
+    let pad = vec![(StyleId::PaddingLeft, observed(Edge::Bottom, None))];
+    let mut ops = create(3..=3);
+    ops.push(style(2, pad, &[(StyleId::Height, "100")]));
+    ops.push(style(
+        3,
+        vec![],
+        &[(StyleId::Width, "100"), (StyleId::Height, "10")],
+    ));
+    ops.extend([children(1, &[2]), children(2, &[3])]);
+    let mut k = owner(390.0, 200.0, ops);
+    let fit = |height| block(BlockAxis::Fit(390.0), BlockAxis::Is(height));
+    k.set_host_block(2, Some(fit(200.0))).unwrap();
+    k.set_owner_band(2, Some([0.0, 0.0, 50.0, 0.0]), &[])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.host_block_size(2), Some((100.0, 200.0)));
+    let measured = k.measure_block(2, fit(100.0)).unwrap();
+    assert_eq!(measured.used, (150.0, 100.0));
+    // The trial leaves the kernel's reader as it was, and the layout of the
+    // block it measured gives what it answered
+    assert_eq!(
+        (left(&k, 2), k.observation(2).unwrap()[2]),
+        (0.0, Some(0.0))
+    );
+    k.set_host_block(2, Some(fit(100.0))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.host_block_size(2), Some(measured.used));
+    // A band set since the last layout leaves the readers it edges to the
+    // next, which a measure waits for
+    k.set_owner_band(2, Some([0.0, 0.0, 20.0, 0.0]), &[])
+        .unwrap();
+    assert!(k.measure_block(2, fit(100.0)).is_err());
+    lay_out(&mut k);
+    assert_eq!(k.measure_block(2, fit(100.0)).unwrap().used, (120.0, 100.0));
+}
+
+#[test]
+fn a_measure_gives_no_text_revision_a_later_one_gives() {
+    // The popover 3 holds the paragraph 4, whose run 5 pads its left by its
+    // top observation: the trial of a block its host gives, which the host
+    // places, makes the band unavailable and the fallback apply, a restyle
+    // that revises the paragraph
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut k = Kernel::new(Box::new(crate::kernel::measure_block_tests::Stamps(
+        seen.clone(),
+    )));
+    let mut ops = create([1, 3]);
+    for id in [4, 5] {
+        ops.push(Op::CreateView {
+            id,
+            node_type: NodeType::Text,
+        });
+    }
+    let text = |value: &str| Op::SetProp {
+        id: 5,
+        prop: crate::PropId::Text,
+        value: value.into(),
+    };
+    ops.push(text("x"));
+    ops.push(style(1, vec![], &[(StyleId::Height, "300")]));
+    let pad = vec![(StyleId::PaddingLeft, observed(Edge::Top, Some(7.0)))];
+    ops.extend([style(5, pad, &[]), popover(3)]);
+    ops.extend([children(1, &[3]), children(3, &[4]), children(4, &[5])]);
+    ops.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &ops).unwrap();
+    k.set_session_band([40.0, 0.0, 0.0, 0.0]).unwrap();
+    lay_out(&mut k);
+    seen.borrow_mut().clear();
+    let given = block(BlockAxis::Is(100.0), BlockAxis::Is(100.0));
+    k.measure_block(3, given).unwrap();
+    let trial = std::mem::take(&mut *seen.borrow_mut());
+    assert!(!trial.is_empty(), "the trial measured the paragraph anew");
+    // The next edit's revision is not one the trial gave, which a measurer
+    // holding the trial's answer would take for its text
+    k.apply(0, 2, &[text("xx")]).unwrap();
+    lay_out(&mut k);
+    let edited = k.node(4).unwrap().paragraph_stamp().unwrap();
+    assert!(!trial.contains(&edited), "{edited:?} {trial:?}");
 }
 
 #[test]
@@ -1027,6 +1122,51 @@ fn a_content_region_solves_its_shell_and_withholds_its_content() {
 }
 
 #[test]
+fn a_measure_beside_a_content_region_leaves_the_region_as_it_was() {
+    // The popover 8, beside the content region of 2, pads its left by its
+    // top observation, 0 where the kernel places it; in a block its host
+    // gives, which the host places, the band is unavailable and the
+    // fallback of 7 applies
+    let mut k = Kernel::with_monospace();
+    let mut ops = create([1, 2, 3, 8]);
+    for id in [4, 5] {
+        ops.push(Op::CreateView {
+            id,
+            node_type: NodeType::Text,
+        });
+    }
+    ops.push(style(1, vec![], &[(StyleId::Height, "300")]));
+    ops.push(style(2, vec![], &REGION));
+    ops.push(style(5, vec![], &[(StyleId::PositionType, "absolute")]));
+    let pad = vec![(StyleId::PaddingLeft, observed(Edge::Top, Some(7.0)))];
+    let rows = [
+        (StyleId::Bottom, "0"),
+        (StyleId::Width, "50"),
+        (StyleId::Height, "10"),
+    ];
+    ops.extend([style(8, pad, &rows), popover(8)]);
+    ops.extend([
+        children(3, &[4]),
+        children(2, &[3, 5]),
+        children(1, &[2, 8]),
+    ]);
+    ops.push(Op::AttachRoot { id: 1 });
+    k.apply(0, 1, &ops).unwrap();
+    k.set_session_band([40.0, 0.0, 0.0, 0.0]).unwrap();
+    let ticket = |r: crate::RegionLayoutReceipt| match r.selection {
+        crate::region::RegionSelection::Accepted(p) => p.ticket().clone(),
+        crate::region::RegionSelection::Pending(_) => panic!("no accepted content"),
+    };
+    let accepted = ticket(lay_out_region(&mut k, Default::default()));
+    assert_eq!(left(&k, 8), 0.0);
+    let given = block(BlockAxis::Is(50.0), BlockAxis::Is(10.0));
+    assert_eq!(k.measure_block(8, given).unwrap().border, (57.0, 10.0));
+    assert_eq!(left(&k, 8), 0.0);
+    // The next region layout keeps the content it accepted
+    assert_eq!(ticket(lay_out_region(&mut k, Default::default())), accepted);
+}
+
+#[test]
 fn a_region_branch_that_is_a_popover_observes_its_band() {
     // The region's content 3 is itself a popover, laid out apart from the
     // region, reading its top observation with a 7-point fallback under
@@ -1194,3 +1334,6 @@ mod provenance;
 
 #[path = "content_root_tests.rs"]
 mod content_root;
+
+#[path = "reservation_tests.rs"]
+mod reservation;

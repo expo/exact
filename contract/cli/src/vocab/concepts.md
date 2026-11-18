@@ -580,8 +580,8 @@ More: docs/recipes/list-rows.md (search, filter, the long-press menu)
 ## task: a timer, once or repeating (every, after)
 names: every, after, timer, interval, setInterval, setTimeout, debounce
 
-A root `task` has one schedule: `every(ms, action)` repeats, `after(ms, action)` fires once,
-`every(frame, action)` ticks once a display frame. `task t mount` runs from launch; `task t
+A `task` has one schedule: `every(ms, action)` repeats, `after(ms, action)` fires once,
+`every(frame, action)` ticks once a display frame per armed instance. `task t mount` runs from mount; `task t
 when cond` only while `cond` holds, and `key=x` restarts it when `x` changes. The interval is
 a literal number of milliseconds, and the action takes no parameters.
 
@@ -638,7 +638,7 @@ names: sources, fetch, load, useEffect, useQuery, query, transient, no-store, vo
 (or a declared `source`) and shows its answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
 `else empty()`, the shape's zero. `pending(name)`: a request out; `failed(name)`: no answer;
 `current(name)`: it shows its arguments' answer. `when cond` asks nothing while `cond` is
-false. Only the root declares one.
+false. A root or a child at a bounded use may declare one; each instance owns its request.
 
 ```contract
 component App
@@ -652,8 +652,8 @@ component App
       text `${hits.length} found` testId="n"
 ```
 
-- `app.ts` answers exactly the shape (an extra field fails it); a failed fetch is data, not
-  an exception; `refresh name` in an action asks again. A child takes what it shows as props.
+- `app.ts` answers exactly the shape; a failed fetch is data, not an exception.
+  `refresh name` in an action asks again.
 - `transient` after the shape: the answer is never kept for the next launch.
 
 More: docs/recipes/fetch-loading-error.md
@@ -860,7 +860,7 @@ component Tag
       text label
 ```
 
-- A child may own resources, asked while each instance lives; mutations and tasks are the root's.
+- A child at a bounded use owns its resources, mutations and tasks until destroyed. Gate hidden screens' work on activity.
 
 ## derive: a value computed from state
 names: computed, memo, useMemo, selector, getter

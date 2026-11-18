@@ -60,11 +60,67 @@ pub(super) enum Route {
     Export(SaveFile),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub(super) struct Waiting {
     pub(super) view: Option<ViewId>,
     route: Route,
+    source: Option<Export>,
+    live: std::sync::Arc<()>,
 }
+
+#[derive(Debug)]
+pub(super) enum Export {
+    Text(String),
+    File(std::fs::File),
+}
+
+impl Export {
+    pub(super) fn open(from: &str, text: Option<&str>) -> Result<Self, String> {
+        match text {
+            Some(text) => Ok(Self::Text(text.to_owned())),
+            None => crate::picker::open(from)
+                .map(Self::File)
+                .ok_or_else(|| "no app file to copy".into()),
+        }
+    }
+
+    pub(super) fn write(self, to: &std::path::Path) -> Result<(), String> {
+        if to.to_str().is_none() {
+            return Err("a chosen path is not Unicode".into());
+        }
+        // All views and windows serialize truncation and copying through this lock.
+        static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _write = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        let copy = || -> std::io::Result<()> {
+            let mut destination = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(to)?;
+            if let Self::File(from) = &self {
+                let source = same_file::Handle::from_file(from.try_clone()?)?;
+                let chosen = same_file::Handle::from_file(destination.try_clone()?)?;
+                if source == chosen {
+                    return Ok(());
+                }
+            }
+            destination.set_len(0)?;
+            match self {
+                Self::Text(text) => {
+                    use std::io::Write;
+                    destination.write_all(text.as_bytes())?;
+                }
+                Self::File(mut from) => {
+                    std::io::copy(&mut from, &mut destination)?;
+                }
+            }
+            Ok(())
+        };
+        copy().map_err(|error| error.to_string())
+    }
+}
+
+pub(super) type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(u32, PathBuf, Result<(), String>)>>>;
 
 impl<D: DataSource> Presenter<D> {
     /// The window has file dialogs. Headless hosts leave them unavailable.
@@ -73,32 +129,49 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(super) fn queue_file_dialog(&mut self, dialog: FileDialog, view: ViewId, route: Route) {
-        if self
-            .requests
-            .waiting
-            .values()
-            .any(|wait| matches!(wait, requests::Waiting::FileDialog(w) if w.view == Some(view)))
-        {
+        if self.requests.waiting.values().any(|wait| match wait {
+            requests::Waiting::FileDialog(w) => w.view == Some(view),
+            requests::Waiting::Export(v) => *v == Some(view),
+            _ => false,
+        }) {
             self.host.log(format!("picker: {view} is already open"));
             return;
         }
+        // Timers can replace the name while the dialog is open; keep the opened file.
+        let source = if let Route::Export(save) = &route {
+            match Export::open(&save.from, save.text.as_deref()) {
+                Ok(source) => Some(source),
+                Err(reason) => {
+                    self.host.log(format!("saveFile: refused: {reason}"));
+                    self.deliver_picker(view, Event::Cancel);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let id = self.request(Request::FileDialog(dialog));
         self.requests.waiting.insert(
             id,
             requests::Waiting::FileDialog(Waiting {
                 view: Some(view),
                 route,
+                source,
+                live: std::sync::Arc::new(()),
             }),
         );
     }
 
     /// Take desktop dialogs from the shared request queue, once each.
-    /// Showing them must happen after this borrow has ended.
-    pub fn take_file_dialogs(&mut self) -> Vec<(u32, FileDialog)> {
+    /// Showing them must happen after this borrow has ended and only while
+    /// the returned weak lifetime still has an owner.
+    pub fn take_file_dialogs(&mut self) -> Vec<(u32, FileDialog, std::sync::Weak<()>)> {
         let mut dialogs = Vec::new();
         self.requests.queued.retain(|(id, request)| {
             if let Request::FileDialog(dialog) = request {
-                dialogs.push((*id, dialog.clone()));
+                if let Some(requests::Waiting::FileDialog(wait)) = self.requests.waiting.get(id) {
+                    dialogs.push((*id, dialog.clone(), std::sync::Arc::downgrade(&wait.live)));
+                }
                 false
             } else {
                 true
@@ -143,10 +216,90 @@ impl<D: DataSource> Presenter<D> {
                 self.documents_chosen(view, command, paths.iter().map(|p| p.as_path()))
             }
             Route::Import => self.borrowed_files_chosen(id, view, paths),
-            Route::Export(save) => {
-                self.save_chosen(view, &paths[0], &save.from, save.text.as_deref())
+            Route::Export(_) => {
+                self.export_chosen(id, view, paths[0].clone(), waiting.source.unwrap())
             }
         }
+    }
+
+    fn export_chosen(&mut self, id: u32, view: ViewId, to: PathBuf, source: Export) {
+        if to.to_str().is_none() {
+            self.finish_save(view, &to, Err("a chosen path is not Unicode".into()));
+            return;
+        }
+        self.requests
+            .waiting
+            .insert(id, requests::Waiting::Export(Some(view)));
+        let (inbox, wake) = (self.requests.exports.clone(), self.executor.waker());
+        let failed_to = to.clone();
+        let started = std::thread::Builder::new()
+            .name("exact-file-export".into())
+            .spawn(move || {
+                let copied = source.write(&to);
+                inbox
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((id, to, copied));
+                wake();
+            });
+        match started {
+            Ok(worker) => {
+                self.requests.export_workers.insert(id, worker);
+            }
+            Err(error) => {
+                self.requests.waiting.remove(&id);
+                self.finish_save(view, &failed_to, Err(error.to_string()));
+            }
+        }
+    }
+
+    pub(super) fn finish_file_exports(&mut self) {
+        let done = std::mem::take(
+            &mut *self
+                .requests
+                .exports
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        for (id, to, copied) in done {
+            if let Some(worker) = self.requests.export_workers.remove(&id) {
+                if worker.join().is_err() {
+                    self.host.log("saveFile: refused: export worker panicked");
+                }
+            }
+            if let Some(requests::Waiting::Export(Some(view))) = self.requests.waiting.remove(&id) {
+                self.finish_save(view, &to, copied);
+            } else if let Err(reason) = copied {
+                self.host.log(format!("saveFile: refused: {reason}"));
+            }
+        }
+    }
+
+    /// Finish accepted exports before the window host exits; return failures to report.
+    pub fn drain_file_exports(&mut self) -> Vec<String> {
+        let mut failures = Vec::new();
+        for (id, worker) in std::mem::take(&mut self.requests.export_workers) {
+            if worker.join().is_err() {
+                failures.push("saveFile: refused: export worker panicked".to_owned());
+            }
+            self.requests.waiting.remove(&id);
+        }
+        let done = std::mem::take(
+            &mut *self
+                .requests
+                .exports
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        for (_, _, copied) in done {
+            if let Err(reason) = copied {
+                failures.push(format!("saveFile: refused: {reason}"));
+            }
+        }
+        for failure in &failures {
+            self.host.log(failure);
+        }
+        failures
     }
 }
 
@@ -202,3 +355,7 @@ fn an_agent_holds_dialogs_even_with_a_native_window() {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "file_dialog_tests.rs"]
+mod tests;

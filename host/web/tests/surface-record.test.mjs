@@ -1,5 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
+import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
+import { need } from '../../../scripts/coverage.mjs';
 import { fixture } from './surface.mjs';
 
 test('a connected registered publisher keeps the name even before the GPU gives it an id', async () => {
@@ -940,3 +942,114 @@ test('canvas metrics start and stop after a commit without rebinding the canvas'
   f.destroy(1);
   assert.equal(f.metrics.at(-1), 'world');
 });
+test('GPU modules receive reduced motion on load, changes and replacement', async () => {
+  const media = new EventTarget();
+  media.matches = true;
+  const f = await fixture({matchMedia(query) {
+    assert.equal(query, '(prefers-reduced-motion: reduce)');
+    return media;
+  }});
+  assert.deepEqual(f.motion, [true]);
+  f.create(1);
+  await f.exact.gpu.settled();
+  media.matches = false;
+  media.dispatchEvent(new Event('change'));
+  assert.deepEqual(f.motion, [true, false]);
+  await f.exact.gpu.swap(1);
+  assert.deepEqual(f.motion, [true, false, false]);
+  media.matches = true;
+  media.dispatchEvent(new Event('change'));
+  assert.deepEqual(f.motion, [true, false, false, true]);
+});
+
+for (const status of ['healthy', 'recovered']) test(`recovery ${status} delivers the latest motion preference before presentation`, async () => {
+  const media = new EventTarget();
+  media.matches = false;
+  const f = await fixture({matchMedia: () => media});
+  f.gpu.gpu_published = () => undefined;
+  f.create(1);
+  await f.exact.gpu.settled();
+  let present = true, reduce = false, dirty = false, resume, entered;
+  const pending = new Promise(resolve => { resume = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const deliveries = [], pictures = [];
+  f.gpu.gpu_reduced_motion = on => {
+    deliveries.push({present, on});
+    if (present) { reduce = on; dirty = true; }
+  };
+  f.gpu.gpu_recover = async () => {
+    // gpu/src/web.rs removes MODULE while awaiting a replacement device.
+    present = false;
+    entered();
+    await pending;
+    present = true;
+    return JSON.stringify({status});
+  };
+  f.exact.gpu.deviceLost();
+  await started;
+  for (const matches of [true, false, true]) {
+    media.matches = matches;
+    media.dispatchEvent(new Event('change'));
+  }
+  assert.deepEqual(deliveries, [], 'no preference is sent while the module is absent');
+  f.gpu.gpu_bind_at = () => { assert.equal(reduce, true); return true; };
+  f.gpu.gpu_dirty = () => dirty;
+  f.gpu.gpu_render = () => { pictures.push(reduce); dirty = false; return 0; };
+  resume();
+  await f.exact.gpu.settled();
+  assert.deepEqual(deliveries, [{present: true, on: true}]);
+  assert.ok(pictures.length > 0);
+  assert.ok(pictures.every(value => value === true), 'the first recovered picture uses the latest preference');
+  media.matches = false;
+  media.dispatchEvent(new Event('change'));
+  assert.deepEqual(deliveries.at(-1), {present: true, on: false});
+});
+
+need('chrome', chromium().unavailable)('the browser motion preference reaches a loaded GPU module', async () => {
+  const {hostFixtureFile} = await import('./glue-fixture.mjs');
+  const module = `
+    export default function() {}
+    export function gpu_load() {} export function gpu_seekable() {}
+    export function gpu_child_view() {} export function gpu_shaders_clear() {}
+    export function gpu_shader_names() { return '[]'; }
+    export function gpu_reduced_motion(on) { motion.push(on); globalThis.motionChanged?.(); }
+  `;
+  const html = `<script type="module">
+    globalThis.motion=[];
+    Object.defineProperty(Navigator.prototype, 'gpu', {get:()=>({requestAdapter:async()=>({info:{}})})});
+    globalThis.exact={views:new Map(),root:document.body,now:()=>0,agent:true,devAssets:[]};
+    await import('/gpu-glue.js'); globalThis.ready=true;
+  </script>`;
+  const server = Bun.serve({port:0,hostname:'127.0.0.1',fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response(html, {headers:{'content-type':'text/html'}});
+    if (path === '/gpu.js') return new Response(module, {headers:{'content-type':'text/javascript'}});
+    if (path === '/favicon.ico') return new Response('', {status:404});
+    return new Response(hostFixtureFile(new URL('..' + path, import.meta.url)), {headers:{'content-type':'text/javascript'}});
+  }});
+  const browser = await cdpBrowser();
+  try {
+    const {sessionId} = await browser.page();
+    const call = (method, params = {}) => browser.cdp.send(method, params, sessionId);
+    const evaluate = async expression => {
+      const reply = await call('Runtime.evaluate', {expression,returnByValue:true,awaitPromise:true});
+      assert.equal(reply.exceptionDetails, undefined, JSON.stringify(reply.exceptionDetails));
+      return reply.result.value;
+    };
+    const prefer = value => call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion',value}]});
+    await prefer('reduce');
+    await call('Page.navigate', {url:`http://127.0.0.1:${server.port}/`});
+    const deadline = Date.now() + 15000;
+    while (!await evaluate('globalThis.ready === true')) {
+      assert.ok(Date.now() < deadline, 'GPU preference fixture did not load');
+      await Bun.sleep(50);
+    }
+    assert.deepEqual(await evaluate('motion'), [true]);
+    for (const [value, expected] of [['no-preference', [true, false]], ['reduce', [true, false, true]]]) {
+      await evaluate('globalThis.changed = new Promise(resolve => { globalThis.motionChanged = resolve; }); true');
+      await prefer(value);
+      await evaluate('changed');
+      assert.deepEqual(await evaluate('motion'), expected);
+    }
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);

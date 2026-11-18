@@ -1,4 +1,4 @@
-use super::*;
+use exact_meshopt::decode;
 fn unhex(s: &str) -> Vec<u8> {
     s.as_bytes()
         .as_chunks::<2>()
@@ -10,7 +10,8 @@ fn unhex(s: &str) -> Vec<u8> {
 #[test]
 fn decoded_buffers_equal_npm_meshoptimizer() {
     let cases: serde_json::Value =
-        serde_json::from_str(include_str!("../../tests/fixtures/meshopt/buffers.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/buffers.json")).unwrap();
+    assert_eq!(cases.as_array().unwrap().len(), 22);
     for case in cases.as_array().unwrap() {
         let encoded = unhex(case["encoded"].as_str().unwrap());
         let expected = unhex(case["expected"].as_str().unwrap());
@@ -34,7 +35,7 @@ fn decoded_buffers_equal_npm_meshoptimizer() {
 #[test]
 fn malformed_streams_refuse_without_panicking() {
     let cases: serde_json::Value =
-        serde_json::from_str(include_str!("../../tests/fixtures/meshopt/buffers.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/buffers.json")).unwrap();
     for case in cases.as_array().unwrap() {
         let encoded = unhex(case["encoded"].as_str().unwrap());
         let count = case["count"].as_u64().unwrap() as usize;
@@ -63,4 +64,8 @@ fn malformed_streams_refuse_without_panicking() {
         assert!(decode(3, stride, &[], mode, filter).is_err());
     }
     assert!(decode(usize::MAX, 4, &[], "ATTRIBUTES", "NONE").is_err());
+    assert_eq!(
+        decode(256 * 1024 * 1024 / 4 + 1, 4, &[], "ATTRIBUTES", "NONE").unwrap_err(),
+        "meshopt decoded buffer exceeds 256 MiB"
+    );
 }

@@ -16,8 +16,7 @@ impl<D: DataSource> Runner<D> {
     /// selection (LLP 1075.003 §9.14): a page rendered ahead of its runtime
     /// holds every panel, which the JS target adopts at boot.
     pub fn build_every_tab(&mut self) -> Result<CommitReceipt, RunnerError> {
-        self.ids.tabs.build_every_tab();
-        self.update_tree(true, |tree, u| tree.open_every_tab(u))
+        self.prepare_tabs(None)
     }
 
     /// Build the waiting tab panels among `panels` now, selecting none (LLP
@@ -25,7 +24,23 @@ impl<D: DataSource> Runner<D> {
     /// cannot show unbuilt asks for that tab first (UIKit's More list does
     /// nothing for a row whose navigation controller is empty).
     pub fn build_tabs(&mut self, panels: &[ViewId]) -> Result<CommitReceipt, RunnerError> {
-        self.update_tree(true, |tree, u| tree.open_panels(u, panels))
+        self.prepare_tabs(Some(panels))
+    }
+
+    fn prepare_tabs(&mut self, panels: Option<&[ViewId]>) -> Result<CommitReceipt, RunnerError> {
+        // A host can prepare tabs outside an action's transaction. Their
+        // requests and tasks must roll back together if preparation refuses.
+        let was_poisoned = self.poisoned;
+        let checkpoint = self.checkpoint();
+        let result = match panels {
+            Some(panels) => self.update_tree(true, |tree, u| tree.open_panels(u, panels)),
+            None => {
+                self.ids.tabs.build_every_tab();
+                self.update_tree(true, |tree, u| tree.open_every_tab(u))
+            }
+        };
+        self.conclude(checkpoint, &result, was_poisoned);
+        result
     }
 
     /// Whether each tab panel in `panels` needs a navigation controller

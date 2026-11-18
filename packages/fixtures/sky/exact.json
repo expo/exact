@@ -1,0 +1,11 @@
+{
+  "kind": "interface",
+  "name": "@fixture/sky",
+  "version": "1.0.0",
+  "names": [],
+  "gpu": {
+    "crate": "rust",
+    "exactGpu": "0.3",
+    "surfaces": { "sky": { "arity": 1, "factory": "sky_surface::surface" } }
+  }
+}

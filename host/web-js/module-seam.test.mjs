@@ -234,6 +234,26 @@ test.each([false, true])('an implementation receives another package fixture onl
   } finally { await browser.close(); server.stop(true); }
 });
 
+test('a directory path option admits an app root and one trailing slash', async () => {
+  const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const { setAppGrantSet } = await import('/host/web-js/admission.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      setAppGrantSet({ version: 1, entries: [[1, 'fs.write app:/tmp', ['fs-write', 'app:', 'tmp'], null]], error: null, keepsNoAnswers: false, seal: '130293dc1db0c4d5' });
+      const paths = { directory: { type: 'path', access: 'write', directory: true } };
+      modules({ still: ['capture.still', true, { implementation: true, paths }, 'b'] },
+        { capture: async () => ({ implementation: () => ({ still: () => true }) }) });
+      const call = directory => exact.extensions.call({ extension: 'capture', send: 'still', args: { directory } });
+      const given = ['app:/tmp', 'app:/tmp/freeze/', 'app:/tmp//', 'app:/', 'app:/data'];
+      return Object.fromEntries(await Promise.all(given.map(async d => [d, (await call(d))?.error ?? null])));
+    });
+    expect(Object.entries(result).map(([d, e]) => [d, e === null])).toEqual([
+      ['app:/tmp', true], ['app:/tmp/freeze/', true], ['app:/tmp//', false], ['app:/', false], ['app:/data', false]]);
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test('screen fixtures publish through one file transaction and preserve old files on refusal', async () => {
   const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {

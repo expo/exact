@@ -153,6 +153,12 @@ final class BatchDecodeTests: XCTestCase {
                         XCTAssertEqual(row.measured, expectedRow.measured, file: file, line: line)
                     }
                 }
+            } else if a.op == .surface {
+                var payload = a.payload
+                if let arguments = payload["values"] as? Data {
+                    payload["values"] = try JSONSerialization.jsonObject(with: arguments, options: .fragmentsAllowed)
+                }
+                XCTAssertTrue(NSDictionary(dictionary: payload).isEqual(to: expected), file: file, line: line)
             } else { XCTAssertTrue(NSDictionary(dictionary: a.payload).isEqual(to: expected), file: file, line: line) }
             XCTAssertEqual(a.runs.count, b.runs.count, file: file, line: line)
             for (x, y) in zip(a.runs, b.runs) {

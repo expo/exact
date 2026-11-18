@@ -9,6 +9,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { bakeTarget, buildBake, pendingBuildInputs } from './app.mjs';
+import { packageGpuManifest } from './app-shells.mjs';
 
 async function withContractBake(use, {binding=false,watchPackage=false}={}) {
   const root=resolve(import.meta.dir,'..'), old=new Date('2000-01-01T00:00:00Z');
@@ -54,7 +55,7 @@ async function withContractBake(use, {binding=false,watchPackage=false}={}) {
       assert.ok(unit, 'the bake must leave its build-script marker');
       return resolve(builds,unit);
     };
-    await use({dir,write,source,bake,plan,run,scriptDir,old});
+    await use({dir,write,source,bake,plan,run,scriptDir,old,app});
   } finally {rmSync(dir,{recursive:true,force:true});}
 }
 
@@ -90,6 +91,26 @@ test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('restored and equal-mtime Contra
     writeFileSync(library, 'component Child\n  view\n    text "CHANGED!"\n');
     utimesSync(library, old, old);
     bake(); assert.ok(plan().includes(Buffer.from('CHANGED!')), 'installed Contract imports must be watched by content');
+  });
+}, 300000);
+
+// LLP 1153.003 D5: a package's GPU declaration decides what a host builds even when it omits the host, and its lock
+// what the module resolves from.
+test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('a package GPU declaration and lock are native build inputs', async () => {
+  await withContractBake(({dir, write, bake, app}) => {
+    const declaration = targets => JSON.stringify({gpu:{crate:'rust', exactGpu:'0.3', targets, surfaces:{sky:{arity:1, factory:'sky_surface::surface'}}}});
+    write('package.json', JSON.stringify({dependencies:{'@fixture/sky':'1.0.0'}}));
+    write('node_modules/@fixture/sky/package.json', JSON.stringify({name:'@fixture/sky', exports:'./exact.json'}));
+    write('node_modules/@fixture/sky/exact.json', declaration(['macos']));
+    write('node_modules/@fixture/sky/rust/Cargo.lock', 'version = 4\n');
+    app.manifest = packageGpuManifest(app.manifest, dir);
+    const build = bake();
+    assert.deepEqual(pendingBuildInputs(build), []);
+    write('node_modules/@fixture/sky/exact.json', declaration(['macos', 'linux']));
+    assert.deepEqual(pendingBuildInputs(build), ['package/@fixture/sky/exact.json']);
+    write('node_modules/@fixture/sky/exact.json', declaration(['macos']));
+    write('node_modules/@fixture/sky/rust/Cargo.lock', 'version = 4\n\n');
+    assert.deepEqual(pendingBuildInputs(build), ['package/@fixture/sky/rust/Cargo.lock']);
   });
 }, 300000);
 

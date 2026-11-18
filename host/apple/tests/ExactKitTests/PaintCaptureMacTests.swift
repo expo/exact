@@ -92,7 +92,7 @@ final class PaintCaptureMacTests: XCTestCase {
             child: { _, _, _, _, _, _, _, _, _, _, _, _ in 0 }, childrenCount: { _, _ in 0 }, placement: { _, _, _, _ in 0 },
             shader: nil, validateShader: nil, clearShaders: nil, errorLen: { 0 }, errorPtr: { nil },
             wantsInput: nil, input: nil, messages: nil, published: nil, agent: nil, outPtr: nil)
-        let entry = CanvasesHost.Entry(view: canvas, name: "paint", values: [])
+        let entry = CanvasesHost.Entry(view: canvas, name: "paint", values: Data("[]".utf8))
         entry.id = 7; entry.module = module; entry.through = true
         session.surfaceHost.entries[2] = entry
         capturedPaintPixels = []
@@ -174,7 +174,7 @@ final class PaintCaptureMacTests: XCTestCase {
             }, childrenCount: { _, _ in 0 }, placement: { _, _, _, _ in 0 },
             shader: nil, validateShader: nil, clearShaders: nil, errorLen: { 0 }, errorPtr: { nil },
             wantsInput: nil, input: nil, messages: nil, published: nil, agent: nil, outPtr: nil)
-        let entry = CanvasesHost.Entry(view: canvas, name: "paint", values: [])
+        let entry = CanvasesHost.Entry(view: canvas, name: "paint", values: Data("[]".utf8))
         entry.id = 7; entry.module = module; entry.through = true
         session.surfaceHost.entries[2] = entry
         if firstEach {

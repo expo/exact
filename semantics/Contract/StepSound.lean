@@ -4,8 +4,7 @@ Well-typed programs don't go wrong.
 `ConfigOK p c` is a well-typed configuration: root slots present and of
 their types, settled derives and resources of theirs, every live row's
 slots of theirs, every rendered element's handlers naming an existing
-action with typed curried arguments, every timer running an action of no
-parameters. For a program the checker accepts (`check p = true`):
+action with typed curried arguments, every timer running an existing action. For a program the checker accepts (`check p = true`):
 
 * every reachable configuration is `ConfigOK` (`reachable_configOK`);
 * every step from one — `dispatch` or `advance`, whatever the oracle —
@@ -73,18 +72,18 @@ def OutcomeOK : Outcome → Prop
 
 /-! ## Well-typed configurations -/
 
-/-- Every timer runs an action that exists and takes no parameters, and a
-gated one's gate and key are well typed (LLP 1092 D9). -/
+/-- Every timer runs an existing action; a root task's gate and key are
+well typed (LLP 1092 D9). Child gates read their instance's frame. -/
 def TimersOK (p : Program) (timers : List Timer) : Prop :=
-  ∀ tm ∈ timers, (∃ a, p.actions.find? (·.name == tm.action) = .some a ∧ a.params = []) ∧
-    ∀ e ∈ tm.gate.toList ++ tm.key.toList, ∃ u, HasTy p (compScope p) [] e u
+  ∀ tm ∈ timers, (∃ a, p.actions.find? (·.name == tm.action) = .some a) ∧
+    (tm.owner = .none → ∀ e ∈ tm.gate.toList ++ tm.key.toList, ∃ u, HasTy p (compScope p) [] e u)
 
 /-- The gate step keeps timers well formed: it moves only their deadlines. -/
-theorem TimersOK.gateStep {p : Program} {ts ts' slots st now} (h : TimersOK p ts)
-    (hg : gateStep p slots st now ts = .ok ts') : TimersOK p ts' := fun tm' hm => by
-  obtain ⟨tm, htm, ha, hgate, hkey⟩ := gateStep_mem hg tm' hm
+theorem TimersOK.gateStep {p : Program} {ts ts' slots st now store view} (h : TimersOK p ts)
+    (hg : gateStep p slots st now ts store view = .ok ts') : TimersOK p ts' := fun tm' hm => by
+  obtain ⟨tm, htm, ha, hgate, hkey, howner⟩ := gateStep_mem hg tm' hm
   obtain ⟨hact, hgk⟩ := h tm htm
-  exact ⟨by rw [ha]; exact hact, by rw [hgate, hkey]; exact hgk⟩
+  exact ⟨by rw [ha]; exact hact, by rw [hgate, hkey, howner]; exact hgk⟩
 
 /-- A well-typed configuration. Its slots are present and every derive and
 resource settled, unless nothing can run (no element, no timer: the
@@ -240,15 +239,22 @@ theorem GoodW.map {α β} {E : Err → Prop} {P : α → Prop} {Q : β → Prop}
 
 /-- The gate step fails only legitimately: every gate and key is well
 typed in the component's scope, and a key that is no key is a refusal. -/
-theorem gateStep_good {p : Program} (hp : WellTyped p) {slots st now ts}
+theorem gateStep_good {p : Program} (hp : WellTyped p) {slots st now ts store view}
     (henv : EnvOKE p Strict (compScope p)
       { prog := p, slots, derives := st.derives, resources := st.resources, now, idle := st.idle })
-    (hts : TimersOK p ts) : GoodW Strict (fun _ => True) (gateStep p slots st now ts) := by
+    (hts : TimersOK p ts) : GoodW Strict (fun _ => True) (gateStep p slots st now ts store view) := by
   have hfn : ProgOK p := ⟨hp.fns, hp.routeShapes⟩
   have hE : ∀ e, Legit e → e ≠ .pending → Strict e := fun _ h hn => ⟨h, hn⟩
   unfold gateStep
   refine mapM_goodW fun tm htm => ?_
-  have hg := (hts tm htm).2
+  unfold gateTask
+  split
+  case h_2 =>
+    split
+    · exact ⟨trivial, by simp⟩
+    · trivial
+  next ho =>
+  have hg := (hts tm htm).2 ho
   unfold gateTimer
   split
   · trivial
@@ -429,7 +435,7 @@ theorem runAction_sound {p : Program} (hp : WellTyped p) {o c name args rows c' 
   rw [hu] at hup
   obtain ⟨hst, hcm, hr⟩ := hup
   have hg : GoodW Strict (fun _ => True)
-      (gateStep p (applyWrites c.slots (answered ++ fx.writes)) st c.now c.timers) :=
+      (gateStep p (applyWrites c.slots (answered ++ fx.writes)) st c.now c.timers (r.toOption.map (·.2) |>.getD []) (r.toOption.map (·.1) |>.getD [])) :=
     gateStep_good hp (EnvGood.envOKE hp ⟨rfl, hok, hpres', RowsOK.nil, hst.1, hst.2⟩ hcm) hc.timers
   split at h
   · next e he => rw [he] at hg; exact keep h hg
@@ -492,7 +498,7 @@ theorem nextCommit_sound {p : Program} (hp : WellTyped p) {o c m c' out}
   next st r hu =>
   rw [hu] at hup
   obtain ⟨hst, hcm, hr⟩ := hup
-  have hg : GoodW Strict (fun _ => True) (gateStep p (setSlot c.slots m (.some v)) st c.now c.timers) :=
+  have hg : GoodW Strict (fun _ => True) (gateStep p (setSlot c.slots m (.some v)) st c.now c.timers (r.toOption.map (·.2) |>.getD []) (r.toOption.map (·.1) |>.getD [])) :=
     gateStep_good hp (EnvGood.envOKE hp ⟨rfl, hok, hpres', RowsOK.nil, hst.1, hst.2⟩ hcm) hc.timers
   split at h
   · next e he => rw [he] at hg; exact keep h (hc' c.queued _) hg
@@ -714,6 +720,16 @@ theorem ownedThen_sound {p : Program} (hp : WellTyped p) {o c i a c' out}
   · exact thenCommit_sound hp hc hlive ha h
   · simp only [Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact ⟨hc, trivial⟩
 
+/-- A task evaluates its captures and runs in its current instance. -/
+theorem timerCommit_sound {p : Program} (hp : WellTyped p) {o c tm c' out}
+    (hc : ConfigOK p c) (hlive : SlotsPresent p c.slots ∧ Complete p c.settled)
+    (ha : ∃ a, p.actions.find? (·.name == tm.action) = .some a)
+    (h : timerCommit p o c tm = (c', out)) : ConfigOK p c' ∧ OutcomeOK out := by
+  simp only [timerCommit, thenCommit] at h
+  split at h
+  · exact runAction_sound hp hc hlive ha h
+  all_goals (simp only [Prod.mk.injEq] at h; obtain ⟨rfl, rfl⟩ := h; exact ⟨hc, by constructor⟩)
+
 theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
     (hdue : ∀ c tm i, due c = Option.some (tm, i) → tm ∈ c.timers)
     (hpick : ∀ c m w a, pick c = Option.some (.andThen m w a) → a ∈ thenActions p ∧ c.armed ≠ [])
@@ -780,17 +796,17 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
     · exact ⟨hc, trivial⟩
     have htm := hdue c tm i hd
     have hpres := hc.present.resolve_right fun ⟨_, ht, _⟩ => by simp [ht] at htm
-    obtain ⟨⟨a, ha, hpa⟩, hgk⟩ := hc.timers tm htm
+    obtain ⟨⟨a, ha⟩, hgk⟩ := hc.timers tm htm
     have hset : TimersOK p (c.timers.set i tm.fired) := fun y hy => by
       rcases List.mem_or_eq_of_mem_set hy with hy | rfl
       · exact hc.timers y hy
-      · unfold Timer.fired; split <;> (try split) <;> (try split) <;> exact ⟨⟨a, ha, hpa⟩, hgk⟩
+      · obtain ⟨ha', hg', hk', ho'⟩ := tm.fired_fields
+        exact ⟨by rw [ha']; exact ⟨a, ha⟩, by rw [hg', hk', ho']; exact hgk⟩
     dsimp only
-    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
-      tm.action [] [] = r
+    generalize hr : timerCommit p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next } tm = r
     obtain ⟨c₂, out₂⟩ := r
     have hc₁ := hc.withTimers hpres hset (if tm.change && tm.next < c.now then c.now else tm.next)
-    obtain ⟨hc₂, hout₂⟩ := runAction_sound hp hc₁ hpres ⟨a, ha⟩ hr
+    obtain ⟨hc₂, hout₂⟩ := timerCommit_sound hp hc₁ hpres ⟨a, ha⟩ hr
     cases out₂ with
     | ok =>
       dsimp only
@@ -933,9 +949,9 @@ theorem boot_configOK {p : Program} (hp : WellTyped p) (o : Oracle) : ConfigOK p
   have hcomp := settle_complete hst
   have htimers₀ : TimersOK p timers := by
     intro tm htm
-    obtain ⟨t, htk, ha, hg, hk⟩ := startTimers_tasks ht tm htm
-    refine ⟨by rw [ha]; exact hp.taskActions t htk, ?_⟩
-    rw [hg, hk]; exact hp.taskGates t htk
+    obtain ⟨t, htk, ha, hg, hk, ho⟩ := startTimers_tasks ht tm htm
+    refine ⟨by rw [ha]; exact (hp.taskActions t htk).imp fun _ h => h.1, ?_⟩
+    rw [hg, hk, ho]; exact hp.taskGates t htk
   split at hb
   · exact empty hb
   next st₂ hst₂ =>
@@ -952,6 +968,10 @@ theorem boot_configOK {p : Program} (hp : WellTyped p) (o : Oracle) : ConfigOK p
   dsimp only at hb
   split at hb
   · next view live hr =>
+    split at hb
+    · exact empty hb
+    next timers'' ht'' =>
+    have htimers := htimers.gateStep ht''
     simp only [Prod.mk.injEq] at hb
     obtain ⟨rfl, -⟩ := hb
     have hrender := renderTabs_good hp (E := Legit) (fun _ h _ => h) fuel
@@ -967,8 +987,7 @@ theorem boot_configOK {p : Program} (hp : WellTyped p) (o : Oracle) : ConfigOK p
 /-- **Every reachable configuration of a well-typed program is
 well typed**: root slots present and of their types, settled derives and
 resources of theirs, live rows' slots of theirs, rendered handlers naming
-existing actions with typed arguments, timers running actions of no
-parameters. -/
+existing actions with typed arguments, and timers running existing actions. -/
 theorem reachable_configOK {p : Program} (hp : WellTyped p) {c : Config} (h : Reachable p c) :
     ConfigOK p c := by
   induction h with

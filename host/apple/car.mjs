@@ -72,12 +72,14 @@ function component(value, where) {
   return number;
 }
 
-export function catalogRecords(catalogs, fallback) {
+/** Each catalog's records; `fallbacks`, by icon name, the PNG an Icon Composer project's icon
+ * is drawn from for older iOS (`--exact-icon-fallback <name>=<png>`). */
+export function catalogRecords(catalogs, fallbacks = {}) {
   const records = [], seen = new Set();
   const walk = (path, namespace = '') => {
     const suffix = extname(path), contents = resolve(path, 'Contents.json');
     if (suffix === '.icon') {
-      const icon = composerRecords(path, fallback);
+      const icon = composerRecords(path, fallbacks[basename(path, suffix)]);
       for (const name of new Set(icon.map(record => record.name))) {
         if (seen.has(name)) throw new Error(`host/apple: duplicate named asset ${name}`); seen.add(name);
       }
@@ -190,18 +192,25 @@ export function compileCatalogCommand(args) {
   const options = {}, catalogs = [];
   const flags = new Set(['--compile', '--platform', '--minimum-deployment-target', '--target-device', '--app-icon', '--alternate-app-icon', '--accent-color', '--output-partial-info-plist', '--output-format', '--exact-icon-fallback']);
   for (let i = 0; i < args.length; i++) {
-    if (flags.has(args[i])) { const flag = args[i]; if (args[i + 1] == null) throw new Error(`${flag} needs a value`); const value = args[++i]; options[flag] = flag === '--alternate-app-icon' ? [...(options[flag] ?? []), value] : value; }
+    if (flags.has(args[i])) { const flag = args[i]; if (args[i + 1] == null) throw new Error(`${flag} needs a value`); const value = args[++i]; options[flag] = ['--alternate-app-icon', '--exact-icon-fallback'].includes(flag) ? [...(options[flag] ?? []), value] : value; }
     else if (args[i].startsWith('-')) throw new Error(`host/apple: unsupported asset compiler option ${args[i]}`);
     else catalogs.push(resolve(args[i]));
   }
   if (!['iphoneos', 'iphonesimulator'].includes(options['--platform'])) throw new Error('host/apple: the portable catalog compiler currently targets iOS');
   const output = options['--compile'], minimum = options['--minimum-deployment-target'] ?? '17.0';
   if (!output || !catalogs.length || !/^\d+(\.\d+){0,2}$/.test(minimum)) throw new Error('host/apple: asset compilation needs catalogs, an output directory and a valid deployment target');
-  const records = catalogRecords(catalogs, options['--exact-icon-fallback']), bytes = assetCatalog(records, minimum);
+  const fallbacks = Object.fromEntries((options['--exact-icon-fallback'] ?? []).map(value => {
+    const at = value.indexOf('=');
+    if (at < 1) throw new Error(`host/apple: --exact-icon-fallback takes <icon name>=<png>, not ${value}`);
+    return [value.slice(0, at), value.slice(at + 1)];
+  }));
+  const records = catalogRecords(catalogs, fallbacks), bytes = assetCatalog(records, minimum);
   const keys = options['--accent-color'] ? { NSAccentColorName: options['--accent-color'] } : {};
   const primary = options['--app-icon'], alternates = options['--alternate-app-icon'] ?? [];
   const icon = name => records.find(record => record.kind === 'icon' && record.name === name);
   for (const name of [primary, ...alternates].filter(Boolean)) if (!icon(name)) throw new Error(`host/apple: no app icon named ${name}`);
+  // For iOS 17, Exact's floor, the pinned actool (Xcode 27.2) lists an alternate by its name alone: no
+  // CFBundleIconFiles and no fallback PNGs, which it writes for the primary only.
   if (primary) {
     const alternateKeys = alternates.length ? { CFBundleAlternateIcons: Object.fromEntries(alternates.map(name => [name, { CFBundleIconName: name }])) } : {};
     for (const [key, files] of [['CFBundleIcons', [`${primary}60x60`]], ['CFBundleIcons~ipad', [`${primary}60x60`, `${primary}76x76`]]])

@@ -1487,14 +1487,3 @@ test('APK rebuilds preserve selected ABIs and freshness covers both libraries', 
     expect(apkChanges(app, apk)[0]).toContain('no complete ABI build record');
   } finally { run.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
 });
-
-
-test('TypeScript x86_64 refuses before compiling even with a Hermes override', () => {
-  const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', '--apk', '--abis', 'x86_64'], {
-    encoding: 'utf8', env: { ...process.env, HERMES_LEAN_SYS_DIR_x86_64_linux_android: '/unused-bundle' },
-  });
-  expect(r.status).toBe(1);
-  expect(r.stderr).toContain('vendored Hermes resolver does not support Android x86_64 ICU');
-  expect(r.stderr).toContain('Use --abis arm64-v8a');
-  expect(r.stderr).not.toContain('Compiling');
-}, 30_000);

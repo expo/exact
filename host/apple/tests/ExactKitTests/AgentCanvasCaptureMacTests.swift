@@ -30,7 +30,7 @@ final class AgentCanvasCaptureMacTests: XCTestCase {
             ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 100, "h": 100],
             ["op": "frame", "id": 2, "x": 0, "y": 40, "w": 100, "h": 20],
         ]))
-        let entry = CanvasesHost.Entry(view: try XCTUnwrap(p.views[1]), name: "viewport-pixels", values: [])
+        let entry = CanvasesHost.Entry(view: try XCTUnwrap(p.views[1]), name: "viewport-pixels", values: Data("[]".utf8))
         entry.id = 1; entry.module = module()
         session.surfaceHost.entries[1] = entry
         window.orderFrontRegardless(); window.displayIfNeeded(); CATransaction.flush()
@@ -69,7 +69,7 @@ final class AgentCanvasCaptureMacTests: XCTestCase {
             ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 100, "h": 100],
             ["op": "frame", "id": 3, "x": 80, "y": 0, "w": 20, "h": 20],
         ]))
-        let entry = CanvasesHost.Entry(view: try XCTUnwrap(p.views[2]), name: "glass-fallback-pixels", values: [])
+        let entry = CanvasesHost.Entry(view: try XCTUnwrap(p.views[2]), name: "glass-fallback-pixels", values: Data("[]".utf8))
         entry.id = 3; entry.module = module()
         session.surfaceHost.entries[2] = entry
         window.orderFrontRegardless(); window.displayIfNeeded(); CATransaction.flush()
@@ -132,7 +132,7 @@ final class AgentCanvasCaptureMacTests: XCTestCase {
                 ["op": "frame", "id": 7, "x": 60, "y": 0, "w": 20, "h": 20],
             ]))
             let canvas = try XCTUnwrap(p.views[3])
-            let entry = CanvasesHost.Entry(view: canvas, name: "window-pixels", values: [])
+            let entry = CanvasesHost.Entry(view: canvas, name: "window-pixels", values: Data("[]".utf8))
             entry.id = UInt32(index + 1); entry.module = module()
             session.surfaceHost.entries[3] = entry
         }

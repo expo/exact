@@ -608,6 +608,23 @@ mod tests {
         assert!(super::parse("fs.read home:/").unwrap_err()[0].contains("home-grant-whole"));
     }
 
+    #[test]
+    fn known_folder_lines_are_write_only_and_separate_from_documents() {
+        let spec = "fs.write documents:/
+fs.write pictures:/Exports
+fs.read doc:/";
+        assert_eq!(super::parse(spec).unwrap().lines().len(), 3);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&super::normalized_json(spec)).unwrap();
+        assert_eq!(
+            parsed["entries"][0][2],
+            serde_json::json!(["fs-write", "documents:"])
+        );
+        for capability in ["fs.read", "sqlite.open"] {
+            assert!(super::parse(&format!("{capability} documents:/")).is_err());
+        }
+    }
+
     /// `browser.automation` is the runner's own line and names no target
     /// (LLP 1020.002 D9): with a word after it, it is no such line, and the
     /// I/O grammar refuses it.

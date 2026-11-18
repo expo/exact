@@ -1,0 +1,127 @@
+routes nav
+  home "/"
+  counter "/counter/:id"
+
+component App
+  state total = 0
+  state active = true
+  state version = 0
+  state divisor = 1
+  state visible = true
+  state refuseA = false
+  action refuse
+    refuseA = true
+  action hideText
+    visible = false
+  action open(id: string)
+    nav = push(nav, path("counter", id))
+  action back
+    nav = back(nav)
+  action leaveInvalid
+    nav = back(nav)
+    divisor = 0
+  action toggle
+    active = not active
+  action rekey
+    version = version + 1
+  action add(n: number)
+    total = total + n
+  view
+    column
+      text `${total}` testId="total"
+      button press=open("a") testId="a"
+        text "A"
+      button press=open("b") testId="b"
+        text "B"
+      button press=back testId="back"
+        text "Back"
+      button press=leaveInvalid testId="leave-invalid"
+        text "Leave"
+      button press=toggle testId="toggle"
+        text "Toggle"
+      button press=hideText testId="hide-text"
+        text "Hide text"
+      button press=rekey testId="rekey"
+        text "Restart"
+      button press=refuse testId="refuse"
+        text "Refuse A's ticks"
+      for e in stack(nav) key=e.id
+        if e.name == "counter"
+          Counter(id=e.params.id, active=active, version=version + 1 / divisor, add=add, visible=visible, divisor=refuseA and e.params.id == "a" ? 0 : 1)
+
+component Counter
+  props
+    id: string
+    active: bool
+    version: number
+    visible: bool
+    divisor: number
+    add: action
+  state count = 0
+  task tick when active key=version
+    every(10, bump)
+  action bump
+    count = count + 1 / divisor
+    add(1)
+  view
+    if visible
+      text `${count}` testId=`count-${id}`
+
+test "two instances keep their tasks while covered and stop on destruction"
+  tap "a"
+  clock +10
+  expect state total == 1
+  tap "b"
+  clock +10
+  expect state total == 3
+  tap "toggle"
+  clock +30
+  expect state total == 3
+  tap "toggle"
+  clock +5
+  tap "rekey"
+  clock +5
+  expect state total == 3
+  clock +5
+  expect state total == 5
+  tap "back"
+  clock +10
+  expect state total == 6
+  tap "back"
+  clock +20
+  expect state total == 6
+  tap "a"
+  clock +10
+  expect state total == 7
+
+test "an instance still owns its task when its view has no elements"
+  tap "a"
+  tap "hide-text"
+  clock +10
+  expect state total == 1
+
+test "a departing instance does not evaluate its task key"
+  tap "a"
+  clock +10
+  tap "leave-invalid"
+  clock +10
+  expect state total == 1
+
+test "a refused firing leaves the next sibling due"
+  tap "a"
+  tap "b"
+  tap "refuse"
+  clock +10
+  expect state total == 0
+  expect text "count-a" == "0"
+  expect text "count-b" == "0"
+  clock +0
+  expect state total == 1
+  expect text "count-a" == "0"
+  expect text "count-b" == "1"
+  clock +10
+  expect state total == 1
+  clock +0
+  expect state total == 2
+  expect text "count-a" == "0"
+  expect text "count-b" == "2"

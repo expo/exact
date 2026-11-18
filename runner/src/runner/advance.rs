@@ -8,6 +8,37 @@ use super::*;
 mod data_timers;
 mod inputs;
 
+/// A timer or collection-feedback commit and the runner clock it happened at.
+#[derive(Debug, Clone)]
+pub struct Timed {
+    /// The runner's clock when the receipt committed, milliseconds.
+    pub at_ms: f64,
+    /// The commit.
+    pub receipt: CommitReceipt,
+}
+
+/// What one `advance_timed` or collection feedback call did: the commits in order, each at the time
+/// it committed (on a seek clock its due time); the clock afterwards — the requested time, or the
+/// last time reached before a refusal or, advancing until a request, at the timer that sent it
+/// (on a live clock, the last sample if later); and that refusal, if any. Commits before a refusal are
+/// kept: they are in the kernel, and a host must show them.
+#[derive(Debug)]
+pub struct Advanced {
+    /// The commits, in order.
+    pub receipts: Vec<Timed>,
+    /// The clock after the call, milliseconds.
+    pub now_ms: f64,
+    /// The refusal that stopped the advance or the collection edge action.
+    pub error: Option<RunnerError>,
+    /// [`Runner::advance_until_request`] stopped after a commit that sent a
+    /// request, short of its cutoff or at it: the host lands the reply
+    /// before it advances again.
+    pub stopped_on_request: bool,
+    /// Apply this batch before continuing: a keyed change action needs
+    /// the preceding host layout and commands to be visible.
+    pub needs_apply: bool,
+}
+
 /// How the runner's clock moves: whether the host presents frames, and the
 /// host's live clock when one owns it (D1; none is a seek clock).
 #[derive(Default)]
@@ -20,7 +51,10 @@ pub(super) struct Clock {
     pub(super) admission: Option<f64>,
     pub(super) admitting: bool,
     pub(super) takeover: Option<f64>,
-    frame_turn: Option<(f64, std::collections::VecDeque<usize>)>,
+    frame_turn: Option<(
+        f64,
+        std::collections::VecDeque<(usize, owned_tasks::TaskOwner)>,
+    )>,
     pub(super) sample: Option<Box<dyn FnMut() -> f64>>,
     /// The scheduling instant of the callback running, which the `then`s and
     /// queue `next`s it arms inherit (D2)
@@ -240,10 +274,12 @@ impl<D: DataSource> Runner<D> {
             .as_ref()
             .is_none_or(|(at, _)| *at != now_ms)
         {
-            let armed = (0..self.plan.timers.len())
-                .filter(|&i| self.plan.timers[i].frame && self.timers[i].armed)
+            let mut armed: Vec<_> = (0..self.timers.len())
+                .filter(|&i| self.timer_row(i).frame && self.timers[i].armed)
+                .map(|i| (i, self.timers[i].owner.clone()))
                 .collect();
-            self.clock.frame_turn = Some((now_ms, armed));
+            armed.sort_by_key(|(i, _)| (self.timers[*i].site, self.timers[*i].instance));
+            self.clock.frame_turn = Some((now_ms, armed.into()));
         }
         while self
             .clock
@@ -258,7 +294,7 @@ impl<D: DataSource> Runner<D> {
                 a.now_ms = self.now_ms;
                 return a;
             }
-            let i = self
+            let (i, owner) = self
                 .clock
                 .frame_turn
                 .as_mut()
@@ -266,7 +302,7 @@ impl<D: DataSource> Runner<D> {
                 .1
                 .pop_front()
                 .unwrap();
-            if !self.timers[i].armed {
+            if !self.timers[i].armed || !owned_tasks::same_owner(&self.timers[i].owner, &owner) {
                 continue;
             }
             self.timers[i].base = at;
@@ -275,9 +311,9 @@ impl<D: DataSource> Runner<D> {
             if !self.ids.work.sites.is_empty() {
                 self.ids.work.timer_firings[6] += 1;
             }
-            let action = self.plan.timers[i].action;
+            let action = self.timer_row(i).action;
             let was_poisoned = self.poisoned;
-            match self.scheduled(at, |r| r.traced_action("task", action, Vec::new(), &[])) {
+            match self.scheduled(at, |r| r.task_action(i)) {
                 Ok(receipt) => a.receipts.push(Timed {
                     at_ms: self.now_ms,
                     receipt,
@@ -336,9 +372,9 @@ impl<D: DataSource> Runner<D> {
             .chain(
                 self.timers
                     .iter()
-                    .zip(&self.plan.timers)
-                    .filter(|(_, row)| row.change)
-                    .map(|(t, _)| &t.next_ms),
+                    .enumerate()
+                    .filter(|(i, _)| self.timer_row(*i).change)
+                    .map(|(_, t)| &t.next_ms),
             )
             .copied()
             .filter(|ms| ms.is_finite())
@@ -392,7 +428,7 @@ impl<D: DataSource> Runner<D> {
     /// Whether a change action is due by `now_ms`.
     fn change_due_by(&self, now_ms: f64) -> bool {
         (self.timers.iter().enumerate())
-            .any(|(i, t)| self.plan.timers[i].change && t.next_ms <= now_ms)
+            .any(|(i, t)| self.timer_row(i).change && t.next_ms <= now_ms)
     }
 
     /// [`Self::advance_within`] with no input held.
@@ -495,29 +531,27 @@ impl<D: DataSource> Runner<D> {
         }
         let mut work_spent = None;
         loop {
-            // The earliest due timer, deterministic by index on ties.
+            // Ties follow declaration order, then instance creation order.
             let due = self
                 .timers
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| {
-                    timers || (self.plan.timers[*i].change && !self.wake_stops_timers())
-                })
-                .filter(|(i, _)| frames || !self.plan.timers[*i].frame)
+                .filter(|(i, _)| timers || (self.timer_row(*i).change && !self.wake_stops_timers()))
+                .filter(|(i, _)| frames || !self.timer_row(*i).frame)
                 .map(|(i, _)| (i, self.timer_execution(i)))
                 .filter(|(_, at)| *at <= now_ms)
                 .min_by(|(ia, a), (ib, b)| {
                     a.total_cmp(b)
                         .then_with(|| {
-                            (self.plan.timers[*ia].wait == 4)
-                                .cmp(&(self.plan.timers[*ib].wait == 4))
+                            (self.timer_row(*ia).wait == 4).cmp(&(self.timer_row(*ib).wait == 4))
                         })
                         .then_with(|| {
                             self.timers[*ia]
                                 .next_ms
                                 .total_cmp(&self.timers[*ib].next_ms)
                         })
-                        .then(ia.cmp(ib))
+                        .then(self.timers[*ia].site.cmp(&self.timers[*ib].site))
+                        .then(self.timers[*ia].instance.cmp(&self.timers[*ib].instance))
                 });
             // A sequence's end is a timer after every task (LLP 1125 D2): its
             // index is the last; its own wake (a fill, the count-in's end)
@@ -905,7 +939,8 @@ impl<D: DataSource> Runner<D> {
             // A change action may read the host's layout or issue commands.
             // Return the preceding receipts before running it, and its own
             // receipt before any following change action.
-            if self.plan.timers[i].change && !receipts.is_empty() {
+            let change = self.timer_row(i).change;
+            if change && !receipts.is_empty() {
                 return Advanced {
                     receipts,
                     now_ms: self.now_ms,
@@ -928,7 +963,7 @@ impl<D: DataSource> Runner<D> {
             let nominal = self.timers[i].next_ms;
             let was_poisoned = self.poisoned;
             let ticket = self.next_ticket;
-            let action = self.plan.timers[i].action;
+            let action = self.timer_row(i).action;
             let result = self.fire_timer(i, nominal, at, if live { now_ms } else { at }, false);
             match result {
                 Ok(receipt) => receipts.push(Timed {
@@ -952,7 +987,7 @@ impl<D: DataSource> Runner<D> {
                     };
                 }
             }
-            if self.plan.timers[i].change {
+            if change {
                 return Advanced {
                     receipts,
                     now_ms: self.now_ms,

@@ -37,7 +37,7 @@ pub const CLIENT: &str = "network.client";
 pub const USER_SELECTED: &str = "files.user-selected.read-write";
 
 const CLIENT_ONLY: Sandbox = Sandbox::Keys(&[CLIENT]);
-const OUTSIDE: &str = "the Mac App Store sandbox reaches no path outside the app's container, its bundle and the documents the person chooses; only a temporary-exception entitlement spells one";
+const OUTSIDE: &str = "the Mac App Store sandbox reaches no path outside the app's container, its bundle, supported well-known folders and the documents the person chooses; only a temporary-exception entitlement spells another path";
 
 /// What a device row asks of the sandbox: its column, or a refusal for a row
 /// that leaves it unset, as a row a package adds may (D2: the audit stays a
@@ -98,11 +98,18 @@ pub fn line(line: &str) -> Sandbox {
 }
 
 /// A filesystem target, in D2's order: the container and the bundle take
-/// nothing, a chosen document the user-selected key, and a home or absolute
-/// path is refused.
+/// nothing, a chosen document the user-selected key, and supported known
+/// folders their asset keys. A home or absolute path is refused.
 fn path(target: &str) -> Sandbox {
     match target.split_once(':') {
         Some(("app" | "bundle", _)) => NONE,
+        Some(("downloads", _)) => Sandbox::Keys(&["files.downloads.read-write"]),
+        Some(("pictures", _)) => Sandbox::Keys(&["assets.pictures.read-write"]),
+        Some(("music", _)) => Sandbox::Keys(&["assets.music.read-write"]),
+        Some(("videos", _)) => Sandbox::Keys(&["assets.movies.read-write"]),
+        Some(("desktop" | "documents" | "screenshots", _)) => Sandbox::Refused(
+            "the Mac App Store sandbox has no entitlement for this well-known folder",
+        ),
         Some(("doc", _)) => Sandbox::Keys(&[USER_SELECTED]),
         // A Windows path (LLP 1027.001) names nothing on the Mac.
         Some(("win", _)) => NONE,
@@ -170,6 +177,22 @@ mod tests {
             ("fs.write app:/notes", NONE),
             ("sqlite.open app:/db.sqlite", NONE),
             ("fs.read bundle:/Resources/data", NONE),
+            (
+                "fs.write downloads:/",
+                Sandbox::Keys(&["files.downloads.read-write"]),
+            ),
+            (
+                "fs.write pictures:/Exports",
+                Sandbox::Keys(&["assets.pictures.read-write"]),
+            ),
+            (
+                "fs.write music:/",
+                Sandbox::Keys(&["assets.music.read-write"]),
+            ),
+            (
+                "fs.write videos:/",
+                Sandbox::Keys(&["assets.movies.read-write"]),
+            ),
             ("fs.write doc:/", Sandbox::Keys(&[USER_SELECTED])),
             (
                 "doc.keep",
@@ -207,6 +230,9 @@ mod tests {
             other => panic!("{grant} is {other:?}"),
         };
         assert!(refused("fs.read home:/Documents").contains("temporary-exception"));
+        for folder in ["desktop", "documents", "screenshots"] {
+            assert!(refused(&format!("fs.write {folder}:/")).contains("no entitlement"));
+        }
         assert!(refused("fs.write /Users/me/notes").contains("temporary-exception"));
         assert!(refused("sqlite.open home:/db").contains("outside the app's container"));
         assert!(refused("net.listen unix:/tmp/sock").contains("binds no socket"));

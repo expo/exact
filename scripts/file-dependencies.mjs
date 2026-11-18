@@ -6,7 +6,7 @@
 // it what the declared directories hold now, by Bun's own install: the one that decides what an install is.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { installLock, withInstallLock } from './filesystem.mjs';
 
 // Not a package's sources: its own installs, and its repository. Bun copies both; no build reads either from it.
@@ -44,6 +44,21 @@ export function fileDependencies(appDir) {
     out.push({ name, spec, source: resolve(root, spec.slice('file:'.length)), installed: join(modules, 'node_modules', name), modules, root });
   }
   return out;
+}
+
+/** Where an edit to a path inside an installed `file:` package is made: a function from that path to the same path
+ * under the declared directory, or to null for a path in no such install. An install outside the app is links to the
+ * declared files (above), so a watcher of the install never sees an edit to them. */
+export function declaredSources(appDir) {
+  const installs = fileDependencies(appDir).flatMap(({ installed, source }) => {
+    let real;
+    try { real = realpathSync(installed); } catch { return []; }
+    return [...new Set([installed, real])].map(at => ({ at, source }));
+  });
+  return (path) => {
+    const found = installs.find(({ at }) => path === at || path.startsWith(at + sep));
+    return found ? join(found.source, relative(found.at, path)) : null;
+  };
 }
 
 const isDirectory = (path) => { try { return statSync(path).isDirectory(); } catch { return false; } };

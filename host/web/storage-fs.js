@@ -5,7 +5,7 @@
 // module evaluates: a realm that later refuses ambient time to app code (the
 // module Worker, LLP 1027.002 D2) still stamps files with the real one.
 import { agentStorageRefusal, directories as roots, fileVersion, now, storageKey } from './storage-environment.js';
-import { coversPath } from './grant-admission.js';
+import { coversPath, knownFolderPath } from './grant-admission.js';
 const rootPaths = Object.values(roots);
 // Calls from one host module retain invocation order. Web Locks queue
 // conflicts with a live SQLite handle or another tab, with a bounded wait.
@@ -19,6 +19,7 @@ function failure(message, code) {
 }
 
 export function normalizePath(path) {
+  if (knownFolderPath(path)) throw Object.assign(new Error('NotSupportedError: well-known folders are unavailable on this host'), { name: 'NotSupportedError', code: 'failed' });
   if (typeof path !== 'string' || !path.startsWith('app:/')) {
     throw failure('browser storage needs an app:/ path');
   }

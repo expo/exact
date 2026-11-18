@@ -62,7 +62,17 @@ pub async fn load_gpu(
     instance: wgpu::Instance,
     compatible: Option<&wgpu::Surface<'_>>,
 ) -> Result<Gpu, DeviceFailure> {
-    load_gpu_as(instance, compatible, false).await
+    load_gpu_with_requirements(instance, compatible, &[]).await
+}
+
+/// Create a device with the union of the packages' satisfiable requirements.
+/// Unavailable packages are refused by the module at surface creation.
+pub async fn load_gpu_with_requirements(
+    instance: wgpu::Instance,
+    compatible: Option<&wgpu::Surface<'_>>,
+    requirements: &[crate::grants::Requirements],
+) -> Result<Gpu, DeviceFailure> {
+    load_gpu_as(instance, compatible, false, requirements).await
 }
 
 /// [`load_gpu`]; `module`: a native module's own device, whose adapter
@@ -73,6 +83,7 @@ pub(crate) async fn load_gpu_as(
     instance: wgpu::Instance,
     compatible: Option<&wgpu::Surface<'_>>,
     module: bool,
+    requirements: &[crate::grants::Requirements],
 ) -> Result<Gpu, DeviceFailure> {
     // Exact's Android shaders keep uniforms in f32. Opt this instance into
     // native f16 arithmetic on Adreno; the HAL rejects unsupported f16 uniforms
@@ -94,13 +105,12 @@ pub(crate) async fn load_gpu_as(
     }
     #[cfg(target_arch = "wasm32")]
     let _ = module;
-    let available = adapter.limits();
-    let required_limits = requested_limits(available);
+    let grant = crate::grants::negotiate(adapter.limits(), adapter.features(), requirements);
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("exact"),
-            required_limits,
-            required_features: adapter.features() & requested_features(),
+            required_limits: grant.limits,
+            required_features: grant.features,
             memory_hints: memory_hints(),
             ..Default::default()
         })

@@ -27,7 +27,7 @@
     ]
   },
   "maven": [
-    "androidx.browser:browser:1.8.0"
+    "androidx.browser:browser:1.9.0"
   ],
   "artifacts": [],
   "class": "exact.inappbrowser.InAppBrowserModule",

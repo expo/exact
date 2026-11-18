@@ -142,7 +142,5 @@ test "add, open, delete after asking"
 - An unmatched location offers home (`notfound`); a missing detail says so.
 - `link href="#tags"` scrolls to `id="tags"` once data lands.
 
-## A screen open twice
-
-A screen as a component, `Finder(entry=e)` (`props entry: Entry`), has `state` per
-entry, gone on pop with its resources; mutations and tasks are the root's.
+Each screen instance owns its state, resources, mutations and tasks. Pop destroys
+it; covering keeps it alive. Pass activity as a prop and gate tasks with `when active`.

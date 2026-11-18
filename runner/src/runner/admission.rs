@@ -163,9 +163,9 @@ impl<D: DataSource> Runner<D> {
 
     /// A request let go while it may still run (a newer send replaced it),
     /// kept so the app's abort still cancels it, until its reply comes: at
-    /// most 256, the oldest let go first. Once each: a refused commit puts
-    /// the request back without undoing this, and may retire it again. (A
-    /// native host drops a let-go request's reply, so its record waits for
+    /// most 256, the oldest let go first. A refused commit restores this
+    /// list with its requests. (A native host drops a let-go request's reply,
+    /// so its record waits for
     /// the cap; there the app's abort can only come in the turn that
     /// replaced it, as the prelude settles a let-go call's fetches.)
     pub(super) fn note_retired(&mut self, p: &super::PendingReq) {

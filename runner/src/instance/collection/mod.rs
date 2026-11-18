@@ -138,7 +138,7 @@ pub fn set_bootstrap_extent(px: f64) {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Mounted {
     position: usize,
     wrapper: ViewId,
@@ -166,7 +166,7 @@ fn sort_mounted(rows: &mut [Mounted]) {
     rows.sort_by_key(|row| row.position);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Collection {
     /// The app modes around the list (LLP 1121 D5): what a row it mounts
     /// later, on a report, is in.

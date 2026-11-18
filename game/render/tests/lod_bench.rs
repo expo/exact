@@ -82,7 +82,7 @@ fn model_lod_cost_on_twenty_thousand_trees() {
     };
     let run = |lod: bool| {
         let mut s = WorldSurface::<Forest, ModelExecutor, true>::default();
-        s.device_ready(gpu.device.features());
+        s.device_ready(gpu.device.features(), gpu.device.limits());
         s.bind(&[Value::Bool(lod)], None).unwrap();
         s.prepare_assets(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
         s.agent(r#"{"op":"state","perf":true}"#);

@@ -113,3 +113,14 @@ test('a rename onto the other kind of entry is EISDIR or ENOTDIR, as rename(2) a
   });
   expect(codes).toEqual(['EISDIR', 'ENOTDIR']);
 }, 60_000);
+
+test('known-folder paths refuse with NotSupportedError before browser app storage', async () => {
+  const result = await inPage(async () => {
+    const { normalizePath } = await import('/storage-fs.js');
+    return ['desktop', 'documents', 'downloads', 'music', 'pictures', 'videos', 'screenshots'].map(name => {
+      try { normalizePath(`${name}:/shot.png`); return 'allowed'; }
+      catch (error) { return [error.name, error.code, error.message]; }
+    });
+  });
+  expect(result).toEqual(Array(7).fill(['NotSupportedError', 'failed', 'NotSupportedError: well-known folders are unavailable on this host']));
+});

@@ -31,6 +31,11 @@ const LAUNCHCTL_LIMIT: Duration = Duration::from_secs(2);
 /// `app:/data`, `app:/cache` and `app:/tmp` the app's directories,
 /// `bundle:/` the app bundle's `Contents` on macOS; an absolute path itself.
 pub(crate) fn native(shared: &Shared, path: &str) -> Result<PathBuf, String> {
+    if ibex2::stdlib::fs::is_known_folder(path) {
+        return super::storage_roots(&shared.processes)
+            .resolve_known_folder(path)
+            .map_err(|e| e.to_string());
+    }
     if let Some(rest) = path.strip_prefix("home:/") {
         return Ok(home(shared)?.join(rest));
     }
@@ -616,8 +621,8 @@ pub(super) fn exec(
 
 /// The `fs.write` line of the app's grants `app` under which it may write
 /// `path`'s directory entry or `real`, what it names, compared by realized
-/// whole names: a native line, or a `home:` or `app:` one. Where the grants
-/// do not parse, or a line names no directory here, the answer is the parse
+/// whole names, using storage's host roots. Where the grants do not parse,
+/// or a line names no directory here, the answer is the parse
 /// error or that line, and `path` is refused as if a line covered it.
 fn writable(shared: &Shared, app: &str, path: &Path, real: &Path) -> Option<String> {
     let realize = ibex2::stdlib::fs::realize;

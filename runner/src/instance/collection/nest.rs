@@ -31,7 +31,7 @@ pub(crate) struct KeptPosition {
 
 /// An outer list's kept positions: (outer row key, inner site) to the inner
 /// list's position, bounded by recency.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Kept {
     entries: HashMap<(Rc<str>, Rc<str>), KeptPosition>,
     order: BTreeMap<u64, (Rc<str>, Rc<str>)>,

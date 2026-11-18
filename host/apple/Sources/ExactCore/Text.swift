@@ -1107,9 +1107,13 @@ package final class TextEngine {
         func removed(_ line: CTLine, _ room: CGFloat) -> CGFloat {
             TextEngine.uncountedTrailingWidth(line, whiteSpace: spec.whiteSpace, source: shape.attributed, room: room)
         }
-        // CSS `text-wrap-style: balance` (TextBreaks.swift): a narrower room until the first forced break.
+        func made(_ range: CFRange) -> CTLine {
+            TextEngine.finishedLine(CTTypesetterCreateLine(typesetter, range), source: shape.attributed, range: range, justify: nil)
+        }
+        // CSS `text-wrap-style: balance` (TextBreaks.swift): the lines before the first forced break.
         let balanced = spec.balance && spec.lineClamp == 0 && !plan.boundaries.isEmpty && width > 0
-            ? plan.balance(limit, length: length, inset: { Double(insets.at($0).width) }, removed: removed, next: next, typesetter: typesetter, source: shape.attributed) : nil
+            ? plan.balance(limit, length: length, fontSize: (spec.strut ?? spec.runs.first)?.size ?? 0, justified: spec.align == 3, insets: insets,
+                           line: made, removed: removed, next: next, typesetter: typesetter, source: shape.attributed) : nil
         while start < length {
             if spec.lineClamp > 0 && lines.count == spec.lineClamp { break }
             var count: Int
@@ -1124,11 +1128,12 @@ package final class TextEngine {
                 // CSS pre: preserved like pre-wrap, so a forced break (the
                 // ones CoreText and pre-wrap take) ends a line; nothing else does.
                 count = CTTypesetterSuggestLineBreak(typesetter, start, Double.greatestFiniteMagnitude)
+            } else if let balanced, lines.count < balanced.counts.count {
+                count = balanced.counts[lines.count]
             } else {
                 // CSS `text-indent` takes its room from the first line only,
                 // a list item's indent from each of its lines.
-                let room = (balanced.map { start < $0.until ? $0.room : limit } ?? limit) - Double(insets.at(start).width)
-                count = next(&plan, start, room)
+                count = next(&plan, start, limit - Double(insets.at(start).width))
             }
             if count <= 0 { count = length - start }
             let range = CFRangeMake(start, count)
@@ -1140,8 +1145,7 @@ package final class TextEngine {
             if spec.align != 3, let oldLine, CTLineGetStringRange(oldLine).location == start, CTLineGetStringRange(oldLine).length == count {
                 line = oldLine
             } else {
-                line = TextEngine.placingRooms(TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: shape.attributed, range: range),
-                                               source: shape.attributed, range: range)
+                line = made(range)
             }
             var clamps = false
             // A word too long for its line keeps its width in layout, as CSS

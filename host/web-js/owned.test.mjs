@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { webCompiler } from './module.mjs';
@@ -10,6 +10,17 @@ import { webCompiler } from './module.mjs';
 // go when it ends.
 
 const root = resolve(import.meta.dir, '../..');
+
+test('equal-deadline child tasks follow instance creation order across recreation and rearming', async () => {
+  const source = readFileSync(resolve(root, 'semantics/corpus/timers/owned-order.contract'), 'utf8');
+  for (const change of ['toggle', 'gate', 'rekey']) await fixture(source, async ({ browser, text }) => {
+    await browser.tap('b');
+    await browser.tap(change);
+    if (change !== 'rekey') await browser.tap(change);
+    await browser.clock('+10');
+    expect(await text('total')).toBe(change === 'toggle' ? '21' : '12');
+  });
+}, 180_000);
 
 // `subjectWorks(s)` answers when the test lands it (`hold`) or at once, with `s`
 // as its one work; `now(x)` answers at once; every ask is recorded in
@@ -331,3 +342,150 @@ test("a rendered page's instances answer the boot's first frame", () => fixture(
   await land();
   expect(await text('works')).toBe('fantasy');
 }, { path: '/discover', render: true, hold: false }), 180_000);
+
+
+const TASK_REFUSAL = `component App
+  state shown = false
+  state divisor = 0
+  action show
+    shown = true
+  action repair
+    divisor = 1
+  view
+    column
+      text \`\${shown}\` testId="shown"
+      button press=show testId="show"
+        text "Show"
+      button press=repair testId="repair"
+        text "Repair"
+      if shown
+        Clock(divisor=divisor)
+component Clock
+  props
+    divisor: number
+  state count = 0
+  task tick key=(1 / divisor)
+    every(10, bump)
+  action bump
+    count = count + 1
+  view
+    text \`\${count}\` testId="clock"
+`;
+for (const fallback of [false, true]) {
+  const source = fallback ? TASK_REFUSAL.replace('Clock(divisor=divisor)',
+    'Clock(divisor=divisor)\n      else\n        Clock(divisor=1)') : TASK_REFUSAL;
+  test(`a new child task refuses its mounting commit and recovers (old instance: ${fallback})`, () => fixture(source, async ({ browser, text }) => {
+    await browser.clock('+10');
+    await browser.tap('show');
+    expect(await text('shown')).toBe('false');
+    expect(await text('clock')).toBe(fallback ? '1' : null);
+    expect((await browser.state()).slots.shown).toBe(false);
+    await browser.clock('+10');
+    expect(await text('clock')).toBe(fallback ? '2' : null);
+    await browser.tap('repair');
+    await browser.tap('show');
+    await browser.clock('+10');
+    expect(await text('clock')).toBe('1');
+  }), 180_000);
+}
+
+test('gated and ungated tasks share declaration order', () => fixture(`component App
+  state enabled = false
+  state total = 0
+  action enable
+    enabled = true
+  action first
+    total = total * 10 + 1
+  action second
+    total = total * 10 + 2
+  task gated when enabled
+    every(10, first)
+  task mounted mount
+    every(10, second)
+  view
+    column
+      text \`\${total}\` testId="total"
+      button press=enable testId="enable"
+        text "Enable"
+`, async ({ browser, text }) => {
+  await browser.tap('enable');
+  await browser.clock('+10');
+  expect(await text('total')).toBe('12');
+}), 180_000);
+
+
+test('an unopened tab refuses an invalid task key before changing selection', () => fixture(`routes nav
+  tab a "/"
+  tab b "/b"
+component App
+  state divisor = 1
+  action pick(name: string)
+    nav = select(nav, name)
+  action breakKey
+    divisor = 0
+  action repair
+    divisor = 1
+  view
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back"
+      for t in nav.tabs key=t.name
+        column role="tabpanel" id=\`panel-\${t.name}\`
+          for e in t.stack key=e.id
+            column navigationKey=\`\${e.id}\`
+              Clock(name=t.name, divisor=t.name == "b" ? divisor : 1)
+      row role="tablist"
+        button press=pick("a") testId="tab-a" role="tab" aria-controls="panel-a" aria-selected=(nav.tab == "a")
+          text "A"
+        button press=pick("b") testId="tab-b" role="tab" aria-controls="panel-b" aria-selected=(nav.tab == "b")
+          text "B"
+      button press=breakKey testId="break"
+        text "Break"
+      button press=repair testId="repair"
+        text "Repair"
+      text nav.tab testId="selected"
+component Clock
+  props
+    name: string
+    divisor: number
+  state count = 0
+  task tick key=(1 / divisor)
+    every(10, bump)
+  action bump
+    count = count + 1
+  view
+    text \`\${count}\` testId=\`clock-\${name}\`
+`, async ({ browser, text }) => {
+  expect(await text('clock-b')).toBe(null);
+  await browser.tap('break');
+  await browser.tap('tab-b');
+  expect(await text('selected')).toBe('a');
+  expect(await text('clock-b')).toBe(null);
+  await browser.tap('repair');
+  await browser.tap('tab-b');
+  await browser.clock('+10');
+  expect(await text('clock-b')).toBe('1');
+}), 180_000);
+
+
+test('destroying a child does not validate its departing task', () => fixture(TASK_REFUSAL
+  .replace('state shown = false', 'state shown = true')
+  .replace('state divisor = 0', 'state divisor = 1')
+  .replace('shown = true\n  action repair', 'shown = false\n    divisor = 0\n  action repair'), async ({ browser, text }) => {
+  await browser.clock('+10');
+  await browser.tap('show');
+  expect((await browser.state()).slots.shown).toBe(false);
+  expect(await text('clock')).toBe(null);
+  await browser.clock('+20');
+  expect((await browser.state()).tasks).toEqual({});
+}), 180_000);
+
+
+test("a child's task key reads its synchronous resource before mounting", () => fixture(TASK_REFUSAL
+  .replace('Clock(divisor=divisor)', 'Clock()')
+  .replace('  props\n    divisor: number', '  resource n = now("x") as shape string')
+  .replace('key=(1 / divisor)', 'key=(1 / n.length)'), async ({ browser, text, asks }) => {
+  await browser.tap('show');
+  expect((await browser.state()).slots.shown).toBe(true);
+  expect(await asks()).toEqual(['now(x)']);
+  await browser.clock('+10');
+  expect(await text('clock')).toBe('1');
+}), 180_000);

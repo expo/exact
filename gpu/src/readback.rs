@@ -102,6 +102,9 @@ impl Module {
     /// Render and capture directly into caller-owned RGBA bytes, reusing GPU
     /// storage until the size, format, or device changes.
     pub fn readback_into(&mut self, id: u32, frame: &Frame, out: &mut [u8]) -> Option<bool> {
+        if let Some(error) = self.refused_instance(id) {
+            return self.fail(error);
+        }
         self.check_device();
         if let Some(why) = shaders::missing(self.registry.shaders) {
             self.error = why;

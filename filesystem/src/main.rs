@@ -148,6 +148,8 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
             .ok_or_else(|| refuse("retained size overflow"))?,
     };
     let mut candidate = Vec::new();
+    // The request's index, even one an earlier, failed request already wrote.
+    let mut index = None;
     let own = files.iter().map(|(name, body)| (false, name, body));
     for (blob, name, encoded) in own.chain(blobs.iter().map(|(name, body)| (true, name, body))) {
         let path = format!("{}/{name}", if blob { "blobs" } else { prefix });
@@ -156,6 +158,9 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
             .map_err(|_| refuse("invalid base64"))?;
         if blob && format!("{:x}", Sha256::digest(&body)) != *name {
             return Err(refuse("a blob is not named by its digest"));
+        }
+        if !blob && name == "assets.json" {
+            index = Some(body.clone());
         }
         let previous = root
             .parent(&path, false)
@@ -178,9 +183,8 @@ fn retain(root: &Directory, input: &Value) -> io::Result<Value> {
         return Err(refuse("retained generation cache quota exceeded"));
     }
     // A blob can be released between the request that kept it and its envelope.
-    let index = format!("{prefix}/assets.json");
-    if let Some((_, _, index)) = candidate.iter().find(|(_, path, _)| *path == index) {
-        for digest in indexed_blobs(index)? {
+    if let Some(index) = index {
+        for digest in indexed_blobs(&index)? {
             let kept = blobs.contains_key(&digest)
                 || root
                     .parent(&format!("blobs/{digest}"), false)
@@ -248,6 +252,10 @@ fn release(root: &Directory, input: &Value) -> io::Result<Value> {
         }
         let epoch = root.child(&epoch, false)?;
         for seq in epoch.names()? {
+            // Only `retain`'s sequence names are generations; skip others, like Finder's `.DS_Store`.
+            if seq.is_empty() || !seq.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
             let generation = epoch.child(&seq, false)?;
             if generation.kind("exact.json").is_err() {
                 continue;

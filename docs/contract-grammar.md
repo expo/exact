@@ -385,26 +385,28 @@ calls (a shape, a `fn`, a component) comes from its own `use` lines or is
 declared in it, beside the block; another file, the root among them, names
 such a declaration on a `use` line. The
 component's rules hold for its members wherever they are written: a child's
-members file declares no mutation or task.
+members file may declare resources, mutations and tasks at bounded uses.
 
 There is one `props`, `inject`, `provide`, `slot`, and `view` section at most in
-a component. Only the root may own tasks. Any component may own resources and
-mutations (LLP 1035.005.004): each instance of a child asks for its own
+a component. Any component may own resources, mutations and tasks (LLP 1035.005.004): each instance of a child asks for its own
 resources, after the render that makes it, and lets go when the render destroys
 it. Each instance sends its own mutations: its own `pending`, failure, queue and
 answer, and its `then` runs in that instance, where it may call an action prop.
 A child's `refreshes` names its own resources. A send in flight when the render
 destroys the instance stays sent, but its answer changes nothing and its `then`
 does not run, and its waiting sends are dropped. A child's resource is not a
-resource over a list, and a child that owns requests is used where its instances
+resource over a list, and a child that owns requests or tasks is used where its instances
 are bounded: outside every region, under `if` and `match`, or in a row of
 `stack(nav)`, `t.stack` or `nav.tabs`, never under another `for` or in a
 virtualized list (`type-child-resource`). Its state initializers do not read its
 own resources (`type-state-reads-request`). The device's facts,
 `exactViewport()` and `exactPage()` with no arguments (`EmptyState` reads
 `accessibilityTextSize`), open no request: every instance reads the root's one
-answer. A task's
-body has exactly one schedule. A gated task (`when cond`, LLP 1092) has its
+answer. A task's body has exactly one schedule. Each child's task starts with
+its instance, stops when the instance is destroyed and runs its action in that
+instance's frame. A hidden tab or covered screen can remain alive: gate its
+work on activity. Frame tasks are allowed, with one action per armed instance
+per frame. Reload restarts timers over the carried state. A gated task (`when cond`, LLP 1092) has its
 timer only while `cond` holds, armed from the commit that made it true; `key=`
 re-arms it from the commit that changed the key (compared as a `for` key),
 and `key=` alone is `when true key=…`. The gate is a bool (`type-task-gate`), the
@@ -511,18 +513,45 @@ new shape cannot update or end an older instance with incompatible state. A
 compatibility-changing binary update follows LLP 1126.001 §5 Q6’s device gate.
 
 `resource activities = exactActivities() as shape Activities` reads a record
-whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool` and
-`linked: bool` (the host packaged its arm).
+whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool`,
+`linked: bool` (the host packaged its arm), `pushToStartToken:
+option<string>` and `pushToStartActivities: PushStartActivity[]`.
 An activity has `id`, `kind`, `state` (a JSON string), `activityState`
 (`pending`, `active`, `stale`, `ended`, `dismissed`) and `token: option<string>`.
-Readers may name only the fields they need. Off iOS the list is empty and
-frequent pushes are false. A first demand enumerates existing activities,
-including after a relaunch without a send; later token, state and content
-updates re-answer the source. A token is absent until ActivityKit supplies
-it, and exists only for an entry declaring `push: true`. The data module
-sends it to its own backend. Push-to-start and the `remote-notification`
-background mode stay refused; an app with activities registers for remote
-notifications only when it grants `device.push`.
+A push-start activity has `kind`, `generation` and `shape`, all strings.
+Readers may name only the fields they need. Off iOS the lists are empty, the
+push-to-start token is absent and frequent pushes are false. A first demand
+enumerates existing activities, including after a relaunch without a send;
+later token, state and content updates re-answer the source. A token is absent
+until ActivityKit supplies it, and exists only for an entry declaring
+`push: true`. The data module sends it to its own backend. The
+`remote-notification` background mode stays refused; an app with activities
+registers for remote notifications only when it grants `device.push`.
+
+Push-to-start (iOS 17.2 and later) lets the app's backend start an activity
+while the app is not running (LLP 1126 D9). `pushToStartToken` is
+ActivityKit's push-to-start token, read only when an entry declares
+`push: true`; it is absent until ActivityKit supplies one, which it does
+once Live Activities are allowed, and the source answers again when it
+rotates. `pushToStartActivities` lists the entries declaring `push: true`, each
+with the `generation` the app runs and its state `shape` digest; it is empty
+until the app has published that generation, just after it starts. The backend
+sends APNs a `start` event with `attributes-type` `ExactActivityAttributes`,
+`attributes` `{"kind", "generation", "shape"}` from that list, and
+`content-state` `{"shape", "state"}`, the same shape digest and a state in
+the entry's declared shape
+([Apple: starting a Live Activity with a push](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications)).
+It sends the values the app last reported, since a delivered update changes
+the generation; a generation from before a compatibility-changing binary
+update no longer renders.
+
+No app code runs when the start arrives. iOS may launch the app in the
+background for it, and the host boots no session for that launch. The started
+activity, with its update `token`, appears in `activities` the next time a
+session reads `exactActivities()`: at once in a session already reading it,
+otherwise at the app's next launch. Until then the backend has no update token
+for the activity, so it cannot update or end it. The app can update and end
+it as it does an activity it started.
 
 ### MIDI: `exactMIDI`, `sendMIDI`, `midimessage`
 
@@ -1503,8 +1532,8 @@ CSS hyphens are part of the authored name. `testId` and admitted host-specific
 props retain their declared spelling.
 `text-wrap-style="balance"` and its `text-wrap="balance"` shorthand are
 inherited; `auto` restores ordinary greedy wrapping. `pretty` and `stable` are refused with the supported values, `auto | balance`. Every host balances the
-lines before a paragraph's first forced break, up to six, at the narrowest
-width that keeps their count, as Chrome does (LLP 1001 §6).
+lines before a paragraph's first forced break, up to six, where Chrome
+breaks them (LLP 1001 §6).
 `-webkit-font-smoothing` takes `auto` or `antialiased` and is inherited; `none`
 and `subpixel-antialiased` are refused. It changes how glyphs paint, never how
 text measures (LLP 1019 D12).
@@ -3177,9 +3206,11 @@ Syntax is only the first layer. In particular:
   called `name(x)`, as it is declared) but not take a declared shape's constructor name.
 - Action reads see the starting snapshot. Writes land together. Locals are
   immutable and cannot shadow visible names or escape their block.
-- Tasks are root-owned. A child may own ordinary state, derives, actions,
-  resources and mutations, each instance its own, where its instances are
-  bounded (`type-child-resource`). An action writes only its own admitted slots.
+- A child may own ordinary state, derives and actions, and, at bounded uses,
+  resources, mutations and tasks (`type-child-resource`). Each instance owns its
+  work; its task runs in that instance's frame until destruction. Hidden instances
+  stay alive, so a task that should stop while hidden needs a `when` gate.
+  An action writes only its own admitted slots.
 - A `then` handler takes no parameters and must not send its own mutation.
 - A state's initializer reads only props, injects and the states above it; a
   resource, derive, mutation, action or later state it names is

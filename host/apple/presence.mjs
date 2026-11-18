@@ -3,8 +3,9 @@
 // Attest, the Declared Age Range, Group Activities, the iCloud key-value
 // store, CloudKit, Sensitive Content Analysis), the keychain group a locked secret is kept
 // in (a Mac keeps one only in the data-protection keychain, whose access
-// groups the signature names, TN3137), a passkey's associated domains, and
-// Sign in with Apple's and Apple Pay's entitlements (LLP 1030.005 §6 piece 4).
+// groups the signature names, TN3137), passkeys' and HTTPS auth callbacks'
+// associated domains, and Sign in with Apple's and Apple Pay's entitlements
+// (LLP 1030.005 §6 piece 4).
 // The build picks a macOS profile for the app that allows them all, signs
 // with that profile's team's identity and embeds it. With none, a
 // development build signs none of them and says what each feature then
@@ -12,7 +13,7 @@
 import { installedProfiles, decodeProfile, profilesFor, byExpiry, signedEnvironment, allowsEntitlement, profileMisfit, macHardwareID, METHODS, identity, profileIdentity, developmentIdentities } from './devices.mjs';
 import { widgetSigningTeam, macWidgetProfiles, macWidgetSigning, platformWidgetEntries, macWidgetGroup, kindPhrase, identityVariable } from './widgets.mjs';
 import { shareId } from './extensions.mjs';
-import { appleLinkDomains } from '../../scripts/links.mjs';
+import { appleLinkDomains, webAuthCallback } from '../../scripts/links.mjs';
 
 const POLICIES = ['user-presence', 'biometry-any', 'biometry-current-set', 'device-credential'];
 
@@ -75,6 +76,12 @@ export function macProfileNeeds(compat, app = null) {
   const passkeys = passkeyLines(ceiling);
   if (passkeys.length) needs.push({ entitlement: DOMAINS, lines: passkeys.map((rp) => `auth.passkey ${rp}`).join(', '), mandatory: true,
     effect: 'getClientCapabilities().available is false and create and get fail NotSupportedError' });
+  const callbacks = (compat?.reach?.auth?.callbacks ?? []).filter((callback) => {
+    const url = new URL(callback);
+    return url.protocol === 'https:' && !webAuthCallback(url);
+  });
+  if (callbacks.length) needs.push({ entitlement: DOMAINS, lines: callbacks.map((callback) => `auth.callback ${callback}`).join(', '), mandatory: true,
+    effect: 'HTTPS auth sessions fail association validation' });
   // Verified links (LLP 1038 D8) are not mandatory: unsigned, they open in the browser.
   const links = app?.manifest ? appleLinkDomains(app.manifest) : [];
   if (links.length) needs.push({ entitlement: DOMAINS, lines: 'handle_links "preferred"', mandatory: false,
@@ -104,7 +111,7 @@ export function macAllows(p, app, name, values = {}) {
 
 const signingChoice = method => method === 'developerid' || method === 'appstore'
   ? `set ${identityVariable(true, method === 'appstore' ? method : null)}=<sha1> to choose ${kindPhrase(true, method === 'appstore' ? method : null)} identity`
-  : 'set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1> to choose an Apple Development identity, or EXACT_IDENTITY=- to sign ad hoc (drops Mac extensions, leaves push, App Attest, age range, SharePlay, keychain-access groups, passkeys, Sign in with Apple and Apple Pay unsigned, and makes stored login-keychain items prompt after rebuilds)';
+  : 'set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1> to choose an Apple Development identity, or EXACT_IDENTITY=- to sign ad hoc (drops Mac extensions, leaves push, App Attest, age range, SharePlay, keychain-access groups, passkeys, HTTPS auth callbacks, Sign in with Apple and Apple Pay unsigned, and makes stored login-keychain items prompt after rebuilds)';
 const teamSelectedByEnvironment = (team, method) => method === 'development' && !process.env.EXACT_IDENTITY && team === process.env.DEVELOPMENT_TEAM?.trim();
 
 /** The macOS profile a build of `app` signs `required` under: for its id or the team's wildcard, unexpired, of the
@@ -283,12 +290,10 @@ export function passkeyLines(ceiling = '') {
     .filter((w) => w[0] === 'auth.passkey' && w[1] && w[1] !== 'localhost').map((w) => w[1]);
 }
 
-/** The bake's associated domains for an entitlement. A passkey RP ID's `webcredentials:` in a development build is
- * `?mode=developer`, so the device fetches the association from the domain rather than Apple's CDN (LLP 1133.011
- * D6); a release build never asks for it. */
+/** A debuggable build appends `?mode=developer` to the bake's `webcredentials:` entries, so Apple fetches the
+ * association from the domain rather than its CDN (LLP 1133.011 D6). Release builds keep the entries unsuffixed. */
 export function associatedDomains(auth, debuggable) {
-  const passkeys = new Set((auth?.passkeys ?? []).map((rp) => `webcredentials:${rp}`));
-  return (auth?.associatedDomains ?? []).map((d) => debuggable && passkeys.has(d) ? `${d}?mode=developer` : d);
+  return (auth?.associatedDomains ?? []).map((d) => debuggable && d.startsWith('webcredentials:') ? `${d}?mode=developer` : d);
 }
 
 /** Sign in with Apple's entitlement, which follows the signing, not the grant (LLP 1133.014 D7, D8): a simulator

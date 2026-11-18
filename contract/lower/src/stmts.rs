@@ -109,29 +109,11 @@ impl Lowerer<'_> {
             // `let`s first, as a block of their own, whose locals drop before
             // the next statement. No call opcode: the plan never sees one.
             Stmt::Call { body, .. } => self.block(asm, body, scope, locals)?,
-            // Hosts receive records positionally, so the field names are sent
-            // as arguments: `observe(name, Shape(a=x), sev)` becomes
-            // `name, sev, "a", x`, and `observeAttributes(Shape(a=x))` becomes `"a", x`.
+            // Hosts receive records positionally (`expr::observe_args`).
             Stmt::Command { name, args, .. }
                 if name == "observe" || name == "observeAttributes" =>
             {
-                let (mut flat, record) = if name == "observe" {
-                    let severity = args
-                        .get(2)
-                        .cloned()
-                        .unwrap_or_else(|| Expr::Str("info".into(), args[0].span()));
-                    (vec![args[0].clone(), severity], args.get(1))
-                } else {
-                    (Vec::new(), args.first())
-                };
-                if let Some(Expr::Call(_, fields, _)) = record {
-                    for field in fields {
-                        if let Expr::NamedArg(key, value, span) = field {
-                            flat.push(Expr::Str(key.clone(), *span));
-                            flat.push(value.as_ref().clone());
-                        }
-                    }
-                }
+                let flat = expr::observe_args(name, args).expect("an observe command");
                 for arg in &flat {
                     expr::compile_or_none(self, asm, Some(arg), scope, locals)?;
                 }

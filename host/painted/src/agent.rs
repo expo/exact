@@ -118,39 +118,9 @@ pub fn serve<D: DataSource + Default>(
 
 pub use stdio::{handle, handle_for_window};
 
-/// Every reply carries the runner's `epoch`, `incarnation` and `clock`
-/// (LLP 1035.002 D3), read after the operation; a reply that already has a
-/// `clock` (where a `clock` call landed) keeps it. The runner's own replies
-/// (`tree`, `state`, `node`) are tagged at the source; an error is left
-/// alone.
-fn tagged<D: DataSource>(p: &Presenter<D>, line: &str, mut reply: String) -> String {
-    let op = field_str(line, "op");
-    let host_reply = op.is_some();
-    if !host_reply || !reply.ends_with('}') || reply.starts_with("{\"error\"") {
-        return reply;
-    }
-    if field_num(&reply, "epoch").is_some() {
-        return reply;
-    }
-    let tags = p.host().agent("{\"op\":\"tags\"}");
-    let (Some(epoch), Some(incarnation), Some(clock)) = (
-        field_num(&tags, "epoch"),
-        field_num(&tags, "incarnation"),
-        field_num(&tags, "clock"),
-    ) else {
-        return reply;
-    };
-    reply.pop();
-    reply.push_str(&format!(
-        ",\"epoch\":{},\"incarnation\":{}",
-        num(epoch),
-        num(incarnation)
-    ));
-    if !reply.contains("\"clock\":") {
-        reply.push_str(&format!(",\"clock\":{}", num(clock)));
-    }
-    reply.push('}');
-    reply
+/// Add the session identity after the host's operation (LLP 1029.000.002 D10).
+fn tagged<D: DataSource>(p: &Presenter<D>, _line: &str, reply: String) -> String {
+    exact_runner::agent::tagged(p.host().runner(), reply)
 }
 
 pub(crate) fn answer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {

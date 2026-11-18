@@ -16,7 +16,7 @@ use exact_ink::counters::{self, Counter};
 use exact_kernel::id::{IdMap, IdSet};
 use exact_kernel::NodeKey;
 
-/// What changed since the last frame, by node: what the host saw.
+/// Node changes awaiting row invalidation, and the last unpainted commit's time.
 #[derive(Default)]
 pub struct Dirty {
     hard: Vec<NodeKey>,
@@ -28,6 +28,18 @@ pub struct Dirty {
 }
 
 impl Dirty {
+    #[cfg(test)]
+    pub(crate) fn pending_nodes(&self) -> usize {
+        self.hard.len() + self.moved.len() + self.renewed.len()
+    }
+
+    /// Take node changes while keeping the commit time for the next paint's numeric roll.
+    pub(crate) fn take_changes(&mut self) -> Self {
+        let changes = std::mem::take(self);
+        self.committed = changes.committed;
+        changes
+    }
+
     /// A commit's nodes, and when it landed (ms).
     pub fn commit(&mut self, r: &exact_kernel::CommitReceipt, at: f64) {
         self.committed = Some(at);
@@ -179,7 +191,7 @@ impl Painter {
         }
     }
 
-    /// Before a frame: drop the rows the host's changes reach.
+    /// Invalidate the rows reached by the host's changes.
     pub(crate) fn rows_dirty(&mut self, kernel: &Kernel, dirty: Dirty) {
         self.numerals.committed = dirty.committed;
         self.invalidate_rows(kernel, dirty);

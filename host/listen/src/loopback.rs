@@ -261,10 +261,13 @@ fn check<'a>(head: &'a str, callback: &Callback) -> Result<&'a str, &'static str
         return Err("This is not the sign-in this app is waiting for.");
     }
     if callback.logout {
-        return if values("code").is_empty() && values("error").is_empty() {
+        return if ["code", "error", "id_token", "access_token"]
+            .iter()
+            .all(|name| values(name).is_empty())
+        {
             Ok(target)
         } else {
-            Err("This logout return carries a code or error.")
+            Err("This logout return carries a sign-in response.")
         };
     }
     match (values("code").as_slice(), values("error").as_slice()) {

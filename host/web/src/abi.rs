@@ -302,6 +302,10 @@ impl<D: DataSource> Bridge<D> {
             ..exact_runner::Viewport::default()
         };
         let (checkpoint, launch_facts) = (self.checkpoint.take(), self.launch());
+        let sequence = self
+            .host
+            .as_ref()
+            .map(|host| host.runner().reboot_sequence());
         let booted = exact_runner::time::launching_with(launch_facts, || match checkpoint {
             Some((digest, page)) => Host::boot_checkpoint_linked(
                 self.links,
@@ -309,6 +313,7 @@ impl<D: DataSource> Bridge<D> {
                 data,
                 &page,
                 &digest,
+                sequence.as_ref(),
                 snapshot,
                 self.compat,
                 viewport,
@@ -318,7 +323,7 @@ impl<D: DataSource> Bridge<D> {
                 self.links,
                 plan,
                 data,
-                None,
+                sequence.as_ref(),
                 snapshot,
                 self.compat,
                 viewport,

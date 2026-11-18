@@ -7,23 +7,14 @@ use contract_syntax::{Component, Expr};
 
 pub(crate) mod sequences;
 
-/// `type-child-resource`'s message for `child`, which declares a task or a
-/// resource over a list, under the root `root`. A child's task is most often
-/// a timer the child starts and stops (the euxy port's press-and-hold
-/// capsule) or "when this sheet or route opens" (its icon picker): the
-/// root's gated task does each, so the message shows both.
+/// A resource over a list stays at the root, where its request count is explicit.
 pub(crate) fn child_owns(root: &str, child: &Component) -> String {
     let name = &child.name;
-    if let Some(r) = child.resources.iter().find(|r| r.each.is_some()) {
-        let prefix = lower_first(name);
-        let example = format!("{prefix}{}", upper_first(&r.name));
-        return format!(
-            "only the root, the root file's first component (`{root}`), may declare a resource over a list: `resource {} = {}(…) for …` asks once for each element, a count of requests its list sets. Declare it in `{root}` (`resource {example} = {}(…) for …`) and pass `{name}` its answers as a prop; or, where each element is a row, give the row a component of its own that renders one answer",
-            r.name, r.source, r.source
-        );
-    }
+    let r = child.resources.iter().find(|r| r.each.is_some()).unwrap();
+    let example = format!("{}{}", lower_first(name), upper_first(&r.name));
     format!(
-        "only the root, the root file's first component (`{root}`), may declare a `task`: a timer is the app's; `{name}` is a child, which may own state, derives, resources, mutations, and actions. Move the task into `{root}` with the state that gates it, and pass `{name}` that state and the actions that set it as props. A press-and-hold: in `{root}`, `state holding = false`, `task charging when holding` with `every(16, step)` under it, and `action hold(on: bool)` that sets `holding = on`; then `{name}(charge=charge, down=hold(true), up=hold(false))`, whose `props` declare `down: action` and `up: action` and whose view binds `pointerdown=down pointerup=up` (docs/recipes/timer-in-a-component.md). To act when a sheet or route opens, gate the task on what shows `{name}` and key it on what opens it again: `task reveal when top(nav).name == \"icons\" key=top(nav).id` with `change(reveal)` under it. Or, if `{name}` is the app, move it above `{root}`"
+        "only the root, the root file's first component (`{root}`), may declare a resource over a list: `resource {} = {}(…) for …` asks once for each element, a count of requests its list sets. Declare it in `{root}` (`resource {example} = {}(…) for …`) and pass `{name}` its answers as a prop; or, where each element is a row, give the row a component of its own that renders one answer",
+        r.name, r.source, r.source
     )
 }
 
@@ -102,6 +93,18 @@ pub(crate) fn repeated_owner(
             at.line
         ),
     };
+    if let Some(t) = file
+        .components
+        .iter()
+        .find(|c| &c.name == name)
+        .and_then(|c| c.tasks.first())
+    {
+        return TypeError {
+            id: "type-child-resource",
+            message: format!("`{name}` declares `task {}`, and this use is under {around}: each row would start its own task. Use the component in a tab, screen or `if` arm; for a data-sized list, keep the task in `{root}` and pass its values and actions to the rows", t.name),
+            span: u.span,
+        };
+    }
     let Some((r, source)) = first.map(|r| (r.name.as_str(), r.source.as_str())) else {
         // It owns only mutations (D6): each row would send and run its
         // `then` on its own.
@@ -210,19 +213,22 @@ fn upper_first(s: &str) -> String {
 }
 
 /// Check every task of `c` in the component's scope.
-pub(crate) fn check_tasks(c: &Component, scope: &Scope, shapes: &Shapes, sink: &mut Sink) {
-    for t in &c.tasks {
-        match infer(&t.timer.0, scope, shapes) {
-            Ok(Ty::Number) => {}
-            Ok(_) => sink.push(TypeError {
-                id: "type-timer",
-                message: "a task needs a number of milliseconds".into(),
-                span: t.timer.2,
-            }),
-            Err(e) => sink.push(e),
-        }
-        check_gate(t.gate.as_ref(), t.key.as_ref(), "task", scope, shapes, sink);
+pub(crate) fn check_task(
+    t: &contract_syntax::Task,
+    scope: &Scope,
+    shapes: &Shapes,
+    sink: &mut Sink,
+) {
+    match infer(&t.timer.0, scope, shapes) {
+        Ok(Ty::Number) => {}
+        Ok(_) => sink.push(TypeError {
+            id: "type-timer",
+            message: "a task needs a number of milliseconds".into(),
+            span: t.timer.2,
+        }),
+        Err(e) => sink.push(e),
     }
+    check_gate(t.gate.as_ref(), t.key.as_ref(), "task", scope, shapes, sink);
 }
 
 /// A gate takes a bool, and a key is a string, number or bool, as a `for`

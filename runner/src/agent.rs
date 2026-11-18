@@ -35,6 +35,7 @@ mod streams;
 mod transport;
 mod tree;
 use tree::props_json;
+pub use tree::tagged;
 
 /// Answer one request: `{"op":"tree"}`, `{"op":"state"}`,
 /// `{"op":"logs","since":N}`, `{"op":"node","id":V}` — the runner's half
@@ -42,7 +43,7 @@ use tree::props_json;
 /// a host stamps on its own replies (D3). Anything else is an
 /// `{"error":…}`.
 pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
-    match field_str(request, "op").as_deref() {
+    let reply = match field_str(request, "op").as_deref() {
         Some("tree") => tree::request(runner, request),
         Some("state") => state_with(runner, request),
         Some("tags") => tags(runner),
@@ -115,16 +116,18 @@ pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         },
         Some(other) => error(&format!("unknown op: {other}")),
         None => error("no op"),
-    }
+    };
+    tagged(runner, reply)
 }
 
-/// `{"epoch":E,"incarnation":I,"clock":C}`: what every reply carries (LLP
+/// `{"generation":G,"epoch":E,"incarnation":I,"clock":C}`: what every reply carries (LLP
 /// 1035.002 D3). The runner's own replies are tagged where they are built;
 /// a host asks for this after an operation it answered itself.
 pub fn tags<D: DataSource>(runner: &Runner<D>) -> String {
     let kernel = runner.kernel();
     format!(
-        "{{\"epoch\":{},\"incarnation\":{},\"clock\":{}}}",
+        "{{\"generation\":{},\"epoch\":{},\"incarnation\":{},\"clock\":{}}}",
+        runner.generation(),
         kernel.epoch(),
         kernel.incarnation(),
         num(runner.now_ms())
@@ -176,7 +179,8 @@ pub fn frames<D: DataSource>(
     let mut s = String::new();
     let _ = write!(
         s,
-        "{{\"epoch\":{},\"incarnation\":{},\"clock\":{},\"nodes\":[",
+        "{{\"generation\":{},\"epoch\":{},\"incarnation\":{},\"clock\":{},\"nodes\":[",
+        runner.generation(),
         kernel.epoch(),
         kernel.incarnation(),
         num(runner.now_ms())
@@ -439,7 +443,7 @@ pub(crate) fn target<D: DataSource>(
 /// their schema names, the events it handles, `inactive` when it is under a
 /// route its navigation root has not selected, and `hidden` too when that
 /// route is not shown (any but one a sheet covers), `unopened` on a tab panel not
-/// yet built (LLP 1075.003 §9.14), its children — plus the kernel's epoch
+/// yet built (LLP 1075.003 §9.14), its children — plus the session generation, kernel epoch
 /// and incarnation (the consistency token: nothing moves between two calls
 /// unless the agent moved it).
 pub fn tree<D: DataSource>(runner: &Runner<D>) -> String {
@@ -532,7 +536,7 @@ pub(super) fn token_fields(
 /// the parent (a block's root in its own block), `absolute` in the root's
 /// space or the viewport when the host places its block (as `frame()`
 /// reports it), `content` when it scrolls.
-/// Observations of the runner's memory, tagged with the epoch and
+/// Observations of the runner's memory, tagged with the generation, epoch and
 /// incarnation; a host adds the spaces and what it mounted. An id that is
 /// not a live node in this incarnation is refused by name.
 pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
@@ -546,7 +550,8 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
     let mut s = String::new();
     let _ = write!(
         s,
-        "{{\"epoch\":{},\"incarnation\":{},\"clock\":{},\"id\":{id},\"type\":",
+        "{{\"generation\":{},\"epoch\":{},\"incarnation\":{},\"clock\":{},\"id\":{id},\"type\":",
+        runner.generation(),
         kernel.epoch(),
         kernel.incarnation(),
         num(runner.now_ms())
@@ -739,7 +744,8 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     let mut s = String::new();
     let _ = write!(
         s,
-        "{{\"epoch\":{},\"incarnation\":{},\"clock\":{},\"slots\":{{",
+        "{{\"generation\":{},\"epoch\":{},\"incarnation\":{},\"clock\":{},\"slots\":{{",
+        runner.generation(),
         runner.kernel().epoch(),
         runner.kernel().incarnation(),
         num(runner.now_ms())
@@ -761,7 +767,9 @@ fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
             None => s.push_str("null"),
         }
     }
-    s.push_str("},\"language\":{\"lang\":");
+    s.push_str("},\"replacement\":");
+    runner.replacement_json(&mut s);
+    s.push_str(",\"language\":{\"lang\":");
     quote(runner.resolved_locale(), &mut s);
     s.push_str(",\"dir\":");
     quote(runner.direction(), &mut s);

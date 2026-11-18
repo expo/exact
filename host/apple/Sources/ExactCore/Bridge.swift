@@ -55,6 +55,8 @@ public struct Batch {
     public var controls = false
     /// Image handles a 2D canvas asked for, to decode (LLP 1056 D9).
     public var canvasImages: [String] = []
+    /// Image handles no mounted canvas asks for any more, to let go.
+    public var canvasImagesDropped: [String] = []
     /// The window's app modes after a `setMode` (LLP 1121 D5), when the call was one.
     public var modes: [String: String]? = nil
     /// After a live design batch (LLP 1121 stage 4): applied, stale,

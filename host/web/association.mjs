@@ -2,7 +2,7 @@
 // origin a build deploys gets its files written into the build; every other origin a claim names gets them printed.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { EXACT_PATHS, appleComponents, appleCovers, baseIdentity, claimedOrigin, linkClaims, processedId, rawAppleDomains } from '../../scripts/links.mjs';
+import { EXACT_PATHS, appleComponents, appleCovers, baseIdentity, claimedOrigin, linkClaims, processedId, rawAppleDomains, webAuthCallback } from '../../scripts/links.mjs';
 
 const HANDLE_ALL_URLS = 'delegate_permission/common.handle_all_urls', LOGIN_CREDS = 'delegate_permission/common.get_login_creds';
 
@@ -11,6 +11,9 @@ const view = (app) => ({ ...app.manifest, app: { ...app.manifest.app, id: app.id
 
 /** The origin's host, as the claims normalize it. */
 const hostOf = (origin) => { try { return claimedOrigin(origin).host ?? new URL(origin).hostname; } catch { return null; } };
+const ownOrigin = (app) => app.origin ? new URL(app.origin).origin : null;
+const authOrigins = (callbacks) => [...new Set(callbacks.map((callback) => new URL(callback))
+  .filter((url) => url.protocol === 'https:' && !webAuthCallback(url)).map((url) => url.origin))];
 
 /** An `apple-app-site-association` for `components` (null: no `applinks`), its App Clip's `appclips` beside them,
  * and `webcredentials`. Each names `<host.ios.team>.<base bundle id>`, the base app alone (LLP 1030.008 D8). */
@@ -30,6 +33,7 @@ function appleFile(manifest, team, { components = null, clip = false, webcredent
  * 1069.006 D2, LLP 1133.011 D6). */
 export function appleAssociation(app, { webcredentials = false, callbacks = [] } = {}) {
   const manifest = view(app), team = manifest.host?.ios?.team, host = app.origin ? hostOf(app.origin) : null;
+  webcredentials ||= authOrigins(callbacks).includes(ownOrigin(app));
   const claim = host && linkClaims(manifest, callbacks).find((c) => c.host === host);
   const raw = !!host && rawAppleDomains(manifest).some((d) => appleCovers(d, host));
   const components = claim ? appleComponents(claim) : raw ? appleComponents({ scope: '/', exclude: [EXACT_PATHS] }) : null;
@@ -53,11 +57,11 @@ export const androidAssociation = (manifest, relation = LOGIN_CREDS) => ({
     sha256_cert_fingerprints: manifest.host?.android?.certificates ?? [] },
 });
 
-/** The deployed origin's `assetlinks.json` statements, one per relation: `handle_all_urls` where `handle_links` claims
- * the origin (LLP 1038 D8), `get_login_creds` for its passkeys. Path narrowing is the app's filter's, not the file's. */
-export function androidStatements(app, { passkeys = false } = {}) {
+/** The deployed origin's `assetlinks.json` statements: `handle_all_urls` for navigation or native auth callbacks,
+ * `get_login_creds` for passkeys. The app's filters narrow paths; the file names identities. */
+export function androidStatements(app, { passkeys = false, callbacks = [] } = {}) {
   const manifest = view(app), host = app.origin ? hostOf(app.origin) : null;
-  const links = !!host && linkClaims(manifest).some((c) => c.host === host);
+  const links = !!host && (linkClaims(manifest).some((c) => c.host === host) || authOrigins(callbacks).includes(ownOrigin(app)));
   return [...(links ? [androidAssociation(manifest, HANDLE_ALL_URLS)] : []), ...(passkeys ? [androidAssociation(manifest)] : [])];
 }
 
@@ -65,8 +69,9 @@ export function androidStatements(app, { passkeys = false } = {}) {
  * `/.well-known/`: an extension origin's `apple-app-site-association` and `assetlinks.json` when `handle_links`
  * claims it, and its `web-app-origin-association` (keyed by the processed manifest id, `{}` granting its whole
  * origin) whatever `handle_links` says; a raw `applinks:` host the claims do not derive, its Apple file (a wildcard's
- * names the domain Apple fetches it from). */
-export function elsewhereFiles(app, { callbacks = [], webManifest = null } = {}) {
+ * names the domain Apple fetches it from). Native auth callback origins also need webcredentials and Android links;
+ * passkey RP IDs need webcredentials and Android login credentials in those same files. */
+export function elsewhereFiles(app, { callbacks = [], passkeys = [], webManifest = null } = {}) {
   const manifest = view(app), team = manifest.host?.ios?.team ?? '<host.ios.team>', own = app.origin ? hostOf(app.origin) : null;
   const byOrigin = new Map(), add = (origin, name, file) => { if (!byOrigin.has(origin)) byOrigin.set(origin, {}); byOrigin.get(origin)[name] = file; };
   const claims = linkClaims(manifest, callbacks);
@@ -85,15 +90,25 @@ export function elsewhereFiles(app, { callbacks = [], webManifest = null } = {})
     if (derived.has(host) || host === own) continue;
     add(`https://${host}`, 'apple-app-site-association', appleFile(manifest, team, { components: appleComponents({ scope: '/', exclude: [] }), clip: !wildcard }));
   }
+  for (const origin of authOrigins(callbacks).filter((origin) => origin !== ownOrigin(app))) {
+    const existing = byOrigin.get(origin)?.['apple-app-site-association'] ?? {};
+    add(origin, 'apple-app-site-association', { ...existing, ...appleFile(manifest, team, { webcredentials: true }) });
+    add(origin, 'assetlinks.json', [androidAssociation(manifest, HANDLE_ALL_URLS)]);
+  }
+  for (const rp of new Set(passkeys.filter((rp) => rp !== own && rp !== 'localhost'))) {
+    const origin = `https://${rp}`, existing = byOrigin.get(origin) ?? {};
+    add(origin, 'apple-app-site-association', { ...existing['apple-app-site-association'], ...appleFile(manifest, team, { webcredentials: true }) });
+    add(origin, 'assetlinks.json', [...(existing['assetlinks.json'] ?? []), androidAssociation(manifest)]);
+  }
   return [...byOrigin].map(([origin, files]) => ({ origin, files }));
 }
 
-/** Writes the deployed origin's link files into `root` (the JS target's, from the manifest alone; the wasm build adds
- * credentials: `webcredentials`, `passkeys`) and returns the build's lines: what it wrote, what it could not, and
- * each file every other origin must serve. */
-export function writeLinkFiles(root, app, { webcredentials = false, passkeys = false, callbacks = [], webManifest = null } = {}) {
-  writeAppleAssociation(root, app, { webcredentials, callbacks });
-  const manifest = view(app), statements = androidStatements(app, { passkeys }), certificates = manifest.host?.android?.certificates ?? [];
+/** Writes the deployed origin's link and credential files into `root` and returns the build's lines:
+ * what it wrote, what it could not, and each file every other origin must serve. */
+export function writeLinkFiles(root, app, { passkeys = [], callbacks = [], webManifest = null } = {}) {
+  const own = app.origin ? hostOf(app.origin) : null, passkeyHere = passkeys.includes(own);
+  writeAppleAssociation(root, app, { webcredentials: passkeyHere, callbacks });
+  const manifest = view(app), statements = androidStatements(app, { passkeys: passkeyHere, callbacks }), certificates = manifest.host?.android?.certificates ?? [];
   if (statements.length && certificates.length) {
     mkdirSync(resolve(root, '.well-known'), { recursive: true });
     writeFileSync(resolve(root, '.well-known/assetlinks.json'), JSON.stringify(statements, null, 2) + '\n');
@@ -104,10 +119,12 @@ export function writeLinkFiles(root, app, { webcredentials = false, passkeys = f
       !certificates.length && 'host.android.certificates (no assetlinks.json: Android verifies none)'].filter(Boolean);
     lines.push(`links: ${claims.map((c) => `${c.host}${c.scope === '/' ? '' : c.scope}`).join(', ')} open the app${missing.length ? `; no ${missing.join(', no ')}` : ''}`);
   }
-  for (const { origin, files } of elsewhereFiles(app, { callbacks, webManifest })) {
+  const credentials = [passkeyHere && 'passkeys', authOrigins(callbacks).includes(ownOrigin(app)) && 'auth callbacks'].filter(Boolean);
+  if (credentials.length) lines.push(`${credentials.join(', ')}: ${own}'s association files${manifest.host?.ios?.team ? '' : ' (no host.ios.team: no apple-app-site-association)'}${certificates.length ? '' : ' (no host.android.certificates: no assetlinks.json)'}`);
+  for (const { origin, files } of elsewhereFiles(app, { callbacks, passkeys, webManifest })) {
     for (const [name, file] of Object.entries(files)) lines.push(`links: ${origin} must serve /.well-known/${name} ${JSON.stringify(file)}`);
   }
-  if (manifest.host?.web?.base && manifest.host.web.base !== "/" && (appleAssociation(app, { webcredentials, callbacks }) || statements.length && certificates.length))
+  if (manifest.host?.web?.base && manifest.host.web.base !== "/" && (appleAssociation(app, { webcredentials: passkeyHere, callbacks }) || statements.length && certificates.length))
     lines.push(`links: serve ${root}/.well-known/ at the origin root ${app.origin}/.well-known/, outside the site mount`);
   return lines;
 }

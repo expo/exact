@@ -372,8 +372,10 @@ fn meshopt_external_buffers_quantization_only_and_named_refusals() {
     assert!(failures.is_empty(), "{failures:?}");
 
     // Remove compression, retaining quantized accessors and all transforms.
-    let cases: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/meshopt/buffers.json")).unwrap();
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../packages/model-viewer/meshopt/tests/fixtures/buffers.json"
+    ))
+    .unwrap();
     let mut decoded = vec![];
     for (i, view) in source["bufferViews"]
         .as_array_mut()

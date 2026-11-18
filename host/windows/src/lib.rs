@@ -61,6 +61,20 @@ mod wheel;
 #[cfg(windows)]
 mod window;
 
+#[cfg(windows)]
+fn shell_path(path: &std::path::Path) -> windows::core::Result<windows::core::HSTRING> {
+    use std::os::windows::ffi::OsStrExt;
+    let path =
+        exact_grants::WindowsPath::shell_path(&path.as_os_str().encode_wide().collect::<Vec<_>>())
+            .map_err(|error| {
+                windows::core::Error::new(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                    error.to_string(),
+                )
+            })?;
+    Ok(windows::core::HSTRING::from_wide(&path))
+}
+
 /// The window an app opens in, in logical pixels, and what closing it does:
 /// `host.windows.window` in its `app.json`, which the bake writes as
 /// `WINDOW`. `EXACT_SIZE` overrides the size.

@@ -92,7 +92,7 @@ function checkGrants(s, grants) {
 }
 
 /** D3: scheme, host and path exactly the request's, no userinfo. A sign-in
- * carries its exact `state`; a logout carries no code or error and may omit state. */
+ * carries its exact `state`; a logout carries no sign-in answer and may omit state. */
 function accept(s, got) {
   const want = parse(s.callback), u = parse(got);
   if (!want) return "the request's callback is unreadable";
@@ -101,8 +101,9 @@ function accept(s, got) {
   if (u.authority?.includes("@")) return "the callback carries userinfo";
   if (u.authority?.toLowerCase() !== want.authority?.toLowerCase()) return "the callback's host is not the request's";
   if (u.path !== want.path) return "the callback's path is not the request's";
-  const states = pairs(u.query).filter(([n]) => n === "state").map(([, v]) => v);
-  if (s.logout && pairs(u.query).some(([n]) => n === "code" || n === "error")) return "the logout return carries a code or error";
+  const params = [...pairs(u.query), ...pairs(u.fragment)];
+  const states = params.filter(([n]) => n === "state").map(([, v]) => v);
+  if (s.logout && params.some(([n]) => ["code", "error", "id_token", "access_token"].includes(n))) return "the logout return carries a sign-in response";
   if (s.logout && states.length === 0) return null;
   return states.length === 1 ? (same(states[0], s.state) ? null : "the callback's state is not the request's") : states.length ? "the callback carries state more than once" : "the callback carries no state";
 }

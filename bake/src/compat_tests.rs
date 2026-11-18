@@ -1,6 +1,9 @@
 use super::{compatibility_with_trust, Manifest};
 use std::path::Path;
 
+#[path = "compat_gpu_tests.rs"]
+mod gpu_tests;
+
 #[test]
 fn the_baked_painter_round_trips_per_host_without_changing_bundle_compatibility() {
     let dir = app("painter-config");

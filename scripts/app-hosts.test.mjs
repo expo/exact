@@ -320,6 +320,15 @@ test('a CI setup check names only the requested build toolchain and fails when i
   assert.doesNotMatch(result.stdout, /Chrome|web nightly|wasm-bindgen|Xcode/);
 });
 
+test('a setup check requires a Hermes bundle only of an app that links it', async () => {
+  const { platformReport } = await import('./exact.mjs');
+  const rows = [{ name: 'Hermes bundle (aarch64-linux-android)', ok: false, have: 'missing', fix: 'install it', need: 'Android TypeScript' }];
+  const hermesRow = async hermes => (await platformReport('android', rows, { hermes })).find(row => row.name === rows[0].name);
+  expect(await hermesRow(false)).toMatchObject({ ok: true, required: true, have: 'not linked by this app' });
+  expect(await hermesRow(null)).toMatchObject({ ok: false, required: false, need: 'TypeScript apps' });
+  expect(await hermesRow(true)).toMatchObject({ ok: false, required: true, fix: 'install it' });
+});
+
 test('web setup accepts an install scope and refuses native install scopes before provisioning', () => {
   for (const platform of ['web', 'ios', 'macos', 'android', 'linux', 'windows']) {
     const result = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'setup', '--platform', platform], {
@@ -453,4 +462,33 @@ test('a signal during one test file stops the run; a failing file does not', asy
     const failed = spawnSync(process.execPath, [driver, 'test', ...files('fail', 'pass'), '--web-dist', dir], { cwd: dir, encoding: 'utf8', env });
     expect([failed.status, failed.stdout.includes('STARTED pass')]).toEqual([1, true]);
   } finally { rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+test.skipIf(process.platform === 'win32')('TypeScript Android builds require a target Hermes bundle before baking', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-typescript-'));
+  try {
+    mkdirSync(resolve(dir, 'bin'));
+    const tool = (name, body) => writeFileSync(resolve(dir, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    tool('rustup', "printf '%s\\n' aarch64-linux-android x86_64-linux-android");
+    tool('cargo', 'if [ "$1" = tree ]; then echo "exact-js v0.1.0"; else echo "x86_64 bake reached" >&2; exit 1; fi');
+    tool('java', `echo 'openjdk version "21.0.8"' >&2`);
+    tool('javac', 'exit 0');
+    const bin = resolve(dir, 'toolchains/llvm/prebuilt', process.platform === 'darwin' ? 'darwin-x86_64' : 'linux-x86_64', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(resolve(bin, 'x86_64-linux-android29-clang'), '');
+    for (const [abis, bundle] of [['x86_64', '/intel-bundle'], ['x86_64'], ['arm64-v8a,x86_64']]) {
+      const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'shelf', '--apk', '--abis', abis], {
+        encoding: 'utf8', env: { ...process.env, PATH: `${dir}/bin:${process.env.PATH}`, JAVA_HOME: dir, ANDROID_NDK_HOME: dir,
+          HERMES_LEAN_SYS_DIR_aarch64_linux_android: '/arm-bundle', HERMES_LEAN_SYS_DIR_x86_64_linux_android: bundle },
+      });
+      expect(r.status).toBe(1);
+      if (bundle) expect(r.stderr).toContain('x86_64 bake reached');
+      else {
+        expect(r.stderr).toContain("shelf's TypeScript needs the x86_64-linux-android Hermes bundle:");
+        expect(r.stderr).toContain('HERMES_LEAN_SYS_DIR_x86_64_linux_android');
+        expect(r.stderr).not.toContain('x86_64 bake reached');
+        expect(r.stderr).not.toContain('at hermesBundle');
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 30_000);

@@ -57,6 +57,7 @@ routes nav
   learnContractForAgentsRepairCommonMistakes "/learn/contract-for-agents/repair-common-mistakes" render=build activate=idle
   learnContractForAgentsCompletionCriteria "/learn/contract-for-agents/completion-criteria" render=build activate=idle
   recipeAfterAWrite "/recipes/after-a-write" render=build activate=idle
+  recipeAlternateAppIcons "/recipes/alternate-app-icons" render=build activate=idle
   recipeAppJson "/recipes/app-json" render=build activate=idle
   recipeBackgroundTransfers "/recipes/background-transfers" render=build activate=idle
   recipeBackgroundWork "/recipes/background-work" render=build activate=idle

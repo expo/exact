@@ -45,6 +45,7 @@ import { setSpaceState } from "../web/address-space.js";
 import { members } from "./members.js";
 import { sheets } from "./sheets.js";
 import { errorCode, object, complete, handlesAt, overlay, partial, equalJson, serdeJson, fill, value } from "./declared-values.js";
+import { hatchClock } from "./hatches.js";
 
 // `rows`: source → [extension.name, send, substitute, type, request, options' type, live];
 // `bound`: extension → a loader of its web implementation, where the app binds one
@@ -497,6 +498,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (!bound[extension]) return null;
     if (!loaded.has(extension)) loaded.set(extension, chunk(extension).then(async m => {
       const context = { changed: key => reask([...byKey.values()].filter(r => r.key.split("#")[0] === key && route(r) !== "substitute").map(r => r.key)), agent: clock.agent, config: m.config ?? {}, now: () => { time(); return clock.now; }, clocked: fn => { Clocked.push(fn); }, foreground: shown, log: say, tracks, files, audioSession,
+        after: (ms, body) => hatchClock.after(ms, body),
         // The app's grant lines, and the host's auth session for an implementation (LLP 1133.014 D10 item 3).
         grants: data.grants ?? "", get authSession() { return globalThis.exact?.authSession; },
         revokePicture: source => pictures?.revokePicture(source), pictureChanged: source => pictures?.pictureChanged(source), invoke: invoker(extension),
@@ -906,11 +908,14 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
       }
     }
     // A path option is the app's own file, within its `fs.read` or `fs.write` lines (LLP 1133.009 D10 item 4); each
-    // of a list's (LLP 1133.024 D16); a keyed shape's path keys (`keys`), each item's (LLP 1133.006 D8 item 3).
+    // of a list's (LLP 1133.024 D16); a keyed shape's path keys (`keys`), each item's (LLP 1133.006 D8 item 3). One
+    // declared a `directory` names a directory, an app root itself included, with or without one trailing `/`.
     for (const [option, path] of Object.entries(sub.paths ?? {})) {
       const capability = `fs.${path.access}`, value = args?.[option];
       for (const given of path.keys ? [value].flat().flatMap(item => path.keys.map(k => item?.[k])) : [value].flat()) {
-        if (typeof given === "string" && !(appPath(given) && coversPath(appGrantSet(), capability, given))) return `grant-missing (${option}=${given} needs ${capability})`;
+        if (typeof given !== "string") continue;
+        const at = path.directory ? given.replace(/\/$/, "") : given;
+        if (!(appPath(path.directory ? at + "/f" : at) && coversPath(appGrantSet(), capability, at))) return `grant-missing (${option}=${given} needs ${capability})`;
       }
     }
     const applies = !sub.when || Object.entries(sub.when).every(([k, v]) => args?.[k] === v);

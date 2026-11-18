@@ -6,8 +6,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
-import { appIconProblems, iconFile, opaque, pickIcon, placeRgba, pngAlpha, readPng, resize, webIconLinks, webThemeColors, WINDOWS_ICON_SIZES, windowsIconRes, writeTinted } from './app-icons.mjs';
+import { alternateIcons, appIconProblems, iconDigests, iconFile, opaque, pickIcon, placeRgba, pngAlpha, readPng, resize, webIconLinks, webThemeColors, WINDOWS_ICON_SIZES, windowsIconRes, writeTinted } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
+import { validate } from './app.mjs';
 
 // An async body's directory goes when its promise settles, not when it returns one.
 const inDir = (body) => {
@@ -70,6 +71,47 @@ test('the manifest refuses icons outside assets/, missing or unknown files, size
   [32, 0, 16].forEach((side, i) => { ico[6 + 16 * i] = ico[7 + 16 * i] = side; });
   put(dir, 'assets/icon.ico', ico);
   assert.equal(iconFile(dir, 'assets/icon.ico').sizes, '32x32 256x256 16x16');
+}));
+
+test("each alternate icon is checked as the app's icons are, under its own name and its place in alternate_icons", () => inDir((dir) => {
+  png(dir, 'assets/icon.png', 1024);
+  png(dir, 'assets/paper.png', 1024);
+  rect(dir, 'assets/wide.png', 1024, 512);
+  const manifest = {
+    icons: [{ src: 'assets/icon.png' }],
+    host: { ios: { icon: 'art/Main.icon' } },
+    alternate_icons: [
+      { name: 'Paper', icons: [{ src: 'assets/paper.png' }], color_scheme_dark: { icons: [{ src: 'assets/paper.png', purpose: 'monochrome' }] } },
+      { name: 'paper', icons: [{ src: 'assets/gone.png' }] },
+      { name: 'AppIcon', icons: [{ src: 'assets/wide.png' }] },
+      { name: 'MAIN', icons: [{ src: 'assets/paper.png', purpose: 'monochrome' }] },
+    ],
+  };
+  assert.deepEqual(appIconProblems(manifest, dir), [
+    'alternate_icons[0].color_scheme_dark.icons[0].purpose: "monochrome"; a dark icon is "any" only, since no host varies a mask or a glyph with the scheme',
+    'alternate_icons[1].name: "paper" is alternate_icons[0]\'s name too, regardless of case; name each alternate once',
+    'alternate_icons[1].icons[0].src: assets/gone.png does not exist',
+    'alternate_icons[2].name: "AppIcon" is the primary icon\'s name on Apple; choose another',
+    'alternate_icons[2].icons: none is a square "any" or "maskable" file, which the alternate\'s light slot takes; add one',
+    'alternate_icons[3].name: "MAIN" is the primary icon\'s name on Apple; choose another',
+    'alternate_icons[3].icons: none is a square "any" or "maskable" file, which the alternate\'s light slot takes; add one',
+  ]);
+  // The schema takes a name of ASCII letters and digits, starting with a letter, at most 32, and an alternate with icons.
+  const schema = JSON.parse(readFileSync(new URL('./app.schema.json', import.meta.url), 'utf8'));
+  const of = (entry) => validate([entry], schema.properties.alternate_icons, 'alternate_icons', schema).length === 0;
+  assert.ok(of({ name: `P${'a'.repeat(31)}`, icons: [{ src: 'assets/paper.png' }], host: { ios: { icon: 'art/Paper.icon' } } }));
+  for (const name of ['', '1Paper', 'Paper Night', 'Papér', 'Paper-2', `P${'a'.repeat(32)}`]) assert.ok(!of({ name, icons: [{ src: 'assets/paper.png' }] }), name);
+  assert.ok(!of({ name: 'Paper', icons: [] }));
+  assert.ok(!of({ name: 'Paper' }));
+  // A slot's refusal names the alternate's own field.
+  const [paper] = alternateIcons({ alternate_icons: [{ name: 'Paper', icons: [{ src: 'assets/wide.png' }, { src: 'assets/icon.png', sizes: '1024x1024' }] }] });
+  png(dir, 'assets/icon.png', 512);
+  assert.throws(() => pickIcon(paper.manifest, dir, IOS), /^Error: alternate_icons\[0\]\.icons\[1\]: assets\/icon\.png is 512×512 px, and the iOS icon needs at least 1024 px/);
+  // An alternate's files key the built icons, under its name; its order is the manifest's.
+  const digests = iconDigests({ icons: [{ src: 'assets/icon.png' }], alternate_icons: [{ name: 'Paper', icons: [{ src: 'assets/paper.png' }] }] }, dir);
+  assert.deepEqual(digests.map((row) => row.slice(0, 3)), [['light', 'assets/icon.png', null], ['Paper', 'light', 'assets/paper.png']]);
+  png(dir, 'assets/paper.png', 1024, { hole: true });
+  assert.notDeepEqual(iconDigests({ icons: [{ src: 'assets/icon.png' }], alternate_icons: [{ name: 'Paper', icons: [{ src: 'assets/paper.png' }] }] }, dir), digests);
 }));
 
 test('PNG decodes every form to RGBA, opacity and the tinted icon read its alpha, resizing premultiplies, and compositing is over', () => inDir((dir) => {

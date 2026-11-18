@@ -71,6 +71,132 @@ impl Drop for App {
 }
 
 #[test]
+fn a_package_gpu_surface_checks_its_positional_arity() {
+    let declaration = r#"{"kind":"interface","name":"@fixture/sky","version":"1.0.0",
+        "gpu":{"crate":"rust","exactGpu":"0.3","surfaces":{"sky":{"arity":1,"factory":"sky::surface"}}}}"#;
+    let app = App::new(
+        "gpu-arity",
+        "component App\n  view\n    canvas surface=sky(1, 2)\n",
+        &[("@fixture/sky", declaration)],
+    );
+    let errors = contract::compile_path(&app.0.join("app.contract")).unwrap_err();
+    assert!(errors.message.contains("sky"), "{}", errors.message);
+    assert_eq!(errors.id, "analyze-surface-arity");
+    for surface in ["sky()", "sky(1)", "sky(color=1)"] {
+        std::fs::write(
+            app.0.join("app.contract"),
+            format!("component App\n  view\n    canvas surface={surface}\n"),
+        )
+        .unwrap();
+        contract::compile_path(&app.0.join("app.contract")).unwrap();
+    }
+    std::fs::write(app.0.join("app.contract"), "component App\n  view\n    text \"no canvas\"\ncomponent Unused\n  view\n    canvas surface=sky(1, 2)\n").unwrap();
+    contract::compile_path(&app.0.join("app.contract")).unwrap();
+    std::fs::write(
+        app.0.join("app.json"),
+        r#"{"app":{"id":"com.exact.gpu-arity","name":"GPU arity"},"gpu":{"modules":{"other":["sky"]}}}"#,
+    )
+    .unwrap();
+    let error = contract::compile_path(&app.0.join("app.contract")).unwrap_err();
+    assert!(
+        error
+            .message
+            .contains("both gpu.modules.other and @fixture/sky"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_package_gpu_declaration_checks_device_requirements_at_build() {
+    let app = App::new(
+        "gpu-requirements",
+        "component App\n  view\n    canvas surface=sky()\n",
+        &[(
+            "@fixture/sky",
+            r#"{"kind":"interface","name":"@fixture/sky","version":"1.0.0"}"#,
+        )],
+    );
+    let path = app.0.join("node_modules/@fixture/sky/exact.json");
+    let gpu = json!({"crate":"rust", "exactGpu":"0.3", "surfaces":{"sky":{"arity":0,"factory":"sky::surface"}},
+        "limits":{"required":{"maxStorageBufferBindingSize":268435456},"optional":{"maxBufferSize":1073741824}},
+        "features":{"required":["subgroups", "primitive-index"],"optional":["float32-filterable"]}});
+    let write = |gpu: &Json| {
+        std::fs::write(
+            &path,
+            json!({"kind":"interface","name":"@fixture/sky","version":"1.0.0","gpu":gpu})
+                .to_string(),
+        )
+        .unwrap()
+    };
+    write(&gpu);
+    contract::compile_path(&app.0.join("app.contract")).unwrap();
+    for (key, value, expected) in [
+        (
+            "limits",
+            json!({"required":{"max_buffer_size":512}}),
+            "max_buffer_size",
+        ),
+        (
+            "limits",
+            json!({"required":{"maxBufferSize":-1}}),
+            "maxBufferSize",
+        ),
+        (
+            "limits",
+            json!({"optional":{"maxBindGroups":1.5}}),
+            "maxBindGroups",
+        ),
+        (
+            "limits",
+            json!({"required":{"maxBufferSize":9007199254740992_u64}}),
+            "integer from 0 to 9007199254740991",
+        ),
+        (
+            "limits",
+            json!({"required":{"maxBindGroups":4294967296_u64}}),
+            "integer from 0 to 4294967295",
+        ),
+        ("limits", Json::Null, "object"),
+        ("limits", json!({"required":[]}), "object"),
+        ("features", json!({"optional":[3]}), "feature names"),
+        (
+            "limits",
+            json!({"required":{"minStorageBufferOffsetAlignment":3}}),
+            "power of two",
+        ),
+        (
+            "limits",
+            json!({"required":{"maxBindGroups":4},"optional":{"maxBindGroups":8}}),
+            "both required and optional",
+        ),
+        (
+            "features",
+            json!({"required":["FLOAT32_FILTERABLE"]}),
+            "FLOAT32_FILTERABLE",
+        ),
+        (
+            "features",
+            json!({"required":["subgroups"],"optional":["subgroups"]}),
+            "more than once",
+        ),
+        ("features", json!({"optional":"subgroups"}), "array"),
+        (
+            "limits",
+            json!({"require":{"maxBufferSize":512}}),
+            "expected required or optional",
+        ),
+    ] {
+        let mut bad = gpu.clone();
+        bad[key] = value;
+        write(&bad);
+        let error = contract::compile_path(&app.0.join("app.contract")).unwrap_err();
+        assert_eq!(error.id, "bake-gpu-declaration");
+        assert!(error.message.contains(expected), "{}", error.message);
+    }
+}
+
+#[test]
 fn a_package_view_in_an_uninstantiated_component_is_not_in_the_plan() {
     let app = App::new("unused", "component App\n  view\n    text \"plain\"\ncomponent Tile\n  view\n    swatch-box tint=\"red\"\n", &[]);
     let plan = contract::compile_path(&app.0.join("app.contract")).unwrap();

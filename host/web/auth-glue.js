@@ -51,20 +51,16 @@ function takePrepared(id) {
   return reserved.window;
 }
 
-const stateLessLogout = url => {
-  try {
-    const query = new URL(url).searchParams;
-    return query.getAll('state').length === 0 && !query.has('code') && !query.has('error');
-  } catch { return false; }
+const responseParams = url => {
+  const parsed = new URL(url), params = parsed.searchParams;
+  for (const [name, value] of new URLSearchParams(parsed.hash.slice(1))) params.append(name, value);
+  return params;
 };
 
-const logoutReturn = (url, state) => {
-  try {
-    const query = new URL(url).searchParams, states = query.getAll('state');
-    return !query.has('code') && !query.has('error')
-      && (states.length === 0 || states.length === 1 && states[0] === state);
-  } catch { return false; }
-};
+// A sign-in's answer, in the query or the fragment (RFC 6749 §4.1.2, §4.2.2; OpenID Connect
+// Core 1.0 §3.2.2.5). A logout return carries none of these (LLP 1069.006 D3).
+const SIGN_IN_RESPONSE = ['code', 'error', 'id_token', 'access_token'];
+const signInResponse = params => SIGN_IN_RESPONSE.some(name => params.has(name));
 
 function finish(env, report, session = live) {
   if (!session || live !== session) return;
@@ -140,13 +136,14 @@ export function arm(op, env) {
   const session = { ticket: op.ticket, popup, channel: null, onMessage: null, poll: null, bound: null,
     identity };
   live = session;
-  // Every same-origin tab hears the channel: a callback there is this tab's only when its one `state` is this
-  // session's. One from this tab's own popup is, whatever it carries, and the runner checks it.
+  // Every same-origin tab hears the channel. A matching state routes even a malformed
+  // callback to its session; the runner, not this transport, refuses duplicates. A
+  // sign-in answer without a popup identity never selects a logout (LLP 1069.006 D4).
   const ours = url => {
     try {
-      const states = new URL(url).searchParams.getAll('state');
-      return states.length === 1 && states[0] === reply.present.state
-        && (!reply.present.logout || logoutReturn(url, reply.present.state));
+      const params = responseParams(url);
+      if (reply.present.logout && signInResponse(params)) return false;
+      return params.getAll('state').includes(reply.present.state);
     } catch { return false; }
   };
   // A runner that let go is silent. The bound is elapsed time, which a system
@@ -173,9 +170,6 @@ export function arm(op, env) {
     if (event.source !== popup) return;
     const url = String(event.data.url);
     if (!matches(url) || ended()) return;
-    if (reply.present.logout) {
-      if (!logoutReturn(url, reply.present.state)) return;
-    }
     accept(url, 'opener');
   };
   let channel = null;
@@ -186,9 +180,9 @@ export function arm(op, env) {
       const url = String(event.data.url);
       if (!matches(url) || ended()) return;
       if (ours(url)) return accept(url, 'channel');
-      // A state-less return is addressed, never selected: only the tab that
-      // seeded this popup identity can take its severed broadcast.
-      if (reply.present.logout && identity && event.data.identity === identity && stateLessLogout(url)) {
+      // This popup addresses its own logout, including an invalid return.
+      // The acceptance check settles a sign-in answer with 502.
+      if (reply.present.logout && identity && event.data.identity === identity) {
         accept(url, 'channel');
       }
     };

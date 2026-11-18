@@ -200,14 +200,14 @@ test('an agent-fulfilled auth request closes its unadopted prepared window', asy
   }
 });
 
-test('a clock-adjusted auth timeout releases the JS target', async () => {
+test.each(['a clock-adjusted auth timeout', 'a logout opener response', 'a logout identity response'])('%s releases the JS target', async mode => {
   const names = ['window', 'navigator', 'location', 'performance', 'BroadcastChannel',
     'requestAnimationFrame', 'addEventListener', 'removeEventListener', 'setTimeout',
     'clearTimeout', 'setInterval', 'clearInterval', 'exact'];
   const saved = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
   const savedNow = Date.now;
   const timers = [], popups = [];
-  let timerNumber = 0, listener = null, mono = 0, wall = 10_000, target = 'first';
+  let timerNumber = 0, listener = null, channel = null, mono = 0, wall = 10_000, target = 'first';
   const timer = (callback, delay, repeat) => {
     const value = { id: ++timerNumber, callback, delay: Number(delay), repeat, active: true };
     timers.push(value);
@@ -228,11 +228,11 @@ test('a clock-adjusted auth timeout releases the JS target', async () => {
   define('performance', { timeOrigin: 1000, now: () => mono });
   define('location', { origin: 'https://app.example', search: '' });
   define('navigator', { userActivation: { isActive: true } });
-  define('BroadcastChannel', class { close() {} });
+  define('BroadcastChannel', class { constructor() { channel = this; } close() {} });
   define('addEventListener', (type, value) => { if (type === 'message') listener = value; });
   define('removeEventListener', (type, value) => { if (type === 'message' && listener === value) listener = null; });
   define('requestAnimationFrame', callback => { callback(); return 1; });
-  define('exact', {});
+  define('exact', { authHost: realAuthGlue });
   define('window', { open(url) {
     const values = new Map();
     const popup = {
@@ -250,13 +250,30 @@ test('a clock-adjusted auth timeout releases the JS target', async () => {
   } });
   Date.now = () => wall;
   clock.agent = false;
-  glueImported = false;
   try {
     install('auth.session https://login.example.com\nauth.callback https://app.example/.exact/auth/callback', () => target);
     run(0);
     await import('./auth-glue.js');
     await Promise.resolve();
     expect(glueImported).toBe(true);
+
+    if (mode !== 'a clock-adjusted auth timeout') {
+      for (const part of ['?', '#']) for (const name of ['code', 'error', 'id_token', 'access_token']) {
+        for (const state of ['', '&state=first', '&state=wrong']) {
+          const pending = openAuthSession('https://login.example.com/logout', {
+            callback: authCallback(), state: 'first', logout: true,
+          }).catch(error => error);
+          const popup = popups.at(-1);
+          const data = { type: 'exact-auth', url: `${authCallback()}${part}${name}=answer${state}`,
+            identity: popup.sessionStorage.getItem('exact.auth.return') };
+          if (mode === 'a logout opener response') listener({ origin: location.origin, source: popup, data });
+          else channel.onmessage({ data });
+          await expect(pending).resolves.toMatchObject({ status: 502, message: 'the logout return carries a sign-in response' });
+          expect(timers.filter(timer => timer.active)).toEqual([]);
+        }
+      }
+      return;
+    }
 
     const first = openAuthSession('https://login.example.com/authorize', {
       callback: authCallback(), state: 'first',
@@ -280,5 +297,24 @@ test('a clock-adjusted auth timeout releases the JS target', async () => {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else delete globalThis[name];
     }
+  }
+});
+
+test("fragment callbacks retain their parameters and require one exact state across query and fragment", async () => {
+  globalThis.location = { origin: "https://app.example" };
+  clock.agent = true;
+  install("auth.session https://login.example.com\nauth.callback https://app.example/cb", () => "login");
+  const pending = openAuthSession("https://login.example.com/authorize", { callback: "https://app.example/cb", state: "s +😀" });
+  const [hold] = holds();
+  try {
+    for (const suffix of ["#id_token=token", "#state=wrong", "?state=wrong#state=s+%2B%F0%9F%98%80", "?state=s+%2B%F0%9F%98%80#state=wrong", "#state=s+%2B%F0%9F%98%80&state=wrong"]) {
+      expect(answer({ ticket: hold.ticket, op: "type", text: "https://app.example/cb" + suffix }).error).toBeDefined();
+    }
+    const callback = "https://app.example/cb?tracking=1#state=s+%2B%F0%9F%98%80&id_token=token&code=hybrid";
+    expect(answer({ ticket: hold.ticket, op: "type", text: callback }).error).toBeUndefined();
+    expect(await pending).toBe(callback);
+  } finally {
+    answer({ ticket: hold.ticket, op: "tap", choice: "cancel" });
+    await pending.catch(() => {});
   }
 });

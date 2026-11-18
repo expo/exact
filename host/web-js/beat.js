@@ -9,3 +9,6 @@ export function beatAfter(beat, ms, t) {
   while (beat + k * ms <= t) k++;
   return beat + k * ms;
 }
+
+// Equal-deadline tasks follow declaration order, then instance creation order.
+export const timerOrder = (a, b) => a.i - b.i || (a.instance ?? 0) - (b.instance ?? 0);

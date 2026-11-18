@@ -154,6 +154,13 @@ impl Module {
             .and_then(|i| i.surface.placement(index))
     }
 
+    /// Visual opacity for a host-composited placed child (LLP 1133.039 D8).
+    pub fn placement_opacity(&self, id: u32, index: usize) -> f32 {
+        self.instances
+            .get(&id)
+            .map_or(1.0, |i| i.surface.placement_opacity(index))
+    }
+
     /// The canvas's children, painted by the host (LLP 1014 D3): `width`×`height`
     /// premultiplied RGBA, rows top-down, tightly packed. Creates or
     /// replaces the texture at a new size, writes the pixels, and marks the

@@ -287,7 +287,7 @@ test('the early refusals are the ones packaging makes', async () => {
     const set = resolve(dir, 'modules/apple/Icons.xcassets/Alternate.appiconset');
     mkdirSync(set, { recursive: true });
     writeFileSync(resolve(set, 'Contents.json'), '{}');
-    assert.deepEqual(appleRefusals(app({}), 'ios'), ["host/apple: fixture's alternate icons require a primary; declare host.ios.icon or a square icon of at least 1024 px"]);
+    assert.deepEqual(appleRefusals(app({ alternate_icons: [{ name: 'Alternate', icons: [{ src: 'assets/wide.png' }] }] }), 'ios'), ["host/apple: fixture's alternate icons require a primary; declare host.ios.icon or a square icon of at least 1024 px"]);
     assert.deepEqual(appleRefusals(app({ host: { ios: { icon: 'Missing.icon' } } }), 'ios', { archive: true }), ['host.ios.icon: Missing.icon does not exist'], 'one reason, not the primary it leaves missing as well');
     // tvOS's icon is a 5:3 one; a Caltrain-shaped 8:3 icon is none, which only a distributed bundle refuses.
     writeFileSync(resolve(dir, 'assets/caltrain.png'), encodePng({ width: 320, height: 120, data: new Uint8Array(320 * 120 * 4).fill(255) }));

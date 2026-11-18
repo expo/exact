@@ -1272,3 +1272,15 @@ for (const placement of ['main', 'worker']) for (const wait of ['GET', 'timer'])
     expect(environment.disk.get('exact.secret.token')).toBe('half-written');
   } finally { w.done(); environment.restore(); }
 }, 20000);
+
+test('storage preserves access denial codes and the known-folder absence name', () => {
+  const source = readFileSync(resolve(ROOT, 'js/src/storage.js'), 'utf8');
+  for (const [windows, errno] of [[false, 13], [true, 5]]) {
+    const realm = vm.createContext({ __exact_windows_storage: windows });
+    vm.runInContext(source, realm);
+    const calls = realm.__exact_storage_calls({});
+    expect(calls.storageError(`filesystem: access denied (os error ${errno})`).code).toBe('EACCES');
+    const absent = calls.storageError('NotSupportedError: well-known folders are unavailable on this host');
+    expect([absent.name, absent.kind, absent.code]).toEqual(['NotSupportedError', 'Unavailable', 'failed']);
+  }
+});

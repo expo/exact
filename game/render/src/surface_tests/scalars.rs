@@ -135,7 +135,10 @@ fn values(baked: bool, coated: bool, mapped: bool, case: u32, enabled: bool) -> 
 }
 fn surface(args: [Value; 7]) -> WorldSurface<Die, crate::ModelExecutor, true> {
     let mut s = WorldSurface::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&args, None).unwrap();
     let texel = [0, 128, 192, 255];
     s.asset(

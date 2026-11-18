@@ -11,6 +11,7 @@ mod ancestor_row_state;
 mod animation_trigger;
 mod announce;
 mod app_action_snapshots;
+mod app_icon;
 mod aria;
 mod asset_paths;
 mod at;

@@ -211,8 +211,8 @@ export const classifications = [
   group("canvas images", ["one-shot"], "image source and the canvas lifetimes that requested it", "UI-owned",
     "runner/src/runner/canvas2d.rs:1360-1380 updates only canvases still held by this runner; image source strings themselves carry no session capability.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_canvas_image exact_canvas_image_released"],
-    ["painted:host/painted/src/host_canvas.rs", "Host::sync_canvases"],
-    ["runner:runner/src/runner/canvas2d.rs", "Runner::canvas_fonts_loaded Runner::canvas_image Runner::canvas_image_released Runner::canvas_images_pending Runner::take_canvas_image_requests"],
+    ["painted:host/painted/src/host_canvas.rs", "Host::canvas_picture_changed Host::sync_canvases"],
+    ["runner:runner/src/runner/canvas2d.rs", "Runner::canvas_fonts_loaded Runner::canvas_image Runner::canvas_image_named Runner::canvas_image_released Runner::canvas_images_pending Runner::take_canvas_image_requests"],
     ["web:host/web/src/canvas2d.rs", "exact_canvas_image"],
   ]),
   group("declared operations", ["one-shot", "durable operation"], "declared list entry or registered app operation; scope can be session or app", "UI-owned",
@@ -286,7 +286,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/hatch.rs",
       "Presenter::connect_hatches Presenter::end_hatches Presenter::hatch_built Presenter::hatch_command Presenter::hatch_fire Presenter::hatch_in_flight " +
       "Presenter::hatch_instant Presenter::hatch_moments Presenter::hatch_perf Presenter::hatch_progress Presenter::hatch_scopes Presenter::hatch_sites " +
-      "Presenter::hatch_state Presenter::hatch_ticks Presenter::hatch_trace_asked Presenter::hatch_turn Presenter::set_hatches"],
+      "Presenter::hatch_state Presenter::hatch_ticks Presenter::hatch_trace_asked Presenter::hatch_turn Presenter::reader_hatch_act Presenter::set_hatches"],
   ]),
   group("holds", ["one-shot"], "held request/node until answer, cancellation or node retirement", "UI-owned",
     "runner/src/runner/device.rs:1-12 retires holds with the requesting node or ticket and refuses duplicate answers; the agent hold is not an executor request.", [
@@ -443,6 +443,7 @@ export const classifications = [
     ["runner:runner/src/runner/each.rs", "Runner::declared_resources"],
     ["runner:runner/src/runner/faults.rs", "Runner::faults"],
     ["runner:runner/src/runner/fonts.rs", "Runner::plan Runner::runtime_font_count Runner::runtime_font_stacks"],
+    ["runner:runner/src/runner/owned_tasks.rs", "Runner::arm_task#generation:1 Runner::arm_task#next_ms:1 Runner::arm_task#next_ms:2 Runner::reconcile_tasks#generation:1 Runner::reconcile_tasks#instance:1"],
     ["runner:runner/src/runner/overrun.rs", "Runner::is_reask_wait Runner::reask_due_ms"],
     ["runner:runner/src/runner/perf.rs",
       "Runner::alert Runner::count_kernel_layout Runner::failure_counts Runner::measure Runner::measure_from_now Runner::measure_kernel_layouts Runner::measure_later " +
@@ -577,7 +578,7 @@ export const classifications = [
     ["apple:host/apple/src/material.rs", "exact_material_platform"],
     ["apple:host/apple/src/pan_velocity.rs", "exact_pan_sample exact_pan_velocity exact_velocity"],
     ["apple:host/apple/src/svg_image.rs", "exact_svg_image_free exact_svg_image_header exact_svg_image_scene"],
-    ["apple:host/apple/src/textflow.rs", "exact_text_line_breaks exact_textflow_flow exact_textflow_free exact_textflow_prepare"],
+    ["apple:host/apple/src/textflow.rs", "exact_text_balanced_breaks exact_text_line_breaks exact_textflow_flow exact_textflow_free exact_textflow_prepare"],
     ["painted:host/painted/src/lower.rs", "Host::play_transitions"],
     ["painted:host/painted/src/desktop.rs", "Screen::json"],
     ["painted:host/painted/src/screen_capture.rs", "fixtures sizes"],
@@ -618,7 +619,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/pump.rs", "Presenter::pump Presenter::pump_with_clock"],
   ], "durable when the ticket names background/tool work or retained effectful module work; see reply.rs:70-88 and module_work.rs. Not all tool handlers survive session teardown."),
   group("request lifecycle", ["one-shot", "subscription", "durable operation"], "pending ticket, queued turn or held executor request", "UI-owned",
-    "runner/src/runner/admission.rs and in_flight.rs tie admission, aborts and retirement to pending tickets. Retained effectful work is separately represented by module_work.rs. presenter/pump.rs release_held_work resumes requests retained by runner.holds.", [
+    "runner/src/runner/admission.rs and in_flight.rs tie admission, aborts and retirement to pending tickets. queue.rs restores a refused commit's queued-send deadlines with their owners. Retained effectful work is separately represented by module_work.rs. presenter/pump.rs release_held_work resumes requests retained by runner.holds.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_request_active"],
     ["painted:host/painted/src/canvas.rs", "CanvasHost::poll"],
     ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_poll Java_dev_exact_canvas_Native_requests"],
@@ -642,7 +643,7 @@ export const classifications = [
       "Runner::effects_in_flight Runner::has_pending Runner::held_replies Runner::held_requests Runner::in_flight Runner::is_open_stream Runner::must_finish " +
       "Runner::one_shot_armed Runner::pending Runner::stream_grant Runner::streams"],
     ["runner:runner/src/runner/outstanding.rs", "Runner::outstanding"],
-    ["runner:runner/src/runner/queue.rs", "Runner::mutation_requests Runner::queued"],
+    ["runner:runner/src/runner/queue.rs", "Runner::mutation_requests Runner::queued Queues::restore#next_due:1"],
     ["runner:runner/src/runner/reply.rs", "Runner::holds"],
     ["runner:runner/src/runner/uploads.rs", "Runner::uploads_started"],
     ["web:host/web/src/abi.rs", "exact_collect_aborts exact_request_active"],
@@ -672,8 +673,8 @@ export const classifications = [
     ["render:host/render/src/requests.rs", "render_with_at"],
     ["render:host/render/src/serve.rs", "document expire_renders Server::addr Server::bind Server::run Server::stopper Stopper::stop"],
     ["render:host/render/src/source.rs", "Anonymous::new"],
-    ["runner:runner/src/runner.rs", "Runner::auth_mut Runner::boot Runner::boot_carrying Runner::data Runner::kernel_mut Runner::set_full_evaluation Runner::set_row_reuse"],
-    ["runner:runner/src/runner/carry.rs", "Runner::carry"],
+    ["runner:runner/src/runner.rs", "Runner::auth_mut Runner::boot Runner::data Runner::kernel_mut Runner::set_full_evaluation Runner::set_row_reuse"],
+    ["runner:runner/src/runner/carry.rs", "Runner::boot_carrying Runner::carry Runner::reboot_sequence Carried::with_validated_answers"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::boot_checkpoint Runner::boot_checkpoint_linked"],
     ["runner:runner/src/runner/commit.rs", "Runner::set_inline_geometry"],
     ["runner:runner/src/runner/console.rs", "Runner::set_console"],
@@ -710,7 +711,7 @@ export const classifications = [
     ["web:host/web/src/abi.rs", "exact_store"],
   ]),
   group("timer fires", ["subscription"], "session timer generation/deadline or one frame task", "UI-owned",
-    "runner/src/runner/native_timers.rs binds one subscription in each live ordinary timer record at native_timers handoff. Repeats reuse it; gates.rs resets it on rearming. Typed and integer fires retain the original index/generation and clock checks. Frame tasks and other clock entries still use their existing paths. Advance/frame can also pump replies and deferred thens.", [
+    "runner/src/runner/native_timers.rs binds one subscription in each live ordinary timer record at native_timers handoff. Repeats reuse it; owned_tasks.rs resets it on rearming. Typed and integer fires retain the original index/generation and clock checks. Frame tasks and other clock entries still use their existing paths. Advance/frame can also pump replies and deferred thens.", [
     ["apple:host/apple/src/abi/exports.rs",
       "exact_admitted_frame exact_advance exact_fire_native_timer exact_frame exact_frame_at exact_native_timers exact_present_frames exact_pump exact_set_live_clock " +
       "exact_prefer_presented exact_start_on_frame exact_tick exact_tick_at exact_timer_waits"],
@@ -738,7 +739,7 @@ export const classifications = [
     ["runner:runner/src/runner/advance/data_timers.rs", "Runner::data_timer_due_ms Runner::data_timer_landing Runner::data_timer_waits Runner::timer_first#next_ticket:1"],
     ["runner:runner/src/runner/dated.rs", "Runner::resources_reading_clock"],
     ["runner:runner/src/runner/gates.rs",
-      "Runner::collection_timer_due_ms Runner::collection_timer_due_ms#generation:1 Runner::gate_step#generation:1 Runner::gate_step#next_ms:1 Runner::gate_step#next_ms:2 Runner::gate_step#next_ms:3 Runner::has_timers Runner::tasks " +
+      "Runner::collection_timer_due_ms Runner::collection_timer_due_ms#generation:1 Runner::has_timers Runner::tasks " +
       "Runner::timer_due_ms Runner::timer_tolerance_ms Runner::timer_wake_ms Runner::wants_frames"],
     ["runner:runner/src/runner/native_timers.rs", "Runner::fire_native_timer Runner::native_timers Runner::native_timer_completion Runner::use_native_timers Runner::uses_native_timers"],
     ["runner:runner/src/runner/overrun.rs", "Runner::hold_overrun_reply#next_ticket:1 Runner::hold_reask#next_ticket:1"],
@@ -1200,7 +1201,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/window.rs", "Presenter::env_insets Presenter::fit_view"],
   ]),
   group("timer fires", ["subscription"], "session timer generation/deadline or one frame task", "UI-owned",
-    "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/native_timers.rs binds one subscription in each live ordinary timer record at native_timers handoff. Repeats reuse it; gates.rs resets it on rearming. Typed and integer fires retain the original index/generation and clock checks. Frame tasks and other clock entries still use their existing paths. Advance/frame can also pump replies and deferred thens.", [
+    "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/native_timers.rs binds one subscription in each live ordinary timer record at native_timers handoff. Repeats reuse it; owned_tasks.rs resets it on rearming. Typed and integer fires retain the original index/generation and clock checks. Frame tasks and other clock entries still use their existing paths. Advance/frame can also pump replies and deferred thens.", [
     ["painted:host/painted/src/presenter/clock.rs", "Presenter::android_clock Presenter::give_clock"],
     ["painted:host/painted/src/presenter/scroll_end.rs", "Presenter::scroll_end_live Presenter::scroll_end_moved Presenter::timer_or_scroll_due_ms"],
   ]),
@@ -1241,10 +1242,10 @@ export const classifications = [
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
     ["painted:host/painted/src/presenter/picker.rs",
-      "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
-      "Presenter::finish_portal_picks Presenter::is_file_input Presenter::picked_targets Presenter::save_chosen Presenter::start_folder"],
+      "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::borrowed_files_chosen Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
+      "Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
     ["painted:host/painted/src/presenter/file_dialog.rs",
-      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::finish_file_dialog Presenter::queue_file_dialog " +
+      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
       "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",
@@ -1279,6 +1280,8 @@ export const classifications = [
     "The named public runner-crate source is the inspection API or its value/admission helper. The declaration reads or reports the current session. It does not establish a durable operation.", [
     ["runner:runner/src/agent.rs", "base64 error field_bool field_num field_str frames handle holds logs node num quote shown_value state tags tree typed_json unbase64 untyped_json"],
     ["runner:runner/src/agent/row.rs", "row_json"],
+    ["runner:runner/src/agent/tree.rs", "tagged"],
+    ["runner:runner/src/runner/carry.rs", "Runner::generation"],
     ["runner:runner/src/frame_health.rs",
       "applied capture context create destroy distribution exact_frame_health_applied exact_frame_health_capture exact_frame_health_context exact_frame_health_create " +
       "exact_frame_health_destroy exact_frame_health_distribution exact_frame_health_history_status exact_frame_health_hitch exact_frame_health_record " +

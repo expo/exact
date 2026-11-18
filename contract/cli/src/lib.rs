@@ -29,6 +29,7 @@ mod declaration;
 pub mod faces;
 pub mod functions;
 pub mod gallery;
+mod gpu_requirements;
 mod grants;
 /// The Lean backend: a program as a term of `semantics/` (LLP-free; see
 /// `semantics/README.md`).
@@ -42,6 +43,7 @@ mod module_rust;
 mod modules;
 pub mod native;
 mod orientationlock;
+pub mod package_gpu;
 mod package_views;
 pub mod picker;
 mod resolve;
@@ -995,6 +997,7 @@ fn compile_loaded(
     if !surface.is_empty() {
         return Err(surface);
     }
+    package_gpu::check(&app_root, &plan).map_err(|e| vec![e])?;
     let placed = package_views::placed(&plan);
     for v in views.iter().filter(|v| placed.contains(&v.tag)) {
         let binds: Vec<&str> = v.binds.iter().map(String::as_str).collect();
@@ -1277,7 +1280,13 @@ fn first_frame<D: DataSource>(
     fact_shape(
         plan,
         "exactActivities",
-        &["activities", "frequentPushesEnabled", "linked"],
+        &[
+            "activities",
+            "frequentPushesEnabled",
+            "linked",
+            "pushToStartToken",
+            "pushToStartActivities",
+        ],
         "bake-activities-field",
     )?;
     activities::shape(plan)?;

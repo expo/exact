@@ -32,7 +32,7 @@
 // and asks nothing for; a runtime permission comes only from a grant line, which derives its prompt (LLP 1133.002 D6).
 // There is no `<provider>` but a library's removed one, and no `android:process`.
 
-import { EXACT_PATHS } from './links.mjs';
+import { EXACT_PATHS, androidAuthCallbacks } from './links.mjs';
 
 /** The broadcasts a package's receiver may name: the boot, the package replaced, the clock and zone, the exact-alarm
  * switch (LLP 1133.030 D9). */
@@ -333,16 +333,29 @@ export function withAppLinks(fragment, filters = []) {
   return onMainActivity(fragment, lines);
 }
 
-/** Auth callbacks are custom schemes on Android. HTTPS grants remain available to the web and Apple, and an https
- * callback on a claimed origin is excluded from the App Links (`withAppLinks`); Android registers no loopback
- * callback. The runner checks the full endpoint and state. */
+/** HTTPS auth callbacks have their own exact-path App Link for browsers without Auth Tab. Custom schemes share
+ * their protocol handler's filter. The runner checks the full endpoint and state; HTTP loopback is not registered. */
 export function withAuthCallbacks(fragment, callbacks = []) {
-  const endpoints = [...new Set(callbacks.filter(callback => !['http:', 'https:'].includes(new URL(callback).protocol)))];
-  const schemes = [...new Set(endpoints.map(callback => new URL(callback).protocol.slice(0, -1)))];
-  if (!schemes.length) return fragment;
+  const endpoints = androidAuthCallbacks(callbacks);
+  const schemes = [...new Set(endpoints.filter(callback => new URL(callback).protocol !== 'https:').map(callback => new URL(callback).protocol.slice(0, -1)))];
+  if (!endpoints.length) return fragment;
   // A scheme a protocol handler already filters is not filtered twice.
   const filters = schemes.filter((scheme) => !fragment.includes(viewFilter(scheme).join('\n'))).flatMap(viewFilter);
+  for (const callback of endpoints.filter(callback => new URL(callback).protocol === 'https:')) {
+    const url = new URL(callback);
+    filters.push('            <intent-filter android:autoVerify="true">',
+      '                <action android:name="android.intent.action.VIEW" />',
+      '                <category android:name="android.intent.category.DEFAULT" />',
+      '                <category android:name="android.intent.category.BROWSABLE" />',
+      `                <data android:scheme="https" android:host="${escape(url.hostname)}" android:path="${escape(decodeURIComponent(url.pathname))}" />`,
+      '            </intent-filter>');
+  }
   // A hostless scheme:/path cannot be narrowed by android:path: Android ignores paths without a host.
   const app = onMainActivity(fragment, filters, [`        <meta-data android:name="dev.exact.auth.callbacks" android:value="${escape(JSON.stringify(endpoints))}" />`]);
-  return `${app}\n    <queries>\n        <intent><action android:name="android.support.customtabs.action.CustomTabsService" /></intent>\n        <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="https" /></intent>\n    </queries>`;
+  const queries = [
+    '        <intent><action android:name="android.support.customtabs.action.CustomTabsService" /></intent>',
+    '        <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="https" /></intent>',
+  ].join('\n');
+  if (app.includes('    </queries>')) return app.replace('    </queries>', `${queries}\n    </queries>`);
+  return `${app}\n    <queries>\n${queries}\n    </queries>`;
 }

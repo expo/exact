@@ -60,7 +60,7 @@ class PaymentButton {
     }
     b.removeAttribute('aria-label');
     b.textContent = LABELS[type] ?? 'Pay';
-    b.style.cssText = 'width:100%;height:100%;min-height:40px;border:0;border-radius:6px;background:#000;color:#fff;font:600 16px system-ui;cursor:pointer';
+    b.style.cssText = 'display:grid;place-items:center;padding:0;width:100%;height:100%;min-height:40px;border:0;border-radius:6px;background:#000;color:#fff;font:600 16px system-ui;cursor:pointer';
   }
   destroy() { this.button.remove(); }
 }

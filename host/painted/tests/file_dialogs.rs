@@ -84,7 +84,8 @@ fn take(p: &mut Presenter<()>) -> (u32, FileDialog) {
         p.host().runner().journal().collect::<Vec<_>>()
     );
     assert!(p.take_file_dialogs().is_empty());
-    asks.remove(0)
+    let (id, dialog, _) = asks.remove(0);
+    (id, dialog)
 }
 
 #[test]
@@ -131,6 +132,15 @@ fn documents_exports_and_imports_take_their_routes_and_a_headless_export_refuses
     assert_eq!(request.picker.kind, Kind::Save);
     let target = folder.join("saved.txt");
     p.answer_file_dialog(id, Outcome::Chosen(vec![target.clone()]));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while p.host().runner().slot("chosen") != Some(&Value::str("saved.txt")) {
+        assert!(p.pump(0.).is_none());
+        assert!(
+            std::time::Instant::now() < deadline,
+            "export did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     assert_eq!(std::fs::read(&target).unwrap(), b"saved bytes");
     assert_eq!(
         p.host().runner().slot("chosen"),

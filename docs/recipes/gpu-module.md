@@ -1,5 +1,8 @@
 # Recipe: a GPU module (a canvas drawn in Rust)
 
+For a package, `bun exact.mjs add <package>` then `canvas surface=name(…)`. For compute
+limits and features, see [device requirements](../reference.md#gpu-device-requirements).
+
 A `canvas surface=name(…)` that no data module draws is drawn by the app's GPU module: a crate
 `gpu/` beside app.json whose surfaces implement `exact_gpu::Surface`, loaded after the first pixel
 (`apps/caltrain/gpu` is a whole one). `exact_gpu::wgpu` is wgpu 30, whose fields differ from older
@@ -13,9 +16,6 @@ from the host's: write no root `Cargo.toml` and copy nothing up.
    writes `.exact/gpu/`, whose lock is exact2's.
 3. When `gpu/` depends on a crate, or a version, that exact2's lock does not hold, the build stops and says
    to run `bun exact.mjs lock`, which captures `Cargo.gpu.lock` beside app.json. Commit it.
-
-An app with a `Cargo.toml` of its own (an authored workspace) adds `"gpu"` to its `members` instead,
-leaves out `package.workspace`, and writes these dependencies as its other crates write exact2's.
 
 `gpu/Cargo.toml`. Its package is the app's name plus `-gpu`; `module!` exports through the three web
 dependencies, so they are required, at the workspace's versions (the web build's wasm-bindgen CLI
@@ -70,7 +70,6 @@ fn clear() -> Box<dyn Surface> {
     Box::new(Clear)
 }
 
-/// Each surface: its name, its number of inputs, its factory.
 pub static REGISTRY: Registry = Registry { surfaces: &[("clear", 0, clear)], shaders: &[] };
 
 exact_gpu::module!(REGISTRY);

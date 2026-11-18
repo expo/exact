@@ -339,7 +339,8 @@ public final class ExactSession {
     public private(set) var state: State = .created {
         didSet { if state != oldValue { let changed = state; app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, didChange: changed) } } }
     }
-    /// Bumped by every reboot; a callback from an older generation is dropped.
+    /// The agent's session generation, advanced by each accepted boot or replacement.
+    /// A callback from an older generation is dropped.
     public var generation: Int { runtime.completionLease.generation }
     let storeRefresh = SessionStoreRefresh()
     var activatedGeneration: Int?
@@ -1195,6 +1196,7 @@ public final class ExactSession {
         let orientationChanged = presenter.orientationChangesScreen(batch)
         ThemeRoles.within(presenter.root) { presenter.apply(batch) }; Formas.moved(self) // bindings' places (LLP 1121 D12)
         drainCanvasCaptures(batch)
+        if !batch.canvasImagesDropped.isEmpty { presenter.canvas2d.drop(batch.canvasImagesDropped) }
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         AnimatedRasters.shared.poke()
         for op in outputs.reorders { presenter.reorder?.observe(ReorderState(op.payload)); presenter.reorderGroup?.observe(ReorderGroupState(op.payload)) }

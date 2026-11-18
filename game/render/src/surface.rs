@@ -510,7 +510,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     fn preparing(&self) -> bool {
         self.hooks.needs().contains(crate::Needs::PENDING)
     }
-    fn device_ready(&mut self, features: wgpu::Features) {
+    fn device_ready(&mut self, features: wgpu::Features, _: wgpu::Limits) {
         if ASSETS {
             let family_changed = self.payloads.choose(features);
             if let Some(sim) = &mut self.sim {
@@ -1019,7 +1019,7 @@ mod residency_tests {
             return;
         };
         let mut s = WorldSurface::<Cosmetic, crate::ModelExecutor, true>::default();
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.bind(&[], None).unwrap();
         let model = model();
         let bytes = exact_game::asset::encode_model(&model);
@@ -1040,7 +1040,7 @@ mod residency_tests {
         else {
             return;
         };
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.prepare_assets(
             &replacement.device,
             &replacement.queue,
@@ -1051,7 +1051,7 @@ mod residency_tests {
         assert!(changes.retired.contains(&model.textures[0]));
         assert!(changes.requests.contains(&model.textures[0]));
         s.asset(&model.textures[0], Ok(tex));
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.prepare_assets(
             &replacement.device,
             &replacement.queue,
@@ -1072,7 +1072,7 @@ mod residency_tests {
             return;
         };
         let mut s = WorldSurface::<Cosmetic, crate::ModelExecutor, true>::default();
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.bind(&[], None).unwrap();
         let mut model = model();
         let texture = include_bytes!("../../bake/tests/fixtures/crate/0-srgb-straight.tex");
@@ -1130,7 +1130,7 @@ mod residency_tests {
             return;
         };
         let mut s = WorldSurface::<Cosmetic, crate::ModelExecutor, true>::default();
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.bind(&[], None).unwrap();
         let mut model = model();
         // Character-sized resident, already retired when the oversized cache enters preparation.
@@ -1243,7 +1243,7 @@ mod residency_tests {
             return;
         };
         let mut s = WorldSurface::<Cosmetic, crate::ModelExecutor, true>::default();
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.bind(&[], None).unwrap();
         let mut model = model();
         let texture = exact_game::asset::TextureData {
@@ -1291,7 +1291,7 @@ mod residency_tests {
     #[test]
     fn ready_reasons_name_declaration_and_render_failures() {
         let mut s = WorldSurface::<Fox, crate::ModelExecutor, true>::default();
-        s.device_ready(wgpu::Features::empty());
+        s.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         s.bind(&[], None).unwrap();
         s.asset("fox.model", Err(AssetError::Missing));
         let state = s.agent(r#"{"op":"state"}"#).unwrap();
@@ -1327,7 +1327,7 @@ mod residency_tests {
             return;
         };
         let mut surface = WorldSurface::<Fox, crate::ModelExecutor, true>::default();
-        surface.device_ready(wgpu::Features::empty());
+        surface.device_ready(wgpu::Features::empty(), wgpu::Limits::downlevel_defaults());
         surface.bind(&[], None).unwrap();
         surface.asset(
             "fox.model",

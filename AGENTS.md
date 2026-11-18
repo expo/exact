@@ -195,8 +195,8 @@ section binds (`rules/RULES.md`, "Agents").
   50"` films motion on it as a contact sheet, `.apng` to play). The driver refuses a
   build older than its sources and names the rebuild (LLP 1012.001.000). `bun scripts/smoke.mjs
   <web|macos|ios|linux|host>` is the whole app driven that way. The Linux host
-  (`cargo build --profile host-dev -p caltrain-linux`: a development build, as
-  `build.mjs` makes for Apple; `--release` is the one that ships) runs headless
+  (`bun scripts/build-linux.mjs caltrain`: a development build, as
+  `build.mjs` makes for Apple; a release build is the one that ships) runs headless
   anywhere, macOS included. `host-dev` compiles incrementally unless the shell
   exports `CARGO_INCREMENTAL=0`, which a hand-run cargo obeys (a touched kernel
   line is then 17 s, not 6) and `build.mjs` overrides, saying so.

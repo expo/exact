@@ -92,6 +92,61 @@ test('the JS loop carries a checkpoint literally across document probes and retr
   }
 }, 180000);
 
+test('replacement generations never repeat through A, B, A and a carried reboot', async () => {
+  const dir = mkdtempSync(resolve(ROOT, 'target/replacement-js-'));
+  const source = join(dir, 'app.contract');
+  const contract = (label, second = false) => `component App
+  state kept = 1
+  state retyped = ${second ? '"new"' : '1'}
+${second ? '' : '  state removed = 1\n'}  action bump
+    kept = kept + 1
+  view
+    column
+      button press=bump testId="bump"
+        text "Bump"
+      text "${label}" testId="label"
+`;
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Replacement', app: { id: 'test.replacement', name: 'Replacement' } }));
+  writeFileSync(source, contract('A'));
+  let loop, browser;
+  try {
+    loop = await devLoop(dir);
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(loop.base + '?agent=1');
+    await page.waitForFunction(() => globalThis.exact?.agentSettled);
+    const read = () => page.evaluate(() => exact.agentSettled({ op: 'state' }));
+    let before = await read();
+    expect(before.generation).toBe(1);
+    expect(before.replacement).toBeNull();
+    for (const [label, generation] of [['B', 2], ['A', 3], ['reboot', 4]]) {
+      await page.getByTestId('bump').click();
+      before = await read();
+      if (label === 'reboot') {
+        // The same plan, with the same carry handoff as the loop's document replacement.
+        const checkpoint = await page.evaluate(() => ({ generation: exact.clock.generation, epoch: exact.clock.epoch, time: exact.clock.now,
+          slots: exact.state[0].map(s => [s.n.devName, s.n.devType, s()]), answers: [], carryAnswers: false }));
+        expect((await fetch(`${loop.base}/__dev/checkpoint?id=4-5-6-7&seq=3`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(checkpoint) })).status).toBe(204);
+        await page.goto(loop.base + '?agent=1&__exactDev=4-5-6-7');
+      } else {
+        writeFileSync(source, contract(label, label === 'B'));
+        await page.waitForFunction(label => document.querySelector('[data-testid="label"]')?.textContent === label, label);
+      }
+      await page.waitForFunction(() => globalThis.exact?.agentSettled);
+      const after = await read();
+      expect(after.generation).toBe(generation);
+      expect(after.epoch).toBeGreaterThanOrEqual(before.epoch);
+      expect(after.incarnation).toBe(1);
+      expect(after.slots.kept).toBe(before.slots.kept);
+      if (generation === 2) expect(after.replacement.dropped).toEqual([
+        { what: 'state', name: 'retyped', why: 'type changed' },
+        { what: 'state', name: 'removed', why: 'no place' },
+      ]);
+      expect((await page.evaluate(() => exact.agentSettled({ op: 'logs' }))).generation).toBe(generation);
+    }
+  } finally { await browser?.close(); await loop?.stop(); rmSync(dir, { recursive: true, force: true }); }
+}, 180000);
+
 test.each([false, true])('a blurred autofocus field stays blurred after a carried reload (bound: %s)', async bound => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-blurred-carry-'));
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Blurred carry', app: { id: 'test.blurred.carry', name: 'Blurred carry' } }));

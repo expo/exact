@@ -1245,8 +1245,8 @@ impl Painter {
         }
         let clips = clip.is_some();
         let mut child_rect = clip_rect;
-        if let Some(clip) = clip {
-            self.backend.push_clip(&clip, ts);
+        if let Some(clip) = &clip {
+            self.backend.push_clip(clip, ts);
             let own = bbox(ts, clip.rect);
             child_rect = Some(match clip_rect {
                 Some(c) => intersect(c, own),
@@ -1270,7 +1270,12 @@ impl Painter {
         if paints_self {
             self.alert_title(walk, node, ts, child_offset);
         }
+        let child_start = walk.boxes.len();
         self.children(walk, node, ts, child_offset, child_rect);
+        if let Some(clip) = &clip {
+            let hit_ts = walk.hit_space.map_or(ts, |(ts, _)| ts);
+            shape::overflow_hits(&mut walk.boxes[child_start..], clip, ts, hit_ts);
+        }
         if clips {
             self.backend.pop_clip();
         }

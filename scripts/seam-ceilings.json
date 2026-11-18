@@ -1560,7 +1560,7 @@
       ]
     },
     "appleAbiExports": {
-      "ceiling": 296,
+      "ceiling": 297,
       "sites": [
         "host/apple/Sources/ExactCore/WidgetContainer.swift: exact_widget_reload",
         "host/apple/activityarm/ActivityArm.swift: exact_activity_close",
@@ -1809,6 +1809,7 @@
         "host/apple/src/svg_image.rs: exact_svg_image_free",
         "host/apple/src/svg_image.rs: exact_svg_image_header",
         "host/apple/src/svg_image.rs: exact_svg_image_scene",
+        "host/apple/src/textflow.rs: exact_text_balanced_breaks",
         "host/apple/src/textflow.rs: exact_text_line_breaks",
         "host/apple/src/textflow.rs: exact_text_paragraph_bases",
         "host/apple/src/textflow.rs: exact_textflow_flow",

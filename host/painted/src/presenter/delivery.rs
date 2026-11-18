@@ -213,9 +213,7 @@ impl<D: DataSource> Presenter<D> {
                 return Err(HostError::Layout(error));
             }
             self.restore_time(&mut host)?;
-            let mut validated = host.carry();
-            validated.store = carried.store.clone();
-            *carried = validated;
+            *carried = carried.clone().with_validated_answers(host.carry());
         }
         Ok(data)
     }
@@ -760,7 +758,7 @@ component App
     }
 
     #[test]
-    fn delivered_update_recomputes_paint_ranks_at_the_same_kernel_epoch() {
+    fn delivered_update_continues_the_epoch_and_recomputes_paint_ranks() {
         let source = r##"component Paint
   view
     box width=100 height=100
@@ -797,11 +795,11 @@ component App
         assert_eq!(p.brush.paint_epoch, Some(epoch));
         p.set_updates(Some(Box::new(StagedPlan(new.into()))));
         assert!(p.activate_update(()).unwrap());
-        assert_eq!(
-            p.host.kernel().epoch(),
-            epoch,
-            "replacement epochs must collide"
+        assert!(
+            p.host.kernel().epoch() > epoch,
+            "replacement epochs continue"
         );
+        assert_eq!(p.host.runner().generation(), 2);
         assert_eq!(
             pixel(&mut p),
             (255, 0, 0),
@@ -813,6 +811,15 @@ component App
         p.dirty = true;
         assert_eq!(pixel(&mut p), (255, 0, 0));
         assert_eq!(p.brush.rank_passes, passes + 1);
+        assert!(p.reload(b"invalid plan", ()).is_err());
+        assert_eq!(p.host.runner().generation(), 2);
+        for generation in 3..=4 {
+            let epoch = p.host.kernel().epoch();
+            assert!(p.reload(&old, ()).unwrap().is_none());
+            assert_eq!(p.host.runner().generation(), generation);
+            assert!(p.host.kernel().epoch() > epoch);
+            assert_eq!(pixel(&mut p), (0, 0, 255));
+        }
     }
 }
 

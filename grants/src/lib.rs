@@ -81,9 +81,21 @@ impl PathPrefix {
         // 1069.010 D1), a namespace beside `app:/` resolved by the host.
         // `home:/` and `bundle:/` name the person's home directory and the
         // app's installed bundle (LLP 1133.007 D6), resolved by the host.
-        let namespace = ["app:", "doc:", "home:", "bundle:"]
-            .into_iter()
-            .find_map(|ns| Some((ns, path.strip_prefix(ns)?.strip_prefix('/')?)));
+        let namespace = [
+            "app:",
+            "doc:",
+            "home:",
+            "bundle:",
+            "desktop:",
+            "documents:",
+            "downloads:",
+            "music:",
+            "pictures:",
+            "videos:",
+            "screenshots:",
+        ]
+        .into_iter()
+        .find_map(|ns| Some((ns, path.strip_prefix(ns)?.strip_prefix('/')?)));
         // A chosen document's path is the host's own, never normalized: an
         // empty segment, a backslash or a NUL refuses it, as ibex2's parser,
         // which the native hosts admit by, refuses it (LLP 1069.010 D1).
@@ -571,6 +583,22 @@ pub fn namespace_refusal(capability: &str, prefix: &PathPrefix) -> Result<(), St
             "home-grant-whole: a line names a subtree of the home directory, such as `home:/.ssh`"
                 .into(),
         ),
+        [folder, ..]
+            if matches!(
+                folder.as_str(),
+                "desktop:"
+                    | "documents:"
+                    | "downloads:"
+                    | "music:"
+                    | "pictures:"
+                    | "videos:"
+                    | "screenshots:"
+            ) && capability != "fs.write" =>
+        {
+            Err(format!(
+                "well-known folders only admit fs.write: `{capability}` cannot name {folder}"
+            ))
+        }
         [bundle, ..] if bundle == "bundle:" && capability != "fs.read" => Err(format!(
             "the bundle is read only: `{capability}` cannot name it"
         )),

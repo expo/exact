@@ -22,6 +22,7 @@ pub(super) type ThenCall = (Vec<Value>, Vec<Frame>);
 
 /// The runner's row for one instance's sends to one mutation.
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct OwnedSend {
     /// The plan's mutation.
     pub(super) site: usize,

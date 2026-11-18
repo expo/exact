@@ -174,13 +174,17 @@ impl crate::Module {
     /// for it is prepared again on the same device, its state untouched.
     pub fn retier(&mut self) {
         for inst in self.instances.values_mut() {
+            if self.refused.contains_key(inst.name.as_str()) {
+                continue;
+            }
             if !inst.surface.retier() {
                 continue;
             }
             // Drawn again at once: the agent's clock need not move to show the new rung.
             inst.dirty = true;
             if let Some(gpu) = &self.gpu {
-                inst.surface.device_ready(gpu.device.features());
+                inst.surface
+                    .device_ready(gpu.device.features(), gpu.device.limits());
                 inst.report_color_space();
                 if let Some(config) = &inst.config {
                     inst.surface.prepare_assets(

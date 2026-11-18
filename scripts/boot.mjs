@@ -36,6 +36,7 @@ const MODULES = {
     'host/web/navigation/routes.js',
     'host/web/navigation/scroll.js',
     'host/web/navigation/selection.js',
+    'host/web/navigation/sheet-stack.js',
     'host/web/navigation/store.js',
     'host/web/navigation/type.js',
     'host/web/navigation/urls.js',

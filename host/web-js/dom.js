@@ -18,6 +18,19 @@ const attr = (name, value) => (value === null ? '' : value === '' ? ` ${name}` :
 let Trees = 0;
 class Node {
   constructor(type) { this.nodeType = type; this.parentNode = null; this.childNodes = []; }
+  cloneNode(deep = false) {
+    let copy;
+    if (this.nodeType === 1) {
+      copy = new Element(this.localName, this.fonts);
+      copy.attrs = new Map(this.attrs);
+      copy.style.cssText = this.style.cssText;
+    } else if (this.nodeType === 3) copy = new Text(this.data);
+    else if (this.nodeType === 8) copy = new Comment();
+    else if (this.nodeType === 11) copy = new Fragment();
+    else copy = new Node(this.nodeType);
+    if (deep) copy.append(...this.childNodes.map(c => c.cloneNode(true)));
+    return copy;
+  }
   get parentElement() { return this.parentNode?.nodeType === 1 ? this.parentNode : null; }
   get firstChild() { return this.childNodes[0] ?? null; }
   get nextSibling() { const s = this.parentNode?.childNodes; return s ? s[s.indexOf(this) + 1] ?? null : null; }

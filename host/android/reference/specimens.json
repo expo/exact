@@ -17,7 +17,11 @@
     { "id": "checkbox-unchecked", "placed": true, "component": "Checkbox", "probes": [{ "name": "outline", "x": 1, "y": "mid" }] },
     { "id": "segmented-buttons", "placed": true, "component": "SingleChoiceSegmentedButtonRow", "probes": [{ "name": "selected", "x": "mid", "y": 6 }, { "name": "unselected", "x": 24, "y": 6 }] },
     { "id": "radio-selected", "placed": true, "component": "RadioButton", "probes": [{ "name": "dot", "x": "mid", "y": "mid" }] },
-    { "id": "radio-unselected", "placed": true, "component": "RadioButton", "probes": [{ "name": "ring", "x": 1, "y": "mid" }] }
+    { "id": "radio-unselected", "placed": true, "component": "RadioButton", "probes": [{ "name": "ring", "x": 1, "y": "mid" }] },
+    { "id": "icon-button", "placed": true, "component": "IconButton", "probes": [{ "name": "ground", "x": 5, "y": "mid" }] },
+    { "id": "icon-button-tonal", "placed": true, "component": "FilledTonalIconButton", "probes": [{ "name": "container", "x": 5, "y": "mid" }] },
+    { "id": "icon-button-outlined", "placed": true, "component": "OutlinedIconButton", "probes": [{ "name": "outline", "x": 0.5, "y": "mid" }, { "name": "inside", "x": 5, "y": "mid" }] },
+    { "id": "icon-toggle-checked", "placed": true, "component": "IconToggleButton", "probes": [{ "name": "ground", "x": 5, "y": "mid" }] }
   ],
   "defects": [
     { "id": "defect-missing-control", "of": "checkbox-checked", "planted": "the control left out" },

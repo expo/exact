@@ -204,6 +204,26 @@ test('a Mac build with a passkey line and no profile has none, and a release bui
   expect(macProvisioning(app, bake('auth.passkey localhost'), { release: true, find: none })).toBeNull();
 });
 
+test('a Mac HTTPS auth callback selects a profile and signs its webcredentials domain', () => {
+  const callback = 'https://auth.example/return', domains = 'com.apple.developer.associated-domains';
+  const compat = { ...bake(`auth.session https://accounts.google.com\nauth.callback ${callback}\nsecret.keep session`),
+    reach: { auth: { callbacks: [callback], associatedDomains: ['webcredentials:auth.example'] } } };
+  const profile = { name: 'auth', team: 'TEAM', prefix: 'TEAM', dev: true, method: 'development',
+    appId: `TEAM.${app.id}`, platforms: ['OSX'], devices: ['THIS-MAC'], expires: new Date('2099-01-01'),
+    entitlements: [domains] };
+  const signed = macSigning(app, compat, { current: 'identity', teamOf: () => 'TEAM', identityFor: () => 'identity', log: () => {},
+    find: (a, required, options) => macProfile(a, required, { ...options, installed: [profile], named: null, udid: 'THIS-MAC' }) });
+  expect(signed.provisioning?.profile).toBe(profile);
+  expect(signed.provisioning?.entitlements[domains]).toEqual(['webcredentials:auth.example?mode=developer']);
+  const said = [];
+  expect(macProvisioning(app, compat, { find: none, log: line => said.push(line) })).toBeNull();
+  expect(said.join('\n')).toContain('HTTPS auth sessions fail association validation');
+  expect(() => macProvisioning(app, compat, { release: true, find: none })).toThrow(/^grant-needs-profile: auth.callback https:\/\/auth.example\/return:/);
+  for (const callback of ['app.test:/return', 'http://127.0.0.1/return', 'https://auth.example/.exact/auth/callback']) {
+    expect(macProfileNeeds({ reach: { auth: { callbacks: [callback], associatedDomains: [] } } })).toEqual([]);
+  }
+});
+
 test('one profile signs every need: the rows, the keychain group and the domains, each as its build signs it', () => {
   const profile = { name: 'p', team: 'T', prefix: 'P', dev: true, method: 'development' };
   const compat = { ...bake('secret.keep key biometry-any\nauth.passkey app.example', ['com.apple.developer.aps-environment', 'com.apple.developer.declared-age-range']),
@@ -215,10 +235,10 @@ test('one profile signs every need: the rows, the keychain group and the domains
     'com.apple.developer.aps-environment': 'development', 'com.apple.developer.declared-age-range': true,
     'keychain-access-groups': ['P.com.example.lock'], 'com.apple.developer.associated-domains': ['webcredentials:app.example?mode=developer'] });
 });
-test('a development build asks for a passkey domain in developer mode, a release build never', async () => {
+test('a development build asks for every webcredentials domain in developer mode, a release build never', async () => {
   const { associatedDomains } = await import('./presence.mjs');
-  const auth = { passkeys: ['app.example'], associatedDomains: ['webcredentials:app.example', 'webcredentials:auth.example'] };
-  expect(associatedDomains(auth, true)).toEqual(['webcredentials:app.example?mode=developer', 'webcredentials:auth.example']);
+  const auth = { passkeys: ['app.example'], associatedDomains: ['webcredentials:app.example', 'webcredentials:auth.example', 'applinks:app.example'] };
+  expect(associatedDomains(auth, true)).toEqual(['webcredentials:app.example?mode=developer', 'webcredentials:auth.example?mode=developer', 'applinks:app.example']);
   expect(associatedDomains(auth, false)).toEqual(auth.associatedDomains);
   expect(associatedDomains(undefined, true)).toEqual([]);
 });

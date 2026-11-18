@@ -5,6 +5,10 @@
   "id": "com.exact.shelf",
   "start_url": "/",
   "display": "standalone",
+  "icons": [{ "src": "assets/icon.png", "purpose": "any maskable" }],
+  "alternate_icons": [
+    { "name": "Paper", "icons": [{ "src": "assets/icon-paper.png", "purpose": "any maskable" }] }
+  ],
   "preload": {
     "discover": { "url": "https://openlibrary.org/subjects/science_fiction.json?limit=20" }
   },

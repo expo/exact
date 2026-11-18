@@ -99,7 +99,7 @@ extension FrameHealth {
     /// `perf frames track start|read|stop`. One track a session: a second `start` replaces the first (its unread
     /// rows go with it, and the reply says `replaced`). Allowed exactly where the capture lease is.
     func trackRequest(_ action: String, node: Int?, scroller: AnyObject?, durationMs: Double?, cursor: String?,
-                      maximumFramesPerSecond: Int, now: Double = CACurrentMediaTime()) -> [String: Any] {
+                      maximumFramesPerSecond: Int, now: Double = CACurrentMediaTime(), extra: [String: Any] = [:]) -> [String: Any] {
         expireTrack(at: now)
         switch action {
         case "start":
@@ -134,7 +134,7 @@ extension FrameHealth {
                 track.frozen = true
                 updateCapture(at: now)
             }
-            var page = track.page(from: asked, lease: now, extra: track.frozen ? ["stopped": true] : [:])
+            var page = track.page(from: asked, lease: now, extra: extra.merging(track.frozen ? ["stopped": true] : [:]) { _, new in new })
             if track.frozen, page["more"] as? Bool == false { self.track = nil }
             page["more"] = nil
             return page

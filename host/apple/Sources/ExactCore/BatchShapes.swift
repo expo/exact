@@ -47,6 +47,10 @@ extension BatchReader {
                 if key == "op", discriminator == nil { discriminator = try r.string() }
                 else { try r.skip() }
             }
+            if discriminator == "surface" {
+                offset = start; depth = startDepth
+                return try surfaceOp()
+            }
             if discriminator == "collections" {
                 offset = start
                 var op = BatchOp(op: .collections)
@@ -71,6 +75,10 @@ extension BatchReader {
         }
         let name = try string()
         var op = BatchOp(op: BatchOp.Kind(rawValue: name) ?? .unknown)
+        if op.op == .surface {
+            offset = start; depth = startDepth
+            return try surfaceOp()
+        }
         if op.isAdapter {
             var payload: NodeStyle = ["op": .string(name)]
             while !take(125) {
@@ -92,6 +100,24 @@ extension BatchReader {
             try recordField(&op, key: key)
         }
         depth -= 1
+        return op
+    }
+
+    /// Surface argument order reaches the module unchanged (LLP 1181 D4),
+    /// including records whose fields cross the GPU seam by position.
+    private mutating func surfaceOp() throws -> BatchOp {
+        var fields: NodeStyle = [:], arguments: Data?
+        try object { r, key in
+            if key == "values" {
+                r.whitespace()
+                let start = r.offset
+                try r.skip()
+                arguments = Data(r.bytes[start..<r.offset])
+            } else { fields[key] = try r.value() }
+        }
+        var op = BatchOp(op: .surface, nodeID: try BatchFields(fields).id("id"))
+        op.payload = fields.mapValues(\.any)
+        op.payload["values"] = arguments
         return op
     }
 }

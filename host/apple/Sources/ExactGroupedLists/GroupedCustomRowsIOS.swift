@@ -38,12 +38,14 @@ extension GroupedListHost {
 }
 
 extension GroupedListView {
+    static func direction(of owner: NodeView) -> UISemanticContentAttribute {
+        owner.style["direction"]?.string == "rtl" ? .forceRightToLeft : .forceLeftToRight
+    }
+
     /// Its cells, headers and separators follow the list's direction, as
     /// UIKit mirrors its own lists; a view's `semanticContentAttribute`
     /// reaches no subview, a trait does.
     func followDirection() {
-        let direction: UISemanticContentAttribute = owner.style["direction"]?.string == "rtl" ? .forceRightToLeft : .forceLeftToRight
-        guard collection.semanticContentAttribute != direction else { return }
         collection.semanticContentAttribute = direction
         collection.traitOverrides.layoutDirection = direction == .forceRightToLeft ? .rightToLeft : .leftToRight
     }

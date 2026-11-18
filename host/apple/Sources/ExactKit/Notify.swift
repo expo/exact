@@ -7,8 +7,9 @@
 // `navigate` location, or raises the module's event on the session that
 // posted it, held until that session can hear it. A remote notification's
 // payload is its sender's: its click opens the payload's top-level
-// `navigate` as a local notification's opens, and nothing else of the
-// payload is read (LLP 1133.004 §9 P5). A chosen action is the app's
+// `navigate`, or the Expo push service's `body.navigate`, as a local
+// notification's opens, and nothing else of the payload is read
+// (LLP 1133.004 §9 P5). A chosen action is the app's
 // declared action, read against its declarations (NotifyActions.swift).
 // A notification shows with the app in front
 // too, as a browser shows a page's, and sounds only when its content has a
@@ -101,15 +102,24 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
         deliver(id: request.identifier, date: notification.date, info: request.content.userInfo)
     }
 
-    /// A push's tap: its top-level `navigate`, a string, opened as a local
-    /// notification's is (`openLocation`, the router's `location_of`), so it
-    /// reaches only the app's own routes; the app's link handlers are not the
+    /// A push's tap: its `navigate`, a string at the top level or, in a push
+    /// the Expo push service sent, in the `body` object it sends a message's
+    /// `data` as; the top level first. It opens as a local notification's does
+    /// (`openLocation`, the router's `location_of`), so it reaches only the
+    /// app's own routes; the app's link handlers are not the
     /// sender's to pick. It opens in `chosen`, or the first live session when
     /// none was chosen; a chosen session that is gone gets nothing, and no
     /// other session stands in for it. Nothing else is read, no event is
     /// raised, and without a location nothing is opened.
+    /// The message's `data` in a push the Expo push service sent: the `body`
+    /// object beside Expo's own `experienceId` or `scopeKey`. Another sender's
+    /// `body` is not read (LLP 1133.004 §9 P5).
+    private func expoData(_ info: [AnyHashable: Any]) -> [AnyHashable: Any]? {
+        guard info["experienceId"] is String || info["scopeKey"] is String else { return nil }
+        return info["body"] as? [AnyHashable: Any]
+    }
     func deliverPush(id: String, date: Date, info: [AnyHashable: Any], to chosen: ExactSession?) {
-        guard let text = info["navigate"] as? String,
+        guard let text = (info["navigate"] ?? expoData(info)?["navigate"]) as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, firstDelivery(id, date) else { return }
         let session = chosen ?? app?.sessions.first { $0.state != .destroyed }
         guard let session, session.state != .destroyed else {

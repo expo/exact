@@ -122,6 +122,8 @@ export interface OAuthAuthorization {
 }
 
 export interface OAuthSignIn {
+  /** OIDC nonce for this sign-in, requiring openid: a non-empty string checked against the ID token. Omit to generate one. Use a fresh value for each sign-in. */
+  nonce?: string;
   /** Extra authorization parameters for this press, overriding authorizationParams. The package's own fields (response_type, client_id, redirect_uri, scope, state, code_challenge, code_challenge_method, nonce and max_age) are refused with TypeError. */
   params?: Record<string, string>;
   /** For an app that signs the person in with its own screens (LLP 1146 D8): sends the authorization request as the provider documents, and answers the URL it redirected to. Throw an `OAuthError` to say why it could not. */
@@ -389,11 +391,11 @@ export function oauth(config: OAuthConfig): OAuthProvider {
 
   // The app's own sign-in sends the authorization request (D8): no browser
   // opens, so it may await. What it answers must be the callback.
-  const sentByApp = async (tx: Transaction | null, authorize: NonNullable<OAuthSignIn['authorize']>, params: OAuthSignIn['params']): Promise<[Transaction, string] | OAuthResult> => {
+  const sentByApp = async (tx: Transaction | null, authorize: NonNullable<OAuthSignIn['authorize']>, params: OAuthSignIn['params'], nonce: string | undefined): Promise<[Transaction, string] | OAuthResult> => {
     try {
       tx ??= await prepare();
       prepared = null;
-      tx = { ...tx, params: { ...tx.params, ...params } };
+      tx = { ...tx, nonce: nonce ?? tx.nonce, params: { ...tx.params, ...params, ...(nonce !== undefined ? { nonce } : {}) } };
       const back = await authorize({ url: authorizationUrl(tx), endpoint: tx.meta.authorization, params: { ...tx.params }, fetch: transport(config) });
       if (typeof back === 'string' && isCallback(back, tx.callback)) return [tx, back];
       return result('invalid_response', 'Sign-in failed: the provider did not send the person back to the app.');
@@ -405,7 +407,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
   // The browser sends it. Prepared, `openAuthSession` comes before any
   // await; otherwise it is prepared first, which on the web may leave the
   // popup blocked (428).
-  const openedInBrowser = async (tx: Transaction | null, params: OAuthSignIn['params']): Promise<[Transaction, string] | OAuthResult> => {
+  const openedInBrowser = async (tx: Transaction | null, params: OAuthSignIn['params'], nonce: string | undefined): Promise<[Transaction, string] | OAuthResult> => {
     let opened: Promise<string>;
     let readied: Promise<void> = Promise.resolve();
     try {
@@ -414,7 +416,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
         tx = await prepare();
         prepared = null;
       }
-      tx = { ...tx, params: { ...tx.params, ...params } };
+      tx = { ...tx, nonce: nonce ?? tx.nonce, params: { ...tx.params, ...params, ...(nonce !== undefined ? { nonce } : {}) } };
       opened = openAuthSession(authorizationUrl(tx), { callback: tx.callback, state: tx.state, ephemeral: config.ephemeral });
       // Ready the next press, which then opens at once (a blocked popup's retry).
       if (fallback) readied = prepare().then(() => undefined, () => undefined);
@@ -441,9 +443,12 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     const params = { ...options.params };
     const reserved = Object.keys(params).filter(k => RESERVED.includes(k));
     if (reserved.length) throw new TypeError(`oauth: signIn params may not set ${reserved.join(', ')}; the package sets them, or does not check what they ask for (max_age)`);
+    const nonce = options.nonce;
+    if (nonce !== undefined && (typeof nonce !== 'string' || !nonce)) throw new TypeError('oauth: nonce must be a non-empty string');
+    if (nonce !== undefined && !config.scopes.includes('openid')) throw new TypeError('oauth: nonce requires the openid scope');
     const ready = prepared;
     prepared = null;
-    const reached = options.authorize ? await sentByApp(ready, options.authorize, params) : await openedInBrowser(ready, params);
+    const reached = options.authorize ? await sentByApp(ready, options.authorize, params, nonce) : await openedInBrowser(ready, params, nonce);
     if (!Array.isArray(reached)) return reached;
     const [tx, back] = reached;
     const why = checkCallback(back, tx, config);

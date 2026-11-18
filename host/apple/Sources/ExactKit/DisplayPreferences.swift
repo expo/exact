@@ -25,7 +25,7 @@ extension ExactEnv {
 }
 #endif
 
-enum DisplayPreferences {
+package enum DisplayPreferences {
     /// What an agent's `prefer` set, in place of the platform's settings.
     /// Under the agent it starts at `no-preference` for both, never the
     /// machine's (LLP 1069.007 D2: facts are fixed at launch).
@@ -66,7 +66,7 @@ enum DisplayPreferences {
     /// session tells its runner again.
     static func changed() { center.post(name: agentChanged, object: nil) }
 
-    static var reducedMotion: Bool {
+    package static var reducedMotion: Bool {
         if let agent { return agent.reducedMotion }
         #if os(macOS)
         return NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -187,7 +187,7 @@ enum DisplayPreferences {
 
     /// Calls `changed` on the main queue when any setting changes; the
     /// caller holds the tokens and removes them.
-    static func observe(_ changed: @escaping () -> Void) -> [NSObjectProtocol] {
+    package static func observe(_ changed: @escaping () -> Void) -> [NSObjectProtocol] {
         #if os(macOS)
         let names = [NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, agentChanged]
         var tokens: [NSObjectProtocol] = names.map { center.addObserver(forName: $0, object: nil, queue: .main) { _ in changed() } }
@@ -232,7 +232,7 @@ enum DisplayPreferences {
     #elseif !os(macOS)
     private static let pointingDevices: [Notification.Name] = []
     #endif
-    static func forget(_ tokens: [NSObjectProtocol]) {
+    package static func forget(_ tokens: [NSObjectProtocol]) {
         #if os(macOS)
         tokens.forEach { token in
             if let observation = token as? NSKeyValueObservation { observation.invalidate() } else { center.removeObserver(token) }

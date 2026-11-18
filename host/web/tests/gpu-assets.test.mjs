@@ -1,6 +1,8 @@
 import {assetDelivery} from '../gpu-assets.js';
 import {test, expect} from 'bun:test';
-import {readFileSync} from 'node:fs';
+import {existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {resolve} from 'node:path';
 const source = readFileSync(new URL('../gpu-glue.js', import.meta.url), 'utf8');
 test('asset fetches have at most eight simultaneous requests', async () => {
   let active = 0, peak = 0;
@@ -31,7 +33,7 @@ test('a failed cosmetic never gets a first-frame stamp or repeated state seriali
 });
 
 test('a final paused frame delivers submitted output once without another render', () => {
-  const entry = {id:1,view:1,name:'world',el:{},host:{},wants:true};
+  const entry = {id:1,view:1,name:'world',el:{style:{}},host:{},wants:true};
   const surfaces = new Map([[entry.view,entry]]), delivered = [], records = [];
   let renders = 0, submits = 0, pending = false, output = [], record;
   const gpu = {
@@ -85,7 +87,7 @@ test('browser frame scheduling delivers final submitted output through the compl
     const counts = globalThis.counts = {renders:0, submits:0, assetPolls:0};
     globalThis.arm = () => { armed = true; counts.assetPolls = 0; };
     export default function() {}
-    export function gpu_load() {} export function gpu_child_view() {}
+    export function gpu_load() {} export function gpu_child_view() {} export function gpu_reduced_motion() {}
     export function gpu_shader_names() { return '[]'; } export function gpu_shaders_clear() {}
     export function gpu_create() { return 1; } export function gpu_bind_at() { return true; }
     export function gpu_lifecycle() {} export function gpu_wants_input() { return false; }
@@ -154,15 +156,203 @@ test('browser frame scheduling delivers final submitted output through the compl
   } finally { await browser?.close(); server.stop(true); }
 }, 60000);
 
-function harness({names, fetch, exact = {}}) {
+function harness({names, fetch, readAppFile, exact = {}}) {
   const entry = {id: 1, view: 1}, delivered = [], failed = [];
   let retired = [];
   const gpu = {gpu_assets: () => JSON.stringify({requests:names.splice(0),retired:retired.splice(0)}),
     gpu_asset: (_, name, bytes) => { delivered.push([name,bytes]); return true; },
     gpu_asset_failed: (_, name, reason) => { failed.push([name,reason]); return true; }};
-  const api = assetDelivery({getModule:()=>gpu, live:()=>entry, fetch, devAssets:()=>exact.devAssets, baseURI:()=> 'http://fixture/'});
+  const api = assetDelivery({getModule:()=>gpu, live:()=>entry, fetch, readAppFile, devAssets:()=>exact.devAssets, baseURI:()=> 'http://fixture/'});
   return {...api, entry, delivered, failed, retire: n => retired.push(n)};
 }
+test('GPU app files resolve before bundled assets, including in a dev generation', async () => {
+  for (const devAssets of [undefined, new Map([['assets/part.glb', {bytes:new Uint8Array([2])}]])]) {
+    const names = ['app:/cache/part.glb', 'app:/data/part.glb', 'app:/tmp/part.glb', 'app:/cache/missing.glb', 'part.glb'];
+    const resolved = [], fetched = [];
+    const api = harness({names:[...names], exact:{devAssets},
+      readAppFile:async name => { resolved.push(name); return name.includes('missing') ? null : new Blob([new Uint8Array([2])]); },
+      fetch:async url => { fetched.push(String(url)); return new Response(new Uint8Array([2])); }});
+    await api.settled(()=>[api.entry]);
+    expect(resolved).toEqual(names.slice(0,4));
+    expect(fetched).toEqual(devAssets ? [] : ['http://fixture/assets/part.glb']);
+    expect(api.failed).toEqual([]);
+    expect(api.delivered.map(([name,bytes])=>[name,bytes && [...bytes]]).sort()).toEqual(names.map(name=>[name,name.includes('missing') ? null : [2]]).sort());
+  }
+});
+test('GPU asset names are validated before resolving app files or bundled assets', async () => {
+  const names = ['app:/cache/../part.glb', 'app:/cache/./part.glb', 'app:/cache/café.glb', `app:/cache/${'a'.repeat(118)}`, '../part.glb'];
+  const api = harness({names:[...names], readAppFile:()=>{ throw new Error('must not resolve'); }, fetch:()=>{ throw new Error('must not fetch'); }});
+  await api.settled(()=>[api.entry]);
+  expect(api.delivered).toEqual([]);
+  expect(api.failed).toEqual(names.map(name=>[name,'invalid asset name']));
+});
+test('GPU app files obey the pre-copy byte limit', async () => {
+  let copied = false;
+  const api = harness({names:['app:/cache/large.glb'],
+    readAppFile:async () => ({size:64*1024*1024+1,arrayBuffer(){ copied = true; }}),
+    fetch:()=>{ throw new Error('must not fetch'); }});
+  await api.settled(()=>[api.entry]);
+  expect(api.delivered).toEqual([]);
+  expect(api.failed).toEqual([['app:/cache/large.glb','exceeds 64 MiB']]);
+  expect(copied).toBe(false);
+});
+test.each([['js', 'connect-src'], ['wasm', 'connect-src'], ['js', 'default-src'], ['wasm', 'default-src']])('%s GPU app files use the media resolver under %s self', async (target, directive) => {
+  const {suiteBrowser} = await import('../../../scripts/agent-launch.mjs');
+  const fixture = `
+    import {assetDelivery} from '/gpu-assets.js';
+    const entry = {id:1,view:1}, delivered = [], failed = [];
+    const names = ['app:/cache/part.glb','app:/cache/missing.glb','app:/other/part.glb'];
+    const gpu = {gpu_assets:()=>JSON.stringify({requests:names.splice(0),retired:[]}),
+      gpu_asset:(_,name,bytes)=>{ delivered.push([name,bytes && [...bytes]]); return true; },
+      gpu_asset_failed:(_,name,reason)=>{ failed.push([name,reason]); return true; }};
+    const delivery = assetDelivery({getModule:()=>gpu,live:()=>entry,baseURI:()=>document.baseURI,devAssets:()=>new Map()});
+    exact.gpu = {async settled() {
+      await delivery.settled(()=>[entry]);
+      globalThis.assetResult = {delivered:delivered.sort(),failed};
+    }};
+  `;
+  const server = Bun.serve({hostname:'127.0.0.1',port:0,fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response('<!doctype html><div id="exact-root"></div>',{headers:{
+      'content-type':'text/html',
+      'content-security-policy':`default-src 'self'; img-src 'self' blob:;${directive === 'connect-src' ? " connect-src 'self';" : ''}`,
+    }});
+    if (path === '/host/web-js/names.js') return new Response('export default [[],[],[]]; export const types = [[],[],[]], sourceTypes = {};',{headers:{'content-type':'text/javascript'}});
+    if (path === '/gpu-glue.js') return new Response(fixture,{headers:{'content-type':'text/javascript'}});
+    let file = new URL(path.startsWith('/host/') ? `../../..${path}` : `..${path}`,import.meta.url);
+    if (!existsSync(file)) file = new URL(file.href.replace('/host/web-js/', '/host/web/'));
+    return new Response(Bun.file(file),{headers:{'content-type':'text/javascript'}});
+  }});
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await page.evaluate(async target => {
+      const appId = 'gpu-asset-test';
+      globalThis.exact = {compat:{inputs:target === 'wasm' ? {app:appId} : {gpuModules:{}}}};
+      const {createFileStore} = await import('/storage-fs.js');
+      const store = createFileStore(appId);
+      try {
+        await store.writeFile('app:/cache/part.glb',new Uint8Array([4,2]));
+        await store.writeFile('app:/cache/preview.svg',new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"/>'));
+      }
+      finally { store.close(); }
+      if (target === 'js') {
+        const rt = await import('/host/web-js/rt.js');
+        rt.data.appId = appId;
+        rt.mount(root => {
+          const canvas = document.createElement('div');
+          root.append(canvas);
+          rt.gs(canvas,'model',()=>[]);
+        });
+      } else {
+        await import('/gpu-glue.js');
+        await exact.gpu.settled();
+      }
+    }, target);
+    await page.waitForFunction(()=>globalThis.assetResult);
+    expect(await page.evaluate(()=>assetResult)).toEqual({delivered:[['app:/cache/missing.glb',null],['app:/cache/part.glb',[4,2]],['app:/other/part.glb',null]],failed:[]});
+    const image = await page.evaluate(async () => {
+      const image = new Image();
+      image.src = await exact.appURL('app:/cache/preview.svg','gpu-asset-test');
+      await image.decode();
+      return [image.naturalWidth,image.naturalHeight];
+    });
+    expect(image).toEqual([2,3]);
+  } finally { await browser?.close(); server.stop(true); }
+}, 60000);
+test.each([false, true])('a production checkpoint reads GPU app files before its TypeScript module loads (variant: %s)', async variant => {
+  const {suiteBrowser} = await import('../../../scripts/agent-launch.mjs');
+  const {patchLines} = await import('../../../scripts/app.mjs');
+  const {webCompiler} = await import('../../web-js/module.mjs');
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../../..'), dir = mkdtempSync(resolve(root, 'target/gpu-app-startup-'));
+  const out = resolve(dir, 'dist'), baseId = 'test.gpu-app-startup', appId = baseId + (variant ? '.preview' : '');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({name:'Startup',app:{id:baseId,name:'Startup'},rust:false,
+      variants:{preview:{idSuffix:'.preview',name:'Startup Preview'}}}));
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=build activate=idle
+
+component App
+  state count = 0
+  resource said = greeting(count) as shape string
+  action bump
+    count = count + 1
+  view
+    column
+      canvas surface=model() width=100 height=100
+      text said testId="said"
+      button "More" press=bump testId="bump"
+`);
+    writeFileSync(resolve(dir, 'app.ts'), "export const grants = '';\nexport const answer = (_: string, args: unknown[]): any => 'said ' + String(args[0]);\n");
+    // A cached module registers the surface without compiling a renderer.
+    const cache = resolve(dir, 'target/web-js-gpu/startup'), deps = resolve(dir, 'target/wasm32-unknown-unknown/web');
+    for (const path of [resolve(dir, 'gpu/src'), cache, deps]) mkdirSync(path,{recursive:true});
+    writeFileSync(resolve(dir, 'gpu/src/lib.rs'), '');
+    writeFileSync(resolve(dir, 'gpu/Cargo.toml'), '[package]\nname="startup-gpu"\nversion="0.1.0"\nedition="2021"\n');
+    writeFileSync(resolve(dir, 'Cargo.toml'), `[workspace]\nmembers=["gpu"]\nresolver="2"\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
+    const locked = spawnSync('cargo',['generate-lockfile','--offline'],{cwd:dir,encoding:'utf8'});
+    expect(locked.status,locked.stderr).toBe(0);
+    writeFileSync(resolve(cache, 'gpu.js'), 'export function initSync() {}\nexport function gpu_surfaces() { return \'["model"]\'; }\n');
+    writeFileSync(resolve(cache, 'gpu_bg.wasm'), '');
+    writeFileSync(resolve(cache, '.modules.json'), JSON.stringify([['gpu','startup-gpu']]));
+    writeFileSync(resolve(deps, 'startup_gpu.d'), `startup_gpu: ${resolve(dir, 'app.json')}\n`);
+    utimesSync(resolve(dir, 'app.json'),0,0);
+    const built = spawnSync(process.execPath,['host/web-js/build.mjs','startup','--out',out,'--production','--render','js'],{
+      cwd:root,env:{...process.env,EXACT_APP_DIR:dir,EXACT_VARIANT:variant ? 'preview' : '',EXACT_VARIANT_APP:''},encoding:'utf8',
+    });
+    expect(built.status,built.stdout+built.stderr).toBe(0);
+    expect(Object.keys(JSON.parse(readFileSync(resolve(out, '.gen/modules.json'),'utf8')))).not.toContain('ts-data.js');
+    const chunk = readdirSync(out).find(name=>/^ts-data-.*\.js$/.test(name));
+    expect(chunk).toBeDefined();
+    const fixture = `
+      import {assetDelivery} from '/test/gpu-assets.js';
+      const entry = {id:1,view:1}, names = ['app:/cache/part.glb'];
+      const gpu = {gpu_assets:()=>JSON.stringify({requests:names.splice(0),retired:[]}),
+        gpu_asset:(_,name,bytes)=>{ (globalThis.assetResults ??= []).push([name,bytes && [...bytes]]); return true; }};
+      const delivery = assetDelivery({getModule:()=>gpu,live:()=>entry,baseURI:()=>document.baseURI});
+      exact.gpu = {destroy(){},surface(){},settled:()=>delivery.settled(()=>[entry])};
+      globalThis.reread = () => { names.push('app:/cache/part.glb'); return exact.gpu.settled(); };
+    `;
+    server = Bun.serve({hostname:'127.0.0.1',port:0,fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/seed') return new Response('<!doctype html>',{headers:{'content-type':'text/html'}});
+      if (path === '/gpu-glue.js') return new Response(fixture,{headers:{'content-type':'text/javascript'}});
+      const file = path.startsWith('/test/') ? resolve(root,'host/web',path.slice(6)) : resolve(out,path === '/' ? 'index.html' : path.slice(1));
+      return new Response(Bun.file(file));
+    }});
+    browser = await suiteBrowser();
+    const page = await browser.newPage(), errors = [];
+    page.on('pageerror',error=>errors.push(error.message));
+    await page.goto(new URL('/seed',server.url).href);
+    await page.evaluate(async appId => {
+      const {createFileStore} = await import('/test/storage-fs.js'), store = createFileStore(appId);
+      try {
+        await store.writeFile('app:/cache/part.glb',new Uint8Array([4,2]));
+        await store.writeFile('app:/cache/preview.svg',new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"/>'));
+      } finally { store.close(); }
+    },appId);
+    await page.goto(server.url.href);
+    await page.waitForFunction(()=>globalThis.assetResults?.length === 1);
+    expect(await page.evaluate(()=>({results:assetResults,loaded:typeof exact.moduleReaders === 'function'})))
+      .toEqual({results:[['app:/cache/part.glb',[4,2]]],loaded:false});
+    await page.getByTestId('bump').click();
+    await page.waitForFunction(()=>document.querySelector('[data-testid=said]').textContent === 'said 1');
+    expect(await page.evaluate(()=>typeof exact.moduleReaders === 'function')).toBe(true);
+    await page.evaluate(()=>reread());
+    expect(await page.evaluate(()=>assetResults)).toEqual([['app:/cache/part.glb',[4,2]],['app:/cache/part.glb',[4,2]]]);
+    expect(await page.evaluate(async appId => {
+      const image = new Image();
+      image.src = await exact.appURL('app:/cache/preview.svg',appId);
+      await image.decode();
+      return [image.naturalWidth,image.naturalHeight];
+    },appId)).toEqual([2,3]);
+    expect(errors).toEqual([]);
+  } finally { await browser?.close(); server?.stop(true); rmSync(dir,{recursive:true,force:true}); }
+}, 60000);
 test('stream limit aborts before joining an oversized chunked response', async () => {
   let cancelled = false, read = 0;
   const api = harness({names:['large.tex'], fetch: async () => new Response(new ReadableStream({

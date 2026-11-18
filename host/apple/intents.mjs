@@ -329,8 +329,8 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
 }
 
 
-/** Gather constants under the module name the shipping binary uses. A separate typecheck leaves its normal
- * compile and arm cache unchanged; the binary, compiler and arguments identify the cached constants. */
+/** Gather constants under the shipping module's name and compiler context.
+ * The binary, compiler and arguments identify the cached constants. */
 export function nativeIntentModule({ moduleName, binary, sources, args, directory, swiftc, runApple }) {
   const binaries = [binary].flat();
   const hash = createHash('sha256').update(JSON.stringify([swiftc, args, gathered, sources.map(f => readFileSync(f, 'utf8'))]));
@@ -344,9 +344,12 @@ export function nativeIntentModule({ moduleName, binary, sources, args, director
     const object = a => /\.[oa]$/.test(a ?? '');
     const checking = args.filter((a, i) => a !== '-emit-library' && a !== '-o' && args[i - 1] !== '-o' && !object(a)
       && !(a === '-Xlinker' && object(args[i + 1])));
-    // The native build system can leave per-source objects. The extractor takes one binary, so compile a whole-module
-    // object in that layout; a merged SwiftPM object needs only its constants typechecked.
-    try { runApple('xcrun', [...checking, '-wmo', ...(binaries.length > 1 ? ['-c', '-o', binary] : ['-typecheck']), ...constValueArgs(values, dir)]); }
+    // The native build system can leave per-source objects. The extractor takes one binary, so compile a
+    // whole-module object in that layout.
+    try {
+      const constants = constValueArgs(values, dir);
+      runApple('xcrun', [...checking, '-wmo', ...(binaries.length > 1 ? ['-c', '-o', binary] : ['-typecheck']), ...constants]);
+    }
     catch (error) { rmSync(dir, { recursive: true, force: true }); throw error; }
   }
   const constants = JSON.parse(readFileSync(values, 'utf8'));

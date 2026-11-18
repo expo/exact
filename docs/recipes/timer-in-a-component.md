@@ -1,48 +1,40 @@
 # Recipe: a component that needs a timer
 
-Only the root may declare a `task` (`type-child-resource`): a timer is the app's. A
-component that starts and stops one, a capsule a held finger charges, keeps its view; the
-task, the state that gates it and the actions that set that state move to the root, and the
-component takes the state and the actions as props ([timers](timers.md) has the rest):
+A child at a bounded use can own a task and the state that gates it. Each
+instance starts and stops its own timer ([timers](timers.md) has the schedules):
 
 ```contract
 component App
+  view
+    column
+      Capsule(id="left")
+      Capsule(id="right")
+
+component Capsule
+  props
+    id: string
   state charge = 0
   state holding = false
-  task charging when holding
+  task charging when holding and charge < 100
     every(16, step)
   action step
     charge = min(100, charge + 2)
   action hold(on: bool)
     holding = on
   view
-    column padding=16 gap=12
-      Capsule(charge=charge, down=hold(true), up=hold(false))
-
-component Capsule
-  props
-    charge: number
-    down: action
-    up: action
-  view
-    column gap=8
-      button pointerdown=down pointerup=up testId="capsule"
+    column
+      button pointerdown=hold(true) pointerup=hold(false) testId=id
         text (charge < 100 ? "Hold to charge" : "Charged")
       progress value=charge max=100
 ```
 
-```contract-test
-test "a hold charges the capsule, and letting go stops it"
-  tap "capsule" drag 0 0 hold 400
-  expect state charge == 50
-  clock +500
-  expect state charge == 50
-  tap "capsule" drag 0 0 hold 1000
-  expect state charge == 100
-  expect text "capsule" == "Charged"
-```
+The task's action runs in its instance: charging the left capsule does not
+change the right one. Destroying a capsule stops its task. A hidden tab can
+remain alive; gate its work on activity passed from the router. `key=` restarts
+a timer when its key changes, as at the root. Reload restarts timers over
+compatible carried state.
 
-- `hold(true)` is bound where the component is used, so `pointerdown=down` runs the root's
-  action with `true`; the component never writes the root's state.
-- Two capsules gate two tasks, or one task on either flag (`when leftHeld or rightHeld`)
-  whose action steps the one held.
+A task cannot belong to a component under a data-sized `for` or in a virtualized
+list. Put shared timing in the enclosing screen and pass its value or action to
+those rows. `every(frame, …)` is allowed at bounded uses; each armed instance
+runs an action per frame.

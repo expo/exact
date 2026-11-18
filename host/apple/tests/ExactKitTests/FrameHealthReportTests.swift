@@ -124,12 +124,15 @@ final class FrameHealthReportTests: XCTestCase {
         }
         report["hitches"] = rows
         report["identity"] = ["app": String(repeating: "é", count: 80), "device": String(repeating: "🦊", count: 40)]
-        let data = FrameHealthReport.encode(report)
+        let tags: [String: Any] = ["generation": UInt64.max, "epoch": UInt64.max, "incarnation": UInt64.max, "clock": 1_000_000_000.25]
+        let data = FrameHealthReport.encode(report, extra: tags)
         XCTAssertLessThanOrEqual(data.count + 1, 4000, "the carrier newline is part of the hard cap")
         let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let events = try XCTUnwrap(decoded["hitches"] as? [[Any]])
         XCTAssertGreaterThan(events.count, 0)
         XCTAssertLessThan(events.count, 16)
+        XCTAssertEqual(decoded["generation"] as? UInt64, UInt64.max)
+        XCTAssertEqual(decoded["clock"] as? Double, 1_000_000_000.25)
         XCTAssertEqual(events.last?[3] as? Int64, -8_999_999_999_999_991)
         XCTAssertEqual((decoded["retention"] as? [String: Any])?["omittedForBudget"] as? Int, 16 - events.count)
     }

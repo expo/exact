@@ -94,7 +94,7 @@ final class SurfaceHapticsTests: XCTestCase {
         host.haptics.suspended = false
         for view in [UInt32(100), 101] {
             let e = CanvasesHost.Entry(view: NodeView(id: view, kind: "canvas", presenter: appSession.presenter),
-                                       name: view == 100 ? "sky" : "game", values: [Any]())
+                                       name: view == 100 ? "sky" : "game", values: Data("[]".utf8))
             e.id = 1
             host.entries[view] = e
             _ = host.haptics.take(view, texture)

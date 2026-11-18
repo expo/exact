@@ -78,6 +78,8 @@ pub struct Owned {
     /// The runner's row for each mutation its arm owns that it has sent,
     /// by the plan's mutation (LLP 1035.005.004 D6).
     pub sends: Vec<(u32, usize)>,
+    /// The task sites this instance owns.
+    pub tasks: Vec<u32>,
 }
 
 impl Owned {

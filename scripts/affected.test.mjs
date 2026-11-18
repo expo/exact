@@ -292,6 +292,24 @@ test('hosted touch tests run on the simulator whose XCTest runner injects their 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a hosted test in an extension of its class, in another file, runs hosted', () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'hosted-extension-')));
+  writeFileSync(resolve(dir, 'History.swift'), `final class HistoryTests: XCTestCase {
+    func testStack() {}
+  }
+  extension XCTestCase {
+    func tap() {}
+  }`);
+  writeFileSync(resolve(dir, 'HistorySheets.swift'), `extension HistoryTests {
+    func testSheet() {
+      throw missing("scene", "a sheet")
+    }
+  }`);
+  try {
+    expect(hostedTests(dir)).toEqual(['ExactKitTests/HistoryTests/testSheet']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('the commands run each workspace once, the Bun files together and every app test file', () => {
   const run = commands([
     { suite: { kind: 'cargo', name: 'a', manifest: 'Cargo.toml' } }, { suite: { kind: 'cargo', name: 'b', manifest: 'Cargo.toml' } },

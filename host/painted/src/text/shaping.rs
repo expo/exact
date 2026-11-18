@@ -211,15 +211,26 @@ pub(super) struct HardLine {
     box_leads: Vec<(u32, f32)>,
 }
 
-/// A hard line's layout and the width, balanced width and alignment it was
-/// last broken and aligned at (`None` until a width breaks it): breaking it
+/// A hard line's layout and the width, alignment and balancing it was last
+/// broken and aligned at (`None` until a width breaks it): breaking it
 /// again at the same ones leaves the same lines, so a width painted after it
 /// was measured is not broken twice. `balance` is the last width's
 /// [`ShapedSource::balanced`].
 struct Broken {
     layout: parley::Layout<u32>,
-    at: Option<(Option<u32>, Option<u32>, Alignment)>,
-    balance: Option<(u32, Option<(f32, f32)>)>,
+    at: Option<(Option<u32>, bool, Alignment)>,
+    balance: Option<(u32, Option<(Balanced, f32)>)>,
+}
+
+/// Where a balanced paragraph's first hard line breaks
+/// ([`ShapedSource::balanced`]).
+#[derive(Clone)]
+enum Balanced {
+    /// Its scorer's breaks: where each line before the first forced break
+    /// ends, the last at that break or the text's end.
+    Breaks(Vec<parley::BreakOpportunity>),
+    /// Its bisection's width for the lines, the inset apart.
+    Width(f32),
 }
 
 pub(super) struct ShapedSource {
@@ -663,27 +674,42 @@ impl ShapedSource {
         let mut left = (spec.line_clamp > 0).then_some(spec.line_clamp as usize);
         let mut cut = false;
         let count = self.data.lines.len();
-        let balanced = self.balanced(width).map(|(narrow, _)| narrow);
+        let balanced = self.balanced(width).map(|(balanced, _)| balanced);
         #[cfg(test)]
         BREAKS.with(|n| n.set((n.get().0 + 1, n.get().1)));
         'hard: for (h, hard) in self.data.lines.iter().enumerate() {
             let (_, rest) = hard.inset;
             let mut broken = hard.layout.lock().expect("layout lock");
-            let narrow = balanced.filter(|_| h == 0);
-            let at = Some((width.map(f32::to_bits), narrow.map(f32::to_bits), align));
+            let balanced = balanced.as_ref().filter(|_| h == 0);
+            let at = Some((width.map(f32::to_bits), balanced.is_some(), align));
             if broken.at != at {
                 #[cfg(test)]
                 BREAKS.with(|n| n.set((n.get().0, n.get().1 + 1)));
                 broken.at = None;
-                if let (Some(narrow), Some(width)) = (narrow, width) {
-                    // Broken at the balanced width, each line aligned (and
-                    // justified) in the box's, as Chrome's are.
+                if let (Some(balanced), Some(width)) = (balanced, width) {
+                    // Each line is aligned (and justified) in the box's
+                    // width wherever it breaks, as Chrome's are.
+                    let room = (width - rest).max(0.0);
                     let mut breaker = broken.layout.break_lines();
-                    let state = breaker.state_mut();
-                    state.set_layout_max_advance((narrow - rest).max(0.0));
-                    state.set_line_max_advance((narrow - rest).max(0.0));
-                    while breaker.break_next().is_some() {
-                        breaker.set_prior_line_width((width - rest).max(0.0));
+                    match balanced {
+                        Balanced::Breaks(ends) => {
+                            let state = breaker.state_mut();
+                            state.set_layout_max_advance(room);
+                            state.set_line_max_advance(room);
+                            for end in ends {
+                                breaker.break_next_at(end);
+                            }
+                            // Past a forced break the lines are greedy.
+                            while breaker.break_next().is_some() {}
+                        }
+                        Balanced::Width(narrow) => {
+                            let state = breaker.state_mut();
+                            state.set_layout_max_advance(*narrow);
+                            state.set_line_max_advance(*narrow);
+                            while breaker.break_next().is_some() {
+                                breaker.set_prior_line_width(room);
+                            }
+                        }
                     }
                     breaker.finish();
                 } else {
@@ -753,13 +779,17 @@ impl ShapedSource {
         (out, cut)
     }
 
-    /// CSS `text-wrap-style: balance` (LLP 1001 §6): the width the first
-    /// hard line's lines break at, the narrowest that keeps the count they
-    /// have at `width` (two to six, `exact_textflow::balanced_width`; Chrome
-    /// balances only the lines before the first forced break), and those
-    /// lines' widest broken greedily, which the paragraph still measures:
-    /// balancing moves breaks, never the box. A clamp keeps greedy lines.
-    fn balanced(&self, width: Option<f32>) -> Option<(f32, f32)> {
+    /// CSS `text-wrap-style: balance` (LLP 1001 §6) as Blink does it: where
+    /// the lines before the first forced break end (Chrome balances only
+    /// those), and those lines' widest broken greedily, which the paragraph
+    /// still measures: balancing moves breaks, never the box. A forced break
+    /// is a separator `hard_lines` splits at or a newline Parley breaks at
+    /// inside the first hard line (U+2028). `None` keeps the greedy lines: a
+    /// clamp, one line or more than six, a line that overflows the box, or
+    /// neither Blink's scorer nor its bisection moving a break. A tab in
+    /// those lines keeps the scorer out, and a forced break the bisection,
+    /// as in Blink.
+    fn balanced(&self, width: Option<f32>) -> Option<(Balanced, f32)> {
         let spec = &self.spec;
         if spec.text_wrap_style != exact_kernel::TextWrapStyle::Balance
             || spec.line_clamp > 0
@@ -771,22 +801,78 @@ impl ShapedSource {
         let hard = self.data.lines.first()?;
         let (_, rest) = hard.inset;
         let mut broken = hard.layout.lock().expect("layout lock");
-        if let Some((bits, balanced)) = broken.balance {
-            if bits == width.to_bits() {
-                return balanced;
+        if let Some((bits, balanced)) = &broken.balance {
+            if *bits == width.to_bits() {
+                return balanced.clone();
             }
         }
         broken.at = None;
-        let mut widest = 0.0;
-        let narrow = exact_textflow::balanced_width(width, |w| {
-            broken.layout.break_all_lines(Some((w - rest).max(0.0)));
-            if w == width {
-                widest = broken.layout.width() + rest;
+        let room = (width - rest).max(0.0);
+        // The greedy lines in `room` before the first forced break: their
+        // count, their widths' sum and widest, whether one overflows (the
+        // breaker fits a line under 1/32 px over its room, `fit_limit`) or
+        // breaks inside a word (`overflow-wrap`), and whether that break
+        // ends them.
+        let greedy = |layout: &mut parley::Layout<u32>, room: f32| {
+            layout.break_all_lines(Some(room));
+            let (mut count, mut total, mut widest) = (0, 0.0, 0.0f32);
+            let (mut overflows, mut forced) = (false, false);
+            for (i, line) in layout.lines().enumerate() {
+                let m = line.metrics();
+                let indent = if i == 0 { hard.indent } else { 0.0 };
+                let w = m.advance - m.trailing_whitespace + indent;
+                count += 1;
+                total += w;
+                widest = widest.max(w);
+                let reason = line.break_reason();
+                overflows |= w > room + 1.0 / 32.0 || reason == parley::BreakReason::Emergency;
+                if reason == parley::BreakReason::Explicit {
+                    forced = true;
+                    break;
+                }
             }
-            broken.layout.len()
-        });
-        let balanced = narrow.map(|narrow| (narrow, widest));
-        broken.balance = Some((width.to_bits(), balanced));
+            (count, total, widest, overflows, forced)
+        };
+        let (count, total, widest, overflows, forced) = greedy(&mut broken.layout, room);
+        // `hard_lines` keeps no separator, so with one, a trailing one
+        // too, the first hard line's text is shorter than the runs'.
+        let source = spec.runs.iter().filter(|r| r.inline.is_none());
+        let forced = forced || source.map(|r| r.text.len()).sum::<usize>() != hard.text.len();
+        let scored = || {
+            let opportunities = broken.layout.break_lines().opportunities();
+            let places: Vec<_> = opportunities
+                .iter()
+                .map(|o| (o.end, o.next, o.hyphen))
+                .collect();
+            let breaks = exact_textflow::balanced_breaks(
+                room,
+                hard.indent,
+                spec.strut.size,
+                self.alignment() == Alignment::Justify,
+                &places,
+                count,
+            )?;
+            let ends = breaks.iter().map(|&at| opportunities[at]);
+            Some(ends.chain(opportunities.last().copied()).collect())
+        };
+        // The lines to balance end at the hard line's first U+2028.
+        let before = hard.text.split('\u{2028}').next().unwrap_or("");
+        let tab = before.contains('\t');
+        let balanced = if overflows || !(2..=exact_textflow::BALANCE_MAX_LINES).contains(&count) {
+            None
+        } else if let Some(ends) = (!tab).then(scored).flatten() {
+            Some(Balanced::Breaks(ends))
+        } else if !forced {
+            exact_textflow::balanced_width(room, count, total, |w| {
+                let (lines, .., overflows, _) = greedy(&mut broken.layout, w);
+                lines <= count && !overflows
+            })
+            .map(Balanced::Width)
+        } else {
+            None
+        };
+        let balanced = balanced.map(|balanced| (balanced, widest + rest));
+        broken.balance = Some((width.to_bits(), balanced.clone()));
         balanced
     }
 

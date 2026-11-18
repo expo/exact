@@ -442,6 +442,7 @@ fn new_row_slots(
 pub(super) fn owns_slots(plan: &exact_plan::Plan, arm: ArmsId) -> bool {
     plan.slots.iter().any(|s| s.owner == Some(arm))
         || plan.resources.iter().any(|r| r.owner == Some(arm))
+        || plan.timers.iter().any(|t| t.owner == Some(arm))
 }
 
 /// Give arm `arm`'s new instance a request for each resource the arm owns,
@@ -450,6 +451,13 @@ pub(super) fn owns_slots(plan: &exact_plan::Plan, arm: ArmsId) -> bool {
 pub(super) fn init_requests(u: &Update<'_>, arm: ArmsId, slots: &RowSlots) {
     let plan = u.env.plan;
     let mut storage = slots.borrow_mut();
+    storage.tasks = plan
+        .timers
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.owner == Some(arm))
+        .map(|(i, _)| i as u32)
+        .collect();
     for (i, r) in plan.resources.iter().enumerate() {
         if r.owner != Some(arm) {
             continue;

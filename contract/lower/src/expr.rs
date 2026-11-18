@@ -9,6 +9,35 @@ use contract_types::{Ref, Scope, Ty};
 use exact_plan::asm::Asm;
 use exact_plan::{Opcode, Stdlib};
 
+/// `observe` and `observeAttributes` as hosts receive them. A record goes
+/// positionally, each field name before its value in the order the call names
+/// them: `observe(name, Shape(a=x), sev)` is `name, sev, "a", x` (`sev` is
+/// `"info"` when left out) and `observeAttributes(Shape(a=x))` is `"a", x`.
+/// `None` for any other command. The lowerer and the Lean embedding both read
+/// it, so the plan and the semantics cannot disagree.
+pub fn observe_args(name: &str, args: &[Expr]) -> Option<Vec<Expr>> {
+    let (mut flat, record) = match name {
+        "observe" => {
+            let severity = args
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| Expr::Str("info".into(), args[0].span()));
+            (vec![args[0].clone(), severity], args.get(1))
+        }
+        "observeAttributes" => (Vec::new(), args.first()),
+        _ => return None,
+    };
+    if let Some(Expr::Call(_, fields, _)) = record {
+        for field in fields {
+            if let Expr::NamedArg(key, value, span) = field {
+                flat.push(Expr::Str(key.clone(), *span));
+                flat.push(value.as_ref().clone());
+            }
+        }
+    }
+    Some(flat)
+}
+
 /// A host command's arguments in the order its hosts read them. `share`'s
 /// are named (LLP 1069.003 D1) and lower as `(title, text, url, files)`,
 /// `None` for an absent one, so the plan's `Command` op stays positional.

@@ -61,7 +61,7 @@ package protocol Canvases: AnyObject {
     var awaitingDrawable: Bool { get }
     var frameNow: Double? { get set }
     func reset()
-    func surface(view: NodeView, name: String, values: Any)
+    func surface(view: NodeView, name: String, values: Data)
     func destroy(view: UInt32)
     func loadIfNeeded()
     func surfaceWork(_ op: [String: Any], generation: Int)
@@ -142,6 +142,8 @@ package protocol Canvas2DCanvases: AnyObject {
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize])
     func forget(_ id: UInt32)
     func load(_ srcs: [String])
+    /// Lets go handles no mounted canvas asks for any more.
+    func drop(_ srcs: [String])
     func pictureChanged(_ src: String)
     func waitForReplays(timeout: TimeInterval)
     /// The kept bitmap of canvas `id` encoded as `type` at `quality`, or as a
@@ -210,7 +212,7 @@ final class NoCanvases: Canvases {
     var awaitingDrawable: Bool { false }
     var frameNow: Double?
     func reset() {}
-    func surface(view: NodeView, name: String, values: Any) {}
+    func surface(view: NodeView, name: String, values: Data) {}
     func destroy(view: UInt32) {}
     func loadIfNeeded() {}
     func surfaceWork(_ op: [String: Any], generation: Int) {}
@@ -269,6 +271,7 @@ final class NoCanvas2D: Canvas2DCanvases {
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize]) {}
     func forget(_ id: UInt32) {}
     func load(_ srcs: [String]) {}
+    func drop(_ srcs: [String]) {}
     func pictureChanged(_ src: String) {}
     func waitForReplays(timeout: TimeInterval) {}
     func capture(_ id: UInt32, lifetime: UInt64, generation: UInt32, sequence: UInt64, width: Int, height: Int, type: String, quality: Double?, snapshot: @escaping (() -> Bool) -> Bool, done: @escaping (Data?) -> Void) { done(nil) }

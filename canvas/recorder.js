@@ -571,7 +571,7 @@ function dimension(v, which) {
 }
 
 class Inner {
-  constructor() { this.state = defaults(); this.stack = []; this.writer = new Writer(); this.sealed = []; this.subpath = null; this.nextId = 0; this.imageIds = new Map(); this.env = { canvas: 0, currentColor: null, rtl: false, p3: false, host: null }; this.notes = []; }
+  constructor() { this.state = defaults(); this.stack = []; this.writer = new Writer(); this.sealed = []; this.subpath = null; this.nextId = 0; this.imageIds = new Map(); this.patterns = new Map(); this.env = { canvas: 0, currentColor: null, rtl: false, p3: false, host: null }; this.notes = []; }
   op(code, operands) {
     if (this.writer.len + 8 + operands.length * 8 > SEAL && this.writer.ops) { this.sealed.push(this.writer.finish()); this.writer = new Writer(); }
     this.writer.op(code, operands);
@@ -652,6 +652,11 @@ class Inner {
     const size = typeof reply === "string" ? (reply ? JSON.parse(reply) : null) : reply;
     return size && size[0] > 0 && size[1] > 0 ? size : null;
   }
+  // canvas/src/context/image.rs, `hold_patterns`.
+  holdPatterns() {
+    for (const s of [this.state, ...this.stack]) for (const p of [s.fill, s.stroke]) if (p.pattern !== undefined) this.holdPattern(p.pattern);
+  }
+  holdPattern(id) { const src = this.patterns.get(id); if (src !== undefined) this.imageSize(src); }
   imageId(src) {
     src = String(src);
     let id = this.imageIds.get(src);
@@ -941,6 +946,7 @@ export class Recorder {
     if (v instanceof CanvasGradient || v instanceof CanvasPattern) {
       if (v._inner !== g) { g.notes.push(`a ${v instanceof CanvasGradient ? "gradient" : "pattern"} from another canvas was ignored`); return; }
       p = v instanceof CanvasGradient ? { gradient: v._id } : { pattern: v._id };
+      if (p.pattern !== undefined) g.holdPattern(p.pattern);
       g.paintOp(fill, p);
       g.state[slot] = p;
       return;
@@ -1073,6 +1079,7 @@ export class Recorder {
     if (!g.imageSize(image)) return null;
     const img = g.imageId(image), id = g.nextObject();
     g.op(OP.Pattern, [id, img, rep]);
+    g.patterns.set(id, String(image));
     return new CanvasPattern(g, id);
   }
   createImageData(a, b) {
@@ -1137,6 +1144,7 @@ export function canvasSeam(draw) {
       if (!entry || entry.generation !== generation) { entry = { generation, rec: new Recorder() }; recorders.set(canvas, entry); }
       const inner = entry.rec._;
       inner.env = { canvas, currentColor: request.currentColor ?? null, rtl: request.rtl === true, p3: request.colorSpace === "display-p3", host: host ?? null };
+      inner.holdPatterns();
       let wants = false, error = null;
       try {
         const result = draw(surface, args, entry.rec, Object.freeze(frame));

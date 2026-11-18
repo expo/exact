@@ -70,7 +70,10 @@ fn parent_visibility_pixels_remove_mesh_model_shadow_and_light_without_a_tick() 
     let Some(gpu) = gpu() else { return };
     let make = |objects| {
         let mut s = VisibilitySurface::default();
-        s.device_ready(exact_gpu::wgpu::Features::empty());
+        s.device_ready(
+            exact_gpu::wgpu::Features::empty(),
+            exact_gpu::wgpu::Limits::downlevel_defaults(),
+        );
         s.bind(&[Value::Bool(objects)], None).unwrap();
         let mut model: exact_game::asset::Model =
             exact_game::bin::from_slice(include_bytes!("../../../bake/tests/fixtures/crate.model"))
@@ -181,7 +184,10 @@ impl Game for ModelStates {
 fn visible_names_a_pending_model_and_a_hidden_level() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<ModelStates, exact_game_render::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[], None).unwrap();
     let mut model: exact_game::asset::Model =
         exact_game::bin::from_slice(include_bytes!("../../../bake/tests/fixtures/crate.model"))
@@ -252,7 +258,10 @@ impl Game for SpriteStates {
 fn visible_reads_a_sprites_residency_and_its_anchored_extent() {
     let Some(gpu) = gpu() else { return };
     let mut s = WorldSurface::<SpriteStates, exact_game_render::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[], None).unwrap();
     let white = exact_game::asset::TextureData {
         width: 1,
@@ -316,7 +325,10 @@ fn a_skinned_model_is_drawn_and_framed_where_its_joint_holds_it() {
     model.materials.fill(Default::default());
     model.textures.clear();
     let mut s = WorldSurface::<Deformed, exact_game_render::ModelExecutor, true>::default();
-    s.device_ready(exact_gpu::wgpu::Features::empty());
+    s.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     s.bind(&[], None).unwrap();
     s.asset(
         "deformed.model",

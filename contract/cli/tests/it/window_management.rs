@@ -296,6 +296,10 @@ component App
   mutation shot as shape ScreenCaptures
   action capture
     send shot = captureScreens(directory="app:/tmp/freeze")
+  action root
+    send shot = captureScreens(directory="app:/tmp")
+  action slash
+    send shot = captureScreens(directory="app:/tmp/freeze/")
   view
     button "Capture" press=capture
 "#).unwrap();
@@ -376,11 +380,14 @@ component App
             })));
         runner.bind_extensions(&["screen-capture"], &[]);
         pump(&mut runner);
-        runner.act_from(origin, "capture", Vec::new()).unwrap();
-        pump(&mut runner);
+        // A directory option admits an app root and a trailing slash.
+        for action in ["capture", "root", "slash"] {
+            runner.act_from(origin, action, Vec::new()).unwrap();
+            pump(&mut runner);
+        }
         assert_eq!(
             *calls.lock().unwrap(),
-            usize::from(allowed),
+            3 * usize::from(allowed),
             "{grants}: {origin:?}"
         );
     }

@@ -8,6 +8,7 @@ pub(crate) enum Placement {
     Visible {
         h: [f32; 9],
         depth: f32,
+        opacity: f32,
         clip_depth: [[f32; 3]; 2],
         canvas: u32,
     },

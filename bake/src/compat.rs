@@ -818,6 +818,19 @@ fn compatibility_with_trust(
             }
         }
     }
+    // @ref LLP 1163.000 D2 — the alternate icons' names, in their order, are
+    // the iOS binary's: a plan never reaches a binary with another roster.
+    // Their art is the binary's alone, so it is not an input here.
+    // tvOS and watchOS bake as iOS but build no alternate (§7).
+    if platform == "ios" && !target.contains("-tvos") && !target.contains("-watchos") {
+        let names: Vec<&str> = (manifest.json.get("alternate_icons"))
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(|i| i["name"].as_str()).collect())
+            .unwrap_or_default();
+        if !names.is_empty() {
+            inputs["alternateIcons"] = json!(names);
+        }
+    }
     if platform != "web" {
         let base = manifest
             .json
@@ -869,12 +882,14 @@ fn compatibility_with_trust(
     // Which GPU artifact owns which surface (LLP 1009 D6): the manifest's
     // modules, bound into the cohort — a routing change is a new binary. An
     // app with one artifact carries no key, so its id and bytes are as before.
-    if let Some(modules) = manifest
-        .json
-        .pointer("/gpu/modules")
-        .filter(|m| m.as_object().is_some_and(|m| !m.is_empty()))
-    {
-        inputs["gpuModules"] = modules.clone();
+    // The TV and the watch bake as "ios"; a package's `targets` names them apart.
+    let gpu_platform = ["tvos", "watchos"]
+        .into_iter()
+        .find(|p| target.contains(&format!("-{p}")))
+        .unwrap_or(platform);
+    let modules = contract::package_gpu::modules(app_dir, &manifest.json, gpu_platform)?;
+    if modules.as_object().is_some_and(|m| !m.is_empty()) {
+        inputs["gpuModules"] = modules;
     }
     // A native TypeScript module runs on the binary's prelude: what it may
     // ask of it is identity. Only apps with one carry the key, so no other
@@ -1404,6 +1419,9 @@ mod faces_tests;
 #[path = "compat_notification_service_tests.rs"]
 mod notification_service_tests;
 
+#[cfg(test)]
+#[path = "compat_alternate_icons_tests.rs"]
+mod alternate_icons_tests;
 #[cfg(test)]
 #[path = "compat_file_handlers_tests.rs"]
 mod file_handlers_tests;

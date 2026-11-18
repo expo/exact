@@ -379,6 +379,89 @@ import CExact
             }
         }
     }
+    /// The worker balances where the ordinary layout does: eleven words,
+    /// which Blink's scorer breaks, and three, which its bisection does.
+    func testABalancedRegionBreaksWhereTheOrdinaryLayoutDoes() {
+        let engine = TextEngine(resolve: { _ in nil })
+        for (text, first) in [("one two three four five six seven eight nine ten eleven", "one two three four five six seven eight nine ten"),
+                              ("bbbbbbbb a cc", "bbbbbbbb a")] {
+            func spec(_ text: String, balance: Bool) -> Spec {
+                let run = Run(text: text, size: 16, weight: 400, family: 0, italic: false, lineHeight: 26, letterSpacing: 0)
+                return Spec(runs: [run], align: 0, lineClamp: 0, color: [0,0,0,255], strut: run, balance: balance)
+            }
+            func ranges(_ p: Paragraph) -> [NSRange] {
+                p.lines.map { CTLineGetStringRange($0) }.map { NSRange(location: $0.location, length: $0.length) }
+            }
+            // Room for all but the last word: greedy leaves it alone on its line.
+            let room = engine.paragraph(spec(first, balance: false), width: .infinity).width + 1
+            let ordinary = engine.paragraph(spec(text, balance: true), width: room)
+            XCTAssertEqual(ordinary.lines.count, 2, text)
+            XCTAssertNotEqual(ranges(ordinary), ranges(engine.paragraph(spec(text, balance: false), width: room)), "\(text): balancing moves the break")
+            let source = RegionTextSource.capture(spec(text, balance: true), engine: engine)
+            let box = RegionTestBox(), done = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                box.value = RegionWorkerLayout.shape(source, width: room, compact: false).metadata
+                done.signal()
+            }
+            done.wait()
+            XCTAssertEqual(box.value!.lines.map(\.range), ranges(ordinary), text)
+        }
+    }
+    /// The worker scores an inline box's start room with its run, as the
+    /// ordinary layout does (10px Menlo at 96px, expo/exact#437's heading):
+    /// the padded run takes the third line.
+    func testABalancedRegionScoresAPaddedRunsStartRoomWithItsRun() {
+        let engine = TextEngine(resolve: { _ in nil })
+        let menlo = CTFontDescriptorCreateWithNameAndSize("Menlo-Regular" as CFString, 10)
+        engine.catalog = [10: [RegisteredFace(family: "Menlo", generic: nil, weight: 400, italic: false, descriptor: menlo)]]
+        var runs = ["Seven studies in ", "live typography"].map {
+            Run(text: $0, size: 10, weight: 400, family: 10, italic: false, lineHeight: 16, letterSpacing: 0)
+        }
+        runs[1].inlineStart = 1
+        let spec = Spec(runs: runs, align: 0, lineClamp: 0, color: [0,0,0,255], strut: runs[0], balance: true)
+        let ordinary = engine.paragraph(spec, width: 96).lines.map { CTLineGetStringRange($0).location }
+        XCTAssertEqual(ordinary, [0, 6, 17])
+        let source = RegionTextSource.capture(spec, engine: engine)
+        let box = RegionTestBox(), done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            box.value = RegionWorkerLayout.shape(source, width: 96, compact: false).metadata
+            done.signal()
+        }
+        done.wait()
+        XCTAssertEqual(box.value!.lines.map(\.range.location), ordinary)
+    }
+    #if os(iOS)
+    /// The worker balances at no emergency hyphen (LLP 1001 §6, iOS emergency
+    /// word breaks), as the ordinary layout: a word that fits its line stays
+    /// whole, whether the scorer has the paragraph (four words) or the
+    /// bisection.
+    func testABalancedRegionDoesNotHyphenateAWordThatFitsItsLine() {
+        let engine = TextEngine(resolve: { _ in nil })
+        let word = "antidisestablishmentarianism"
+        func spec(_ text: String, balance: Bool) -> Spec {
+            let run = Run(text: text, size: 16, weight: 400, family: 0, italic: false, lineHeight: 26, letterSpacing: 0)
+            var spec = Spec(runs: [run], align: 0, lineClamp: 0, color: [0,0,0,255], strut: run, balance: balance)
+            spec.overflowWrap = 1; spec.language = "en"
+            spec.hyphenateAuto()
+            return spec
+        }
+        let room = engine.paragraph(spec(word, balance: false), width: .infinity).width + 1
+        func worker(_ spec: Spec) -> [NSRange] {
+            let source = RegionTextSource.capture(spec, engine: engine)
+            let box = RegionTestBox(), done = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                box.value = RegionWorkerLayout.shape(source, width: room, compact: false).metadata
+                done.signal()
+            }
+            done.wait()
+            return box.value!.lines.map(\.range)
+        }
+        for text in ["aa bb cc " + word, "Work " + word, "Work " + word + " x"] {
+            XCTAssertFalse(spec(text, balance: true).emergencyBreaks.isEmpty)
+            XCTAssertEqual(worker(spec(text, balance: true)), worker(spec(text, balance: false)), text)
+        }
+    }
+    #endif
     /// A balanced paragraph's measure is its greedy lines' widest, each less
     /// the collapsible space that ends it (CSS Text 3 §4.1.3), in the worker
     /// as in the ordinary layout.

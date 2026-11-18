@@ -10,6 +10,134 @@ use tiny_skia::Transform;
 
 mod measurement;
 
+#[test]
+fn hidden_resource_updates_bound_retained_work_without_a_paint() {
+    use exact_runner::{DataError, Value};
+
+    struct Feed {
+        rows: Vec<Value>,
+        revision: usize,
+    }
+    impl DataSource for Feed {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            if name == "changeRows" {
+                let index = self.revision % 10;
+                self.revision += 1;
+                let mut rows = self.rows.clone();
+                rows[index] = Value::record(vec![
+                    Value::str(&format!("row-{index}")),
+                    Value::str(&format!("Row {index} | revision {}", self.revision)),
+                ]);
+                self.rows = rows;
+                return Ok(Value::Bool(true));
+            }
+            assert_eq!(name, "loadFeed");
+            Ok(Value::record(vec![
+                Value::list(self.rows.clone()),
+                Value::Number(self.revision as f64),
+            ]))
+        }
+    }
+    let source = r#"shape Row
+  id: string
+  label: string
+shape Feed
+  rows: Row[]
+  revision: number
+component App
+  state running = true
+  resource feed = loadFeed() as shape Feed
+  mutation changed as shape bool refreshes feed
+  task updates when running
+    every(250, pulse)
+  action pulse
+    send changed = changeRows()
+  action stop
+    running = false
+  view
+    column height="100%"
+      button "Stop" press=stop testId="stop"
+      text `Revision ${feed.revision}` testId="status" -exact-content-transition="numeric"
+      list virtualized=true appearance="none" estimated-item-height=44 flex=1 min-height=0
+        for item in feed.rows key=item.id
+          row height=44
+            text item.label
+"#;
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(source),
+        Feed {
+            rows: (0..25_000)
+                .map(|index| {
+                    Value::record(vec![
+                        Value::str(&format!("row-{index}")),
+                        Value::str(&format!("Row {index} | revision 0")),
+                    ])
+                })
+                .collect(),
+            revision: 0,
+        },
+        (1024., 720.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert_eq!(error, None);
+    p.frame();
+    let status = p.host.kernel().find_by_test_id("status")[0];
+    let accepted = Rc::downgrade(p.brush.paragraph(status).unwrap());
+    let mut page = p.host.runner().page();
+    page.hidden = true;
+    page.background = Some(false);
+    assert_eq!(p.set_page(page), None);
+
+    for revision in 1..=384 {
+        assert_eq!(p.advance(revision as f64 * 250.), None);
+        assert_eq!(p.host.row_dirty.pending_nodes(), 0);
+        assert!(p.brush.text.borrow().residency().cold_paragraphs <= 320);
+    }
+    assert_eq!(p.host.runner_mut().data().revision, 384);
+    let stop = p.host.kernel().find_by_test_id("stop")[0];
+    let stop = p.host.kernel().node_by_key(stop).unwrap().id;
+    assert_eq!(
+        p.host
+            .dispatch_at(stop, exact_runner::Event::Press, p.host.now()),
+        None
+    );
+    assert_eq!(p.after_commit(), None);
+    assert_eq!(p.advance(396_000.), None);
+    assert!(!p.host.runner().has_pending());
+    assert_eq!(p.host.runner_mut().data().revision, 384);
+    assert_eq!(p.host.runner_mut().data().rows.len(), 25_000);
+    assert_eq!(
+        Rc::as_ptr(p.brush.paragraph(status).unwrap()),
+        accepted.as_ptr(),
+        "the last accepted frame stays intact while hidden"
+    );
+    let residency = p.brush.text.borrow().residency();
+    let pending = p.host.row_dirty.pending_nodes();
+    eprintln!("hidden text storage: {residency:?}; pending row nodes: {pending}");
+    assert!(
+        residency.cold_paragraphs <= 320,
+        "cold storage must stay within the 256-identity target plus 64 deferred identities: {residency:?}"
+    );
+    assert_eq!(
+        pending, 0,
+        "row invalidations must be consumed without painting"
+    );
+    let mut page = p.host.runner().page();
+    page.hidden = false;
+    assert_eq!(p.set_page(page), None);
+    p.frame();
+    let status = p.host.kernel().find_by_test_id("status")[0];
+    let paragraph = p.brush.paragraph(status).unwrap();
+    assert_eq!(paragraph.runs()[0].text, "Revision 384");
+    assert!(
+        !p.needs_animation_frame(),
+        "restoring must not start a numeric roll from an old commit"
+    );
+}
+
 /// What the backend heard: each row begun, with the row it was said to
 /// have been, and each row freed.
 #[derive(Default)]

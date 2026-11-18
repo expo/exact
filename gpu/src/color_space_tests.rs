@@ -69,7 +69,7 @@ impl Surface for Probe {
     fn high_dynamic_range(&self) -> bool {
         self.hdr
     }
-    fn device_ready(&mut self, _: wgpu::Features) {
+    fn device_ready(&mut self, _: wgpu::Features, _: wgpu::Limits) {
         self.granted = ColorSpace::Srgb;
         self.events.push_str("ready;");
     }

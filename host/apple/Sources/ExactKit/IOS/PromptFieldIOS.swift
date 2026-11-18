@@ -35,8 +35,11 @@ final class PromptField: NSObject, UITextFieldDelegate {
     }
     private var restoring: Snapshot?
     private var relocating = false
-    /// The alert's own delegate for the field, which answers what this does
-    /// not.
+    /// The delegate UIKit gave the field, which answers what this does not.
+    /// UIKit keeps it as long as the field, which alone calls this delegate,
+    /// and its class answers the same at each call: unlike an app's delegate
+    /// (`ForwardingDelegate`), it needs no strong hold and no unconditional
+    /// forwarding.
     private weak var alertDelegate: UITextFieldDelegate?
     /// What Return chooses when the input itself does not take it: the
     /// prompt's first action that is not destructive (`MenuHost`).

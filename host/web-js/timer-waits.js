@@ -1,6 +1,6 @@
 // Timer admission observations and wake planning (LLP 1147).
 import { rt } from './rt-link.js';
-import { beatAfter } from './beat.js';
+import { beatAfter, timerOrder } from './beat.js';
 
 import { frameAtOrAfter, cap, idleAllowed, ScrollActivity } from './timer-observations.js';
 export { frameAtOrAfter, cap, idleAllowed, ScrollActivity } from './timer-observations.js';
@@ -49,7 +49,7 @@ export function timerWaits() {
       }
       const supported = 'onscrollend' in window;
       const scrolling = () => !offscreen() && (activity.sample(Math.max(clock.now, rt.wall()), supported, inFrame) || rt.collectionScrollPending?.() === true);
-      const held = () => clock.timers.filter(t => t.wait && t.due <= now && cap(t) > now).sort((a, b) => a.due - b.due || a.i - b.i);
+      const held = () => clock.timers.filter(t => t.wait && t.due <= now && cap(t) > now).sort((a, b) => a.due - b.due || timerOrder(a, b));
       while (!clock.agent && !clock.stopped && !rt.poisoned?.()) {
         const scroll = scrolling();
         const demand = clock.timers.some(t => t.frame) || scroll || clock.timers.some(t => t.wait === 1 && t.due <= clock.now);

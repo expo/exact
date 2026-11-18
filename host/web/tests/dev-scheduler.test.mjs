@@ -455,7 +455,7 @@ test('generated game arguments use the resident plan compiler without a host reb
 test('GPU edit profile recognizes both authored tables and generated inline TOML', () => {
   const body=source.slice(source.indexOf('async function produceGpu(files)'));
   const line=body.split('\n').find(line=>line.trimStart().startsWith('const profile ='));
-  const profile=text=>new Function('readFileSync','resolve','app','Bun',`${line};return profile;`)
+  const profile=text=>new Function('readFileSync','resolve','at','Bun',`${line};return profile;`)
     (()=>text,resolve,{workspace:'.'},Bun);
   assert.equal(profile('[profile.gpu-dev]\nopt-level=1\n'),'gpu-dev');
   assert.equal(profile('[profile]\n"gpu-dev" = { inherits="dev", opt-level=1 }\n'),'gpu-dev');
@@ -694,6 +694,23 @@ test('compiler polls keep nested atomic saves GPU-only and ignore directory meta
     assert.deepEqual(context.builds, [{ paths: [input], gpu: true }]);
     writeFileSync(resolve(nested, '.DS_Store'), 'ignored'); quiet.tick(); quiet.notify();
     assert.equal(context.builds.length, 1, 'ignored descendants do not invalidate parent directories');
+    context.close(); quiet.tick(); quiet.closed();
+  } finally { context?.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('compiler polls watch installed GPU sources while ignoring generated GPU inputs', () => {
+  const directory = mkdtempSync(resolve(import.meta.dir, '../../../dev-compiler-installed-gpu-'));
+  const input = resolve(directory, 'node_modules/fixture/rust/lib.rs'), output = resolve(directory, 'target/out/generated.rs');
+  const quiet = quietWatches();
+  let context;
+  try {
+    for (const path of [input, output]) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, 'before'); }
+    context = compilerWatches(directory, quiet, { gpuInputs: [input, output], appInputs: [resolve(directory, 'host.rs')],
+      skipped: /(^|\/)(target|dist|node_modules)(\/|$)/ });
+    writeFileSync(input + '.new', 'after'); renameSync(input + '.new', input); quiet.tick();
+    assert.deepEqual(context.builds, [{ paths: [input], gpu: true }]);
+    writeFileSync(output, 'generated again'); quiet.tick();
+    assert.equal(context.builds.length, 1);
     context.close(); quiet.tick(); quiet.closed();
   } finally { context?.close(); rmSync(directory, { recursive: true, force: true }); }
 });

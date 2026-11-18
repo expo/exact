@@ -1,4 +1,4 @@
-//! A `radiogroup` of radios as the platform's segmented control on the
+//! A content `tablist` or `radiogroup` as the platform's segmented control on the
 //! painted hosts, as iOS shows a `UISegmentedControl` for the same group
 //! (LLP 1116.004 D5; docs/contract-for-agents.md, `role="radiogroup"`).
 //! Under the Material look (Android) it is Material 3's segmented buttons
@@ -6,13 +6,12 @@
 //! the web's neutral segmented control, `host/web/neutral.css`'s track with
 //! the checked radio raised on it (LLP 1115.000 D17).
 //!
-//! Which group is one is iOS's rule (`SegmentsIOS.sync`): a `radiogroup`
-//! that is not `aria-orientation="vertical"` and whose `appearance: none`
-//! nobody wrote, every live child of it a native `button role="radio"`
-//! (a radio that paints itself is no native button: the compiler writes
-//! its `appearance: none`, LLP 1104 D2). Material asks for two or more,
-//! each one text or one symbol, as a segment can show; the neutral look
-//! asks what the web's sheet does, `bordered` or `gray` radios.
+//! Which group is one is iOS's rule (`SegmentsIOS.sync`): horizontal,
+//! no written `appearance: none`, each live child a native button with
+//! the group's member role (`tab` or `radio`). Material asks for two or
+//! more, each one text or one symbol. Navigation-root tabs keep their bar.
+//! The neutral look follows the web's sheet: `bordered` or `gray` members,
+//! and tablists with `aria-controls` keep their tab-bar treatment.
 //!
 //! Layout is here, paint in the host. Everything this sets is a default
 //! beneath what the author wrote: a group whose author wrote its layout (a
@@ -42,10 +41,10 @@ pub enum SegmentPlace {
 }
 
 impl NodeArena {
-    /// Whether `slot` is a radio a segment can stand for under `column`.
-    fn segment_radio(&self, slot: u32, column: Column) -> bool {
+    /// Whether `slot` is a member a segment can stand for under `column`.
+    fn segment_member(&self, slot: u32, column: Column, role: &str) -> bool {
         if ControlKind::of(self.node_type(slot), self.props(slot)) != Some(ControlKind::Button)
-            || self.props(slot).str(PropId::AccessibilityRole) != Some("radio")
+            || self.props(slot).str(PropId::AccessibilityRole) != Some(role)
         {
             return false;
         }
@@ -65,16 +64,45 @@ impl NodeArena {
         }
     }
 
-    /// The radios of `slot` when it is a segmented `radiogroup` under this
-    /// process's look, in order.
-    pub(crate) fn segmented_radios(&self, slot: u32) -> Option<Vec<u32>> {
+    /// The members of a segmented tablist or radio group, in order.
+    pub(crate) fn segmented_members(&self, slot: u32) -> Option<Vec<u32>> {
         let column = metrics::column();
         let props = self.props(slot);
         if !matches!(column, Column::Material | Column::Neutral)
-            || props.str(PropId::AccessibilityRole) != Some("radiogroup")
+            || !matches!(
+                props.str(PropId::AccessibilityRole),
+                Some("radiogroup" | "tablist")
+            )
             || props.str(PropId::AccessibilityOrientation) == Some("vertical")
         {
             return None;
+        }
+        let tablist = props.str(PropId::AccessibilityRole) == Some("tablist");
+        if tablist {
+            if column == Column::Neutral
+                && self
+                    .children(slot)
+                    .iter()
+                    .any(|c| self.props(*c).get(PropId::AccessibilityControls).is_some())
+            {
+                return None;
+            }
+            // A navigation root's own list is its navigation bar. Local panel
+            // controls inside a route remain tabs of that route.
+            let mut ancestor = self.parent(slot);
+            let mut root = None;
+            while let Some(at) = ancestor {
+                if self.props(at).str(PropId::NavigationKey).is_some() {
+                    root = Some(at);
+                }
+                ancestor = self.parent(at);
+            }
+            if root
+                .and_then(|root| self.root_tabs(root))
+                .is_some_and(|tabs| tabs.tablist == self.local_id(slot))
+            {
+                return None;
+            }
         }
         let style = self.style(slot);
         if style.written.has(StyleId::Appearance) && style.appearance == crate::Appearance::None {
@@ -85,8 +113,11 @@ impl NodeArena {
             .filter(|c| self.is_live(*c) && self.style(*c).display != Display::None)
             .collect();
         let least = if column == Column::Material { 2 } else { 1 };
-        (radios.len() >= least && radios.iter().all(|r| self.segment_radio(*r, column)))
-            .then_some(radios)
+        (radios.len() >= least
+            && radios
+                .iter()
+                .all(|r| self.segment_member(*r, column, if tablist { "tab" } else { "radio" })))
+        .then_some(radios)
     }
 
     /// Whether `slot` is itself a grouped list's row: as the web's sheet has
@@ -115,7 +146,7 @@ impl NodeArena {
                 StyleId::GridAutoFlow,
             ],
         ) || (self.children(slot).iter()).any(|c| {
-            // The children `segmented_radios` counts: a hidden one sizes
+            // The children `segmented_members` counts: a hidden one sizes
             // nothing.
             self.is_live(*c)
                 && self.style(*c).display != Display::None
@@ -143,7 +174,7 @@ impl NodeArena {
             return None;
         }
         let group = self.parent(slot)?;
-        let mut radios = self.segmented_radios(group)?;
+        let mut radios = self.segmented_members(group)?;
         let style = self.effective_style(group);
         if style.display == Display::Flex
             && matches!(
@@ -183,7 +214,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
         return;
     }
     let written = arena.style(slot).written;
-    if arena.segmented_radios(slot).is_some() {
+    if arena.segmented_members(slot).is_some() {
         // The track's padding is inside the group's width, as the web's
         // sheet has it (`box-sizing: border-box`).
         if !written.has(StyleId::BoxSizing) {
@@ -311,12 +342,18 @@ fn changed(
     if !matches!(metrics::column(), Column::Material | Column::Neutral) {
         return false;
     }
-    let group = |s: u32| arena.props(s).str(PropId::AccessibilityRole) == Some("radiogroup");
+    let group = |s: u32| {
+        matches!(
+            arena.props(s).str(PropId::AccessibilityRole),
+            Some("radiogroup" | "tablist")
+        )
+    };
     let parent = arena.parent(slot);
     let mut groups: Vec<u32> = Vec::new();
     match what {
         Change::Prop(
             PropId::AccessibilityRole
+            | PropId::AccessibilityControls
             | PropId::AccessibilityOrientation
             | PropId::ButtonStyle
             | PropId::Type
@@ -330,6 +367,16 @@ fn changed(
         }
         Change::Prop(PropId::Text | PropId::ImageSource) => {
             groups.extend(parent.and_then(|p| arena.parent(p)).filter(|g| group(*g)));
+        }
+        Change::Prop(PropId::NavigationKey) => {
+            // Root-tab discovery stops at route keys. A new key can hide
+            // formerly root-owned tabs, whose cached layout must change too.
+            groups.extend(
+                arena
+                    .subtree(slot)
+                    .into_iter()
+                    .filter(|s| arena.props(*s).str(PropId::AccessibilityRole) == Some("tablist")),
+            );
         }
         Change::Prop(_) => {}
         Change::Style(mask) => {
@@ -349,6 +396,17 @@ fn changed(
                 groups.extend(held);
             }
         }
+    }
+    if matches!(
+        what,
+        Change::Prop(
+            PropId::Id
+                | PropId::NavigationKey
+                | PropId::AccessibilityRole
+                | PropId::AccessibilityControls
+        )
+    ) {
+        groups.extend(navigation_lists(arena, slot));
     }
     groups.sort_unstable();
     groups.dedup();
@@ -378,12 +436,19 @@ pub(crate) fn children_changed(
     if !matches!(metrics::column(), Column::Material | Column::Neutral) {
         return;
     }
-    let group = |slot: u32| arena.props(slot).str(PropId::AccessibilityRole) == Some("radiogroup");
+    let group = |slot: u32| {
+        matches!(
+            arena.props(slot).str(PropId::AccessibilityRole),
+            Some("radiogroup" | "tablist")
+        )
+    };
     let groups = std::iter::once(parent)
         .chain(arena.parent(parent))
         .find(|s| group(*s))
         .into_iter()
-        .chain(arena.children(parent).iter().copied().filter(|c| group(*c)));
+        .chain(arena.children(parent).iter().copied().filter(|c| group(*c)))
+        .chain(navigation_lists(arena, parent))
+        .chain(behind_keyed_children(arena, parent));
     for group in groups.collect::<Vec<_>>() {
         for slot in std::iter::once(group).chain(arena.children(group).iter().copied()) {
             if let Some(node) = arena.taffy(slot) {
@@ -392,4 +457,49 @@ pub(crate) fn children_changed(
             }
         }
     }
+}
+
+/// The tablists behind a keyed child of `parent`: root-tab discovery
+/// ([`navigation_lists`]) stops at a route key, so tabs moved into a keyed
+/// container that is then attached would keep a root tab's layout.
+fn behind_keyed_children(arena: &NodeArena, parent: u32) -> Vec<u32> {
+    if metrics::column() != Column::Material {
+        return Vec::new();
+    }
+    (arena.children(parent).iter())
+        .filter(|c| arena.props(**c).get(PropId::NavigationKey).is_some())
+        .flat_map(|c| arena.subtree(*c))
+        .filter(|s| arena.props(*s).str(PropId::AccessibilityRole) == Some("tablist"))
+        .collect()
+}
+
+/// Root-tab membership also reads panel ids and topology outside the group.
+/// Refresh tablists in that navigation tree when those inputs move.
+fn navigation_lists(arena: &NodeArena, slot: u32) -> Vec<u32> {
+    if metrics::column() != Column::Material {
+        return Vec::new();
+    }
+    let mut at = Some(slot);
+    let mut root = slot;
+    while let Some(s) = at {
+        if arena.props(s).get(PropId::NavigationKey).is_some() {
+            root = s;
+        }
+        at = arena.parent(s);
+    }
+    fn walk(arena: &NodeArena, slot: u32, lists: &mut Vec<u32>) {
+        if arena.props(slot).str(PropId::AccessibilityRole) == Some("tablist") {
+            lists.push(slot);
+        }
+        if arena.props(slot).get(PropId::NavigationKey).is_none() {
+            for child in arena.children(slot) {
+                walk(arena, *child, lists);
+            }
+        }
+    }
+    let mut lists = Vec::new();
+    for child in arena.children(root) {
+        walk(arena, *child, &mut lists);
+    }
+    lists
 }

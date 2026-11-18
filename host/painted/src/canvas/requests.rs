@@ -59,14 +59,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// between turns: its answer, -1 when refused. A view hosted or let go
     /// paints again.
     pub fn hatch_act(&mut self, node: u32, kind: i32, text: Option<&str>) -> i64 {
-        let answer = crate::hatches::reader::act(node, kind, text);
-        if answer >= 0 {
-            self.p.hatch_turn();
-            if matches!(kind, 13 | 14) {
-                self.p.hatch_views_changed();
-            }
-        }
-        answer
+        self.p.reader_hatch_act(node, kind, text)
     }
 
     /// An app module's event, only for the session and allocation whose view the reader still holds.

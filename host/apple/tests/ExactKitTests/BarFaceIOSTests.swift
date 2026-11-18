@@ -47,6 +47,35 @@ final class BarFaceIOSTests: XCTestCase {
         XCTAssertLessThan(pixel.0, 15)
     }
 
+    func testABadgeOnAGlassButtonKeepsItsOwnGlass() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("bar item glass is iOS 26") }
+        let p = Presenter()
+        defer { p.reset() }
+        let fill: [String: Any] = ["background_color": [[255, 0, 0, 255], [0, 0, 255, 255]], "width": 36, "height": 36]
+        p.apply(wireBatch([
+            ["op": "create", "id": 100, "kind": "view", "props": ["semanticTag": "header"]],
+            ["op": "create", "id": 1, "kind": "button", "props": ["testId": "plain"]],
+            ["op": "create", "id": 2, "kind": "view", "style": fill],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "A"]],
+            ["op": "create", "id": 4, "kind": "button", "props": ["testId": "glass", "backgroundMaterial": "glass"]],
+            ["op": "create", "id": 5, "kind": "view", "style": fill],
+            ["op": "create", "id": 6, "kind": "text", "props": ["text": "A"]],
+            ["op": "children", "id": 2, "ids": [3]], ["op": "children", "id": 1, "ids": [2]],
+            ["op": "children", "id": 5, "ids": [6]], ["op": "children", "id": 4, "ids": [5]],
+            ["op": "children", "id": 100, "ids": [1, 4]], ["op": "roots", "ids": [100]],
+        ]))
+        let shape = try [1, 4].map { HeaderShape.Item(try XCTUnwrap(p.views[$0])) }
+        XCTAssertNotNil(shape[0].badge)
+        XCTAssertNotNil(shape[1].badge)
+        XCTAssertFalse(shape[0].ownGlass)
+        XCTAssertTrue(shape[1].ownGlass)
+        let items = p.navigation.barItems(shape, RouteController(try XCTUnwrap(p.views[100])))
+        XCTAssertEqual(items.count, 2)
+        XCTAssertTrue(items[0].hidesSharedBackground, "a badge alone is its own shape, with no glass")
+        XCTAssertFalse(items[1].hidesSharedBackground, "a badge on a glass button shows glass")
+        XCTAssertFalse(items[1].sharesBackground, "and that glass is its own capsule")
+    }
+
     func testADotBesideALabelIsDrawnAsPainted() throws {
         let (p, node) = button([dot, label(["written": ["text_color"]])])
         let face = try XCTUnwrap(ChipFace(node, engine: TextEngine(resolve: { _ in nil })))

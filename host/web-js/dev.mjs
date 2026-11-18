@@ -1,6 +1,6 @@
 // The dev loop on the JS target (LLP 1071): what `host/web/dev.mjs` runs for
 // an app the JS target takes, so a developer runs the runtime the app ships.
-// An edit — the Contract, the app's TypeScript or Rust data, its assets, or
+// An edit — the Contract, TypeScript, Rust data or GPU sources, assets, or
 // this runtime and compiler — rebuilds the app (`host/web-js/build.mjs
 // --render none`, into a stage renamed over dist/, so a request sees the old
 // build or the new one; what did not change is not rebuilt: module.mjs
@@ -42,7 +42,7 @@ import { inlineWhy as inlineWhyOf } from './dev-inline.mjs';
 import { DEV_STATUS_TYPE, FAILED, PHASE, gist } from '../web/dev-phase.mjs';
 import { startupBuilds, stopBuildTree } from '../web/dev-startup.mjs';
 import { fileURLToPath } from 'node:url';
-import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
+import { declaredSources, installedFileDependencies } from '../../scripts/file-dependencies.mjs';
 
 const CHECKPOINT_BYTES = 16 * 1024 * 1024, CHECKPOINTS = 8;
 
@@ -51,11 +51,15 @@ const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const skipped = new RegExp(String.raw`(^|\/)(target|dist|${besidePattern()}|node_modules|conformance)(\/|$)|(^|\/)\.|\.md$`);
 /** The files beside app.json a setting is read from (`import.meta.env`, LLP 1153 D4): inputs, though dot files. */
 const settingsFile = (name) => /^\.env(?:\.local)?$/.test(String(name));
-/** Whether `path` changed from `since` (ms) until now, by the entry's own times (lstat: a link replaced by one to an older
- * file is new, though its target is not): its modification, or its status change, which alone moves when an older file
- * is renamed over it. A time past now is a file dated ahead (an archive's, a clock's), which a build read as it is, so it is no change. Throws
- * for a path that is gone, which each caller reads its own way. */
-const changedSince = (path, since) => { const s = lstatSync(path), now = Date.now() + 1; return [s.mtimeMs, s.ctimeMs].some((t) => t >= since && t <= now); };
+/** Whether an entry or its link target changed from `since` (ms) until now.
+ * A replaced link counts even when its target is older. Status changes also
+ * catch an older file renamed over an input. Future timestamps do not prove an
+ * edit. A missing path throws; callers handle its absence. */
+const changedSince = (path, since) => {
+  const entry = lstatSync(path), now = Date.now() + 1;
+  const stats = entry.isSymbolicLink() ? [entry, statSync(path)] : [entry];
+  return stats.some(s => [s.mtimeMs, s.ctimeMs].some(t => t >= since && t <= now));
+};
 /** Whether a watcher's event for `path` is an edit since `since`: macOS reports a build's reads of a tree (the assets it
  * copies) as events too, and a path unchanged since then is none. A path that is gone is an edit. */
 const movedSince = (path, since) => { try { return changedSince(path, since); } catch { return true; } };
@@ -151,7 +155,7 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
       building = null;
       const packages = devPackages(stage);
       // Or a source it read moved since it began (a watcher's event can come
-      // after the build ends): its Contract sources (one gone is moved), and
+      // after the build ends): its compiler sources (one gone is moved), and
       // the design, app.ts, app.json, the backend's origin and the settings
       // files .env.local and .env (one come or gone is moved), by their times. Asked again just before it is
       // published or kept, after the work before that.
@@ -169,10 +173,12 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
       // What it said: its last 12 lines, or from the compiler's first error when those leave it out.
       const said = log.split('\n').filter((l) => l.trim() && !/^\s*(Compiling|Finished|Running|warning)/.test(l) && !compilerWarnings(l).length), first = said.findIndex(compilerError);
       if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: said.slice(first >= 0 ? Math.min(first, Math.max(0, said.length - 12)) : -12).join('\n') || `build exited ${code}` }); }
-      let cargo;
-      try { cargo = cargoContractReads(webSourceRoots(app, true), began); }
+      let cargo, roots;
+      try { roots = webSourceRoots(app, true); cargo = cargoContractReads(roots, began); }
       catch (error) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: error.message }); }
-      packages.sources = [...new Set([...packages.sources, ...Object.keys(cargo)])];
+      packages.roots = roots;
+      const files = roots.filter(root => root.file).map(root => root.file);
+      packages.sources = [...new Set([...packages.sources, ...files])];
       lastSources = packages.sources;
       if (changedContractReads(cargo).length) return setAside();
       const logic = readFileSync(resolve(stage, '.exact-dev-logic.json'), 'utf8').trim();
@@ -745,9 +751,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // a path not modified since the last build started is no edit.
   const changed = (base, skip = skipped, fresh = true) => (_, name) => {
     if (stopping) return;
-    // A Contract source the compile read is an input even where the app's
-    // watcher skips (a dot directory).
-    if (name && skip.test(String(name)) && !contractInput(resolve(base, String(name)))
+    // A compiler input remains watched in dot directories and node_modules.
+    if (name && skip.test(String(name)) && !compilerInput(resolve(base, String(name)))
       && !(base === app.dir && (/^\.exact(?:[\\/]backend-origin)?$/.test(String(name)) || settingsFile(name)))) return;
     // `.exact/` is an input only for `backend-origin`: the loop's own design
     // server makes the directory for its lock, which is none. An event for
@@ -799,13 +804,13 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     const path = resolve(root, file);
     watchers.push(watch(path, changed(dirname(path))));
   }
-  // Each Contract package the app uses, wherever it is installed or linked.
+  // Compiler source trees and recorded files, wherever installed or linked.
   const packages = new Set();
-  const contractSources = new Set();
+  const compilerSources = new Set();
   // A source, or a directory holding one (its event names the directory).
-  const contractInput = path => contractSources.has(path) || [...contractSources].some(s => s.startsWith(path + '/') || s.startsWith(path + '\\'));
-  const watchPackages = ({ trees = [], shallow = [], sources = [] } = {}) => {
-    for (const source of sources) contractSources.add(source);
+  const compilerInput = path => compilerSources.has(path) || [...compilerSources].some(s => s.startsWith(path + '/') || s.startsWith(path + '\\'));
+  const watchPackages = ({ trees = [], shallow = [], sources = [], roots = [] } = {}) => {
+    for (const source of sources) compilerSources.add(source);
     for (const dir of trees) {
       if (packages.has(dir) || !existsSync(dir)) continue;
       packages.add(dir);
@@ -820,6 +825,28 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
       if (packages.has(key) || !existsSync(dir)) continue;
       packages.add(key);
       watchers.push(watch(dir, (_, name) => { if (String(name) === entry) changed(dir, /^$/, false)(_, name); }));
+    }
+    // Cargo reads can produce macOS notifications too. Its sources need a
+    // changed entry or link target, rather than every notification. An
+    // installed `file:` package is watched at its declared directory too,
+    // where its files are edited: an install of links reports none of that.
+    const watchCargo = (dir, at, file) => {
+      const key = `cargo:${at}:${file ?? ''}`;
+      if (packages.has(key) || !existsSync(at)) return;
+      packages.add(key);
+      const notify = changed(dir);
+      watchers.push(watch(at, { recursive: !file }, (event, name) => {
+        if (file && String(name) !== basename(file)) return;
+        const path = name == null ? dir : resolve(dir, String(name));
+        if (!compilerInput(path) && !existsSync(path)) return;
+        notify(event, name);
+      }));
+    };
+    const declared = declaredSources(app.dir);
+    for (const input of roots) {
+      const file = input.file, dir = file ? dirname(file) : input, source = declared(dir);
+      watchCargo(dir, dir, file);
+      if (source && source !== dir) watchCargo(dir, source, file);
     }
   };
   watchPackages(built.packages);
@@ -840,7 +867,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
 const show=t=>{if(!t){o?.remove();o=null;return}o??=document.body.appendChild(Object.assign(document.createElement('pre'),{style:'position:fixed;left:0;right:0;bottom:0;margin:0;padding:12px;background:#300;color:#fdd;font:12px/1.4 ui-monospace,monospace;white-space:pre-wrap;z-index:2147483647',onclick:()=>show()}));o.textContent=t+'\\n(click to dismiss)'};
 const encode=v=>typeof v==='number'&&(!Number.isFinite(v)||Object.is(v,-0))?{$exactNumber:Object.is(v,-0)?'-0':String(v)}:Array.isArray(v)?v.map(encode):v;
 const children=e=>[...(e?.children??[])].flatMap(x=>x.hasAttribute('data-exact-list-item')?[...x.children]:[x]).filter(x=>x.hasAttribute('data-carry-type')||x.hasAttribute('data-listitemkey'));
-const capture=logic=>{const x=globalThis.exact,active=document.activeElement?.closest?.('[data-carry-type]');let focus=null;if(active){const path=[];for(let el=active,p;el&&el.id!=='exact-root';el=p){p=el.parentElement;if(p?.hasAttribute('data-exact-list-item'))p=p.parentElement;path.unshift(children(p).indexOf(el))}if(!path.includes(-1))focus={path,type:active.getAttribute('data-carry-type')}}return{time:x.clock.now,slots:[...x.state[0],...[...(globalThis.__exactDevPanels?.live??[])].filter(s=>!s.n.gone)].map(s=>[s.n.devName,s.n.devType,encode(s())]).concat(globalThis.__exactDevPanels?.left()??[]),answers:logic?[]:x.resources.filter(r=>!r.owned&&!r.failed&&!r.ticket&&!r.waiting&&!r.ov&&r.settled!==undefined).map(r=>[r.name,r.source,encode(r.settled),encode(r.value),r.devType,!!r.store]),carryAnswers:!logic,modes:ch.before?.mode??x.modes?.read()??null,focus}};
+const capture=logic=>{const x=globalThis.exact,active=document.activeElement?.closest?.('[data-carry-type]');let focus=null;if(active){const path=[];for(let el=active,p;el&&el.id!=='exact-root';el=p){p=el.parentElement;if(p?.hasAttribute('data-exact-list-item'))p=p.parentElement;path.unshift(children(p).indexOf(el))}if(!path.includes(-1))focus={path,type:active.getAttribute('data-carry-type')}}return{generation:x.clock.generation,epoch:x.clock.epoch,time:x.clock.now,slots:[...x.state[0],...[...(globalThis.__exactDevPanels?.live??[])].filter(s=>!s.n.gone)].map(s=>[s.n.devName,s.n.devType,encode(s())]).concat(globalThis.__exactDevPanels?.left()??[]),answers:logic?[]:x.resources.filter(r=>!r.owned&&!r.failed&&!r.ticket&&!r.waiting&&!r.ov&&r.settled!==undefined).map(r=>[r.name,r.source,encode(r.settled),encode(r.value),r.devType,!!r.store]),carryAnswers:!logic,modes:ch.before?.mode??x.modes?.read()??null,focus}};
 const restored=document.querySelector('script[type="application/vnd.exact.dev-checkpoint"]'),q=new URLSearchParams(location.search),devKeys=new Set(['agent','seed','locale','formatLocale','timeZone','epoch','storage']),admission=['','1'].includes(q.get('agent'))?[...q].filter(([k])=>devKeys.has(k)):null;
 if(restored){const restoredSeq=Number(restored.dataset.seq);console.info('exact dev reload: restored',restoredSeq);const t=setInterval(()=>{const b=document.getElementById('exact-root')?.dataset.bootMs;if(b!=null){clearInterval(t);Promise.resolve(globalThis.exact?.ready).then(()=>{console.info('exact dev reload: runtime up',restoredSeq);fetch('${base}/reloaded?seq='+restoredSeq+'&boot='+b+'&at='+Date.now(),{method:'POST'})})}},2)}
 const ready=()=>globalThis.exact?Promise.resolve(globalThis.exact.ready):new Promise(ok=>{const t=setInterval(()=>{if(globalThis.exact){clearInterval(t);Promise.resolve(globalThis.exact.ready).then(ok)}},2)});

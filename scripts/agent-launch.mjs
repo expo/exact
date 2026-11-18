@@ -440,7 +440,7 @@ const playwrightFull = () => pinned ??= createRequire(import.meta.url)(resolve(R
 const playwrightVersion = () => JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).devDependencies['playwright-core'];
 const executableAt = (path) => { try { accessSync(path, constants.X_OK); return true; } catch { return false; } };
 /** What a web drive of `app` (resolveApp's) needs of Chromium: the GPU when the app has a GPU module. */
-export const webNeeds = app => app?.hasGpu || (app?.manifest && gpuModules(app.manifest).length) ? ['gpu'] : [];
+export const webNeeds = app => app?.hasGpu || (app?.manifest && gpuModules(app.manifest, 'web').length) ? ['gpu'] : [];
 /** The Chromium a drive or test launches: CHROME when it is set (a bare name is resolved through PATH; one that names
  * no browser is `unavailable`), else the build Playwright pins (package.json): its headless shell, or its full build for a need in CHROMIUM_NEEDS. A browser
  * that is not there is no error: `unavailable` says why and how to install it, so a test can skip on it. `environment`,

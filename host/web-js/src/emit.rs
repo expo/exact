@@ -22,6 +22,8 @@ mod answers;
 mod commands;
 #[path = "each.rs"]
 mod each;
+#[path = "input.rs"]
+mod input;
 #[path = "list_options.rs"]
 mod list_options;
 #[path = "list_text.rs"]
@@ -38,6 +40,8 @@ mod mutations;
 mod named_records;
 #[path = "navigation.rs"]
 mod navigation;
+#[cfg(test)]
+pub(crate) use input::ALL as INPUT;
 #[cfg(test)]
 pub(crate) use navigation::ALL as NAVIGATION;
 #[path = "pages.rs"]
@@ -76,6 +80,8 @@ pub struct Output {
     pub dialogs: bool,
     /// The navigation behaviours the plan cannot use (`navigation::unused`).
     pub navigation: Vec<&'static str>,
+    /// The input piece's behaviours the plan cannot use (`input::unused`).
+    pub input: Vec<&'static str>,
     pub paint: String,
     pub names: String,
     /// Build routes as JSON: locations (including the not-found page), or
@@ -129,6 +135,8 @@ struct Em<'a> {
     classes: Vec<String>,
     /// Each distinct set of state looks (LLP 1121 D8), `data-exact-looks` index plus one.
     looks: Vec<Vec<(u8, String)>>,
+    /// Whether a node's own style holds a pressed paint (`input::unused`).
+    press_paint: bool,
     /// Where each class and each set of looks is in `classes` and `looks`.
     class_at: HashMap<String, usize>,
     looks_at: HashMap<Vec<(u8, String)>, usize>,
@@ -240,6 +248,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         out: String::new(),
         classes: Vec::new(),
         looks: Vec::new(),
+        press_paint: false,
         class_at: HashMap::new(),
         looks_at: HashMap::new(),
         root_class: None,
@@ -266,7 +275,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         site_attrs,
         dev_reload,
         panels: exact_runner::instance::tabs::panel_sites(plan),
-        owns_requests: plan.resources.iter().any(|r| r.owner.is_some()),
+        owns_requests: plan.resources.iter().any(|r| r.owner.is_some())
+            || plan.timers.iter().any(|t| t.owner.is_some()),
     };
     em.heights = em.drag_targets(PropId::HeightDragFor);
     em.transforms = em.drag_targets(PropId::TransformDragFor);
@@ -524,6 +534,10 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     if !commands.is_empty() {
         let use_commands = em.uses.rt("useCommands");
         body.push_str(&commands::install(&use_commands, &commands));
+    }
+    if plan.timers.iter().any(|t| t.owner.is_some()) {
+        let owned = em.uses.rt("ownedTasks");
+        let _ = write!(body, "{owned}();");
     }
     let mount = em.uses.rt("mount");
     let _ = write!(body, "{mount}($R=>{{{view}}});");
@@ -845,6 +859,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         markdown: em.markdown,
         dialogs: em.dialogs,
         navigation: navigation::unused(&em, roots),
+        input: input::unused(&em),
         canvas2d: em.canvas2d,
         motion: em.motion,
         editor: em.editor,
@@ -954,27 +969,25 @@ impl Em<'_> {
         if commands::dialog_glue(plan, &parts.tag, &attrs, NodesId(i)) {
             self.dialogs = true;
         }
-        if presence.contains("--exact-press:")
+        let press_paint = [
+            "--exact-press-opacity:",
+            "--exact-press-opacity-to:",
+            "--exact-press-background-color:",
+            "--exact-press-color:",
+        ]
+        .iter()
+        .any(|p| presence.contains(p));
+        self.press_paint |= press_paint;
+        if press_paint
+            || presence.contains("--exact-press:")
             || presence.contains("--exact-press-haptic:")
             || presence.contains("--exact-press-translate:")
-            || presence.contains("--exact-press-opacity:")
-            || presence.contains("--exact-press-opacity-to:")
-            || presence.contains("--exact-press-background-color:")
-            || presence.contains("--exact-press-color:")
             || !parts.looks.is_empty()
-            || plan
-                .node(NodesId(i))
-                .bindings
+            || answers::property(plan, i, PropId::AccessibilityKeyShortcuts).is_some()
+            || answers::role_can(plan, i, &["radiogroup", "tablist", "menu"])
+            || attrs
                 .iter()
-                .map(|b| plan.binding(b))
-                .any(|b| {
-                    b.kind == BindingKind::Prop && b.id == PropId::AccessibilityKeyShortcuts as u16
-                })
-            || attrs.iter().any(|a| {
-                a.0 == "data-button-style"
-                    || a.0 == "aria-keyshortcuts"
-                    || (a.0 == "role" && ["radiogroup", "tablist", "menu"].contains(&a.1.as_str()))
-            })
+                .any(|a| a.0 == "data-button-style" || a.0 == "aria-keyshortcuts")
         {
             let press = self.uses.rt("pressFeedback");
             let _ = write!(self.out, "{press}();");
@@ -1420,7 +1433,7 @@ impl Em<'_> {
         let panel = self.panels.binary_search(&exact_plan::NodesId(i)).is_ok();
         if panel {
             let tp = self.uses.rt("tp");
-            let _ = write!(self.out, "{tp}({e},()=>{{");
+            let _ = write!(self.out, "{tp}({e},{e}=>{{");
         }
         if virtualized {
             self.collection_children(i, &e, scope, &edges)?;

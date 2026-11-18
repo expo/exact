@@ -1252,6 +1252,30 @@ fn moments(words: &[i32]) -> Vec<Told> {
 }
 
 #[test]
+fn a_readers_package_timer_runs_without_app_hatches() {
+    let mut p = boot::<()>("component App\n  view\n    text \"Record\"\n", &[]);
+    p.set_hatches(None);
+    first_pixel(&mut p);
+    assert!(!p.hatches.connected());
+    agent(&mut p, json!({"op": "clock", "to": 1000.0}));
+    let ticket = p.reader_hatch_act(0, 6, Some("5000"));
+    assert!(
+        ticket >= 0,
+        "ExtensionContext.after must register without app hatches"
+    );
+    let cancelled = p.reader_hatch_act(0, 6, Some("100"));
+    assert_eq!(p.reader_hatch_act(0, 8, Some(&cancelled.to_string())), 1);
+    crate::hatches::reader::take();
+    assert_eq!(p.timer_due_ms(), Some(6000.0));
+    agent(&mut p, json!({"op": "clock", "to": 5999.0}));
+    assert!(crate::hatches::reader::take().is_none());
+    agent(&mut p, json!({"op": "clock", "to": 6000.0}));
+    assert_eq!(crate::hatches::reader::take(), Some(vec![6, ticket as i32]));
+    agent(&mut p, json!({"op": "clock", "to": 7000.0}));
+    assert!(crate::hatches::reader::take().is_none());
+}
+
+#[test]
 fn the_readers_hatches_are_told_every_moment_and_act_by_the_nodes_number() {
     let mut p = boot::<()>(BESIDE, &["feed"]);
     p.set_hatches(Some(crate::hatches::install_with_reader::<()>(&["feed"])));

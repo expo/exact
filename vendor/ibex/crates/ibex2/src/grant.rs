@@ -74,9 +74,19 @@ impl PathPrefix {
                 return None;
             }
             ("doc:", path)
-        } else if let Some(found) = ["home:", "bundle:"]
-            .into_iter()
-            .find_map(|ns| Some((ns, path.strip_prefix(ns)?.strip_prefix('/')?)))
+        } else if let Some(found) = [
+            "home:",
+            "bundle:",
+            "desktop:",
+            "documents:",
+            "downloads:",
+            "music:",
+            "pictures:",
+            "videos:",
+            "screenshots:",
+        ]
+        .into_iter()
+        .find_map(|ns| Some((ns, path.strip_prefix(ns)?.strip_prefix('/')?)))
         {
             // Exact patch (exact2 LLP 1133.007 D6): the person's home
             // directory and the app's installed bundle, resolved by the host.
@@ -655,6 +665,22 @@ fn namespace_refusal(capability: &str, prefix: &PathPrefix) -> Result<(), String
             "home-grant-whole: a line names a subtree of the home directory, such as `home:/.ssh`"
                 .into(),
         ),
+        [folder, ..]
+            if matches!(
+                folder.as_str(),
+                "desktop:"
+                    | "documents:"
+                    | "downloads:"
+                    | "music:"
+                    | "pictures:"
+                    | "videos:"
+                    | "screenshots:"
+            ) && capability != "fs.write" =>
+        {
+            Err(format!(
+                "well-known folders only admit fs.write: `{capability}` cannot name {folder}"
+            ))
+        }
         [bundle, ..] if bundle == "bundle:" && capability != "fs.read" => Err(format!(
             "the bundle is read only: `{capability}` cannot name it"
         )),

@@ -287,7 +287,7 @@ test("the wasm auth arm forwards the agent drive's fixture", async () => {
 
 test('a broadcast callback ends only the sign-in whose state it carries, in either order', async () => {
   const a = await tab('state-a', 1, 'a'), b = await tab('state-b', 2, 'b');
-  for (const url of [`${CALLBACK}?code=c`, `${CALLBACK}?code=c&state=a&state=b`, `${CALLBACK}?state=other`, 'not a url']) {
+  for (const url of [`${CALLBACK}?code=c`, `${CALLBACK}?state=other`, 'not a url']) {
     post(url);
     await scheduler.drain({ kind: 'channel' });
   }
@@ -392,7 +392,7 @@ test('a state-less return with no identity, or one no live logout holds, complet
   expect(forgotten.delivered).toEqual([]);
 });
 
-test('a state-less return never completes a sign-in or a logout when it carries code or error', async () => {
+test("an addressed state-less response reaches its logout for validation, never a sign-in", async () => {
   const signIn = await tab('identity-sign-in', 36, 'sign-in');
   const logout = await tab('identity-logout', 37, 'logout', true);
   const identity = popupIdentity('identity-logout');
@@ -402,11 +402,12 @@ test('a state-less return never completes a sign-in or a logout when it carries 
   await scheduler.next({ owner: 'identity-logout', kind: 'channel' });
   expect(logout.done).toHaveLength(1);
 
-  for (const [name, parameter, ticket] of [['identity-code', 'code=c', 38], ['identity-error', 'error=denied', 39]]) {
+  for (const [name, parameter, ticket] of [['identity-code', '?code=c', 38], ['identity-error', '?error=denied', 39],
+    ['identity-id-token', '#id_token=t', 50], ['identity-access-token', '#access_token=t', 51]]) {
     const value = await tab(name, ticket, name, true);
-    post(`${CALLBACK}?${parameter}`, { identity: popupIdentity(name) });
+    post(`${CALLBACK}${parameter}`, { identity: popupIdentity(name) });
     await scheduler.drain({ owner: name, kind: 'channel' });
-    expect(value.done).toEqual([]);
+    expect(value.done).toEqual([{ op: 'done', ticket, url: `${CALLBACK}${parameter}` }]);
   }
 });
 
@@ -525,7 +526,7 @@ test('a tab at another callback endpoint takes no return', async () => {
   expect(b.done).toEqual([{ op: 'done', ticket: 14, url: 'https://app.example/callback-b' }]);
 });
 
-test("a sign-in response completes no logout with the same state", async () => {
+test("a sign-in response reaches only the sign-in that shares its state", async () => {
   const signIn = await tab('same-state-sign-in', 15, 'shared');
   const logout = await tab('same-state-logout', 16, 'shared', true);
   post(`${CALLBACK}?error=cancelled`);
@@ -535,9 +536,6 @@ test("a sign-in response completes no logout with the same state", async () => {
   await scheduler.drain({ kind: 'channel' });
   expect(signIn.done).toEqual([{ op: 'done', ticket: 15, url: `${CALLBACK}?code=sign-in-code&state=shared` }]);
   expect(logout.done).toEqual([]);
-  post(`${CALLBACK}?state=shared`);
-  await scheduler.drain({ kind: 'channel' });
-  expect(logout.done).toEqual([{ op: 'done', ticket: 16, url: `${CALLBACK}?state=shared` }]);
 });
 
 test("a prepared window preserves the press's activation until the auth request knows its URL", async () => {
@@ -735,3 +733,62 @@ for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: auth
     await browser?.close(); server.stop(true); provider.stop(true);
   }
 }, 30_000);
+
+test('a severed popup returns fragment parameters only to the tab with its state', async () => {
+  const a = await tab('fragment-a', 1, 's +😀');
+  const b = await tab('fragment-b', 2, 'other');
+  const url = CALLBACK + '?tracking=1#state=s+%2B%F0%9F%98%80&id_token=token&code=hybrid';
+  post(url);
+  await scheduler.drain({ kind: 'channel' });
+  expect(a.done).toEqual([{ op: 'done', ticket: 1, url }]);
+  expect(b.done).toEqual([]);
+});
+
+test("callbacks carrying this session's state reach the runner even when malformed", async () => {
+  for (const via of ['channel', 'opener']) for (const logout of [false, true]) {
+    const a = await makeTab(`malformed-${via}-${logout}`);
+    const b = await tab(`unrelated-${via}-${logout}`, 2, 'other', logout);
+    for (const suffix of [
+      '?state=s+%2B%F0%9F%98%80#state=wrong',
+      '?state=wrong#state=s+%2B%F0%9F%98%80',
+      '#state=s+%2B%F0%9F%98%80&state=wrong',
+      '#state=s+%2B%F0%9F%98%80&state=s+%2B%F0%9F%98%80',
+      ...(logout ? [] : ['?state=s+%2B%F0%9F%98%80#code=unexpected', '#state=s+%2B%F0%9F%98%80&error=denied']),
+    ]) {
+      await a.arm(1, 's +😀', logout);
+      const url = CALLBACK + suffix;
+      if (via === 'channel') post(url);
+      else opener(a.name, url);
+      await scheduler.drain({ kind: via });
+      expect(a.done.splice(0)).toEqual([{ op: 'done', ticket: 1, url }]);
+      expect(b.done).toEqual([]);
+    }
+  }
+});
+
+test("a logout forwards its own popup response but ignores an unaddressed sign-in answer", async () => {
+  for (const via of ['channel', 'opener', 'identity']) {
+    const a = await makeTab(`logout-code-${via}`);
+    for (const suffix of ['?error=access_denied&state=s+%2B%F0%9F%98%80', '#code=c&state=s+%2B%F0%9F%98%80',
+      '#id_token=t&state=s+%2B%F0%9F%98%80', '#access_token=t&state=s+%2B%F0%9F%98%80']) {
+      await a.arm(1, 's +😀', true);
+      const url = CALLBACK + suffix;
+      if (via === 'channel') post(url);
+      else if (via === 'identity') post(url, { identity: popupIdentity(a.name) });
+      else opener(a.name, url);
+      await scheduler.drain({ kind: via === 'identity' ? 'channel' : via });
+      expect(a.done.splice(0)).toEqual(via === 'channel' ? [] : [{ op: 'done', ticket: 1, url }]);
+    }
+  }
+});
+
+test("a broadcast callback carrying only another tab's state is ignored", async () => {
+  for (const logout of [false, true]) {
+    const a = await tab(`other-state-${logout}`, 1, 'ours', logout);
+    for (const suffix of ['?state=other', '#state=other', '?state=other#state=other']) {
+      post(CALLBACK + suffix);
+      await scheduler.drain({ kind: 'channel' });
+      expect(a.done).toEqual([]);
+    }
+  }
+});

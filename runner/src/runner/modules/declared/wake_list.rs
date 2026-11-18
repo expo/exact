@@ -338,9 +338,13 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A source declared `"listed"`: the entries of its kind, its fields each.
+    /// So is a source whose value the runner keeps: the content index, the app's icon.
     pub(in crate::runner) fn listed_value(&self, row: &ModulesRow, sub: &Json) -> Option<Json> {
         if let Some(entries) = self.reach_value(sub) {
             return Some(entries);
+        }
+        if sub["appIcon"] == "status" {
+            return Some(self.app_icon_status(row));
         }
         let listed = sub["listed"].as_object()?;
         let state = listed.get("state")?.as_str()?;

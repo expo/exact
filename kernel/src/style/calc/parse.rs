@@ -780,6 +780,10 @@ pub fn nonnegative_row(style: crate::StyleId) -> bool {
             | PaddingRight
             | PaddingBottom
             | PaddingLeft
+            | SafeAreaPaddingTop
+            | SafeAreaPaddingRight
+            | SafeAreaPaddingBottom
+            | SafeAreaPaddingLeft
             | FlexGrow
             | FlexShrink
             | RowGap

@@ -2,6 +2,21 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+test('the primary cannot shadow a module surface in development; production reports it', () => {
+  const source = readFileSync(new URL('../gpu-glue.js', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('function checkSurfaceOwners('), source.indexOf('const publishers'));
+  const errors = [], exact = { compat: { inputs: { gpuModules: { sky: ['sky'] } } } };
+  const check = new Function('exact', 'stem', 'console', `${body}; return checkSurfaceOwners;`)(exact, 'gpu', { error: m => errors.push(m) });
+  const module = { gpu_surfaces: () => '["clear","sky"]' };
+  assert.throws(() => check(module), /primary and owned by module sky/);
+  exact.compat.embedded = { trust: 'production' };
+  check(module);
+  assert.equal(errors.length, 1);
+  module.gpu_surfaces = () => '["clear"]';
+  check(module);
+  assert.equal(errors.length, 1);
+});
+
 // The router (LLP 1009 D6) over recording stand-ins for gpu-glue.js
 // instances: which artifact each call reaches, and what it joins.
 async function fixture(pending = []) {

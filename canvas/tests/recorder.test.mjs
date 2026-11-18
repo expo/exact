@@ -2,7 +2,7 @@
 // getters and throws Chrome gave, as the Rust recorder is held to them.
 import { test, expect } from 'bun:test';
 import { runCases } from './cases.mjs';
-import { Recorder, parseColor, serializeColor } from '../recorder.js';
+import { Recorder, canvasSeam, parseColor, serializeColor } from '../recorder.js';
 
 test('the shared cases hold for the TypeScript recorder', () => {
   const failed = runCases(() => new Recorder()).filter((r) => r.fail.length);
@@ -100,4 +100,27 @@ test('a number after Z ends the path there, as Chrome does', () => {
   const drawn = (d) => { const ctx = new Recorder(); ctx.stroke(new Path2D(d)); return ctx._.take(); };
   expect(drawn('M0 0 L10 0 Z 5')).toEqual(drawn('M0 0 L10 0 Z'));
   expect(drawn('M0 0 L10 0 z5 5')).toEqual(drawn('M0 0 L10 0 z'));
+});
+
+test('each draw asks for the images its retained patterns hold, as the Rust recorder does', () => {
+  // host/painted/src/screen_capture/tests.rs `a_retained_pattern_keeps_its_image_across_draws`.
+  const asked = [];
+  const host = { image: (json) => { asked.push(JSON.parse(json).src); return '[4,4]'; } };
+  const seam = canvasSeam((surface, _, ctx) => {
+    if (surface === 'make') {
+      ctx.fillStyle = ctx.createPattern('fill', 'repeat');
+      ctx.strokeStyle = ctx.createPattern('stroke', 'repeat');
+      ctx.save();
+      ctx.strokeStyle = 'black';
+    }
+    ctx.fillRect(0, 0, 4, 4);
+  });
+  const draw = (surface) => {
+    asked.length = 0;
+    seam.draw({ canvas: 1, generation: 0, surface, args: [], frame: {} }, host);
+    return [...new Set(asked)].sort();
+  };
+  expect(draw('make')).toEqual(['fill', 'stroke']);
+  expect(draw('fill')).toEqual(['fill', 'stroke']);
+  expect(draw('fill')).toEqual(['fill', 'stroke']);
 });

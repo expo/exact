@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
 import { roster } from '../web/index.js';
 
 for (const [longitude, zoom, dx, dy, expected] of [
@@ -28,6 +29,7 @@ for (const [longitude, zoom, dx, dy, expected] of [
 async function mapPage(browser, options = {}) {
   const page = await browser.newPage({ viewport: { width: 600, height: 600 }, ...options });
   await page.setContent('<div id="map" style="position:absolute;left:100px;top:100px;width:400px;height:400px"></div>');
+  await page.addStyleTag({ content: readFileSync(new URL('../../../host/web/index.html', import.meta.url), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1] });
   await page.evaluate(async source => {
     const { roster, implementation } = await import(`data:text/javascript,${encodeURIComponent(source)}`);
     window.moves = [];
@@ -154,6 +156,36 @@ for (const key of ['Enter', 'Space']) {
       await page.keyboard.press(key);
       expect(await page.evaluate(() => changes)).toEqual(['pin']);
       expect(await page.locator('.marker').getAttribute('aria-pressed')).toBe('true');
+    } finally {
+      await browser.close();
+    }
+  });
+}
+
+const engineTest = await engineTests();
+for (const engine of ['chromium', 'firefox', 'webkit']) {
+  engineTest[engine]('map zoom glyphs stay centred under the host reset at 390 px', async () => {
+    const browser = await suiteBrowser(engine);
+    try {
+      const page = await mapPage(browser, { viewport: { width: 390, height: 600 } });
+      const buttons = page.locator('.zoom button');
+      const offsets = await buttons.evaluateAll(buttons => buttons.map(button => {
+        const range = document.createRange();
+        range.selectNodeContents(button);
+        const text = range.getBoundingClientRect(), box = button.getBoundingClientRect();
+        return { x: text.x + text.width / 2 - box.x - box.width / 2,
+          y: text.y + text.height / 2 - box.y - button.clientTop - button.clientHeight / 2 };
+      }));
+      for (const offset of offsets) {
+        expect(Math.abs(offset.x)).toBeLessThan(1);
+        expect(Math.abs(offset.y)).toBeLessThan(1);
+      }
+      for (const [index, key, zoom] of [[0, 'Enter', 16], [1, 'Space', 15]]) {
+        await buttons.nth(index).focus();
+        await page.keyboard.press(key);
+        await page.clock.runFor(250);
+        expect(await page.evaluate(() => moves.at(-1).camera.zoom)).toBe(zoom);
+      }
     } finally {
       await browser.close();
     }

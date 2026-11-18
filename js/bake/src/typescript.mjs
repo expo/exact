@@ -18,7 +18,7 @@ import { checkPreloadBackend, envReads, inlineSettings } from './__exact_env.mjs
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
-import { compilerOptions, bare, lineColumn, packageRefusals, propertyName, walkRuntime } from './__exact_portable.mjs';
+import { compilerOptions, bare, lineColumn, packageRefusals, propertyName, walkRuntime, moduleSpecifiers } from './__exact_portable.mjs';
 
 export { moduleBinding, compilerOptions };
 
@@ -1129,7 +1129,16 @@ export function implementationFor(app, iface, target) {
     if (!covers(i)) throw new Error(`bake-implementation-missing: app.json names ${named} for ${iface.name} on ${target}, and ${i ? `it does not implement it for ${target}` : 'it is not installed'}`);
     return checked(i);
   }
-  const deps=Object.keys(read(join(app,'package.json'))?.dependencies ?? {}).filter(n=>n!==iface.name).map(located).filter(covers);
+  let dependencies = {};
+  for (let dir = app; ; dir = dirname(dir)) {
+    const manifest = join(dir, 'package.json');
+    if (existsSync(manifest)) {
+      dependencies = read(manifest)?.dependencies ?? {};
+      break;
+    }
+    if (dirname(dir) === dir) break;
+  }
+  const deps=Object.keys(dependencies).filter(n=>n!==iface.name).map(located).filter(covers);
   if (deps.length>1) throw new Error(`bake-implementation-ambiguous: ${deps.map(d=>d.name).join(' and ')} each implement ${iface.name} for ${target}; name one in app.json: "implementations": { "${iface.name}": { "${target}": "${deps[0].name}" } }`);
   if (deps.length) return checked(deps[0]);
   const carried=iface.implementations.find(i=>(i.json.targets ?? []).includes(target));
@@ -1148,24 +1157,6 @@ function rustSources(app) {
 function appText(app) {
   const contracts=(d)=>{ try { return readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory() ? (/^(\.|node_modules$|target$)/.test(e.name) ? [] : contracts(join(d,e.name))) : e.name.endsWith('.contract') ? [join(d,e.name)] : []); } catch { return []; } };
   return [join(app,'app.ts'),...contracts(app)].map(f=>{ try { return readFileSync(f,'utf8'); } catch { return ''; } }).join('\n');
-}
-
-/** The specifiers a TypeScript or JavaScript file imports and re-exports from, read from its syntax tree, so a string or
- * comment that spells an import is none: `import … from "x"` and `export … from "x"` (not `import type` or `export
- * type`), `import "x"` and `import("x")`. The compiler reads the same set by tokens (`contract/cli/src/sources/data.rs`). */
-function moduleSpecifiers(file, text) {
-  const { parseSync } = createRequire(import.meta.url)('rolldown/utils');
-  const { program } = parseSync(file, text, { sourceType: 'module' });
-  const out = [];
-  const visit = (node) => {
-    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
-    if (!node || typeof node !== 'object') return;
-    if (/^(Import|ExportNamed|ExportAll)Declaration$/.test(node.type) && node.source && (node.importKind ?? node.exportKind) !== 'type') out.push(node.source.value);
-    if (node.type === 'ImportExpression' && typeof node.source?.value === 'string') out.push(node.source.value);
-    for (const key in node) visit(node[key]);
-  };
-  visit(program);
-  return out;
 }
 
 /** The packages the app imports, wherever it imports them (LLP 1133.004
@@ -1188,7 +1179,7 @@ export function usedPackages(app) {
     // A Contract file's `use` lines, its comments left out.
     const specs=contract
       ? [...text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1').matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
-      : moduleSpecifiers(file, text);
+      : moduleSpecifiers(file, text, createRequire(import.meta.url)('rolldown/utils').parseSync);
     for (const spec of specs) {
       if (spec.startsWith('.')) visit(contract ? resolve(dirname(file),spec) : tsFile(resolve(dirname(file),spec)), contract);
       else if (!spec.startsWith('exact:') && !spec.startsWith('node:')) names.add(packageName(spec));
@@ -1232,7 +1223,15 @@ export function appleImplementations(app, target, extensions, contractSources = 
     const events=(i.declaration.names ?? []).some(n=>n.event);
     const credentialMembers = Object.entries(i.declaration.members ?? {}).flatMap(([owner, members]) =>
       Object.keys(members).map(option => `${owner.split('/').at(-1)}.${option}`));
-    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,hostEvents:impl.json.hostEvents ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',credentialMembers,frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
+    return [{
+      swiftPackages: impl.json.swiftPackages, swiftPackagesSource: resolve(impl.dir, 'exact.json'),
+      privacyManifest: resolve(impl.dir, 'PrivacyInfo.xcprivacy'), extension,
+      module: 'ExactPkg_' + extension.replace(/\W/g, '_'), className: impl.json.class,
+      sources: files.map(f => resolve(impl.dir, f)), plist, plistKeys: impl.json.plistKeys ?? null,
+      hostEvents: impl.json.hostEvents ?? null, views: packageViewTags(i, impl), authenticator,
+      start: i.declaration?.start === 'load', credentialMembers, frameworks: impl.json.frameworks ?? {},
+      activity: impl.json.apple?.activity ?? null,
+    }];
   });
 }
 

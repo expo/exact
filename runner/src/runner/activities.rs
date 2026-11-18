@@ -16,7 +16,7 @@ pub(super) struct Activities {
 impl Default for Activities {
     fn default() -> Self {
         Self {
-            snapshot: json!({"activities":[],"frequentPushesEnabled":false,"linked":false}),
+            snapshot: json!({"activities":[],"frequentPushesEnabled":false,"linked":false,"pushToStartToken":null,"pushToStartActivities":[]}),
             demanded: false,
             started: false,
             loading: false,
@@ -84,7 +84,7 @@ impl<D: DataSource> Runner<D> {
                 "exactActivities takes no arguments".into(),
             ));
         }
-        let value = decode(&self.plan, row.ty, &self.activities.snapshot).ok_or_else(|| DataError::BadArguments("exactActivities answers {linked: bool, activities: Activity[], frequentPushesEnabled: bool}; Activity has id, kind, state (JSON string), activityState, token (option<string>)".into()))?;
+        let value = decode(&self.plan, row.ty, &self.activities.snapshot).ok_or_else(|| DataError::BadArguments("exactActivities answers {linked: bool, activities: Activity[], frequentPushesEnabled: bool, pushToStartToken: option<string>, pushToStartActivities: PushStartActivity[]}; Activity has id, kind, state (JSON string), activityState, token (option<string>)".into()))?;
         if self.activities.linked && !self.activities.started && !self.activities.loading {
             self.activities.demanded = true;
             self.activities.loading = true;
@@ -100,6 +100,12 @@ impl<D: DataSource> Runner<D> {
             error: DataError::BadArguments(e.to_string()),
         })?;
         snapshot["linked"] = Json::Bool(self.activities.linked);
+        if snapshot.get("pushToStartToken").is_none() {
+            snapshot["pushToStartToken"] = Json::Null;
+        }
+        if snapshot.get("pushToStartActivities").is_none() {
+            snapshot["pushToStartActivities"] = Json::Array(vec![]);
+        }
         let mut next = self.activities.clone();
         next.snapshot = snapshot;
         next.started = true;
@@ -224,6 +230,12 @@ shape Activity
 shape Activities
   activities: Activity[]
   frequentPushesEnabled: bool
+  pushToStartToken: option<string>
+  pushToStartActivities: PushStartActivity[]
+shape PushStartActivity
+  kind: string
+  generation: string
+  shape: string
 component App
   resource activities = exactActivities() as shape Activities
   mutation started as shape ID
@@ -256,7 +268,9 @@ component App
             r.resource("activities"),
             Some(&Value::record(vec![
                 Value::list(vec![]),
-                Value::Bool(false)
+                Value::Bool(false),
+                Value::Option(None),
+                Value::list(vec![])
             ]))
         );
         for action in ["start", "update", "end"] {
@@ -308,8 +322,12 @@ component App
                 .unwrap()
                 .is_some());
         }
-        for token in [Json::Null, json!("aabb"), json!("ccdd")] {
-            let snapshot = json!({"activities":[{"id":"a","kind":"train","state":"{\"count\":102}","activityState":"active","token":token}],"frequentPushesEnabled":true}).to_string();
+        for (token, start_token) in [
+            (Json::Null, Json::Null),
+            (json!("aabb"), json!("start-a")),
+            (json!("ccdd"), json!("start-b")),
+        ] {
+            let snapshot = json!({"activities":[{"id":"a","kind":"train","state":"{\"count\":102}","activityState":"active","token":token}],"frequentPushesEnabled":true,"pushToStartToken":start_token,"pushToStartActivities":[{"kind":"train","generation":"generation-a","shape":"shape-a"}]}).to_string();
             assert!(r.set_activities(&snapshot).unwrap().is_some());
             assert!(r.set_activities(&snapshot).unwrap().is_none());
             let mut state = String::new();
@@ -322,6 +340,15 @@ component App
             assert_eq!(
                 serde_json::from_str::<Json>(&state).unwrap()["activities"][0]["token"],
                 token
+            );
+            assert_eq!(
+                serde_json::from_str::<Json>(&state).unwrap()["pushToStartToken"],
+                start_token
+            );
+            assert_eq!(
+                serde_json::from_str::<Json>(&state).unwrap()["pushToStartActivities"][0]
+                    ["generation"],
+                "generation-a"
             );
             assert!(!r.take_activities_demand());
         }
@@ -436,6 +463,14 @@ component App
             ("token: option<string>", "token: string"),
             ("activityState: string", "activityState: number"),
             ("activities: Activity[]", "activities: string[]"),
+            (
+                "pushToStartToken: option<string>",
+                "pushToStartToken: string",
+            ),
+            (
+                "pushToStartActivities: PushStartActivity[]",
+                "pushToStartActivities: string[]",
+            ),
         ] {
             let error = contract::bake(contract::compile(&SOURCE.replace(from, to)).unwrap(), ())
                 .unwrap_err();
@@ -454,5 +489,33 @@ component App
         .unwrap_err()
         .to_string()
         .contains("bake-activities-field"));
+
+        // As with `Activity`, a reader names only the fields it needs.
+        let declared =
+            "shape PushStartActivity\n  kind: string\n  generation: string\n  shape: string";
+        for subset in [
+            "shape PushStartActivity\n  kind: string\n  generation: string",
+            "shape PushStartActivity\n  shape: string",
+        ] {
+            contract::bake(
+                contract::compile(&SOURCE.replace(declared, subset)).unwrap(),
+                (),
+            )
+            .unwrap();
+        }
+        for malformed in [
+            "shape PushStartActivity\n  kind: string\n  generation: string\n  shape: string\n  extra: string",
+            "shape PushStartActivity\n  kind: string\n  generation: number\n  shape: string",
+        ] {
+            let error = contract::bake(
+                contract::compile(&SOURCE.replace(declared, malformed)).unwrap(),
+                (),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("bake-activities-field"),
+                "{error}"
+            );
+        }
     }
 }

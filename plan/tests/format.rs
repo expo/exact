@@ -1062,11 +1062,13 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// fields: every host rebuilds for them. A child's requests add `owner` and
 /// `late` to resources (LLP 1035.005.004 D1, D2), and its mutations add
 /// `owner` and `then_args` to mutations (D6): every host rebuilds for them.
+/// Child tasks add `owner` and captured `args` to timers (D6); every
+/// plan-reading host needs a new binary for those rows.
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xb75d_cd8f_1cc9_7715,
+        FORMAT_DIGEST, 0xf1cf_e1fc_7009_617a,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

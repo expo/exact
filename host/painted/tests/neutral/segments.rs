@@ -48,7 +48,17 @@ const SEGMENTS: &str = r##"component App
 /// track; a press moves the chip. What the author wrote of the track wins,
 /// and a vertical group stays as written.
 pub(super) fn radio_groups_are_the_webs_segmented_control() {
-    let plan = contract::compile(SEGMENTS).unwrap();
+    segmented_groups(SEGMENTS);
+    segmented_groups(
+        &SEGMENTS
+            .replace("radiogroup", "tablist")
+            .replace("role=\"radio\"", "role=\"tab\"")
+            .replace("aria-checked", "aria-selected"),
+    );
+}
+
+fn segmented_groups(source: &str) {
+    let plan = contract::compile(source).unwrap();
     let (mut p, error) = Presenter::boot_with(
         &plan.encode(),
         (),

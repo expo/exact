@@ -32,6 +32,13 @@ impl<D: DataSource> Runner<D> {
         true
     }
 
+    /// Whether a later send of `target`'s parallel mutation has already
+    /// concluded, so that this one's answer leaves the slot and the failure
+    /// (D4). [`Self::conclude_send`] would say no for it.
+    pub(super) fn concluded_after(&self, target: Target) -> bool {
+        matches!(target, Target::Sent(m, n) if self.queues.concluded[m] > n)
+    }
+
     /// Refuse a send of parallel mutation `m` that would be the 65th in
     /// flight, counting `more` of this commit not yet handed out (D2), as
     /// a queue refuses its 65th waiting send.

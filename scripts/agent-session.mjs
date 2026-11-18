@@ -347,10 +347,14 @@ export async function open({
     /** What happened since the last read: the runner's journal (`lines`, from index `from` up to `next`) and the
      * host's own output (`host`). `dropped` counts lines the journal ring let go before this read caught up. */
     async logs({ all = false } = {}) {
-      const since = all ? 0 : s.logCursor;
+      let since = all ? 0 : s.logCursor;
       let r;
       try {
         r = await s.op({ op: 'logs', since, ...(all ? { all: true } : {}) });
+        if (r.generation != null && r.generation !== s.logGeneration) {
+          if (since > 0) { since = 0; r = await s.op({ op: 'logs', since }); }
+          s.logGeneration = r.generation;
+        }
       } catch (e) {
         if ((carrier.host !== 'web' || !carrier.hostLines.length) && !e.message.startsWith(AWAY)) throw e;
         r = { lines: [], from: since, next: since, refused: e.reply?.refused, error: e.message };
@@ -364,6 +368,7 @@ export async function open({
       s.hostLogCursor = carrier.hostLines.length;
       const crash = carrier.crashes?.() ?? [];
       return {
+        ...(r.generation != null ? { generation: r.generation, epoch: r.epoch, incarnation: r.incarnation, clock: r.clock } : {}),
         ...(r.error ? { error: r.error, refused: r.refused } : {}),
         lines: [...notes, ...r.lines],
         host,
@@ -820,6 +825,7 @@ export async function open({
         r.settled = false;
         r.reason = l.reason;
       }
+      delete r.generation;
       delete r.epoch;
       delete r.incarnation;
       delete r.clock;
@@ -841,11 +847,11 @@ export async function open({
       }
       return s.tagged(r);
     },
-    /** Every reply carries the runner's `epoch`, `incarnation` and `clock` (LLP 1035.002 D3). A host that answered
+    /** Every reply carries the runner's `generation`, `epoch`, `incarnation` and `clock` (LLP 1035.002 D3). A host that answered
      * the operation itself stamps them; the web carrier's input and capture are the driver's own (CDP), so the driver
-     * reads the tags after the operation and adds what the reply lacks. An error is left alone. */
+     * reads the tags after the operation and adds what the reply lacks.  */
     async tagged(r) {
-      if (r == null || r.error != null || r.epoch != null) return r;
+      if (r == null || r.generation != null) return r;
       const tags = await s.op({ op: 'tags' });
       for (const key of Object.keys(tags)) if (r[key] === undefined) r[key] = tags[key];
       return r;

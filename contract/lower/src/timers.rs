@@ -1,4 +1,4 @@
-//! A root task's timer row: its schedule and, for a gated task, its gate
+//! A task's timer row: its schedule and, for a gated task, its gate
 //! and key as plan code (LLP 1092 D9), compiled the way a slot's
 //! initializer is and evaluated by the runner at each commit.
 
@@ -8,9 +8,24 @@ use contract_types::Scope;
 use exact_plan::{SequencesRow, Value};
 
 impl Lowerer<'_> {
-    /// Every task of the root, in declaration order.
-    pub(crate) fn timers(&mut self, tasks: &[Task], scope: &Scope) -> Result<(), Vec<LowerError>> {
-        for t in tasks {
+    /// Every task, in declaration order, in its owning instance’s scope.
+    pub(crate) fn timers(
+        &mut self,
+        tasks: &[Task],
+        ex: &contract_syntax::Expanded,
+        root_scope: &Scope,
+    ) -> Result<(), Vec<LowerError>> {
+        for (i, t) in tasks.iter().enumerate() {
+            let (owner, scope) = match ex.task_owners[i] {
+                contract_syntax::Owner::Arm { tag, arm } => {
+                    let (owner, scope) = self.arm_scopes[&(tag, arm)].clone();
+                    (Some(owner), scope)
+                }
+                _ => (None, root_scope.clone()),
+            };
+            let scope = &scope;
+            self.sharing.instance = ex.task_instances[i];
+            self.sharing.arm = owner;
             let action = self.actions[self
                 .root
                 .actions
@@ -129,6 +144,13 @@ impl Lowerer<'_> {
             });
             let key = code(self, &t.key)?;
             self.b.set_timer_gate(id, gate, key);
+            let args = ex.task_args[i]
+                .iter()
+                .map(|a| self.expr_code(a, scope, 0))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| vec![e])?;
+            self.b.set_timer_owner(id, owner, &args);
+            self.sharing.arm = None;
         }
         Ok(())
     }

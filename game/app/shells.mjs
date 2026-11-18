@@ -747,7 +747,13 @@ if (import.meta.main) {
     process.exitCode=failed?1:0;
   } else if (!requested && args.includes('--update-lock')) sdkLock(gameRoot, {update:true});
   else if (args.includes('--lock')) {
-    try { console.log(refreshLock(resolve(requested ?? '.'))); }
+    try {
+      const dir = resolve(requested ?? '.');
+      console.log(refreshLock(dir));
+      const { lockSwiftPackages } = await import('../../host/apple/compose.mjs');
+      const swift = lockSwiftPackages({ dir, manifest: gameDefaults(dir) });
+      if (swift) console.log(swift);
+    }
     catch (error) { console.error(error.message); process.exitCode = 1; }
   } else {
     const dir = resolve(requested);

@@ -314,6 +314,7 @@ test('--plan finds plans with a map beside them in a directory, and refuses one 
 
 test('perf during subtracts each handler\'s dispatches and drops the ones that did not run', () => {
   const read = (n) => ({ plan: 'p', incarnation: 1, seq: n, sites: [], handlers: [{ site: 3, event: 'hover in', dispatched: n, committed: n }, { site: 5, event: 'press', dispatched: 1, committed: 0 }] });
+  expect(() => perfDelta({...read(2), generation:1}, {...read(60), generation:3})).toThrow('generation 1 → 3');
   expect(perfDelta(read(2), read(60)).handlers).toEqual([{ site: 3, event: 'hover in', dispatched: 58, committed: 58 }]);
 });
 
@@ -573,4 +574,29 @@ test('trace --pid looks for a sandboxed Mac app\'s marker in its container (LLP 
     : cmd === 'codesign' ? signed : cmd === 'plutil' ? 'com.example.probe\n' : cmd === 'getconf' ? '/var/folders/x/T/\n' : '' });
   await expect(pidTrace(4242, () => '/nowhere', run(sandbox))).rejects.toThrow(`no ${join(homedir(), 'Library/Containers/com.example.probe/Data/tmp/exact-trace-4242.ready')}`);
   await expect(pidTrace(4242, () => '/nowhere', run('<plist><dict/></plist>'))).rejects.toThrow('no /var/folders/x/T/exact-trace-4242.ready');
+});
+
+
+test('logs retain session tags and read a replacement journal from its start', async () => {
+  let generation = 1, lines = ['first', 'second'];
+  const calls = [];
+  const carrier = {
+    host: 'web', browser: 'chrome', hostLines: [], launchFacts: launchFacts({}), reset() {},
+    async ask(req) {
+      calls.push(req);
+      return {
+        generation, epoch: generation, incarnation: 1, clock: 0,
+        from: Math.min(req.since, lines.length), next: lines.length, lines: lines.slice(req.since),
+      };
+    },
+  };
+  const s = await open({ reuse: carrier });
+  expect((await s.logs()).generation).toBe(1);
+  generation = 2;
+  lines = ['replacement generation 2'];
+  const reply = await s.logs();
+  expect(reply.generation).toBe(2);
+  expect(reply.epoch).toBe(2);
+  expect(reply.lines).toEqual(lines);
+  expect(calls.map(c => c.since)).toEqual([0, 2, 0]);
 });

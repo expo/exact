@@ -16,7 +16,7 @@ async function page(boot, run) {
   const moduleSource = `
     export default function() {}
     export function gpu_load() {} export function gpu_unload() {}
-    export function gpu_child_view() {} export function gpu_seekable() {} export function gpu_period() {}
+    export function gpu_child_view() {} export function gpu_seekable() {} export function gpu_reduced_motion() {} export function gpu_period() {}
     export function gpu_shader_names(){return '[]';} export function gpu_shaders_clear() {}
     export function gpu_create(){return 1;} export function gpu_bind_at(){return true;}
     export function gpu_wants_input(){return false;} export function gpu_dirty(){return false;}

@@ -1,19 +1,17 @@
 # Recipe: files, SQLite and grants
 
-Where an app keeps things, and its `grants` line:
-
 | What | Where | Grant |
 | --- | --- | --- |
 | A setting | `state … persist` ([a remembered setting](persisted-setting.md)) | none |
-| A small collection | a JSON file, `storage.fs` (start-here's list) | `fs.read app:/data/items.json`, `fs.write …` |
-| A collection that grows or is queried | SQLite, `storage.sqlite` | `sqlite.open app:/data/journal.db` |
+| A small collection with one writer | `storage.fs` (start-here’s list) | `fs.read app:/data/items.json`, `fs.write …` |
+| Shared or queried items | SQLite (`pattern list-detail`) | `sqlite.open app:/data/journal.db` |
 | A secret: a token | `store.get`, `store.set` | `secret.keep token` |
 | Data the app ships | a JSON file `app.ts` imports ([shipped data](shipped-data.md)) | none |
 | A file read by path | app.json `host.ios.resources` (and `.macos`) | `fs.read bundle:/Resources/x` (its `to`) |
 | A server | `fetch` ([a REST server](rest-backend.md)) | `net.fetch https://api.example.com` |
 | A server named at run time | `fetch`, a socket | `net.fetch https:`, `net.websocket wss:` (any host and port); plain `http:` on Apple also needs `appTransportSecurity.allowsArbitraryLoads` |
 
-A journal in SQLite (start-here's field and Add):
+A journal in SQLite:
 
 ```contract
 shape Entry
@@ -66,4 +64,5 @@ export const answer: Answer = (source, args, store, storage, native) => sources[
 - A file is bytes (`readFile`, `atomicWriteFile`); a missing one is code `ENOENT`: answer
   the empty collection, and branch on `e.code`, never the message.
 - SQLite: `query` reads, `execute` writes, `transaction([...])` writes several or none.
+  Close connections in `finally` to release the web’s cross-tab lock.
 - At build there is no storage (code `bake`): let it through.

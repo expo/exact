@@ -1,5 +1,5 @@
 import { viewChildren, inertAncestor } from './navigation.js';
-import { carryRouter, clock, data, launchLocation, res, sig } from './rt.js';
+import { carryRouter, clock, data, journal, launchLocation, res, sig } from './rt.js';
 import { offerAll, restartAutofocus } from './focus.js';
 
 // A render's checkpoint answers (LLP 1048.000 D6), as
@@ -60,12 +60,29 @@ function dev() {
   if (!el) return Dev = null;
   Dev = JSON.parse(el.textContent);
   clock.now = Number.isFinite(Dev.time) ? Dev.time : 0;
+  clock.generation = (Dev.generation ?? 0) + 1;
+  if (!Number.isSafeInteger(clock.generation)) throw new Error("session generation exhausted");
+  clock.epoch = Dev.epoch ?? 0;
+  Replacement = { at: clock.now, dropped: [] };
   return Dev;
+}
+
+let Replacement = null;
+const Slots = new Map();
+/** The root-slot report; unbuilt tab panels remain carried rather than dropped. */
+export function replacement() {
+  if (!Replacement) return null;
+  Replacement.dropped = (dev()?.slots ?? []).filter(([name]) => !name.includes('@')).flatMap(([name, type]) => {
+    const found = Slots.get(name), why = !found ? 'no place' : !found.router && !shape(type, found.type) ? 'type changed' : null;
+    return why ? [{ what: 'state', name, why }] : [];
+  });
+  return Replacement;
 }
 
 /** A root slot carried by authored name and full declared shape. */
 export function devSignal(name, initial, type, declared, router = false) {
   // The launch locale must reach newly added initializers before language().
+  Slots.set(name, { type: declared, router });
   const cp = dev(), kept = name === '#locale' ? null : cp?.slots?.find(s => s[0] === name);
   const value = kept && (router || shape(kept[1], declared)) ? (router ? carryRouter(decode(kept[2]), launchLocation()) : decode(kept[2])) : initial;
   const out = sig(value, type, type === "s" ? name : undefined); out.n.devName = name; out.n.devType = declared;
@@ -93,6 +110,8 @@ export function prepareDev() {
   HTMLElement.prototype.focus = function () {};
   return () => {
     HTMLElement.prototype.focus = focus;
+    const report = replacement();
+    journal.unshift(`t=${clock.now} replacement generation ${clock.generation}: ${JSON.stringify(report)}`);
     offerAll(); // nothing it rebuilt takes the focus later (focus.js)
     if (!cp.focus) return;
     // A virtualized row wrapper is a logical View in the wasm tree even

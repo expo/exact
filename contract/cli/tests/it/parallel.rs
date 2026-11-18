@@ -408,3 +408,101 @@ fn a_declined_write_stops_showing_alone() {
     assert_eq!(derive(&r, "shown"), "b");
     assert!(r.writes().is_empty());
 }
+
+const KEPT: &str = r#"
+shape Ack
+  op: string
+
+source remote(op: string) as shape Ack
+  url "https://names.test/remote"
+  method "POST"
+  body json
+
+component App
+  mutation renamed as shape Ack parallel
+  derive last = match renamed { case some(a) => a.op, case none => "-" }
+  derive why = match failure(renamed) { case some(f) => f.reason, case none => "-" }
+  action near(t: string)
+    send renamed = quick(t)
+  action far(t: string)
+    send renamed = remote(t)
+  view
+    text last
+"#;
+
+/// Answers `quick` at once once it is ready, failing an op named `fail`.
+struct Quick(bool);
+impl DataSource for Quick {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+        match source {
+            "quick" if op(args) == "fail" => Err(DataError::Failed(
+                FailureCode::Error,
+                "failed".into(),
+                op(args),
+            )),
+            "quick" => Ok(Answer::Now(Value::record(vec![Value::str(&op(args))]))),
+            other => Err(DataError::UnknownSource(other.into())),
+        }
+    }
+    fn ready(&self) -> bool {
+        self.0
+    }
+}
+
+/// A runner over [`KEPT`] whose data source is still loading.
+fn loading() -> Runner<Quick> {
+    let plan = contract::compile(KEPT).unwrap();
+    Runner::boot(
+        plan,
+        Quick(false),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
+}
+
+/// A send kept until the data source is ready lands its reply only if no
+/// later send has concluded meanwhile (LLP 1161.000 D4): here a later send
+/// to a source declared in Contract, which needs no data source, lands
+/// first, and the kept one's synchronous answer leaves the slot.
+#[test]
+fn a_kept_send_answering_after_a_later_one_landed_leaves_the_slot() {
+    let mut r = loading();
+    r.act("near", vec![Value::str("a")]).unwrap();
+    assert!(r.take_requests().is_empty(), "kept for the data source");
+    r.act("far", vec![Value::str("b")]).unwrap();
+    let [b] = &r.take_requests()[..] else {
+        panic!("the declared source's request")
+    };
+    let reply = Outcome::Response(Response {
+        status: 200,
+        headers: vec![("content-type".into(), "application/json".into())],
+        body: br#"{"op":"b"}"#.to_vec(),
+    });
+    r.fulfill(b.ticket, reply).unwrap();
+    assert_eq!(r.derive("last"), Some(&Value::str("b")));
+    r.data().0 = true;
+    r.data_ready().unwrap();
+    assert_eq!(
+        r.derive("last"),
+        Some(&Value::str("b")),
+        "the older send leaves it"
+    );
+}
+
+/// Two kept sends, the first failing: the second's answer lands and clears
+/// the failure, as a reply landing does.
+#[test]
+fn a_later_kept_success_clears_an_earlier_kept_failure() {
+    let mut r = loading();
+    r.act("near", vec![Value::str("fail")]).unwrap();
+    r.act("near", vec![Value::str("ok")]).unwrap();
+    r.data().0 = true;
+    r.data_ready().unwrap();
+    assert_eq!(r.derive("last"), Some(&Value::str("ok")));
+    assert_eq!(r.derive("why"), Some(&Value::str("-")));
+}

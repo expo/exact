@@ -21,8 +21,11 @@ Each entry is `{path, width, height, type, screen}`. The files are
 `screen-0.png`, `screen-1.png`, …, sorted by the display's `left`, then
 `top`. Width and height are physical pixels; `screen` has the display-list
 fields and `clientRect`, its rectangle in the calling window's CSS pixels.
-Draw the file there with an image or canvas. Capturing into the same directory
-replaces the files and refreshes loaded image and canvas handles.
+Draw the file there with an image, or on Windows and Linux a canvas.
+Capturing into the same directory replaces the files and redraws each image
+and canvas showing them, even one that asked before the file existed. On the
+web (agent only), an image shows a capture only if its source is set after
+it. A canvas on macOS or the web cannot draw an app file.
 Set the hidden window's frame
 before capturing; with no window, `clientRect` is null. The API neither
 shows nor activates a window, and needs no `device.window-management` grant.

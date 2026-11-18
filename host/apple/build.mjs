@@ -62,6 +62,8 @@ import { thinTextures } from '../../scripts/texture-families.mjs';
 import { bundleShaderLibraries } from './shader-libraries.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
+import { rebuildArgs } from './link.mjs';
+export { rebuildArgs };
 import { composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
 import { associatedDomains, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
@@ -654,7 +656,7 @@ async function main(args, lockHeld = false) {
   // One load name lets the Swift presenter serve every app.
   const loadName = 'libexact_gpu.dylib';
   // Each GPU module is signed before the bake binds its digest (LLP 1009 D6).
-  const moduleDylibs = gpuModules(app.manifest).map(({ name }) => ({
+  const moduleDylibs = gpuModules(app.manifest, ios ? (tv ? 'tvos' : 'ios') : 'macos').map(({ name }) => ({
     framework: `ExactGpu_${name.replace(/-/g, '_')}`, built: `lib${app.crate(`gpu-${name}`).replace(/-/g, '_')}.dylib`, load: `libexact_gpu_${name.replace(/-/g, '_')}.dylib` }));
   const gpuArtifacts = [...(hasGpu ? [{ built: dylib, load: loadName, framework: 'ExactGpu' }] : []), ...moduleDylibs];
   const preparedGpu = new Map();
@@ -1133,46 +1135,40 @@ async function main(args, lockHeld = false) {
   const frameworkStamp = (forIos, simulator, arch) => JSON.stringify([linkArgs(forIos), ...frameworksFor(forIos, simulator, arch).stamped.map(f => { const st = statSync(f); return [f, st.size, st.mtimeMs]; })]);
   const macArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
   const simulatorArch = iosTriple.startsWith('arm64') ? 'arm64' : 'x86_64', iosArch = device ? 'arm64' : simulatorArch;
-  const moduleArgs = (sdkFor, targetArgs, out, forIos = false, simulator = false, arch = macArch, packagesIn = packageDir, probe = false) => ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, '-L', packagesIn, ...packageObjects(packagesIn)] : []), ...frameworksFor(forIos, simulator, arch).args, ...(probe ? ['-Xlinker', '-rpath', '-Xlinker', '@loader_path/Frameworks'] : []), ...linkArgs(forIos), ...moduleLibraryLinkArgs({ wrapped: forIos && production && !probe }), '-o', out, ...targetArgs];
+  const moduleArgs = (sdkFor, targetArgs, out, forIos = false, simulator = false, arch = macArch, packagesIn = packageDir, probe = false) => {
+    placePackages(packagesIn);
+    return ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, '-L', packagesIn, ...packageObjects(packagesIn)] : []), ...packageImports(packagesIn), ...(app.manifest.host?.[forIos ? 'ios' : 'macos']?.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...packageLink(packagesIn)] : []), ...frameworksFor(forIos, simulator, arch).args, ...(probe ? ['-Xlinker', '-rpath', '-Xlinker', '@loader_path/Frameworks'] : []), ...linkArgs(forIos), ...moduleLibraryLinkArgs({ wrapped: forIos && production && !probe }), '-o', out, ...targetArgs];
+  };
   const moduleLibraries = modulesBuilt ? frameworksFor(ios, ios && !device, ios ? iosArch : macArch).libraries : [];
   const macTarget = ['-target', moduleTripleFor(app, false)];
-  const { place: placePackages, libraries: packageLibraries } = packageCompiler({ packages, packageDir, packageTargets,
+  const { place: placePackages, libraries: packageLibraries, resources: packageResources, frameworks: packageFrameworks, imports: packageImports, link: packageLink, products: packageProducts } = packageCompiler({ packages, packageDir, packageTargets,
     packageCopies, seam, packagesRoot, swiftc, production, distribution, ios, tv,
-    minimum: { ios: app.manifest.host?.ios?.minimumOS, tvos: app.manifest.host?.ios?.minimumOS,
+    app, extensions: buildReceipt.graph.extensions, minimum: { ios: app.manifest.host?.ios?.minimumOS, tvos: app.manifest.host?.ios?.minimumOS,
       macos: app.manifest.host?.macos?.minimumOS } });
   placePackages(packageDir);
-  // The macOS roster probe opens the shipping artifact before bundle assembly.
-  if (!ios) placeMacDylibs(webBuildDir, packageLibraries);
-  const packageStamp = JSON.stringify(packages.map(p => [p.module, createHash('sha256').update(readFileSync(resolve(packageDir, `${p.module}.dylib`))).digest('hex')]));
+  moduleLibraries.push(...packageFrameworks);
+  const packageStamp = JSON.stringify([...packages.map(p => [p.module, createHash('sha256').update(readFileSync(resolve(packageDir, `${p.module}.dylib`))).digest('hex')]), ...packageProducts(packageDir).map(p => p.digest)]);
   const appModule = modulesBuilt ? arm(moduleArgs(sdkName, ios ? ['-target', moduleTripleFor(app, true, device, tv), '-sdk', sdk] : macTarget, modulesBuilt, ios, ios && !device, ios ? iosArch : macArch), [...moduleSources, ...packageSources], modulesBuilt, frameworkStamp(ios, ios && !device, ios ? iosArch : macArch) + packageStamp, true) : null;
-  // The roster the artifact serves (its tags, and which join the first frame) is read by running its table: a macOS build
-  // dlopens its artifact; an iOS build links the same sources (their iOS code) with each xcframework's slice for a route, and
-  // the first route that reads it stands: a Mac Catalyst executable run here, an iOS simulator one spawned on a booted
-  // simulator (UIKit will not start without one: any booted, else one booted here and shut down after), a macOS dylib dlopened
-  // here. A route with no slice, or whose probe does not compile, load or run, falls through; a roster read is final. tvOS has
-  // the macOS route alone, and no first-frame tag. The first route compiles beside the build, a later one only when needed.
+  // A probe runs the module's table beside its dependencies and resources. iOS tries Catalyst, an iOS simulator,
+  // then macOS; tvOS has the macOS route alone and no first-frame tags. A failed route falls through, and the
+  // first roster read stands. Each route compiles only when needed.
   let rosterKeys = {}; if (process.platform === 'linux') rmSync(resolve(linkRoot, 'native-probes.json'), { force: true });
   // On Linux no route's probe can run (no simulator, Catalyst or macOS loader): a development build without a simulator
   // qualification (EXACT_NATIVE_ROSTERS) takes the manifest's roster, as it would after every route failed, without
   // compiling three probes for it (85 s of a build with native modules).
   const probeless = process.platform === 'linux' && !production && !distribution && !process.env.EXACT_NATIVE_ROSTERS;
   if (probeless && modules.tags.length) console.log('host/apple: on Linux the manifest\'s native-module roster stands unprobed (EXACT_NATIVE_ROSTERS qualifies one)');
-  const routes = probeless || !(modulesBuilt && modules.tags.length && typeof Bun !== 'undefined') ? [] : !ios ? [{ via: 'macOS', variant: false, packages: packageDir, built: moduleLibraries.length ? resolve(webBuildDir, 'probe-' + modulesLoadName) : modulesBuilt, ...(moduleLibraries.length ? {} : { placed: async () => true }) }]
+  const routes = probeless || !(modulesBuilt && modules.tags.length) ? [] : !ios ? [{ via: 'macOS', variant: false, packages: packageDir, built: resolve(webBuildDir, 'probe-' + modulesLoadName) }]
     : rosterRoutes({ tv, device, packageDir, missingSlice: (variant) => (modules.frameworks ?? []).find(fw => { try { frameworkSlice(fw, variant !== false, variant, variant === true ? simulatorArch : macArch); return false; } catch { return true; } }) }).map(route => ({ ...route, packages: `${route.packages}-probe`, built: resolve(webBuildDir, route.variant === false ? 'probe-' + modulesLoadName : `probe-roster-${route.variant === true ? 'simulator' : route.variant}`) }));
   const compileProbe = ({ variant, built, packages: packagesIn }, probeMain = resolve(linkRoot, 'ExactRosterProbe.swift')) => {
-    const place = (library, launcher) => rosterProbe({ library, launcher, built, packagesIn, packages, placePackages,
+    const place = (library, launcher) => rosterProbe({ library, launcher, built, packagesIn, packages, placePackages, swiftProducts: () => packageProducts(packagesIn),
       frameworks: frameworksFor(variant !== false, variant, variant === true ? simulatorArch : macArch).libraries });
-    if (variant === false) {
-      packageTargets.set(packagesIn, ['macosx', macTarget]);
-      return place(arm(moduleArgs('macosx', macTarget, built, false, false, macArch, packagesIn, true),
-        [...moduleSources, ...packageSources], built, frameworkStamp(false, false, macArch) + packageStamp, true, true));
-    }
     const probeLibrary = `${built}.dylib`;
     writeFileSync(probeMain, rosterProbeMain);
-    const on = variant === true ? 'iphonesimulator' : 'macosx', catalyst = variant !== true && resolve(read('xcrun', ['--sdk', 'macosx', '--show-sdk-path']).stdout.trim(), 'System/iOSSupport');
-    const target = catalyst ? ['-target', `${macArch}-apple-ios${targets.ios}-macabi`, '-Fsystem', `${catalyst}/System/Library/Frameworks`, '-I', `${catalyst}/usr/lib/swift`, '-L', `${catalyst}/usr/lib/swift`] : ['-target', `${simulatorArch}-apple-ios${targets.ios}-simulator`, '-sdk', read('xcrun', ['--sdk', on, '--show-sdk-path']).stdout.trim()];
+    const on = variant === true ? 'iphonesimulator' : 'macosx', catalyst = variant !== false && variant !== true && resolve(read('xcrun', ['--sdk', 'macosx', '--show-sdk-path']).stdout.trim(), 'System/iOSSupport');
+    const target = variant === false ? macTarget : catalyst ? ['-target', `${macArch}-apple-ios${targets.ios}-macabi`, '-Fsystem', `${catalyst}/System/Library/Frameworks`, '-I', `${catalyst}/usr/lib/swift`, '-L', `${catalyst}/usr/lib/swift`] : ['-target', `${simulatorArch}-apple-ios${targets.ios}-simulator`, '-sdk', read('xcrun', ['--sdk', on, '--show-sdk-path']).stdout.trim()];
     if (!packageTargets.has(packagesIn)) packageTargets.set(packagesIn, [on, target]);
-    const library = arm(moduleArgs(on, target, probeLibrary, true, variant, variant === true ? simulatorArch : macArch, packagesIn, true), [...moduleSources, ...packageSources], probeLibrary, frameworkStamp(true, variant, variant === true ? simulatorArch : macArch) + packageStamp, true, true);
+    const library = arm(moduleArgs(on, target, probeLibrary, variant !== false, variant, variant === true ? simulatorArch : macArch, packagesIn, true), [...moduleSources, ...packageSources], probeLibrary, frameworkStamp(variant !== false, variant, variant === true ? simulatorArch : macArch) + packageStamp, true, true);
     const launcher = arm(['--sdk', on, 'swiftc', '-parse-as-library', ...target, probeMain, '-o', built], [probeMain], built, '', true, true);
     return place(library, launcher);
   };
@@ -1260,7 +1256,6 @@ async function main(args, lockHeld = false) {
   if (modules.tags.length) {
     // The manifest's roster stands when no route reads the artifact's; with no artifact, it serves nothing.
     let provided = modulesBuilt ? modules.tags : [], roster = null, noSimulator = false;
-    if (modulesBuilt && typeof Bun === 'undefined') console.warn('host/apple: the module roster check needs Bun (bun:ffi); skipped');
     const causes = [], logs = [], failed = (did, text, log, lines = text.trim().split('\n')) => {
       writeFileSync(log, text); logs.push(log); const named = lines.filter(l => / error: |^ld: |[Uu]ndefined symbol/.test(l));
       return new Error(`does not ${did}:\n${(named.length ? named : lines.slice(-5)).slice(0, 5).map(l => `    ${l}`).join('\n')}`);
@@ -1274,8 +1269,8 @@ async function main(args, lockHeld = false) {
         if (compiled !== true) throw failed('compile', readFileSync(compiled, 'utf8'), log);
         if (process.platform === 'linux' && route.variant === true) writeFileSync(resolve(linkRoot, 'native-probes.json'), JSON.stringify({ version: 1, probes: [{ app: app.name, appId: app.id, file: basename(placed.cached), cachePath: relative(root, placed.cached), probeSha256: probeDigest(placed.cached) }] }));
         const artifact = placed.artifact ?? route.built;
-        let text = keptRoster(placed.cached); if (text === undefined && !route.variant) try { const { dlopen, read: at, CString } = import.meta.require('bun:ffi'); text = new CString(at.ptr(dlopen(artifact, { exact_native_abi: { args: [], returns: 'ptr' } }).symbols.exact_native_abi(), 8)).toString(); } catch (e) { throw failed('load', e.message, log); }
-        else if (text === undefined && route.variant === 'maccatalyst') text = ran(read(artifact, [], { timeout: 60_000 }), log);
+        let text = keptRoster(placed.cached);
+        if (text === undefined && route.variant !== true) text = ran(read(artifact, [], { timeout: 60_000 }), log);
         else if (text === undefined) { // the iOS simulator named (--sim, EXACT_SIM; a name that is none is not this route's), else any booted
           const pick = args.includes('--sim') ? args[args.indexOf('--sim') + 1] : process.env.EXACT_SIM, ios = simulators().filter(d => /SimRuntime\.iOS/.test(d.runtime)), named = pick && ios.find(d => d.udid === pick || d.name === pick); let sim = named ? null : ios.find(d => d.state === 'Booted');
           if (!sim) try { sim = simulator(named?.udid ?? null); } catch (e) { noSimulator = /^no iPhone simulator/.test(e.message); throw noSimulator ? new Error('no iPhone simulator on an installed iOS runtime') : e; }
@@ -1337,7 +1332,7 @@ async function main(args, lockHeld = false) {
 
   const bundleTools = {runApple,appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements, appClip};
   if (!ios) {
-    const bundlePath = assembleMac({intents, shared, library, moduleLibraries, packageLibraries, serviceDylibs, macWidgets, shareTeam: signing.shareTeam, shareProfile: signing.shareProfile, sandbox: signing.sandbox, provisioning, triple: moduleTripleFor(app, ios, device, tv), appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, bundleTools);
+    const bundlePath = assembleMac({intents, shared, library, moduleLibraries, packageLibraries, packageResources, serviceDylibs, macWidgets, shareTeam: signing.shareTeam, shareProfile: signing.shareProfile, sandbox: signing.sandbox, provisioning, triple: moduleTripleFor(app, ios, device, tv), appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, bundleTools);
     publishProducts();
     release();
     rmSync(webBuildDir, { recursive: true, force: true });
@@ -1347,7 +1342,7 @@ async function main(args, lockHeld = false) {
     if (args.includes('--run')) process.exitCode = runMac(bundlePath ? resolve(bundlePath, 'Contents/MacOS', paths.executable) : paths.binary, { ...env, ...launchEnv, EXACT_ASSETS: paths.capture });
     return;
   }
-  const { bundles, frameworkSymbols } = assembleIOS({intents, shared, library, moduleLibraries, packageLibraries, serviceDylibs, triple: iosTripleFor(app, device, tv, compiled.ios), app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm: ios && !tv && packaged.has('alarms') ? alarmActivity(packages) : null, notification: packaged.has('notifications') ? notification : null, watch: device && !tv && packaged.has('watch') && watchCompanion(app)}, bundleTools);
+  const { bundles, frameworkSymbols } = assembleIOS({intents, shared, library, moduleLibraries, packageLibraries, packageResources, serviceDylibs, triple: iosTripleFor(app, device, tv, compiled.ios), app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm: ios && !tv && packaged.has('alarms') ? alarmActivity(packages) : null, notification: packaged.has('notifications') ? notification : null, watch: device && !tv && packaged.has('watch') && watchCompanion(app)}, bundleTools);
   publishProducts();
   release();
   if (!ipa && frameworkSymbols.count) console.log(`host/apple: framework symbols: ${resolve(paths.products, basename(frameworkSymbols.dir))} (${frameworkSymbols.count} frameworks, ${(frameworkSymbols.saved / 1048576).toFixed(1)} MB off them)`);
@@ -1476,8 +1471,7 @@ async function test(args) {
     const bootedHere = before.find(d => d.udid === dev.udid)?.state !== 'Booted';
     try {
       const destination = `platform=iOS Simulator,id=${dev.udid}`, derived = resolve(paths.namespace, 'ios-tests'), xcodeEnv = { ...env, IPHONEOS_DEPLOYMENT_TARGET: '17.0' };
-      runApple('xcodebuild', ['build-for-testing', '-scheme', 'Exact-Package', '-destination', destination, '-derivedDataPath', derived], { cwd: pkg, stdio: 'inherit', env: xcodeEnv });
-      await iosTestRuns({ pkg, products: resolve(derived, 'Build/Products'), destination, udid: dev.udid, env: xcodeEnv, canvasGpu, hostSource: resolve(root, 'host/apple/testhost/TestHost.swift'), triple: iosTriple, runApple, run, only });
+      await iosTestRuns({ pkg, derived, destination, udid: dev.udid, env: xcodeEnv, canvasGpu, hostSource: resolve(root, 'host/apple/testhost/TestHost.swift'), triple: iosTriple, runApple, run, only });
     } finally { if (bootedHere) read('xcrun', ['simctl', 'shutdown', dev.udid]); }
   } finally { cargoRelease?.(); release(); }
 }
@@ -1487,14 +1481,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(new URL(import
   useXcode(); if (args.includes('--release')) process.env.EXACT_UPDATE_TRUST = 'production';
   const oldXcode = process.platform === 'darwin' && args.includes('--test') && xcodeRefusal(args.includes('--ios') ? 'iphonesimulator' : 'macosx');
   if (oldXcode) { console.error(oldXcode); process.exitCode = 1; } else (args.includes('--test') ? test(args) : main(args)).catch((error) => { console.error(error.rebuild ? `${error.message}: ${rebuildArgs(args)}` : error.message); process.exitCode = 1; });
-}
-
-/** This build's command, to run it again: an `exact new` app's `exact.mjs` verb (EXACT_APP_DIR, which that
- * sets), else this script's. */
-export function rebuildArgs(args, dir = process.env.EXACT_APP_DIR) {
-  const quote = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", "'\\''")}'`;
-  if (!dir) return `bun host/apple/build.mjs ${args.map(quote).join(' ')}`;
-  const ios = ['--ios', '--device', '--tvos'].some((flag) => args.includes(flag));
-  const rest = args.filter((a) => a !== '--ios' && !(a.endsWith('-apple') && !a.startsWith('-')));
-  return [`(cd ${quote(dir)} && bun exact.mjs ${ios ? 'ios' : 'mac'}`, ...rest.map(quote)].join(' ') + ')';
 }

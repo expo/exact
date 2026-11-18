@@ -73,10 +73,100 @@ fn device() -> Option<Gpu> {
 }
 
 #[test]
+fn a_package_can_allocate_a_storage_buffer_over_256_mib() {
+    let requirements = [exact_gpu::grants::Requirements {
+        package: "compute-grid",
+        surfaces: &["grid"],
+        required_limits: &[("maxStorageBufferBindingSize", 536870912)],
+        ..Default::default()
+    }];
+    let Some(gpu) = fixture::device_or_skip(fixture::device_with_requirements(&requirements))
+    else {
+        return;
+    };
+    let size = 256 * 1024 * 1024 + 256;
+    if requirements[0]
+        .check(&gpu.adapter.limits(), gpu.adapter.features())
+        .is_err()
+    {
+        let grant = exact_gpu::grants::negotiate(
+            gpu.adapter.limits(),
+            gpu.adapter.features(),
+            &requirements,
+        );
+        assert_eq!(grant.refused.len(), 1);
+        return;
+    }
+    assert!(gpu.device.limits().max_storage_buffer_binding_size >= size);
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("package compute buffer"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+    let error = exact_gpu::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(buffer.size(), size);
+}
+
+#[test]
+fn an_unavailable_package_does_not_disable_other_surfaces_on_the_device() {
+    use exact_gpu::grants::Requirements;
+    static REQUIREMENTS: &[Requirements] = &[Requirements {
+        package: "too-large",
+        surfaces: &["large"],
+        required_limits: &[("maxBufferSize", 1 << 50)],
+        optional_limits: &[],
+        required_features: &[],
+        optional_features: &[],
+    }];
+    static REGISTRY: exact_gpu::Registry = exact_gpu::Registry {
+        surfaces: &[
+            ("large", 0, || Box::new(Fill([1.0, 0.0, 0.0, 1.0]))),
+            ("small", 0, || Box::new(Fill([0.0, 1.0, 0.0, 1.0]))),
+        ],
+        shaders: &[],
+    };
+    let Some(gpu) = fixture::device_or_skip(fixture::device_with_requirements(REQUIREMENTS)) else {
+        return;
+    };
+    let available = gpu.adapter.limits().max_buffer_size;
+    let mut module = exact_gpu::Module::new(&REGISTRY).with_requirements(REQUIREMENTS);
+    let blocked = module.create_headless("large").unwrap();
+    assert!(module.bind(blocked, &[], None));
+    module.set_gpu(gpu);
+    assert!(module.create_headless("large").is_none());
+    let error = module.take_error();
+    assert!(error.contains(&available.to_string()), "{error}");
+    for word in ["too-large", "maxBufferSize", "1125899906842624"] {
+        assert!(error.contains(word), "{error}");
+    }
+    let id = module.create_headless("small").unwrap();
+    assert!(module.bind(id, &[], None));
+    let frame = Frame {
+        width: 2.0,
+        height: 2.0,
+        scale: 1.0,
+        now_ms: 0.0,
+        seekable: false,
+        period_ms: 0.0,
+        children_generation: 0,
+        shader_generation: 0,
+        headroom: 1.0,
+    };
+    assert!(module.readback(blocked, &frame).is_none());
+    assert!(module.take_error().contains("maxBufferSize"));
+    let (pixels, _) = module.readback(id, &frame).unwrap();
+    assert_eq!(pixels.at(0, 0), [0, 255, 0, 255]);
+}
+
+#[test]
 fn offscreen_module_admits_device_before_its_first_readback() {
     struct Ready(bool);
     impl Surface for Ready {
-        fn device_ready(&mut self, _: wgpu::Features) {
+        fn device_ready(&mut self, _: wgpu::Features, limits: wgpu::Limits) {
+            assert!(limits.max_buffer_size >= 256 * 1024 * 1024);
             self.0 = true;
         }
         fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {

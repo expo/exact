@@ -51,17 +51,21 @@ pub fn asset_failed(id: u32, name: &str, reason: &str) -> bool {
 
 /// Create the device and the module (asynchronous: WebGPU's adapter and
 /// device requests are).
-pub async fn load(registry: &'static Registry) -> Result<(), JsValue> {
+pub async fn load(
+    registry: &'static Registry,
+    requirements: &'static [crate::grants::Requirements],
+) -> Result<(), JsValue> {
     crate::report_panics();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::BROWSER_WEBGPU,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
-    match crate::load_gpu(instance, None).await {
+    match crate::load_gpu_with_requirements(instance, None, requirements).await {
         Ok(gpu) => {
             MODULE.with(|m| {
                 let mut m = m.borrow_mut();
-                m.get_or_insert_with(|| Module::new(registry)).set_gpu(gpu);
+                m.get_or_insert_with(|| Module::new(registry).with_requirements(requirements))
+                    .set_gpu(gpu);
             });
             Ok(())
         }
@@ -101,6 +105,9 @@ pub async fn recover(
         let mut targets = Vec::new();
         for (id, canvas) in ids.iter().zip(canvases) {
             let inst = module.instances.get_mut(id).unwrap();
+            if module.refused.contains_key(inst.name.as_str()) {
+                continue;
+            }
             let config = inst.config.as_mut().ok_or_else(|| {
                 crate::recovery::RecoveryFailure::other("missing presentation configuration")
             })?;
@@ -117,7 +124,8 @@ pub async fn recover(
         for (id, target) in targets {
             let inst = module.instances.get_mut(&id).unwrap();
             let config = inst.config.as_ref().unwrap();
-            inst.surface.device_ready(gpu.device.features());
+            inst.surface
+                .device_ready(gpu.device.features(), gpu.device.limits());
             inst.surface
                 .color_space_granted(crate::target::granted(Some(config)));
             inst.surface
@@ -306,6 +314,10 @@ pub fn child(id: u32, index: u32, name: &str, frame: [f32; 4]) -> bool {
 pub fn children_count(id: u32, count: u32) -> bool {
     with(|m| m.children_count(id, count as usize)).unwrap_or(false)
 }
+/// Visual opacity for a host-composited placed child (LLP 1133.039 D8).
+pub fn placement_opacity(id: u32, index: u32) -> f32 {
+    with(|m| m.placement_opacity(id, index as usize)).unwrap_or(1.0)
+}
 /// Same encoding as native: 0 kernel frame, 1 ten floats (sixteen with the
 /// two clip rows when `out` has room), 2 hidden (out untouched).
 pub fn placement(id: u32, index: u32, out: &mut [f32]) -> u32 {
@@ -397,6 +409,11 @@ pub fn seekable(on: bool) {
     with(|m| m.set_seekable(on));
 }
 
+/// Set the host's motion preference for every canvas.
+pub fn reduced_motion(on: bool) {
+    with(|m| m.set_reduced_motion(on));
+}
+
 /// The display's frame period in milliseconds (0 = unknown), for every frame after.
 pub fn period(period_ms: f64) {
     with(|m| m.set_period(period_ms));
@@ -462,10 +479,13 @@ pub fn error() -> String {
 #[macro_export]
 macro_rules! module {
     ($registry:expr) => {
+        $crate::module!($registry, &[]);
+    };
+    ($registry:expr, $requirements:expr) => {
         /// Create the device.
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub async fn gpu_load() -> Result<(), ::wasm_bindgen::JsValue> {
-            $crate::web::load(&$registry).await
+            $crate::web::load(&$registry, $requirements).await
         }
 
         /// Recover device/context bindings while keeping every surface ID.
@@ -583,6 +603,12 @@ macro_rules! module {
             $crate::web::placement(id, index, out)
         }
 
+        /// Visual opacity multiplier for a placed child; defaults to 1.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_placement_opacity(id: u32, index: u32) -> f32 {
+            $crate::web::placement_opacity(id, index)
+        }
+
         /// Whether a canvas wants raw input.
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_wants_input(id: u32) -> bool {
@@ -680,6 +706,11 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_seekable(on: bool) {
             $crate::web::seekable(on)
+        }
+        /// Set the host's motion preference for every canvas.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_reduced_motion(on: bool) {
+            $crate::web::reduced_motion(on)
         }
 
         /// The display's frame period in milliseconds, 0 while unknown.

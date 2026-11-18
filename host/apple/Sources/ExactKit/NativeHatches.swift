@@ -11,7 +11,7 @@
 //
 // The host's table, handed to the module once (`module_connect`):
 //
-//    0  u32 size                192
+//    0  u32 size                200
 //    8  resolve(host, routeKey, keyLen, id, idLen) → node (0: none)
 //   16  act(host, node, action) → 0 done   action 0 click, 1 focus, 2 blur
 //   24  log(host, text, len)
@@ -52,6 +52,9 @@
 //        with len 0 for no answer
 //  184  after_coalescing(host, token, ms): refresh at the next clock instant
 //        at or past the deadline, without adding a seek stop (HatchClock.swift)
+//  192  tab_intent(host, kind, text, len) → 0 queued: an intent of a tab
+//        container the app owns (LLP 1075.003 §3.6), kind 0 Back, 1 open the
+//        URL `text`, 2 select the tab whose index is `text`; queued like `act`
 //
 // `host` is the session's runtime handle, as for `changed` and `now`: a
 // destroyed session's is answered with nothing. Service queries use the
@@ -125,6 +128,14 @@ private let hatchAct: HatchActFn = { host, node, action in
 private typealias HatchInputFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafePointer<UInt8>?, UInt32) -> Int32
 private let hatchInputText: HatchInputFn = { host, node, bytes, length in
     hatchSession(host)?.presenter.elements.input(node, hatchText(bytes, length)) == true ? 0 : 1
+}
+
+private let hatchTabIntent: HatchInputFn = { host, kind, bytes, length in
+    #if os(iOS) || os(tvOS)
+    hatchSession(host)?.presenter.navigation.tabIntent(kind, hatchText(bytes, length)) == true ? 0 : 1
+    #else
+    1
+    #endif
 }
 
 private typealias HatchFramesFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, Int32) -> Void
@@ -410,7 +421,7 @@ private let hatchService: @convention(c) (UnsafeMutableRawPointer?, UnsafePointe
 /// The host's callbacks, one table for the process: each finds its session
 /// by the handle it is called with.
 private let hatchHostTable: UnsafeRawPointer = {
-    let size = 192
+    let size = 200
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: UInt32(size), as: UInt32.self)
@@ -436,6 +447,7 @@ private let hatchHostTable: UnsafeRawPointer = {
     t.storeBytes(of: unsafeBitCast(hatchArrangement, to: UnsafeRawPointer.self), toByteOffset: 168, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchService, to: UnsafeRawPointer.self), toByteOffset: 176, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchAfterCoalescing, to: UnsafeRawPointer.self), toByteOffset: 184, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(hatchTabIntent, to: UnsafeRawPointer.self), toByteOffset: 192, as: UnsafeRawPointer.self)
     return UnsafeRawPointer(t)
 }()
 

@@ -40,10 +40,25 @@ pub trait Images: Send + Sync {
         let _ = canvas;
         Vec::new()
     }
-    /// The host let the decoded `src` go: its next use requests it again,
-    /// and draws nothing until it is answered.
+    /// The host let `src` go, decoded, broken or requested: its next use
+    /// requests it again, and draws nothing until it is answered.
     fn release(&self, src: &str) {
         let _ = src;
+    }
+    /// Canvas `canvas`'s draw finished: it keeps only the handles that draw
+    /// asked for.
+    fn drew(&self, canvas: u64) {
+        let _ = canvas;
+    }
+    /// Canvas `canvas` is gone.
+    fn forget(&self, canvas: u64) {
+        let _ = canvas;
+    }
+    /// Whether a canvas's latest draw, or the one under way, asked for
+    /// `src`, decoded or not: a host decodes a changed file only then.
+    fn named(&self, src: &str) -> bool {
+        let _ = src;
+        false
     }
 }
 
@@ -73,7 +88,11 @@ struct ImageState {
     broken: Vec<(String, String)>,
     pending: Vec<String>,
     requests: Vec<String>,
+    /// Each handle's canvases: those whose latest draw, or the one under
+    /// way, asked for it.
     subscribers: Vec<(String, Vec<u64>)>,
+    /// What each canvas's draw under way has asked for.
+    drawing: Vec<(u64, Vec<String>)>,
 }
 
 impl ImageState {
@@ -103,6 +122,16 @@ impl Images for ImageTable {
         let subs = s.subscribers(src);
         if !subs.contains(&canvas) {
             subs.push(canvas);
+        }
+        let drawing = match s.drawing.iter().position(|(c, _)| *c == canvas) {
+            Some(i) => &mut s.drawing[i].1,
+            None => {
+                s.drawing.push((canvas, Vec::new()));
+                &mut s.drawing.last_mut().expect("pushed").1
+            }
+        };
+        if !drawing.iter().any(|d| d == src) {
+            drawing.push(src.to_string());
         }
         if let Some((_, size)) = s.ready.iter().find(|(r, _)| r == src) {
             return Some(*size);
@@ -157,7 +186,37 @@ impl Images for ImageTable {
     }
 
     fn release(&self, src: &str) {
-        self.state().ready.retain(|(r, _)| r != src);
+        let mut s = self.state();
+        s.ready.retain(|(r, _)| r != src);
+        s.broken.retain(|(b, _)| b != src);
+        s.pending.retain(|p| p != src);
+    }
+
+    fn drew(&self, canvas: u64) {
+        let mut s = self.state();
+        let asked = match s.drawing.iter().position(|(c, _)| *c == canvas) {
+            Some(i) => s.drawing.swap_remove(i).1,
+            None => Vec::new(),
+        };
+        for (src, subs) in &mut s.subscribers {
+            if !asked.contains(src) {
+                subs.retain(|c| *c != canvas);
+            }
+        }
+        s.subscribers.retain(|(_, subs)| !subs.is_empty());
+    }
+
+    fn forget(&self, canvas: u64) {
+        let mut s = self.state();
+        s.drawing.retain(|(c, _)| *c != canvas);
+        for (_, subs) in &mut s.subscribers {
+            subs.retain(|c| *c != canvas);
+        }
+        s.subscribers.retain(|(_, subs)| !subs.is_empty());
+    }
+
+    fn named(&self, src: &str) -> bool {
+        (self.state().subscribers.iter()).any(|(s, subs)| s == src && !subs.is_empty())
     }
 }
 
@@ -355,6 +414,25 @@ impl Inner {
             .filter(|(w, h)| *w > 0 && *h > 0)
     }
 
+    /// Ask for the image of each pattern a style holds, saved states'
+    /// included: a draw that only fills with a retained pattern paints its
+    /// image, and the host keeps only the images a draw asked for.
+    pub(crate) fn hold_patterns(&self) {
+        for s in std::iter::once(&self.state).chain(&self.stack) {
+            for paint in [&s.fill, &s.stroke] {
+                if let Paint::Pattern(id) = paint {
+                    self.hold_pattern(*id);
+                }
+            }
+        }
+    }
+
+    fn hold_pattern(&self, id: u32) {
+        if let Some((_, src)) = self.patterns.iter().find(|(p, _)| *p == id) {
+            self.image_size(src);
+        }
+    }
+
     /// The handle's id in this generation, recording it on first use.
     fn image_id(&mut self, src: &str) -> u32 {
         if let Some((_, id)) = self.image_ids.iter().find(|(s, _)| s == src) {
@@ -494,6 +572,7 @@ impl Context2d {
         let image = g.image_id(src);
         let id = g.next_object();
         g.op(Op::Pattern, &[id as f64, image as f64, rep as f64]);
+        g.patterns.push((id, src.to_string()));
         Ok(Some(CanvasPattern {
             id,
             inner: self.inner.clone(),
@@ -506,6 +585,7 @@ impl Context2d {
             g.note("a pattern from another canvas was ignored".into());
             return;
         }
+        g.hold_pattern(pattern.id);
         let p = Paint::Pattern(pattern.id);
         g.paint_op(fill, &p);
         if fill {

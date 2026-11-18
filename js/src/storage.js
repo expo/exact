@@ -33,7 +33,7 @@
     // the same on every host (kanban F28; host/web-js/ts-data.js `coded`):
     // storage itself is unavailable ("bake", "agent", "unsupported"), the
     // grants do not cover the operation ("denied"), the filesystem's POSIX
-    // name ("ENOENT", "EEXIST", "ENOTDIR", "EISDIR", "ENOTEMPTY", "EBUSY"),
+    // name ("ENOENT", "EEXIST", "ENOTDIR", "EISDIR", "ENOTEMPTY", "EBUSY", "EACCES"),
     // else "failed". The message says more and differs by host.
     var REFUSED = {
       bake: "storage is unavailable during bake",
@@ -42,14 +42,15 @@
     };
     var toldAgent = false,
       READS = { readFile: true, readdir: true, stat: true, realpath: true };
-    // Rust's error numbers are platform-specific. Never treat Windows access
-    // denial (5) as EISDIR, or its 17/39 as Unix EEXIST/ENOTEMPTY.
+    // Rust's error numbers are platform-specific: Windows access denial
+    // is 5 (EACCES), and its 17/39 are not Unix EEXIST/ENOTEMPTY.
     var windowsStorage = global.__exact_windows_storage === true;
     delete global.__exact_windows_storage;
     var ERRNO = windowsStorage
       ? {
           2: "ENOENT",
           3: "ENOENT",
+          5: "EACCES",
           32: "EBUSY",
           33: "EBUSY",
           80: "EEXIST",
@@ -58,7 +59,7 @@
           183: "EEXIST",
           267: "ENOTDIR",
         }
-      : { 2: "ENOENT", 16: "EBUSY", 17: "EEXIST", 20: "ENOTDIR", 21: "EISDIR", 39: "ENOTEMPTY", 66: "ENOTEMPTY" };
+      : { 13: "EACCES", 2: "ENOENT", 16: "EBUSY", 17: "EEXIST", 20: "ENOTDIR", 21: "EISDIR", 39: "ENOTEMPTY", 66: "ENOTEMPTY" };
     // The image calls' own failures (LLP 1069.002 A1.4, LLP 1133.019 D17),
     // named in the message natively; the web sets the code itself.
     var IMAGE_CODE =
@@ -103,7 +104,7 @@
       var error = new Error(message);
       error.kind = "Unavailable";
       error.code = code || storageCode(String(message));
-      if (/^unsupported: no (home|bundle): directory here$/.test(String(message)))
+      if (/^NotSupportedError: |^unsupported: no (home|bundle): directory here$/.test(String(message)))
         // no such directory on iOS, tvOS, Android (LLP 1133.007 D6); its code stays "failed", as "unsupported" is a
         // host with no app storage
         Object.defineProperty(error, "name", { value: "NotSupportedError", writable: true, configurable: true });

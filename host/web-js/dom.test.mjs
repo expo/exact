@@ -8,6 +8,29 @@ import { renderer } from './render.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { standIns } from '../web/tests/stand-ins.mjs';
 
+test('a tab preparation can clone its render DOM shell without sharing attributes or children', () => {
+  const doc = createDocument(), panel = doc.createElement('section');
+  panel.setAttribute('id', 'panel');
+  panel.setAttribute('role', 'tabpanel');
+  panel.style.setProperty('visibility', 'hidden');
+  panel.append('content', doc.createComment('anchor'));
+  doc.root.append(panel);
+  const shell = panel.cloneNode(false);
+  expect(shell.parentNode).toBe(null);
+  expect(shell.childNodes).toHaveLength(0);
+  expect(shell.localName).toBe('section');
+  expect(shell.getAttribute('role')).toBe('tabpanel');
+  expect(shell.style.cssText).toBe(panel.style.cssText);
+  shell.setAttribute('id', 'prepared');
+  shell.style.setProperty('visibility', 'visible');
+  expect(panel.id).toBe('panel');
+  expect(panel.style.getPropertyValue('visibility')).toBe('hidden');
+  const deep = panel.cloneNode(true);
+  expect(deep.html()).toBe(panel.html());
+  expect(deep.childNodes[0]).not.toBe(panel.childNodes[0]);
+  expect(deep.childNodes[1].nodeType).toBe(8);
+});
+
 // The render's DOM orders nodes as DOM §4.4 does (midi.js sorts its listeners by it).
 test('the render DOM compares document positions, across trees one way each', () => {
   const doc = createDocument(), root = doc.getElementById('exact-root');

@@ -571,6 +571,19 @@ fn css_text_in(
             // @ref LLP 1123 D4 — no host chrome covers a page the browser
             // lays out: nothing is cleared, so there is nothing to turn off.
             (StyleId::SafeArea | StyleId::SafeAreaIgnore, _) => {}
+            // @ref LLP 1123 D11 — not CSS, and not written yet: a page's
+            // reservations wait for the web's owners (D17)
+            (
+                StyleId::AdditionalSafeAreaTop
+                | StyleId::AdditionalSafeAreaRight
+                | StyleId::AdditionalSafeAreaBottom
+                | StyleId::AdditionalSafeAreaLeft
+                | StyleId::SafeAreaPaddingTop
+                | StyleId::SafeAreaPaddingRight
+                | StyleId::SafeAreaPaddingBottom
+                | StyleId::SafeAreaPaddingLeft,
+                _,
+            ) => {}
             // Where a grouped row's separator starts (index.html), and which
             // way a leading symbol moves it, inherited as the direction is.
             (StyleId::Direction, RowValue::Enum(dir)) => {

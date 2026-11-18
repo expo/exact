@@ -4,6 +4,7 @@ import { viewChildren } from "./navigation.js";
 // `scripts/agent.mjs web` asks. Input and screenshots stay the carrier's own
 // (CDP). Loaded only under `?agent`; never part of an app's boot bytes.
 import names, { types } from './names.js';
+import { replacement } from './checkpoint.js';
 import { pieces, pageHistory, Head, navigateRoot, Tasks, journal, unopened, busy as busyIds } from './rt.js';
 import * as perf from './perf.js';
 import { resourceKey } from './resource-inspection.js';
@@ -182,9 +183,8 @@ export function install(exact) {
     kids(root).forEach(el => walk(el, 0, 0));
     return out;
   };
-  // The runner's tags (LLP 1035.002 D3): a commit is an epoch; a JS page
-  // has one incarnation (a plan swap is a new page).
-  const tags = () => ({ clock: exact.clock.now, epoch: exact.clock.epoch, incarnation: 1 });
+  // Generations and epochs cross the dev checkpoint; incarnation belongs to one page (LLP 1029.000.002 D10).
+  const tags = () => ({ generation: exact.clock.generation, clock: exact.clock.now, epoch: exact.clock.epoch, incarnation: 1 });
   // `tap <node>/<part>` (LLP 1075.003.000.001 §3.5): the aim (which changes nothing) and the landing; the driver delivers
   // a real pointer event at the aimed point between them. The token binds the part's element: one replaced since is stale.
   let PartAim = null, PartAims = 0;
@@ -335,7 +335,7 @@ export function install(exact) {
     return req.op === 'clock' ? heldNamed({ ...tags(), settled: false, reason: 'gpu', pending: names })
       : { error: `GPU is not settled: ${names.join(', ')}`, pending: names };
   };
-  exact.agentSettled = async (req) => {
+  const answer = async (req) => {
     await pieces();
     const beforeGpu = await settleGpu();
     if (beforeGpu.length) return gpuPendingReply(req, beforeGpu);
@@ -412,7 +412,7 @@ export function install(exact) {
       // A location typed into the navigation root is its `navigate` (LLP 1038 D11), as glue.js delivers it.
       case 'type': { const el = views.get(req.id); if (el?.hasAttribute('navigationBack') && req.key == null) return navigateRoot(req.text ?? '') ? { typed: req.id, delivery: 'recognized', handled: true } : { handled: true, error: 'the navigation root has no `navigate` handler' }; return typedControl(el) && req.key == null ? typeControl(el, req, inertAncestor, settleValue) : el instanceof HTMLIFrameElement ? guestType(el, req) : {}; }
       case 'reveal': return { ...reveal(views.get(req.id), req.id, inertAncestor), ...tags() }; // before a tap or a type
-      case 'logs': { const j = exact.journal, from = Math.max(req.since ?? 0, j.start); return { lines: j.slice(from - j.start), from, next: j.start + j.length }; }
+      case 'logs': { const j = exact.journal, from = Math.max(req.since ?? 0, j.start); return { lines: j.slice(from - j.start), from, next: j.start + j.length, ...tags() }; }
       // `perf <target>` (LLP 1079 D2): the plan sites under a view, with their work (perf.js).
       case 'perf': {
         if (req.frames) return { virtual: true }; // the agent's clock presents no frame (LLP 1079 D4)
@@ -642,7 +642,7 @@ export function install(exact) {
         const mutationFailures = Object.fromEntries(exact.mutations.flatMap(m => { const failure = m.e(); return failure ? [[m.name, {code: failure[0], message: failure[1]}]] : []; }));
         // The writes shown over resources until they end or are answered (overlay.js), as the runner's `state.writes`.
         const writes = exact.writes?.() ?? [];
-        return masked(req, { delivery: deliveryFacts, slots, derives, resources, ...ownedState, ...(observed.length ? { planDigest: exact.plan ?? null, resourceStatus, resourcesMeasuredFrom: exact.resources.find(r => r.observation).resourcesMeasuredFrom, failures } : {}), ...(Object.keys(mutationFailures).length ? {mutationFailures} : {}), mutationRequests: exact.mutations.reduce((n,m)=>n+m.requests,exact.mutations.retired ?? 0), device: { frozen: (exact.page ?? ownPage()).read().frozen, displayMode: displayMode(), navigationType: ownPage().read()['navigation-type'], gpuTier: (exact.page ?? ownPage()).read()['gpu-tier'], presented: (exact.page ?? ownPage()).read().presented }, ...(writes.length ? { writes } : {}), ...(Object.keys(failed).length ? { failed } : {}), pending, ...(Object.keys(exact.heldReplies?.() ?? {}).length ? { heldReplies: exact.heldReplies() } : {}), streams, watches: exact.watchState?.() ?? [], ...(faults.length ? { faults } : {}), ...(background ? { background } : {}), tasks, taskTiming, queued, ...(exact.extensions?.declared?.() ?? {}), ...(exact.extensions?.wake?.() ? { wake: exact.extensions.wake() } : {}), ...(exact.sounds ? { sounds: exact.sounds.state(req.sounds === 'all') } : {}), ...(exact.transport?.declared() ? { transport: exact.transport.state() } : {}), ...(exact.midi ? { midi: exact.midi.state(req.midi === 'all') } : {}), ...(exact.extensions ? { extensions: exact.extensions.state() } : {}), ...(exact.calls ? { intents: exact.calls.state() } : {}), wakelock: exact.wakelock?.() ?? { held: false, by: [] }, orientationlock: exact.orientationlock?.() ?? { held: false, by: [], words: [], lock: null, conflict: null, applied: 'unavailable' }, head, focus, language, storage, keyboard, atoms, decorations, navigation: (pageHistory() ?? navigation).observation(document.getElementById('exact-root')), media, mediaSession: exact.mediaSession?.state(id) ?? { owner: null, claimants: [], actions: [], playbackState: 'none', published: 'none' }, window: { title: document.title }, ...(exact.canvas2dState ? { canvas: exact.canvas2dState() } : {}), ...(exact.surfaceRefusals ? { surfaceRefusals: exact.surfaceRefusals() } : {}), reorder: exact.reorderState?.() ?? null, ...(exact.lists ? { scrollIntoView: exact.lists.intoView() } : {}), ...(exact.presenceLive ? { presence: presence() } : {}), ...(exact.hatchState ? { hatches: exact.hatchState() } : {}), ...tags() });
+        return masked(req, { replacement: replacement(), delivery: deliveryFacts, slots, derives, resources, ...ownedState, ...(observed.length ? { planDigest: exact.plan ?? null, resourceStatus, resourcesMeasuredFrom: exact.resources.find(r => r.observation).resourcesMeasuredFrom, failures } : {}), ...(Object.keys(mutationFailures).length ? {mutationFailures} : {}), mutationRequests: exact.mutations.reduce((n,m)=>n+m.requests,exact.mutations.retired ?? 0), device: { frozen: (exact.page ?? ownPage()).read().frozen, displayMode: displayMode(), navigationType: ownPage().read()['navigation-type'], gpuTier: (exact.page ?? ownPage()).read()['gpu-tier'], presented: (exact.page ?? ownPage()).read().presented }, ...(writes.length ? { writes } : {}), ...(Object.keys(failed).length ? { failed } : {}), pending, ...(Object.keys(exact.heldReplies?.() ?? {}).length ? { heldReplies: exact.heldReplies() } : {}), streams, watches: exact.watchState?.() ?? [], ...(faults.length ? { faults } : {}), ...(background ? { background } : {}), tasks, taskTiming, queued, ...(exact.extensions?.declared?.() ?? {}), ...(exact.extensions?.wake?.() ? { wake: exact.extensions.wake() } : {}), ...(exact.sounds ? { sounds: exact.sounds.state(req.sounds === 'all') } : {}), ...(exact.transport?.declared() ? { transport: exact.transport.state() } : {}), ...(exact.midi ? { midi: exact.midi.state(req.midi === 'all') } : {}), ...(exact.extensions ? { extensions: exact.extensions.state() } : {}), ...(exact.calls ? { intents: exact.calls.state() } : {}), wakelock: exact.wakelock?.() ?? { held: false, by: [] }, orientationlock: exact.orientationlock?.() ?? { held: false, by: [], words: [], lock: null, conflict: null, applied: 'unavailable' }, head, focus, language, storage, keyboard, atoms, decorations, navigation: (pageHistory() ?? navigation).observation(document.getElementById('exact-root')), media, mediaSession: exact.mediaSession?.state(id) ?? { owner: null, claimants: [], actions: [], playbackState: 'none', published: 'none' }, window: { title: document.title }, ...(exact.canvas2dState ? { canvas: exact.canvas2dState() } : {}), ...(exact.surfaceRefusals ? { surfaceRefusals: exact.surfaceRefusals() } : {}), reorder: exact.reorderState?.() ?? null, ...(exact.lists ? { scrollIntoView: exact.lists.intoView() } : {}), ...(exact.presenceLive ? { presence: presence() } : {}), ...(exact.hatchState ? { hatches: exact.hatchState() } : {}), ...tags() });
       }
       // The page group (LLP 1069.000 D6), where the plan reads `exactPage` (facts.js); else the drive's facts
       // held here, so `root-font-size` still sets the root element's size `rem` follows (D3), as glue.js does.
@@ -661,5 +661,6 @@ export function install(exact) {
       default: return { error: `${req.op} is not carried by the JS target` };
     }
   };
+  exact.agentSettled = async req => { const reply = await answer(req); return { ...tags(), ...reply }; };
   return true;
 }

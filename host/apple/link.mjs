@@ -254,3 +254,13 @@ export function assertLinkedSdk(executable, expected) {
     }
   }
 }
+
+/** This build's command, to run it again: an `exact new` app's `exact.mjs` verb (EXACT_APP_DIR, which that
+ * sets), else this script's. */
+export function rebuildArgs(args, dir = process.env.EXACT_APP_DIR) {
+  const quote = (a) => /^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replaceAll("'", "'\\''")}'`;
+  if (!dir) return `bun host/apple/build.mjs ${args.map(quote).join(' ')}`;
+  const ios = ['--ios', '--device', '--tvos'].some((flag) => args.includes(flag));
+  const rest = args.filter((a) => a !== '--ios' && !(a.endsWith('-apple') && !a.startsWith('-')));
+  return [`(cd ${quote(dir)} && bun exact.mjs ${ios ? 'ios' : 'mac'}`, ...rest.map(quote)].join(' ') + ')';
+}

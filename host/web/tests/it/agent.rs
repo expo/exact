@@ -29,7 +29,7 @@ fn view_with_test_id(host: &Host<caltrain_data::Caltrain>, test_id: &str) -> u32
 fn tree_lists_every_live_node_in_preorder_with_props_and_handlers() {
     let host = boot();
     let tree = host.agent(r#"{"op":"tree"}"#);
-    assert!(tree.starts_with("{\"epoch\":"), "{tree}");
+    assert!(tree.starts_with("{\"generation\":1,\"epoch\":"), "{tree}");
     assert!(tree.contains("\"incarnation\":1,\"clock\":0,\"roots\":[1],\"nodes\":[{\"id\":1,\"parent\":null,\"depth\":0,\"type\":"), "{tree}");
     assert!(tree.contains("\"testId\":\"caltrain-main\""));
     assert!(tree.contains("\"text\":\"Mountain View\""));
@@ -80,9 +80,8 @@ fn mapped_tree_names_sites_and_the_digest_from_the_same_runner_read() {
 fn state_is_typed_json_with_field_names() {
     let host = boot();
     let state = host.agent(r#"{"op":"state"}"#);
-    // Tagged with the epoch and incarnation (LLP 1035.002 D3), then the
-    // clock, then the slots in the plan's order.
-    assert!(state.starts_with("{\"epoch\":"), "{state}");
+    // Session identity precedes the slots in the plan's order (LLP 1029.000.002 D10).
+    assert!(state.starts_with("{\"generation\":1,\"epoch\":"), "{state}");
     assert!(state.contains(",\"clock\":0,\"slots\":{"), "{state}");
     // Every slot by name, typed (LLP 1014 added the sky's material, the
     // deck, and its focus).
@@ -153,14 +152,18 @@ fn logs_journal_boot_events_refusals_and_the_clock() {
     );
     let next = host.runner().journal_start() + host.runner().journal().count();
     let again = host.agent(r#"{"op":"logs","since":99}"#);
-    assert_eq!(
-        again,
-        format!("{{\"next\":{next},\"from\":{next},\"lines\":[]}}"),
-        "a cursor past the end clamps to it"
+    assert!(
+        again.starts_with(&format!("{{\"next\":{next},\"from\":{next},\"lines\":[],")),
+        "a cursor past the end clamps to it: {again}"
     );
     assert_eq!(
-        host.agent(r#"{"op":"logs","since":"3"}"#),
-        "{\"error\":\"since must be a non-negative number\"}"
+        exact_runner::agent::field_num(&again, "generation"),
+        Some(1.0)
+    );
+    let refused = host.agent(r#"{"op":"logs","since":"3"}"#);
+    assert_eq!(
+        exact_runner::agent::field_str(&refused, "error").as_deref(),
+        Some("since must be a non-negative number")
     );
     // An unknown action is journaled as a refusal too.
     let _ = host.runner_mut().act("fly", Vec::new());
@@ -214,9 +217,18 @@ fn an_advance_batch_marks_each_timers_time_and_says_where_the_clock_landed() {
 fn settle_is_null_with_no_spring_in_flight_and_unknown_ops_are_errors() {
     let host = boot();
     assert_eq!(host.agent(r#"{"op":"settle"}"#), "{\"settle\":null}");
-    assert_eq!(
-        host.agent(r#"{"op":"fly"}"#),
-        "{\"error\":\"unknown op: fly\"}"
-    );
-    assert_eq!(host.agent(r#"{"since":3}"#), "{\"error\":\"no op\"}");
+    for (request, message) in [
+        (r#"{"op":"fly"}"#, "unknown op: fly"),
+        (r#"{"since":3}"#, "no op"),
+    ] {
+        let refused = host.agent(request);
+        assert_eq!(
+            exact_runner::agent::field_str(&refused, "error").as_deref(),
+            Some(message)
+        );
+        assert_eq!(
+            exact_runner::agent::field_num(&refused, "generation"),
+            Some(1.0)
+        );
+    }
 }

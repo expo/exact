@@ -199,8 +199,10 @@ impl<D: DataSource> Runner<D> {
     /// or a queued mutation's next send. A repeating timer is not: an
     /// `every` spinner never ends, so it cannot hold a run open.
     pub fn one_shot_armed(&self) -> bool {
-        (self.timers.iter().zip(&self.plan.timers))
-            .any(|(t, row)| row.once && t.next_ms.is_finite())
+        self.timers
+            .iter()
+            .enumerate()
+            .any(|(i, t)| self.timer_row(i).once && t.next_ms.is_finite())
             || self.then_due.iter().any(|due| due.is_finite())
             || self.queues.next_due.iter().any(|due| due.is_finite())
     }

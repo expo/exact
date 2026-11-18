@@ -249,7 +249,7 @@ pub(super) struct Cache {
     // By owner (a measure looks one up per call), each with its recency.
     bindings: HashMap<exact_kernel::NodeKey, Binding>,
     recency: u64,
-    /// What a paint's maintenance ([`Cache::maintain`]) weighs to skip the
+    /// What maintenance ([`Cache::maintain`]) weighs to skip the
     /// eviction walk: every entry's policy bytes, pinned or not, at the last
     /// walk; bytes and identities added since; maintenance calls since.
     walked_bytes: usize,
@@ -260,18 +260,18 @@ pub(super) struct Cache {
     /// ones a paint still held ([`Cache::superseding`]).
     superseded: HashMap<(u32, u8), Vec<(u64, u64)>>,
 }
-/// New identities since the last walk after which a paint's maintenance walks.
+/// New identities since the last walk after which maintenance walks.
 pub(super) const WALK_IDENTITIES: usize = 64;
-/// Paints' maintenance calls after which one walks regardless: rows a paint
-/// stopped showing became cold without anything growing.
+/// Maintenance calls after which one walks regardless: released paragraph
+/// owners can make entries cold without anything growing.
 pub(super) const WALK_CALLS: u32 = 32;
 thread_local! {
     /// Inside [`deferring_eviction`]: growth skips the eviction walk.
     static DEFERRED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 /// Run `f` (a layout pass, a presenter's frame) with eviction walks deferred
-/// to the paint's maintenance ([`Cache::maintain`]) or the first growth after
-/// it. A walk visits every identity, so one per text a pass measures (rows
+/// to maintenance after the pass ([`Cache::maintain`]) or the first growth
+/// after it. A walk visits every identity, so one per text a pass measures (rows
 /// mounting during a fling) or a paint misses (a width the kernel answers
 /// from its own cache) is quadratic; the cold target is soft, and the pass's
 /// own texts are pinned anyway.
@@ -732,12 +732,12 @@ impl Cache {
         });
         self.prune_bindings();
     }
-    /// A paint's maintenance: [`Cache::trim`] when anything could be over a
+    /// After commits or paints: [`Cache::trim`] when anything could be over a
     /// budget. Bytes cannot be: every entry weighed at the last walk plus
     /// everything added since is within the cold target. Identities are let
     /// past their cap by at most [`WALK_IDENTITIES`] new ones, and by entries
-    /// a paint stopped pinning for at most [`WALK_CALLS`] paints: a walk
-    /// visits every identity, which a paint per frame cannot afford.
+    /// owners stopped pinning for at most [`WALK_CALLS`] maintenance calls.
+    /// Walking every identity on every call would be too expensive.
     pub fn maintain(&mut self) {
         self.unwalked += 1;
         if self.walked_bytes.saturating_add(self.grown_bytes) <= self.target

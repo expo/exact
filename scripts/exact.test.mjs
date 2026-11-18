@@ -828,7 +828,7 @@ test.skipIf(process.platform !== 'darwin')('Icon Composer supplies the primary i
   assert.deepEqual(appIcon(app, mac, 'macos'), { CFBundleIconFile: 'AppIcon' });
 }), 60000);
 
-test.skipIf(process.platform !== 'darwin')('iOS alternate icon sets compile beside raster and Composer primaries for both device families', () => inDir(dir => {
+test.skipIf(process.platform !== 'darwin')('a declared alternate\'s catalog set compiles beside raster and Composer primaries for both device families', () => inDir(dir => {
   const { useXcode } = require('../host/apple/devices.mjs');
   const { iosAssets } = require('../host/apple/assets.mjs');
   useXcode();
@@ -841,6 +841,9 @@ test.skipIf(process.platform !== 'darwin')('iOS alternate icon sets compile besi
   writeFileSync(resolve(set, 'Contents.json'), JSON.stringify({ info: { author: 'xcode', version: 1 }, images: [{ idiom: 'universal', platform: 'ios', size: '1024x1024', filename: 'icon.png' }] }));
   const app = composerFixture(dir);
   app.manifest.icons = [{ src: 'icon.png', sizes: '1024x1024' }];
+  // A catalog set is an alternate only where alternate_icons names it (LLP 1163.000 D1).
+  assert.throws(() => iosAssets(app, resolve(dir, 'undeclared'), false), /Alternate\.appiconset is an app icon that no alternate_icons entry names/);
+  app.manifest.alternate_icons = [{ name: 'Alternate', icons: [{ src: 'icon.png' }] }];
   for (const [composer, catalog, device, folder] of [[true, true, false, 'composer'], [false, true, false, 'raster'], [false, false, false, 'development'], [false, true, true, 'device']]) {
     if (!composer) delete app.manifest.host.ios.icon;
     const out = resolve(dir, folder); mkdirSync(out);

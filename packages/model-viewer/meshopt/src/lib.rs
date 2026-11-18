@@ -1,9 +1,7 @@
-//! Bake-only port of meshoptimizer v0.25's reference decoder by Jasper St. Pierre.
+//! Port of meshoptimizer v0.25's reference decoder by Jasper St. Pierre.
 //! https://github.com/zeux/meshoptimizer/blob/v0.25/js/meshopt_decoder_reference.js
-//! Copyright (c) 2016-2025 Arseny Kapoulkine. MIT license: LICENSE.md beside this file.
+//! Copyright (c) 2016-2025 Arseny Kapoulkine. MIT license: ../LICENSE.md.
 mod filters;
-#[cfg(test)]
-mod tests;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -43,7 +41,12 @@ fn dezig(v: u32) -> u32 {
     (v >> 1) ^ (0u32.wrapping_sub(v & 1))
 }
 
-pub(crate) fn decode(
+/// Decode an `EXT_meshopt_compression` buffer view.
+///
+/// `count` and `stride` are the view's element count and byte stride. `mode`
+/// and `filter` take the extension's uppercase names, including `NONE`.
+/// Invalid streams and decoded views above 256 MiB return an error.
+pub fn decode(
     count: usize,
     stride: usize,
     source: &[u8],

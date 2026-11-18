@@ -848,3 +848,43 @@ fn a_window_that_is_not_shown_reaches_first_pixel_without_a_present() {
     p.first_pixel_unshown();
     assert!(p.first_pixel_told());
 }
+
+#[test]
+fn module_validation_keeps_the_live_sequence_and_root_drop_report() {
+    let plan = |second: bool| {
+        crate::test_plan(&format!(
+        "component App\n  state kept = 1\n  state retyped = {}\n{}  view\n    text `${{kept}}`\n",
+        if second { "\"new\"" } else { "1" },
+        if second { "" } else { "  state removed = 1\n" },
+    ))
+    };
+    let (mut p, error) = Presenter::boot_with(
+        &plan(false),
+        Held,
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.host.activate_data().unwrap();
+    p.painted = true;
+    let epoch = p.host.runner().kernel().epoch();
+    assert!(p
+        .reload_module(&plan(true), Held, module(), false)
+        .unwrap()
+        .is_none());
+    let runner = p.host.runner();
+    let state = exact_runner::agent::state(runner);
+    assert!(
+        state.contains("{\"what\":\"state\",\"name\":\"retyped\",\"why\":\"type changed\"}"),
+        "{state}"
+    );
+    assert!(
+        state.contains("{\"what\":\"state\",\"name\":\"removed\",\"why\":\"no place\"}"),
+        "{state}"
+    );
+    assert_eq!(runner.generation(), 2);
+    assert!(runner.kernel().epoch() > epoch);
+}

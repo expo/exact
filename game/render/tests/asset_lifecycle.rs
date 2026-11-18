@@ -116,7 +116,10 @@ fn loaded_content_reprepares_after_device_loss() {
         return;
     };
     let mut surface = fresh();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bake/tests/fixtures/crate.gltf");
     let (model, mut textures) = exact_game_bake::assets(&path).unwrap();
@@ -139,7 +142,10 @@ fn loaded_content_reprepares_after_device_loss() {
         surface.assets().requests,
         textures.keys().cloned().collect::<Vec<_>>()
     );
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     for (name, texture) in &textures {
         surface.asset(name, Ok(&bin::to_vec(texture)));
     }
@@ -154,10 +160,16 @@ fn loaded_content_reprepares_after_device_loss() {
 #[test]
 fn loss_during_loading_reissues_unanswered_names() {
     let mut surface = fresh();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert_eq!(surface.assets().requests, ["crate.model"]);
     surface.device_lost();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert_eq!(surface.assets().requests, ["crate.model"]);
 }
 
@@ -173,7 +185,10 @@ fn attaching_a_device_after_headless_delivery_requests_texture_bytes() {
     for (name, texture) in &textures {
         surface.asset(name, Ok(&bin::to_vec(texture)));
     }
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert_eq!(
         surface.assets().requests,
         textures.keys().cloned().collect::<Vec<_>>()
@@ -202,7 +217,10 @@ fn deferred_restore_preserves_the_last_texture_until_upload() {
     }
     let save = source.save().unwrap();
     let mut surface = fresh();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.restore(&save, exact_gpu::Restore::Open).unwrap();
     surface.asset("crate.model", Ok(&exact_game::asset::encode_model(&model)));
     for (name, texture) in &textures {
@@ -236,7 +254,10 @@ fn replacement_device_draws_identical_pixels() {
         return;
     };
     let mut surface = WorldSurface::<VisibleArt, exact_game_render::ModelExecutor, true>::default();
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     surface.bind(&[], None).unwrap();
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bake/tests/fixtures/crate.gltf");
@@ -263,7 +284,10 @@ fn replacement_device_draws_identical_pixels() {
     let Some(replacement) = crate::test_device::device_or_skip(exact_gpu::fixture::device()) else {
         return;
     };
-    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.device_ready(
+        exact_gpu::wgpu::Features::empty(),
+        exact_gpu::wgpu::Limits::downlevel_defaults(),
+    );
     assert_eq!(
         surface.assets().requests,
         textures.keys().cloned().collect::<Vec<_>>()

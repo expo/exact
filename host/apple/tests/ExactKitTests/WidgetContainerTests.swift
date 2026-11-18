@@ -56,6 +56,22 @@ final class WidgetContainerTests: XCTestCase {
         XCTAssertNoThrow(try WidgetContainer.pin(root: root, compatibility: "cohort"), "a reader with no embedded plan of its own takes what is current")
         XCTAssertThrowsError(try WidgetContainer.pin(root: root, generation: first, compatibility: "cohort", embedded: "build-a"), "a generation published before binaries were named is no binary's")
     }
+    /// LLP 1126 D9, amended 2026-11-17: a push-to-start names the generation the app runs, as a start from the app
+    /// does, and that generation is published, so the extension renders it and the app's update and end find it.
+    func testPushStartsNameTheRunningGenerationAndPublishIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let registry = #"[{"kind":"train","shape":"s1","push":true},{"kind":"quiet","shape":"s2","push":false}]"#
+        let delivered = AssetResolver(root: root, names: ["plans/card.plan", "plans/activities.json"], generation: "delivered") { name in
+            Data((name == "plans/activities.json" ? registry : "plan").utf8)
+        }
+        let entries = try WidgetContainer.pushStarts(delivered, root: root, kinds: ["card"], compatibility: "cohort", embedded: "build-a")
+        let running = WidgetContainer.generationDigest(compatibility: "cohort", publicationID: "delivered")
+        XCTAssertEqual(entries, [["kind": "train", "generation": running, "shape": "s1"]])
+        XCTAssertNotEqual(running, WidgetContainer.generationDigest(compatibility: "cohort", publicationID: "embedded:build-a"))
+        let folder = try WidgetContainer.pin(root: root, generation: running, compatibility: "cohort")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("plans/activities.json").path))
+    }
     func testTypeScriptPublicationRefusesEitherMissingHalf() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

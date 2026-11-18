@@ -111,6 +111,18 @@ pub fn device() -> Result<Gpu, String> {
     block_on(load_gpu(wgpu::Instance::default(), None)).map_err(|error| error.to_string())
 }
 
+/// This machine's device with the packages' declared requirements.
+pub fn device_with_requirements(
+    requirements: &[crate::grants::Requirements],
+) -> Result<Gpu, String> {
+    block_on(crate::load_gpu_with_requirements(
+        wgpu::Instance::default(),
+        None,
+        requirements,
+    ))
+    .map_err(|error| error.to_string())
+}
+
 /// This machine's device without the `withheld` features: what a device that
 /// lacks them draws (full-precision shading, say), beside `device`'s.
 pub fn device_without(withheld: wgpu::Features) -> Result<Gpu, String> {

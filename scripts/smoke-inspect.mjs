@@ -326,3 +326,38 @@ export async function messageKeys(s, { host, check, app }) {
   await s.type(button.id, { key: 'Space' });
   check((await s.state()).slots.replying === source, `${app}: Space replies to the focused message`);
 }
+
+/** A, B, A and the same plan again are distinct committed generations (LLP 1029.000.002 D10). */
+export async function replacementGenerations(s, { root, source, plan, original, check }) {
+  let before = await s.state();
+  check(before.generation === 1, `initial generation: ${before.generation}`);
+  async function passthroughReplies(state) {
+    for (const request of [{ op: 'settle' }, { op: 'actions', drain: true }]) {
+      const reply = await s.op(request);
+      check(['generation', 'epoch', 'incarnation', 'clock'].every(key => reply[key] === state[key]),
+        `${request.op} carries the session tags at generation ${state.generation}: ${JSON.stringify(reply)}`);
+      check(request.op === 'settle' ? reply.settle === null : Array.isArray(reply.ended),
+        `${request.op} keeps its reply payload: ${JSON.stringify(reply)}`);
+    }
+  }
+  await passthroughReplies(before);
+  const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'), HOST_DEV, 'contract');
+  for (const [label, generation] of [['Other reloaded', 2], ['Other', 3], ['Other', 4]]) {
+    writeFileSync(source, original.replace('text "Other"', `text "${label}"`));
+    const built = spawnSync(compiler, ['build', source, '-o', plan], { cwd: root, encoding: 'utf8' });
+    check(built.status === 0, 'replacement fixture compiles: ' + built.stderr);
+    const after = await pollUntil(() => s.state(), state => state.generation >= generation, { bound: 30_000 });
+    check(after.generation === generation, `replacement generation ${generation}: ${JSON.stringify(after.replacement)}`);
+    check(after.epoch > before.epoch, `replacement epoch continues: ${before.epoch} → ${after.epoch}`);
+    check(after.incarnation === before.incarnation, 'incarnation remains the new kernel count');
+    check(after.replacement?.dropped.length === 0, 'the unchanged root declarations all carry');
+    const tree = await s.tree();
+    check(tree.nodes.some(n => n.props.text === label), 'the replacement label is visible');
+    check((await s.layout()).generation === generation, 'host replies carry the generation');
+    check((await s.logs()).generation === generation, 'journal replies carry the generation');
+    await passthroughReplies(after);
+    before = after;
+  }
+  const report = await s.op({ op: 'perf', frames: true, report: true });
+  check(report.generation === before.generation, 'raw frame reports carry the generation');
+}

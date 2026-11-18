@@ -251,3 +251,39 @@ fn refusal_before_boot_has_no_wake() {
     assert!(refused["timer_due_ms"].is_null());
     assert_ne!(refused["frames"], true);
 }
+
+#[test]
+fn generation_and_epoch_continue_across_plan_replacement_and_fresh_boot() {
+    crate::link::link_for_tests();
+    let a = contract::compile("component App\n  view\n    text \"A\"\n")
+        .unwrap()
+        .encode();
+    let b = contract::compile("component App\n  view\n    text \"B\"\n")
+        .unwrap()
+        .encode();
+    let mut bridge = Bridge::new();
+    let mut previous = 0;
+    for (i, plan) in [&a, &b, &a, &a].into_iter().enumerate() {
+        let len = if i == 0 || i == 3 {
+            bridge.boot(plan, Data, 400., 400., "/")
+        } else {
+            bridge.input_write(plan);
+            bridge.boot_plan(plan.len(), Data, 400., 400., "/")
+        };
+        assert_eq!(output(&bridge, len)["error"], Json::Null);
+        let runner = bridge.host.as_ref().unwrap().runner();
+        assert_eq!(runner.generation(), i as u64 + 1);
+        assert!(runner.kernel().epoch() > previous);
+        previous = runner.kernel().epoch();
+    }
+    let page = crate::document::checkpoint(bridge.host.as_ref().unwrap().runner(), "/");
+    for (index, page) in [page, "invalid checkpoint".into()].into_iter().enumerate() {
+        bridge.checkpoint = Some(("digest".into(), page));
+        let len = bridge.boot(&a, Data, 400., 400., "/");
+        assert_eq!(output(&bridge, len)["error"], Json::Null);
+        let runner = bridge.host.as_ref().unwrap().runner();
+        assert_eq!(runner.generation(), index as u64 + 5);
+        assert!(runner.kernel().epoch() > previous);
+        previous = runner.kernel().epoch();
+    }
+}

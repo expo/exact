@@ -70,9 +70,10 @@ impl<D: DataSource> Presenter<D> {
     /// The shell's answer to picture request `id`: its pixels, RGBA
     /// premultiplied, or the implementation's error. Whether it waited.
     pub fn picture_answered(&mut self, id: u32, answer: Result<tiny_skia::Pixmap, String>) -> bool {
-        let Some(Waiting::Picture(ticket)) = self.requests.waiting.get(&id).cloned() else {
+        let Some(Waiting::Picture(ticket)) = self.requests.waiting.get(&id) else {
             return false;
         };
+        let ticket = *ticket;
         self.requests.waiting.remove(&id);
         let reports = (self.images).package_answer(ticket, answer.map_err(|why| (false, why)));
         self.apply_reports(reports);

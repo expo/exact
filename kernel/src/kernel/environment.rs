@@ -2,6 +2,31 @@
 use super::*;
 
 impl Kernel {
+    /// The published epoch: bumps on every commit that changed something.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// What moves whenever a trial measure (`Kernel::measure_block`) could
+    /// answer differently: the incarnation, the epoch (a commit that changed
+    /// something) and the layout publications. A host that keeps measures
+    /// keeps them while this stands: a change a trial would read either is
+    /// such a commit or waits for a layout (`measure_block` refuses until).
+    pub fn layout_stamp(&self) -> (u64, u64, u64) {
+        (self.incarnation, self.epoch, self.arena.last_pass())
+    }
+
+    /// The kernel incarnation: bumps on every [`Kernel::reset`]. Keys from an
+    /// earlier incarnation never resolve.
+    pub fn incarnation(&self) -> u64 {
+        self.incarnation
+    }
+
+    /// Continue a session's commit sequence in a replacement kernel (LLP 1029.000.002 D10).
+    pub fn continue_epoch(&mut self, previous: u64) {
+        self.epoch = self.epoch.max(previous);
+    }
+
     /// Restore the host's previous scale report after a refused update, including
     /// its absence. An absent report uses the layout default of one.
     pub fn restore_display_scale_report(&mut self, scale: Option<f32>) -> Result<(), KernelError> {
@@ -114,15 +139,15 @@ impl Kernel {
         self.provisional_layouts
     }
 
-    /// Set the insets, the layout regions (LLP 1123 D10), the title-bar area and control text
-    /// styles of the environment — what the host reports with the viewport (a
+    /// Set the insets, the layout regions (LLP 1123 D10), the default padding (D11), the
+    /// title-bar area and control text styles of the environment — what the host reports with the viewport (a
     /// rotation changes them); the segment grid
     /// `env` carries is ignored, [`Kernel::set_segments`] being its twin.
     /// Every node whose style holds an `env()` length gets its engine style
     /// re-derived and is marked dirty; returns whether any did (a layout is
     /// owed then). Changed control fonts immediately re-resolve `em` rows and
-    /// invalidate the controls that read them. Non-finite/nonpositive font sizes
-    /// and non-finite insets are refused. A `reset` keeps the
+    /// invalidate the controls that read them. Non-finite/nonpositive font sizes,
+    /// non-finite insets and a negative default padding are refused. A `reset` keeps the
     /// environment: it is the host's.
     pub fn set_env(&mut self, env: Env) -> Result<bool, KernelError> {
         if !env.is_finite() {
@@ -137,6 +162,7 @@ impl Kernel {
             button_fonts: env.button_fonts,
             screen: env.screen,
             regions: env.regions,
+            default_padding: env.default_padding,
             titlebar_area: env.titlebar_area,
             ..next
         };
@@ -222,6 +248,8 @@ impl Kernel {
         let box_rules_changed = self.arena.env().cell_spaces != env.cell_spaces
             || self.arena.env().cell_borders != env.cell_borders
             || self.arena.env().border_scale != env.border_scale;
+        // Restyle a box padded by default, which moves with the default (LLP 1123 D11)
+        let padding_changed = self.arena.env().default_padding != env.default_padding;
         let before: Vec<_> = if control_changed {
             self.arena
                 .iter_live()
@@ -248,6 +276,7 @@ impl Kernel {
             .filter(|s| {
                 box_rules_changed
                     || uses_env(self.arena.style(*s))
+                    || padding_changed && block::reservation::pads_by_default(self.arena.style(*s))
                     || self.arena.cover(*s).is_some()
                     || self.arena.neutral_alert(*s)
             })

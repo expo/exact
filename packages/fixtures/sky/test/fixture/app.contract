@@ -1,0 +1,15 @@
+component App
+  state shown = false
+  state red = false
+  action show
+    shown = not shown
+  action recolor
+    red = not red
+  view
+    column padding=16 gap=8
+      button press=show testId="show"
+        text "Show sky"
+      button press=recolor testId="recolor"
+        text "Change color"
+      if shown
+        canvas surface=sky(red) width=200 height=120 testId="sky"

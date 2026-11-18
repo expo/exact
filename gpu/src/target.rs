@@ -38,6 +38,9 @@ impl Module {
         height: u32,
     ) -> Option<u32> {
         self.check_device();
+        if let Some(error) = self.refused.get(name).cloned() {
+            return self.fail(error);
+        }
         let Some(gpu) = self.gpu.as_ref() else {
             return self.fail("no device");
         };
@@ -61,7 +64,7 @@ impl Module {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         config.desired_maximum_frame_latency = FRAME_LATENCY;
         swapchains(|| target.configure(&gpu.device, &config));
-        let id = self.insert(surface, Some((target, config)))?;
+        let id = self.insert(name, surface, Some((target, config)))?;
         if let Some(inst) = self.instances.get_mut(&id) {
             inst.hdr = hdr;
             inst.alpha_modes = caps.alpha_modes;
@@ -101,6 +104,10 @@ impl Module {
         width: u32,
         height: u32,
     ) -> bool {
+        if let Some(error) = self.refused_instance(id) {
+            self.fail::<()>(error);
+            return false;
+        }
         self.settle(id);
         self.detach(id);
         self.check_device();
@@ -120,6 +127,7 @@ impl Module {
         config.present_mode = wgpu::PresentMode::AutoVsync;
         config.desired_maximum_frame_latency = FRAME_LATENCY;
         let features = gpu.device.features();
+        let limits = gpu.device.limits();
         let Some(inst) = self.instances.get_mut(&id) else {
             return self.fail::<()>(format!("no canvas {id}")).is_some();
         };
@@ -129,7 +137,7 @@ impl Module {
         inst.seen = Default::default();
         inst.presentation = Some(SurfaceRef::new(target));
         inst.config = Some(config);
-        inst.surface.device_ready(features);
+        inst.surface.device_ready(features, limits);
         inst.report_color_space();
         inst.dirty = true;
         true
@@ -181,13 +189,17 @@ impl Module {
         id: u32,
         features: wgpu::Features,
     ) -> Option<&mut crate::Instance> {
+        if let Some(error) = self.refused_instance(id) {
+            return self.fail(error);
+        }
         self.release(id);
         if !self.instances.contains_key(&id) {
             return self.fail(format!("no canvas {id}"));
         }
+        let limits = self.gpu.as_ref()?.device.limits();
         let inst = self.instances.get_mut(&id).unwrap();
         inst.hdr = false;
-        inst.surface.device_ready(features);
+        inst.surface.device_ready(features, limits);
         inst.surface.color_space_granted(ColorSpace::Srgb);
         inst.dirty = true;
         Some(inst)

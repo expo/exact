@@ -36,6 +36,51 @@ afterAll(async () => {
   server?.stop(true);
 }, 60_000);
 
+test('a list replacing a focused route fills after its ancestor focusout commits', async () => {
+  const result = await evaluate(`(async () => {
+    const root = document.createElement('section');
+    root.style.cssText = 'position:relative;width:400px;height:800px';
+    document.getElementById('exact-root').append(root);
+    const routes = rt.sig(['one']), focused = rt.sig(false), events = [];
+    const rows = Array.from({length:200}, (_, i) => i);
+    let port, link;
+    const own = rt.scope(() => {
+      for (const kind of ['focusin', 'focusout']) rt.on(root, kind, rt.act(event => {
+        events.push({kind, event, attached:port.isConnected});
+        rt.W(focused, kind === 'focusin');
+      }), rt.onFocusWithin);
+      rt.each(root, routes, route => route(), (parent, route) => {
+        const page = rt.h(parent, 'div', 0, 0, 0);
+        page.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column';
+        link = rt.h(page, 'a', 0, {id:'link-' + route(), href:'/' + route()}, 'Next');
+        link.style.height = '20px';
+        rt.on(link, 'press', rt.act(() => rt.W(routes, [route() === 'one' ? 'two' : 'one'])), rt.onPress);
+        port = rt.h(page, 'div', 0, 0, 0);
+        port.style.cssText = 'flex:1;min-height:0;overflow:auto';
+        list.vl(port, () => rows, item => item(), (wrapper, item) => {
+          const row = rt.h(wrapper, 'div', 0, 0, String(item()));
+          row.style.height = '40px';
+        }, {est:40, pw:[], ph:[]});
+      }, 1);
+    });
+    rt.settled(); await exact.lists.pending(); await exact.lists.settle();
+    const windows = [];
+    for (let i = 0; i < 2; i++) {
+      link.focus(); link.click();
+      await exact.lists.settle();
+      windows.push({port:port.$list.geometry?.port_main ?? null,
+        filled:port.$list.mounted.some(row => row.position === 19), focused:focused()});
+    }
+    rt.end(own); root.remove(); rt.settled();
+    return {windows, events};
+  })()`);
+  expect(result.windows).toEqual(Array(2).fill({port:780, filled:true, focused:false}));
+  expect(result.events).toEqual(['one', 'two'].flatMap(route => [
+    {kind:'focusin', event:['link-' + route, null], attached:true},
+    {kind:'focusout', event:['link-' + route, null], attached:true},
+  ]));
+}, 60_000);
+
 test('adopted prefetched rows hold from their live mount, preserving insertion-triggered plays', async () => {
   const result = await evaluate(`(async () => {
     const style = document.head.appendChild(document.createElement('style'));

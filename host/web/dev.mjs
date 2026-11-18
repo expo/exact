@@ -17,7 +17,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { slashRelative, within } from '../../scripts/paths.mjs';
 import { rustPackage, rustOutput, rustInputs, rustCards } from '../../scripts/rust.mjs';
-import { gpuModules, shaderWatchRoots, rustPolicy, rebuildPolicy } from '../../scripts/app.mjs';
+import { currentGpuModules, gpuView } from '../../scripts/app-shells.mjs';
+import { injectedProfiles, gpuModules, shaderWatchRoots, rustPolicy, rebuildPolicy } from '../../scripts/app.mjs';
 import { HOST_DEV, webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
 import { developmentLinks } from '../apple/build.mjs';
 import { acceptsHTML, webRequestURL } from '../../scripts/origin.mjs';
@@ -103,7 +104,7 @@ async function currentWebBuild() {
   try {
     const build = JSON.parse(readFileSync(graphPath, 'utf8'));
     return build.version === 1 && build.trust === 'development' && build.binary?.configuration?.flags?.EXACT_WEB_LINK === 'all'
-      && (!app.manifest.game || ['gpu', ...gpuModules(app.manifest).map(({name}) => `gpu-${name}`)].every(kind => build.products?.some(p => p.path === resolve(app.target, 'wasm32-unknown-unknown', buildEnv.EXACT_GAME_PROOF_PROFILE === 'gpu-dev' ? 'gpu-dev' : 'web', app.crate(kind).replaceAll('-', '_') + '.wasm'))))
+      && (!app.manifest.game || ['gpu', ...gpuModules(app.manifest, 'web').map(({name}) => `gpu-${name}`)].every(kind => build.products?.some(p => p.path === resolve(app.target, 'wasm32-unknown-unknown', buildEnv.EXACT_GAME_PROOF_PROFILE === 'gpu-dev' ? 'gpu-dev' : 'web', app.crate(kind).replaceAll('-', '_') + '.wasm'))))
       && pendingBuildInputs(build).length === 0;
   } catch { return false; }
 }
@@ -140,7 +141,7 @@ function readGpuInputs(profile = buildEnv.EXACT_GAME_PROOF_PROFILE === 'gpu-dev'
 // Every GPU artifact the web serves (LLP 1009 D6): the primary `gpu`, then
 // each declared module `gpu/<name>`, with the inputs its last link named.
 const gpuArtifacts = () => [{ stem: 'gpu', kind: 'gpu' },
-  ...gpuModules(app.manifest).map(({ name }) => ({ stem: `gpu/${name}`, kind: `gpu-${name}`, module: name }))];
+  ...gpuModules(app.manifest, 'web').map(({ name }) => ({ stem: `gpu/${name}`, kind: `gpu-${name}`, module: name }))];
 let gpuArtifactInputs = new Map();
 function gameRuntimeInputs(inputs) {
   if (!app.manifest.game || !inputs.size) return inputs;
@@ -424,7 +425,7 @@ let assetsNeedRebuild = false;
 // Browsers reload on changed web bytes; native admission uses its own build receipt.
 const programIdentity = () => {
   if (producersOnly) return JSON.parse(readFileSync(graphPath, 'utf8')).binary.sha256;
-  const files = ['app.wasm', 'gpu_bg.wasm', ...gpuModules(app.manifest).map(({ name }) => `gpu/${name}_bg.wasm`), 'markup-editor.wasm', 'textflow.wasm'].map((name) => {
+  const files = ['app.wasm', 'gpu_bg.wasm', ...gpuModules(app.manifest, 'web').map(({ name }) => `gpu/${name}_bg.wasm`), 'markup-editor.wasm', 'textflow.wasm'].map((name) => {
     const encoded = filesystem({ op: 'get', root: dist, path: name });
     if (encoded === null && name === 'app.wasm') throw new Error('the app wasm is missing');
     return { name, sha256: encoded === null ? null : createHash('sha256').update(Buffer.from(encoded, 'base64')).digest('hex') };
@@ -1127,10 +1128,11 @@ let optionalRootsSeen = optionalRoots();
 function watchCompilerInputs(contract = contractGraph()) {
   // Poll file and directory-entry metadata: saves, replacements and new paths
   // remain visible when filesystem notifications are lost or coalesced.
-  // A Contract package's files are inputs wherever they are installed,
-  // node_modules included (LLP 1091 D10).
+  // Package Contract and GPU files are inputs wherever they are installed,
+  // node_modules included (LLP 1091 D10, LLP 1153.003 D5).
   compilerContracts = contract; for (const path of contract.sources) readinessContracts.add(path);
-  const outside=p=>skipped.test(p)&&!contract.files.has(p), cargo=p=>/[\\/]\.cargo[\\/]/.test(p);
+  const outside=p=>skipped.test(p)&&!contract.files.has(p)
+    &&!(gpuInputs.has(p)&&/[\\/]node_modules[\\/]/.test(p)), cargo=p=>/[\\/]\.cargo[\\/]/.test(p);
   // Paths in skipped trees invalidate cached native admission (`nativeValidation`) and rebuild nothing.
   const { directories: nativeTrees, files: nativeFiles, nativeOnly } = nativeWatchPaths(builtReceipts, outside, cargo);
   resourceDirectories = nativeTrees;
@@ -1279,16 +1281,17 @@ async function produceGpu(files) {
 }
 async function produceGpuArtifact(files, { stem, kind, module }) {
   const start = Date.now();
-  const profile = Bun.TOML.parse(readFileSync(resolve(app.workspace, 'Cargo.toml'), 'utf8')).profile?.['gpu-dev'] ? 'gpu-dev' : 'web';
+  const at = gpuView(app, currentGpuModules(app, 'web').find(m => m.name === module));
+  const profile = Bun.TOML.parse(readFileSync(resolve(at.workspace, 'Cargo.toml'), 'utf8')).profile?.['gpu-dev'] ? 'gpu-dev' : 'web';
   if (profile === 'web') console.log('gpu: add [profile.gpu-dev] inheriting dev, opt-level=1, no LTO, and optimized dependencies for fast module rebuilds');
   mkdirSync(gpuSideRoot, { recursive: true });
   const stage = mkdtempSync(resolve(gpuSideRoot, 'build-'));
   const run = (command, args) => runBuildTree(command, args,
-    { cwd: app.workspace, env: { ...buildEnv, CARGO_TARGET_DIR: app.target } },
+    { cwd: at.workspace, env: { ...buildEnv, CARGO_TARGET_DIR: app.target } },
     child => { gpuBuildChild = child; }, () => stopping);
   try {
     console.log(`gpu: ${files.length} source file(s) changed; building ${app.crate(kind)} (${profile})`);
-    await run('cargo', ['build',...cargoReproducibilityFlags(app),'-p',app.crate(kind),'--target','wasm32-unknown-unknown','--profile',profile]);
+    await run('cargo', ['build',...cargoReproducibilityFlags(at),...injectedProfiles(at),'-p',app.crate(kind),'--target','wasm32-unknown-unknown','--profile',profile]);
     const compiled = Date.now();
     // The side directory mirrors dist: `gpu.js`, or a module's `gpu/<name>.js`.
     await run('wasm-bindgen', ['--target','no-modules','--no-typescript','--out-dir',module ? resolve(stage, 'gpu') : stage,'--out-name',module ?? 'gpu',resolve(app.target,'wasm32-unknown-unknown',profile,app.crate(kind).replaceAll('-','_')+'.wasm')]);

@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -199,7 +199,7 @@ print("700 named colors passed")
 
 test('Icon Composer retains live SVG stacks and explicit legacy artwork beside ordinary assets', () => fixture(({ root, bundle, args }) => {
   const project = resolve(import.meta.dir, '../../apps/duo-lab/art/DuoLab.icon'), fallback = resolve(project, '../../assets/icon.png');
-  const command = [...args, project, '--app-icon', 'DuoLab', '--exact-icon-fallback', fallback];
+  const command = [...args, project, '--app-icon', 'DuoLab', '--exact-icon-fallback', `DuoLab=${fallback}`];
   compileCatalogCommand(command);
   const bytes = readFileSync(resolve(bundle, 'Assets.car')), info = assetCatalogInfo(bytes);
   expect(info.filter(row => row.Name === 'DuoLab' && row.AssetType === 'Icon Stack')).toHaveLength(3);
@@ -217,6 +217,37 @@ test('Icon Composer retains live SVG stacks and explicit legacy artwork beside o
     expect(inspected.some(row => row.Name === 'DuoLab')).toBe(true);
   }
 }));
+
+test('an Icon Composer alternate takes the fallback of its own name, and alternates are listed by name alone, as actool lists them', () => fixture(({ root, catalog, bundle, args }) => {
+  const set = resolve(catalog, 'Primary.appiconset'); mkdirSync(set);
+  const data = Buffer.alloc(1024 * 1024 * 4);
+  for (let i = 0; i < data.length; i += 4) data.set([255, 0, 0, 255], i);
+  writeFileSync(resolve(set, 'icon.png'), encodePng({ width: 1024, height: 1024, data }));
+  writeFileSync(resolve(set, 'Contents.json'), JSON.stringify({ images: [{ filename: 'icon.png', idiom: 'universal', platform: 'ios', size: '1024x1024' }], info: { version: 1, author: 'exact' } }));
+  // A project is compiled under its directory's stem, which the Apple build stages as the alternate's name.
+  const project = resolve(root, 'Paper.icon');
+  cpSync(resolve(import.meta.dir, '../../apps/duo-lab/art/DuoLab.icon'), project, { recursive: true });
+  const fallback = resolve(import.meta.dir, '../../apps/duo-lab/assets/icon.png');
+  const command = [...args, project, '--app-icon', 'Primary', '--alternate-app-icon', 'Paper'];
+  expect(() => compileCatalogCommand(command)).toThrow('PNG icons entry');
+  expect(() => compileCatalogCommand([...command, '--exact-icon-fallback', fallback])).toThrow('<icon name>=<png>');
+  expect(() => compileCatalogCommand([...command, '--exact-icon-fallback', `Primary=${fallback}`])).toThrow('PNG icons entry');
+  const { keys } = compileCatalogCommand([...command, '--exact-icon-fallback', `Paper=${fallback}`]);
+  for (const idiom of ['CFBundleIcons', 'CFBundleIcons~ipad']) expect(keys[idiom].CFBundleAlternateIcons).toEqual({ Paper: { CFBundleIconName: 'Paper' } });
+  expect(readdirSync(bundle).filter(file => file.endsWith('.png')).sort()).toEqual(['Primary60x60@2x.png', 'Primary76x76@2x~ipad.png']);
+  const info = assetCatalogInfo(readFileSync(resolve(bundle, 'Assets.car')));
+  expect(info.filter(row => row.Name === 'Paper' && row.AssetType === 'Icon Stack')).toHaveLength(3);
+  expect(info.filter(row => row.Name === 'Primary' && row.AssetType === 'Icon Image')).toHaveLength(2);
+  if (process.platform !== 'darwin') return;
+  // Xcode's actool writes the same roster from the same inputs.
+  const partial = resolve(root, 'native.plist'), native = resolve(root, 'Native.bundle'); mkdirSync(native);
+  const ran = spawnSync('xcrun', ['actool', catalog, project, '--compile', native, '--platform', 'iphonesimulator', '--minimum-deployment-target', '17.0', '--target-device', 'iphone', '--target-device', 'ipad',
+    '--app-icon', 'Primary', '--alternate-app-icon', 'Paper', '--output-partial-info-plist', partial, '--output-format', 'human-readable-text'], { encoding: 'utf8' });
+  expect(ran.status, ran.stderr).toBe(0);
+  const written = JSON.parse(spawnSync('plutil', ['-convert', 'json', '-o', '-', partial], { encoding: 'utf8' }).stdout);
+  for (const idiom of ['CFBundleIcons', 'CFBundleIcons~ipad']) expect(written[idiom]).toEqual(keys[idiom]);
+  expect(readdirSync(native).filter(file => file.endsWith('.png')).sort()).toEqual(['Primary60x60@2x.png', 'Primary76x76@2x~ipad.png']);
+}), 30000);
 
 test("the icon files named by actool's keys, as Xcode's actool writes them, and nothing else", () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-icon-files-'));

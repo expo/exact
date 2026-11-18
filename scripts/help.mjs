@@ -510,12 +510,14 @@ completion.`,
     example: 'bun exact.mjs forma eval . --mode dark-style=dim',
   },
   add: {
-    line: 'a standard module (geolocation): its dependency in package.json, installed',
+    line: 'a standard module (geolocation) or another package: its dependency in package.json, installed',
     usage: 'bun exact.mjs add <module> [<app>]',
     flags: [['--no-install', 'write the dependency and install nothing']],
     body: `In an app, omit <app>; from the checkout, name it. <module> is one of exact2's
 (geolocation, or @exact/geolocation): a path into this checkout,
-so it compiles against the SDK the app uses. The app's package manager installs it:
+so it compiles against the SDK the app uses. Another package is a directory
+(../maplibre-exact, depended on as file:) or a registry name with its scope or version
+(@birkskyum/maplibre-exact), which needs the install. The app's package manager installs it:
 the packageManager the nearest package.json up to the repository names, else the one
 whose lockfile is nearest (pnpm, Yarn, npm), else Bun. Then name what you use; when the module
 has grants, add their line: docs/recipes/permissions.md.
@@ -588,11 +590,11 @@ Ports    none; send makes one HTTPS request. Runs to completion.`,
     example: 'bun exact.mjs shells',
   },
   lock: {
-    line: 'refresh the app or game Cargo.lock against this Exact checkout',
+    line: 'refresh Cargo.lock and the app’s Swift Package.resolved',
     usage: 'bun exact.mjs lock',
     flags: [],
     internal: ['--lock'],
-    body: 'Use after exact update reports app lock drift, after this checkout moves or after adding a dependency.\nApps preserve locked versions where possible, resolve offline first and fetch missing dependencies when needed; games fetch and recapture their lock. Builds never change the lock.\nPorts    none. Runs to completion.',
+    body: 'Use after exact update reports app lock drift, after this checkout moves or after adding a dependency.\nApps preserve locked versions where possible, resolve Cargo offline first and fetch missing dependencies when needed; games fetch and recapture their lock. Swift products declared by the app or its packages resolve into Package.resolved. Review and commit changed locks. Builds never change them.\nPorts    none. Runs to completion.',
     example: 'bun exact.mjs lock',
   },
   windows: {

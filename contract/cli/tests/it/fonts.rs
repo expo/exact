@@ -443,11 +443,11 @@ fn shared_font_choices_preserve_baseline_plan_bytes() {
             "component App\n  view\n    Child()\ncomponent Child\n  state on = false\n  derive face = {face}\n  derive choice = on ? face : face\n  view\n    text \"hi\" font-family=choice\n",
         ))
         .unwrap();
-        // Bytes 16..24 are the schema digest, which moves with every schema edit and says nothing
-        // about this program; the rest of the plan must be the baseline's.
+        // Bytes 8..24 are the format and kernel schema digests. Neither describes
+        // this program; its rows must still match the baseline.
         let encoded = plan.encode();
         assert_eq!(encoded.len(), baseline.len(), "{face}");
-        assert_eq!(encoded[..16], baseline[..16], "{face}");
+        assert_eq!(encoded[..8], baseline[..8], "{face}");
         assert_eq!(encoded[24..], baseline[24..], "{face}");
         assert_eq!(plan.derives.len(), 2, "{face}");
     }

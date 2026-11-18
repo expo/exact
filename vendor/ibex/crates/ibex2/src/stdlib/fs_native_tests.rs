@@ -252,6 +252,7 @@ fn a_native_grant_below_a_home_line_the_app_replaced_is_not_followed() {
     set_roots(Roots {
         home: Some(base.clone()),
         bundle: None,
+        known_folder: None,
     });
     let deeper = inner.display();
     let grants = GrantSet::parse(&format!(

@@ -8,6 +8,8 @@ import os
 package final class Presenter {
     var documentLanguage = ""
     var documentDirection = "ltr"
+    /// The direction Exact's controllers take (`turnChrome`): nil until the document is told its language.
+    var chromeDirection: UITraitEnvironmentLayoutDirection?
     // A disabled signposter still allocates interval state; callers check its log first.
     static let signpostLog = OSLog(subsystem: "com.exact.host", category: .dynamicTracing)
     static let signposts = OSSignposter(logHandle: signpostLog)
@@ -1023,7 +1025,7 @@ package final class Presenter {
                 guard let parent = views[id] else { return }
                 placeChildren(parent, op.ids)
             case .surface:
-                if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] ?? []) }
+                if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] as? Data ?? Data("[]".utf8)) }
             case .canvas2d: if let v = views[id] { canvas2d.apply(id, op.payload, layer: v.layer) }
             case .svg: if views[id] != nil { applyGeometry(op) }
             case .animations:

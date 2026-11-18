@@ -15,7 +15,7 @@ import { liveById, installFits } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)
 export { animationClocks, launchLocation, launchVisits } from './navigation.js';
 export { fontFamily } from './font-family.js';
-import { Head, markDocument, projectRoots, openTabs, unopened, tp } from './document.js';
+import { Head, markDocument, projectRoots, openTabs, prepareTabs, unopened, tp } from './document.js';
 export { Head, unopened, tp };
 export { canSetStatus, statusSubject } from './document.js';
 import { conforms, eq, equal, Refusal, Failed } from './shape.js';
@@ -56,7 +56,7 @@ import { Resources, Mutations, lateReaders, lateIdle } from './resources.js';
 import { Views } from './tree.js';
 import { KeyEvent, Propagating } from './events.js';
 import { Pres, Present, Sh, Input, pressFeedback } from './pieces.js';
-import { Booting, start } from './mount.js';
+import { Booting, start, finishTaskScopes } from './mount.js';
 export * from './clock.js';
 export * from './resources.js';
 export * from './tree.js';
@@ -483,6 +483,7 @@ export function commit(f, what = 'commit', finished) {
     }
     // gated tasks and sequences over the settled state, inside the rollback (LLP 1092 D8, LLP 1125 D2)
     step = 'arming its tasks and sequences';
+    prepareTabs();
     Sched?.gates();
     sound = Sounds.gate?.();
   } catch (e) {
@@ -531,6 +532,7 @@ export function commit(f, what = 'commit', finished) {
   unpark();
   // Freeze releases streams and stops sequences even when the tree waits for a view transition.
   if (ok) {
+    finishTaskScopes();
     if (Sounds.frozen && Open.size) closeLetGo(inflight, say);
     if (Sounds.frozen === true && !wasFrozen) {
       Sounds.settling = true;
@@ -570,6 +572,7 @@ export function commit(f, what = 'commit', finished) {
     try {
       flush();
       openTabs();
+      Sched?.gates();
     } catch (e) {
       Poisoned = true;
       Why = why('updating the tree', String(e));
@@ -609,7 +612,7 @@ export function commit(f, what = 'commit', finished) {
         m.thenOrigin = origin;
         if (!clock.agent) drive();
       }
-    Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
+    Sched?.scan(true, Sched?.changed(queued) ?? changed); // a free queue's waiting send is due (LLP 1092 D3)
     return true;
   };
   // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
@@ -958,6 +961,6 @@ export * from './roster.js'; // the roster's pure entries
 // the router (LLP 1038), its own file
 export * from './router.js';
 import { routerValid } from './router.js';
-export { queues, gated } from './schedule.js'; // queued sends and gated tasks (LLP 1092), their own file
+export { queues, gated, ownedTasks } from './schedule.js'; // queued sends and gated tasks (LLP 1092), their own file
 export { timerWaits } from './timer-waits.js';
 export { resEach, owned, own, ownedMut, ownMut, keptOwned, rowPath } from './each.js';

@@ -113,7 +113,7 @@ test.skipIf(process.platform !== 'darwin')('Apple draws the same bars from the s
 }
 `);
     sh('xcrun', ['swiftc', '-parse-as-library', '-I', out, '-L', out, '-lExactPackage',
-      'packages/recording/apple/Recording.swift', join(out, 'main.swift'), '-o', join(out, 'waveform')]);
+      'packages/recording/apple/Recording.swift', 'packages/recording/apple/VideoRecorder.swift', join(out, 'main.swift'), '-o', join(out, 'waveform')]);
     const { frames: apple, meter } = JSON.parse(sh(join(out, 'waveform'), [JSON.stringify(drive)]));
     expect(meter).toEqual([{ duration: 10, levels: 100, level: 0 }, { duration: 3610, levels: 100, level: 0 }]);
     const web = run(drive);

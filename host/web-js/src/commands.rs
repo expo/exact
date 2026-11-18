@@ -182,7 +182,18 @@ pub(super) fn format_slot(plan: &Plan, body: &mut String, locale: u32) {
 /// their compiled registries (`EXACT_JS_GPU_SURFACES`, comma-separated;
 /// host/web-js/build.mjs).
 pub(super) fn gpu_surfaces() -> Vec<String> {
-    std::env::var("EXACT_JS_GPU_SURFACES")
+    surface_list("EXACT_JS_GPU_SURFACES")
+}
+
+/// The surfaces of packages whose GPU `targets` omit the web that nothing
+/// else draws, neither a GPU module of the app nor a data source on
+/// Canvas 2D (`EXACT_JS_UNREGISTERED_SURFACES`; LLP 1153.003 D5.8).
+pub(super) fn unregistered_surfaces() -> Vec<String> {
+    surface_list("EXACT_JS_UNREGISTERED_SURFACES")
+}
+
+fn surface_list(var: &str) -> Vec<String> {
+    std::env::var(var)
         .unwrap_or_default()
         .split(',')
         .filter(|s| !s.is_empty())

@@ -8,7 +8,7 @@ use super::*;
 use exact_kernel::{Kernel, NodeKey};
 
 /// The gap a foreign list opens for the dragged row.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct Incoming {
     /// The dragged row's identity: once this list holds it, it has landed
     /// and fills the gap itself.
