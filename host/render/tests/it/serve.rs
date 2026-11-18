@@ -89,7 +89,7 @@ impl DataSource for Posts {
                     DRAWS.fetch_add(1, Ordering::SeqCst) + 1
                 ))))
             }
-            ("post", "slow") => Ok(Answer::Later(Request::continuation(1))),
+            ("post", "slow") => Ok(Answer::Later(Request::continuation::<crate::TestWork>(1))),
             ("post", "boom") => Err(DataError::Unavailable("boom".into())),
             ("post", "cache-probe") => Ok(Answer::Now(post(&format!(
                 "Read {}",
@@ -572,7 +572,7 @@ impl DataSource for Feed {
 
     fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
         match source {
-            "cards" => Ok(Answer::Later(Request::continuation(1))),
+            "cards" => Ok(Answer::Later(Request::continuation::<crate::TestWork>(1))),
             "saved" => Ok(Answer::Later(Request::storage(b"get".to_vec()))),
             other => Err(DataError::UnknownSource(other.into())),
         }

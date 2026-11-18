@@ -10,7 +10,6 @@ mod nest;
 mod reach;
 mod rekey;
 mod reorder;
-mod reorder_api;
 mod reorder_group;
 #[cfg(test)]
 mod reorder_tests;
@@ -22,18 +21,16 @@ use shown::in_collection_row;
 mod start;
 #[cfg(test)]
 mod tests;
+mod text;
 mod traversal;
 pub(crate) mod views;
 mod within;
 pub(super) mod work;
 use super::*;
-pub use api::*;
+pub use crate::list_api::*;
 use exact_kernel::PropId;
 use exact_plan::EventKind;
 use index::{MeasurementToken, SizeIndex};
-pub use into_view::{Align, IntoView, IntoViewStatus};
-pub(crate) use keep::idents as keep_mounted;
-pub use reorder_api::*;
 use sizing::Sizing;
 pub(super) use traversal::{collections_json, invalidate_typography};
 
@@ -68,8 +65,6 @@ pub(super) fn update_collection(
     c.update_data(u, frames, false, remount)
 }
 
-const BOOTSTRAP_ROWS: usize = 16;
-const ESTIMATED_HEIGHT: f64 = 32.0;
 /// Travel the window leads by, past its viewport of overscan.
 const LEAD_SECONDS: f64 = 0.25;
 /// A mounted row farther than this many viewports from what shows retires
@@ -104,38 +99,6 @@ fn lead(viewport: f64, fill: CollectionFill) -> [f64; 2] {
 /// travels: a quarter second of travel, up to two viewports.
 fn travel_lead(viewport: f64, velocity: f64) -> f64 {
     (velocity.abs() * LEAD_SECONDS).min(viewport * 2.0)
-}
-
-/// 1.0's bits: the process's lead scale (a host may boot on one thread and
-/// run on another).
-static LEAD_SCALE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0x3FF0_0000_0000_0000);
-
-/// How much of a window's lead past its viewport collections realize: 1,
-/// the default, all of it; a host drawing its first frame may ask for 0 (the
-/// rows that show), then 1 once that frame is out, so the rows past the
-/// viewport mount after the first frame instead of before it.
-pub fn set_lead_scale(scale: f64) {
-    LEAD_SCALE.store(
-        scale.clamp(0.0, 1.0).to_bits(),
-        std::sync::atomic::Ordering::Relaxed,
-    );
-}
-
-/// The provisional extent (px along the axis) a list with no port yet
-/// realizes rows for: by default sixteen 32 px rows' worth; a host that knows
-/// its viewport sets it ([`set_bootstrap_extent`]).
-static BOOTSTRAP_EXTENT: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new((BOOTSTRAP_ROWS as f64 * ESTIMATED_HEIGHT).to_bits());
-
-/// How far a new list's first rows reach before its port is reported: a
-/// host passes its viewport's extent, so the rows that can show are built
-/// with the list instead of in a second commit after the first layout (at
-/// most sixteen rows; a list's `initial-item-count` still wins).
-pub fn set_bootstrap_extent(px: f64) {
-    if px.is_finite() && px > 0.0 {
-        BOOTSTRAP_EXTENT.store(px.to_bits(), std::sync::atomic::Ordering::Relaxed);
-    }
 }
 
 #[derive(Debug, Clone)]

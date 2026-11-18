@@ -3,6 +3,7 @@ import AppKit
 import IOSurface
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 @testable import ExactSurfaces
 
 private var capturedPaintPixels: [[UInt8]] = []

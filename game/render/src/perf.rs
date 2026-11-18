@@ -3,6 +3,7 @@ use std::fmt::Write;
 #[cfg(test)]
 thread_local! { pub(crate) static CLOCK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Stamp {
     #[cfg(not(target_arch = "wasm32"))]
     time: std::time::Instant,
@@ -20,6 +21,17 @@ impl Stamp {
             time: performance_now(),
         }
     }
+    pub fn elapsed_at(&self, end: Self) -> f64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            end.time.duration_since(self.time).as_secs_f64() * 1000.0
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            end.time - self.time
+        }
+    }
+
     pub fn wall_ms(&self) -> f64 {
         #[cfg(target_arch = "wasm32")]
         {
@@ -56,9 +68,7 @@ thread_local! {
     // has spent creating pipelines since the last `pipeline_ms`.
     static PIPELINES: std::cell::Cell<(bool, f64)> = const { std::cell::Cell::new((false, 0.)) };
 }
-/// Times this thread's pipeline creation from zero while it lives, when `on`:
-/// a seekable frame reads no clock, so it times nothing. Every return of the
-/// timed work stops it.
+/// Times pipeline creation on this thread until the scope ends.
 pub(crate) struct PipelineTiming;
 impl PipelineTiming {
     pub fn start(on: bool) -> Self {
@@ -100,6 +110,35 @@ pub(crate) fn pipeline<T>(make: impl FnOnce() -> T) -> T {
     made
 }
 pub(crate) use exact_game::diagnostics::Ring;
+use exact_game::LiveGap;
+
+// LLP 1182.000 D5.
+#[derive(Default)]
+struct CatchUp {
+    overload_frames: u64,
+    clamp_frames: u64,
+    clamp_ms: f64,
+    idle_frames: u64,
+    idle_ms: f64,
+    warned: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct CatchUpGap {
+    owed: Option<u64>,
+    clamped_ms: f64,
+    pub idle_ms: f64,
+}
+
+pub(crate) fn warn_catch_up(message: Option<String>) {
+    if let Some(message) = message {
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::warn_1(&message.into());
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("{message}");
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Perf {
     pub reporting: Option<crate::surface::performance::Report>,
@@ -109,18 +148,22 @@ pub(crate) struct Perf {
     pub encode: Ring,
     /// Of the frame's feed and encode, the time creating pipelines on its thread.
     pub pipeline: Ring,
-    /// Pipeline time from the renderer's making to the first frame log; None
-    /// once a seekable frame, which times nothing, came between.
+    /// Pipeline time from renderer creation to the first frame log, if measured.
     pub pipeline_ready: Option<f64>,
-    /// Pipeline time not yet in a frame's: a frame that stopped before
-    /// encoding, the `Game::PREPARE` warm-up after the last submit. The next
-    /// drawn frame counts it.
-    pub pipeline_pending: f64,
-    /// Whether the last rendered frame was live, so its warm-up may be timed,
-    /// and whether one is rendering now (its own timing covers what it prepares).
+    pub pipeline_ready_seekable: bool,
+    /// Pipeline time for the next drawn frame of each clock mode.
+    pipeline_pending: [f64; 2],
+    /// Whether the last rendered frame was live, for submission accounting.
     pub live: bool,
     pub rendering: bool,
+    /// Reused for pipeline warm-up after submission.
+    pub measure_frame: bool,
+    cpu_seekable: bool,
     pub ticks: Ring,
+    ticks_owed: Ring,
+    catch_up: CatchUp,
+    /// Picture generation of the preceding submitted live frame if it was playing.
+    pub submitted_live: Option<u64>,
     last_live: Option<f64>,
     pub stats: Stats,
     pub pixels: (u32, u32),
@@ -139,6 +182,34 @@ impl Perf {
     pub fn armed(&self) -> bool {
         !self.frame.values.is_empty()
     }
+    // LLP 1182.000 D3. An unsampled clock change leaves the window readable.
+    pub fn begin_cpu_sample(
+        &mut self,
+        seekable: bool,
+        hooks: Option<&mut crate::hooks::metrics::Metrics>,
+    ) {
+        if self.cpu_seekable == seekable || !self.armed() {
+            return;
+        }
+        self.cpu_seekable = seekable;
+        for ring in [
+            &mut self.tick,
+            &mut self.feed,
+            &mut self.encode,
+            &mut self.pipeline,
+        ] {
+            ring.clear();
+        }
+        if let Some(hooks) = hooks {
+            hooks.clear_cpu();
+        }
+    }
+    pub fn keep_pipeline_time(&mut self, seekable: bool) {
+        self.pipeline_pending[usize::from(seekable)] += pipeline_ms();
+    }
+    pub fn frame_pipeline_time(&mut self, seekable: bool) -> f64 {
+        pipeline_ms() + std::mem::take(&mut self.pipeline_pending[usize::from(seekable)])
+    }
     pub fn arm(&mut self) {
         for r in [
             &mut self.frame,
@@ -147,6 +218,7 @@ impl Perf {
             &mut self.encode,
             &mut self.pipeline,
             &mut self.ticks,
+            &mut self.ticks_owed,
         ] {
             r.values.resize(16384, 0.0);
         }
@@ -159,15 +231,16 @@ impl Perf {
             &mut self.encode,
             &mut self.pipeline,
             &mut self.ticks,
+            &mut self.ticks_owed,
         ] {
             r.values.resize(16384, 0.0);
-            r.count = 0;
-            r.sum = 0.0;
-            r.max = 0.0;
-            r.len = 0;
-            r.next = 0;
+            r.clear();
         }
         self.last_live = None;
+        self.catch_up = CatchUp {
+            warned: self.catch_up.warned,
+            ..Default::default()
+        };
     }
     pub fn restart(&mut self) {
         *self = Self {
@@ -185,6 +258,77 @@ impl Perf {
         }
         self.last_live = Some(now);
     }
+    pub fn record_ticks<G: exact_game::Game>(
+        &mut self,
+        frame: &exact_gpu::Frame,
+        ticks: u32,
+        gap: CatchUpGap,
+    ) -> Option<String> {
+        self.ticks.push(f64::from(ticks));
+        if frame.seekable {
+            self.ticks_owed.push(f64::from(ticks));
+            return None;
+        }
+        self.ticks_owed
+            .push(gap.owed.unwrap_or(u64::from(ticks)) as f64);
+        self.record_overload::<G>(frame.period_ms, ticks, gap)
+    }
+    pub fn record_gap(&mut self, note: Option<LiveGap>, picture: u64) -> CatchUpGap {
+        let (excess_ms, owed, continued) = match note {
+            Some(LiveGap::Advance {
+                excess_ms,
+                ticks_owed,
+                paused,
+            }) => (
+                excess_ms,
+                // A paused clock asks for no ticks, whatever the gap.
+                (!paused).then_some(ticks_owed),
+                !paused && self.submitted_live == Some(picture),
+            ),
+            Some(LiveGap::Wake { excess_ms }) => (excess_ms, None, false),
+            None => return CatchUpGap::default(),
+        };
+        if continued {
+            self.catch_up.clamp_frames += 1;
+            self.catch_up.clamp_ms += excess_ms;
+            CatchUpGap {
+                owed,
+                clamped_ms: excess_ms,
+                idle_ms: 0.0,
+            }
+        } else {
+            self.catch_up.idle_frames += 1;
+            self.catch_up.idle_ms += excess_ms;
+            CatchUpGap {
+                owed,
+                clamped_ms: 0.0,
+                idle_ms: excess_ms,
+            }
+        }
+    }
+    pub fn record_overload<G: exact_game::Game>(
+        &mut self,
+        period_ms: f64,
+        ticks: u32,
+        gap: CatchUpGap,
+    ) -> Option<String> {
+        let ratio = period_ms * (f64::from(G::HZ) / 1000.0);
+        if ratio > 0.0 && f64::from(ticks) > ratio.ceil() + 1.0 {
+            self.catch_up.overload_frames += 1;
+            if !std::mem::replace(&mut self.catch_up.warned, true) {
+                let owed = gap.owed.unwrap_or(u64::from(ticks));
+                let CatchUpGap {
+                    clamped_ms,
+                    idle_ms,
+                    ..
+                } = gap;
+                return Some(format!(
+                    "game tick overload: {owed} ticks owed, {ticks} run, {ratio:.3} ticks per display period, {clamped_ms:.3} ms clamped, {idle_ms:.3} ms idle. `perf world:<surface>` names the systems"
+                ));
+            }
+        }
+        None
+    }
     /// Record the frame's light counts; the first frame that drops lights says so.
     pub fn lights(&mut self, drawn: usize, dropped: usize) {
         self.lights = (drawn, dropped);
@@ -201,6 +345,8 @@ impl Perf {
     }
     pub fn append(&self, out: &mut String) {
         out.push_str(",\"perf\":{\"wallClock\":true");
+        let clock = if self.cpu_seekable { "agent" } else { "live" };
+        write!(out, ",\"clock\":\"{clock}\"").unwrap();
         write!(out, ",\"armed\":{}", self.armed()).unwrap();
         write!(out, ",\"pixels\":[{},{}]", self.pixels.0, self.pixels.1).unwrap();
         for (name, ring) in [
@@ -210,10 +356,18 @@ impl Perf {
             ("encodeMs", &self.encode),
             ("pipelineMs", &self.pipeline),
             ("ticksPerFrame", &self.ticks),
+            ("ticksOwed", &self.ticks_owed),
         ] {
             write!(out, ",\"{name}\":").unwrap();
             ring.json(out);
         }
+        let c = &self.catch_up;
+        write!(
+            out,
+            ",\"catchUp\":{{\"overloadFrames\":{},\"clampFrames\":{},\"clampMs\":{},\"idleFrames\":{},\"idleMs\":{}}}",
+            c.overload_frames, c.clamp_frames, c.clamp_ms, c.idle_frames, c.idle_ms
+        )
+        .unwrap();
         write!(
             out,
             ",\"draws\":{},\"instances\":{},\"triangles\":{},\"directFrames\":{}",
@@ -246,6 +400,186 @@ impl Perf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use exact_game::{Clock, Game, Input, Sim, Value, World};
+    use exact_gpu::Frame;
+    use serde_json::{json, Value as Json};
+
+    struct TestGame;
+    #[derive(Default, exact_game::Args)]
+    struct Args {
+        #[live]
+        paused: bool,
+    }
+    impl Game for TestGame {
+        const ID: &'static str = "catch-up";
+        const NAME: &'static str = "scene";
+        const HZ: u32 = 120;
+        type Args = Args;
+        fn setup(_: &mut World, _: &Args) {}
+        fn tick(_: &mut World, _: &Input, _: &Args) {}
+        fn paused(args: &Args) -> bool {
+            args.paused
+        }
+    }
+
+    fn frame(now_ms: f64, period_ms: f64) -> Frame {
+        Frame {
+            width: 64.,
+            height: 64.,
+            scale: 1.,
+            now_ms,
+            period_ms,
+            seekable: false,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        }
+    }
+
+    fn state(perf: &Perf) -> Json {
+        let mut out = String::from("{\"tick\":0");
+        perf.append(&mut out);
+        out.push('}');
+        serde_json::from_str::<Json>(&out).unwrap()["perf"].take()
+    }
+
+    fn advance_gap(excess_ms: f64, ticks_owed: u64) -> Option<LiveGap> {
+        Some(LiveGap::Advance {
+            excess_ms,
+            ticks_owed,
+            paused: false,
+        })
+    }
+
+    #[test]
+    fn catch_up_counts_clamp_and_pause() {
+        let mut sim = Sim::<TestGame>::new(Args::default()).unwrap();
+        let mut perf = Perf::default();
+        let mut advance = |sim: &mut Sim<TestGame>, now, submitted: bool| {
+            let picture = sim.picture_generation();
+            perf.submitted_live = submitted.then_some(picture);
+            let ticks = sim.advance(now, Clock::Live);
+            let gap = perf.record_gap(sim.take_live_gap(), picture);
+            perf.record_ticks::<TestGame>(&frame(now, 0.0), ticks, gap);
+        };
+        for i in 0..=10 {
+            advance(&mut sim, f64::from(i) * 300.0, i > 0);
+        }
+        sim.bind(&[Value::Bool(true)], None).unwrap();
+        advance(&mut sim, 5000.0, true);
+        assert_eq!(sim.world().tick(), 300);
+        let state = state(&perf);
+        assert_eq!(state["armed"], false);
+        assert_eq!(
+            state["catchUp"],
+            json!({"clampFrames":10,"clampMs":500,"idleFrames":1,"idleMs":1750,"overloadFrames":0})
+        );
+        assert_eq!(state["ticksOwed"]["count"], 12);
+        assert_eq!(state["ticksPerFrame"]["max"], 30);
+        // The paused gap asks for none: the largest ask is a clamped frame's.
+        assert_eq!(state["ticksOwed"]["max"], 36);
+    }
+
+    #[test]
+    fn catch_up_excludes_seeks_and_classifies_first_and_resumed_frames_as_idle() {
+        let mut perf = Perf::default();
+        perf.arm();
+        let mut sim = Sim::<TestGame>::new(Args::default()).unwrap();
+        // Even with a prior stamp from a bind, the first frame follows no picture.
+        sim.advance(0., Clock::Seekable);
+        let mut now = 0.;
+        for (gap, continued, resting) in [
+            (2000., false, false),
+            (250., true, false),
+            (249., true, false),
+            (2000., false, true),
+        ] {
+            now += gap;
+            let picture = sim.picture_generation();
+            perf.submitted_live = continued.then_some(picture);
+            if resting {
+                sim.wake(now);
+                perf.record_gap(sim.take_live_gap(), picture);
+            }
+            let ticks = sim.advance(now, Clock::Live);
+            let gap = perf.record_gap(sim.take_live_gap(), picture);
+            perf.record_ticks::<TestGame>(&frame(now, 0.), ticks, gap);
+        }
+        now += 2000.;
+        let mut seek = frame(now, 1000. / 120.);
+        seek.seekable = true;
+        let ticks = sim.advance(now, Clock::Seekable);
+        assert!(ticks > 2);
+        assert!(perf
+            .record_ticks::<TestGame>(&seek, ticks, Default::default())
+            .is_none());
+        assert_eq!(perf.ticks_owed.count, 5);
+        assert_eq!(perf.ticks.count, 5);
+        assert_eq!(perf.ticks_owed.values[0], 240.);
+        assert_eq!(&perf.ticks_owed.values[1..5], &perf.ticks.values[1..5]);
+        assert_eq!(
+            state(&perf)["catchUp"],
+            json!({"clampFrames":0,"clampMs":0,"idleFrames":2,"idleMs":3500,"overloadFrames":0})
+        );
+    }
+
+    #[test]
+    fn catch_up_first_overload_reports_idle_time_and_canvas() {
+        let mut perf = Perf::default();
+        let display = frame(2000., 1000. / 60.);
+        let gap = perf.record_gap(advance_gap(1750., 240), 0);
+        let message = perf.record_ticks::<TestGame>(&display, 30, gap).unwrap();
+        assert_eq!(message, "game tick overload: 240 ticks owed, 30 run, 2.000 ticks per display period, 0.000 ms clamped, 1750.000 ms idle. `perf world:<surface>` names the systems");
+    }
+
+    #[test]
+    fn catch_up_overload_threshold_warning_and_reset() {
+        for (hz, limit) in [(60., 3), (120., 2)] {
+            let mut perf = Perf::default();
+            perf.arm();
+            let display = frame(0., 1000. / hz);
+            assert!(perf
+                .record_ticks::<TestGame>(&display, limit, Default::default())
+                .is_none());
+            assert_eq!(perf.catch_up.overload_frames, 0);
+            perf.submitted_live = Some(0);
+            let gap = perf.record_gap(advance_gap(50., 36), 0);
+            let message = perf
+                .record_ticks::<TestGame>(&display, limit + 1, gap)
+                .unwrap();
+            assert_eq!(message, format!(
+                "game tick overload: 36 ticks owed, {} run, {:.3} ticks per display period, 50.000 ms clamped, 0.000 ms idle. `perf world:<surface>` names the systems",
+                limit + 1, 120. / hz
+            ));
+            let gap = perf.record_gap(advance_gap(1750., 240), 1);
+            assert!(perf
+                .record_ticks::<TestGame>(&display, limit + 1, gap)
+                .is_none());
+            assert!(perf
+                .record_ticks::<TestGame>(&frame(0., 0.), 30, Default::default())
+                .is_none());
+            assert_eq!(
+                state(&perf)["catchUp"],
+                json!({"clampFrames":1,"clampMs":50,"idleFrames":1,"idleMs":1750,"overloadFrames":2})
+            );
+            assert_eq!(perf.ticks_owed.len, 4);
+            perf.reset();
+            assert_eq!(
+                state(&perf)["catchUp"],
+                json!({"clampFrames":0,"clampMs":0,"idleFrames":0,"idleMs":0,"overloadFrames":0})
+            );
+            assert_eq!(perf.ticks_owed.count, 0);
+            assert_eq!(perf.ticks_owed.len, 0);
+            assert!(perf
+                .record_ticks::<TestGame>(&display, limit + 1, Default::default())
+                .is_none());
+            perf.restart();
+            assert!(perf
+                .record_ticks::<TestGame>(&display, limit + 1, Default::default())
+                .is_some());
+        }
+    }
+
     #[test]
     fn cadence_excludes_seeks_and_keeps_dropped_intervals() {
         let mut p = Perf::default();

@@ -1,6 +1,10 @@
 use super::*;
 use std::sync::mpsc::Receiver;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[test]
 fn response_fixture_uses_prefetch_and_retains_its_foreground_fallback() {
     for asynchronous in [false, true] {
@@ -263,7 +267,7 @@ fn a_prefetch_after_a_made_handoff_starts_a_hold_before_the_sends_reply() {
         let server = Server::new();
         let (core, woke, _) = runtime(&server, asynchronous, false);
         let (handed, replies) = channel();
-        let mut send = job(1, Request::continuation(1));
+        let mut send = job(1, Request::continuation::<TestWork>(1));
         send.class = RequestClass::Ordered;
         core.run_owned(
             send,

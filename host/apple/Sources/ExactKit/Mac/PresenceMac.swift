@@ -19,7 +19,7 @@ extension Presenter {
             views[$0.id] === $0 && !$0.isDescendant(of: view) && logicallyWithin($0, view)
         }
         // Native containers hold these routes outside their authored ancestors.
-        for leaving in [view] + held { landFlights(inside: leaving) }
+        for leaving in [view] + held { flightHost.landInside(leaving) }
         var members: [NodeView] = [], seen = Set<UInt32>()
         var stack: [NSView] = [view] + held
         while let next = stack.popLast() {

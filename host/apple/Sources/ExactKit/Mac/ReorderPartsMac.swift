@@ -67,7 +67,7 @@ struct ReorderPort {
     let scrollTop: Double
     init?(list node: NodeView, presenter: Presenter) {
         guard let scroll = node.scroll, scroll.window != nil,
-              let top = presenter.collections.geometry(node.id)?.offset else { return nil }
+              let top = presenter.collections.mainOffset(node.id) else { return nil }
         rect = scroll.contentView.convert(scroll.contentView.bounds, to: nil)
         scrollTop = top
     }

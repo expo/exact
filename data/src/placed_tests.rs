@@ -3,6 +3,10 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 struct Slow {
     started: Sender<()>,
     release: std::sync::mpsc::Receiver<()>,
@@ -617,7 +621,7 @@ impl DataSource for PollsOtherWork {
 
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
         Ok(Answer::Later(
-            Request::continuation(1).long_poll("since", "seq"),
+            Request::continuation::<TestWork>(1).long_poll("since", "seq"),
         ))
     }
 
@@ -789,7 +793,9 @@ impl DataSource for Retiring {
     }
     fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
         if source == "timer" {
-            return Ok(Answer::Later(Request::continuation(700).due(10000)));
+            return Ok(Answer::Later(
+                Request::continuation::<TestWork>(700).due(10000),
+            ));
         }
         self.started.send(()).unwrap();
         self.release.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -912,7 +918,7 @@ fn repeated_successful_worker_timers_and_discards_leave_no_bookkeeping() {
             unreachable!()
         }
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(Request::continuation(1).due(10)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(1).due(10)))
         }
         fn parse(
             &mut self,

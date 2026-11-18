@@ -1,11 +1,9 @@
-// The owners (LLP 1031 D1): `ExactApp` — one per process, the Exact app
-// the archive links: its asset root, its sessions, its one dev connection —
-// `ExactSession` — any number: one runtime handle, one plan, one clock,
-// its presenter, text engine, canvases, and web views — and, per
-// platform, `ExactView`, the ordinary view that presents a session. The
-// standalone apps and a brownfield host both build on exactly these; the
-// dev menu, the environment variables, and the agent carrier stay in the
-// adapters.
+// The owners (LLP 1031 D1): `ExactApp` — one per process, the Exact app the archive links: its
+// asset root, its sessions, its one dev connection — `ExactSession` — any number: one runtime
+// handle, one plan, one clock, its presenter, text engine, canvases, and web views — and, per
+// platform, `ExactView`, the ordinary view that presents a session. The standalone apps and a
+// brownfield host both build on exactly these; the dev menu, the environment variables, and the
+// agent carrier stay in the adapters.
 #if canImport(UIKit)
 import UIKit
 #else
@@ -32,7 +30,7 @@ public enum ExactEnv {
     }()
     /// Whether this binary was baked with `EXACT_UPDATE_TRUST=production`
     /// (`BakedCompatibility.production`).
-    static let productionBake = BakedCompatibility.production(BakedCompatibility.json)
+    static package let productionBake = BakedCompatibility.production(BakedCompatibility.json)
     public static let agentMode = environment["EXACT_AGENT"] == "1"
     /// `EXACT_AGENT=live` (the driver's `--live`): an ordinary launch on the
     /// wall clock that the driver can still reach, which sends input and
@@ -41,7 +39,7 @@ public enum ExactEnv {
     /// Whether the launch serves the driver: agent mode or `--live`.
     public static let agentCarried = agentMode || agentLive
     /// `EXACT_AGENT_BIND` (`--bind`, LLP 1133.001 D7): extensions answered by their implementations under the agent.
-    static let agentBind = Set((environment["EXACT_AGENT_BIND"] ?? "").split(separator: ",").map(String.init))
+    static package let agentBind = Set((environment["EXACT_AGENT_BIND"] ?? "").split(separator: ",").map(String.init))
     /// `EXACT_AGENT_TIMING=platform` (LLP 1035.003 D5, opt-in): under the
     /// agent carrier, UIKit's own transitions, presentations and keyboard
     /// animations keep their natural timing — the ordinary app with a
@@ -125,7 +123,7 @@ public final class ExactApp {
     public var lifecycle: ExactAppLifecycle?
     private(set) var selectedToken: UInt64 = 0
     private var sessionRefs: [WeakSession] = []
-    let notificationProcessID = UUID().uuidString
+    package let notificationProcessID = UUID().uuidString
     let sharedStore = SharedStoreRefresh()
     /// Every live session, in creation order.
     public var sessions: [ExactSession] { sessionRefs.compactMap(\.session) }
@@ -187,7 +185,7 @@ public final class ExactApp {
         let live = Set(sessionRefs.compactMap { $0.session?.label })
         let named = label.isEmpty ? (1...).lazy.map { "session-\($0)" }.first { !live.contains($0) }! : label
         let s = ExactSession(app: self, label: named)
-        s.delegate = delegate; PushRegistration.listen(); HostEvents.listen() // before its packages can register or drain
+        s.delegate = delegate; ModuleSeamLink.listen?() // before its packages can register or drain
         replacements.attach(s)
         sessionRefs.append(WeakSession(s))
         sessionRefs.removeAll { $0.session == nil }
@@ -196,7 +194,7 @@ public final class ExactApp {
     func forget(_ session: ExactSession) {
         replacements.destroyed(session)
         sessionRefs.removeAll { $0.session == nil || $0.session === session }
-        HostEvents.ended(session.label)
+        ModuleSeamLink.sessionEnded?(session.label)
     }
 
     /// Connect to the app URL (LLP 1023 D1–D3): the envelope resolved, the
@@ -341,7 +339,7 @@ public final class ExactSession {
     public let app: ExactApp
     /// A host-owned name the agent carrier routes by (D9) and logs carry.
     public let label: String
-    let notificationOwnerID: String
+    package let notificationOwnerID: String
     /// Under the agent the session's own pasteboard, which `copyText` and @exact/clipboard write, registered for
     /// removal when the session is made, so a process that exits removes it too (AgentPasteboard.swift).
     let agentPasteboard: String?
@@ -368,9 +366,9 @@ public final class ExactSession {
     package var runtime: Runtime { core.runtime }
     /// This session's file roots, captured outside a native module callback.
     package var appFileRoots: [String: String] = [:]
-    let rasters = ImageLink.makeLoader?()
+    package let rasters = ImageLink.makeLoader?()
     #if os(macOS)
-    lazy var regions = RegionController(self)
+    lazy var regions: any ContentRegionHosting = ContentRegionLink.make?(self) ?? NoContentRegions()
     #endif
     var text: TextEngine { get { core.text } set { core.text = newValue } }
     let fieldChrome = FieldChromeCache()
@@ -387,15 +385,15 @@ public final class ExactSession {
     var webMount: [String: String] = ExactEnv.appMetadata["ExactWebMount"] as? [String: String] ?? [:]
     var protocolHandlers: [[String: String]] = ExactEnv.appMetadata["ExactProtocolHandlers"] as? [[String: String]] ?? []
     private var textPressure: DispatchSourceMemoryPressure?
-    let canvases: Canvases
-    let webviews: WebViews
-    let natives = NativeViews()
+    package let canvases: Canvases
+    let webviews: any WebHosting
+    package let natives: any NativeModuleHosting = NativeModuleLink.make?() ?? NoNativeModule()
     /// The file picker (LLP 1069.002).
     lazy var picker = Picker(session: self)
     /// The voice table's output (LLP 1096 D8); settable for tests.
-    lazy var sound = SoundOutput(self)
-    lazy var midi = MIDIOutput(self)
-    var activityOutput: ActivityOutput?
+    lazy var sound: any AudioOutputting = MediaLink.makeSound?(self) ?? NoAudioOutput()
+    lazy var midi: any AudioOutputting = MediaLink.makeMIDI?(self) ?? NoAudioOutput()
+    var activityOutput: (any ActivityOutputting)?
     package let frames: Frames
     /// A session's presented frames (LLP 1079 D3); a production bake has one only while an app records.
     var sampler: FrameSampler?
@@ -452,7 +450,7 @@ public final class ExactSession {
     private var pendingCommands: [(String, [Any], UInt32?)] = []
     /// The ids the batch being applied asks `scrollIntoView` of (LLP 1070.000 §15: they win over the end-follow).
     var pendingElementScrolls: [String] { pendingCommands.compactMap { $0.0 == "scrollIntoView" ? $0.1.first as? String : nil } }
-    private(set) var applying = false
+    private(set) var applying = false { didSet { releaseWaitingFirings() } }
     /// The chain of covers corrections the work running belongs to (`CoversChain`): work asked in one
     /// runs in it, at once or queued; a batch the owner publishes lands in none
     private(set) var coversCause: AnyObject?
@@ -460,7 +458,7 @@ public final class ExactSession {
     // one is in flight, work that would wait behind it on the owner (a
     // frame's tick, a timer, a reply, an intrinsic size, a report) waits on
     // main instead, and runs after the slice lands, in order.
-    private(set) var fillInFlight = false
+    private(set) var fillInFlight = false { didSet { releaseWaitingFirings() } }
     typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
     /// The work waiting, in the order asked (work asked while a slice lands, while work waits or while it runs joins the
     /// end, so nothing runs ahead of work asked before it), and whether a drain of it runs (`runWaitingWork`)
@@ -486,16 +484,16 @@ public final class ExactSession {
     /// slice's (with its list), a frame's tick's and a canvas draw's.
     let published = PublishedBatches()
     /// A frame's tick is on the owner (LLP 1072 §7.1): the next one waits.
-    var tickInFlight = false
+    var tickInFlight = false { didSet { releaseWaitingFirings() } }
     /// A timer advance is on the owner (LLP 1072.000): the next one waits.
-    var advanceInFlight = false
+    var advanceInFlight = false { didSet { releaseWaitingFirings() } }
     /// Canvas draws run in a turn of their own on the owner (LLP 1072 §8.5):
     /// the last batch applied says whether one is owed, one is in flight
     /// at a time, and one is asked for once per main-queue turn.
-    private(set) var canvasInFlight = false
+    private(set) var canvasInFlight = false { didSet { releaseWaitingFirings() } }
     /// A system notice's batches on the owner (`tellSoon`), each landing in its order.
-    var noticesInFlight = 0
-    var repliesInFlight = 0
+    var noticesInFlight = 0 { didSet { releaseWaitingFirings() } }
+    var repliesInFlight = 0 { didSet { releaseWaitingFirings() } }
     var replySubmissions: [Double] = []
     /// Owner work main did not wait for, whose batches land before any made later (T4).
     var ownerInFlight: Bool { fillInFlight || tickInFlight || advanceInFlight || canvasInFlight || noticesInFlight > 0 || repliesInFlight > 0 }
@@ -548,14 +546,14 @@ public final class ExactSession {
         let runtime = Runtime()
         runtime.useNativeTimers(true)
         LocalNetworkFact.install() // before the first boot reads the fact (LLP 1133.036 D8)
-        if ActivityLibrary.packaged { runtime.linkActivities() }
+        if ModuleSeamLink.activitiesPackaged?() == true { runtime.linkActivities() }
         // Motion starts at the first frame that shows it, until an agent owns the clock (LLP 1003.001 D7).
         if !ExactEnv.agentFreezes { _ = runtime.startOnFrame(true, at: 0) }
         core = SessionCore(runtime: runtime, text: TextEngine.pair(resolve: { [weak app] source in app?.resolveAsset(source) }, read: { [weak app] source in app?.assetBytes(source) },
                                bundled: { [weak app] source in app?.bundledAsset(source) }))
         presenter = Presenter()
         canvases = SurfacesLink.installed?.canvases() ?? NoCanvases()
-        webviews = WebViews()
+        webviews = MediaLink.makeWeb?() ?? NoWebViews()
         frames = Frames()
         presenter.session = self; RowReuse.adopt(self)
         #if os(iOS)
@@ -633,7 +631,7 @@ public final class ExactSession {
     deinit { destroy() }
 
     /// The live session behind a runtime handle, or nil for a stranger's.
-    static func session(for rt: ExactRuntime) -> ExactSession? { live[rt]?.session }
+    static package func session(for rt: ExactRuntime) -> ExactSession? { live[rt]?.session }
 
     private static let wake: ExactWakeFn = { ctx in
         let rt = ExactRuntime(UInt(bitPattern: ctx))
@@ -648,6 +646,7 @@ public final class ExactSession {
 
     /// Send a build-only slice to the owner; its batch comes back published.
     private func sendFill(_ view: UInt32, _ bytes: Data) {
+        guard CoreExports.collectionFeedback != nil else { return } // no list family, no list to fill
         fillInFlight = true
         runtime.collectionFeedbackAsync(bytes, now: now()) { [weak self] batch in
             self?.publish(.fill(view), batch)
@@ -736,7 +735,7 @@ public final class ExactSession {
     static func drainAll() { for weak in live.values { weak.session?.drainFill() } }
 
     /// Work that every session counts ended: the last SVG picture in flight (`hostOutstanding`).
-    static func workEndedEverywhere() { for weak in live.values { weak.session?.workEnded() } }
+    package static func workEndedEverywhere() { for weak in live.values { weak.session?.workEnded() } }
 
     /// Wait for the slice in flight and land it: what shows, the agent and
     /// every read that must see it (T5, T7, T9).
@@ -757,7 +756,7 @@ public final class ExactSession {
             presenter.collections.drain = { [weak self] in self?.drainFill() }
         }
         presenter.collections.onFeedback = { [weak self] bytes in
-            guard let self, state != .destroyed else { return }
+            guard let self, state != .destroyed, CoreExports.collectionFeedback != nil else { return }
             let batch = runtime.collectionFeedback(bytes, now: now())
             // A report inside the built window commits nothing: while a list
             // moves that is most frames. Skip the presenter's finalization
@@ -923,7 +922,7 @@ public final class ExactSession {
             sampler?.reset(); frameHealth.reset() // a new runner numbers its transactions afresh (LLP 1079 D3)
             // A fresh boot over a running app (the dev menu's reload from the baked plan) starts the views over; the library already replaced its host.
             routerOp = nil
-            replaceBackgroundActions()
+            notificationHost.replaceBackgroundActions(self)
             if booted { awaitingTree = true; resetHeld(); viewsEpoch += 1; forgetAppearances(); presenter.launchAutofocusReleased = false } // a fresh boot's autofocus waits again
             booted = true; app.liveBooted(self)
             text.commitFonts()
@@ -962,7 +961,7 @@ public final class ExactSession {
         modulePending = false; requestsPending = false; preparationError = nil
         guard state != .destroyed else { return nil }
         // The running tree's focus, read before the candidate replaces it.
-        keptFocus = booted ? presenter.focusPlace(tree: agent("{\"op\":\"tree\"}")) : nil
+        keptFocus = booted ? presenter.focusPlace(tree: runtime.ask(exact_tree, "{}")) : nil
         let module = module ?? app.lastModule
         runtime.setProfileResolver(resolver)
         defer { runtime.setProfileResolver(app.resolver) }
@@ -1024,7 +1023,7 @@ public final class ExactSession {
         text = candidate.text
         text.commitFonts()
         updateToken = candidate.token
-        replaceBackgroundActions()
+        notificationHost.replaceBackgroundActions(self)
         return batch
     }
 
@@ -1047,7 +1046,7 @@ public final class ExactSession {
         ExactLaunch.shared.treeApplied(self, path: label)
         view?.rebooted()
         autofocusHeld = false
-        if restart { presenter.restoreFocus(kept, tree: agent("{\"op\":\"tree\"}")) }
+        if restart { presenter.restoreFocus(kept, tree: runtime.ask(exact_tree, "{}")) }
         state = .ready
         if restart { fputs("reloaded \(label)\n", stderr) } // a launch generation's first boot is no reload
     }
@@ -1094,7 +1093,7 @@ public final class ExactSession {
         updateTimerState(batch)
         // Its transactions are reported once (LLP 1079 D3): account for them, at no presentation cost.
         sampler?.batch(batch.seq, ms: 0); logSkipped(batch); relayStore(batch)
-        if let q = batch.seq { natives.hatchClock.seq = q.1 } // its commits are the hatches' latest
+        if let q = batch.seq { natives.hatchSeq(q.1) } // its commits are the hatches' latest
         timerDue = batch.timerDueMs; timerLanding = batch.landing
         scheduleClock(due: batch.timerDueMs)
         // Fixed roots can emit no operations while their viewport changes.
@@ -1127,7 +1126,7 @@ public final class ExactSession {
             // Appearance already changed natively; retain its transaction accounting without rescheduling.
             if !ownerInFlight, changesNothing(batch), clockUnchanged(batch) {
                 sampler?.batch(batch.seq, ms: 0); logSkipped(batch)
-                if let q = batch.seq { natives.hatchClock.seq = q.1 }
+                if let q = batch.seq { natives.hatchSeq(q.1) }
             } else { apply(batch) }
         }
     }
@@ -1155,8 +1154,8 @@ public final class ExactSession {
     package func apply(_ batch: Batch) {
         guard state != .destroyed, !batch.busy, !batch.held else { return }
         #if os(iOS) || os(tvOS)
-        AudioSession.beginPresentation()
-        defer { AudioSession.endPresentation() }
+        MediaLink.audioSession?.beginPresentation()
+        defer { MediaLink.audioSession?.endPresentation() }
         #endif
         defer { app.replacements.changed() }
         appliedBatches += 1
@@ -1174,7 +1173,7 @@ public final class ExactSession {
         applying = true
         // What applying it cost, with its transactions, for the next sampled frame (LLP 1079 D3), told to the sampler there was when it began while the session keeps it: a recording the batch starts makes a new one, and one it stops lets a production bake's go.
         let timed = sampler, began = CACurrentMediaTime()
-        defer { if let timed, timed === sampler { timed.batch(batch.seq, ms: outermost ? (CACurrentMediaTime() - began) * 1000 : 0) }; if let q = batch.seq { natives.hatchClock.seq = q.1 }; logAlerts(batch.alerts); logJournal(batch.journal); relayStore(batch) }
+        defer { if let timed, timed === sampler { timed.batch(batch.seq, ms: outermost ? (CACurrentMediaTime() - began) * 1000 : 0) }; if let q = batch.seq { natives.hatchSeq(q.1) }; logAlerts(batch.alerts); logJournal(batch.journal); relayStore(batch) }
         defer { if outermost { recordFrameHealthApply(batch, began: began) } }
         if batch.facts { app.scheduleStatus() } // the app's own `setMode` or `setRootFontSize` (LLP 1122 D4)
         if let must = batch.mustFinish { finishHold.moved(must) }
@@ -1195,7 +1194,7 @@ public final class ExactSession {
         regions.prepare(batch)
         #endif
         for op in outputs.activities {
-            if activityOutput == nil { activityOutput = ActivityOutput(self) }
+            if activityOutput == nil { activityOutput = ModuleSeamLink.makeActivities?(self) }
             activityOutput?.enqueue(op.payload)
         }
         for op in outputs.surfaces { pendingSurfaceWork.append((op.payload, generation)) }
@@ -1473,7 +1472,7 @@ public final class ExactSession {
         taskTimers.cancel(); clockTimer?.invalidate(); timerAdmissions.takeover()
         clockTimer = nil
         // A live hatch frame ticket would keep the link on through `run(false)`.
-        natives.hatchClock.reset()
+        natives.resetHatchClock()
         frames.run(false)
         sampler?.stop(); releaseSampler()
         frameHealth.destroy()

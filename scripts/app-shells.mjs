@@ -198,7 +198,7 @@ ${dependencies}
 exact-bake = ${dep('bake')}
 ${data.krate} = ${data.dependency}
 `,
-    'build.rs': `fn main() {\n    exact_bake::host::app(${JSON.stringify(kind)}, ${JSON.stringify(app)}, ${data.source});\n}\n`,
+    'build.rs': `fn main() {\n    let source = ${data.source};\n    let host_work = exact_bake::hands_out_work!(source);\n    exact_bake::host::app(${JSON.stringify(kind)}, ${JSON.stringify(app)}, source, host_work);\n}\n`,
     [['linux', 'windows'].includes(kind) ? 'src/main.rs' : 'src/lib.rs']: `//! ${title} on ${on}: the host over the Rust data crate (\`${data.ty}\`) and the baked plan.
 ${kind === 'windows' ? '#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]\n' : ''}
 include!(concat!(env!("OUT_DIR"), "/entry.rs"));
@@ -251,6 +251,7 @@ ${platform === 'apple' ? `    let platform = match std::env::var("CARGO_CFG_TARG
         std::path::Path::new(${JSON.stringify(app)}),
         ${platform === 'apple' ? 'platform' : JSON.stringify(platform)},
         &${data.source},
+        exact_js_bake::hands_out_work!(${data.source}),
         ${data.lib}::RUST_SOURCES,
         |javascript, typescript| {
             let app = exact_runner::DataSource::app_id(&javascript).to_owned();

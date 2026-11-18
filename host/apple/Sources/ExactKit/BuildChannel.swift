@@ -6,6 +6,7 @@
 // unsupported. The server's half
 // is scripts/forma-builds.mjs; the web page's, host/web/dev.js. A pin sets
 // what the agent's `prefer` sets (Agent.swift), by the same means.
+import CExact
 #if os(macOS)
 import AppKit
 #else
@@ -221,7 +222,7 @@ extension ExactApp {
 
     /// The runner's own root font size (the agent's `state`, `device`).
     private func renderedRootFontSize(_ s: ExactSession) -> Double? {
-        guard let data = s.agent("{\"op\":\"state\"}").data(using: .utf8),
+        guard let data = s.runtime.ask(exact_state, "{}").data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return ((o["device"] as? [String: Any])?["rootFontSize"] as? NSNumber)?.doubleValue
     }

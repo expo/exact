@@ -176,7 +176,7 @@ impl DrawRequest<'_> {
             "{{\"canvas\":{},\"generation\":{},\"seq\":{},\"surface\":",
             self.canvas, self.generation, self.seq
         );
-        crate::agent::quote(self.surface, &mut s);
+        crate::json::quote(self.surface, &mut s);
         s.push_str(",\"args\":");
         let named = !self.names.is_empty();
         s.push(if named { '{' } else { '[' });
@@ -185,7 +185,7 @@ impl DrawRequest<'_> {
                 s.push(',');
             }
             if named {
-                crate::agent::quote(&self.names[i], &mut s);
+                crate::json::quote(&self.names[i], &mut s);
                 s.push(':');
             }
             crate::instance::value_json(v, &mut s);
@@ -195,8 +195,8 @@ impl DrawRequest<'_> {
         let _ = write!(
             s,
             ",\"frame\":{{\"time\":{},\"mounted\":{},\"cause\":\"{}\",\"causes\":[",
-            crate::agent::num(f.time),
-            crate::agent::num(f.mounted),
+            crate::json::num(f.time),
+            crate::json::num(f.mounted),
             f.cause.primary()
         );
         for (i, c) in f.cause.names().iter().enumerate() {
@@ -208,11 +208,11 @@ impl DrawRequest<'_> {
         let _ = write!(
             s,
             "],\"width\":{},\"height\":{},\"pixelWidth\":{},\"pixelHeight\":{},\"scale\":{}}}}}",
-            crate::agent::num(f.width),
-            crate::agent::num(f.height),
+            crate::json::num(f.width),
+            crate::json::num(f.height),
             f.pixel_width,
             f.pixel_height,
-            crate::agent::num(f.scale)
+            crate::json::num(f.scale)
         );
         s.pop();
         if let Some(c) = self.current_color {
@@ -222,7 +222,7 @@ impl DrawRequest<'_> {
                 c.r,
                 c.g,
                 c.b,
-                crate::agent::num(c.a)
+                crate::json::num(c.a)
             );
         }
         if self.p3 {
@@ -941,7 +941,7 @@ impl CanvasEngine for Canvases {
                 s.push(',');
             }
             let _ = write!(s, "{{\"view\":{view},\"surface\":");
-            crate::agent::quote(&r.surface, s);
+            crate::json::quote(&r.surface, s);
             let requested = r.next_seq - 1;
             let _ = write!(
                 s,
@@ -963,7 +963,7 @@ impl CanvasEngine for Canvases {
                         ",\"width\":{},\"height\":{},\"scale\":{},\"stretch\":{},\"colorSpace\":\"{}\",\"colorType\":\"{}\"",
                         b.pixel_width,
                         b.pixel_height,
-                        crate::agent::num(b.scale),
+                        crate::json::num(b.scale),
                         b.stretch,
                         if b.settings.p3 { "display-p3" } else { "srgb" },
                         if b.settings.float16 { "float16" } else { "unorm8" }
@@ -976,7 +976,7 @@ impl CanvasEngine for Canvases {
             s.push_str(",\"lastDraw\":");
             match r.last_draw {
                 Some(t) => {
-                    let _ = write!(s, "{}", crate::agent::num(t));
+                    let _ = write!(s, "{}", crate::json::num(t));
                 }
                 None => s.push_str("null"),
             }
@@ -986,13 +986,13 @@ impl CanvasEngine for Canvases {
                 if i > 0 {
                     s.push(',');
                 }
-                crate::agent::quote(b, s);
+                crate::json::quote(b, s);
             }
             s.push(']');
             for (key, v) in [("error", &r.error), ("refused", &r.refused)] {
                 let _ = write!(s, ",\"{key}\":");
                 match v {
-                    Some(e) => crate::agent::quote(e, s),
+                    Some(e) => crate::json::quote(e, s),
                     None => s.push_str("null"),
                 }
             }

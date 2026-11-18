@@ -60,6 +60,7 @@ macro_rules! canvas_jni {
 
             const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
             const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
+            include!(concat!(env!("OUT_DIR"), "/launch.rs"));
 
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_environment(

@@ -2,12 +2,15 @@
 import XCTest
 import QuartzCore
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 final class NavigationMarksTests: XCTestCase {
     func testTheRenderLinkStopsWhileTTIWaitsForWork() throws {
         let session = ExactApp.shared.makeSession(label: "navigation-marks")
         defer { session.destroy() }
-        XCTAssertNil(session.boot(plan: try fixturePlan("HEADLESS"), size: CGSize(width: 400, height: 800)).error)
+        XCTAssertNil(session.boot(plan: try fixturePlan("STILL_PAGE"), size: CGSize(width: 400, height: 800)).error)
+        settleViewlessSession(session)
         let marks = NavigationMarks()
         marks.routerChanged(session, payload: ["top": 1, "pattern": "/"])
         session.holdFillForTests()
@@ -82,7 +85,8 @@ final class NavigationMarksTests: XCTestCase {
     /// what `hold` left outstanding.
     private func heldNavigation(_ route: String, _ hold: (ExactSession) -> Void) throws -> ExactSession {
         let session = ExactApp.shared.makeSession(label: "navigation-marks\(route)")
-        XCTAssertNil(session.boot(plan: try fixturePlan("HEADLESS"), size: CGSize(width: 400, height: 800)).error)
+        XCTAssertNil(session.boot(plan: try fixturePlan("STILL_PAGE"), size: CGSize(width: 400, height: 800)).error)
+        settleViewlessSession(session)
         let marks = NavigationMarks.shared
         marks.routerChanged(session, payload: ["top": 1, "pattern": "/"])
         hold(session)

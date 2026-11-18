@@ -7,6 +7,10 @@ use super::super::{
 use super::*;
 use std::sync::mpsc::{channel, Receiver};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const HANG: Duration = Duration::from_secs(10);
 const GRANTS: &str = "net.fetch https://*.example.test";
 
@@ -454,7 +458,7 @@ fn retained_handles_keep_no_machine_thread_or_permit_after_retirement() {
     let waker = core.waker();
     let (reply, kept): (_, Receiver<Reply>) = channel();
     core.run_owned(
-        job(1, Request::continuation(1)),
+        job(1, Request::continuation::<TestWork>(1)),
         Some(OwnedWork::Later(Box::new(move |r| {
             reply.send(r).unwrap();
         }))),

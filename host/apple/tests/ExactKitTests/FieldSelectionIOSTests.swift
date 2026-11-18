@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// x2apps codeedit #2 on UIKit: a field's `input` reports the selection its
 /// edit left; `setSelectionRange` fires `select`, never focuses, and waits
@@ -670,7 +671,7 @@ final class FieldSelectionIOSTests: XCTestCase {
         p.fieldSelections.onReplacement = { _, value, s in events.append("\(value):\(s.start)-\(s.end)") }
         for id in [UInt32(2), UInt32(3)] {
             events.removeAll()
-            XCTAssertTrue(p.elements.input(id, "Palo"))
+            XCTAssertTrue(p.hatchElements!.input(id, "Palo"))
             p.elements.drain()
             XCTAssertEqual(events, ["Palo:4-4"])
             XCTAssertEqual(p.edited, id)

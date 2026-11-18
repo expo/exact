@@ -88,9 +88,9 @@ extension Presenter {
         elements.destroyed(id)
         elements.created(view)
         svg?.forget(id); boxAnimations.forget(id)
-        if let flight = flights[id] { landFlight(flight) }
+        flightHost.land(id)
         // The old item's image left the document: its floating window closes, as at a destroy.
-        PictureInPictureHost.gone(view)
+        MediaLink.pictureGone?(view)
         if let session, session.viewDark.removeValue(forKey: id) != nil { session.noteAppearance(view) }
         view.renew()
     }

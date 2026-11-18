@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1008: nearest projected rest on both axes; oversized areas remain freely scrollable.
 final class ScrollSnapIOSTests: XCTestCase {
@@ -12,7 +13,7 @@ final class ScrollSnapIOSTests: XCTestCase {
         let p = session.presenter
         let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
         let scroll = try XCTUnwrap(node.scroll)
-        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        let snapshot = try XCTUnwrap(p.listHost.entries[node.id]?.snapshot)
         XCTAssertLessThan(snapshot.rows.map(\.index).max() ?? 1000, 10)
         let (eager, eagerScroll) = try strip((0..<300).map { ("start", Double($0) * 150, 150) })
         eagerScroll.contentSize.width = 45000
@@ -44,8 +45,8 @@ final class ScrollSnapIOSTests: XCTestCase {
         let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
         let scroll = try XCTUnwrap(node.scroll)
         scroll.contentOffset.x = 3000
-        p.collections.flushIfNeeded()
-        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        p.listHost.flushIfNeeded()
+        let snapshot = try XCTUnwrap(p.listHost.entries[node.id]?.snapshot)
         let first = try XCTUnwrap(snapshot.rows.map(\.index).min())
         XCTAssertGreaterThan(first, 0)
         let earlier = CGFloat(first - 1) * 150

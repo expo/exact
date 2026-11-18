@@ -153,17 +153,4 @@ func declaredElements(_ elements: [Any]?, count: Int, at: (Int) -> Any?) -> [NSO
     return (0..<count).compactMap { at($0) as? NSObject }
 }
 
-#if os(iOS)
-/// UIKit's switch, whose frame follows a placement.
-final class ExactSwitch: UISwitch {
-    override var accessibilityFrame: CGRect {
-        get { placedAccessibilityFrame ?? super.accessibilityFrame }
-        set { super.accessibilityFrame = newValue }
-    }
-    override var accessibilityActivationPoint: CGPoint {
-        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
-        set { super.accessibilityActivationPoint = newValue }
-    }
-}
-#endif
 #endif

@@ -103,7 +103,7 @@ package class ScrollView: UIScrollView {
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()
         guard let node = superview as? NodeView, node.props["scrollStart"] == "end" || node.props["scrollFollowEnd"] == "true",
-              node.presenter?.collections.entries[node.id]?.snapshot.horizontal != true,
+              node.presenter?.collections.snapshot(node.id)?.horizontal != true,
               !isTracking, !isDecelerating, contentSize.height > 0, !node.authorOwnsScroll(self) else { return }
         let end = { (inset: UIEdgeInsets) in max(-inset.top, self.contentSize.height + inset.bottom - self.bounds.height) }
         guard contentOffset.y >= end(was) - 1, was.bottom != keptInset.bottom else { return }

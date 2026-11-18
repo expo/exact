@@ -1,6 +1,6 @@
 //! A view's logical ancestors with their plan sites, for `{"op":"ancestors"}` (forma/1.16 `inspect` `select`).
 
-use super::error;
+use crate::json::error;
 use crate::{DataSource, Runner};
 use std::fmt::Write;
 

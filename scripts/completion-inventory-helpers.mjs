@@ -35,15 +35,15 @@ export function helperClassifications(group) {
   ]),
   group("fills", ["one-shot"], "collection/view generation, window and fill token", "UI-owned",
     "The named public runner-crate source is the fills API or its value/admission helper. runner/src/runner/collection.rs validates feedback/fill against the current collection; instance/collection/index.rs versions rows and into_view.rs versions reveal requests.", [
-    ["runner:runner/src/instance/collection/api.rs",
+    ["runner:runner/src/instance/collection/into_view.rs", "Tree::into_view_json"],
+    ["runner:runner/src/instance/collection/nest.rs", "Tree::kept_positions_json"],
+    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection Tree::collection_data Tree::collection_mounted Tree::collections Tree::collections_bounded Tree::collections_shallow"],
+    ["runner:runner/src/list_api/feedback.rs",
       "CollectionFeedback::decode CollectionFeedback::decode_with_fill CollectionFeedback::encode CollectionFeedback::encode_with CollectionSnapshot::json " +
       "CollectionSnapshot::write_json ListAxis::name snapshots_json"],
-    ["runner:runner/src/instance/collection/into_view.rs", "Align::parse Tree::into_view_json"],
-    ["runner:runner/src/instance/collection/mod.rs", "set_bootstrap_extent set_lead_scale"],
-    ["runner:runner/src/instance/collection/nest.rs", "Tree::kept_positions_json"],
-    ["runner:runner/src/instance/collection/reorder_api.rs", "ReorderEnding::name ReorderGeometry::decode ReorderGeometry::encode ReorderPhase::name ReorderStep::from_key ReorderToken::list ReorderToken::serial"],
-    ["runner:runner/src/instance/collection/shown.rs", "RowsShown::extend"],
-    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection Tree::collection_data Tree::collection_mounted Tree::collections Tree::collections_bounded Tree::collections_shallow"],
+    ["runner:runner/src/list_api/into_view.rs", "Align::parse"],
+    ["runner:runner/src/list_api/mod.rs", "RowsShown::extend set_bootstrap_extent set_lead_scale"],
+    ["runner:runner/src/list_api/reorder.rs", "ReorderEnding::name ReorderGeometry::decode ReorderGeometry::encode ReorderPhase::name ReorderStep::from_key ReorderToken::list ReorderToken::serial"],
   ]),
   group("sockets and listens", ["subscription"], "source stream/watch and pending subscription in a session", "UI-owned",
     "The named public runner-crate source is the sockets and listens API or its value/admission helper. runner/src/runner/sockets.rs and listen.rs associate reader facts with source requests; retirement of the source removes the UI observer.", [

@@ -74,7 +74,7 @@ package enum DisplayPreferences {
         return UIAccessibility.isReduceMotionEnabled
         #endif
     }
-    static var reducedTransparency: Bool {
+    static package var reducedTransparency: Bool {
         if let agent { return agent.reducedTransparency }
         #if os(macOS)
         return NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
@@ -84,7 +84,7 @@ package enum DisplayPreferences {
     }
     /// `prefers-contrast`: Increase Contrast (macOS) or Increase Contrast /
     /// Darker System Colors (iOS) is `more`; neither platform has `less`.
-    static var contrast: String {
+    static package var contrast: String {
         if let agentContrast { return agentContrast }
         #if os(macOS)
         return NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? "more" : "no-preference"
@@ -147,7 +147,7 @@ package enum DisplayPreferences {
     /// An app whose manifest fixes `userInterfaceStyle` sees it as the
     /// system's, as UIKit's `UIUserInterfaceStyle` makes it on iOS.
     #if os(macOS)
-    static var systemDark: Bool {
+    static package var systemDark: Bool {
         if let fixed = ExactEnv.fixedAppearance { return fixed.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
         #if EXACT_AGENT
         if let agent = Agent.systemAppearance { return agent.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }

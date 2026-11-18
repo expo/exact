@@ -76,6 +76,7 @@ internal object Setup {
         meta?.getString("dev.exact.protocol_handlers")?.let { android.system.Os.setenv("EXACT_PROTOCOL_HANDLERS", it, true) }
         // GPU modules (LLP 1009) come from this APK. Exported intents never select executable content.
         android.system.Os.setenv("EXACT_NATIVE_LIBS", app.applicationInfo.nativeLibraryDir, true)
+        android.system.Os.setenv("EXACT_ANDROID_APK", app.applicationInfo.sourceDir, true)
         android.system.Os.setenv("EXACT_MOVE_TRACKS", "1", true)
         // The logcat tag of the app's `console` lines, in every build (`host/painted/src/android.rs`, `console`): the
         // package name, as Apple's subsystem is the bundle identifier. A label can be localized and hold spaces.

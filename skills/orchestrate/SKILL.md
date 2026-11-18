@@ -24,13 +24,16 @@ unsafe or would waste the work if wrong.
 
 | Work | Model |
 |---|---|
-| Implementation | codex `gpt-6.1-sol` high / xhigh / ultra |
-| Code review | **both** `grok-4.7` **and** codex `gpt-6.1-sol` xhigh |
+| Implementation | codex Sol, high / xhigh / ultra |
+| Code review | **both** Grok, xhigh **and** codex Sol, xhigh |
 | Hard directional decisions, RFC/LLP refinement | **the panel** — see the `panel` skill; it replaces super-refine |
 | Everything else | your call |
 
-Codex: `codex exec -m gpt-6.1-sol -c model_reasoning_effort=<effort>`, prompt on stdin;
-`-s read-only` for reviews.
+Codex: `codex exec -m gpt-6.2-sol -c model_reasoning_effort=<effort>`, prompt on stdin;
+`-s read-only` for reviews. Grok: `grok -p "<prompt>" -m grok-4.7 --effort xhigh`. Sol and
+Grok mean the latest of each. Neither CLI has an alias for that, so at the start of a
+program check `codex debug models` and [xAI's model list](https://docs.x.ai/docs/models); if
+either names a newer one, use it and update this paragraph.
 
 Reviews are **mutually blind**: two families, neither shown the other's findings, both on
 the same revision. Agreement across families is signal; a finding only one family raises

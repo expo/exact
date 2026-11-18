@@ -4,6 +4,7 @@ use crate::{FrameInput, RenderError};
 use exact_game::{Component, Entity, Mat4, Ref, Resource, Target, Transform, World};
 use exact_gpu::wgpu;
 
+pub(crate) mod budget;
 pub(crate) mod gpu_timing;
 mod materials;
 pub(crate) mod metrics;
@@ -80,6 +81,9 @@ impl Needs {
     pub const ANIMATE: Self = Self(8);
     /// Presentation resources are still preparing. Does not stop simulation ticks.
     pub const PENDING: Self = Self(16);
+    /// Pending only for want of allowance. A redraw at the same time cannot help.
+    /// Has effect only with `PENDING`.
+    pub const STARVED: Self = Self(32);
     /// Whether all the requested bits are present.
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -95,9 +99,39 @@ impl std::ops::BitOr for Needs {
     }
 }
 
+/// A live frame's time limit for hook preparation (LLP 1182.000 D6).
+#[derive(Clone, Copy, Debug)]
+pub struct Deadline {
+    start: crate::perf::Stamp,
+    offset_ms: f64,
+}
+impl Deadline {
+    pub(crate) fn new(start: crate::perf::Stamp, offset_ms: f64) -> Self {
+        Self { start, offset_ms }
+    }
+
+    pub(crate) fn remaining_at(&self, now: crate::perf::Stamp) -> f64 {
+        self.offset_ms - self.start.elapsed_at(now)
+    }
+
+    /// Whether the frame has reached its preparation deadline.
+    pub fn passed(&self) -> bool {
+        self.remaining_at(crate::perf::Stamp::now()) <= 0.
+    }
+
+    /// Milliseconds left for preparation, or zero after the deadline.
+    pub fn remaining_ms(&self) -> f64 {
+        self.remaining_at(crate::perf::Stamp::now()).max(0.)
+    }
+}
+
 /// Host clock and lifecycle facts, separate from saved game time.
 #[derive(Clone, Copy, Debug)]
 pub struct HookTime {
+    /// Bounded units this call to prepare may complete.
+    pub allowance: u32,
+    /// The preparation deadline for a live canvas with a known frame period.
+    pub deadline: Option<Deadline>,
     /// Seconds since the last draw; zero on resets, clamped to 100 ms on live gaps.
     pub dt: f32,
     /// Histories must be primed before this draw.
@@ -126,6 +160,8 @@ pub struct HookTime {
 impl Default for HookTime {
     fn default() -> Self {
         Self {
+            allowance: 0,
+            deadline: None,
             dt: 0.,
             reset: true,
             seekable: true,
@@ -232,11 +268,26 @@ impl HookWork {
     }
 }
 
+/// Game-reported counters cumulative since this hook value was made (LLP 1182.000 D1).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameWork {
+    /// Draw calls issued by the hook in opaque, background, surface, and post.
+    pub draws: u64,
+    /// Submitted triangles, including instances, before culling or clipping.
+    pub triangles: u64,
+    /// Bytes passed to `write_buffer`, `write_texture`, and `create_buffer_init`.
+    pub upload_bytes: u64,
+    /// Game-defined items that issued a draw, counted once per frame across layers.
+    pub items: u64,
+}
+
 /// Optional game rendering. Every callback borrows resources for this frame only.
 /// @ref llp/1046.006.000-render-hooks.rfc.md#d1-the-shape-a-type-parameter-like-presentation
 pub trait Hooks: Default {
     /// Compile away all hook preparation for the default implementation.
     const ENABLED: bool = true;
+    /// Maximum bounded units per advancing frame, or zero to opt out.
+    const ALLOWANCE: u32 = 0;
     /// Allocate/resize resources, extract immutable world data, and upload uniforms.
     fn prepare(
         &mut self,
@@ -269,6 +320,14 @@ pub trait Hooks: Default {
     /// Cumulative work performed through the raw GPU handles.
     fn work(&self) -> Option<HookWork> {
         None
+    }
+    /// Cumulative draw and upload counts, read after the last hook stage of a frame.
+    fn frame_work(&self) -> Option<FrameWork> {
+        None
+    }
+    /// Name of the game-defined unit counted by `FrameWork::items`.
+    fn item_name(&self) -> &'static str {
+        "items"
     }
     /// Custom shading for loaded unskinned opaque model materials.
     fn materials(&self) -> &[CustomMaterial] {
@@ -426,6 +485,7 @@ mod pose_tests {
 pub(crate) struct HookClock {
     last: Option<(f64, bool)>,
     generation: Option<u64>,
+    pub budget: Option<Box<budget::Budget>>,
 }
 impl HookClock {
     pub fn reset(&mut self) {
@@ -452,6 +512,8 @@ impl HookClock {
         self.last = Some((frame.now_ms, frame.seekable));
         self.generation = Some(generation);
         HookTime {
+            allowance: 0,
+            deadline: None,
             dt,
             reset,
             paused,

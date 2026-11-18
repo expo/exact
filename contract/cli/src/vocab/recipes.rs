@@ -62,6 +62,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("long-lists"),
     recipe!("long-text"),
     recipe!("mobile-build"),
+    recipe!("model-viewer"),
     recipe!("money"),
     recipe!("motion"),
     recipe!("native-module"),

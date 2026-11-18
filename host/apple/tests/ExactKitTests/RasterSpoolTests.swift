@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// Spooled image bytes outlive a killed process only until the next launch's
 /// first spool: a directory whose lock no live process holds is removed, one

@@ -107,7 +107,7 @@ The build:
 2. builds the app's `android/` crate for each selected ABI (arm64 by default) at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_painted::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
-   which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
+   which writes the app's hatches' install (`hatches.rs`), launch list (`launch.rs`) and the plan's uses (`uses.txt`) beside it. Each `app.json` `launch` module must provide `android/launch.rs`; the list runs once before the host boots, with the app's cache directory available. `apps/caltrain/android` is the one to copy for an app whose data is Rust and
    `apps/shelf/android` for one whose data is TypeScript (three files each, and a line in the root `Cargo.toml`'s
    `members`). A game's is generated in its `.shells/` (`game/app/shells.mjs`). An app with GPU modules (LLP 1009;
    every game) is built as a Linux bake is (`buildBake`): the modules first, then the crate, whose bake records each

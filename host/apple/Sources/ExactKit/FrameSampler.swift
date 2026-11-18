@@ -644,7 +644,7 @@ extension ExactSession {
         // The sites' work, which a release build counts from here: its live
         // instances, and no work yet.
         runtime.measureWork()
-        let perf = raw(agent("{\"op\":\"perf\"}"))
+        let perf = raw(runtime.ask(exact_perf, "{}"))
         #if canImport(UIKit)
         let host = "ios", device = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"].map { "\($0) (simulator)" } ?? UIDevice.current.model
         #else
@@ -679,7 +679,7 @@ extension ExactSession {
                         "overrun": "iOS and tvOS 18 and later: the UI update's commit past its completionDeadlineTime (UIUpdateLink, afterCATransactionCommit); elsewhere: a main run-loop turn that began before the frame's targetTimestamp and went to sleep after it",
                         "loaf": "none on this host"],
             "plan": (perf as? [String: Any])?["plan"] ?? NSNull(),
-            "journal": raw(agent("{\"op\":\"logs\",\"since\":0}")),
+            "journal": raw(runtime.ask(exact_logs, "{\"since\":0}")),
             "frames": frames,
             "perf": perf,
             // The hatches (LLP 1075.003.000.001 §3.3), read in this same turn, so the sections agree.

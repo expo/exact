@@ -57,17 +57,6 @@ pub(crate) fn sync<D: exact_runner::DataSource>(
 }
 
 impl DocWatch {
-    /// Watch, as `owner`'s, the documents `runner`'s answers watch: a
-    /// change announces through its native slot, so the host must listen.
-    pub(crate) fn new<D: exact_runner::DataSource>(
-        owner: u64,
-        runner: &mut exact_runner::Runner<D>,
-    ) -> Self {
-        let mut watch = Self::announcing(owner, runner.native_slot());
-        watch.sync(runner);
-        watch
-    }
-
     /// Follow the topics `runner`'s current answers watch.
     pub(crate) fn sync<D: exact_runner::DataSource>(
         &mut self,
@@ -77,7 +66,10 @@ impl DocWatch {
         self.follow(&topics, runner.data().grants());
     }
 
-    fn announcing(owner: u64, native: exact_runner::Native) -> Self {
+    /// Watch documents as `owner`'s, none yet: a change announces through
+    /// the runner's `native` slot, so the host must listen. [`sync`] follows
+    /// the answers' watches.
+    pub(crate) fn new(owner: u64, native: exact_runner::Native) -> Self {
         Self {
             owner,
             shared: Arc::new(Shared {
@@ -188,7 +180,7 @@ mod tests {
         let owner = (1 << 48) | u64::from(std::process::id());
         let path = documents::mint(&std::env::temp_dir(), owner).unwrap();
         let topics = [format!("doc-watch:{path}")];
-        let mut watch = DocWatch::announcing(owner, exact_runner::Native::default());
+        let mut watch = DocWatch::new(owner, exact_runner::Native::default());
         for _ in 0..100 {
             watch.follow(&topics, "fs.read doc:/");
         }
@@ -213,7 +205,7 @@ mod tests {
     #[test]
     fn a_failed_start_is_tried_again_on_the_next_sync() {
         let folder = std::env::temp_dir();
-        let mut watch = DocWatch::announcing(1, exact_runner::Native::default());
+        let mut watch = DocWatch::new(1, exact_runner::Native::default());
         watch.install(vec![folder.clone()], |_, _| None);
         assert!(watch.stream.is_none());
         assert!(watch.needs_retry());

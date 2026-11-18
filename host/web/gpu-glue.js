@@ -1237,14 +1237,18 @@ const api = {
   },
   layout() { for (const entry of surfaces.values()) if (entry.id && !entry.terminal) { supplyChildren(entry); placeChildren(entry); } schedule(); },
   /// A live window opens (`perf frames live`, frames.js): each world leaves the seek for its own frame loop
-  /// at the page's lent clock, its perf rings emptied and armed; closed, the seek returns and each world's perf is the reply.
+  /// at the page's lent clock with empty, armed rings. Closing returns the world's perf and hook diagnostics.
   live(on) {
-    liveWindow = on; gpu?.gpu_seekable(!on);
+    liveWindow = on;
+    // Closing reads each world while it is still live: after the seek returns, a due tick would
+    // run as agent work and start a new CPU window in place of the one being read (LLP 1182.000 D3).
+    if (on) gpu?.gpu_seekable(false);
     const worlds = [];
     for (const entry of surfaces.values()) if (entry.id && !entry.terminal) {
-      const perf = agent(entry.view, { op: "state", ...(on ? { perf_reset: true } : { perf: true }) })?.world?.perf;
-      if (!on && perf) worlds.push({ canvas: entry.view, perf });
+      const world = agent(entry.view, { op: "state", ...(on ? { perf_reset: true } : { perf: true }) })?.world;
+      if (!on && world?.perf) worlds.push({ canvas: entry.view, perf: world.perf, renderHooks: world.renderHooks });
     }
+    if (!on) gpu?.gpu_seekable(true);
     schedule();
     return worlds;
   },

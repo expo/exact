@@ -97,7 +97,7 @@ extension Agent {
     func partTap(_ req: [String: Any]) -> [String: Any] {
         let name = req["part"] as? String ?? ""
         guard let id = (req["id"] as? NSNumber)?.uint32Value, let node = presenter.views[id] else { return ["error": "part \(name): no view \(req["id"] ?? "?")"] }
-        guard let view = presenter.elements.regions.part(name, of: id)?.1 ?? Agent.packagePart(name, in: node) else { return ["error": "part \(name): view \(id) has no live part of that id"] }
+        guard let view = presenter.elements.regionPart(name, of: id) ?? Agent.packagePart(name, in: node) else { return ["error": "part \(name): view \(id) has no live part of that id"] }
         guard let window = view.window, node.window === window else { return ["error": "part \(name): it is not in the window"] }
         let middle = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
         let inWindow = view.convert(middle, to: nil)

@@ -120,7 +120,7 @@ struct Moving {
 /// The font-axis engine, made at the first change a transition or an
 /// animation moves, and what the runner presents through it.
 #[derive(Default)]
-pub(super) struct TextAxes {
+pub(super) struct Axes {
     engine: Option<Box<Engine>>,
     moving: BTreeMap<(ViewId, Row), Moving>,
     /// Nodes whose own `transition` or `animation` row names a font row.
@@ -129,7 +129,7 @@ pub(super) struct TextAxes {
     keyframed: BTreeMap<ViewId, Vec<u32>>,
 }
 
-impl TextAxes {
+impl Axes {
     /// Whether a font axis is moving.
     pub(super) fn running(&self) -> bool {
         self.engine.as_ref().is_some_and(|e| !e.quiescent())
@@ -142,7 +142,7 @@ impl TextAxes {
 }
 
 /// What a commit's ops change, read before they apply.
-pub(super) struct AxesBefore {
+struct AxesBefore {
     /// Each row that may move, and the value presented before the commit.
     rows: Vec<(ViewId, Row, Shown)>,
     /// The rows the ops set on the node itself.
@@ -158,12 +158,8 @@ impl AxesBefore {
     /// phase: `later`, read before its phase, joins what the earlier phases
     /// read. A row keeps the value presented before the first phase that
     /// changes it, and a node an earlier phase created (`created`) had none,
-    /// as `prepare_text_axes` skips a node the commit creates.
-    pub(super) fn join(
-        first: Option<Self>,
-        later: Option<Self>,
-        created: &BTreeSet<ViewId>,
-    ) -> Option<Self> {
+    /// as `prepare_text_axes_linked` skips a node the commit creates.
+    fn join(first: Option<Self>, later: Option<Self>, created: &BTreeSet<ViewId>) -> Option<Self> {
         let Some(later) = later else { return first };
         let mut first = first.unwrap_or(AxesBefore {
             rows: Vec::new(),
@@ -187,7 +183,7 @@ impl<D: DataSource> Runner<D> {
     /// Before `ops` apply: font edits with their presented values, inherited
     /// changes on watched nodes, and transition declarations. Nothing changes
     /// here, so a refused commit has nothing to undo.
-    pub(super) fn prepare_text_axes(&self, ops: &[Op]) -> Option<AxesBefore> {
+    fn prepare_text_axes_linked(&self, ops: &[Op]) -> Option<AxesBefore> {
         self.links.text_axes?;
         let mut changed: BTreeSet<(ViewId, Row)> = BTreeSet::new();
         let mut own = BTreeSet::new();
@@ -274,7 +270,7 @@ impl<D: DataSource> Runner<D> {
     /// After a commit applied: start, retarget or drop what its changes
     /// move, and write the values presented now as one more commit, which
     /// `receipt` takes in.
-    pub(super) fn settle_text_axes(
+    fn settle_text_axes_linked(
         &mut self,
         before: Option<AxesBefore>,
         receipt: &CommitReceipt,
@@ -365,7 +361,8 @@ impl<D: DataSource> Runner<D> {
                 continue;
             };
             let transitions = exact_kernel::motion::transitions(node.style);
-            let Some(engine) = self.text_axes.engine.as_mut() else {
+            let axes = &mut *self.text_axes;
+            let Some(engine) = axes.engine.as_mut() else {
                 continue;
             };
             let _ = engine.advance(now.max(engine.now()));
@@ -373,7 +370,7 @@ impl<D: DataSource> Runner<D> {
                 if dirty.contains(&(view, row)) {
                     continue;
                 }
-                let Some(moving) = self.text_axes.moving.get(&(view, row)) else {
+                let Some(moving) = axes.moving.get(&(view, row)) else {
                     continue;
                 };
                 // The kernel holds presentation; a declaration edit observes
@@ -453,12 +450,75 @@ impl<D: DataSource> Runner<D> {
             }
         }
     }
+}
 
-    /// When the last font-axis transition or finite animation ends,
-    /// milliseconds; a host's `settle` takes the later of this and its own
-    /// engine's.
-    pub fn text_axes_settle_ms(&self) -> Option<f64> {
-        self.text_axes.settle_ms()
+/// The linked font-axis seam: this module's code, reached only through it.
+pub(crate) struct LinkedTextAxes;
+
+/// Font-axis code reaches the runner's state as `self.text_axes`. It is
+/// [`Axes`] wherever that code runs: the boot makes the state with the seam
+/// it chose for the runner, and this code is reached only through that seam.
+impl std::ops::Deref for super::seams::TextAxesState {
+    type Target = Axes;
+    fn deref(&self) -> &Axes {
+        self.0
+            .downcast_ref()
+            .expect("the linked seam made this state")
+    }
+}
+
+impl std::ops::DerefMut for super::seams::TextAxesState {
+    fn deref_mut(&mut self) -> &mut Axes {
+        self.0
+            .downcast_mut()
+            .expect("the linked seam made this state")
+    }
+}
+
+/// What [`super::seams::TextAxes::prepare`] read, as this seam made it.
+fn before(b: Option<Box<dyn std::any::Any>>) -> Option<AxesBefore> {
+    b.map(|b| *b.downcast().expect("the linked seam made this value"))
+}
+
+impl<D: DataSource> super::seams::TextAxes<D> for LinkedTextAxes {
+    fn state(&self) -> Box<dyn std::any::Any> {
+        Box::new(Axes::default())
+    }
+
+    fn running(&self, r: &Runner<D>) -> bool {
+        r.text_axes.running()
+    }
+
+    fn settle_ms(&self, r: &Runner<D>) -> Option<f64> {
+        r.text_axes.settle_ms()
+    }
+
+    fn prepare(&self, r: &Runner<D>, ops: &[Op]) -> Option<Box<dyn std::any::Any>> {
+        let b = r.prepare_text_axes_linked(ops)?;
+        Some(Box::new(b))
+    }
+
+    fn join(
+        &self,
+        first: Option<Box<dyn std::any::Any>>,
+        later: Option<Box<dyn std::any::Any>>,
+        created: &BTreeSet<ViewId>,
+    ) -> Option<Box<dyn std::any::Any>> {
+        let joined = AxesBefore::join(before(first), before(later), created)?;
+        Some(Box::new(joined))
+    }
+
+    fn settle(
+        &self,
+        r: &mut Runner<D>,
+        b: Option<Box<dyn std::any::Any>>,
+        receipt: &CommitReceipt,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        r.settle_text_axes_linked(before(b), receipt)
+    }
+
+    fn tick(&self, r: &mut Runner<D>) -> Result<Option<CommitReceipt>, RunnerError> {
+        r.tick_text_axes_linked()
     }
 }
 

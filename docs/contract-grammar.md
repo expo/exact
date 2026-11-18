@@ -822,6 +822,8 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                   | "copy" | "cut" | "paste" STRING ) NL
               | "pick" STRING ( STRING { STRING } | "cancel" ) NL
               | "authorize" [ "cancel" ] NL           (* the held sign-in, against the app's server (oauth recipe) *)
+              | "presence" ( "allow" | "cancel" | "fail" | "lockout" | "invalidated" ) NL
+                                                     (* answer the pending user-presence prompt, as tap @presence *)
               | "clock" ( "settle" | "data" | "+" NUMBER [ "real" ] | NUMBER ) NL
               | "clock" "held" { IDENT } [ NUMBER ( "s" | "ms" ) ] NL
                                                      (* real time, the clock frozen, until held requests reply *)
@@ -888,6 +890,14 @@ block in a run under platform timing. `query` and `built` read the same on every
 `evaluated` is each runtime's own, so a test that compares it names one host. The development
 source map names components; a host without one says so. A drive's `perf <target> during "…"`
 shows the same counts while a test is being written.
+
+`presence <answer>` waits as `clock data` does, with the virtual clock frozen, then
+answers the pending user-presence prompt through the driver's `tap @presence`.
+It fails if no prompt is pending, several match, or the data wait expires.
+It answers both a presence secret's unlock and `@exact/local-auth`'s `authenticate`;
+`invalidated` applies only to unlock. Use `prefer permission.local-auth granted`
+to handle the separate permission prompt, and `clock data` after the answer before
+checking its result. Scope tests with `on` to hosts that support the operation.
 
 `expect no failures` fails when, since the test launched or its last `expect no failures`, a
 resource was refused while no `fail fetch` fired, a send failed that no `expect refusal` names,

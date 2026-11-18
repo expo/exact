@@ -14,6 +14,7 @@
 // (`--touch platform`) keeps the hold and presents the real picker too: what
 // the person chooses there answers the hold, and the agent's answer, or
 // `back`, closes it.
+import CExact
 import Foundation
 import UniformTypeIdentifiers
 #if canImport(UIKit)
@@ -30,7 +31,7 @@ extension ExactSession {
         var request = request
         request["owner"] = documentOwner
         let d = (try? JSONSerialization.data(withJSONObject: request)) ?? Data()
-        return (try? JSONSerialization.jsonObject(with: Data(agent(String(decoding: d, as: UTF8.self)).utf8))) as? [String: Any] ?? [:]
+        return (try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_documents, String(decoding: d, as: UTF8.self)).utf8))) as? [String: Any] ?? [:]
     }
 
     /// A value arriving at the `open-file` field (LLP 1069.010 D1): a real
@@ -194,7 +195,7 @@ extension Picker {
         guard let ticket = documentTickets.removeValue(forKey: view) else { return }
         var ask: [String: Any] = ["op": urls == nil ? "tap" : "type", "ticket": ticket]
         if let urls { ask["text"] = urls.map(\.path).joined(separator: "\n") } else { ask["choice"] = "cancel" }
-        if let data = try? JSONSerialization.data(withJSONObject: ask) { _ = session.agent(String(decoding: data, as: UTF8.self)) }
+        if let data = try? JSONSerialization.data(withJSONObject: ask) { _ = session.runtime.ask(exact_answer_ticket, String(decoding: data, as: UTF8.self)) }
     }
 
     func documentsChosen(_ view: UInt32, _ urls: [URL], _ name: String) {

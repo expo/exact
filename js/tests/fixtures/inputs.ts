@@ -12,6 +12,7 @@ const localTimeOptions = { hour: "numeric", minute: "numeric" } as const;
 const localDateFormatter = new Intl.DateTimeFormat("en-US", localTimeOptions);
 const localDateFormat = localDateFormatter.format;
 const calls: Record<string, () => unknown> = {
+  host: () => exactHost(),
   idle: () => "idle",
   now: () => Date.now(),
   new: () => new Date(),
@@ -60,6 +61,8 @@ function explicit(epochMs: number, seed: number): string {
 
 function answer(source: string, args: any[]): unknown {
   switch (source) {
+    case "host": return exactHost();
+    case "hostLater": return Promise.resolve().then(() => globalThis.exactHost());
     case "atInit": return atInit[args[0]];
     case "ambient": return calls[args[0]]();
     case "ambientLater": return fetch("https://fixture.exact.test/value").then(() => calls[args[0]]());

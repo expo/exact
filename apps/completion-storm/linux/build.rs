@@ -26,6 +26,7 @@ fn main() {
         &std::env::var("TARGET").unwrap(),
         &manifest,
         Some(completion_storm_data::Storm::default().grants()),
+        exact_bake::hands_out_work!(completion_storm_data::Storm::default()),
     )
     .expect("compatibility receipt");
     std::fs::write(out.join("compat.json"), compat.to_json()).unwrap();

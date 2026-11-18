@@ -550,7 +550,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `type`, `pick`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -830,6 +830,22 @@ impl Parser {
                     paths,
                     span,
                 }
+            }
+            "presence" => {
+                let expected = "`presence` takes one answer: `allow`, `cancel`, `fail`, `lockout` or `invalidated`";
+                let answer = match self.peek_kind().clone() {
+                    TokenKind::Ident(answer) => {
+                        self.next();
+                        answer
+                    }
+                    _ => return self.err("syntax-expected-step", expected),
+                };
+                if !matches!(answer.as_str(), "allow" | "cancel" | "fail" | "lockout" | "invalidated")
+                    || !matches!(self.peek_kind(), TokenKind::Newline | TokenKind::Eof)
+                {
+                    return self.err("syntax-expected-step", expected);
+                }
+                Step::Presence { answer, span }
             }
             // `authorize` or `authorize cancel` (LLP 1146 D4).
             "authorize" => {
@@ -1277,7 +1293,7 @@ impl Parser {
                 return Err(SyntaxError {
                     id: "syntax-expected-step",
                     message: format!(
-                    "expected `tap`, `type`, `pick`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `fresh`, `before data`), found `{other}`"
+                    "expected `tap`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `fresh`, `before data`), found `{other}`"
                 ),
                     span,
                 })

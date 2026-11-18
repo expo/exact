@@ -368,3 +368,287 @@ export const signalDeadline = { arm: null }; export const fetchWith = async () =
     expect(arms).toBe(3);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('the render fetch boundary defers effective credentials before the cache or network', async () => {
+  const { renderer } = await import('./render.mjs');
+  const saved = globalThis.fetch, sent = [];
+  globalThis.fetch = async input => {
+    const url = typeof input === 'string' ? input : input.url;
+    sent.push(url);
+    return Object.defineProperty(new Response('public', { headers: { 'cache-control': 'public, max-age=600' } }), 'url', { value: url });
+  };
+  const files = {
+    'index.html': '<html><head><title>Test</title><meta name="viewport" content="width=device-width">\n</head><body><div id="exact-root"></div><script type="module" data-entry src="app.js"></script></body></html>',
+    '.gen/server.js': `globalThis.__exactRenderOrigin = 'https://site.test';
+      globalThis.__start = async () => {
+        const cases = [
+          ['https://api.test/current', { credentials: 'include' }],
+          [new Request('https://api.test/current', { credentials: 'include' })],
+          ['https://site.test/current'],
+          ['https://site.test/current', Object.create({ credentials: 'same-origin' })],
+          ['https://site.test/public', { credentials: 'omit' }],
+          [new Request('https://site.test/public', { credentials: 'omit' }).clone()],
+          [new Request('https://api.test/current', { credentials: 'include' }), { credentials: 'omit' }],
+          ['https://other.test/public'],
+        ];
+        const deferred = [];
+        for (const args of cases) {
+          try { await fetch(...args); deferred.push(false); }
+          catch (error) { if (!error.renderDeferred) throw error; deferred.push(true); }
+        }
+        // The public response is already cached when the credentialed request asks for the same URL.
+        try { await fetch('https://site.test/public'); deferred.push(false); }
+        catch (error) { if (!error.renderDeferred) throw error; deferred.push(true); }
+        return { activate: 'eager', deferred };
+      };`,
+  };
+  let page;
+  try {
+    const render = renderer('', { read: path => {
+      if (!(path in files)) throw Object.assign(new Error(path), { code: 'ENOENT' });
+      return Buffer.from(files[path]);
+    } });
+    page = await render.begin('/');
+    expect(page.deferred).toEqual([true, true, true, true, false, false, false, false, true]);
+    expect(sent).toEqual(['https://site.test/public', 'https://api.test/current', 'https://other.test/public']);
+  } finally { page?.dispose(); globalThis.fetch = saved; }
+});
+
+test('the web-session recipe selects cookies or native storage at run time', async () => {
+  const vm = await import('node:vm');
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  const {transformSync} = await import('rolldown/utils');
+  const recipe = readFileSync(resolve(import.meta.dir, '../../docs/recipes/web-sessions.md'), 'utf8');
+  expect(recipe).toMatch(/JS target[\s\S]*preserves\s+`credentials`/);
+  expect(recipe).toMatch(/wasm target, including workers,[\s\S]*same-origin endpoints/);
+  const source = recipe.match(/```ts\n([\s\S]*?)\n```/)[1].replace(/^import type .*;\n/, '');
+  const code = transformSync('session.ts', source, {}).code;
+  for (const host of ['web', 'native']) {
+    const kept = new Map();
+    const store = {get: name => kept.get(name), set: (name, value) => kept.set(name, value), forget: name => kept.delete(name)};
+    const context = vm.createContext({exactHost: () => host, Headers});
+    vm.runInContext(code, context);
+    const transport = context.sessionTransport(store);
+    expect(transport.path).toBe(`/session/${host}`);
+    transport.remember(host === 'web' ? {} : {token: 'rotated'});
+    const options = transport.options({headers: {'x-csrf-token': 'proof'}});
+    expect(options.credentials).toBe(host === 'web' ? 'include' : 'omit');
+    expect(options.headers.get('x-csrf-token')).toBe('proof');
+    expect(options.headers.get('authorization')).toBe(host === 'web' ? null : 'Bearer rotated');
+    expect([...kept]).toEqual(host === 'web' ? [] : [['session', 'rotated']]);
+    transport.forget();
+    expect(kept.size).toBe(0);
+  }
+});
+
+test('the web-session recipe uses an HttpOnly cookie through sign-in, rotation and logout', async () => {
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { resolve } = await import('node:path');
+  const { spawnSync } = await import('node:child_process');
+  const { suiteBrowser } = await import('../../scripts/agent-launch.mjs');
+  const root = resolve(import.meta.dir, '../..'), app = mkdtempSync(resolve(tmpdir(), 'exact-web-session-'));
+  const out = resolve(app, 'dist'), cookies = [];
+  let browser, pageServer, api, token = '';
+  try {
+    api = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      const origin = pageServer?.url.origin;
+      const headers = { 'access-control-allow-origin': origin ?? 'http://unbound.invalid',
+        'access-control-allow-credentials': 'true', 'vary': 'Origin' };
+      if (request.headers.get('origin') !== origin) return new Response(null, { status: 403 });
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...headers,
+        'access-control-allow-methods': 'GET, POST', 'access-control-allow-headers': 'x-csrf-token' } });
+      const path = new URL(request.url).pathname;
+      const cookie = request.headers.get('cookie') ?? '';
+      cookies.push([path, cookie]);
+      if (request.headers.get('x-csrf-token') !== 'fixture-proof') return new Response(null, { status: 403, headers });
+      if (path !== '/session/web/sign-in' && (!token || cookie !== `__Host-session=${token}`)) return new Response(null, { status: 401, headers });
+      if (path === '/session/web/sign-in' || path === '/session/web/refresh') {
+        token = path.endsWith('/sign-in') ? 'first-private-token' : 'rotated-private-token';
+        headers['set-cookie'] = `__Host-session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`;
+      } else if (path === '/session/web/logout') {
+        token = '';
+        headers['set-cookie'] = '__Host-session=; Max-Age=0; HttpOnly; Secure; SameSite=Strict; Path=/';
+      }
+      return Response.json({ ok: true }, { headers });
+    } });
+    const recipe = readFileSync(resolve(root, 'docs/recipes/web-sessions.md'), 'utf8');
+    const adapter = recipe.match(/```ts\n([\s\S]*?)\n```/)[1];
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({name:'Session', app:{id:'test.web-session', name:'Session'}, host:{web:{}}}));
+    writeFileSync(resolve(app, 'app.contract'), 'component App\n  resource result = probe() as shape string\n  view\n    text result testId="result"\n');
+    writeFileSync(resolve(app, 'app.ts'), adapter + `
+import type { Answer } from './app.contract.d.ts';
+export const grants = 'net.fetch ${api.url.origin}\\nsecret.keep session';
+export const answer: Answer = async (_source, _args, store) => {
+  const session = sessionTransport(store);
+  const call = (path: string, method = 'POST') => fetch('${api.url.origin}' + path,
+    session.options({method, headers:{'x-csrf-token':'fixture-proof'}}));
+  for (const operation of ['/sign-in', '/refresh']) {
+    const response = await call(session.path + operation);
+    if (!response.ok || response.headers.get('set-cookie')) throw new Error('session exchange failed');
+    session.remember(await response.json());
+  }
+  if (!(await call('/items', 'GET')).ok) throw new Error('cookie was not sent');
+  if (!(await call(session.path + '/logout')).ok) throw new Error('logout failed');
+  session.forget();
+  if ((await call('/items', 'GET')).status !== 401) throw new Error('logout left a session');
+  return exactHost() + '/' + globalThis.exactHost();
+};
+`);
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'session', '--out', out, '--production', '--render', 'none'],
+      {cwd:root, env:{...process.env, EXACT_APP_DIR:app}, encoding:'utf8'});
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    pageServer = Bun.serve({hostname:'127.0.0.1', port:0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(out, path === '/' ? 'index.html' : path.slice(1))));
+    }});
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(pageServer.url.href);
+    await page.getByTestId('result').filter({hasText:'web/web'}).waitFor();
+    expect(errors).toEqual([]);
+    expect(cookies).toEqual([
+      ['/session/web/sign-in', ''], ['/session/web/refresh', '__Host-session=first-private-token'],
+      ['/items', '__Host-session=rotated-private-token'], ['/session/web/logout', '__Host-session=rotated-private-token'], ['/items', ''],
+    ]);
+    expect(await page.evaluate(() => ({cookie:document.cookie, secrets:Object.keys(localStorage).filter(k => k.startsWith('exact.secret.'))})))
+      .toEqual({cookie:'', secrets:[]});
+  } finally {
+    await browser?.close(); pageServer?.stop(true); api?.stop(true); rmSync(app, {recursive:true, force:true});
+  }
+}, 120000);
+
+test.each(['TypeScript', 'Rust'])('a rendered %s page leaves session reads to the browser with its existing cookie', async language => {
+  const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { resolve } = await import('node:path');
+  const { suiteBrowser } = await import('../../scripts/agent-launch.mjs');
+  const root = resolve(import.meta.dir, '../..'), app = mkdtempSync(resolve(tmpdir(), 'exact-render-session-'));
+  const out = resolve(app, 'dist'), requests = [];
+  let browser, site;
+  try {
+    site = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/current' || path === '/declared') {
+        const cookie = request.headers.get('cookie') ?? '';
+        requests.push(cookie);
+        const state = cookie === '__Host-session=existing-private-token' ? 'signed in' : 'signed out';
+        return path === '/declared' ? Response.json(state) : new Response(state);
+      }
+      if (path === '/public') return new Response('public');
+      if (path === '/existing-session') return new Response('signed in', { headers: {
+        'set-cookie': '__Host-session=existing-private-token; HttpOnly; Secure; SameSite=Strict; Path=/',
+      } });
+      return new Response(Bun.file(resolve(out, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    const recipe = readFileSync(resolve(root, 'docs/recipes/web-sessions.md'), 'utf8');
+    const adapter = recipe.match(/```ts\n([\s\S]*?)\n```/)[1];
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Session',
+      app: { id: 'test.render-session', name: 'Session', origin: site.url.origin + '/' }, host: { web: {} },
+      ...(language === 'Rust' ? { rust: { data: { crate: 'render-session-data', type: 'render_session_data::Session' } } } : {}) }));
+    writeFileSync(resolve(app, 'app.contract'), `routes nav
+  home "/" render=build
+
+source declared() as shape string
+  url "${site.url.origin}/declared"
+
+component App
+  resource declared = declared() as shape string
+  resource current = current() as shape string
+  resource sameOrigin = sameOrigin() as shape string
+  resource public = public() as shape string
+  view
+    column
+      text current testId="current"
+      text sameOrigin testId="sameOrigin"
+      text declared testId="declared"
+      text public testId="public"
+      text (pending(current) ? "pending" : "answered") testId="state"
+`);
+    if (language === 'TypeScript') writeFileSync(resolve(app, 'app.ts'), adapter + `
+import type { Answer } from './app.contract.d.ts';
+export const grants = 'net.fetch ${site.url.origin}\\nsecret.keep session';
+export const answer: Answer = async (source, _args, store) => {
+  await Promise.resolve();
+  const options = source === 'current' ? sessionTransport(store).options()
+    : source === 'public' ? { credentials: 'omit' as const } : {};
+  return (await fetch('${site.url.origin}/' + (source === 'public' ? 'public' : 'current'), options)).text();
+};
+`);
+    else {
+      mkdirSync(resolve(app, 'data/src'), { recursive: true });
+      writeFileSync(resolve(app, 'data/Cargo.toml'), `[package]
+name = "render-session-data"
+version.workspace = true
+edition.workspace = true
+workspace = "../.exact/shells"
+[dependencies]
+exact-runner.workspace = true
+`);
+      writeFileSync(resolve(app, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
+#[derive(Default)]
+pub struct Session;
+impl DataSource for Session {
+    fn grants(&self) -> &str { "net.fetch ${site.url.origin}" }
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> { Ok(Value::str("")) }
+    fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
+        if source == "public" { return Ok(Answer::Now(Value::str("public"))); }
+        Ok(Answer::Later(Request::get("${site.url.origin}/current")))
+    }
+    fn parse(&mut self, _: &mut Store, _: &str, _: &[Value], outcome: Outcome) -> Result<Answer, DataError> {
+        let Outcome::Response(response) = outcome else { return Err(DataError::Unavailable(format!("{outcome:?}"))); };
+        Ok(Answer::Now(Value::str(&String::from_utf8(response.body).unwrap())))
+    }
+}
+`);
+    }
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'session', '--out', out, '--production', '--render', 'js'],
+      { cwd: root, env: { ...process.env, EXACT_APP_DIR: app, CARGO_TARGET_DIR: resolve(root, 'target') }, stdout: 'pipe', stderr: 'pipe' });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect(status, stdout + stderr).toBe(0);
+    const html = readFileSync(resolve(out, 'index.html'), 'utf8');
+    const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(html)[1]);
+    expect(checkpoint.pending).toEqual(['declared', 'current', 'sameOrigin']);
+    expect(checkpoint.answers.map(a => a[0])).toEqual(['public']);
+    expect(html).toMatch(/data-testid="state"[^>]*>pending</);
+    expect(requests).toEqual([]);
+    browser = await suiteBrowser();
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(new URL('/existing-session', site.url).href);
+    expect((await context.cookies())[0]).toMatchObject({ name: '__Host-session', httpOnly: true, secure: true, sameSite: 'Strict' });
+    await page.goto(site.url.href);
+    await page.getByTestId('current').filter({ hasText: 'signed in' }).waitFor();
+    await page.getByTestId('sameOrigin').filter({ hasText: 'signed in' }).waitFor();
+    await page.getByTestId('declared').filter({ hasText: 'signed in' }).waitFor();
+    expect(requests).toEqual(Array(3).fill('__Host-session=existing-private-token'));
+    expect(await page.evaluate(() => document.cookie)).toBe('');
+    expect(await page.evaluate(() => globalThis.exact.journal)).toContainEqual(expect.stringMatching(/adopted the document$/));
+  } finally {
+    await browser?.close(); site?.stop(true); rmSync(app, { recursive: true, force: true });
+  }
+}, 120000);
+
+test('render origins normalize paths, default ports and host case', async () => {
+  const { renderedPages } = await import('./rendered-pages.mjs');
+  for (const origin of ['https://site.test/', 'https://site.test:443', 'https://SITE.TEST', 'https://site.test/app', 'https://site.test:8443/']) {
+    const target = new URL(origin).origin;
+    await renderedPages(`routes nav
+  home "/" render=build
+source current() as shape string
+  url "${target}/current"
+component App
+  resource current = current() as shape string
+  view
+    text current testId="current"
+`, (_head, html) => {
+      const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(html(''))[1]);
+      expect(checkpoint.pending, origin).toEqual(['current']);
+      expect(checkpoint.answers, origin).toEqual([]);
+    }, {}, { app: { id: 'test.origin', name: 'Origin', origin } });
+  }
+}, 120000);

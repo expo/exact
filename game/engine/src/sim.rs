@@ -170,6 +170,20 @@ pub enum Clock {
     /// Look ahead by the display period, aligning the tick origin to its lattice.
     Live,
 }
+/// Observe the accepted tick loop without predicting its advance.
+#[doc(hidden)]
+pub trait TickObserver {
+    /// Ticks still to run, including this one.
+    fn before_tick(&mut self, _left: u64) {}
+    /// Ticks still to run after this tick and its propagation.
+    fn after_tick(&mut self, world: &World, left: u32);
+}
+impl<F: FnMut(&World, u32)> TickObserver for F {
+    fn after_tick(&mut self, world: &World, left: u32) {
+        self(world, left);
+    }
+}
+
 #[derive(Clone, Default, Data)]
 struct Queued {
     #[data(skip)]
@@ -231,6 +245,25 @@ impl Paranoid {
         }
     }
 }
+/// A consumed live host gap beyond the 250 ms limit (LLP 1182.000 D5).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LiveGap {
+    /// An advance consumed the host stamp.
+    Advance {
+        /// Milliseconds beyond the live gap limit.
+        excess_ms: f64,
+        /// Ticks the full gap would have asked a running clock to run.
+        ticks_owed: u64,
+        /// The clock was paused, including the first advance after unpausing.
+        paused: bool,
+    },
+    /// A wake shortened the next live advance's gap.
+    Wake {
+        /// Milliseconds beyond the limit that the wake discarded.
+        excess_ms: f64,
+    },
+}
+
 /// The clock, bounded device queue, and a game's world, without a host or GPU.
 pub struct Sim<G: Game> {
     pub(crate) world: World,
@@ -274,6 +307,7 @@ pub struct Sim<G: Game> {
     last_ms: Option<f64>,
     period_ms: f64,
     paused_clock: bool,
+    live_gap: Option<LiveGap>,
     // Last scheduled lookahead, in microseconds × HZ (one tick = 1_000_000).
     lookahead_us_hz: i128,
     // The last tick's pointer motion, for presentation between ticks only.
@@ -299,6 +333,7 @@ pub struct Sim<G: Game> {
 }
 const QUEUE_LIMIT: usize = 1024;
 const PARANOID_EVERY: u64 = 16;
+const LIVE_GAP_LIMIT_MS: f64 = 250.0;
 pub(crate) fn micros(ms: f64) -> i64 {
     (ms * 1000.0).round() as i64
 }
@@ -480,6 +515,7 @@ impl<G: Game> Sim<G> {
             last_ms: None,
             period_ms: 0.0,
             paused_clock: false,
+            live_gap: None,
             lookahead_us_hz: 0,
             last_motion: crate::Vec2::ZERO,
             pointer_samples: Vec::new(),
@@ -512,6 +548,16 @@ impl<G: Game> Sim<G> {
         clock: Clock,
         after: impl FnMut(&World, u32),
     ) -> Result<(), String> {
+        self.bind_observed(values, at_ms, clock, after)
+    }
+    #[doc(hidden)]
+    pub fn bind_observed(
+        &mut self,
+        values: &[Value],
+        at_ms: Option<f64>,
+        clock: Clock,
+        observer: impl TickObserver,
+    ) -> Result<(), String> {
         if at_ms.is_some_and(|at| !at.is_finite()) {
             return Err("bind clock must be finite".into());
         }
@@ -527,7 +573,7 @@ impl<G: Game> Sim<G> {
             } else {
                 Clock::Seekable
             };
-            self.advance_with(at, clock, after);
+            self.advance_observed(at, clock, observer);
         }
         if restart {
             let mut world = Self::build(&args, self.world.assets.clone());
@@ -574,6 +620,7 @@ impl<G: Game> Sim<G> {
             self.world = world;
             self.world_us = 0;
             self.live_time = None;
+            self.live_gap = None;
             self.lookahead_us_hz = 0;
             self.queue.clear();
             self.pointer_samples.clear();
@@ -663,10 +710,22 @@ impl<G: Game> Sim<G> {
             self.period_ms = period;
         }
     }
+    /// The display period in use by the live scheduler, in milliseconds.
+    pub fn display_period_ms(&self) -> f64 {
+        self.period_ms
+    }
     fn phase_us(ms: f64) -> i128 {
         (ms * G::HZ as f64 * 1000.0).round() as i128
     }
     fn live_time(&self, now_ms: f64) -> LiveTime {
+        let delta = if self.paused_clock {
+            0.0
+        } else {
+            (now_ms - self.last_ms.unwrap_or(now_ms)).clamp(0.0, LIVE_GAP_LIMIT_MS)
+        };
+        self.live_time_after(delta)
+    }
+    fn live_time_after(&self, delta: f64) -> LiveTime {
         let mut live = self.live_time.unwrap_or(LiveTime {
             phase: self.world_us as i128 * G::HZ as i128,
             remainder: 0.0,
@@ -675,11 +734,6 @@ impl<G: Game> Sim<G> {
             // A known period at the first epoch has no preceding pose to jump.
             lookahead: Self::phase_us(self.period_ms.min(1000.0 / G::HZ as f64)) as f64,
         });
-        let delta = if self.paused_clock {
-            0.0
-        } else {
-            (now_ms - self.last_ms.unwrap_or(now_ms)).clamp(0.0, 250.0)
-        };
         if live.period_ms != self.period_ms {
             live.period_ms = self.period_ms;
             live.slew_left = None;
@@ -724,8 +778,30 @@ impl<G: Game> Sim<G> {
         live.lookahead.round() as i128
     }
     fn target(phase: i128, lookahead: i128) -> u64 {
+        Self::tick_boundary(phase, lookahead) as u64
+    }
+    fn tick_boundary(phase: i128, lookahead: i128) -> i128 {
         // ceil(horizon / step) - 1 with L; equality waits for the next frame.
-        ((phase + lookahead - i128::from(lookahead > 0)).max(0) / 1_000_000) as u64
+        (phase + lookahead - i128::from(lookahead > 0)).max(0) / 1_000_000
+    }
+    fn live_gap_ms(&self, now_ms: f64) -> Option<f64> {
+        let gap = (now_ms - self.last_ms?).min(i64::MAX as f64 / 1000.0);
+        (gap > LIVE_GAP_LIMIT_MS).then_some(gap)
+    }
+    fn live_advance_gap(&self, now_ms: f64, paused: bool) -> Option<LiveGap> {
+        let gap = self.live_gap_ms(now_ms)?;
+        let live = self.live_time_after(gap);
+        let target = Self::tick_boundary(live.phase, Self::lookahead(live));
+        let owed = (target - i128::from(self.world.tick())).max(0);
+        Some(LiveGap::Advance {
+            excess_ms: gap - LIVE_GAP_LIMIT_MS,
+            ticks_owed: u64::try_from(owed).unwrap_or(u64::MAX),
+            paused,
+        })
+    }
+    /// Take the last long gap consumed by a live advance or wake.
+    pub fn take_live_gap(&mut self) -> Option<LiveGap> {
+        self.live_gap.take()
     }
     fn exact_world_us(&self) -> i64 {
         let deadline = (self.world.tick() as u128 * 1_000_000).div_ceil(G::HZ as u128);
@@ -774,7 +850,16 @@ impl<G: Game> Sim<G> {
         &mut self,
         now_ms: f64,
         clock: Clock,
-        mut after: impl FnMut(&World, u32),
+        after: impl FnMut(&World, u32),
+    ) -> u32 {
+        self.advance_observed(now_ms, clock, after)
+    }
+    #[doc(hidden)]
+    pub fn advance_observed(
+        &mut self,
+        now_ms: f64,
+        clock: Clock,
+        mut observer: impl TickObserver,
     ) -> u32 {
         assert!(now_ms.is_finite(), "host clock must be finite");
         if self.setup_pending {
@@ -810,11 +895,19 @@ impl<G: Game> Sim<G> {
                 e.host_us = e.host_us.min(now);
             }
         }
-        if G::paused(&self.args) {
+        let paused = G::paused(&self.args);
+        let live_gap = if clock == Clock::Live {
+            self.live_advance_gap(now_ms, paused || self.paused_clock)
+                .or(self.live_gap)
+        } else {
+            self.live_gap
+        };
+        if paused {
             self.flush_paused(now);
             self.paused_clock = true;
             self.last_us = Some(now);
             self.last_ms = Some(now_ms);
+            self.live_gap = live_gap;
             return 0;
         }
         let gap = now.saturating_sub(last);
@@ -860,6 +953,8 @@ impl<G: Game> Sim<G> {
             self.world.observe(&mut self.observations[0]);
         }
         while self.world.tick() < target {
+            let left = target - self.world.tick();
+            observer.before_tick(left);
             self.world.spans.borrow_mut().begin(self.world.tick() + 1);
             self.world.begin_tick();
             self.input.clear_edges();
@@ -932,11 +1027,14 @@ impl<G: Game> Sim<G> {
                     self.last_epoch.set(self.world.mutation_epoch());
                 }
             }
-            after(
+            // A tick may load a world at another tick: count what is left now.
+            observer.after_tick(
                 &self.world,
                 u32::try_from(target - self.world.tick()).unwrap_or(u32::MAX),
             );
         }
+        // Keep the note across paranoid restores within the tick loop.
+        self.live_gap = live_gap;
         u32::try_from(self.world.tick() - start).unwrap_or(u32::MAX)
     }
     fn alpha_numerator(&self) -> i128 {
@@ -1212,6 +1310,12 @@ impl<G: Game> Sim<G> {
         };
         let from = now_ms - period;
         if from > last {
+            if let Some(gap) = self.live_gap_ms(now_ms) {
+                let excess_ms = gap - period.max(LIVE_GAP_LIMIT_MS);
+                if excess_ms > 0.0 {
+                    self.live_gap = Some(LiveGap::Wake { excess_ms });
+                }
+            }
             self.last_ms = Some(from);
             self.last_us = Some(micros(from));
         }

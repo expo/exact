@@ -19,7 +19,7 @@
 //! included). A callback URL carries a code, so no journal line, hold
 //! summary or refusal here ever includes one.
 
-use crate::agent::{field_bool, field_str, quote};
+use crate::json::{field_bool, field_str, quote};
 use crate::{DataSource, Outcome, RequestOut, Response, Runner};
 
 /// The reserved URL of an auth session request.
@@ -362,15 +362,13 @@ pub fn session_grant_refusal(grants: &str) -> Option<String> {
     })
 }
 
-fn origin_admits(grant: &str, url: &Url<'_>) -> bool {
-    let Some(origin) = url.origin() else {
+/// Whether `grant` admits `url`'s origin, read through `link`: an archive
+/// without I/O admits none, as grants that name none.
+fn origin_admits(link: crate::grants::GrantsLink, grant: &str, url: &Url<'_>) -> bool {
+    let (Some(link), Some(origin)) = (link, url.origin()) else {
         return false;
     };
-    let Ok(origin) = exact_grants::origin_of(&origin) else {
-        return false;
-    };
-    exact_grants::GrantSet::parse(&format!("net.fetch {grant}"))
-        .is_ok_and(|set| set.permits(&exact_grants::Operation::Fetch { origin }))
+    (link.session_admits)(grant, &origin)
 }
 
 /// The grant lines that apply: the app's, narrowed by a mixed app's source
@@ -437,6 +435,7 @@ fn bent_http(raw: &str) -> bool {
 /// loopback development page, that page's own callback. `Err` is the 403
 /// text, naming the grant it lacks.
 pub fn check_grants(
+    link: crate::grants::GrantsLink,
     session: &Session,
     admitted: &str,
     scope: Option<&str>,
@@ -459,7 +458,7 @@ pub fn check_grants(
     let origin = url.origin().unwrap_or_default();
     if !lines.iter().any(|l| {
         l.strip_prefix("auth.session ")
-            .is_some_and(|g| origin_admits(g.trim(), &url))
+            .is_some_and(|g| origin_admits(link, g.trim(), &url))
     }) {
         return Err(format!("outside the app's grants (auth.session {origin})"));
     }
@@ -838,6 +837,7 @@ pub fn arm_with_fixture<D: DataSource>(
     };
     let admitted = runner.data().grants().to_string();
     if let Err(why) = check_grants(
+        runner.grants_link(),
         &session,
         &admitted,
         out.request.grants.as_deref(),
@@ -984,6 +984,18 @@ pub(crate) fn check_answer<D: DataSource>(
 mod tests {
     use super::*;
 
+    const LINKED: crate::grants::GrantsLink = Some(&crate::grants::LINKED);
+
+    /// [`super::check_grants`] in an archive that links I/O.
+    fn check_grants(
+        s: &Session,
+        admitted: &str,
+        scope: Option<&str>,
+        web: Option<&str>,
+    ) -> Result<(), String> {
+        super::check_grants(LINKED, s, admitted, scope, web)
+    }
+
     fn session(callback: &str) -> Session {
         Session {
             url: "https://bsky.social/oauth/authorize?client_id=https%3A%2F%2Fapp.example%2Fc.json&request_uri=urn%3Ax&id_token_hint=secret".into(),
@@ -1031,7 +1043,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                origin_admits(grant, &Url::parse(url).unwrap()),
+                origin_admits(LINKED, grant, &Url::parse(url).unwrap()),
                 expected,
                 "{grant}: {url}"
             );
@@ -1251,6 +1263,10 @@ mod tests {
         assert!(check_grants(&other, grants, None, None)
             .unwrap_err()
             .contains("auth.session https://evil.example"));
+        // Without I/O no origin is admitted, as under grants that name none.
+        assert!(super::check_grants(None, &s, grants, None, None)
+            .unwrap_err()
+            .contains("outside the app's grants (auth.session https://bsky.social)"));
         let wild = "auth.session https://*.host.bsky.network\nauth.callback x.y:/cb";
         let mut pds = session("x.y:/cb");
         pds.url = "https://morel.us-east.host.bsky.network/oauth/authorize".into();

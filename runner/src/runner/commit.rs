@@ -772,7 +772,7 @@ impl<D: DataSource> Runner<D> {
                     if i > 0 {
                         s.push_str(", ");
                     }
-                    crate::agent::untyped_json(a, &mut s);
+                    crate::json::untyped_json(a, &mut s);
                 }
                 s.push(')');
                 s
@@ -788,7 +788,7 @@ impl<D: DataSource> Runner<D> {
                 self.commands.push(command);
                 continue;
             }
-            match crate::instance::collection::IntoView::from_command(&command.args) {
+            match crate::list_api::IntoView::from_command(&command.args) {
                 Ok(request) => self.into_view.push(request),
                 Err(why) => self.log(format!("scrollIntoView refused: {why}")),
             }
@@ -1049,7 +1049,13 @@ impl<D: DataSource> Runner<D> {
             sent: false,
             grant: request
                 .stream
-                .then(|| crate::grants::admitting_request(self.data.grants(), &request))
+                .then(|| {
+                    crate::grants::admitting_request(
+                        self.links.grants,
+                        self.data.grants(),
+                        &request,
+                    )
+                })
                 .flatten()
                 .map(str::to_string),
             ask_again: false,

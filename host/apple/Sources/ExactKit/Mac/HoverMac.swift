@@ -7,7 +7,7 @@ import AppKit
 // whether or not it hears `hover`.
 extension Presenter {
     /// Native-module hover dispatch uses the same ancestor coverage.
-    func hover(_ view: NodeView, _ over: Bool) {
+    package func hover(_ view: NodeView, _ over: Bool) {
         guard views[view.id] === view else { return }
         if over {
             var path: [NodeView] = []

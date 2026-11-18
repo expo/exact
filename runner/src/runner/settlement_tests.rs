@@ -194,7 +194,7 @@ impl DataSource for Data {
         }
         if source == "watch" {
             return Ok(if self.watch_later {
-                Answer::Later(Request::continuation(2))
+                Answer::Later(Request::continuation::<crate::host_work::TestWork>(2))
             } else {
                 Answer::Now(Value::Bool(false))
             });
@@ -203,7 +203,9 @@ impl DataSource for Data {
             store.set("token", "once")?;
         }
         if source == "rows" && std::mem::take(&mut self.later_once) {
-            return Ok(Answer::Later(Request::continuation(1)));
+            return Ok(Answer::Later(Request::continuation::<
+                crate::host_work::TestWork,
+            >(1)));
         }
         if let Some(e) = self.refuse_once.take().filter(|_| source == "rows") {
             return Err(e);
@@ -234,7 +236,7 @@ impl DataSource for Data {
         } else if self.later_post {
             Answer::Later(Request::post_json("https://example.test/rows", "{}"))
         } else if self.later {
-            Answer::Later(Request::continuation(1))
+            Answer::Later(Request::continuation::<crate::host_work::TestWork>(1))
         } else {
             Answer::Now(self.value.clone())
         })
@@ -266,7 +268,7 @@ impl DataSource for Data {
             return Ok(Answer::Later(if self.later_get {
                 Request::get("https://example.test/followup")
             } else {
-                Request::continuation(7)
+                Request::continuation::<crate::host_work::TestWork>(7)
             }));
         }
         Ok(Answer::Now(self.value.clone()))

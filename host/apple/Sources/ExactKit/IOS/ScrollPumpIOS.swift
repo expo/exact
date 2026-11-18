@@ -110,7 +110,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     func outruns(_ id: UInt32) -> Bool {
         guard let node = presenter?.views[id], let scroll = node.scrollView,
               let t = travel[id], clock() - t.time < refreshInterval * 1.5 else { return false }
-        let horizontal = presenter?.collections.entries[id]?.snapshot.horizontal == true
+        let horizontal = presenter?.collections.snapshot(id)?.horizontal == true
         let port = Double(horizontal ? scroll.bounds.width : scroll.bounds.height)
         return port > 0 && abs(velocity(id)) * refreshInterval >= port * Self.outrun
     }
@@ -121,7 +121,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     func crossing(_ id: UInt32, step: CGFloat? = nil) -> Bool {
         guard let node = presenter?.views[id], let scroll = node.scrollView, let t = travel[id],
               clock() - t.time < refreshInterval * 1.5 else { return false }
-        let port = presenter?.collections.entries[id]?.snapshot.horizontal == true ? scroll.bounds.width : scroll.bounds.height
+        let port = presenter?.collections.snapshot(id)?.horizontal == true ? scroll.bounds.width : scroll.bounds.height
         return port > 0 && t.crossed >= port && (step ?? port) >= port
     }
     /// The rows a rescue of `id` may build (`CollectionHost.glimpse`): while
@@ -134,7 +134,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     func glimpse(_ id: UInt32) -> UInt32? {
         guard let p = presenter, let node = p.views[id], let scroll = node.scrollView else { return nil }
         if !p.collections.glimpses.contains(id) {
-            let horizontal = p.collections.entries[id]?.snapshot.horizontal == true
+            let horizontal = p.collections.snapshot(id)?.horizontal == true
             let port = horizontal ? scroll.bounds.width : scroll.bounds.height
             let step = travel[id]?.crossed ?? 0
             let repeated = travel[id].map { $0.previousCrossed >= port && step >= port } ?? false
@@ -158,13 +158,13 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
               let scroll = node.scrollView else { return }
         sample(node, now: clock())
         updateRasterTravel()
-        if p.collections.entries[node.id]?.snapshot.seeking == true,
+        if p.collections.snapshot(node.id)?.seeking == true,
            scroll.isTracking || scroll.isDecelerating { p.collections.gestureBegan(node.id) }
     }
     private func sample(_ node: NodeView, now: TimeInterval) {
         guard let scroll = node.scrollView else { return }
         // Along the list's own axis (LLP 1070 H3): a row list travels on x.
-        let horizontal = presenter?.collections.entries[node.id]?.snapshot.horizontal == true
+        let horizontal = presenter?.collections.snapshot(node.id)?.horizontal == true
         let top = horizontal ? scroll.contentOffset.x : scroll.contentOffset.y
         let inset = scroll.adjustedContentInset
         let layout = horizontal ? ScrollLayout(port: scroll.bounds.width, extent: scroll.contentSize.width, before: inset.left, after: inset.right)

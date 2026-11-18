@@ -2,7 +2,7 @@
 //! custom vertex material and a dusk sky replaces the engine's. Presentation
 //! only: the hooks read the world and never step or change it.
 use exact_game_render::hooks::{CustomMaterial, Pipelines};
-use exact_game_render::{FrameView, HookGpu, Hooks, Needs, RenderError, RenderWorld};
+use exact_game_render::{FrameView, FrameWork, HookGpu, Hooks, Needs, RenderError, RenderWorld};
 use exact_gpu::wgpu;
 
 /// The shader inventory (game.render.shaders): every shader under `shaders/`
@@ -25,6 +25,7 @@ pub struct Wind {
     uniform: Option<wgpu::Buffer>,
     sky: Pipelines<wgpu::RenderPipeline>,
     frame: Option<wgpu::BindGroup>,
+    work: FrameWork,
 }
 
 impl Wind {
@@ -109,6 +110,7 @@ impl Hooks for Wind {
                 .map_or(1., |g| g.0);
             let words = [time, gust, 0., 0.].map(f32::to_le_bytes).concat();
             gpu.queue.write_buffer(uniform, 0, &words);
+            self.work.upload_bytes += words.len() as u64;
         }
         if exact_gpu::shaders::shader_source(shaders::sky::NAME).is_some() {
             self.sky
@@ -141,6 +143,9 @@ impl Hooks for Wind {
     fn error(&self) -> Option<&str> {
         self.sky.error().or(self.reeds.error())
     }
+    fn frame_work(&self) -> Option<FrameWork> {
+        Some(self.work)
+    }
     fn materials(&self) -> &[CustomMaterial] {
         self.reeds.get().map_or(&[], Vec::as_slice)
     }
@@ -153,6 +158,9 @@ impl Hooks for Wind {
             pass.set_pipeline(sky);
             pass.set_bind_group(0, frame, &[]);
             pass.draw(0..3, 0..1);
+            self.work.draws += 1;
+            self.work.triangles += 1;
+            self.work.items += 1;
         }
         Ok(())
     }

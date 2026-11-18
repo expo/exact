@@ -362,7 +362,7 @@ extension NodeView {
     var capturesPixels: Bool { kind == "image" && !hasSymbolLeaf && raster?.image != nil && imageLayer != nil }
 
     /// The image's pixels onto a sublayer, or none (`draw(_:)` paints them).
-    func applyImageLayer() {
+    package func applyImageLayer() {
         if ImageLink.pixelated?.apply(self) == true { return }
         if ImageLink.pixelated?.owns(imageLayer) == true { imageLayer?.removeFromSuperlayer(); imageLayer = nil }
         if cssVisibilityHidden || style["image_rendering"]?.string == "pixelated" { imageLayer?.removeFromSuperlayer(); imageLayer = nil; return }
@@ -411,7 +411,7 @@ extension NodeView {
 
     /// The box's sublayers keep CSS's paint order, all under the children:
     /// shadow, fill, gradient, image, border.
-    func insertBoxSublayer(_ l: CALayer) {
+    package func insertBoxSublayer(_ l: CALayer) {
         guard let layer else { return }
         let order: [CALayer?] = [shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder]
         guard let rank = order.firstIndex(where: { $0 === l }) else { return }

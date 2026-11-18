@@ -8,6 +8,7 @@ fn main() {
         std::path::Path::new(".."),
         platform,
         &canvas_gallery_data::Capture,
+        exact_js_bake::hands_out_work!(canvas_gallery_data::Capture),
         canvas_gallery_data::RUST_SOURCES,
         |javascript| {
             Box::new(canvas_gallery_data::mixed(

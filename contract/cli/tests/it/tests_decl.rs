@@ -4,6 +4,28 @@
 use contract_syntax::{Expr, StateComparison, Step, TapForm};
 
 #[test]
+fn a_test_answers_a_pending_presence_prompt() {
+    let answers = ["allow", "cancel", "fail", "lockout", "invalidated"];
+    let mut src = String::from("test \"unlock\" on ios, android\n  tap \"unlock\"\n");
+    for answer in answers {
+        src.push_str(&format!("  presence {answer}\n"));
+    }
+    let tests = contract::tests(&src).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&tests)).unwrap();
+    for (i, answer) in answers.iter().enumerate() {
+        assert_eq!(
+            json[0]["steps"][i + 1],
+            serde_json::json!({"op": "presence", "answer": answer, "line": i + 3})
+        );
+    }
+    for answer in ["", "deny", "\"allow\"", "allow cancel"] {
+        let error = contract::tests(&format!("test \"t\"\n  presence {answer}\n")).unwrap_err();
+        assert!(error.message.contains("presence"), "{error:?}");
+        assert!(error.message.contains("invalidated"), "{error:?}");
+    }
+}
+
+#[test]
 fn authored_http_responses_are_launch_facts_and_steps() {
     let tests = contract::tests(
         r#"answer fetch "https://api.example.com/" with 200 {"text":"Stubbed greeting"}

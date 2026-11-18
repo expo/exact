@@ -289,7 +289,7 @@ impl<D: DataSource> Host<D> {
     /// retiring old surviving overlays at the existing Engine clock.
     pub fn transform_motion(&mut self, bytes: &[u8]) -> String {
         self.transform_input(bytes)
-            .unwrap_or_else(exact_runner::agent::error)
+            .unwrap_or_else(exact_runner::json::error)
     }
 
     fn transform_input(&mut self, bytes: &[u8]) -> Result<String, &'static str> {

@@ -55,6 +55,21 @@ extension XCTestCase {
         waitFor("the data's activation") { !session.activationInFlight }
     }
 
+    /// Settles a freshly booted `session` with no view: waits for
+    /// its owner work to land, then hears its page's first present
+    /// with a tick of its own (LLP 1069.000 D2 r7), as a display
+    /// link's would, so nothing of its own is left to land. The
+    /// session's link cannot be waited for: on the Mac it belongs to
+    /// a viewport in no window, which no display ticks. A test that
+    /// counts the session's batches or reads its outstanding work
+    /// starts from here.
+    func settleViewlessSession(_ session: ExactSession) {
+        waitFor("the boot's owner work landed") { !session.ownerInFlight }
+        session.applyUnlessEmpty(session.runtime.tick(now: session.now(), frame: session.now(), presentOnly: session.frames.presentOnly))
+        XCTAssertFalse(session.frames.motion, "the page's first present heard, and nothing moves")
+        XCTAssertFalse(session.ownerInFlight, "nothing of the session's own in flight")
+    }
+
     /// A LATE-PASS record: an attachment a result bundle keeps (the iOS
     /// runs') and the same text as a line in the run's own log, which the
     /// Mac runner's swift xctest keeps where it keeps no attachment, so one

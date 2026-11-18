@@ -1,0 +1,19 @@
+shape Hud
+  presented: bool
+
+component TerrainFixture
+  state playing = false
+  resource hud = exactSurface("world") as shape Hud
+  action play
+    playing = true
+  view
+    main width="100%" height="100%"
+      if playing
+        canvas surface=world() testId="world" width="100%" height="100%" position="relative"
+          if !hud.presented
+            column position="absolute" inset=0 align-items="center" justify-content="center" background-color="-exact-background"
+              text "Preparing terrain…" testId="terrain-pending"
+      else
+        column width="100%" height="100%" align-items="center" justify-content="center"
+          button press=play testId="play"
+            text "Show terrain"

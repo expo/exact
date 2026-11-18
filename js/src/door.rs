@@ -220,6 +220,12 @@ pub(crate) unsafe extern "C" fn host_door(
         // Whether this is a bake: the prelude marks a stream's refused
         // options there, as storage's refusal is (LLP 1016.000 D11).
         12 if a == "bake" => Ok(state.baking.then(|| "1".into())),
+        12 if a == "host" => {
+            if let Some(store) = state.store {
+                (*store).observe_external_read();
+            }
+            Ok((state.store.is_some() && !state.deferring()).then(|| "native".into()))
+        }
         12 => Ok(crypto::auth_callback(state, &a)),
         // A journal line the runtime writes (LLP 1097 D8): a failed or
         // refused storage operation, an unhandled rejection. `logs` reads

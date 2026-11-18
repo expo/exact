@@ -40,7 +40,7 @@
 //! answers no request whatever its shell attaches.
 
 use super::{CanvasHost, FINISHED};
-use exact_runner::agent::{error, field_bool, field_str};
+use exact_runner::json::{error, field_bool, field_str};
 use exact_runner::DataSource;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 

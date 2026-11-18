@@ -3,6 +3,10 @@ use super::*;
 use exact_runner::{CollectionFeedback, CollectionSnapshot, DataError, RowMeasurement, Value};
 use std::cell::Cell as Counter;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const SOURCE: &str = r#"
 component App
   state showing = true
@@ -113,7 +117,7 @@ fn collection_feedback_submits_edge_request_without_another_bridge_call() {
             args: &[Value],
         ) -> Result<Answer, DataError> {
             if args == [Value::Number(1.)] {
-                Ok(Answer::Later(Request::continuation(7)))
+                Ok(Answer::Later(Request::continuation::<TestWork>(7)))
             } else {
                 self.query(name, args).map(Answer::Now)
             }

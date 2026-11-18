@@ -13,6 +13,7 @@
 // Presentation probe readings remain diagnostic until qualified on a device.
 // A scroller that moves with no finger on it (an animation or app-driven scroll)
 // is moving. A Mac recording follows no scroller: its frames are at rest.
+import CExact
 import Foundation
 import QuartzCore
 #if canImport(UIKit)
@@ -25,11 +26,11 @@ extension ExactSession {
     /// Direct observations bypass the carrier's drain and guest scripting.
     /// The saved frame ring ends before these reads, which never settle or seek.
     func traceSnapshot() -> [String: Any] {
-        let read = { (op: String) -> Any in
-            (try? JSONSerialization.jsonObject(with: Data(self.agent("{\"op\":\"\(op)\"}").utf8))) ?? ["error": "unreadable reply"]
+        let read = { (export: (ExactRuntime, Int) -> UInt32) -> Any in
+            (try? JSONSerialization.jsonObject(with: Data(self.runtime.ask(export, "{}").utf8))) ?? ["error": "unreadable reply"]
         }
         let started = ExactEnv.wall()
-        let tree = read("tree"), state = read("state"), layout = AgentLink.layout(self)
+        let tree = read(exact_tree), state = read(exact_state), layout = AgentLink.layout(self)
         return ["tree": tree, "state": state, "layout": layout,
                 "observation": executionObservation().merging([
                                 "wallFrom": started, "wallTo": ExactEnv.wall(), "timebase": "milliseconds since process main",
@@ -41,7 +42,7 @@ extension ExactSession {
     }
 
     func appFileStorage() -> [String: Any] {
-        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.agent("{\"op\":\"appRoots\"}").utf8))
+        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_app_roots, "").utf8))
         return (reply as? [String: Any])?["storage"] as? [String: Any] ?? ["available": false, "store": "none"]
     }
 
@@ -137,10 +138,10 @@ extension ExactSession {
     }
 
     private func traceWork() -> [String: Any] {
-        func read(_ request: String) -> Any {
-            (try? JSONSerialization.jsonObject(with: Data(agent(request).utf8))) ?? NSNull()
+        func read(_ export: (ExactRuntime, Int) -> UInt32, _ request: String) -> Any {
+            (try? JSONSerialization.jsonObject(with: Data(runtime.ask(export, request).utf8))) ?? NSNull()
         }
-        return ["perf": read("{\"op\":\"perf\"}"), "journal": read("{\"op\":\"logs\",\"since\":0}")]
+        return ["perf": read(exact_perf, "{}"), "journal": read(exact_logs, "{\"since\":0}")]
     }
 
     private func traceIdentity(_ recording: FrameSampler.Recording) -> [String: Any] {

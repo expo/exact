@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1070.000 §6.2 on AppKit, as on UIKit: a smooth correction is the
 /// clip view's animated scroll; while it runs the list reports where it is
@@ -32,7 +33,7 @@ final class SmoothCollectionMacTests: XCTestCase {
             ["op": "content", "id": 1, "w": 300.0, "h": 2000.0]]))
         return p
     }
-    private func sequence(_ p: Presenter) -> String { String(p.collections.entries[1]?.cursor.sequence ?? 0) }
+    private func sequence(_ p: Presenter) -> String { String(p.listHost.entries[1]?.cursor.sequence ?? 0) }
 
     /// LLP 1070.000 §2.5: a request that is replaced takes its animation
     /// with it, stopped where the port is, and so does a list that goes, its
@@ -41,7 +42,7 @@ final class SmoothCollectionMacTests: XCTestCase {
         // Each ending in a presenter of its own, all three stopped before one
         // wait for the animation's time
         var presenters: [Presenter] = [], stops: [(ending: String, clip: NSClipView, at: CGFloat)] = []
-        defer { presenters.forEach { $0.collections.reset() } }
+        defer { presenters.forEach { $0.listHost.reset() } }
         for ending in ["replaced", "retired", "reset"] {
             let p = fixture()
             presenters.append(p)
@@ -51,16 +52,16 @@ final class SmoothCollectionMacTests: XCTestCase {
             snapshot["seeking"] = true; snapshot["request"] = 1
             items[0]["items"] = [snapshot]
             p.apply(batch(items))
-            XCTAssertTrue(p.collections.animating.contains(1), "the request's smooth correction animates")
+            XCTAssertTrue(p.listHost.animating.contains(1), "the request's smooth correction animates")
             switch ending {
             case "replaced":
                 var replaced = try XCTUnwrap((collections(revision: 3, sequence: 0, correction: NSNull())[0]["items"] as? [[String: Any]])?.first)
                 replaced["waiting"] = true; replaced["request"] = 2
                 p.apply(batch([["op": "collections", "items": [replaced]]]))
             case "retired": p.apply(batch([["op": "collections", "items": []]]))
-            default: p.collections.reset()
+            default: p.listHost.reset()
             }
-            XCTAssertFalse(p.collections.animating.contains(1), ending)
+            XCTAssertFalse(p.listHost.animating.contains(1), ending)
             stops.append((ending, clip, clip.bounds.minY))
         }
         let later = expectation(description: "the animation's time has passed")
@@ -74,17 +75,17 @@ final class SmoothCollectionMacTests: XCTestCase {
 
     func testASmoothCorrectionAnimatesReportsItsDestinationAndHoldsTheNext() throws {
         let p = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let clip = try XCTUnwrap(p.views[1]?.scroll?.contentView)
         p.apply(batch(collections(revision: 2, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 1200, "smooth": true])))
-        XCTAssertTrue(p.collections.animating.contains(1), "AppKit animates to it")
-        XCTAssertEqual(try XCTUnwrap(p.collections.geometry(1)).offset, 1200, accuracy: 0.5, "the runner plans from where it is headed")
+        XCTAssertTrue(p.listHost.animating.contains(1), "AppKit animates to it")
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, 1200, accuracy: 0.5, "the runner plans from where it is headed")
         p.apply(batch(collections(revision: 3, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 1500, "smooth": true])))
-        XCTAssertEqual(p.collections.owedTargets[1]?.y, 1500, "held, not restarted")
+        XCTAssertEqual(p.listHost.owedTargets[1]?.y, 1500, "held, not restarted")
         // An ordinary correction stops it where it is told.
         p.apply(batch(collections(revision: 4, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 300])))
-        XCTAssertFalse(p.collections.animating.contains(1))
-        XCTAssertNil(p.collections.owedTargets[1])
+        XCTAssertFalse(p.listHost.animating.contains(1))
+        XCTAssertNil(p.listHost.owedTargets[1])
         XCTAssertEqual(clip.bounds.minY, 300, accuracy: 0.5)
     }
 
@@ -94,10 +95,10 @@ final class SmoothCollectionMacTests: XCTestCase {
         let p = fixture()
         let before = DisplayPreferences.agent
         DisplayPreferences.agent = (reducedMotion: true, reducedTransparency: false)
-        defer { DisplayPreferences.agent = before; p.collections.reset() }
+        defer { DisplayPreferences.agent = before; p.listHost.reset() }
         let clip = try XCTUnwrap(p.views[1]?.scroll?.contentView)
         p.apply(batch(collections(revision: 2, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 1200, "smooth": true])))
-        XCTAssertFalse(p.collections.animating.contains(1))
+        XCTAssertFalse(p.listHost.animating.contains(1))
         XCTAssertEqual(clip.bounds.minY, 1200, accuracy: 0.5)
     }
 
@@ -106,29 +107,29 @@ final class SmoothCollectionMacTests: XCTestCase {
     /// not end the one begun after it.
     func testAStoppedAnimationsCallbacksDoNotEndTheNextOne() throws {
         let p = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let clip = try XCTUnwrap(p.views[1]?.scroll?.contentView)
         let at = clip.bounds.minY
         p.apply(batch(collections(revision: 2, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 1200, "smooth": true])))
         p.apply(batch(collections(revision: 3, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 1500, "smooth": true])))
         // The first animation ends with a target owed: its continuation is
         // queued for the next turn.
-        p.collections.animationEnded(1)
+        p.listHost.animationEnded(1)
         p.apply(batch(collections(revision: 4, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": Double(at)])))
-        XCTAssertFalse(p.collections.animating.contains(1), "stopped, though already there")
+        XCTAssertFalse(p.listHost.animating.contains(1), "stopped, though already there")
         p.apply(batch(collections(revision: 5, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 900, "smooth": true])))
-        XCTAssertTrue(p.collections.animating.contains(1))
+        XCTAssertTrue(p.listHost.animating.contains(1))
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertTrue(p.collections.animating.contains(1) || clip.bounds.minY == 900, "the stale continuation left the new animation alone")
-        XCTAssertNil(p.collections.owedTargets[1])
+        XCTAssertTrue(p.listHost.animating.contains(1) || clip.bounds.minY == 900, "the stale continuation left the new animation alone")
+        XCTAssertNil(p.listHost.owedTargets[1])
     }
 
     func testAnOrdinaryCorrectionIsSetAtOnce() throws {
         let p = fixture()
-        defer { p.collections.reset() }
+        defer { p.listHost.reset() }
         let clip = try XCTUnwrap(p.views[1]?.scroll?.contentView)
         p.apply(batch(collections(revision: 2, sequence: 0, correction: ["scrollSequence": sequence(p), "offset": 900])))
-        XCTAssertFalse(p.collections.animating.contains(1))
+        XCTAssertFalse(p.listHost.animating.contains(1))
         XCTAssertEqual(clip.bounds.minY, 900, accuracy: 0.5)
     }
 }

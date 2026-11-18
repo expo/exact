@@ -43,6 +43,8 @@ pub(crate) fn rows(name: &str) -> &'static [StyleId] {
         // @ref LLP 1057.003 D5 — Scroll-driven Animations 1 §2.2.4, §3.2.4.
         "scroll-timeline" => &[ScrollTimelineName, ScrollTimelineAxis],
         "view-timeline" => &[ViewTimelineName, ViewTimelineAxis, ViewTimelineInset],
+        // @ref LLP 1123 D4 — the regions and edges, then `align`'s alignment.
+        "-exact-safe-area-ignore" => &[SafeAreaIgnore, SafeAreaIgnoreAlign],
         _ => unreachable!("known shorthand"),
     }
 }
@@ -61,6 +63,9 @@ pub(crate) fn component(value: &Expr, name: &str, index: usize) -> Result<Expr, 
             out = if index == 0 { Expr::Str("baseline".into(), *span) } else { Expr::Number(*n, *span) };
         }
         Expr::Str(text, span) if name == "font" => out = font(text, *span)?[index].clone(),
+        Expr::Str(text, span) if name == "-exact-safe-area-ignore" => {
+            out = Expr::Str(safe_area_ignore(text, *span)?[index].clone(), *span);
+        }
         Expr::Str(text, span) if name.ends_with("-timeline") => {
             out = Expr::Str(timeline(name, text, *span)?[index].clone(), *span);
         }
@@ -466,6 +471,29 @@ const FONT_LONGHANDS: &[StyleId] = &[
 /// them, by CSS's grammar. A lone `cap` or `ex` is not an edge (CSS needs its
 /// under edge: `cap text`). A shorthand with no trim trims both ends; with no
 /// edge, its edge is `auto`.
+/// `-exact-safe-area-ignore: <regions>? <edges>? [align <alignment>]?` as its
+/// two rows (LLP 1123 D4): the regions and edges, and the alignment, `none`
+/// without `align`. With `align` alone it takes both regions on every edge,
+/// as naming neither does; each row's own parser checks its words.
+fn safe_area_ignore(text: &str, span: Span) -> Result<[String; 2], LowerError> {
+    let words: Vec<&str> = text.split_ascii_whitespace().collect();
+    let Some(at) = words.iter().position(|w| *w == "align") else {
+        return Ok([text.trim().to_string(), "none".to_string()]);
+    };
+    let [alignment] = words[at + 1..] else {
+        return err(
+            "lower-attr-value",
+            "`-exact-safe-area-ignore`'s `align` takes one alignment, last: `center`, `top`, `bottom`, `leading`, `trailing` or a corner such as `top-leading`",
+            span,
+        );
+    };
+    let regions = match words[..at].join(" ") {
+        taken if taken.is_empty() => "container keyboard".to_string(),
+        taken => taken,
+    };
+    Ok([regions, alignment.to_string()])
+}
+
 fn text_box(name: &str, text: &str, span: Span) -> Result<[String; 2], LowerError> {
     let refuse = |why: String| {
         err(

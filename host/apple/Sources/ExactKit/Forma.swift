@@ -229,7 +229,7 @@ struct FormaMoves: UITraitDefinition {
 
 /// One session's binding state: each place's last answer. Its answers are
 /// read by providers off the main thread, so they are kept under `lock`.
-final class Formas {
+final package class Formas {
     /// A place's answer: its inputs (the tint it resolves by folded in, on
     /// every side, as an accent above moves it), that tint resolved on each
     /// of the eight sides (static colours, which a provider off the main
@@ -404,5 +404,49 @@ extension Runtime {
             } catch { return nil }
             return inputs.map { ($0, colors, answered) }
         }
+    }
+}
+
+extension Formas {
+    /// A native module's `ExactForma` request (`hatchForma`, LLP 1121 D12)
+    /// answered for the node at or above `view`, or nil.
+    package static func hatchReply(_ session: ExactSession, view: PlatformView?, asked: [String: Any]) -> [String: Any]? {
+        var at = view
+        while let v = at, !(v is NodeView) { at = v.superview }
+        let node = at as? NodeView
+        var measures: [Formas.Measure: [String: BatchValue?]] = [:]
+        for kind in Formas.Measure.allCases {
+            for name in asked[kind.rawValue] as? [String] ?? [] { measures[kind, default: [:]][name] = .some(nil) }
+        }
+        guard let answer = Formas.ask(session, view: node?.id ?? 0, names: asked["names"] as? [String] ?? [], measures: measures) else { return nil }
+        let colors = answer.colors.mapValues { value -> Any in
+            guard let value else { return NSNull() }
+            return (0..<8).map { side in
+                value.textChannels(dark: side & 1 != 0, contrast: side & 2 != 0, elevated: side & 4 != 0, tint: answer.tints[side])
+                    .map { ExactForma.extended(TextEngine.color($0)) } ?? []
+            }
+        }
+        var reply: [String: Any] = ["inputs": answer.inputs, "colors": colors]
+        for (kind, values) in answer.measures {
+            reply[kind.rawValue] = values.mapValues { value -> Any in
+                switch (kind, value) {
+                case (.fonts, .object(let f)?):
+                    guard let size = f["size"]?.number else { return NSNull() }
+                    let weight = Int(f["weight"]?.number ?? 400), italic = f["italic"] == .bool(true)
+                    let family = Int(f["family"]?.number ?? 0)
+                    let font = session.text.font(size: CGFloat(size), weight: weight, family: family, italic: italic)
+                    // A system face's name is no name a font opens by: the
+                    // library makes the system font at the weight, in its
+                    // design (a generic stack's: serif, monospaced, rounded).
+                    let generic = family < 8 ? family : session.text.catalog[family]?.first?.generic
+                    let design = switch generic { case 3, 4: "serif"; case 5, 6: "monospaced"; case 7: "rounded"; default: "default" }
+                    return ["size": size, "name": font.fontName, "weight": weight, "italic": italic,
+                            "system": generic != nil, "design": design]
+                case (_, .number(let n)?): return n
+                default: return NSNull()
+                }
+            }
+        }
+        return reply
     }
 }

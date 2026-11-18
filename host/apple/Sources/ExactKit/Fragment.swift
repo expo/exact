@@ -78,7 +78,7 @@ extension Presenter {
         }
     }
 
-    func flushFragment(finishing: Bool = false) {
+    package func flushFragment(finishing: Bool = false) {
         guard let hold = fragmentHeld else { return }
         if finishing { hold.finishing = false }
         guard let route = hold.route, let target = hold.target,

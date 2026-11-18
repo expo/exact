@@ -35,6 +35,7 @@ macro_rules! host {
         $crate::grouped_list_exports!();
         $crate::markup_exports!();
         $crate::presence_exports!();
+        $crate::svg_exports!();
 
         $crate::host!(@core $data, $plan, $compat, $delivery, $api, $new, $region, $crate::link::ALL);
     };
@@ -45,10 +46,6 @@ macro_rules! host {
             $crate::decorations::read(input, len, count)
         }
         $crate::raster_exports!();
-        // SVG's group (`include/exact_svg.h`). The core's Swift still calls
-        // it, so every entry emits it until the SVG family's Swift leaves
-        // ExactKit; that move emits it only for an archive linking `svg`.
-        $crate::svg_exports!();
         $crate::textflow_exports!();
         $crate::collapse_exports!();
         $crate::app_module_exports!();
@@ -97,8 +94,11 @@ macro_rules! host {
             $crate::launch_preloads::copy_name(index as usize, out, capacity)
         }
         /// The optional WatchConnectivity adapter's private store callback.
+        /// Its stores are the host's I/O: an archive without I/O has none to
+        /// sync, and refuses as a binary that can never accept the request.
         #[no_mangle]
         pub unsafe extern "C" fn exact_watch_store(plan: *const u8, plan_len: usize, input: *const u8, len: usize, seal: Option<$crate::watch_sync::Seal>, reply: $crate::watch_sync::Reply, context: usize) {
+            if EXACT_LINKS.io.is_none() { return $crate::watch_sync::refuse(reply, context); }
             // SAFETY: the optional adapter holds these buffers through the callback.
             unsafe { $crate::watch_sync::call(plan, plan_len, input, len, seal, reply, context) }
         }
@@ -1308,6 +1308,8 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.tick_at(now_ms, frame_ms), |n| n)
         }
 
+        // The agent operations a production build uses, each its own export.
+        $crate::answers_exports!();
         /// An agent request from the input buffer; returns the reply's length.
         #[no_mangle]
         pub extern "C" fn exact_agent(rt: u32, len: usize) -> u32 {

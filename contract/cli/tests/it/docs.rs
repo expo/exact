@@ -280,6 +280,11 @@ fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
             &["package.json", "exact.json", "apple/exact.json"][..],
         ),
         (
+            "@exact/model-viewer",
+            "model-viewer",
+            &["package.json", "exact.json"][..],
+        ),
+        (
             "@exact/in-app-browser",
             "in-app-browser",
             &[

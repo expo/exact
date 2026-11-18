@@ -3,6 +3,7 @@ import AppKit
 import IOSurface
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class ScrollPumpMacTests: XCTestCase {
     private var session: ExactSession!
@@ -187,7 +188,7 @@ final class ScrollPumpMacTests: XCTestCase {
     func testCollectionWorkKeepsItsFramesWhileWorkersAreFull() throws {
         let p = fixture([2, 3, 4])
         p.pump()
-        p.collections.filling = { true }
+        p.listHost.filling = { true }
         apply(p, [
             ["op": "create", "id": 10, "kind": "list", "style": ["overflow_y": "scroll"]],
             ["op": "frame", "id": 10, "x": 0.0, "y": 0.0, "w": 400.0, "h": 200.0],
@@ -196,11 +197,11 @@ final class ScrollPumpMacTests: XCTestCase {
                                             "count": 100, "totalExtent": 3000, "rows": [], "pending": true]]],
         ])
         p.pump()
-        XCTAssertEqual(p.collections.fillPending, [10])
+        XCTAssertEqual(p.listHost.fillPending, [10])
         XCTAssertTrue(p.asksForFrames)
-        p.collections.filling = { false }
+        p.listHost.filling = { false }
         p.pump()
-        XCTAssertTrue(p.collections.fillPending.isEmpty)
+        XCTAssertTrue(p.listHost.fillPending.isEmpty)
         XCTAssertFalse(p.asksForFrames)
     }
 }

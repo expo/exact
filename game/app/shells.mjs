@@ -100,10 +100,14 @@ function renderDeclaration(dir, render) {
 /** Check actual unfiltered Cargo edges: aliases and target/build dependencies
  * must not smuggle the GPU render crate into simulation or host metadata. */
 export function renderGraph(metadata, game) {
+  const members = new Set(metadata.workspace_members);
+  const logic = metadata.packages.find(pkg => pkg.name === game.crate && members.has(pkg.id));
+  if (logic?.dependencies?.some(dep => dep.kind === null && dep.name === 'exact-game-render')) {
+    console.warn('warning: hook code in the logic crate: its optional features are outside the determinism lint run, and the logic crate can name renderer types; move it to render/');
+  }
   if (!game.render) return;
   const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
   const nodes = new Map(metadata.resolve.nodes.map(node => [node.id, node]));
-  const members = new Set(metadata.workspace_members);
   const find = name => metadata.packages.find(pkg => pkg.name === name && members.has(pkg.id))?.id;
   const forbidden = find(game.render.crate), name = game.crate.slice(0, -'-logic'.length);
   if (!forbidden) throw new Error(`game.render package ${game.render.crate} is absent from Cargo metadata`);
@@ -549,13 +553,10 @@ export function prepareGame(dir, game, source = gameRoot, {updateLock = false, f
   }
   const checked = result => {
     const graph = JSON.parse(result.stdout);
-    if (game.render) {
-      // A platform-filtered graph omits inactive target edges. Check every
-      // production edge before accepting any build or publishing an own lock.
-      const all = target ? lockedMetadata(root, ['--offline', '--locked'], env) : result;
-      if (all.status !== 0) throw refused(all);
-      renderGraph(JSON.parse(all.stdout), game);
-    }
+    // Render isolation needs the inactive target edges too.
+    const all = game.render && target ? lockedMetadata(root, ['--offline', '--locked'], env) : result;
+    if (all.status !== 0) throw refused(all);
+    renderGraph(all === result ? graph : JSON.parse(all.stdout), game);
     return graph;
   };
   if (updateLock || existsSync(own)) {

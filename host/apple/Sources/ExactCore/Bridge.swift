@@ -599,19 +599,20 @@ package final class Runtime {
     /// owner before the reports after it, not waited for.
     package func listCovered(_ view: UInt32, start: Double, end: Double) {
         Owner.shared.post { [self] in
-            guard !destroyed else { return }
-            exact_list_covered(rt, view, start, end)
+            guard !destroyed, let covered = CoreExports.listCovered else { return }
+            covered(rt, view, start, end)
         }
     }
     /// A build-only report on the owner, not waited for (LLP 1072 §3):
     /// `done` runs on the owner with the decoded batch.
     package func collectionFeedbackAsync(_ bytes: Data, now: Double, done: @escaping (RuntimeCompletion) -> Void) {
         post(done: done) { [self] _ in
+            guard let feedback = CoreExports.collectionFeedback else { return Runtime.noFeedback }
             let n = write(bytes)
             #if DEBUG
             self.collectionFeedbackEntries += 1
             #endif
-            return read(exact_collection_feedback(rt, n, now))
+            return read(feedback(rt, n, now))
         }
     }
     /// Count each plan site's work for `perf` from now, if not yet (LLP 1079 D1).
@@ -643,11 +644,12 @@ package final class Runtime {
     /// Actual viewport/row observations using the runner's versioned LE wire.
     package func collectionFeedback(_ bytes: Data, now: Double) -> Batch {
         return on {
+            guard let feedback = CoreExports.collectionFeedback else { return Runtime.noFeedback }
             let n = write(bytes)
             #if DEBUG
             self.collectionFeedbackEntries += 1
             #endif
-            return read(exact_collection_feedback(rt, n, now))
+            return read(feedback(rt, n, now))
         }
     }
     package func dblclick(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 11, 0, now)) } }
@@ -933,14 +935,20 @@ package final class Runtime {
             return len == 0 ? nil : String(decoding: Data(bytes: exact_out(rt), count: Int(len)), as: UTF8.self)
         }
     }
-    package func linkActivities() { on { exact_link_activities(rt) } }
+    package func linkActivities() { guard let link = CoreExports.linkActivities else { return }; on { link(rt) } }
     /// Activity snapshots or a send completion from the demand-loaded arm.
-    package func activities(_ json: String) -> Batch { on { read(exact_activities(rt, write(json))) } }
+    package func activities(_ json: String) -> Batch {
+        guard let activities = CoreExports.activities else { return Runtime.noFeedback }
+        return on { read(activities(rt, write(json))) }
+    }
     /// A MIDI message (LLP 1125 D6–D8): the arm's ports or inputs, or the agent's `prefer midi` and `tap midi`.
     package func midi(_ json: String) -> Batch { on { read(exact_midi(rt, write(json))) } }
     package func preferExtension(_ json: String) -> Batch { on { read(exact_extension(rt, write(json))) } }
     /// A module event the platform reported (LLP 1133.004 D6), heard now.
-    package func moduleEvent(_ json: String) -> Batch { on { read(exact_module_event(rt, write(json))) } }
+    package func moduleEvent(_ json: String) -> Batch {
+        guard let event = CoreExports.moduleEvent else { return Runtime.noFeedback }
+        return on { read(event(rt, write(json))) }
+    }
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.
@@ -956,17 +964,19 @@ package final class Runtime {
     package func setDisplayScale(_ scale: Double) -> Batch { on(layout: true) { read(exact_set_display_scale(rt, scale)) } }
     package func setPlace(locale: String, timeZone: String, seed: UInt64, formatLocale: String = "") -> Batch { on(layout: true) { read(exact_set_place(rt, write(locale + "\0" + timeZone + "\0" + String(seed) + "\0" + formatLocale)) ) } }
     package func listIndex(_ view: UInt32, key: String) -> Int? {
+        guard let listIndex = CoreExports.listIndex else { return nil }
         return on(busy: nil) {
             let n = write(key)
-            let index = exact_list_index(rt, view, UInt32(n))
+            let index = listIndex(rt, view, UInt32(n))
             return index == UInt32.max ? nil : Int(index)
         }
     }
     package func listText(_ view: UInt32, first: (String, Int, Int, Bool?)?, last: (String, Int, Int, Bool?)?) -> String {
+        guard let listText = CoreExports.listText else { return "" }
         return on(busy: "") {
             let a = first?.0 ?? "", b = last?.0 ?? ""
             let n = write(a + b)
-            let len = exact_list_text(rt, view, UInt32(a.utf8.count), UInt32(n), UInt32(first?.1 ?? 0), UInt32(first?.2 ?? 0), UInt32(last?.1 ?? 0), UInt32(last?.2 ?? 0), first?.3.map { $0 ? 1 : 0 } ?? UInt32.max, last?.3.map { $0 ? 1 : 0 } ?? UInt32.max)
+            let len = listText(rt, view, UInt32(a.utf8.count), UInt32(n), UInt32(first?.1 ?? 0), UInt32(first?.2 ?? 0), UInt32(last?.1 ?? 0), UInt32(last?.2 ?? 0), first?.3.map { $0 ? 1 : 0 } ?? UInt32.max, last?.3.map { $0 ? 1 : 0 } ?? UInt32.max)
             return String(decoding: Data(bytes: exact_out(rt), count: Int(len)), as: UTF8.self)
         }
     }
@@ -1064,11 +1074,18 @@ package final class Runtime {
         }
     }
 
-    /// The agent API (LLP 1012): a request in, its reply out — JSON, not a batch.
-    package func agent(_ request: String) -> String {
+    #if EXACT_AGENT
+    /// The agent API (LLP 1012): a request in, its reply out — JSON, not a
+    /// batch. In development builds only: production asks each operation's
+    /// own export (LLP 1047.001 D11).
+    package func agent(_ request: String) -> String { ask(exact_agent, request) }
+    #endif
+    /// A request to `export`, `exact_agent` or one operation's own (LLP
+    /// 1047.001 D11), and its reply.
+    package func ask(_ export: (ExactRuntime, Int) -> UInt32, _ request: String) -> String {
         return on(busy: Runtime.busyAgent) {
             let n = write(request)
-            let len = exact_agent(rt, n)
+            let len = export(rt, n)
             return String(decoding: Data(bytes: exact_out(rt), count: Int(len)), as: UTF8.self)
         }
     }

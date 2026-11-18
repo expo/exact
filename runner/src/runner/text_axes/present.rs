@@ -49,10 +49,8 @@ impl<D: DataSource> Runner<D> {
             })
             .collect();
         let old = self.text_axes.keyframed.remove(&view).unwrap_or_default();
-        let engine = self
-            .text_axes
-            .engine
-            .get_or_insert_with(|| Box::new(make()));
+        let axes = &mut *self.text_axes;
+        let engine = axes.engine.get_or_insert_with(|| Box::new(make()));
         let _ = engine.advance((self.now_ms / 1000.0).max(engine.now()));
         let _ = engine.set_animations(key(view), &own);
         for (i, (row, target)) in targets.iter().enumerate() {
@@ -100,7 +98,7 @@ impl<D: DataSource> Runner<D> {
                 _ => false,
             };
             if moved {
-                self.text_axes.moving.entry((view, *row)).or_insert(Moving {
+                axes.moving.entry((view, *row)).or_insert(Moving {
                     target: target.clone(),
                     inherited: inherits[i],
                 });
@@ -222,7 +220,8 @@ impl<D: DataSource> Runner<D> {
 
     /// Forget a row's engine values once it rests.
     fn rest_text_axis(&mut self, view: ViewId, row: Row, target: &Shown) {
-        let Some(engine) = self.text_axes.engine.as_mut() else {
+        let axes = &mut *self.text_axes;
+        let Some(engine) = axes.engine.as_mut() else {
             return;
         };
         let p = row.property();
@@ -231,7 +230,7 @@ impl<D: DataSource> Runner<D> {
                 engine.remove_property(key(view), p);
             }
             Shown::Axes(list) => {
-                let keyframed = self.text_axes.keyframed.get(&view);
+                let keyframed = axes.keyframed.get(&view);
                 for tag in list
                     .axes()
                     .iter()
@@ -245,9 +244,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Each moving font row at the clock, one commit for all of them.
-    pub(in crate::runner) fn tick_text_axes(
-        &mut self,
-    ) -> Result<Option<CommitReceipt>, RunnerError> {
+    pub(super) fn tick_text_axes_linked(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
         let Some(engine) = self.text_axes.engine.as_mut() else {
             return Ok(None);
         };

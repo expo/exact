@@ -3,6 +3,7 @@ import Network
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import ExactDrag
 
 final class TouchActionIOSTests: XCTestCase {
@@ -44,7 +45,7 @@ final class TouchActionIOSTests: XCTestCase {
         self.window = window
         for list in [false, true] {
             let p = Presenter()
-            defer { p.onPointer = nil; p.onPan = nil; p.collections.reset(); p.viewport.removeFromSuperview() }
+            defer { p.onPointer = nil; p.onPan = nil; p.listHost.reset(); p.viewport.removeFromSuperview() }
             p.viewport.frame = controller.view.bounds
             controller.view.addSubview(p.viewport)
             var ops: [[String: Any]] = []
@@ -68,7 +69,7 @@ final class TouchActionIOSTests: XCTestCase {
             p.apply(wireBatch(ops))
             let policyID: UInt32 = authored == "transform" ? 2 : 1
             let node = try XCTUnwrap(p.views[policyID]), scroll = try XCTUnwrap(p.views[1]?.scroll)
-            XCTAssertEqual(p.collections.entries[1] != nil, list)
+            XCTAssertEqual(p.listHost.entries[1] != nil, list)
             let recognized = Recognitions()
             if authored == "transform" {
                 // No session or motion runtime: observe the production recognizer's admission only.

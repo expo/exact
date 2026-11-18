@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -340,8 +340,16 @@ test('a Rust module holds its Cargo product claim through optimization and captu
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-rust-cargo-')), out = resolve(dir, 'private');
   const lock = resolve(dir, '.claims/fixture.lock.flock');
   try {
-    const env = { TARGET: dir, resolve, dirname: path => resolve(path, '..'), mkdirSync, awaitBuildOutput, moduleDepInfo: new Map(),
-      fresh: () => false, cargoWasm() { expect(lockHeld(lock)).toBe(true); return { status: 0 }; },
+    const env = { TARGET: dir, WEB: 'fixture', createHash, readFileSync, writeFileSync,
+      WASM_OPT: () => 'fixture', OPT: [],
+      spawnSync: () => ({ status: 0, stdout: JSON.stringify({ packages: [] }) }), refreshCargoRustShapes() {},
+      resolve, dirname: path => resolve(path, '..'), mkdirSync, cpSync, existsSync, statSync, awaitBuildOutput, moduleDepInfo: new Map(),
+      fresh: () => false, cargoWasm() {
+        expect(lockHeld(lock)).toBe(true);
+        const wasm = resolve(dir, 'wasm32-unknown-unknown/release/fixture.wasm');
+        mkdirSync(resolve(wasm, '..'), { recursive: true }); writeFileSync(wasm, 'module');
+        return { status: 0 };
+      },
       replace: (path, write) => write(path), optimize(from, to) { expect(lockHeld(lock)).toBe(true); writeFileSync(to, 'captured module'); },
     };
     const build = new Function('env', `const {${Object.keys(env).join(',')}} = env; ${body}; return module;`)(env);

@@ -68,7 +68,7 @@ request.challenge = 42;
 // @ts-expect-error A referenced DOM dictionary retains its field types.
 request.allowCredentials![0].id = 42;
 `);
-    configure(stage, false, parseSync);
+    await configure(stage, false, parseSync);
     await check(stage, join(libraries, 'tsc'), libraries);
 
     const binding = readFileSync(join(stage, '__exact_modules/exact__passkeys.ts'), 'utf8');
@@ -117,7 +117,7 @@ write({ records: [{ key: 1 }], ids: [] });
 write({ records, kinds: ['c'], ids: [] });
 `);
   try {
-    configure(stage, false, parseSync);
+    await configure(stage, false, parseSync);
     await check(stage, join(libraries, 'tsc'), libraries);
     const binding = readFileSync(join(stage, '__exact_modules/scratch__cloud.ts'), 'utf8');
     // A declared shape is not also a DOM dictionary; a DOM dictionary in a list or a shape's field is.
@@ -128,11 +128,11 @@ write({ records, kinds: ['c'], ids: [] });
   }
 });
 
-test('json<T> refuses at bake what JSON does not carry, naming what it holds', () => {
+test('json<T> refuses at bake what JSON does not carry, naming what it holds', async () => {
   for (const held of ['json<bytes>', 'json<handle<file>>', 'json<json<CloudRecordWrite>>', 'json<lowercase>']) {
     const { root, stage } = cloudApp(cloud(held), '');
     try {
-      expect(() => configure(stage, false, parseSync)).toThrow(`@scratch/cloud's exact.json: \`${held}\` is not a JSON value's type: \`json<T>\` holds a shape or DOM dictionary by name`);
+      await expect(configure(stage, false, parseSync)).rejects.toThrow(`@scratch/cloud's exact.json: \`${held}\` is not a JSON value's type: \`json<T>\` holds a shape or DOM dictionary by name`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -176,7 +176,7 @@ sample({ count: 'two' });
     expect(implementationFor(app, iface, 'ios').name).toBe('@scratch/cloud/apple');
     writeFileSync(join(app, 'app.json'), JSON.stringify({ implementations: { '@scratch/cloud': { ios: '@scratch/cloud-fast' } } }));
     expect(implementationFor(app, iface, 'ios').name).toBe('@scratch/cloud-fast');
-    configure(stage, false, parseSync);
+    await configure(stage, false, parseSync);
     const libraries = resolve(dirname(fileURLToPath(import.meta.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`))), 'lib');
     await check(stage, join(libraries, 'tsc'), libraries);
     const shared = readFileSync(join(stage, '__exact_modules/scratch__cloud.ts'), 'utf8');
@@ -230,7 +230,7 @@ export const sent = put({ item: new Item({ 'text/plain': 'hello' }) });
       kind: 'implementation', implements: '@scratch/cloud@^1.0', platform: 'apple', targets: ['ios'],
       names: [{ send: 'put', answers: null, options: { item: 'Item' } }],
     }));
-    configure(stage, false, parseSync);
+    await configure(stage, false, parseSync);
     const libraries = resolve(dirname(fileURLToPath(import.meta.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`))), 'lib');
     await check(stage, join(libraries, 'tsc'), libraries);
     const load = async (file, as) => {

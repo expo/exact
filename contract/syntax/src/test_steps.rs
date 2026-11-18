@@ -259,6 +259,13 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// Answer the pending user-presence prompt through the driver's `tap @presence`.
+    Presence {
+        /// `allow`, `cancel`, `fail`, `lockout` or `invalidated`.
+        answer: String,
+        /// Where.
+        span: Span,
+    },
     /// `type "testId" copy`, `… cut`, `… paste "text"`: the clipboard's
     /// event at the node, a paste carrying `text` as the clipboard's.
     Clipboard {

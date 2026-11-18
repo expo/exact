@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 /// #125 on AppKit: ⌘V, ⌘C and ⌘X in a textarea or an input — the Edit
 /// menu's paste:, copy: and cut: through the responder chain — are DOM's

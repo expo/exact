@@ -155,7 +155,7 @@ extension NavigationHost {
     /// The module's `tabContainer`, when it is connected: the app's own
     /// container for these tabs' controllers, or nil.
     private func askTabContainer(_ tabs: NavigationTabs, selected: Int) -> UIViewController? {
-        guard let natives = presenter.session?.natives, natives.hatchesConnected, natives.tabCalls != nil else { return nil }
+        guard let natives = presenter.session?.natives, natives.hatchesConnected, natives.hasTabHatches else { return nil }
         let names = tabs.panels.map { $0.props["id"] ?? "" }
         return natives.tabContainerHatch(names: names, nodes: tabs.tabs.map(\.id), selected: selected, controllers: tabPanels.compactMap { tabStacks[$0] }) as? UIViewController
     }

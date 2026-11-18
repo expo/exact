@@ -8,7 +8,7 @@
 //! measures ([`Runner::measure`]). A read changes nothing: two reads tagged
 //! with the same `incarnation` and `plan` are subtracted by the driver.
 
-use crate::agent::{error, field_bool, num, quote};
+use crate::json::{error, field_bool, num, quote};
 use crate::runner::{DataSource, Runner};
 use exact_plan::NodesId;
 use std::collections::BTreeMap;

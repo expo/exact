@@ -48,7 +48,7 @@ struct NativeButtonState: Equatable {
 extension NodeView {
     /// Reject only at the host projection that knows which native API will draw.
     @discardableResult
-    func rejectNativeActiveProperties(on component: String, supporting supported: Set<String> = []) -> Bool {
+    package func rejectNativeActiveProperties(on component: String, supporting supported: Set<String> = []) -> Bool {
         let unsupported = NativeButtonState(self).style.keys.filter { !supported.contains($0) }
         let names = Set(unsupported.map { key in
             switch key {

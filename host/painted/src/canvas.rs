@@ -1113,6 +1113,7 @@ pub struct CanvasHost<D: DataSource> {
     shell: device::Shell,
     /// Pictures the reader will report presented (LLP 1003.001 D9), by token.
     presents: present::Pictures,
+    launch: crate::launch_marks::LaunchMarks,
 }
 
 #[cfg(target_os = "android")]
@@ -1240,8 +1241,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
             p.display_frame()
         }?;
         p.display_complete(&frame);
-        let wanted = p.present_wanted();
-        self.presents.painted(frame.carried(), wanted);
+        let wanted = p.present_wanted() || !self.launch.done();
+        if !self.launch.done() {
+            self.launch.recorded();
+        }
+        self.presents.painted(
+            frame.carried(),
+            wanted,
+            !self.launch.done()
+                && !p.module_pending()
+                && crate::launch_marks::items(&p.host().runner().outstanding()).is_empty(),
+        );
         if p.module_pending() {
             p.first_pixel();
         }
@@ -1439,7 +1449,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if (self.painted_once && !self.lead) || self.owed_surfaces {
             return Some(0.0);
         }
-        self.settle_due(self.p.turn_due_ms(self.now()))
+        let due = self.settle_due(self.p.turn_due_ms(self.now()));
+        match (due, self.launch.timeout_ms()) {
+            (Some(due), Some(launch)) => Some(due.min(f64::from(launch))),
+            (None, Some(launch)) => Some(f64::from(launch)),
+            (due, None) => due,
+        }
     }
 
     /// The descriptors that wake the presenter (executor replies, decoded images).

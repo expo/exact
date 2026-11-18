@@ -148,7 +148,7 @@ async function compile() {
   // so an app's ./app.js import follows the same TS substitution as one-shot.
   rmSync(resolve(stage,'app.js'),{force:true});
   const { configure, check, dataBundle, prepareCanvas } = await import(resolve(stage,'__exact_config.mjs'));
-  configure(stage, true, parseSync);
+  await configure(stage, true, parseSync, false, rolldown);
   await prepareCanvas(stage, libraries);
   const checking=check(stage,tsc,libraries).then(()=>null,error=>error);
   let failed;
@@ -187,6 +187,8 @@ pub(super) const PORTABLE: &str = include_str!("__exact_portable.mjs");
 /// 1153.002), which `CONFIG` imports from beside it.
 pub(super) const LAUNCH: &str = include_str!("__exact_launch_setting.mjs");
 
+pub(super) const FACTS: &str = include_str!("__exact_facts.mjs");
+
 /// The target a module binding answers `supports` for (LLP 1133.006 D7), as
 /// an implementation's `targets` names it: Cargo's `CARGO_CFG_TARGET_OS` in
 /// an app's build script, else the OS of `TARGET`'s triple, which is all a
@@ -219,6 +221,7 @@ pub(super) fn write_config(stage: &Path) -> Result<(), String> {
     super::write_changed(&stage.join("__exact_binding.mjs"), BINDING.as_bytes())?;
     super::write_changed(&stage.join("__exact_env.mjs"), ENV.as_bytes())?;
     super::write_changed(&stage.join("__exact_launch_setting.mjs"), LAUNCH.as_bytes())?;
+    super::write_changed(&stage.join("__exact_facts.mjs"), FACTS.as_bytes())?;
     super::write_changed(&stage.join("__exact_portable.mjs"), PORTABLE.as_bytes())
 }
 
@@ -239,6 +242,7 @@ mod tests {
         write("__exact_binding.mjs", BINDING);
         write("__exact_env.mjs", ENV);
         write("__exact_launch_setting.mjs", LAUNCH);
+        write("__exact_facts.mjs", FACTS);
         write("__exact_portable.mjs", PORTABLE);
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let mut compiler = Compiler::new(&root, &stage.0).unwrap();

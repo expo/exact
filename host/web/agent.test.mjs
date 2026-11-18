@@ -20,6 +20,7 @@ import { suiteBrowser, launchFacts, launchEnvironment, parseFlags } from '../../
 import { nodeNamed } from '../../scripts/agent-test.mjs';
 import { drivable, engineTests } from '../../scripts/coverage.mjs';
 import { declaration, deferred, fixture, requestClock, source, timedRequests } from './glue-fixture.mjs';
+import { parseSync } from 'rolldown/utils';
 
 const engineTest = await engineTests();
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../target', import.meta.url)), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
@@ -1269,10 +1270,21 @@ test('perf frames live lends the clock to the wall for its window and measures w
   try {
     await import('./frames.js');
     let clock = 500;
-    const advanced = [], gpu = [];
+    const advanced = [], gpu = [], requests = [], order = [];
+    const perf = { frameMs: { p50: 16.7 } }, renderHooks = { frame: { draws: { max: 3, count: 1 } } };
+    const glue = readFileSync(new URL('./gpu-glue.js', import.meta.url), 'utf8');
+    const api = parseSync('gpu-glue.js', glue).program.body
+      .flatMap(node => node.declarations ?? []).find(node => node.id.name === 'api').init;
+    const { start, end } = api.properties.find(node => node.key.name === 'live');
+    const live = glue.slice(start, end);
+    const collector = vm.runInNewContext(`({ ${live} })`, {
+      liveWindow: false, gpu: { gpu_seekable: seek => { gpu.push(seek); order.push(`seek ${seek}`); } },
+      surfaces: new Map([[7, { id: 1, view: 7 }]]), schedule() {},
+      agent: (view, request) => (requests.push([view, request]), order.push("state"), { world: { perf, renderHooks } }),
+    });
     const window = globalThis.exact.liveFrames({ ms: 200, origin: () => 0, log() {}, clock: () => clock,
       advance: to => { advanced.push(to); clock = to; },
-      gpu: { live: on => (gpu.push(on), on ? [] : [{ canvas: 7, perf: { frameMs: { p50: 16.7 } } }]) } });
+      gpu: collector });
     let done = false; window.then(() => { done = true; });
     for (let i = 0; i < 40 && !done; i++) {
       wall += 1000 / 60;
@@ -1281,12 +1293,14 @@ test('perf frames live lends the clock to the wall for its window and measures w
       await new Promise(resolve => setImmediate(resolve));
     }
     const reply = await window;
-    expect(gpu).toEqual([true, false]); // the world left the seek for its own frames, and came back
+    expect(gpu).toEqual([false, true]); // the world left the seek for its own frames, and came back
+    expect(order).toEqual(["seek false", "state", "state", "seek true"]); // the closing read is taken while still live
+    expect(requests).toEqual([[7, { op: 'state', perf_reset: true }], [7, { op: 'state', perf: true }]]);
     expect(reply.live).toEqual({ ms: 200, from: 500, to: 700 });
     expect(advanced.at(-1)).toBe(700); // the runner followed the wall to the window's end, and no further
     expect(reply.window.samples).toBeGreaterThan(8);
     expect(reply.window.p50).toBeCloseTo(16.67, 1);
-    expect(reply.world).toEqual([{ canvas: 7, perf: { frameMs: { p50: 16.7 } } }]);
+    expect(reply.world).toEqual([{ canvas: 7, perf, renderHooks }]);
     expect(globalThis.exact.frames).toBeUndefined(); // the window's sampler does not outlive it
   } finally {
     for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];

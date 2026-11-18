@@ -14,6 +14,7 @@
 // `ExactEnv.agentPaints` false) keeps the hold and presents the real sheet
 // too: a window screenshot shows it, `back` or `tap @t cancel` closes it,
 // and its outcome answers the hold, journalled as the agent's answer is.
+import CExact
 #if canImport(UIKit)
 import UIKit
 typealias ShareAnchorView = UIView
@@ -41,7 +42,7 @@ extension ExactSession {
             guard let ticket else { self.log(line); return }
             ShareSheet.shown[ShareSheet.Key(self, ticket)] = nil
             if line.hasPrefix("share: refused") { self.log(line) }
-            _ = self.agent("{\"op\":\"tap\",\"ticket\":\(ticket),\"choice\":\"\(line == "share: shared" ? "shared" : "cancel")\"}")
+            _ = self.runtime.ask(exact_answer_ticket, "{\"op\":\"tap\",\"ticket\":\(ticket),\"choice\":\"\(line == "share: shared" ? "shared" : "cancel")\"}")
         }
         var items: [Any] = []
         if let text = request["text"] as? String { items.append(text) }
@@ -59,7 +60,7 @@ extension ExactSession {
                 if let path = file["path"] as? String {
                     let url = try ShareSheet.scratchFile(dir, index, (path as NSString).lastPathComponent)
                     let ask = try JSONSerialization.data(withJSONObject: ["op": "shareFile", "path": path, "to": url.path])
-                    let reply = (try? JSONSerialization.jsonObject(with: Data(agent(String(decoding: ask, as: UTF8.self)).utf8))) as? [String: Any]
+                    let reply = (try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_share_file, String(decoding: ask, as: UTF8.self)).utf8))) as? [String: Any]
                     guard reply?["file"] is String else {
                         discard(); outcome("share: refused: \(reply?["error"] as? String ?? "\(path) could not be read")"); return
                     }

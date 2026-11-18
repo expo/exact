@@ -7,6 +7,24 @@ pub mod documents;
 pub mod envelope;
 pub mod image;
 pub mod known_folders;
+/// The host work the wrappers hand out for their children (LLP 1047.001
+/// D12), each linked by what makes it.
+mod host_work {
+    /// A turn of an ordered set, whose sources share a `secret.keep` that
+    /// their grants link I/O for, or a child's worker turn, linked by its
+    /// placement.
+    pub(crate) struct OrderedTurn;
+    impl exact_runner::HostWork for OrderedTurn {}
+
+    /// A source placed on a worker, whose placement links I/O.
+    pub(crate) struct WorkerTurn;
+    impl exact_runner::HostWork for WorkerTurn {}
+
+    /// A wrapper forwards its children's continuations, so it declares what
+    /// they do. A mixed source's TypeScript child is the bake's to report.
+    impl<D: exact_runner::HostWork> exact_runner::HostWork for crate::Placed<D> {}
+    impl<J, R: exact_runner::HostWork> exact_runner::HostWork for crate::Mixed<J, R> {}
+}
 mod mixed;
 pub mod modules;
 pub mod placed;

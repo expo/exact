@@ -58,7 +58,7 @@ final class SoundLibrary {
 /// its first frame, D6). A failure is journaled and reported in `state`, its
 /// voices are skipped, and the first voice `retryAfter` or more later tries
 /// again.
-final class SoundOutput {
+final class SoundOutput: AudioOutputting {
     /// The arm and its log context, a +1 on `journal` released after the arm.
     private struct Arm { let handle: UnsafeMutableRawPointer; let context: UnsafeMutableRawPointer }
     /// What the arm's log lines reach: it outlives every arm made with it.

@@ -253,7 +253,7 @@ final class SessionLeaseTests: XCTestCase {
 
     /// A frame whose arm never loads: its entry still takes the arm's events.
     private func framed() throws -> (ExactSession, NodeView, Data) {
-        let session = try session(Self.framing) { $0.webviews.moduleLocation = { "/nonexistent/libexact_web.dylib" } }
+        let session = try session(Self.framing) { $0.webHost.moduleLocation = { "/nonexistent/libexact_web.dylib" } }
         let frame = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "guest" })
         let record: [String: Any] = ["event": "navigatesuccess", "record": ["url": "https://old.example/", "navigationId": 7]]
         return (session, frame, try JSONSerialization.data(withJSONObject: record))
@@ -261,7 +261,7 @@ final class SessionLeaseTests: XCTestCase {
 
     func testAFramesQueuedEventReachesItsHandlerInItsGeneration() throws {
         let (session, frame, event) = try framed()
-        session.webviews.receivedEvent(id: frame.id, kind: 4, data: event)
+        session.webHost.receivedEvent(id: frame.id, kind: 4, data: event)
         drain()
         XCTAssertEqual(try slots(session)["landed"] as? Int, 1)
     }
@@ -272,7 +272,7 @@ final class SessionLeaseTests: XCTestCase {
     func testAFramesQueuedEventIsDroppedWhenItsGenerationOrEntryEnds() throws {
         for replaced in [false, true] {
             let (session, frame, event) = try framed()
-            session.webviews.receivedEvent(id: frame.id, kind: 4, data: event)
+            session.webHost.receivedEvent(id: frame.id, kind: 4, data: event)
             if replaced {
                 session.webviews.destroy(id: frame.id)
                 _ = session.webviews.create(owner: frame)

@@ -312,7 +312,7 @@ impl<D: DataSource> Runner<D> {
                     if i > 0 {
                         said.push_str(", ");
                     }
-                    crate::agent::untyped_json(a, &mut said);
+                    crate::json::untyped_json(a, &mut said);
                 }
                 self.log(format!("setRootFontSize({said}) refused: the root font size is a number of px above 0, a percentage of the host's above 0 (\"125%\"), or \"medium\""));
                 return false;

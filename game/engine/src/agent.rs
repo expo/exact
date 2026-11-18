@@ -1,6 +1,7 @@
 use crate::values::quote;
 use crate::{
-    json, spatial, Clock, Data, DataError, Entity, Game, Parent, Reader, Sim, Vec2, Vec3, World,
+    json, spatial, Clock, Data, DataError, Entity, Game, Parent, Reader, Sim, TickObserver, Vec2,
+    Vec3, World,
 };
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -248,9 +249,18 @@ impl<G: Game> Sim<G> {
         after: impl FnMut(&World, u32),
         inspect: impl Fn(&World, Entity, bool) -> Result<String, String>,
     ) -> String {
+        self.agent_observed(request, after, inspect)
+    }
+    #[doc(hidden)]
+    pub fn agent_observed(
+        &mut self,
+        request: &str,
+        observer: impl TickObserver,
+        inspect: impl Fn(&World, Entity, bool) -> Result<String, String>,
+    ) -> String {
         match Request::parse(request)
             .map_err(|e| e.to_string())
-            .and_then(|q| self.reply(q, after, inspect))
+            .and_then(|q| self.reply(q, observer, inspect))
         {
             Ok(reply) => reply,
             Err(error) => {
@@ -266,7 +276,7 @@ impl<G: Game> Sim<G> {
     fn reply(
         &mut self,
         q: Request,
-        after: impl FnMut(&World, u32),
+        observer: impl TickObserver,
         inspect: impl Fn(&World, Entity, bool) -> Result<String, String>,
     ) -> Result<String, String> {
         if q.width.is_some() != q.height.is_some() {
@@ -276,7 +286,7 @@ impl<G: Game> Sim<G> {
             self.viewport(w, h);
         }
         if let Some(now) = q.now {
-            self.advance_with(now, Clock::Seekable, after);
+            self.advance_observed(now, Clock::Seekable, observer);
         }
         let w = &self.world;
         let tick = w.tick();

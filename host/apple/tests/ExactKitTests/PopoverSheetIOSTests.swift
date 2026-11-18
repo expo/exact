@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
+@testable import ExactNativeViews
 
 final class PopoverSheetIOSTests: XCTestCase {
     private final class Touch: UITouch {
@@ -687,7 +689,7 @@ final class PopoverSheetIOSTests: XCTestCase {
                 XCTAssertFalse(chain.contains { $0.hasSuffix("Controller") && $0 != "UIApplication" }, "UIKit's chain from the layer reaches no controller: \(chain)")
             }
             XCTAssertTrue(ViewPresentation.controller(for: button) === sheet)
-            XCTAssertTrue(p.rowCells.screen(of: button) === sheet)
+            XCTAssertTrue(p.rowCellsHost.screen(of: button) === sheet)
             var pressed: [UInt32] = []
             p.onPress = { pressed.append($0) }
             activate(button)

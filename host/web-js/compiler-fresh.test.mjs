@@ -12,18 +12,18 @@ test('compiler reuse is invalidated by dependency manifests and the workspace lo
   const lock = resolve(import.meta.dir, '../../Cargo.lock'), previous = statSync(lock), fast = process.env.EXACT_WEB_COMPILER;
   try {
     mkdirSync(resolve(crate, 'src'), { recursive: true });
-    writeFileSync(source, 'pub fn run() {}'); writeFileSync(resolve(crate, 'Cargo.toml'), '[package]\nname="fixture"\nversion="0.1.0"\n');
+    writeFileSync(source, 'pub fn run() {}'); writeFileSync(resolve(crate, 'Cargo.toml'), `[package]\nname="fixture"\nversion="0.1.0"\nworkspace=${JSON.stringify(resolve(import.meta.dir, '../..'))}\n`);
     writeFileSync(product, 'compiler fixture'); writeFileSync(`${product}.d`, `${product}: ${source}\n`);
     const built = Date.now() / 1000 + 10;
     utimesSync(product, built, built);
     process.env.EXACT_WEB_COMPILER = product;
     expect(freshCompiler(product)).toBe(true); expect(webCompiler().cmd).toBe(product);
     utimesSync(resolve(crate, 'Cargo.toml'), built + 1, built + 1);
-    expect(fresh(product, `${product}.d`)).toBe(true);
+    expect(fresh(product, `${product}.d`)).toBe(false);
     expect(freshCompiler(product)).toBe(false); expect(webCompiler().cmd).not.toBe(product);
     utimesSync(resolve(crate, 'Cargo.toml'), built - 1, built - 1);
     utimesSync(lock, built + 1, built + 1);
-    expect(fresh(product, `${product}.d`)).toBe(true);
+    expect(fresh(product, `${product}.d`)).toBe(false);
     expect(freshCompiler(product)).toBe(false); expect(webCompiler().cmd).not.toBe(product);
   } finally {
     utimesSync(lock, previous.atime, previous.mtime);
@@ -43,6 +43,8 @@ test('a Windows compiler is found by its .exe beside the dep-info Cargo names wi
   expect(crateDir('C:\\a\\exact\\src\\target\\release\\build\\data-0a1b\\out\\shapes.rs')).toBe(null);
   expect(buildScriptDir('C:\\t\\debug\\build\\kernel-0a1b\\out\\tables.rs')).toBe('C:\\t\\debug\\build\\kernel-0a1b');
   expect(buildScriptDir('/t/debug/build/kernel-0a1b/out/tables.rs')).toBe('/t/debug/build/kernel-0a1b');
+  expect(buildScriptDir('/t/debug/build/kernel/0a1b/out/tables.rs')).toBe('/t/debug/build/kernel/0a1b');
+  expect(buildScriptDir('C:\\t\\debug\\build\\kernel\\0a1b\\out\\tables.rs')).toBe('C:\\t\\debug\\build\\kernel\\0a1b');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-compiler-exe-'));
   try {
     const product = resolve(dir, 'compiler.exe'), source = resolve(dir, 'dep/src/lib.rs');
@@ -52,5 +54,26 @@ test('a Windows compiler is found by its .exe beside the dep-info Cargo names wi
     const built = Date.now() / 1000 + 10;
     utimesSync(product, built, built);
     expect(freshCompiler(product)).toBe(true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('compiler freshness includes a dependency workspace manifest and lockfile', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-module-fresh-'));
+  const product = resolve(dir, 'module.wasm'), crate = resolve(dir, 'dep'), workspace = resolve(dir, 'workspace');
+  try {
+    mkdirSync(resolve(crate, 'src'), { recursive: true }); mkdirSync(workspace);
+    const source = resolve(crate, 'src/lib.rs'), manifest = resolve(workspace, 'Cargo.toml'), lock = resolve(workspace, 'Cargo.lock');
+    writeFileSync(source, '');
+    writeFileSync(resolve(crate, 'Cargo.toml'), '[package]\nname="fixture"\nworkspace="../workspace"\n');
+    writeFileSync(manifest, '[workspace]\n'); writeFileSync(lock, '');
+    writeFileSync(product, ''); writeFileSync(`${product}.d`, `${product}: ${source}\n`);
+    const built = Date.now() / 1000 + 10;
+    utimesSync(product, built, built);
+    expect(fresh(product, `${product}.d`)).toBe(true);
+    for (const path of [resolve(crate, 'Cargo.toml'), manifest, lock]) {
+      utimesSync(path, built + 1, built + 1);
+      expect(fresh(product, `${product}.d`)).toBe(false);
+      utimesSync(path, built - 1, built - 1);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

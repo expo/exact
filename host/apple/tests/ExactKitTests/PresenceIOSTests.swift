@@ -393,11 +393,11 @@ final class PresenceIOSTests: XCTestCase {
         XCTAssertGreaterThan(boundary, 85, "Temperature takes more than its half")
         let half = control.bounds.midX
         for x in stride(from: 2.0, to: 158.0, by: 4.0) where abs(x - half) > 1 {
-            let tab = p.segments.contextTab(at: CGPoint(x: x, y: control.bounds.midY), in: control)
+            let tab = p.segmentHost.contextTab(at: CGPoint(x: x, y: control.bounds.midY), in: control)
             XCTAssertEqual(tab?.id, x < half ? 31 : 32, "at x = \(x): equal shares, the segments meeting at \(boundary)")
         }
         let between = (half + boundary) / 2
-        XCTAssertEqual(p.segments.contextTab(at: CGPoint(x: between, y: control.bounds.midY), in: control)?.id, 32,
+        XCTAssertEqual(p.segmentHost.contextTab(at: CGPoint(x: between, y: control.bounds.midY), in: control)?.id, 32,
                        "past the half, though still on Temperature's segment: the share names Length")
     }
 

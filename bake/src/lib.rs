@@ -27,6 +27,9 @@ pub use compat::{
     compatibility_id, compatibility_id_pinned, compatibility_id_sources,
     compatibility_id_sources_with_entries, Compat,
 };
+/// Whether a source's type declares the host work it hands out (LLP 1047.001
+/// D12), for a build script's call of [`compatibility_id`].
+pub use exact_runner::hands_out_work;
 pub use link::{ahead, apple_link, take_linked};
 pub use receipt::{plan_graph, write_development_artifacts};
 

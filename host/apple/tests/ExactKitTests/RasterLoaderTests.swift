@@ -5,6 +5,7 @@ import XCTest
 import Darwin
 import CExact
 @testable import ExactKit
+@testable import ExactImages
 
 final class RasterLoaderTests: XCTestCase {
     func testScreenSizedPicturesUseTheSessionBudget() throws {

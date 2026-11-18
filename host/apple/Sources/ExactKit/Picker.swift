@@ -7,6 +7,7 @@
 // Safari's rule), with its pixel size and a video's duration (D3). Under
 // the agent the request is held for `type @t <path>…` / `tap @t cancel`
 // (D9), whose files take the same path.
+import CExact
 import Foundation
 import ImageIO
 import CoreImage
@@ -40,7 +41,7 @@ package enum MediaPickerLink {
 /// app's own file (D7): told by the library at boot and with each picked
 /// name, so a photo kept in `app:/data` shows after a relaunch with nothing
 /// picked (recipes F18).
-enum AppFiles {
+package enum AppFiles {
     private static let lock = NSLock()
     private static var roots: [String: URL] = [:]
     static func learn(_ reply: [String: Any]) {
@@ -51,7 +52,7 @@ enum AppFiles {
     /// The roots the library has now (`appRoots`), before the first frame's
     /// images load and again once storage is configured.
     @discardableResult static func learn(_ runtime: Runtime) -> [String: String] {
-        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.agent("{\"op\":\"appRoots\"}").utf8))
+        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_app_roots, "").utf8))
         let object = reply as? [String: Any] ?? [:]
         learn(object)
         return object["roots"] as? [String: String] ?? [:]
@@ -59,13 +60,13 @@ enum AppFiles {
     /// Where an `app:/data|cache|tmp/…` path names, for a file the host
     /// writes there; nil for `..` or a root. A file the app names is read
     /// through `open` or `file`, never through this.
-    static func url(_ path: String) -> URL? {
+    package static func url(_ path: String) -> URL? {
         guard let at = place(path) else { return nil }
         return at.names.reduce(at.root) { $0.appendingPathComponent($1) }
     }
     /// The regular file `path` names, opened through no symbolic link
     /// (`AppFileWalk`), as `readFile` and a share open it; nil for any other.
-    static func open(_ path: String) -> FileHandle? {
+    package static func open(_ path: String) -> FileHandle? {
         lock.lock(); let roots = roots; lock.unlock()
         return AppFileWalk.open(path, roots: roots)
     }
@@ -124,7 +125,7 @@ final class Picker: NSObject {
     func show(_ args: [Any]) {
         guard let id = args.first as? String else { session.log("picker: refused: showPicker names an element id"); return }
         if ExactEnv.agentMode {
-            let r = object(session.agent("{\"op\":\"showPicker\",\"id\":\(quoted(id))}"))
+            let r = object(session.runtime.ask(exact_show_picker, "{\"id\":\(quoted(id))}"))
             if let e = r["error"] as? String { fputs("exact: \(e)\n", stderr) }
             return
         }
@@ -134,7 +135,7 @@ final class Picker: NSObject {
     /// The request to show input `id`'s picker, now marked open; nil when it
     /// is no file input or its picker shows already.
     func request(_ id: String) -> Request? {
-        let r = object(session.agent("{\"op\":\"picker\",\"id\":\(quoted(id))}"))
+        let r = object(session.runtime.ask(exact_picker, "{\"id\":\(quoted(id))}"))
         guard let view = (r["view"] as? NSNumber)?.uint32Value else {
             session.log("picker: refused: no file input with id \"\(id)\""); return nil
         }
@@ -179,7 +180,7 @@ final class Picker: NSObject {
             let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
             let convert = Picker.converts(mime, accept: accept)
             let stored = convert ? (f.name as NSString).deletingPathExtension + ".jpg" : f.name
-            let reply = object(session.agent("{\"op\":\"pickedPath\",\"name\":\(quoted(stored))}"))
+            let reply = object(session.runtime.ask(exact_picked_path, "{\"name\":\(quoted(stored))}"))
             AppFiles.learn(reply)
             guard let path = reply["path"] as? String, let file = reply["file"] as? String else {
                 session.log("picker: refused: no app:/tmp/picked/ for \(f.name)"); cancel(view); return

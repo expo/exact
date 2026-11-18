@@ -299,6 +299,9 @@ impl Harness {
     }
 }
 
+/// Its turns run on the host's worker (LLP 1047.001 D12).
+impl exact_runner::HostWork for Harness {}
+
 impl DataSource for Harness {
     fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
         self.call(source, args)
@@ -316,7 +319,9 @@ impl DataSource for Harness {
         if source == "workspace" && self.shared.lock().branch_loading {
             self.next_request += 1;
             self.branch_requests.push(self.next_request);
-            return Ok(Answer::Later(Request::continuation(self.next_request)));
+            return Ok(Answer::Later(Request::continuation::<Self>(
+                self.next_request,
+            )));
         }
         self.call(source, args).map(Answer::Now)
     }

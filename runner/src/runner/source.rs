@@ -579,10 +579,9 @@ data_source! {
 
     /// Take native work for an executor-local continuation exactly once. The
     /// closure owns its inputs and runs on the host worker, never the renderer.
-    /// Missing or consumed tokens are refused by that executor. An Apple
-    /// production binary has the executor only when it links `io`: an app
-    /// whose source hands out continuations names `io` in the manifest's
-    /// `link` (LLP 1047.001, "The host's I/O by use"; LLP 1047 D8).
+    /// Missing or consumed tokens are refused by that executor. A source that
+    /// hands one out declares it ([`crate::HostWork`]), which the bake reads
+    /// to link the executor into an Apple production binary (LLP 1047.001 D12).
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
         let _ = token;
         None

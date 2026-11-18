@@ -57,7 +57,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     weak var paintParent: PaintView?
     weak var ghostParent: NodeView?
     let firstDraw: DrawReceipt?
-    let kind: String
+    package let kind: String
     var inlineText: [InlineText] = [] { didSet { inlineAccessibility = nil } }
     /// Its runs' elements, kept until the runs change, and what else made
     /// them (`textAccessibilityChildren`).
@@ -121,7 +121,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// translation plus `stickyOffset` (`applyTransform`).
     package var arrangeShift = CGPoint.zero
     /// How far its scroller's scroll moves a sticky box (LLP 1083, `Sticky.swift`).
-    var stickyOffset = CGPoint.zero
+    package var stickyOffset = CGPoint.zero
     package var scale: CGFloat = 1
     package var rotate: CGFloat = 0
     var rotationAxis: [Double] = [0, 0, 0]
@@ -163,9 +163,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     var lastAccessibilityWrite = AccessibilityWrite()
     var boxGradient: CAGradientLayer?
     var boxPattern: GradientPatternLayer?
-    var imageLayer: CALayer?
+    package var imageLayer: CALayer?
     /// While it flies as a shared element (LLP 1013.000 D4): where its image is drawn.
-    var flightLook: FlightLook?
+    package var flightLook: FlightLook?
     var materialView: NSView?
     /// The backdrop blur's σ and mirrored box as last set (`Backdrop.swift`).
     var backdropDrawn: BackdropDrawn?
@@ -175,10 +175,10 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     var materialContent: NSView?
     private var materialKind: String?
     /// Natural extent from the kernel, before the CSS client-size minimum.
-    var content = CGSize.zero
+    package var content = CGSize.zero
     /// The platform view returned by the dlopened iframe arm (@ref LLP 1020 D3).
-    var video: VideoView?
-    var web: NSView? { didSet { if web !== oldValue { placeWeb() } } }
+    var video: (any VideoPlaying)?
+    package internal(set) var web: NSView? { didSet { if web !== oldValue { placeWeb() } } }
     /// A canvas node's Metal layer (LLP 1009).
     package var metal: MetalView?
     package var canvasInput: CanvasInput?
@@ -212,15 +212,15 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// A template path's leaf instead of `symbolView` (IconShapeMac.swift).
     var symbolShape: IconShapeView? { didSet { layerPaintCache = nil } }
     /// Whether a symbol's leaf, either kind, is in this node.
-    var hasSymbolLeaf: Bool { symbolView != nil || symbolShape != nil }
+    package var hasSymbolLeaf: Bool { symbolView != nil || symbolShape != nil }
     var symbolFound = false
     var symbolKey: String?
     var symbolRefusal: String?
     var symbolClip: NSView?
     var image: NSImage?
-    var raster: (any ImageLease)? { didSet { layerPaintCache = nil } }
+    package var raster: (any ImageLease)? { didSet { layerPaintCache = nil } }
     var imageSource: String?
-    var loadGeneration = 0
+    package var loadGeneration = 0
     package var pressed = false { didSet { if pressed != oldValue { pressChanged() } } }
     var keyboardPressed = false
     var press = PressFeedback() // LLP 1061: the feedback `pressed` drives
@@ -464,7 +464,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// and original intrinsic geometry until a matching new backing is accepted.
     func loadImage(_ source: String) {
         let previousSource = imageSource, previousGeneration = loadGeneration
-        imageSource = source; PictureInPictureHost.changed(self)
+        imageSource = source; MediaLink.pictureChanged?(self)
         loadGeneration += 1
         if source.hasPrefix("symbol:") { presenter?.session?.rasters?.cancel(id); raster = nil; updateSymbol(); return }
         clearSymbol(); image = nil
@@ -477,7 +477,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     /// The lease is this load's: shown, its natural size answered for the
     /// loader to report (`RasterLoader.reconcile`, one report per turn).
-    func acceptRaster(_ lease: any ImageLease, generation: Int) -> CGSize? {
+    package func acceptRaster(_ lease: any ImageLease, generation: Int) -> CGSize? {
         guard loadGeneration == generation, let presenter, presenter.views[id] === self else { return nil }
         // A redisplay doesn't re-ask the image layer for a replaced bitmap.
         raster = lease; ImageLink.animated?.attach(self); applyImageLayer()
@@ -498,7 +498,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         loadGeneration += 1
         presenter?.session?.rasters?.cancel(id)
         raster = nil
-        imageSource = nil; PictureInPictureHost.gone(self)
+        imageSource = nil; MediaLink.pictureGone?(self)
         clearSymbol()
         image = nil
         video?.invalidate(); video = nil
@@ -659,7 +659,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     @objc func clipScrolled() {
         // A collection's knob keeps the offset the reader saw (CollectionMac.swift).
-        if let sv = scroll, let drag = KnobDrag.of(sv), !drag.admits(sv.contentView, correcting: presenter?.collections.correcting == true) { return }
+        if let sv = scroll, presenter?.collections.admitsScroll(sv) == false { return }
         if let o = scroll?.contentView.bounds.origin { presenter?.onScrolled?(id, Double(o.x), Double(o.y)) }
         if let sv = scroll { presenter?.session?.frameHealth.trackScrolled(sv) }
         presenter?.stickies.scrolled(id)
@@ -841,14 +841,14 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// names whatever is drawing at that instant, and colours are not all
     /// applied inside a draw — a field's `textColor` is assigned in
     /// `applyStyle`. @ref LLP 1034 D2
-    var drawsDark: Bool {
+    package var drawsDark: Bool {
         effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
     /// The four channels a colour row carries, resolved. A fixed colour is
     /// the four; a `light-dark()` pair is two fours and this picks one
     /// (LLP 1034 D1). Anything else is not a colour.
-    func channels(_ key: String, dark: Bool? = nil) -> [Double]? {
+    package func channels(_ key: String, dark: Bool? = nil) -> [Double]? {
         style[key].flatMap { $0.channels(dark: dark ?? drawsDark, contrast: drawsHighContrast, elevated: window is SheetWindow, tint: ownTint(for: $0)) }
     }
 
@@ -1364,7 +1364,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     }
 
     /// The reduced radii; the layer fast path additionally requires circles.
-    func cornerSizes(in rect: NSRect, inset: CGFloat = 0) -> [CGSize] {
+    package func cornerSizes(in rect: NSRect, inset: CGFloat = 0) -> [CGSize] {
         BorderPaint.reduced(BorderPaint.radii(style, in: rect, inset: inset), in: rect)
     }
     func cornerRadii(in rect: NSRect, inset: CGFloat = 0) -> [CGFloat] {

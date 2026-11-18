@@ -1,6 +1,8 @@
 import XCTest
 import ImageIO
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// SVG islands retain their coverage and phase when tiled or cropped
 /// (LLP 1055.000 D7, D10, D14), within `FilterExtent.cap` pixels.

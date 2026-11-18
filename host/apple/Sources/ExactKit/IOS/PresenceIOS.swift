@@ -22,7 +22,7 @@ extension Presenter {
 
     func beginExit(_ id: UInt32) {
         guard let view = views[id] else { return }
-        landFlights(inside: view)
+        flightHost.landInside(view)
         var children: [ObjectIdentifier: [NodeView]] = [:]
         var displaced = Set<ObjectIdentifier>()
         for node in views.values {

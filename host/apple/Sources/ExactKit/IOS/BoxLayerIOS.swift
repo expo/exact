@@ -138,7 +138,7 @@ extension NodeView {
     /// A `-exact-tint-color` draws (LLP 1011 §4): a mask layer would say it, but a
     /// canvas's capture (`render(in:)`) drops masks and would show the tint's
     /// whole rectangle, so the template is `draw(_:)`'s, from the same pixels.
-    func applyImageLayer() {
+    package func applyImageLayer() {
         if ImageLink.pixelated?.apply(self) == true { return }
         if ImageLink.pixelated?.owns(imageLayer) == true { imageLayer?.removeFromSuperlayer(); imageLayer = nil }
         guard !cssVisibilityHidden, style["image_rendering"]?.string != "pixelated", kind == "image", symbolView == nil, style["tint_color"] == nil, let bitmap = raster?.image ?? flightLook?.stand?.image else {
@@ -485,7 +485,7 @@ extension NodeView {
     /// a fill lent to a menu's stand-in (where the layer's own fill paints),
     /// shadow, gradient, inset shadow, image, border, text — whichever of
     /// them joins first (as `Mac/BoxLayerMac.swift`).
-    func insertBoxSublayer(_ l: CALayer) {
+    package func insertBoxSublayer(_ l: CALayer) {
         let order: [CALayer?] = [extras?.lentFill, shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder, textBoxLayer]
         guard let rank = order.firstIndex(where: { $0 === l }) else { return }
         if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === layer }) {

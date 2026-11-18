@@ -4,6 +4,7 @@ import AppKit
 import Foundation
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 // The build channel's host half (LLP 1122 D4): a pin read as the server
 // sends it (scripts/forma-builds.mjs `pinRefused`), the commands dispatched

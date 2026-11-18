@@ -294,6 +294,10 @@ fn step_json(step: &Step, s: &mut String) {
         Step::Authorize { cancel, .. } => {
             s.push_str(&format!("{{\"op\":\"authorize\",\"cancel\":{cancel}"));
         }
+        Step::Presence { answer, .. } => {
+            s.push_str("{\"op\":\"presence\",\"answer\":");
+            q(answer, s);
+        }
         Step::Clipboard {
             target, edit, text, ..
         } => {

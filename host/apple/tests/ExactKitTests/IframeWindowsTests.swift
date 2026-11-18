@@ -73,9 +73,15 @@ final class IframeWindowsTests: XCTestCase {
     private func pause(_ seconds: TimeInterval) { spin(until: { false }, seconds) }
 
     /// The page's answer to a script, run with a person's gesture.
-    private func run(_ web: WKWebView, _ script: String) -> Any? {
+    private func run(_ web: WKWebView, _ script: String, in frame: WKFrameInfo? = nil) -> Any? {
         var result: Any?, done = false
-        web.evaluateJavaScript(script) { value, error in result = value ?? error.map { "error: \($0.localizedDescription)" }; done = true }
+        web.evaluateJavaScript(script, in: frame, in: .page) {
+            switch $0 {
+            case .success(let value): result = value
+            case .failure(let error): result = "error: \(error.localizedDescription)"
+            }
+            done = true
+        }
         spin { done }
         return result
     }
@@ -90,7 +96,8 @@ final class IframeWindowsTests: XCTestCase {
         pause(0.2)
     }
 
-    private func mount(_ arm: Arm, _ seen: Seen, configuration: [String: Any], src: String, sandbox: String? = nil) -> (UnsafeMutableRawPointer, WKWebView) {
+    private func mount(_ arm: Arm, _ seen: Seen, configuration: [String: Any], src: String, sandbox: String? = nil,
+                       guests: GuestFrames? = nil) -> (UnsafeMutableRawPointer, WKWebView) {
         let handle = arm.create(9, Unmanaged.passUnretained(seen).toOpaque(), Self.event, Self.reply)!
         json(configuration, arm.configure, handle)
         let web = Unmanaged<WKWebView>.fromOpaque(arm.view(handle)!).takeUnretainedValue()
@@ -109,6 +116,7 @@ final class IframeWindowsTests: XCTestCase {
         window.isHidden = false
         windows.append(window)
         #endif
+        if let guests { guests.watch(web) }
         if let sandbox { Array(sandbox.utf8).withUnsafeBufferPointer { arm.setSandbox(handle, $0.baseAddress, UInt32($0.count), 1) } }
         Array(src.utf8).withUnsafeBufferPointer { arm.setSrc(handle, $0.baseAddress, UInt32($0.count), 1) }
         return (handle, web)
@@ -223,17 +231,20 @@ final class IframeWindowsTests: XCTestCase {
     /// An unpartitioned frame is part of the app's page: a scripted window
     /// with features opens no popup and is the app's, as a tab is.
     func testAnUnpartitionedFramesScriptedWindowIsTheApps() throws {
-        let arm = try arm(), seen = Seen()
-        let (handle, web) = mount(arm, seen, configuration: ["newwindow": true], src: "\(baseURL)/opener")
+        let arm = try arm(), seen = Seen(), guests = GuestFrames()
+        let (handle, web) = mount(arm, seen, configuration: ["newwindow": true], src: "\(baseURL)/opener", guests: guests)
         defer { arm.destroy(handle) }
-        // An unpartitioned frame reports no navigation (D2 is a partitioned frame's).
-        spin { web.url?.path == "/opener" && !web.isLoading }
-        XCTAssertEqual(run(web, "window.open('/popup', 'signin', 'width=320,height=240') === null") as? Bool, true)
+        defer { web.configuration.userContentController.removeScriptMessageHandler(forName: "guestFrames") }
+        // An unpartitioned frame reports no navigation (D2 is a partitioned frame's). Its page is the web view's own
+        // document on the Mac, and a wrapper's child on iOS, so the script runs in the frame that loaded `/opener`.
+        spin { guests.frames["/opener"] != nil }
+        let guest = try XCTUnwrap(guests.frames["/opener"], "the guest's page loaded")
+        XCTAssertEqual(run(web, "window.open('/popup', 'signin', 'width=320,height=240') === null", in: guest) as? Bool, true)
         spin { !seen.records.isEmpty }
         XCTAssertEqual(seen.records.first?.event, "newwindow")
         XCTAssertEqual(seen.records.first?.record["disposition"] as? String, "new-window")
         XCTAssertEqual(seen.records.first?.record["url"] as? String, "\(baseURL)/popup")
-        XCTAssertEqual(web.url?.path, "/opener")
+        XCTAssertEqual(run(web, "location.pathname", in: guest) as? String, "/opener", "the guest stays on its page")
         #if os(macOS)
         pause(0.3)
         XCTAssertTrue(popups().isEmpty, "no popup window")
@@ -729,6 +740,8 @@ final class IframeWindowsTests: XCTestCase {
         let page = folder.appendingPathComponent("page.pdf")
         answer(["path": page.path])
         spin { self.run(web, "window.printed") as? String == "done" }
+        // AppKit finishes the saved file after `didRun`, which answers the page.
+        spin { PDFDocument(url: page) != nil }
         XCTAssertEqual(PDFDocument(url: page)?.pageCount, 1)
         XCTAssertTrue(PDFDocument(url: page)?.string?.contains("new tab") == true)
 
@@ -870,6 +883,22 @@ final class IframeWindowsTests: XCTestCase {
         XCTAssertEqual(after.subtracting(before), [], "the file in the temporary directory is removed")
     }
     #endif
+}
+
+/// Each frame of a web view by the path of the page it loaded, for a script run in a child frame (an iOS wrapper's
+/// guest). Watch before the first load: the script that reports a frame runs as each document ends. A development
+/// build's arm notes the added script once, as it notes a hatch's.
+private final class GuestFrames: NSObject, WKScriptMessageHandler {
+    private(set) var frames: [String: WKFrameInfo] = [:]
+    func watch(_ web: WKWebView) {
+        let controller = web.configuration.userContentController
+        controller.add(self, name: "guestFrames")
+        controller.addUserScript(WKUserScript(source: "webkit.messageHandlers.guestFrames.postMessage(location.pathname)",
+                                              injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+    }
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let path = message.body as? String { frames[path] = message.frameInfo }
+    }
 }
 
 /// Takes the frame a page's message came from.

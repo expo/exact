@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactGroupedLists
 /// LLP 1084 on UIKit: a grouped list (`listStyle`) is a UICollectionView
 /// with a list layout as the list's only scroller;
@@ -1060,14 +1061,14 @@ final class GroupedListIOSTests: GroupedListFixture {
         var pressed: [UInt32] = []
         let p = swipeRow { pressed.append($0) }
         let owner = try XCTUnwrap(p.views[21]), delete = try XCTUnwrap(p.views[23])
-        XCTAssertNil(p.swipeActions.refusal(of: owner), "a grouped row's content need not fill it")
+        XCTAssertNil(p.swipeHost.refusal(of: owner), "a grouped row's content need not fill it")
         XCTAssertTrue(delete.isHidden, "the cell's action stands for the control")
         XCTAssertNil(owner.scroll, "no scroll to pan: the cell's swipe takes the touch")
-        XCTAssertTrue(p.swipeActions.ownsAction(23))
+        XCTAssertTrue(p.swipeHost.ownsAction(23))
         let c = try cell(p, 21)
         XCTAssertTrue(owner.isDescendant(of: c.contentView), "carried into its list cell")
-        p.swipeActions.touch(owner)
-        XCTAssertNil(p.swipeActions.cell(of: owner), "no table projected: the list cell is UIKit's own")
+        p.swipeHost.touch(owner)
+        XCTAssertNil(p.swipeHost.cell(of: owner), "no table projected: the list cell is UIKit's own")
         XCTAssertFalse(owner.subviews.contains { $0 is UITableView })
 
         let l = try list(p)
@@ -1089,12 +1090,12 @@ final class GroupedListIOSTests: GroupedListFixture {
         p.apply(wireBatch([["op": "props", "id": 21, "set": ["testId": "swipe-row"], "clear": [String]()]]))
         XCTAssertTrue(delete.isHidden)
         XCTAssertTrue(owner.isDescendant(of: try cell(p, 21).contentView))
-        XCTAssertEqual(p.swipeActions.perform(23), true)
+        XCTAssertEqual(p.swipeHost.perform(23), true)
         XCTAssertEqual(pressed, [23, 23])
         // An inert section offers no action.
         p.apply(wireBatch([["op": "props", "id": 2, "set": ["inert": "true"], "clear": [String]()]]))
         XCTAssertNil(l.swipeActions(at: IndexPath(item: 0, section: 0), leading: false), "inert: nothing offered")
-        XCTAssertEqual(p.swipeActions.perform(23), false)
+        XCTAssertEqual(p.swipeHost.perform(23), false)
     }
 
     /// LLP 1116.008 D4 (grocery-list, round 10): the row's own horizontal snap
@@ -1111,7 +1112,7 @@ final class GroupedListIOSTests: GroupedListFixture {
         let scroll = try XCTUnwrap(owner.scroll, "a `scroll` handler wants the scroll view")
         XCTAssertFalse(scroll.isScrollEnabled, "its pan is off: the cell's swipe takes the touch")
         XCTAssertEqual(scroll.contentOffset.x, -scroll.adjustedContentInset.left, "at its start")
-        XCTAssertNil(p.swipeActions.refusal(of: owner))
+        XCTAssertNil(p.swipeHost.refusal(of: owner))
         XCTAssertTrue(owner.isDescendant(of: try cell(p, 21).contentView), "the cell is UIKit's")
         for _ in 0..<2 {
             p.apply(wireBatch([["op": "props", "id": 21, "set": ["testId": "swipe-row"], "clear": [String]()]]))
