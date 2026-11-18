@@ -36,6 +36,18 @@ for a chosen port. Its automatic rebuild does not run this site's postbuild step
 editing sources, stop the server, run `bun run build`, then start it again. A page request
 between the edit and the full build removes the generated Markdown and indexes.
 
+## Publishing
+
+`.github/workflows/docs.yml` builds the site after a push to `main` that changes `docs/` and
+publishes that build to the Cloudflare Pages project `exact-docs`. Its build job runs the branch's
+code and holds no secret; its deploy job holds the Cloudflare token and uploads the build's files
+without running them.
+`bun run build:pages` makes what is uploaded: `dist.pages`, which is `dist` with each page at
+`<path>.html` (Pages redirects `/start` to `/start/` for a `start/index.html`), a `_headers` within
+Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a request that prefers
+`text/markdown` as `bun start` does, and marks every host but the site's origin `noindex`. `bun
+run test:worker` tests the worker, and `bun run test:pages` the tree under `wrangler pages dev`.
+
 ## Search
 
 The search dialog (Cmd+K) asks the Algolia app and index in `constants/search.ts` with its
