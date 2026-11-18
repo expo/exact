@@ -900,6 +900,7 @@ test('authored preferences use the drive parser, override by name, and survive r
   writeFileSync(contract, `shape Viewport
   prefersColorScheme: string
   prefersReducedMotion: bool
+  displayMode: string
 shape Page
   onLine: bool
 component App
@@ -920,9 +921,12 @@ test "inherits"
   reload
   expect text "scheme" == "dark"
   prefer prefers-color-scheme light
+  prefer display-mode standalone
   expect text "scheme" == "light"
+  expect state viewport.displayMode == "standalone"
   reload
   expect text "scheme" == "light"
+  expect state viewport.displayMode == "standalone"
   prefer prefers-color-scheme dark
   expect text "scheme" == "dark"
   prefer prefers-color-scheme light
@@ -1002,7 +1006,7 @@ test "a host refuses an unsupported page fact"
     } });
     expect(r.results.map(t => t.end?.error)).toEqual(Array(12).fill(undefined));
     expect(r.results.map(t => t.failures.length)).toEqual([0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1]);
-    for (const [index, line, name, value] of [[2, 24, 'prefers-color-scheme', 'banana'], [3, 28, 'unknown', 'dark'], [4, 33, 'prefers-color-scheme', 'banana']]) {
+    for (const [index, line, name, value] of [[2, 27, 'prefers-color-scheme', 'banana'], [3, 31, 'unknown', 'dark'], [4, 36, 'prefers-color-scheme', 'banana']]) {
       const hint = name === 'unknown' ? 'did you mean `prefer prefers-color-scheme dark`? ' : '';
       expect(r.results[index].failures[0]).toContain(`line ${line}: prefer: ${name} ${value}: ${hint}expected`);
     }
@@ -1010,7 +1014,7 @@ test "a host refuses an unsupported page fact"
     expect(r.results[11].failures[0]).toContain('prefer: keyboard-navigation: true is not a page fact this host sets');
     expect(r.results[11].failures[0]).not.toContain('test prefer:');
     expect(ends).toEqual([
-      { 'prefers-color-scheme': 'light', 'prefers-reduced-motion': 'reduce' },
+      { 'prefers-color-scheme': 'light', 'prefers-reduced-motion': 'reduce', 'display-mode': 'standalone' },
       { 'prefers-color-scheme': 'light', 'prefers-reduced-motion': 'reduce' },
       { 'prefers-color-scheme': 'dark', 'prefers-reduced-motion': 'reduce', online: false },
       { 'prefers-color-scheme': 'dark', 'prefers-reduced-motion': 'reduce' },

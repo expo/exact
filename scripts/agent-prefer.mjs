@@ -1,8 +1,9 @@
-// `prefer`, the ninth operation's facts (LLP 1061 D5; LLP 1069.000 D6; LLP
-// 1069.007 D2; LLP 1078 D7): the device facts by their web names, grouped
-// on the wire as `media`, `page` and `fold`; and the web carrier's own path
-// for them — the browser's emulation through CDP where it has one, the
-// glue's substitute where it does not. agent.mjs re-exports the tables.
+// `prefer`, the ninth operation's facts (LLP 1039 D7; LLP 1061 D5; LLP
+// 1069.000 D6; LLP 1069.007 D2; LLP 1078 D7): the device facts by their web
+// names, grouped on the wire as `media`, `page` and `fold`; and the web
+// carrier's own path for them — the browser's emulation through CDP where it
+// has one, the glue's substitute where it does not. agent.mjs re-exports the
+// tables.
 import { MalformedOperation } from './agent-keys.mjs';
 /** A root font size as its help writes it (`53px`) or as a number; px is its only unit. */
 const px = (name, value) => name === 'root-font-size' ? String(value).replace(/px$/, '') : value;
@@ -101,12 +102,12 @@ export function mediaHeard(features, preferences, token) {
 }
 
 export async function preferWeb({ media, page, fold = {}, mode = {}, emulated, call, evaluate, frame, ask, scale = 0 }) {
-  if (media['display-mode'] != null) throw new Error(`Chrome prefer cannot emulate display-mode ${media['display-mode']}: use the browser's fullscreen controls`);
   // LLP 1115.000 D10.3: a browser's scale is fixed when it launches (`EXACT_SCALE=2 bun scripts/agent.mjs web …`: Chrome's own device scale factor). CDP's emulated one moves `devicePixelRatio` and the resolution queries but not the device pixel a border snaps to (Chrome 154: a 0.5px border stays 1px under it), so it is not offered as the scale.
   if (page['display-scale'] != null) { const now = await evaluate('devicePixelRatio'); if (Math.abs(now - page['display-scale']) > 0.01) throw new Error(`prefer: display-scale ${page['display-scale']}: a browser's scale is fixed when it launches, and this one's is ${now}; launch it at another with EXACT_SCALE=${page['display-scale']}`); }
   // Chrome's media emulation ignores `pointer` and `hover`; its touch emulation answers them, together: a touch screen is `coarse` with
   // `none`, the mouse it replaces `fine` with `hover` (Chrome 155), and nothing emulates `pointer: none`.
-  const { pointer, hover, ...rest } = media;
+  // Chrome takes CDP's `display-mode` emulation and changes nothing, so the glue substitutes that fact (LLP 1039 D7).
+  const { pointer, hover, 'display-mode': display, ...rest } = media;
   if (pointer != null || hover != null) {
     const touch = pointer != null ? pointer === 'coarse' : hover === 'none';
     if (pointer === 'none' || (pointer != null && hover != null && touch !== (hover === 'none')))
@@ -146,10 +147,10 @@ export async function preferWeb({ media, page, fold = {}, mode = {}, emulated, c
     await frame();
   }
   const hasMode = Object.keys(mode).length > 0;
-  const pageReply = Object.keys(page).length || foldRequest || hasMode ? await ask({ op: 'prefer', ...(Object.keys(page).length ? { page } : {}), ...(foldRequest ? { fold: foldRequest } : {}), ...(hasMode ? { mode } : {}) }) : null;
+  const pageReply = Object.keys(page).length || foldRequest || hasMode || display != null ? await ask({ op: 'prefer', ...(Object.keys(page).length ? { page } : {}), ...(foldRequest ? { fold: foldRequest } : {}), ...(hasMode ? { mode } : {}), ...(display != null ? { media: { 'display-mode': display } } : {}) }) : null;
   if (pageReply?.error) throw new Error(pageReply.error);
   if (pageReply) await frame();
-  return { media: await evaluate(`Object.fromEntries(${JSON.stringify(Object.entries(PREFERENCES))}.map(([name, values]) => [name, values.find(v => matchMedia('(' + name + ': ' + v + ')').matches) ?? values.at(-1)]))`), ...(pageReply ? { page: pageReply.page, fold: pageReply.fold, ...(hasMode ? { mode: pageReply.mode } : {}) } : {}) };
+  return { media: await evaluate(`({ ...Object.fromEntries(${JSON.stringify(Object.entries(PREFERENCES))}.map(([name, values]) => [name, values.find(v => matchMedia('(' + name + ': ' + v + ')').matches) ?? values.at(-1)])), ...(globalThis.exact?.displayModeSubstitute ? { 'display-mode': globalThis.exact.displayModeSubstitute } : {}) })`), ...(pageReply ? { page: pageReply.page, fold: pageReply.fold, ...(hasMode ? { mode: pageReply.mode } : {}) } : {}) };
 }
 
 export function faultRequest(op, args) {

@@ -14,7 +14,7 @@
 //   surface's published record, decoded against each reader's shape.
 import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js";
 import * as rt from "./rt.js";
-import { environment, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
+import { environment, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode } from "./navigation.js";
 
 const again = (source, why) => {
   const changed = () => {
@@ -62,7 +62,9 @@ export function viewport(readers) {
   viewportChanged = changed;
   shareReporter();
   // The agent's `prefer` fold group (LLP 1078 D7): an empty one re-reads the browser, a filled one is the substitute.
+  // Its `display-mode` is always the substitute (LLP 1039 D7).
   (globalThis.exact ??= {}).fold = { prefer: (f) => { const env = preferFold(f && Object.keys(f).length ? f : null); changed(); return env; }, env: foldEnv };
+  globalThis.exact.displayMode = { prefer: (mode) => { preferDisplayMode(mode); changed(); } };
 }
 
 // A release admits no agent mode (LLP 1069.007 D2): its build writes this false.

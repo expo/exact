@@ -5266,8 +5266,10 @@ require that ABI.
 mode on the web, `fullscreen`, `window-controls-overlay` (the tall title row
 `display_override` asks for) or `standalone` on macOS, `standalone` on other
 native hosts. Declare it on the resource's shape; `state.device.displayMode`
-reports it too. `prefer display-mode fullscreen` substitutes it on Apple;
-browser drivers refuse that override, so test real fullscreen transitions. This reads the window, not a fullscreen navigation route.
+reports it too. `prefer display-mode standalone` substitutes it on Apple and
+in Chrome, so a test on the web reaches an app's standalone branch; the
+browser's own `display-mode` media query does not change, and Firefox and
+WebKit refuse the override. This reads the window, not a fullscreen navigation route.
 `exactViewport().devicePixelRatio` is `option<number>`: display pixels per
 logical point, updated when the display scale changes. It is `none` before a
 host reports its scale, including a server render and the terminal. It is the

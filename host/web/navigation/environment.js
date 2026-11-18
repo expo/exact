@@ -239,8 +239,18 @@ const queries = () => preferenceQueries ??= [
 ].map(([q, bits]) => [matchMedia(q), bits]);
 export const preferences = () => {
   const bits = queries().reduce((bits, [q, bit]) => bits | (q.matches ? bit : 0), 0), meta = globalThis.document?.querySelector?.("meta[name=\"color-scheme\"]")?.content, pinned = globalThis.exact?.systemScheme ?? (meta === "light" || meta === "dark" ? meta : null);
-  return pinned ? bits & ~16 | (pinned === "dark" ? 16 : 0) : bits;
+  const schemed = pinned ? bits & ~16 | (pinned === "dark" ? 16 : 0) : bits, mode = DISPLAY_MODES.indexOf(globalThis.exact?.displayModeSubstitute);
+  return mode < 0 ? schemed : schemed & ~(7 << 29) | mode << 29;
 };
+// @ref LLP 1039 D7 — the agent's `prefer display-mode`, which Chrome's emulation cannot set: the facts read `value`
+// until the next one, and the page's own `display-mode` query does not change. It is kept on `globalThis`, as the
+// fold's substitute is, since the web-js agent reads its own copy of this module. The caller re-answers the runner.
+export function preferDisplayMode(value) {
+  if (!DISPLAY_MODES.includes(value)) {
+    throw Object.assign(new Error(`prefer: display-mode: ${value} is not a display mode`), { malformed: true });
+  }
+  (globalThis.exact ??= {}).displayModeSubstitute = value;
+}
 // a dev pin's scheme is the system's (LLP 1122 D4; dev.js), else the manifest's fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs), as `UIUserInterfaceStyle` is an iOS app's
 export const displayMode = () => DISPLAY_MODES[preferences() >>> 29 & 7];
 // @ref LLP 1101.003 D6 — Media Queries 4's `update`: 0 `fast` (a screen, and a page that cannot ask), 1 `slow`, 2 `none` (print). The preference bits have no room for it; the wasm host takes it through `exact_set_update`.

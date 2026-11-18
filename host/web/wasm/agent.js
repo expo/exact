@@ -1,5 +1,5 @@
 import { views, ask, shownValue, host, INHERITED_CSS, now, root, iframeLoading, waiting, httpHelpers, loadGpuIfNeeded, heldNamed, loadAfterPaint, stageLoaded, loadStage, agentMode, gpuInPlay, register, seek, postSurface, deferFulfill, documentsGlue, picker, t0, log, readOut, presence, forgettable, writeIn, pageFacts, pageChanged, foldChanged, followOffset, pieces, moduleReady, SETTLE_DEADLINE_MS, mediaAttached, GLIDE_BOUND_MS, collections, settleCandidate } from "../glue.js";
-import { inertAncestor, routeFlags, navigation, environment, preferFold, foldEnv, typedControl, settleValue } from "../navigation.js";
+import { inertAncestor, routeFlags, navigation, environment, preferFold, preferDisplayMode, foldEnv, typedControl, settleValue } from "../navigation.js";
 import { applyBatch, sendBatch } from "./commit.js";
 import { replacements } from "./boot.js";
 function nodeDetail(id, plan = false) {
@@ -514,6 +514,9 @@ function agentReply(request) {
           }
           if (request.fold) {
             preferFold(Object.keys(request.fold).length ? request.fold : null);
+          }
+          if (request.media?.["display-mode"] != null) {
+            preferDisplayMode(request.media["display-mode"]);
           }
         } catch (e) {
           return {
