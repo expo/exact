@@ -691,6 +691,8 @@ public final class ExactSession {
     /// up to `limit`; true when what is left waits for a staged batch, whose
     /// reveal applies it. A batch made while it applies one waits its turn.
     @discardableResult func landFill(before limit: UInt64 = .max) -> Bool {
+        // Re-entry: the running loop lands every slice published meanwhile before its limit, and what comes after
+        // lands in a turn of its own (`claimDrain`, below)
         guard !landing else { return false }
         landing = true
         // A slice, tick or reply the owner published is no part of the covers correction that lands it

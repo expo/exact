@@ -209,6 +209,8 @@ export function runCaps(root = process.cwd()) {
   harnesses(root, files);
   helps(root);
   lockedWorkspaces(root, files);
+  reentry(root, files);
+  hostLogs(root, files);
 
   return { problems, counted };
 }
@@ -242,6 +244,29 @@ function windowsNames(files) {
     }
   }
   counted.push(`paths a Windows checkout cannot create: ${refused} of ${files.length}`);
+}
+
+/**
+ * A log line in a native host runs in release builds on every call: an `NSLog` in a per-batch path took 9 ms of the
+ * main thread over one pull past a scroller's top. Native host sources may not call `NSLog` or `print` more often
+ * than they did when the count began; each one removed lowers it.
+ */
+const HOST_LOG_BASELINE = 34;
+function hostLogs(root, files) {
+  const CALL = /(^|[^\w.])(NSLog|print)\(/g;
+  let calls = 0;
+  for (const f of files) {
+    if (!f.startsWith('host/') || !f.endsWith('.swift') || /\/tests?\//i.test(f) || VENDORED.test(f) || !existsSync(resolve(root, f))) continue;
+    for (const line of readFileSync(resolve(root, f), 'utf8').split('\n')) {
+      if (/^\s*\/\//.test(line)) continue;
+      calls += [...line.matchAll(CALL)].length;
+    }
+  }
+  if (calls > HOST_LOG_BASELINE) {
+    fail('cap:host-log', `Native host sources call NSLog or print ${calls} times, more than the ${HOST_LOG_BASELINE} counted when the check began.`,
+      'Each runs in release builds whenever its path runs. Put a diagnostic behind a switch read once at launch, or report through the session\'s log (`session.log`), or remove it before landing; remove another call to make room.');
+  }
+  counted.push(`native host log calls: ${calls} of ${HOST_LOG_BASELINE} allowed`);
 }
 
 /**
@@ -335,6 +360,57 @@ function helps(root) {
   }
   for (const p of found) fail(p.code, p.message, p.detail);
   counted.push(`helps: each verb's flags against its script's, its rows and lengths, ${found.length} problems`);
+}
+
+/**
+ * A guard that returns while the same work runs drops the call. A call that carries data (a batch's ops), or that
+ * comes after the running pass read what it changed, is then lost until something else runs the work again: the iOS
+ * host's navigation sync lost a stack that way when the app answered a request made inside a sync. So each Swift
+ * guard that returns while a flag its file raises is set says, in a comment on it or on the two lines above that
+ * names re-entry, what a call made meanwhile loses, or keeps the call and runs it after the pass.
+ */
+// Guards written before the check, whose dropped calls are yet to be read (QUEUE.md, "Re-entrancy guards"): each
+// leaves this list as it is read, said or fixed, and none joins it.
+const REENTRY_UNREAD = new Set([
+  'host/apple/Sources/ExactDragOut/DragOutMac.swift engaged',
+  'host/apple/Sources/ExactKit/IOS/ContributionsIOS.swift writing',
+  'host/apple/Sources/ExactKit/IOS/PresenterIOS.swift resetting',
+  'host/apple/Sources/ExactKit/Mac/DataTableMac.swift syncing',
+  'host/apple/Sources/ExactNavigation/Mac/SidebarViewsMac.swift configuringInspector',
+  'host/apple/Sources/ExactKit/ForwardingDelegate.swift settling',
+  'host/apple/Sources/ExactKit/IOS/ArrangementIOS.swift syncingInsets',
+  'host/apple/Sources/ExactControls/IOS/DatesIOS.swift readingDeclared',
+  'host/apple/Sources/ExactKit/IOS/SegmentedControlIOS.swift labelling',
+  'host/apple/Sources/ExactKit/Links/NavigationLink.swift syncing',
+  'host/apple/Sources/ExactKit/Mac/CoversMac.swift delivering',
+  'host/apple/Sources/ExactKit/Mac/PresenterMac.swift applying',
+  'host/apple/Sources/ExactKit/Mac/PresenterMac.swift drainingGeometry',
+  'host/apple/Sources/ExactNavigation/Mac/SidebarMac.swift syncing',
+  'host/apple/Sources/ExactKit/SessionIdleWork.swift draining',
+  'host/apple/Sources/ExactMarkdown/MarkupEditor.swift styling',
+]);
+
+function reentry(root, files) {
+  const GUARD = /^\s*(?:guard\s+!\s*([A-Za-z_][\w.]*)\s+else|if\s+([A-Za-z_][\w.]*))\s*\{\s*return\b/;
+  const SAID = /re-?entr/i;
+  let guards = 0, unread = 0;
+  for (const f of files) {
+    if (!f.endsWith('.swift') || VENDORED.test(f) || !existsSync(resolve(root, f))) continue;
+    const text = readFileSync(resolve(root, f), 'utf8'), lines = text.split('\n');
+    lines.forEach((line, i) => {
+      const m = GUARD.exec(line);
+      if (!m) return;
+      const flag = (m[1] ?? m[2]).split('.').pop();
+      // A flag the file raises around work it runs and lowers as it ends: not a state the guard merely reads
+      if (!new RegExp(`\\b${flag}\\s*=\\s*true\\b`).test(text) || !new RegExp(`defer\\s*\\{[^}]*\\b${flag}\\s*=\\s*false\\b`).test(text)) return;
+      guards += 1;
+      if ([line, lines[i - 1] ?? '', lines[i - 2] ?? ''].some((l) => SAID.test(l))) return;
+      if (REENTRY_UNREAD.has(`${f} ${flag}`)) { unread += 1; return; }
+      fail('cap:reentry', `${f}:${i + 1} returns while \`${flag}\` is set, and says nothing of the call it drops.`,
+        'A call made while the work runs is lost when it carries data or comes after the pass read what it changed. Keep it and run the work again as the pass ends (the iOS host\'s `NavigationHost.sync` keeps a batch\'s children), or say on the guard, naming re-entry, why the call loses nothing.');
+    });
+  }
+  counted.push(`re-entrancy guards: ${guards} in Swift, each saying what a call during its work loses, ${unread} yet to be read`);
 }
 
 function main() {

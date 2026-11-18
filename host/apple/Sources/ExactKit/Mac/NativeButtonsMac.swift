@@ -320,6 +320,7 @@ final class NativeButtonMac: NSButton {
     func cancelHeldContact() { if heldContact || tracked != nil { cancelsHeldContact = true } }
     override func sendAction(_ action: Selector?, to target: Any?) -> Bool {
         if let tracked { owner?.holdPresenter?.mouseLayoutPan.trackingEnded(tracked) }
+        // This guards cancellation, independent of re-entry. AppKit has no cancelled mouse-up.
         guard !cancelsHeldContact else { return false }
         clicked = true
         owner?.pointerReleased(nil)

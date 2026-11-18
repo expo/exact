@@ -51,6 +51,7 @@ extension ExactSession {
         outside.append(work)
     }
     private func callOut() {
+        // Re-entry: the loop already running drains `outside`, so it runs what this call would
         guard !callingOut else { return }
         callingOut = true; defer { callingOut = false }
         while !insideApply, !landing, !draining, !outside.isEmpty { outside.removeFirst()() }
