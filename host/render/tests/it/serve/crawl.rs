@@ -17,6 +17,14 @@ fn the_sitemap_lists_each_rendered_route_and_its_listed_pages() {
     ] {
         assert!(body.contains(&format!("<loc>{url}</loc>")), "{url}\n{body}");
     }
+    // A listed value whose location an earlier route answers is that route's page, listed once, as its own
+    // (LLP 1048.000 D2)
+    assert_eq!(
+        body.matches("<loc>https://blog.test/post/latest</loc>")
+            .count(),
+        1,
+        "{body}"
+    );
     // A route without a pages source isn't in it; neither is the shell's,
     // nor a page that says `noindex`, as the build's sitemap leaves them.
     assert!(!body.contains("/live/") && !body.contains("/app"), "{body}");

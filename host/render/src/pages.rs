@@ -7,16 +7,29 @@ use exact_plan::{Plan, RoutesRow, Value};
 use exact_runner::{Answer, DataSource, Dispatch, RequestOut, Store};
 use std::time::{Duration, Instant};
 
-/// The locations route `row` lists, or none when it names no source.
+/// A route's listed pages: the locations that are its own, and each value
+/// that is no page of the route, with why it is refused.
+#[derive(Debug, Default, PartialEq)]
+pub struct Listed {
+    /// The route's own pages.
+    pub locations: Vec<String>,
+    /// `(location, why)`: a value the route's pattern can't hold has no
+    /// location, and one whose location the router gives another route is
+    /// that route's page (LLP 1048.000 D2).
+    pub refused: Vec<(Option<String>, String)>,
+}
+
+/// The pages route `row` lists, or none when it names no source; `Err` when
+/// its source fails or its answer is no list of strings.
 pub fn pages<D: DataSource>(
     plan: &Plan,
     data: D,
     row: &RoutesRow,
     deadline: Duration,
-) -> Result<Vec<String>, String> {
+) -> Result<Listed, String> {
     let source = plan.str(row.pages);
     if source.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Listed::default());
     }
     let route = plan.str(row.name);
     let fail = |why: String| format!("route `{route}`'s pages ({source}): {why}");
@@ -93,13 +106,31 @@ pub fn pages<D: DataSource>(
     let Value::List(values) = value else {
         return Err(fail("its answer isn't a list".into()));
     };
-    values
+    let values = values
         .iter()
-        .map(|value| {
-            let value = value
-                .as_str()
-                .ok_or_else(|| fail("its answer isn't a list of strings".into()))?;
-            exact_web::document::route_location(plan, route, value).map_err(fail)
-        })
-        .collect()
+        .map(|value| value.as_str())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| fail("its answer isn't a list of strings".into()))?;
+    let mut listed = Listed::default();
+    for value in values {
+        let location = match exact_web::document::route_location(plan, route, value) {
+            Ok(location) => location,
+            Err(why) => {
+                let value = serde_json::to_string(value).unwrap();
+                listed.refused.push((None, fail(format!("the value {value} can't be a path segment: {why}. Leave the value out of the list"))));
+                continue;
+            }
+        };
+        // The router gives the location to the first declared pattern that matches it, and the route's own matches it,
+        // so the route that answers is this one or one declared before it
+        let other = exact_web::document::route_at(plan, &location).map_or("", |r| plan.str(r.name));
+        if other == route {
+            listed.locations.push(location);
+        } else {
+            let value = serde_json::to_string(value).unwrap();
+            let why = fail(format!("the value {value} is at {location}, which route `{other}`, declared before `{route}`, answers, so the page there is `{other}`'s, not `{route}`'s. Leave the value out of the list, or give one of the two routes another path"));
+            listed.refused.push((Some(location), why));
+        }
+    }
+    Ok(listed)
 }

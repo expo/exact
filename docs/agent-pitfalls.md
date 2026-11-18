@@ -2058,7 +2058,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   render environment and render each returned value, encoding it as a path segment. An
   app `exact new` made needs no Rust render entry. A source that fails or misses its
   deadline fails the build; an empty list renders no pages. A static build contains only
-  the returned values.
+  the returned values. A listed value whose location a route declared earlier also matches
+  fails the build, naming both routes: with `special "/product/special"` before `product
+  "/product/:id"`, the page at a listed `special` is `special`'s.
 
 - **A link to the same route with a new query pushes a second entry.** A filter written as
   `link href=(path("shop") + "?cat=" + c)` on the shop page reached `follow`, whose

@@ -42,7 +42,7 @@ pub use cli::{main, main_with};
 pub use direct::boot_swap_js;
 pub use executor::{pump, Executor};
 pub use page::{capture, capture_js, page, page_with_rules, scroll_document_js};
-pub use pages::pages;
+pub use pages::{pages, Listed};
 pub use requests::{render_with_at, settle};
 pub use serve::{expire_renders, Serve, Server, Stopper};
 pub use source::Anonymous;

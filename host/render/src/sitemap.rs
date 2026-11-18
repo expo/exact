@@ -25,7 +25,14 @@ pub(super) fn sitemap<D: DataSource + 'static>(shared: &Shared, data: fn() -> D)
         }))
         .unwrap_or_else(|_| Err("the pages source panicked".into()));
         match listed {
-            Ok(found) => locations.extend(found),
+            // Every refused value is left out; a location another route answers is that route's page, which the sitemap
+            // lists or leaves out by that route's own entry
+            Ok(listed) => {
+                for (_, error) in &listed.refused {
+                    crate::log(format_args!("sitemap left out error={error:?}"));
+                }
+                locations.extend(listed.locations);
+            }
             Err(error) => {
                 crate::log(format_args!("sitemap 503 error={error:?}"));
                 return Response::text(503, "the sitemap's pages didn't answer\n")

@@ -195,25 +195,42 @@ pub fn main_with<D: DataSource + 'static>(
         };
         return run_server(server, data);
     }
+    // A build reports every refusal in its one run: it lists and renders every page, then fails
+    let mut failed = false;
     if build {
         match build_locations(&decoded) {
             Ok(found) => locations.extend(found),
             Err(e) => {
                 eprintln!("render: {e}");
-                return ExitCode::FAILURE;
+                failed = true;
             }
         }
-        // @ref LLP 1048.000 D2 — and every page a build route's source lists.
+        // @ref LLP 1048.000 D2 — and every page a build route's source lists. A refused value's line is its error
         for row in decoded
             .routes
             .iter()
             .filter(|r| r.render == RenderPolicy::Build)
         {
             match pages(&decoded, data(), row, deadline) {
-                Ok(found) => locations.extend(found.into_iter().map(|l| (l, false))),
+                Ok(listed) => {
+                    locations.extend(listed.locations.into_iter().map(|l| (l, false)));
+                    for (location, error) in listed.refused {
+                        failed = true;
+                        match location {
+                            Some(location) => writeln!(
+                                out,
+                                "{{\"location\":{},\"error\":{}}}",
+                                json(&location),
+                                json(&error)
+                            )
+                            .expect("render: the output"),
+                            None => eprintln!("render: {error}"),
+                        }
+                    }
+                }
                 Err(e) => {
                     eprintln!("render: {e}");
-                    return ExitCode::FAILURE;
+                    failed = true;
                 }
             }
         }
@@ -224,7 +241,6 @@ pub fn main_with<D: DataSource + 'static>(
         name: &name,
         origin: origin.as_deref(),
     };
-    let mut failed = false;
     for (location, listed) in &locations {
         let route = route_at(&decoded, location);
         // The not-found document, or any location the router sends there.

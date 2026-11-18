@@ -272,6 +272,40 @@ export function answer(name: string): any {
   });
 }, 120000);
 
+// A listed value is its route's page only where the router gives the location back to that route (LLP 1048.000 D2). The
+// build names each value a route declared earlier takes, and each the pattern can't hold, for every route, renders the
+// rest and then fails.
+test('a build names each listed value at a location a route declared earlier answers, and fails', async () => {
+  await builtPages(`routes nav
+  home "/" render=client
+    special "/product/special" render=request
+    product "/product/:id" render=build pages=productPages()
+    fresh "/story/new" render=request
+    story "/story/:id" render=build pages=storyPages()
+
+component App
+  view
+    main
+      text "a page"
+`, `export const grants = '';
+export function answer(name: string): any {
+  if (name === 'productPages') return ['7', 'special', ''];
+  if (name === 'storyPages') return ['new', '1'];
+  return '';
+}
+`, ({ status, output, dist }) => {
+    const refusal = (route, source, value, location, other) => `route \`${route}\`'s pages (${source}): the value "${value}" is at ${location}, which route \`${other}\`, declared before \`${route}\`, answers, so the page there is \`${other}\`'s, not \`${route}\`'s. Leave the value out of the list, or give one of the two routes another path`;
+    expect([status, output.split('\n').filter(line => line.includes('declared before'))], output).toEqual([1, [
+      refusal('product', 'productPages', 'special', '/product/special', 'special'),
+      refusal('story', 'storyPages', 'new', '/story/new', 'fresh'),
+    ]]);
+    // A value the pattern can't hold is reported in the same run
+    expect(output).toContain("route `product`'s pages (productPages): the value \"\" can't be a path segment: a path parameter cannot be empty, `.` or `..`. Leave the value out of the list");
+    expect([existsSync(resolve(dist, 'product/7/index.html')), existsSync(resolve(dist, 'story/1/index.html')), existsSync(resolve(dist, 'product/special'))])
+      .toEqual([true, true, false]);
+  });
+}, 120000);
+
 test('an empty enumeration keeps the static and not-found build pages', async () => {
   await builtPages(contract('productPages()', '  about "/about" render=build\n  notfound render=build\n'), `export const grants = '';
 export function answer(name: string): any { return name === 'productPages' ? [] : 'Static page'; }

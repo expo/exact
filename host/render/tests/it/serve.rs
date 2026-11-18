@@ -17,6 +17,7 @@ mod generations;
 const SRC: &str = r#"
 routes nav
   tab home "/" render=build
+    latest "/post/latest" render=cached
     post "/post/:post" render=cached pages=posts("public")
     live "/live/:post" render=request
     draft "/draft/:post" render=cached pages=posts("drafts")
@@ -75,10 +76,9 @@ impl DataSource for Posts {
         };
         match (source, id.as_str()) {
             ("emptyPost", _) => Ok(Answer::Now(post(""))),
-            ("posts", _) if args == [Value::str("public")] => Ok(Answer::Now(Value::list(vec![
-                Value::str("7"),
-                Value::str("an idea"),
-            ]))),
+            ("posts", _) if args == [Value::str("public")] => Ok(Answer::Now(Value::list(
+                ["7", "an idea", "latest"].map(Value::str).to_vec(),
+            ))),
             ("posts", _) if args == [Value::str("drafts")] => {
                 Ok(Answer::Now(Value::list(vec![Value::str("d1")])))
             }

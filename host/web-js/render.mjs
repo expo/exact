@@ -17,7 +17,7 @@ import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
 import { createDocument, esc } from './dom.js';
 import { cachingFetch, directives, FRESH } from './http-cache.mjs';
-import { canonical, mountedHref, withBase } from './route-pattern.js';
+import { canonical, matchPattern, mountedHref, withBase } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
 import { buildPageFiles, pageRoute, writeCrawlerFiles } from '../web/crawl.mjs';
 import { buildBase, generationOf, withGenerationBase } from '../web/generations.mjs';
@@ -403,13 +403,13 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   render.production = true;
   try { render.production = JSON.parse(read('app.version.json').toString('utf8')).production; }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // Each value route `name`'s source lists (LLP 1048.000 D2), with its location or why the route's pattern can't hold it
   render.pages = async ({ name, pattern, source, args }, deadline = DEADLINE) => {
     let made, timer;
     try {
       made = realm();
       const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("it didn't answer before the deadline")), deadline); });
-      const locations = await Promise.race([made.ctx.__pages(pattern, source, args, deadline), expired]);
-      return locations.map(location => ({ location, notfound: false }));
+      return await Promise.race([made.ctx.__pages(pattern, source, args, deadline), expired]);
     } catch (error) {
       throw new Error(`route \`${name}\`'s pages (${source}): ${error?.message ?? error}`);
     } finally { clearTimeout(timer); made?.dispose(); }
@@ -420,6 +420,20 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
     return ctx.__markdown();
   };
   return render;
+}
+
+/** Route `route`'s listed pages, as the render host's `exact_render::pages` keeps them (LLP 1048.000 D2): `pages`, the
+ * route's own, and `refused`, why each other value is no page of it. The router gives a location to the first declared
+ * pattern that matches it, and the route's own matches it, so the route that answers is this one or one declared before. */
+function listedPages(route, values, routes) {
+  const fail = why => `route \`${route.name}\`'s pages (${route.source}): ${why}`, listed = { pages: [], refused: [] };
+  for (const { value, location, error } of values) {
+    const other = location === undefined ? null : routes[matchPattern(routes, canonical(location))]?.name;
+    if (other === route.name) listed.pages.push({ location, notfound: false });
+    else if (location === undefined) listed.refused.push(fail(`the value ${JSON.stringify(value)} can't be a path segment: ${error}. Leave the value out of the list`));
+    else listed.refused.push(fail(`the value ${JSON.stringify(value)} is at ${location}, which route \`${other}\`, declared before \`${route.name}\`, answers, so the page there is \`${other}\`'s, not \`${route.name}\`'s. Leave the value out of the list, or give one of the two routes another path`));
+  }
+  return listed;
 }
 
 const refusedLine = ([name, api]) => `resource ${name} is pending: ${api} needs the reader's device; the reader's page asks it`;
@@ -595,21 +609,26 @@ if (import.meta.main) {
     const render = renderer(dist);
     if (args.includes('--build')) {
       const listed = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), pages = [], docs = [];
-      render.ahead = false;
-      for (const route of listed) {
-        const locations = route.source ? await render.pages(route) : [route];
-        for (const page of locations) pages.push(page);
-      }
       const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
+      render.ahead = false;
+      // A build reports every refusal in its one run: it lists and renders every page, then fails
+      let failed = false;
+      for (const route of listed) {
+        if (!route.source) { pages.push(route); continue; }
+        try {
+          const found = listedPages(route, await render.pages(route), routes);
+          pages.push(...found.pages);
+          for (const refusal of found.refused) { console.error(refusal); failed = true; }
+        } catch (error) { console.error(error.message); failed = true; }
+      }
       const files = buildPageFiles(dist, pages, routes);
       let origin = null;
-      let drew = false;
       for (const [i, p] of pages.entries()) {
         const page = await render(withBase(p.location, buildBase(dist)));
         // Write no page whose render drew randomness, which every reader of a page made at build would share (LLP 1048.000
         // D7, LLP 1069.005 D2)
         if (page.drew) {
-          drew = true;
+          failed = true;
           console.error(`${p.location}: route \`${pageRoute(p, routes)?.name}\` is render=build, but its render drew randomness, and a page made at build would give every reader the same random values (LLP 1069.005 D2). Declare the route render=request, rendered for each request, or render=client, rendered in the browser`);
           continue;
         }
@@ -622,7 +641,7 @@ if (import.meta.main) {
         for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
         for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
       }
-      if (drew) process.exitCode = 1;
+      if (failed) process.exitCode = 1;
       else writeCrawlerFiles(dist, docs, origin, routes, buildBase(dist));
     } else for (const location of args.slice(1)) {
       const page = await render(withBase(location, buildBase(dist)));

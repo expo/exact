@@ -804,9 +804,9 @@ fn a_route_lists_its_pages_with_its_source() {
         .find(|r| plan.str(r.name) == "post")
         .unwrap();
     let listed = exact_render::pages(&plan, Listed::default(), row, Duration::from_secs(5));
-    assert_eq!(listed.unwrap(), ["/post/1", "/post/two%20words"]);
+    assert_eq!(listed.unwrap().locations, ["/post/1", "/post/two%20words"]);
     let later = exact_render::pages(&plan, Listed { later: true }, row, Duration::from_secs(5));
-    assert_eq!(later.unwrap(), ["/post/3"]);
+    assert_eq!(later.unwrap().locations, ["/post/3"]);
     // The build's own list leaves the listed route to its source.
     assert_eq!(
         exact_web::document::build_locations(&plan).unwrap(),
@@ -839,7 +839,61 @@ fn a_worker_placed_pages_source_is_never_held() {
         .unwrap();
     let worker = exact_data::Placed::new(Listed, exact_runner::Placement::Worker);
     let listed = exact_render::pages(&plan, worker, row, Duration::from_secs(5));
-    assert_eq!(listed.unwrap(), ["/post/1"]);
+    assert_eq!(listed.unwrap().locations, ["/post/1"]);
+}
+
+/// A listed value is its route's page only where the router gives the
+/// location back to that route (LLP 1048.000 D2): a route declared earlier
+/// whose pattern matches it takes it, a literal by its escaped spelling or a
+/// pattern with a parameter of its own. Each such value is refused with its
+/// location, naming both routes, as is a value the pattern can't hold, and
+/// the route keeps the rest.
+#[test]
+fn a_listed_value_at_an_earlier_routes_location_is_refused() {
+    struct Values;
+    impl DataSource for Values {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::list(
+                ["7", "special", "café", "new", "a&b", ""]
+                    .map(Value::str)
+                    .to_vec(),
+            )))
+        }
+    }
+    let plan = contract::compile(
+        "routes nav\n  tab home \"/\" render=build\n    special \"/product/special\" render=request\n    cafe \"/product/café\" render=request\n    fresh \"/:section/new\" render=request\n    amp \"/product/a&b\" render=request\n    product \"/product/:id\" render=build pages=products(\"all\")\ncomponent A\n  view\n    text \"a\"\n",
+    )
+    .unwrap();
+    let row = plan
+        .routes
+        .iter()
+        .find(|r| plan.str(r.name) == "product")
+        .unwrap();
+    let listed = exact_render::pages(&plan, Values, row, Duration::from_secs(5)).unwrap();
+    // `a&b` is at `/product/a%26b`, which the router gives back to `product`, though `amp`'s literal spells it raw
+    assert_eq!(listed.locations, ["/product/7", "/product/a%26b"]);
+    let refusal = |value: &str, location: &str, other: &str| {
+        (
+            Some(location.to_owned()),
+            format!("route `product`'s pages (products): the value \"{value}\" is at {location}, which route `{other}`, declared before `product`, answers, so the page there is `{other}`'s, not `product`'s. Leave the value out of the list, or give one of the two routes another path"),
+        )
+    };
+    assert_eq!(
+        listed.refused[..3],
+        [
+            refusal("special", "/product/special", "special"),
+            refusal("café", "/product/caf%C3%A9", "cafe"),
+            refusal("new", "/product/new", "fresh"),
+        ]
+    );
+    // A value the pattern can't hold has no location
+    assert_eq!(
+        listed.refused[3..],
+        [(None, "route `product`'s pages (products): the value \"\" can't be a path segment: a path parameter cannot be empty, `.` or `..`. Leave the value out of the list".to_owned())]
+    );
 }
 
 /// A `pages=` source that is re-asked without end (`Dispatch::Again` gets

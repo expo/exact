@@ -894,7 +894,8 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   ...(declared ? ['  prepareSources();'] : []),
   '};',
   // Enumeration asks only its source, through the resource executor, with no app boot (LLP 1048.000 D2).
-  // Its answer is the route's locations, each value a path segment as `path(…)` makes it.
+  // Its answer is each value with its location, the value a path segment as `path(…)` makes it, or why the route's
+  // pattern can't hold it.
   'globalThis.__pages = async (pattern, source, args, deadline) => {',
   '  const end = performance.now() + deadline;',
   '  await prepare();',
@@ -910,7 +911,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   '    await new Promise(resolve => setTimeout(resolve, 1));',
   '  }',
   '  if (r.failed) throw new Error(r.error);',
-  "  return r.value.map(value => pattern.split('/').map(s => s[0] === ':' ? segmentOf(value) : s).join('/'));",
+  "  return r.value.map(value => { try { return { value, location: pattern.split('/').map(s => s[0] === ':' ? segmentOf(value) : s).join('/') }; } catch (error) { return { value, error: error?.message ?? String(error) }; } });",
   '};',
   'globalThis.__start = async () => {',
   '  t0 = performance.now();',

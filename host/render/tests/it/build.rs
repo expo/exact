@@ -99,3 +99,90 @@ component App
     );
     assert_eq!(format!("{status:?}"), format!("{:?}", ExitCode::SUCCESS));
 }
+
+/// Lists for two routes, each with a value whose location a route declared earlier answers, and a third route's source
+/// that fails.
+struct Lists;
+
+impl DataSource for Lists {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+
+    fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
+        let values: &[&str] = match source {
+            "products" => &["7", "special", ""],
+            "stories" => &["new", "1"],
+            _ => return Err(DataError::UnknownSource(source.into())),
+        };
+        Ok(Answer::Now(Value::list(
+            values.iter().map(|v| Value::str(v)).collect(),
+        )))
+    }
+}
+
+/// A listed value whose location a route declared earlier answers is that route's page, not the listing route's
+/// (LLP 1048.000 D2). The build names each such value on its location's line, for every route, goes on past a value the
+/// pattern can't hold and past a source that fails, renders the rest and then fails.
+#[test]
+fn a_build_names_each_listed_value_an_earlier_route_answers() {
+    let plan = contract::compile(
+        r#"
+routes nav
+  home "/" render=build
+    special "/product/special" render=request
+    product "/product/:id" render=build pages=products()
+    fresh "/story/new" render=request
+    story "/story/:id" render=build pages=stories()
+    broken "/broken/:id" render=build pages=missing()
+
+component App
+  view
+    text "a page"
+"#,
+    )
+    .unwrap()
+    .encode();
+    let mut out = Vec::new();
+    let status = exact_render::main_with(&plan, || Lists, ["--build".to_owned()], &mut out);
+    let lines: Vec<serde_json::Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let got: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            (
+                line["location"].as_str().unwrap(),
+                line["error"].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    let refusal = |route: &str, source: &str, value: &str, location: &str, other: &str| {
+        Some(format!("route `{route}`'s pages ({source}): the value \"{value}\" is at {location}, which route `{other}`, declared before `{route}`, answers, so the page there is `{other}`'s, not `{route}`'s. Leave the value out of the list, or give one of the two routes another path"))
+    };
+    assert_eq!(
+        got,
+        [
+            (
+                "/product/special",
+                refusal(
+                    "product",
+                    "products",
+                    "special",
+                    "/product/special",
+                    "special"
+                )
+            ),
+            (
+                "/story/new",
+                refusal("story", "stories", "new", "/story/new", "fresh")
+            ),
+            ("/", None),
+            ("/product/7", None),
+            ("/story/1", None),
+        ]
+    );
+    assert_eq!(format!("{status:?}"), format!("{:?}", ExitCode::FAILURE));
+}

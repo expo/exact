@@ -873,12 +873,13 @@ pub fn route_at<'p>(plan: &'p Plan, location: &str) -> Option<&'p exact_plan::Ro
     plan.routes.iter().find(|r| plan.str(r.name) == hit.name)
 }
 
-/// Where route `name` is with `value` for its one parameter: a listed page
-/// (LLP 1048.000 D2).
+/// Where route `name`'s pattern puts `value` for its one parameter (LLP
+/// 1048.000 D2): a listed page only where the router gives that location back
+/// to the route (`exact_render::pages`).
 pub fn route_location(plan: &Plan, name: &str, value: &str) -> Result<String, String> {
     route_table(plan)
         .path(name, &[value])
-        .map_err(|e| format!("{e:?}"))
+        .map_err(|e| e.message)
 }
 
 /// The locations a build renders: every route declared `render=build` but
