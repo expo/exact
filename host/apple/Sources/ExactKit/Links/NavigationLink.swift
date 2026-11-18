@@ -52,12 +52,18 @@ package protocol RouteSurface: UIViewController {
     var stack: UIViewController? { get }
     /// The navigation this route belongs to.
     var hosting: (any NavigationHosting)? { get }
-    /// Fit the content viewport to the route's block (the part its bars leave).
-    func fitContentViewport(in block: CGRect?)
+    /// Fit the content viewport to the route's block (the part its bars leave). `editor` is the keyboard's editor
+    /// where the caller found it already, `nil` to find it.
+    func fitContentViewport(in block: CGRect?, editor: UIView??)
     #if os(iOS)
     /// Point the bar's and the bottom bar's edge effects at the scrollers banded under them.
     func bandEdges(top: UIScrollView?, bottom: UIScrollView?)
     #endif
+}
+
+extension RouteSurface {
+    /// Fit the content viewport to the route's block, finding the keyboard's editor.
+    package func fitContentViewport(in block: CGRect?) { fitContentViewport(in: block, editor: nil) }
 }
 
 /// A plain tab: a controller holding one route, shown before or instead of a

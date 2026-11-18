@@ -258,26 +258,32 @@ package final class OwnerBlocks {
     /// whether a window shows that view: a route under a pushed one, or in a
     /// tab not selected, is out of the window.
     private var routes: [(route: any RouteSurface, view: UIView, block: CGRect, shown: Bool, presented: Bool)] {
-        presenter.navigation.primaryStacks.flatMap { routes(of: $0, presented: false) } + presenter.modals.navigations.flatMap { routes(of: $0, presented: true) }
+        // The keyboard's editor, found once for every route's block: finding it asks the responder chain
+        let editor = presenter.keyboardEditor
+        return presenter.navigation.primaryStacks.flatMap { routes(of: $0, presented: false, editor: editor) }
+            + presenter.modals.navigations.flatMap { routes(of: $0, presented: true, editor: editor) }
     }
 
     /// A stack's routes: a navigation controller's, or a plain tab's one route.
-    private func routes(of stack: UIViewController, presented: Bool) -> [(route: any RouteSurface, view: UIView, block: CGRect, shown: Bool, presented: Bool)] {
+    private func routes(of stack: UIViewController, presented: Bool, editor: UIView?) -> [(route: any RouteSurface, view: UIView, block: CGRect, shown: Bool, presented: Bool)] {
         var controllers = stack.shownStackRoutes
         if let leaving = (stack as? UINavigationController)?.transitionCoordinator?.viewController(forKey: .from),
            !controllers.contains(where: { $0 === leaving }) { controllers.append(leaving) }
         return controllers.compactMap { controller in
             guard let route = controller as? any RouteSurface, let view = route.bootSurface ?? route.viewIfLoaded,
                   presenter.views[route.node.id] === route.node else { return nil }
-            let block = self.block(in: view)
-            route.fitContentViewport(in: block)
+            let block = self.block(in: view, editor: editor)
+            route.fitContentViewport(in: block, editor: editor)
             return (route, view, block, view.window != nil && !block.isEmpty, presented)
         }
     }
 
     /// A native route keeps its controller's bounds and avoids only its own keyboard.
     /// Authored chrome keeps the document's allocation.
-    package func block(in view: UIView) -> CGRect {
+    package func block(in view: UIView) -> CGRect { block(in: view, editor: presenter.keyboardEditor) }
+
+    /// `block(in:)`, the keyboard's editor (`Presenter.keyboardEditor`) given
+    private func block(in view: UIView, editor: UIView?) -> CGRect {
         var block = view.bounds
         if ExactEnv.authoredChrome, let document = presenter.navigation.container, view.isDescendant(of: document) {
             let end = view.convert(CGPoint(x: 0, y: document.bounds.height), from: document).y
@@ -287,7 +293,7 @@ package final class OwnerBlocks {
         // Only an editor in the content shortens it. A search field in the
         // bar is UIKit's: the content keeps its layout and takes the keys as
         // safe area (`RouteController.fitContentViewport`).
-        guard presenter.edits(in: view) else { return block }
+        guard editor?.isDescendant(of: view) == true else { return block }
         #if !os(tvOS)
         if let sheet = presenter.modals.coordinateView, view.isDescendant(of: sheet),
            let top = presenter.keyboardGuideTop(in: sheet) {
@@ -305,12 +311,12 @@ package final class OwnerBlocks {
     /// first box begins its boundary. Retiring routes remain visible but
     /// claim no modal boundary (LLP 1123 D2).
     var presented: [TopLayerBox] {
-        let top = presenter.modals.topNavigation
+        let top = presenter.modals.topNavigation, editor = presenter.keyboardEditor
         var boxes = presenter.modals.navigations.flatMap { nav in
             let backdrop = (nav === top ? nav.parent?.presentationController : nil)
                 .flatMap { NativeGeometry.sheetBackdrop(of: $0, in: presenter.viewport) }
                 .map { (presenter.viewportPoints($0.bounds), $0.excluding.map(presenter.viewportPoints)) }
-            return routes(of: nav, presented: true).filter(\.shown).map { route in
+            return routes(of: nav, presented: true, editor: editor).filter(\.shown).map { route in
                 TopLayerBox(view: route.view,
                             frame: (route.route.node.id, presenter.viewportPoints(NativeGeometry.convert(route.block, from: route.view, to: presenter.viewport)), nil),
                             modal: nav === top ? nav : nil, backdrop: backdrop)

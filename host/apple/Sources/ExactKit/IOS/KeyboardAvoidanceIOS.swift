@@ -386,8 +386,8 @@ extension Presenter {
     /// `route` (LLP 1127.000 D9; iOS 26: out of every navigation bar, across the window), which covers what lies under it
     /// as the keys do. The bar is the field's first container taller than it. UIKit places it above the route's safe
     /// area, so it is a scroll inset, not safe area: counted there, the bar would rise with every inset it gave.
-    package func fieldBarInset(over route: UIViewController) -> CGFloat {
-        guard let top = keyboardTop, let field = keyboardEditor as? UISearchTextField, field.window != nil, field.window === route.view.window,
+    package func fieldBarInset(over route: UIViewController, editor: UIView?) -> CGFloat {
+        guard let top = keyboardTop, let field = editor as? UISearchTextField, field.window != nil, field.window === route.view.window,
               !sequence(first: field as UIView, next: \.superview).contains(where: { $0 is UINavigationBar }),
               let bar = sequence(first: field as UIView, next: \.superview).first(where: { $0.bounds.height > field.bounds.height + 1 }) else { return 0 }
         let frame = bar.convert(bar.bounds, to: nil), over = route.view.convert(route.view.bounds, to: nil)
