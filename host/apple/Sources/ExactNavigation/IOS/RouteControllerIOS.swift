@@ -53,6 +53,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     #endif
     weak var host: NavigationHost?
     let safeArea = RouteSafeArea()
+    /// The cover follows UIKit's layout pass, where its transition's animation is installed.
+    private(set) var safeAreaNeedsLayout = false
 
     /// Whether the route turns off `edge`'s native clearance: by
     /// `-exact-safe-area`, or at the top under a transparent bar, whose
@@ -135,8 +137,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         SafeAreaSteps.react(self) { [weak self] in
-            self?.rideBars()
-            self?.host?.coversChanged()
+            guard let self else { return }
+            safeAreaNeedsLayout = true
+            rideBars()
+            view.setNeedsLayout()
         }
     }
     // Back on a screen whose list pushed the one leaving: the row that was
@@ -176,6 +180,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         fitContentViewport()
+        if safeAreaNeedsLayout {
+            safeAreaNeedsLayout = false
+            host?.coversChanged()
+        }
         host?.presenter.owners.publish()
         if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)

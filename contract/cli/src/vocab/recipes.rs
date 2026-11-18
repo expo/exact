@@ -98,6 +98,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("rest-backend"),
     recipe!("rolling-stat"),
     recipe!("properties"),
+    recipe!("safe-areas"),
     recipe!("screen-capture"),
     recipe!("second-window"),
     recipe!("sequencer"),

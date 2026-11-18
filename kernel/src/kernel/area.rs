@@ -252,7 +252,10 @@ pub(super) fn band_at(kernel: &Kernel, slot: u32) -> Space {
         Holder::Owner(s) => Space {
             owner: Some(s),
             root: Some(s),
-            band: arena.observations.band(s),
+            band: arena.observations.band(s).or_else(|| match arena.cover(s) {
+                Some(super::cover::HostCover::Edges(edges)) => Some(edges),
+                _ => None,
+            }),
             size: kernel.used_size(s),
             origin: (0.0, 0.0),
         },

@@ -550,6 +550,16 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
+            if node.style.mask.has(exact_kernel::StyleId::SafeAreaReach) || m.props.get("boxReach").is_some() {
+                let reach = kernel.scroll_terms(key).map(|terms| terms.reach).or_else(|| kernel.box_reach(key));
+                m.derived_prop(
+                    id,
+                    "boxReach",
+                    reach.filter(|edges| *edges != [0.0; 4])
+                        .map(|edges| edges.map(crate::style::num).join(" ")),
+                    batch,
+                );
+            }
             let extension = kernel.extension(key).filter(|edges| *edges != [0.0; 4]);
             m.derived_prop(
                 id,

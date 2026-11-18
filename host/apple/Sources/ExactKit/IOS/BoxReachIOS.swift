@@ -8,6 +8,18 @@
 import UIKit
 
 extension NodeView {
+    func applyOutsets(_ set: [String: String], clear: [String]) {
+        for key in ["boxReach", "boxExtension"] {
+            if let edges = set[key]?.split(separator: " ").compactMap({ Double($0) }), edges.count == 4 {
+                let insets = UIEdgeInsets(top: edges[0], left: edges[3], bottom: edges[2], right: edges[1])
+                if key == "boxReach" { setReach(insets) } else { setExtension(insets) }
+            } else if clear.contains(key) {
+                if key == "boxReach" { setReach(.zero) } else { setExtension(.zero) }
+            }
+        }
+    }
+
+
     /// Its laid-out border box in its own coordinates: where reach draws it past its frame on the
     /// pixel grid, the box at its origin, as the grid drew it; else its bounds.
     package var laidOutBox: CGRect {

@@ -19,6 +19,7 @@ use ArrangementView, ArrangementSettings from "./arrangement-view.contract"
 
 routes nav
   tab fold "/"
+  tab edges "/edges"
   tab panes "/panes"
     panes-next "/panes/next"
   tab images "/images"
@@ -333,6 +334,15 @@ component DuoLab
               // scroller immediately following the header moves. Fold, Combinations
               // and the note screen draw their own headers, which move with their
               // panes when the device folds (LLP 1115.000 D5.2).
+              if entry.name == "edges"
+                column navigationKey=`${entry.id}` navigationScroll="edges-scroll" class=Screen testId="screen-edges"
+                  header
+                    text "Edges" role="heading" aria-level=1
+                  scroll id="edges-scroll" flex=1 min-height=0 -exact-safe-area-reach="top bottom" testId="edges-scroll"
+                    for index in range(60) key=index
+                      text `Row ${index + 1}` padding="12px 16px"
+                  box testId="edges-chip" position="absolute" top=12 left=16 padding="4px 8px" background-color="#ffcc00" border-radius=12 pointer-events="none"
+                    text "Chip at top 12"
               if entry.name == "images"
                 column navigationKey=`${entry.id}` navigationScroll="image-list" -exact-safe-area="left right" class=Screen testId="screen-images"
                   header class=Head
@@ -366,7 +376,7 @@ component DuoLab
                   ArrangementScreen(routeKey=`${entry.id}`, routeName=entry.name, prefix="pushed", title="Pushed panes", nextTitle="Back", openNext=back, nativeArrangement=paneSupport.available)
               if t.name == "arrangement"
                 ArrangementView(routeKey=`${entry.id}`, depth=(match parseNumber(entry.params.depth) { case some(n) => n, case none => i + 1 }), native=paneSupport.available, seed=arrangementSeed, openNext=openArrangement)
-              if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes" and t.name != "arrangement"
+              if entry.name != "edges" and entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes" and t.name != "arrangement"
                 column navigationKey=`${entry.id}` navigationBar="none" -exact-safe-area="none" class=Screen testId=`screen-${entry.name}`
                   if entry.name == "fold"
                     // Two segments across: the list on the first, the detail on the
@@ -454,6 +464,9 @@ component DuoLab
         button role="tab" aria-controls="panel-keyboard" aria-selected=(nav.tab == "keyboard") press=selectTab("keyboard") testId="tab-keyboard" flex=1
           image "symbol:icon.keyboard"
           text "Keyboard"
+        button role="tab" aria-controls="panel-edges" aria-selected=(nav.tab == "edges") press=selectTab("edges") testId="tab-edges" flex=1
+          image "symbol:sf/rectangle.inset.filled"
+          text "Edges"
         button role="tab" aria-controls="panel-arrangement" aria-selected=(nav.tab == "arrangement") press=selectTab("arrangement") testId="tab-arrangement" flex=1
           image "symbol:icon.split"
           text "Arrange"
