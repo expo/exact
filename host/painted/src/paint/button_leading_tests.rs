@@ -170,7 +170,7 @@ fn neutral_control_text_kernel_and_painter_share_pinned_font_lines() {
                 &face,
                 &rows,
                 AxisOffer::MaxContent,
-                false,
+                None,
                 true,
                 false,
             );

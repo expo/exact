@@ -40,7 +40,7 @@ pub(crate) fn material_icon(
     })
 }
 
-fn role(role: Material, nearest: &str, dark: bool) -> [u8; 4] {
+pub(super) fn role(role: Material, nearest: &str, dark: bool) -> [u8; 4] {
     crate::presenter::material(role, dark).unwrap_or_else(|| look::role(nearest, dark))
 }
 
@@ -117,30 +117,40 @@ impl Painter {
         }
         if outline {
             // An `OutlinedIconButton`'s border is its content's colour
-            // (`outlinedIconButtonBorder`), stroked inside its shape and,
-            // as `Modifier.border` does, rounded up to whole pixels.
-            let line = content;
-            let width = (material_dp(metric::ICON_BUTTON_OUTLINE) * self.scale).ceil() / self.scale;
-            let radii = shape.radii.map(|(r, _)| r);
-            let d = super::segment::outline_path(shape.rect, radii, width / 2.0);
-            let path = exact_kernel::svg::parse_d(&d);
-            self.backend.svg_path(
-                &super::super::SvgPaint {
-                    path: &path,
-                    fill: None,
-                    even_odd: false,
-                    stroke: Some(super::super::Ink::Solid(line)),
-                    order: [0, 1, 2],
-                    width,
-                    cap: 0,
-                    join: 0,
-                    miter: 4.0,
-                    dash: Vec::new(),
-                    phase: 0.0,
-                },
-                ts,
-            );
+            // (`outlinedIconButtonBorder`).
+            self.material_outline(shape, content, metric::ICON_BUTTON_OUTLINE, ts);
         }
         content
+    }
+
+    /// A Material border of the `width` row's dp: stroked inside `shape` and,
+    /// as `Modifier.border` does, rounded up to whole pixels.
+    pub(super) fn material_outline(
+        &mut self,
+        shape: &Shape,
+        line: [u8; 4],
+        width: usize,
+        ts: Transform,
+    ) {
+        let width = (material_dp(width) * self.scale).ceil() / self.scale;
+        let radii = shape.radii.map(|(r, _)| r);
+        let d = super::segment::outline_path(shape.rect, radii, width / 2.0);
+        let path = exact_kernel::svg::parse_d(&d);
+        self.backend.svg_path(
+            &super::super::SvgPaint {
+                path: &path,
+                fill: None,
+                even_odd: false,
+                stroke: Some(super::super::Ink::Solid(line)),
+                order: [0, 1, 2],
+                width,
+                cap: 0,
+                join: 0,
+                miter: 4.0,
+                dash: Vec::new(),
+                phase: 0.0,
+            },
+            ts,
+        );
     }
 }

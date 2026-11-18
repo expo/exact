@@ -15,7 +15,10 @@ use tiny_skia::Transform;
 mod icon_button;
 #[path = "segment.rs"]
 mod segment;
+#[path = "text_button.rs"]
+mod text_button;
 use icon_button::material_icon;
+use text_button::{material_button, MaterialButton};
 
 pub(crate) fn look(name: &str) -> &'static str {
     exact_kernel::generated::button_style(name).map_or("ua", |s| s.look)
@@ -47,14 +50,6 @@ fn neutral_typography(style: &StyleProps, size: Option<f32>) -> StyleProps {
         out.text_align = TextAlign::Center;
     }
     out
-}
-
-/// Whether a button of `style` is Material 3's filled button (`Button`; LLP
-/// 1115.001 D9: `filled` and the prominent styles): under the Material look,
-/// a `fill` style. Its metrics are `ButtonDefaults`', the `filled-button-`
-/// rows; its type label-large; its shape a pill.
-pub(crate) fn material_filled(style: Option<&str>) -> bool {
-    look::material() && matches!(look(style.unwrap_or("bordered")), "fill" | "glass-fill")
 }
 
 /// A length of the Material look, dp.
@@ -144,7 +139,7 @@ fn tab_length(rows: &ButtonFaceStyle, id: usize, em: f32) -> f32 {
 
 fn face_typography(
     rows: &ButtonFaceStyle,
-    filled: bool,
+    material: bool,
     icon: bool,
 ) -> (StyleProps, Option<StyleProps>, StyleProps) {
     let neutral = look::neutral();
@@ -166,7 +161,7 @@ fn face_typography(
             }
     });
     let type_of = |s: &StyleProps| {
-        if filled || segment {
+        if material || segment {
             material_typography(s, scale)
         } else if neutral {
             let mut style =
@@ -230,7 +225,8 @@ pub(crate) fn image_size(kernel: &exact_kernel::Kernel, image: &NodeRef<'_>) -> 
     face.symbol.as_ref()?;
     let said = parent.props.str(PropId::ButtonStyle);
     let icon = material_icon(said, &face, &rows).is_some();
-    let (_, _, style) = face_typography(&rows, material_filled(said) && !icon, icon);
+    let material = material_button(said, &rows).is_some() && !icon;
+    let (_, _, style) = face_typography(&rows, material, icon);
     Some(style.font_size * symbol_scale(&face, &rows))
 }
 
@@ -257,10 +253,13 @@ pub(super) fn face_layout(
     face: &exact_kernel::PressFace,
     rows: &ButtonFaceStyle,
     width: AxisOffer,
-    filled: bool,
+    material: Option<MaterialButton>,
     bordered: bool,
     icon: bool,
 ) -> FaceLayout {
+    // Material's buttons share `ButtonDefaults`' metrics, the `filled-button-`
+    // rows, but for a text button's narrower padding.
+    let material_face = material.is_some();
     let neutral = look::neutral();
     // A member of a segmented group (`exact_kernel::segmented`): Material's
     // segmented button, or the neutral look's segment.
@@ -269,7 +268,7 @@ pub(super) fn face_layout(
     let tab_root = rows.neutral_tab_root;
     let tab_length = |id, em| tab_length(rows, id, em);
     let scale = control_scale(rows.button.control_size);
-    let (title_style, subtitle_style, symbol_style) = face_typography(rows, filled, icon);
+    let (title_style, subtitle_style, symbol_style) = face_typography(rows, material_face, icon);
     let mut column = matches!(
         face.placement,
         ButtonImagePlacement::Top | ButtonImagePlacement::Bottom
@@ -295,7 +294,7 @@ pub(super) fn face_layout(
     // on that axis. The more specific narrow-tab rule keeps its rem padding
     // and minimum until those properties themselves are authored.
     let em = title_style.font_size;
-    let said = |id| (neutral || filled || segment || icon) && rows.button.written.has(id);
+    let said = |id| (neutral || material_face || segment || icon) && rows.button.written.has(id);
     let (said_width, said_height) = (said(StyleId::Width), said(StyleId::Height));
     let padding_block = neutral
         && !rows.neutral_role_floor
@@ -310,7 +309,9 @@ pub(super) fn face_layout(
         tab_length(metric::TABBAR_PADDING_INLINE, em)
     } else if icon {
         icon_pad * scale
-    } else if filled {
+    } else if material == Some(MaterialButton::Text) {
+        material_dp(metric::TEXT_BUTTON_PADDING_INLINE) * scale
+    } else if material_face {
         material_dp(metric::FILLED_BUTTON_PADDING_INLINE) * scale
     } else if segment {
         material_dp(metric::SEGMENTED_BUTTON_PADDING_INLINE) * scale
@@ -327,7 +328,7 @@ pub(super) fn face_layout(
         tab_length(metric::TABBAR_PADDING_BLOCK, em)
     } else if icon {
         icon_pad * scale
-    } else if filled {
+    } else if material_face {
         material_dp(metric::FILLED_BUTTON_PADDING_BLOCK) * scale
     } else if segment {
         material_dp(metric::SEGMENTED_BUTTON_PADDING_BLOCK) * scale
@@ -387,7 +388,7 @@ pub(super) fn face_layout(
         };
         edge + if rows.button.mask.has(id) || (tab_root.is_some() && rows.button.written.has(id)) {
             points(d)
-        } else if neutral || filled || segment || icon {
+        } else if neutral || material_face || segment || icon {
             look
         } else {
             default * scale
@@ -467,7 +468,7 @@ pub(super) fn face_layout(
             look::px(metric::CONTROL_HEIGHT, em)
         } else if icon && !said {
             material_dp(metric::ICON_BUTTON_SIZE) * scale
-        } else if filled && !said {
+        } else if material_face && !said {
             material_dp(metric::FILLED_BUTTON_HEIGHT) * scale
         } else if segment && !said {
             material_dp(metric::SEGMENTED_BUTTON_HEIGHT) * scale
@@ -475,7 +476,7 @@ pub(super) fn face_layout(
             0.0
         }
     };
-    let min_width = if filled && !said_width {
+    let min_width = if material_face && !said_width {
         material_dp(metric::FILLED_BUTTON_MIN_WIDTH) * scale
     } else if segment && !said_width {
         material_dp(metric::SEGMENTED_BUTTON_MIN_WIDTH) * scale
@@ -570,7 +571,7 @@ pub(crate) fn measure(engine: &mut TextEngine, request: &ButtonMeasureRequest) -
         &request.face,
         &request.style,
         request.width,
-        material_filled(said) && !icon,
+        material_button(said, &request.style).filter(|_| !icon),
         said.unwrap_or("bordered") == "bordered",
         icon,
     );
@@ -775,7 +776,9 @@ impl Painter {
         let neutral = look::neutral();
         let disabled = node.props.bool(PropId::Disabled) == Some(true);
         let icon = material_icon(node.props.str(PropId::ButtonStyle), face, rows);
-        let filled = material_filled(node.props.str(PropId::ButtonStyle)) && icon.is_none();
+        let material =
+            material_button(node.props.str(PropId::ButtonStyle), rows).filter(|_| icon.is_none());
+        let filled = material == Some(MaterialButton::Filled);
         // A member of a segmented group: this face with the segment's chrome.
         let material_segment = rows.segment.filter(|_| look::material());
         let checked = segment::chosen(node);
@@ -785,7 +788,12 @@ impl Painter {
         // Material's is its own colours (below).
         let dim = |mut c: [u8; 4]| {
             // A Material segment's disabled colours are its own (`segment.rs`).
-            if disabled && !neutral && !filled && material_segment.is_none() && icon.is_none() {
+            if disabled
+                && !neutral
+                && material.is_none()
+                && material_segment.is_none()
+                && icon.is_none()
+            {
                 c[3] = (c[3] as f32 * 0.45) as u8;
             }
             c
@@ -821,7 +829,7 @@ impl Painter {
             } else if icon.is_some() {
                 // `IconButtonDefaults`' shapes are round.
                 rect.3 / 2.0
-            } else if filled
+            } else if material.is_some()
                 && matches!(
                     rows.button.control_corner_style,
                     ControlCornerStyle::Dynamic | ControlCornerStyle::Capsule
@@ -866,7 +874,7 @@ impl Painter {
         };
         // Compose lays its button out in whole pixels: Material's is drawn
         // with its edges on the pixel grid.
-        let drawn = match filled || material_segment.is_some() || icon.is_some() {
+        let drawn = match material.is_some() || material_segment.is_some() || icon.is_some() {
             true => {
                 let grid = |v, vertical| super::material::on_grid(v, ts, vertical, self.scale);
                 let (x0, y0) = (grid(rect.0, false), grid(rect.1, true));
@@ -889,6 +897,10 @@ impl Painter {
             _ if icon.is_some() => {
                 let kind = icon.expect("an icon button");
                 self.material_icon_button(node, &shape, kind, accent, on_accent, background, ts)
+            }
+            _ if material.is_some() && !filled => {
+                let kind = material.expect("a Material button");
+                self.material_button(node, &shape, kind, accent, background, ts)
             }
             _ if filled && disabled && authored_accent.is_none() => {
                 let at = |role: &str, index: usize| {
@@ -985,7 +997,7 @@ impl Painter {
             face,
             rows,
             AxisOffer::Definite(rect.2),
-            filled,
+            material,
             name == "bordered",
             icon.is_some(),
         );

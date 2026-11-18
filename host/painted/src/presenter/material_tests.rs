@@ -512,8 +512,9 @@ fn materials_segmented_buttons_share_the_row_and_fill_the_checked_one() {
         "its round start"
     );
     assert_ne!(pixel(&mut p, r1.0 + 0.5, r1.1 + 0.5), page, "a square side");
-    // `appearance: none` keeps the authored buttons.
-    assert_ne!(rect(&mut p, "o-1").3, 40.0);
+    // `appearance: none` keeps the authored buttons, which share no outline.
+    let (o1, o2) = (rect(&mut p, "o-1"), rect(&mut p, "o-2"));
+    assert_eq!(o2.0, o1.0 + o1.2);
     // The row's ends are round, between them square.
     assert_eq!(pixel(&mut p, km.0 + 1.0, km.1 + 1.0), page, "a round start");
     assert_eq!(
@@ -1291,4 +1292,75 @@ fn material_content_and_header_tabs_are_segments() {
             "{prefix}: moved fill"
         );
     }
+}
+
+const LABELS: &str = r##"component App
+  view
+    column padding=16 align-items="flex-start" gap=8
+      button testId="outlined"
+        text "Bookmark all"
+      button buttonStyle="tinted" testId="tonal"
+        text "Bookmark all"
+      button buttonStyle="plain" testId="text"
+        text "Bookmark all"
+      button buttonStyle="tinted" disabled=true testId="tonal-off"
+        text "Bookmark all"
+"##;
+
+/// A labelled button is Material's for its emphasis (LLP 1115.001 D9): a
+/// 40 dp pill; unsaid, an outlined button; `tinted`, a tonal one; `plain`, a
+/// text button in the accent, padded 12 dp where the others are 24.
+#[test]
+fn materials_labelled_buttons_take_their_emphasis() {
+    if !material_process() {
+        return;
+    }
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(LABELS),
+        (),
+        (400., 600.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let page = pixel(&mut p, 2.0, 2.0);
+    let rect = |p: &mut Presenter<()>, name| {
+        let view = id(p, name);
+        p.rect_of(view).unwrap()
+    };
+    for name in ["outlined", "tonal", "text"] {
+        let r = rect(&mut p, name);
+        assert_eq!(r.3, 40.0, "{name}: ButtonDefaults.MinHeight");
+        assert_eq!(pixel(&mut p, r.0 + 1.0, r.1 + 1.0), page, "{name}: a pill");
+    }
+    let inside = |p: &mut Presenter<()>, name| {
+        let r = rect(p, name);
+        pixel(p, r.0 + 8.0, r.1 + 20.0)
+    };
+    let outlined = rect(&mut p, "outlined");
+    assert_eq!(inside(&mut p, "outlined"), page, "an outline, not a fill");
+    assert_ne!(
+        pixel(&mut p, outlined.0 + 0.5, outlined.1 + 20.0),
+        page,
+        "its outline"
+    );
+    let tonal = inside(&mut p, "tonal");
+    assert_ne!(tonal, page, "a container");
+    assert_ne!(inside(&mut p, "tonal-off"), tonal, "disabled");
+    assert_eq!(inside(&mut p, "text"), page, "no container");
+    let text = rect(&mut p, "text");
+    assert_eq!(text.2, outlined.2 - 24.0, "TextButtonContentPadding");
+    let accent = crate::paint::control::accents(None, false).0;
+    let frame = (*p.frame()).clone();
+    let at = |v: f32| (v * 2.4375) as u32;
+    let accented = (at(text.1)..at(text.1 + text.3))
+        .flat_map(|y| (at(text.0)..at(text.0 + text.2)).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let c = frame.pixel(x, y).unwrap().demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()] == accent
+        })
+        .count();
+    assert!(accented > 0, "a text button's label is the accent");
 }

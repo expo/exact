@@ -570,7 +570,6 @@ blue) keeps its table pair.
 **One accent.** A control, a focus ring and a filled button paint in the node's `accent-color` where it sets one, else
 in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
 the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
-The controls' shapes are still the desktop painter's (D9).
 
 **An icon button is Material's** (D9; `host/painted/src/paint/icon_button.rs`): a button holding a symbol and no
 title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Compose Material 3 1.4's
@@ -580,6 +579,14 @@ title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Co
 (`IconToggleButton` and the rest), in `IconButtonDefaults`' checked and unchecked colours. The oracle draws it
 beside Compose's as the `icon-button`, `icon-button-tonal`, `icon-button-outlined` and `icon-toggle-checked`
 specimens.
+
+**A labelled button is Material's** (D9; `host/painted/src/paint/text_button.rs`): a 40 dp pill at least 58 dp wide,
+its title in label-large, padded 24 dp across (`ButtonDefaults`, the `filled-button-` rows). Its `buttonStyle` picks
+which: `filled` and the prominent styles the filled `Button`, `tinted` the `FilledTonalButton` (`secondaryContainer`),
+`plain` and `borderless` the `TextButton` (no container, the title in `primary`, padded 12 dp), anything else, unsaid
+included, the `OutlinedButton` (a whole-pixel `outlineVariant` line round a title in `onSurfaceVariant`). Disabled,
+each takes `ButtonDefaults`' disabled colours. The oracle draws them beside Compose's as the `filled-button`,
+`outlined-button`, `tonal-button` and `text-button` specimens, with a disabled filled and tonal one.
 
 **A press is Material's ripple** (D9; `host/painted/src/paint/ripple.rs`): on a button, a segment, a field that opens
 something, a checkbox and a radio (in the 40 dp circle round the mark, from its middle), a list's row and any other

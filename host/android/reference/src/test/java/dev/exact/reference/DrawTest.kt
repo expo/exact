@@ -165,6 +165,7 @@ class InputsTest {
             .put("ButtonDefaults.ContentPadding.top", padding.calculateTopPadding().value)
             .put("ButtonDefaults.ContentPadding.end", padding.calculateEndPadding(LayoutDirection.Ltr).value)
             .put("ButtonDefaults.ContentPadding.bottom", padding.calculateBottomPadding().value)
+            .put("ButtonDefaults.TextButtonContentPadding.start", ButtonDefaults.TextButtonContentPadding.calculateStartPadding(LayoutDirection.Ltr).value)
             .put("SegmentedButtonDefaults.ContentPadding.start", segment.calculateStartPadding(LayoutDirection.Ltr).value)
             .put("SegmentedButtonDefaults.ContentPadding.top", segment.calculateTopPadding().value)
             .put("CheckboxDefaults.StrokeWidth", CheckboxDefaults.StrokeWidth.value)
