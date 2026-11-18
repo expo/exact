@@ -7,6 +7,8 @@
 // a crash between the two leaves work the next launch finishes. The mirror
 // answers the app's `contentIndexEntries`, the reindex delegate, a search
 // result's continuation and the generated entity queries, with no session.
+// A widget extension cannot read the app's container, so each save also
+// publishes the kinds its parameters name to the App Group (LLP 1126 D2).
 //
 // The module side (packages/search-index/apple) and the generated intents
 // reach it through `NotificationCenter`, each body an `NSMutableDictionary`
@@ -17,6 +19,7 @@
 // - `exact.contentIndex.entries`: `entries`, all of them.
 // - `exact.contentIndex.query` `{kind, ids?, matching?}`: `entries`.
 // - `exact.contentIndex.open` `{url}`: opens an entry's location.
+import ExactCore
 import Foundation
 #if canImport(CoreSpotlight) && !os(tvOS)
 import CoreSpotlight
@@ -42,6 +45,12 @@ public enum ExactContentIndex {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return support.appendingPathComponent(Bundle.main.bundleIdentifier ?? "app").appendingPathComponent("exact-content-index.json")
     }() { didSet { mirror = nil } }
+
+    /// The kinds the widgets' entity parameters name, from the build, and the App
+    /// Group their extension reads; a test names its own.
+    static var widgetKinds = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetEntities") as? [String] ?? []
+    static var widgetRoot = WidgetContainer.root { didSet { published = nil } }
+    private static var published: [String: [ContentIndexEntries.Entry]]?
 
     static func install() {
         guard !installed else { return }
@@ -81,6 +90,7 @@ public enum ExactContentIndex {
     /// The mirror, kept and written; false, with a journal line, when the file was not written.
     @discardableResult private static func save(_ m: Mirror) -> Bool {
         mirror = m
+        publishToWidgets(m)
         do {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(m).write(to: file, options: .atomic)
@@ -88,6 +98,24 @@ public enum ExactContentIndex {
         } catch {
             ExactTools.log(nil, "contentIndex: the mirror was not written: \(error.localizedDescription)")
             return false
+        }
+    }
+
+    /// What Edit Widget offers follows the mirror: an index the app clears clears the list.
+    private static func publishToWidgets(_ m: Mirror) {
+        guard let root = widgetRoot, !widgetKinds.isEmpty else { return }
+        let offered = widgetKinds.reduce(into: [String: [ContentIndexEntries.Entry]]()) { lists, kind in
+            lists[kind] = m.entries.filter { $0["kind"]?.string == kind }.compactMap { entry in
+                guard let id = entry["id"]?.string, let title = entry["title"]?.string else { return nil }
+                return ContentIndexEntries.Entry(id: id, title: title, description: entry["description"]?.string)
+            }
+        }
+        guard offered != published else { return }
+        do {
+            try ContentIndexEntries.publish(offered, root: root)
+            published = offered
+        } catch {
+            ExactTools.log(nil, "contentIndex: the widgets' list was not written: \(error.localizedDescription)")
         }
     }
 
@@ -144,16 +172,8 @@ public enum ExactContentIndex {
     /// locale), or all of them in the app's order (D9).
     static func query(kind: String, ids: [String]?, matching text: String?) -> [[String: Any]] {
         let ofKind = load().entries.filter { $0["kind"]?.string == kind }
-        var found = ofKind
-        if let ids {
-            let byId = Dictionary(ofKind.map { ($0["id"]?.string ?? "", $0) }, uniquingKeysWith: { a, _ in a })
-            found = ids.compactMap { byId[$0] }
-        } else if let text, !text.isEmpty {
-            found = ofKind.filter { e in
-                ["title", "description"].contains { e[$0]?.string?.range(of: text, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) != nil }
-            }
-        }
-        return found.map(JSONValue.plainFields)
+        return ContentIndexEntries.answer(ofKind, ids: ids, matching: text, id: { $0["id"]?.string ?? "" },
+                                          texts: { [$0["title"]?.string, $0["description"]?.string] }).map(JSONValue.plainFields)
     }
 
     /// The location of Spotlight's item `identifier`, from the mirror; nil
