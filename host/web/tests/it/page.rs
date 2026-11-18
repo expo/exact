@@ -453,24 +453,32 @@ fn a_build_renders_the_routes_that_ask_and_the_not_found_document() {
     )
     .unwrap();
     assert_eq!(
-        build_locations(&plan).unwrap(),
-        vec![
-            ("/".to_owned(), false),
-            ("/about".to_owned(), false),
-            ("/404.html".to_owned(), true)
-        ]
+        build_locations(&plan),
+        (
+            vec![
+                ("/".to_owned(), false),
+                ("/about".to_owned(), false),
+                ("/404.html".to_owned(), true)
+            ],
+            None
+        )
     );
     // Undeclared routes render nothing at build.
     let plain = contract::compile(
         "routes nav\n  tab home \"/\"\n  notfound\ncomponent A\n  view\n    text \"a\"\n",
     )
     .unwrap();
-    assert!(build_locations(&plain).unwrap().is_empty());
-    // The not-found document's location must be one no pattern matches.
+    assert_eq!(build_locations(&plain), (Vec::new(), None));
+    // The not-found document's location must be one no pattern matches; the build's other locations stay, so one run
+    // reports every refusal.
     let clash = contract::compile("routes nav\n  tab home \"/\" render=build\n  page \"/404.html\"\n  notfound render=build\ncomponent A\n  view\n    text \"a\"\n").unwrap();
-    assert!(build_locations(&clash)
-        .unwrap_err()
-        .contains("route `page` matches"));
+    assert_eq!(
+        build_locations(&clash),
+        (
+            vec![("/".to_owned(), false)],
+            Some(("/404.html".to_owned(), "the not-found document renders at /404.html, which route `page` matches, so it would be that route's page. Give `page` a pattern that doesn't match /404.html, or declare the not-found route render=request or render=client".to_owned()))
+        )
+    );
 }
 
 #[test]

@@ -388,11 +388,13 @@ impl<D: DataSource> Bridge<D> {
     /// The locations `plan` renders at build (LLP 1048.000 D7), as a JSON
     /// array: the web build runs no render step when there are none.
     pub fn build_locations(&mut self, plan: &[u8]) -> u32 {
-        // The routes whose pages a source lists count too, by pattern.
+        // The routes whose pages a source lists count too, by pattern, and the not-found document where a
+        // pattern takes its location: the render entry refuses it beside the build's other refusals.
         let found = exact_plan::Plan::decode(plan)
             .map_err(|e| format!("{e:?}"))
             .and_then(|plan| {
-                let mut found = crate::document::build_locations(&plan)?;
+                let (mut found, refused) = crate::document::build_locations(&plan);
+                found.extend(refused.map(|(location, _)| (location, true)));
                 for row in plan.routes.iter().filter(|r| {
                     r.render == exact_plan::RenderPolicy::Build && !plan.str(r.pages).is_empty()
                 }) {
@@ -402,16 +404,11 @@ impl<D: DataSource> Bridge<D> {
             });
         let out = match found {
             Ok(found) => {
-                let mut json = String::from("[");
-                for (i, (location, _)) in found.iter().enumerate() {
-                    if i > 0 {
-                        json.push(',');
-                    }
-                    json.push('"');
-                    json.push_str(&escape(location));
-                    json.push('"');
-                }
-                json + "]"
+                let quoted: Vec<_> = found
+                    .iter()
+                    .map(|(l, _)| format!("\"{}\"", escape(l)))
+                    .collect();
+                format!("[{}]", quoted.join(","))
             }
             Err(error) => format!("{{\"error\":\"{}\"}}", escape(&error)),
         };

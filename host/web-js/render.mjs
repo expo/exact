@@ -614,6 +614,14 @@ if (import.meta.main) {
       // A build reports every refusal in its one run: it lists and renders every page, then fails
       let failed = false;
       for (const route of listed) {
+        // Refuse a pattern that takes the not-found document's location, as the render host does (page.rs
+        // `build_locations`, LLP 1048.000 D7): the document would be that route's page
+        const taken = route.notfound ? routes[matchPattern(routes, canonical(route.location))]?.name : undefined;
+        if (taken !== undefined) {
+          console.error(`the not-found document renders at ${route.location}, which route \`${taken}\` matches, so it would be that route's page. Give \`${taken}\` a pattern that doesn't match ${route.location}, or declare the not-found route render=request or render=client`);
+          failed = true;
+          continue;
+        }
         if (!route.source) { pages.push(route); continue; }
         try {
           const found = listedPages(route, await render.pages(route), routes);

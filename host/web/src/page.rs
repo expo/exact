@@ -884,29 +884,32 @@ pub fn route_location(plan: &Plan, name: &str, value: &str) -> Result<String, St
 
 /// The locations a build renders: every route declared `render=build` but
 /// the ones whose pages a source lists (the render host asks it), and the
-/// not-found document when that route is declared so. The not-found
-/// document renders at `/404.html`, which no pattern may match.
-pub fn build_locations(plan: &Plan) -> Result<Vec<(String, bool)>, String> {
+/// not-found document when that route is declared so, at `/404.html`. Beside
+/// them, that location and why the not-found document can't be made there,
+/// if a pattern matches it: the document would be that route's page.
+pub fn build_locations(plan: &Plan) -> (Vec<(String, bool)>, Option<(String, String)>) {
     let table = route_table(plan);
-    let mut out = Vec::new();
+    let (mut out, mut refused) = (Vec::new(), None);
     for row in plan
         .routes
         .iter()
         .filter(|r| r.render == RenderPolicy::Build && plan.str(r.pages).is_empty())
     {
-        if row.notfound {
-            if let Some(hit) = table.matches_pattern("/404.html") {
-                return Err(format!(
-                    "the not-found document renders at /404.html, which route `{}` matches",
-                    hit.name
-                ));
-            }
-            out.push(("/404.html".to_owned(), true));
-        } else {
+        if !row.notfound {
             out.push((exact_route::canonical(plan.str(row.pattern)), false));
+        } else if let Some(hit) = table.matches_pattern("/404.html") {
+            refused = Some((
+                "/404.html".to_owned(),
+                format!(
+                    "the not-found document renders at /404.html, which route `{0}` matches, so it would be that route's page. Give `{0}` a pattern that doesn't match /404.html, or declare the not-found route render=request or render=client",
+                    hit.name
+                ),
+            ));
+        } else {
+            out.push(("/404.html".to_owned(), true));
         }
     }
-    Ok(out)
+    (out, refused)
 }
 
 #[cfg(test)]

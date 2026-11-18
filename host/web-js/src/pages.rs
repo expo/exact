@@ -2,7 +2,9 @@
 //! tells the renderers and the runtime about a route before any answer.
 use exact_plan::Plan;
 
-/// Build routes: their locations or enumeration calls, as JSON (LLP 1048.003 D5).
+/// Build routes: their locations or enumeration calls, as JSON (LLP 1048.003
+/// D5). The not-found document's location is `/404.html`, as on the render
+/// host (`exact_web::document::build_locations`).
 pub(super) fn build_pages(plan: &Plan) -> String {
     let rows: Vec<String> = plan
         .routes
@@ -21,7 +23,7 @@ pub(super) fn build_pages(plan: &Plan) -> String {
                 );
             }
             let location = if r.notfound {
-                "/404"
+                "/404.html"
             } else {
                 plan.str(r.pattern)
             };

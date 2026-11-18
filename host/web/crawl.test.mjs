@@ -39,7 +39,7 @@ const locs = sitemap => [...(sitemap ?? '').matchAll(/<loc>([^<]*)<\/loc>/g)].ma
 
 test('build page paths preserve encoded separators on POSIX and Windows', () => {
   const routes = [{ name: 'product', pattern: '/product/:id' }];
-  const pages = ['/', '/about', '/product/plain', '/product/plain%2F', '/product/%252F', '/404'].map(location => page(location, { notfound: location === '/404' }));
+  const pages = ['/', '/about', '/product/plain', '/product/plain%2F', '/product/%252F', '/404.html'].map(location => page(location, { notfound: location === '/404.html' }));
   for (const [paths, dir] of [[posix, '/site/dist'], [win32, 'C:\\site\\dist']]) {
     expect(buildPageFiles(dir, pages, routes, paths)).toEqual([
       'index.html', 'about/index.html', 'product/plain/index.html', 'product/plain%2F/index.html', 'product/%252F/index.html', '404.html',
@@ -49,7 +49,7 @@ test('build page paths preserve encoded separators on POSIX and Windows', () => 
     }
     expect(() => buildPageFiles(dir, [page('/a'), page('/%61')], [], paths)).toThrow('same page file');
     expect(() => buildPageFiles(dir, [page('/a'), page('/a/index.html')], [], paths)).toThrow('inside the page file');
-    expect(() => buildPageFiles(dir, [page('/404', { notfound: true }), page('/404.html')], [], paths)).toThrow('inside the page file');
+    expect(() => buildPageFiles(dir, [page('/404.html', { notfound: true }), page('/404.html')], [], paths)).toThrow('inside the page file');
   }
   expect(() => buildPageFiles('C:\\site\\dist', [page('/a'), page('/A')], [], win32)).toThrow('same page file');
 });

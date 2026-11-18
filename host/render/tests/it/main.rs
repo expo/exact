@@ -809,8 +809,8 @@ fn a_route_lists_its_pages_with_its_source() {
     assert_eq!(later.unwrap().locations, ["/post/3"]);
     // The build's own list leaves the listed route to its source.
     assert_eq!(
-        exact_web::document::build_locations(&plan).unwrap(),
-        vec![("/".to_string(), false)]
+        exact_web::document::build_locations(&plan),
+        (vec![("/".to_string(), false)], None)
     );
 }
 

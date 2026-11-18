@@ -4024,7 +4024,10 @@ route rendered so, `shell.html`, and `routes.json`, the route table in the plan'
 route's pattern, render policy and `notfound`. A route whose render draws randomness
 (`crypto.getRandomValues` or `crypto.randomUUID`, for example) cannot be `render=build`, since
 its page would give every reader the same random values: the build fails, naming the route;
-declare it `render=request` or `render=client` instead. An app with routes also gets `robots.txt`, which
+declare it `render=request` or `render=client` instead. A `notfound` route declared `render=build`
+renders at `/404.html`, so a route whose pattern matches that location, such as `post "/:slug"`,
+fails the build, naming the route: give it another pattern or declare the `notfound` route
+`render=request` or `render=client`. An app with routes also gets `robots.txt`, which
 allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
 by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
 (a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built

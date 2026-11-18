@@ -198,12 +198,18 @@ pub fn main_with<D: DataSource + 'static>(
     // A build reports every refusal in its one run: it lists and renders every page, then fails
     let mut failed = false;
     if build {
-        match build_locations(&decoded) {
-            Ok(found) => locations.extend(found),
-            Err(e) => {
-                eprintln!("render: {e}");
-                failed = true;
-            }
+        let (found, refused) = build_locations(&decoded);
+        locations.extend(found);
+        // The not-found document's clash is its location's line, as a refused page's is
+        if let Some((location, error)) = refused {
+            failed = true;
+            writeln!(
+                out,
+                "{{\"location\":{},\"error\":{}}}",
+                json(&location),
+                json(&error)
+            )
+            .expect("render: the output");
         }
         // @ref LLP 1048.000 D2 — and every page a build route's source lists. A refused value's line is its error
         for row in decoded

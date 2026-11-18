@@ -123,7 +123,8 @@ impl DataSource for Lists {
 
 /// A listed value whose location a route declared earlier answers is that route's page, not the listing route's
 /// (LLP 1048.000 D2). The build names each such value on its location's line, for every route, goes on past a value the
-/// pattern can't hold and past a source that fails, renders the rest and then fails.
+/// pattern can't hold, a source that fails and a pattern that takes the not-found document's `/404.html` (D7), renders
+/// the rest and then fails.
 #[test]
 fn a_build_names_each_listed_value_an_earlier_route_answers() {
     let plan = contract::compile(
@@ -135,6 +136,8 @@ routes nav
     fresh "/story/new" render=request
     story "/story/:id" render=build pages=stories()
     broken "/broken/:id" render=build pages=missing()
+    post "/:slug" render=request
+  notfound render=build
 
 component App
   view
@@ -162,9 +165,11 @@ component App
     let refusal = |route: &str, source: &str, value: &str, location: &str, other: &str| {
         Some(format!("route `{route}`'s pages ({source}): the value \"{value}\" is at {location}, which route `{other}`, declared before `{route}`, answers, so the page there is `{other}`'s, not `{route}`'s. Leave the value out of the list, or give one of the two routes another path"))
     };
+    let clash = "the not-found document renders at /404.html, which route `post` matches, so it would be that route's page. Give `post` a pattern that doesn't match /404.html, or declare the not-found route render=request or render=client";
     assert_eq!(
         got,
         [
+            ("/404.html", Some(clash.to_owned())),
             (
                 "/product/special",
                 refusal(
