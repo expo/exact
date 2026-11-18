@@ -10,7 +10,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
-import { classifyArtifacts, buildBake, bakeOutput, bakeTarget, pendingBuildInputs } from './app.mjs';
+import { classifyArtifacts, buildBake, bakeOutput, bakeTarget, pendingBuildInputs, readDevBuilds } from './app.mjs';
 import { pinned } from './test-workspace.mjs';
 import { fileURLToPath } from 'node:url';
 import { copyStaticTreeIfPresent, syncStaticTree } from '../host/web/serve.mjs';
@@ -1481,3 +1481,25 @@ test.skipIf(!process.env.EXACT_RUST_BAKE_TEST)('a linked Rust bake changes its p
     assert.throws(bake,/unknown widget refresh/,'a refresh absent from the current Rust implementation is rejected');
   } finally { rmSync(dir,{recursive:true,force:true}); }
 },300000);
+
+test("a resident dev loop admits the native receipts `exact mac` writes to the app's usual bake folder", () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-dev-builds-'));
+  try {
+    const app = { dir: root, target: resolve(root, 'target'), id: 'dev.example' };
+    const receipt = (platform, target, sha) => ({ version: 1, compat: { id: sha, target, inputs: { app: app.id, platform } }, binary: { sha256: sha } });
+    const write = (dir, r) => { mkdirSync(dir, { recursive: true }); writeFileSync(resolve(dir, `${r.compat.inputs.platform}-${r.compat.target}.build.json`), JSON.stringify(r)); };
+    const usual = bakeOutput(app, {});
+    const own = resolve(root, 'resident-bake');
+    write(usual, receipt('macos', 'aarch64-apple-darwin', 'mac'));
+    write(usual, receipt('web', 'wasm32-unknown-unknown', 'usual-web'));
+    write(own, receipt('web', 'wasm32-unknown-unknown', 'resident-web'));
+    const names = (rs) => rs.map((r) => `${r.compat.inputs.platform}:${r.binary.sha256}`).sort();
+    // Its own web build, not the usual folder's; the Mac build from the usual folder.
+    assert.deepEqual(names(readDevBuilds(app, { EXACT_BAKE_OUTPUT: own })), ['macos:mac', 'web:resident-web']);
+    // Its own native receipt wins over the usual folder's for the same target.
+    write(own, receipt('macos', 'aarch64-apple-darwin', 'resident-mac'));
+    assert.deepEqual(names(readDevBuilds(app, { EXACT_BAKE_OUTPUT: own })), ['macos:resident-mac', 'web:resident-web']);
+    // Without its own folder, the usual one alone.
+    assert.deepEqual(names(readDevBuilds(app, {})), ['macos:mac', 'web:usual-web']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

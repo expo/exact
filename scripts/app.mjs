@@ -1348,6 +1348,17 @@ export function readBuilds(app, env = process.env) {
   const directory=bakeOutput(app,env);if(!existsSync(directory))return [];
   return readdirSync(directory).filter((name)=>name.endsWith('.build.json')).map((name)=>JSON.parse(readFileSync(resolve(directory,name),'utf8'))).filter((r)=>r.version===1&&r.compat?.inputs?.app===app.id);
 }
+/** The receipts a dev loop admits native clients by. A resident loop (host/web-js
+ * `--serve-as`) bakes into its own EXACT_BAKE_OUTPUT, while `exact mac` / `exact ios`
+ * write to the app's usual folder, so its native receipts come from both, its own first. */
+export function readDevBuilds(app, env = process.env) {
+  const own = readBuilds(app, env);
+  if (!env.EXACT_BAKE_OUTPUT) return own;
+  const { EXACT_BAKE_OUTPUT, ...usual } = env;
+  const key = (r) => `${r.compat.inputs.platform}/${r.compat.target}`;
+  const seen = new Set(own.map(key));
+  return [...own, ...readBuilds(app, usual).filter((r) => r.compat.inputs.platform !== 'web' && !seen.has(key(r)))];
+}
 /** The shared dev/deploy comparison (LLP 1030 D3). A new binary and a safe
  * bundle are independent results. Compatibility-id equality decides neither. */
 export function classifyArtifacts(candidate, cohort, signingKey = null) {
