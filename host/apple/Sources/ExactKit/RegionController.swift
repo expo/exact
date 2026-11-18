@@ -22,7 +22,7 @@ struct RegionPresentation {
 }
 /// All calls are on the session/UI executor. Worker answers revalidate generation,
 /// request and publication on delivery, after the presenter's outermost batch.
-final class RegionController {
+final class RegionController: ContentRegionHosting {
     private weak var session: ExactSession?
     private var lifetime: RegionServiceLifetime?
     private var service: RegionService? { lifetime?.service }
@@ -308,6 +308,8 @@ final class RegionController {
         session?.runtime.log("content-region: \(reason)")
         surface?.needsDisplay = true
     }
+    func ownsSurface(_ view: NSView) -> Bool { (view as? RegionSurfaceMac)?.owner === self }
+
     var diagnostics: [String: Any] {
         let p = service?.pixels.stats, i = service?.ink.stats
         let acceptedSources: [[String: Any]] = accepted?.snapshot.frames.compactMap { frame in

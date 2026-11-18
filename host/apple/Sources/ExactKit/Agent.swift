@@ -317,7 +317,7 @@ public final class Agent {
             session.picker.saveAnswered(answer, request: req)
             // An iframe guest's `open-file` and `save-file` are the arm's, not a document picker's (LLP 1020.002 §10).
             if !session.webviews.answered(answer, request: req) { session.picker.documentAnswered(answer, request: req) }
-            ShareSheet.answered(answer, in: session)
+            session.shareHost.answered(session, answer)
             listedAnswered(answer)
             emit(tagged(answer))
             return
@@ -333,9 +333,9 @@ public final class Agent {
         switch op {
         case "tree" where req["ax"] as? Bool == true: emit(accessibilityElementsTree(req)) // LLP 1080.002
         case "tree":
-            var tree = decorateTree(presenter.elements.regions.decorate(session.natives.decorate(session.webviews.tree(line))))
+            var tree = decorateTree(presenter.elements.decorateRegions(session.natives.decorate(session.webviews.tree(line))))
             #if os(macOS)
-            tree = decoratePictureInPicture(tree) // LLP 1042 §9.1
+            tree = MediaLink.pictureDecorate?(self, tree) ?? tree // LLP 1042 §9.1
             #endif
             emit(session.canvases.decorate(req, tree))
         case "layout": emit(tagged(inspectLayout(req) ?? layout(req))) // LLP 1080.001: `native`, `agree`
@@ -387,7 +387,7 @@ public final class Agent {
             } else if let control = req["pictureInPicture"] as? String {
                 // Exact's picture-in-picture window's controls (LLP 1042 §9.1).
                 #if os(macOS)
-                r = pictureInPictureTap(req, control: control)
+                r = MediaLink.pictureTap?(self, req, control) ?? ["error": "unsupported: picture in picture is not linked"]
                 #else
                 r = ["error": "unsupported: Exact's picture-in-picture window is the Mac's"]
                 #endif
@@ -413,7 +413,7 @@ public final class Agent {
             let r = completingInput(releaseCanvasKey(req) ?? type(req))
             session.canvases.settle(now: session.now())
             emit(tagged(r))
-        case "share": emit(tagged(completingInput(session.receiveShare(req)))) // the driver's `share:` form (LLP 1133.024 D9)
+        case "share": emit(tagged(completingInput(session.shareHost.receive(session, req)))) // the driver's `share:` form (LLP 1133.024 D9)
         case "reveal": emit(tagged(settling(reveal(req)))) // before a tap or a type: a target out of view, scrolled into it
         case "clock": let r = clock(req); session.tellAgentOffset(); emit(tagged(r))
         // A fetch fault (LLP 1103) is the runner's, below; the device facts are this host's.
@@ -477,10 +477,10 @@ public final class Agent {
             let pending = session.app.replacements.reason
             let report = (try? JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: Any])?["replacement"] as? [String: Any]
             nativeSections["replacement"] = report == nil && pending == nil ? NSNull() : (report ?? [:]).merging(["pending": pending ?? NSNull()]) { $1 }
-            var raster = session.rasters.diagnostics
+            var raster = session.rasters?.diagnostics ?? [:]
             raster["encodedResolverBytes"] = session.app.resolver.encodedCacheBytes
-            raster["encodedHTTPCache"] = RasterInput.httpCacheUsage
-            raster["animated"] = AnimatedRasters.shared.diagnostics
+            raster["encodedHTTPCache"] = session.rasters?.encodedHTTPCache
+            raster["animated"] = ImageLink.animated?.diagnostics
             nativeSections["raster"] = raster
             #if os(macOS)
             nativeSections["contentRegion"] = session.regions.diagnostics
@@ -522,7 +522,7 @@ public final class Agent {
             let json = (try? JSONSerialization.data(withJSONObject: forward)).map { String(decoding: $0, as: UTF8.self) } ?? line
             let reply = session.agent(json)
             // A hatched site's row names its hatch's calls and time (LLP 1075.003.000.001 §3.1).
-            if op == "perf", let data = session.hatchDiagnostics.joined(perf: reply).data(using: .utf8),
+            if op == "perf", let data = (session.hatchDiagnostics?.joined(perf: reply) ?? reply).data(using: .utf8),
                var result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 result["hostWork"] = HostPhases.shared.work()
                 emit(result)
@@ -765,7 +765,7 @@ public final class Agent {
         if DisplayPreferences.gamut != gamut || DisplayPreferences.highDynamicRange != high {
             DisplayRange.pinned = high ? 4 : 1
             DisplayPreferences.agentGamut = gamut
-            session.rasters.displayChanged()
+            session.rasters?.displayChanged()
         }
         systemContrast(more: DisplayPreferences.contrast == "more")
         DisplayPreferences.agent = (motion, transparency)
@@ -897,7 +897,7 @@ public final class Agent {
     }
 
     private func clockStep(_ req: [String: Any]) -> [String: Any] {
-        session.natives.hatchClock.beginCommand()
+        session.natives.beginHatchCommand()
         // The end of an input under platform timing before any `clock`: its
         // `then`s land at the wall's now and the clock stays the wall's, so
         // the frame sampler keeps the display's cadence (LLP 1144 D1). Only
@@ -927,7 +927,7 @@ public final class Agent {
             session.sampler?.stop()
             // An activity indicator holds one frame under it (LLP 1069.001,
             // amended 2026-10-07).
-            presenter.controls.syncProgress()
+            presenter.controls.family.syncProgress()
         }
         if req["take"] as? Bool == true { return ["clock": session.clock ?? 0] }
         let from = session.clock ?? 0
@@ -953,13 +953,13 @@ public final class Agent {
         // `context.after` (a gamepad effect's span) is set, so the clock goes
         // to it rather than the wall waiting for the reply.
         let deadline = Date(timeIntervalSinceNow: Agent.settleBound)
-        let hatches = session.natives.hatchClock
+        let hatches = session.natives
         if settle { waitForReplies(until: deadline, orAfter: true) }
         // Settle ends motion: every leaf held mid-fling is made (LLP 1068 §5.1).
         if settle { presenter.leaves.settle() }
         waitForImages()
         var target = req["to"] as? Double
-        if settle { target = max(from, self.settle() ?? from, pendingCount() > 0 ? hatches.nextAfter ?? from : from) }
+        if settle { target = max(from, self.settle() ?? from, pendingCount() > 0 ? hatches.hatchNextAfter ?? from : from) }
         guard var to = target, to.isFinite else { return ["malformed": true, "error": "clock needs \"to\" (ms) or \"settle\": true"] }
         guard to >= from else { return ["error": "the clock cannot go backwards (\(from) → \(to))"] }
         var rounds = 0, hatchDrains = 0
@@ -983,7 +983,7 @@ public final class Agent {
             let landed = max(from, batch.clock ?? to)
             session.clock = landed
             session.apply(session.runtime.tick(now: landed))
-            AnimatedRasters.shared.evaluate()
+            ImageLink.animated?.evaluate()
             // A long catch-up (a takeover after minutes of uptime) can pass the
             // runner's timer-fire limit: it is progress, so go on from there.
             if let e = batch.error, "\(e)".contains("TimerFireLimit"), (batch.clock ?? to) < to, Date() < deadline { continue }
@@ -1033,7 +1033,7 @@ public final class Agent {
             if pendingCount() > 0 {
                 rounds += 1
                 if rounds >= 16 || Date() >= deadline { return reply(landed, false, reason: "requests") }
-                if let after = hatches.nextAfter { to = max(landed, after); continue }
+                if let after = hatches.hatchNextAfter { to = max(landed, after); continue }
                 waitForReplies(until: deadline, orAfter: true)
                 continue
             }
@@ -1167,16 +1167,16 @@ public final class Agent {
         // A seek stops at each hatch instant on the way (LLP 1075.003.000.001
         // §2.4): the runner is brought there, the ticks and `after`s due are
         // called on that instant's state, and what they asked is drained.
-        let clock = session.natives.hatchClock
-        while let instant = clock.nextInstant, instant <= to {
+        let clock = session.natives
+        while let instant = clock.hatchNextInstant, instant <= to {
             let batch = advanceRunner(to: max(instant, session.clock ?? instant), deadline: deadline, floor: floor)
             if batch.error != nil { return batch }
-            if let limit = clock.fire(at: session.clock ?? instant) {
+            if let limit = clock.fireHatchClock(at: session.clock ?? instant) {
                 return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
             }
         }
         let batch = advanceRunner(to: to, deadline: deadline, floor: floor)
-        if batch.error == nil, let limit = clock.fire(at: session.clock ?? to) {
+        if batch.error == nil, let limit = clock.fireHatchClock(at: session.clock ?? to) {
             return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
         }
         return batch
@@ -1187,18 +1187,26 @@ public final class Agent {
         // The agent's clock is a seek: frame tasks fire virtual frames (LLP 1073 D3).
         session.runtime.presentFrames(false)
         while true {
+            guard session.canvases.waitUntilReady() else {
+                return Batch(ops: [], timers: false, motion: false, clock: session.clock, error: "canvas creation is still in flight")
+            }
+            // Deliver world records before later timers (LLP 1012, LLP 1046.003).
+            let now = session.clock ?? floor
+            let worlds = session.canvases.clock(settle: false)
+            let next = worlds.nextTickAt.flatMap { $0 > now ? $0 : nil }
+            let at = worlds.reply.isEmpty ? to : min(to, next ?? to, session.timerDue.flatMap { $0 > now ? $0 : nil } ?? to)
             // A data module's timer the last step released lands first too (exact-runner's `data_timers.rs`).
-            let waited = (session.timerDue.map { $0 <= to } == true || session.timerLanding) && waitForReplies(until: deadline)
+            let waited = (session.timerDue.map { $0 <= at } == true || session.timerLanding) && waitForReplies(until: deadline)
             let held = waited && steps < 4096
-            let batch = session.runtime.advance(now: to, untilRequest: held)
+            let batch = session.runtime.advance(now: at, untilRequest: held)
             session.apply(batch)
-            session.clock = max(floor, batch.clock ?? to)
-            if batch.error == nil, let limit = session.natives.hatchClock.refresh(at: session.clock ?? to) {
+            session.clock = max(floor, batch.clock ?? at)
+            if batch.error == nil, let limit = session.natives.refreshHatchClock(at: session.clock ?? to) {
                 return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
             }
             // A stop at `to` may leave a timer due there: only a plain advance ends.
-            if batch.error != nil || !held { return batch }
-            steps += 1
+            if batch.error != nil || (!held && at >= to) { return batch }
+            if held { steps += 1 }
         }
     }
 
@@ -1209,12 +1217,12 @@ public final class Agent {
     /// as on the web, LLP 1054.000 R9).
     @discardableResult
     func waitForImages(until end: Date = Date(timeIntervalSinceNow: 3)) -> Int {
-        var loading = session.rasters.loadingOnScreen
+        var loading = session.rasters?.loadingOnScreen ?? 0
         while loading > 0 && Date() < end {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
-            loading = session.rasters.loadingOnScreen
+            loading = session.rasters?.loadingOnScreen ?? 0
         }
-        AnimatedRasters.shared.evaluate()
+        ImageLink.animated?.evaluate()
         return loading
     }
 
@@ -1226,7 +1234,7 @@ public final class Agent {
         let end = Date(timeIntervalSinceNow: 3)
         while true {
             presenter.settlePump()
-            let loading = session.rasters.loadingOnScreen
+            let loading = session.rasters?.loadingOnScreen ?? 0
             if loading == 0 || Date() >= end { return loading }
             waitForImages(until: end)
         }
@@ -1314,7 +1322,7 @@ public final class Agent {
     @discardableResult
     func waitForReplies(until deadline: Date, orAfter: Bool = false) -> Bool {
         while pendingCount() > 0 {
-            if orAfter && session.natives.hatchClock.nextAfter != nil { return false }
+            if orAfter && session.natives.hatchNextAfter != nil { return false }
             if Date() >= deadline { return false }
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
             session.apply(session.runtime.pump(now: session.now()))

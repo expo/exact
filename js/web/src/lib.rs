@@ -32,6 +32,11 @@ fn call_key(target: &Json, source: &str, args: &[Json]) -> String {
     .text()
 }
 
+/// A module's timer, wait or background round in a page: the browser's own
+/// event loop runs it, and a page links no executor (LLP 1047.001 D12).
+struct BrowserTurn;
+impl exact_runner::HostWork for BrowserTurn {}
+
 /// A few named entries: a module's sources, its calls in flight. A scan of
 /// a vector costs less code than a hash table per value type.
 struct Table<V>(Vec<(String, V)>);
@@ -316,7 +321,9 @@ impl Module {
                 .as_u64()
                 .ok_or_else(|| unavailable("a timer's turn has no continuation"))?;
             self.waiting.insert(key, true);
-            return Ok(Answer::Later(Request::continuation(token).due(due)));
+            return Ok(Answer::Later(
+                Request::continuation::<BrowserTurn>(token).due(due),
+            ));
         }
         Ok(answer)
     }
@@ -336,7 +343,7 @@ impl Module {
         let timer = response["timer"].as_u64();
         if let (Some(token), None) = (response["continuation"].as_u64(), timer) {
             self.waiting.insert(key, true);
-            return Ok(Answer::Later(Request::continuation(token)));
+            return Ok(Answer::Later(Request::continuation::<BrowserTurn>(token)));
         }
         if let Some(topics) = response["topics"].as_array() {
             for topic in topics.iter().filter_map(|t| t.as_str()) {
@@ -818,7 +825,7 @@ impl DataSource for Module {
         let state = self.realm("background").ok()?;
         (state["head"] == true).then(|| {
             self.background_out = true;
-            Request::continuation(exact_runner::BACKGROUND)
+            Request::continuation::<BrowserTurn>(exact_runner::BACKGROUND)
         })
     }
 

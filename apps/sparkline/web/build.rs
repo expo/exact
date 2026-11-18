@@ -24,8 +24,15 @@ fn main() {
     // Bound first: a copy whose source is `Type::default()` or `Type::new(…)` would borrow a temporary (E0716).
     let source = sparkline_data::Spark;
     let grants = source.grants();
-    let compat = exact_bake::compatibility_id(&app_dir, platform, &target, &manifest, Some(grants))
-        .unwrap_or_else(|e| panic!("compatibility id: {e}"));
+    let compat = exact_bake::compatibility_id(
+        &app_dir,
+        platform,
+        &target,
+        &manifest,
+        Some(grants),
+        exact_bake::hands_out_work!(source),
+    )
+    .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();
     let entry = contract::rust_entry(
         "sparkline_data::Spark",

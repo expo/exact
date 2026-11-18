@@ -1131,6 +1131,9 @@ impl Backend for Gpu {
     fn rows(&self) -> bool {
         true
     }
+    fn rows_through(&self) -> bool {
+        true
+    }
     fn row_reusable(&self, id: u32, _: (f32, f32)) -> bool {
         self.rows.kept.contains_key(&id)
     }
@@ -1142,6 +1145,9 @@ impl Backend for Gpu {
     }
     fn row_draw(&mut self, id: u32, origin: (f32, f32), _: Rect4) {
         self.draw_row(id, origin);
+    }
+    fn row_draw_through(&mut self, id: u32, ts: Transform, _: Rect4) {
+        self.draw_row_through(id, ts);
     }
     fn row_free(&mut self, id: u32) {
         self.rows.kept.remove(&id);

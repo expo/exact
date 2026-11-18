@@ -328,6 +328,7 @@ mod tests {
             "clock data",
             "reload",
             "back",
+            "presence allow",
             "fail fetch",
             "request",
         ] {

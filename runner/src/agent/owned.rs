@@ -2,7 +2,7 @@
 //! names its components declare them by, and each live instance's under its
 //! path.
 
-use super::{quote, typed_json};
+use crate::json::{quote, typed_json};
 use crate::{DataSource, Runner};
 
 /// The name a child's declaration was written with: lifting renames each

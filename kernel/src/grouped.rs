@@ -52,6 +52,11 @@ pub struct GroupedList {
     /// The space under the last section, when the author set its
     /// `margin-bottom` (as `GroupedSection::space_above`).
     pub space_below: Option<f32>,
+    /// Whether a row asks for motion as a column's row would: a layout
+    /// transition that takes time (its moves) or an exit animation (its
+    /// removals). A host animates the list's changes only then, as a UIKit
+    /// list applies a snapshot at once unless its code asks.
+    pub animates: bool,
 }
 
 /// A section: its texts and its rows.
@@ -416,10 +421,21 @@ impl Kernel {
                 out
             })
             .collect::<Vec<GroupedSection>>();
+        let animates = sections.iter().flat_map(|s| &s.rows).any(|r| {
+            self.node(r.view).is_some_and(|n| {
+                let rare = &n.style.rare;
+                !rare.exit_animation.0.is_empty()
+                    || rare.layout_transition.0.iter().any(|t| {
+                        t.duration > 0.0
+                            || matches!(t.timing, exact_motion::TimingFunction::Spring(_))
+                    })
+            })
+        });
         let mut list = GroupedList {
             style,
             sections,
             space_below: None,
+            animates,
         };
         // A section's percentage margin is of the list's content box
         let basis = crate::svg::scene::content_box(self, &self.node(view)?).2;

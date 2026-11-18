@@ -543,8 +543,8 @@ impl<D: DataSource> Runner<D> {
             receipts.push(self.scroll_into_view(IntoView {
                 list: format!("#{view}"),
                 key: exact_plan::Value::str(&key),
-                block: crate::instance::collection::Align::Nearest,
-                inline: crate::instance::collection::Align::Nearest,
+                block: crate::list_api::Align::Nearest,
+                inline: crate::list_api::Align::Nearest,
                 row: None,
                 view: Some(view),
                 smooth: false,
@@ -567,21 +567,21 @@ impl<D: DataSource> Runner<D> {
             _ => s.before.clone(),
         };
         let mut out = String::from("{\"item\":");
-        crate::agent::quote(&s.key, &mut out);
+        crate::json::quote(&s.key, &mut out);
         out.push_str(",\"from\":");
-        crate::agent::quote(&self.list_id(s.token.list), &mut out);
+        crate::json::quote(&self.list_id(s.token.list), &mut out);
         out.push_str(",\"to\":");
-        crate::agent::quote(&self.list_id(s.target), &mut out);
+        crate::json::quote(&self.list_id(s.target), &mut out);
         out.push_str(",\"before\":");
         match before.as_deref().and_then(|b| b.strip_prefix("s:")) {
-            Some(key) => crate::agent::quote(key, &mut out),
+            Some(key) => crate::json::quote(key, &mut out),
             None => out.push_str("null"),
         }
         out.push_str(",\"phase\":");
-        crate::agent::quote(s.phase.name(), &mut out);
+        crate::json::quote(s.phase.name(), &mut out);
         out.push_str(",\"ending\":");
         match s.ending {
-            Some(e) => crate::agent::quote(e.name(), &mut out),
+            Some(e) => crate::json::quote(e.name(), &mut out),
             None => out.push_str("null"),
         }
         out.push('}');

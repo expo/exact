@@ -188,6 +188,34 @@ fn diagnostic(message: &str, api: &str) {
 }
 
 #[test]
+fn session_transport_reads_the_runtime_host_and_is_not_baked() {
+    let plan = contract::compile("component App\n  resource value = host() as shape string\n  resource later = hostLater() as shape string\n  resource init = atInit(\"host\") as shape string\n  view\n    text value\n").unwrap();
+    let mut module = Module::loaded(HBC.to_vec(), APP, GRANTS).unwrap();
+    module.bind(&plan);
+    assert_eq!(
+        module
+            .query("atInit", &[Value::str("host")])
+            .unwrap()
+            .as_str(),
+        Some("exactHost() is unavailable during module initialization; call it inside an answer"),
+    );
+    assert!(
+        module.query("host", &[]).is_err(),
+        "a query has no runtime host"
+    );
+    let mut store = Store::new(GRANTS, vec![]);
+    for source in ["host", "hostLater"] {
+        let Ok(Answer::Now(value)) = module.answer(&mut store, source, &[]) else {
+            panic!("{source} must answer the host, including after await");
+        };
+        assert_eq!(value.as_str(), Some("native"));
+    }
+    let baked = contract::bake(plan, Module::inspect(HBC.to_vec()).unwrap()).unwrap();
+    assert_eq!(baked.resources[0].initial.len, 0);
+    assert_eq!(baked.resources[1].initial.len, 0);
+}
+
+#[test]
 fn initialization_and_captured_aliases_cannot_obtain_ambient_inputs() {
     let mut module = module();
     for &(form, api) in FORMS {

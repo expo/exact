@@ -15,7 +15,7 @@ extension NodeView {
         TextStyle.run(value, style: style, defaultSize: PageFacts.defaultRootFontSize)
     }
 
-    var isParagraph: Bool { kind == "text" }
+    package var isParagraph: Bool { kind == "text" }
 
     /// The node box this view stands in: the nearest node view above it,
     /// past the containers and scroll views a box holds its children in.

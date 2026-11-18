@@ -8,6 +8,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
 
 final class PictureInPictureWindowMacTests: XCTestCase {
     private var window: PictureInPictureWindow?

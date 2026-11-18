@@ -1,5 +1,6 @@
 //! The modelViewer GPU surface (LLP 1133.039 D1–D12).
 mod arguments;
+mod bvh;
 mod camera;
 mod hotspots;
 mod input;
@@ -9,6 +10,7 @@ mod pick;
 mod presentation;
 mod renderer;
 mod styles;
+mod timing;
 
 use arguments::Arguments;
 use camera::Camera;
@@ -27,10 +29,13 @@ use styles::Effective;
 struct Parsed {
     sequence: u64,
     name: String,
-    scene: Result<Scene, String>,
+    scene: Result<(Scene, bvh::Bvh), String>,
+    timing_session: u64,
+    parse_ms: Option<f64>,
 }
 struct Model {
     scene: Scene,
+    bvh: bvh::Bvh,
     camera: Camera,
     effective: Vec<Effective>,
     clip: Clip,
@@ -78,6 +83,8 @@ pub struct ModelViewer {
     messages: Vec<String>,
     max_buffer_size: u64,
     force_samples: Option<u32>,
+    timing_session: u64,
+    timing: Option<timing::Timing>,
 }
 impl Default for ModelViewer {
     fn default() -> Self {
@@ -108,6 +115,8 @@ impl Default for ModelViewer {
             messages: vec![],
             max_buffer_size: 256 * 1024 * 1024,
             force_samples: None,
+            timing_session: 0,
+            timing: None,
         }
     }
 }
@@ -125,6 +134,7 @@ impl ModelViewer {
         }
     }
     fn pick(&mut self, [x, y]: [f32; 2]) {
+        let start = self.timing.as_ref().map(|_| timing::Stamp::now());
         let name = self
             .model()
             .map(|m| {
@@ -137,6 +147,7 @@ impl ModelViewer {
                 );
                 pick::pick(
                     &m.scene,
+                    &m.bvh,
                     &m.effective,
                     m.clip,
                     origin,
@@ -146,6 +157,9 @@ impl ModelViewer {
             })
             .unwrap_or_default();
         self.messages.push(name);
+        if let Some(timing) = &mut self.timing {
+            timing.pick_ms = start.map(|s| s.elapsed());
+        }
     }
 }
 
@@ -326,8 +340,7 @@ impl Surface for ModelViewer {
                 Source::Ready { scene, .. } => scene.as_deref(),
                 _ => self.previous.as_deref(),
             };
-            self.hotspots
-                .update(model, &self.arguments, &frame, self.generation);
+            self.hotspots.update(model, &self.arguments, &frame);
         }
     }
     fn placement(&self, index: usize) -> Option<Placement> {
@@ -338,6 +351,17 @@ impl Surface for ModelViewer {
     }
     fn agent(&mut self, request: &str) -> Option<String> {
         let request: serde_json::Value = serde_json::from_str(request).ok()?;
+        if request["op"] == "state" && request["performance"] == true {
+            let timing = self.timing.as_ref()?;
+            let mut metrics = timing.snapshot(&self.hotspots);
+            if let Some(model) = self.model() {
+                metrics["bvhBytes"] = model.bvh.bytes().into();
+            }
+            if let Some(arrival) = &timing.arrival {
+                metrics["sinceArrivalMs"] = arrival.elapsed().into();
+            }
+            return Some(serde_json::json!({ "performance": metrics }).to_string());
+        }
         if request["op"] != "clock" {
             return None;
         }
@@ -405,6 +429,33 @@ impl Surface for ModelViewer {
             Some(json)
         }
     }
+    fn set_performance_reporting(&mut self, enabled: bool) {
+        if enabled != self.timing.is_some() {
+            self.timing_session += 1;
+            self.timing = enabled.then(timing::Timing::default);
+            self.hotspots.reporting = enabled;
+            self.hotspots.reset_timing();
+        }
+    }
+    fn take_performance(&mut self, _now_ms: f64) -> Option<String> {
+        let timing = self.timing.as_ref()?;
+        let mut metrics = timing.snapshot(&self.hotspots);
+        if let Some(model) = self.model() {
+            metrics["triangles"] = model.scene.triangles().into();
+        }
+        Some(metrics.to_string())
+    }
+    fn submitted(&mut self) {
+        if self.loaded && self.frame_ready() {
+            if let Some(timing) = &mut self.timing {
+                if let Some(arrival) = &timing.arrival {
+                    if timing.load_to_submit_ms.is_none() {
+                        timing.load_to_submit_ms = Some(arrival.elapsed());
+                    }
+                }
+            }
+        }
+    }
     fn render(
         &mut self,
         frame: &Frame,
@@ -427,30 +478,31 @@ impl Surface for ModelViewer {
             _ => self.previous.as_deref_mut(),
         };
         let Some(model) = model else {
-            self.hotspots
-                .update(None, &self.arguments, frame, self.generation);
+            self.hotspots.update(None, &self.arguments, frame);
             renderer::clear(encoder, target);
             self.drawn_generation = complete.then_some(self.generation);
             return self.preparing();
         };
         let moving = model.camera.step(&model.scene, frame.now_ms);
-        self.hotspots
-            .update(Some(model), &self.arguments, frame, self.generation);
+        self.hotspots.update(Some(model), &self.arguments, frame);
         if model
             .renderer
             .as_ref()
             .is_none_or(|r| r.size != size || r.format != format || r.samples != samples)
         {
+            let start = self.timing.as_ref().map(|_| timing::Stamp::now());
             match Renderer::new(device, &model.scene, size, format, samples) {
                 Ok(renderer) => model.renderer = Some(renderer),
                 Err(SurfaceError(error)) => {
                     self.fail(error);
-                    self.hotspots
-                        .update(None, &self.arguments, frame, self.generation);
+                    self.hotspots.update(None, &self.arguments, frame);
                     renderer::clear(encoder, target);
                     self.drawn_generation = Some(self.generation);
                     return false;
                 }
+            }
+            if let Some(timing) = &mut self.timing {
+                timing.upload_ms = start.map(|s| s.elapsed());
             }
         }
         model.renderer.as_ref().unwrap().draw(

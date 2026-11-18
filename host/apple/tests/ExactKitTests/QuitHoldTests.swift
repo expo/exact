@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1097 D10: a quit is held while the module's storage lands, and let
 /// go when it has or when the bound passes.

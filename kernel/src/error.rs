@@ -362,6 +362,8 @@ pub enum LayoutError {
     NativeTarget(&'static str),
     /// A host's report of Exact's contributions refused (LLP 1123 D11).
     Contribution(&'static str),
+    /// A host's report of an owner's keyboard refused (LLP 1123 D7).
+    Keyboard(&'static str),
     /// A definite available-space offer is infinite or NaN.
     InvalidOffer,
     /// The id is not live.

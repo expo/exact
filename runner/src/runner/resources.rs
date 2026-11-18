@@ -45,6 +45,14 @@ pub(crate) struct ResourceRow {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// The plan row declaring a resource, shared by its runtime members and instances.
+    pub(super) fn resource_site(&self, i: usize) -> usize {
+        match self.owned_row(i) {
+            Some(owned) => owned.site,
+            None => self.member(i).map_or(i, |member| member.family),
+        }
+    }
+
     /// Runtime rows include list members; declaration walks use the plan.
     pub(super) fn resource_row(&self, i: usize) -> &exact_plan::ResourcesRow {
         if let Some(member) = &self.resources[i].member {

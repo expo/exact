@@ -1,5 +1,7 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// A repeating or reflecting gradient draws every period its shape covers
 /// (SVG 2 `spreadMethod`), however many there are (LLP 1055.000 D7).

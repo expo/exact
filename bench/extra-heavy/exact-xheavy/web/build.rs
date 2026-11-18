@@ -15,7 +15,7 @@ fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     let manifest = contract::Manifest::read(&app_dir).unwrap_or_else(|e| panic!("app.json: {e}"));
     let source = exact_xheavy_data::XHeavy::for_bake();
-    let compat = exact_bake::compatibility_id(&app_dir, "web", &target, &manifest, Some(source.grants()))
+    let compat = exact_bake::compatibility_id(&app_dir, "web", &target, &manifest, Some(source.grants()), exact_bake::hands_out_work!(source))
         .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     std::fs::write(out_dir.join("compat.json"), compat.to_json()).unwrap();
     // The host entry (as exact2's apps/caltrain/web/build.rs): the data type and the capabilities the plan links.

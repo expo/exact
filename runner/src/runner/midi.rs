@@ -266,8 +266,8 @@ impl<D: DataSource> Runner<D> {
                 "midi in {} {} at {} beat {}",
                 m.input,
                 crate::midi::hex(&m.data),
-                crate::agent::num(m.time_stamp),
-                crate::agent::num(beat)
+                crate::json::num(m.time_stamp),
+                crate::json::num(beat)
             );
             self.log(line);
             self.midi.heard(Received {
@@ -513,8 +513,8 @@ impl<D: DataSource> Runner<D> {
                     Vec::new(),
                     Err(format!(
                         "tap midi: clock stamps rise from the last tick to now ({}), not {}",
-                        crate::agent::num(now),
-                        crate::agent::num(stamp)
+                        crate::json::num(now),
+                        crate::json::num(stamp)
                     )),
                 );
             }
@@ -541,7 +541,7 @@ impl<D: DataSource> Runner<D> {
                 if i > 0 {
                     s.push(',');
                 }
-                crate::agent::quote(&port.id, &mut s);
+                crate::json::quote(&port.id, &mut s);
             }
             s.push(']');
             s

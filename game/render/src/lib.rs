@@ -60,7 +60,8 @@ pub use exact_game;
 /// GPU surface ABI, also used by module! without a direct dependency.
 pub use exact_gpu;
 pub use hooks::{
-    FrameView, HookGpu, HookTime, HookWork, Hooks, Needs, PostInputs, RenderWorld, SceneCopy,
+    FrameView, FrameWork, HookGpu, HookTime, HookWork, Hooks, Needs, PostInputs, RenderWorld,
+    SceneCopy,
 };
 pub use models::ModelExecutor;
 pub use surface::{Executor, WorldSurface};

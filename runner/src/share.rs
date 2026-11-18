@@ -9,8 +9,8 @@
 //! element as the host draws it now, which needs no grant, since nothing is
 //! written that the app can read.
 
-use crate::agent::{field_num, field_str, quote};
-use crate::save_file::{covered, plain_app_path};
+use crate::json::{field_num, field_str, quote};
+use crate::save_file::plain_app_path;
 use crate::{DataSource, Runner};
 use exact_kernel::ViewId;
 use exact_plan::Value;
@@ -227,7 +227,7 @@ fn file<D: DataSource>(runner: &Runner<D>, entry: &str, reach: Reach) -> Result<
             "{entry} is neither an app:/ file nor an element's #id"
         ));
     }
-    if !covered(runner.data_ref().grants(), "fs.read", entry) {
+    if !runner.covers("fs.read", entry) {
         return Err(format!("{entry} is outside the app's fs.read grants"));
     }
     if let Some(reason) = reach.files {
@@ -294,9 +294,9 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
     let source = field_num(json, "source")
         .filter(|n| *n >= 0.0 && *n <= u32::MAX as f64 && *n == n.trunc())
         .map(|n| n as ViewId);
-    let agent = crate::agent::field_bool(json, "agent");
-    let shown = agent && crate::agent::field_bool(json, "present");
-    let reach = if crate::agent::field_bool(json, "web") {
+    let agent = crate::json::field_bool(json, "agent");
+    let shown = agent && crate::json::field_bool(json, "present");
+    let reach = if crate::json::field_bool(json, "web") {
         Reach::WEB
     } else {
         Reach::APPLE

@@ -3,6 +3,10 @@ use exact_plan::Value;
 use exact_runner::{Answer, DataError, Store};
 use std::sync::{Arc, Mutex};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// Answers through a continuation, as Markdown Stress's document does, and
 /// keeps the outcome it is handed back.
 #[derive(Clone, Default)]
@@ -13,7 +17,9 @@ impl DataSource for Continuing {
         Err(DataError::UnknownSource(name.into()))
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-        Ok(Answer::Later(exact_runner::Request::continuation(1)))
+        Ok(Answer::Later(
+            exact_runner::Request::continuation::<TestWork>(1),
+        ))
     }
     fn parse(
         &mut self,

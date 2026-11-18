@@ -102,7 +102,7 @@ fn tools_are_a_plan_with_a_tool() {
 /// and button plan by none; no other host's set moves.
 #[test]
 fn each_native_entry_is_selected_by_the_rows_that_reach_its_family() {
-    use Capability::{Collections, Controls, Images, NativeViews, Svg, Traces};
+    use Capability::{Collections, Controls, Effects, Images, NativeViews, Svg, Traces};
     let plain = "column\n      text \"a\"\n      button \"b\" press=go";
     for (view, capability, selected) in [
         (plain, Svg, false),
@@ -118,6 +118,11 @@ fn each_native_entry_is_selected_by_the_rows_that_reach_its_family() {
         ),
         // A box's filter runs on box effects' engine, which SVG's uses.
         ("text \"a\" filter=\"blur(2px)\"", Svg, false),
+        ("text \"a\" filter=\"blur(2px)\"", Effects, true),
+        ("text \"a\" filter=(wide ? \"none\" : \"blur(2px)\")", Effects, true),
+        // `clip-path` is the core's mask on Apple.
+        ("text \"a\" clip-path=\"inset(1px)\"", Effects, false),
+        (plain, Effects, false),
         // The host tells an SVG by its bytes: a computed source can be one,
         // and so can a download; a bundled file is the bake's to read.
         (
@@ -159,6 +164,13 @@ fn each_native_entry_is_selected_by_the_rows_that_reach_its_family() {
             Collections,
             true,
         ),
+        // A list whose rows are cells; the author's own rows are not.
+        ("list\n      row\n        text \"a\"", Collections, true),
+        (
+            "list appearance=\"none\"\n      row\n        text \"a\"",
+            Collections,
+            false,
+        ),
     ] {
         let plan = plan(view);
         assert_eq!(
@@ -166,7 +178,7 @@ fn each_native_entry_is_selected_by_the_rows_that_reach_its_family() {
             selected,
             "{view}: {capability:?}"
         );
-        if capability != Collections {
+        if !matches!(capability, Collections | Effects) {
             assert!(!uses(&plan).has(capability), "{view}: {capability:?}");
         }
     }

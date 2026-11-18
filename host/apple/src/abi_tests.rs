@@ -191,7 +191,7 @@ fn plan_and_module_reloads_keep_the_document_owner() {
         file.display()
     );
     let reply = bridge.host.as_mut().unwrap().answer_hold(&request).unwrap();
-    let doc = exact_runner::agent::field_str(&reply, "doc").unwrap();
+    let doc = exact_runner::json::field_str(&reply, "doc").unwrap();
     // A picker's `startIn` opens in the chosen file's folder (LLP 1173 D2).
     let mut folder = |path: &str, owner: u64| {
         let request = format!(r#"{{"op":"documentFolder","owner":{owner},"path":"{path}"}}"#);
@@ -199,7 +199,7 @@ fn plan_and_module_reloads_keep_the_document_owner() {
     };
     let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     assert_eq!(
-        exact_runner::agent::field_str(&folder(&doc, u64::from(rt)), "folder").as_deref(),
+        exact_runner::json::field_str(&folder(&doc, u64::from(rt)), "folder").as_deref(),
         parent.to_str()
     );
     assert_eq!(folder(&doc, u64::from(rt) + 1), "{}");

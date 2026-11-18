@@ -20,7 +20,7 @@ pub(super) fn disambiguate(text: String, dup: u32) -> String {
 /// The journal line for a repeated key's row.
 pub(super) fn repeated(region: RegionsId, key: &Value, ident: &str) -> String {
     let mut shown = String::new();
-    crate::agent::untyped_json(key, &mut shown);
+    crate::json::untyped_json(key, &mut shown);
     format!(
         "list {}: key {shown} repeats; this row is {ident}",
         region.0

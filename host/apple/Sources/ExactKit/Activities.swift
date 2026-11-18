@@ -45,7 +45,7 @@ final class ActivityLibrary {
     }
 }
 
-final class ActivityOutput {
+final class ActivityOutput: ActivityOutputting {
     private weak var session: ExactSession?
     private var listener: UInt = 0
     private var context: UInt = 0

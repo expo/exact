@@ -5,6 +5,10 @@
 use super::*;
 use exact_runner::{Answer, DataError, Store, Value};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 #[derive(Default)]
 struct Keeps;
 impl DataSource for Keeps {
@@ -1178,8 +1182,8 @@ impl DataSource for Refused {
     }
     fn answer(&mut self, _: &mut Store, name: &str, _: &[Value]) -> Result<Answer, DataError> {
         Ok(Answer::Later(match name {
-            "bad" => with_deadline(exact_runner::Request::continuation(1)),
-            _ => exact_runner::Request::continuation(2),
+            "bad" => with_deadline(exact_runner::Request::continuation::<TestWork>(1)),
+            _ => exact_runner::Request::continuation::<TestWork>(2),
         }))
     }
     fn continuation(
@@ -1202,7 +1206,7 @@ impl DataSource for Refused {
     }
     fn background(&mut self, _: &Store) -> Option<exact_runner::Request> {
         (!std::mem::replace(&mut self.armed, true)).then(|| {
-            with_deadline(exact_runner::Request::continuation(
+            with_deadline(exact_runner::Request::continuation::<TestWork>(
                 exact_runner::BACKGROUND,
             ))
         })
@@ -1281,7 +1285,9 @@ impl DataSource for Waiting {
             Value::Number(n) => n as u64,
             _ => 0,
         };
-        Ok(Answer::Later(exact_runner::Request::continuation(i + 1)))
+        Ok(Answer::Later(
+            exact_runner::Request::continuation::<TestWork>(i + 1),
+        ))
     }
     fn dispatch(&mut self, _: u64, _: &Store) -> exact_runner::Dispatch {
         exact_runner::Dispatch::Again
@@ -1299,7 +1305,9 @@ impl DataSource for Waiting {
         };
         // Asked again once more, as a waiter re-parks before its work lands.
         if self.asked.insert(i.to_string()) {
-            return Ok(Answer::Later(exact_runner::Request::continuation(1000 + i)));
+            return Ok(Answer::Later(
+                exact_runner::Request::continuation::<TestWork>(1000 + i),
+            ));
         }
         self.settled
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);

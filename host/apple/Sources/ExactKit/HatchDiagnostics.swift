@@ -403,7 +403,7 @@ final class HatchDiagnostics: HatchDiagnosing {
         var reply: [String: Any] = tags
         reply["hatches"] = by
         reply["calls"] = calls
-        reply["tickets"] = session?.natives.hatchClock.liveTickets ?? 0
+        reply["tickets"] = session?.natives.liveTickets ?? 0
         reply["counters"] = grouped(counterOrder) { counters[$0] ?? 0 }
         reply["timings"] = timed
         reply.merge(refusals) { a, _ in a }
@@ -442,8 +442,9 @@ private let hatchRecord: HatchRecordFn = { host, kind, node, scope, scopeLength,
 }
 
 extension ExactSession {
-    /// This session's store, which a development composition always makes.
-    var hatchDiagnostics: HatchDiagnostics { natives.diagnostics as! HatchDiagnostics }
+    /// This session's store, which a development composition makes when it
+    /// links the native module family; none without it.
+    var hatchDiagnostics: HatchDiagnostics? { natives.diagnostics as? HatchDiagnostics }
 
-    func hatchPerf() -> [String: Any] { hatchDiagnostics.perf(of: self) }
+    func hatchPerf() -> [String: Any] { hatchDiagnostics?.perf(of: self) ?? [:] }
 }

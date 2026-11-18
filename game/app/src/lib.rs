@@ -79,6 +79,9 @@ fn bake_source<D: contract::DataSource>(
         app_dir,
         &GAME,
         data,
+        // A game is the plain Apple host (`GAME.apple_linked` is false),
+        // which links every capability.
+        false,
         data_type,
         constructor,
         |entry| {

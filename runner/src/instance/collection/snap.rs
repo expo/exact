@@ -115,7 +115,7 @@ impl Tree {
         [port, minimum, maximum]: [f64; 3],
     ) -> Result<Vec<(f64, f64, bool)>, InstanceError> {
         let mut frames = Vec::new();
-        let Some((list, _, _)) = super::super::text::list_region(
+        let Some((list, _, _)) = super::text::list_region(
             None,
             &self.children,
             view,

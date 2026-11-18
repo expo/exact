@@ -204,9 +204,10 @@ is unavailable in agent mode unless the drive names a scratch store (--storage
 <name>)`), so an app that keeps its data there does nothing on a write; a chosen document (`doc:/`)
 still opens under its grant. That store, and an authored test's own store, includes
 a data module's `secret.keep`: files in the named scratch tree on Apple and Linux,
-and the page's `localStorage` on the web. Apple native modules use that store's
-data, cache and temporary roots too; a fresh drive clears them, and only picked
-temporary documents are cleared on each launch. A nameless drive keeps no secrets.
+and the page's `localStorage` on the web ([web sessions](recipes/web-sessions.md)).
+Apple native modules use that store's data, cache and temporary roots too; a fresh
+drive clears them, and only picked temporary documents are cleared on each launch.
+A nameless drive keeps no secrets.
 To show what survives a restart on any host, use an authored test's `reload` step (below).
 
 The driver prints each reply in a short text form. A `tap` or `type` is one line
@@ -1521,6 +1522,15 @@ web, the page's `localStorage`, readable by any script on that origin; on Linux,
 unencrypted files in the app's data directory, retained across launches (an app
 without an ID keeps them in memory). A drive keeps it, by default,
 only in a named `--storage` store (`EXACT_STORE=real` gives an Apple drive, on a Mac, a simulator or a phone, the Keychain a normal launch reads).
+
+**Web refresh and session tokens belong in an HttpOnly, Secure cookie set by the
+app's server, which the page never reads.** Follow [web sign-in tokens and
+sessions](recipes/web-sessions.md) for SameSite, credentialed fetch, CSRF, rotation
+and logout, sharing the flow with native `secret.keep`. Inside an answer,
+`exactHost()` returns `'web'` or `'native'` at run time; no per-build transport
+setting is needed. This string store does not protect a web token from
+injected scripts. See the browser's [cookie attributes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie).
+
 A secret that only the person in front of the device may read (an account's token
 behind Face ID) carries a policy on its line, `secret.keep token user-presence`
 (`biometry-any`, `biometry-current-set`, `device-credential`), then `optional` when
@@ -2039,8 +2049,11 @@ redirectTo }` to `{ redirect, state }`), one that completes it (`{ code, state
 hooks and browser session manager do not run in a data module. Call the
 mutations with `cx.mutation`, open `redirect` with `openAuthSession` (it and
 `authCallback` are declared for every app in `app.contract.d.ts`), keep the
-refresh token with `store.set` under a `secret.keep` grant, and give the access
-token to `cx.setAuth`. The mutations' names are the deployment's:
+refresh token with `store.set` under a `secret.keep` grant on native hosts, and
+give the access token to `cx.setAuth`. This direct token flow exposes web tokens
+to page scripts. For [web sessions](recipes/web-sessions.md), put the flow behind
+your server's HttpOnly cookie; `cx.setAuth` does not turn a bearer token into a
+cookie. The mutations' names are the deployment's:
 
 ```ts
 const SESSION = 'example.session';
@@ -3484,6 +3497,12 @@ instantiates does not link its views' implementations.
 
 ### A package's GPU surfaces
 
+To show a static glTF model, add `@exact/model-viewer` from
+`packages/model-viewer` in this checkout. Its `modelViewer` surface supplies
+the camera, picking, node styles, faded-behind rendering, clipping and
+hotspot labels as Exact children. See [the model viewer recipe](recipes/model-viewer.md)
+for a runnable example, file sources and the surface record (LLP 1133.039).
+
 Any package may declare `gpu` beside `views` in its main `exact.json` (LLP 1153.003 D5):
 
 ```json
@@ -3555,6 +3574,106 @@ error names each attempt's failure. An incompatible `exactGpu` requirement stops
 build before resolution. Neither input lock changes.
 The app commits no Rust files for a package. Modules load only when their surfaces mount;
 package WGSL is compiled into the crate, rather than shipped through `gpu.shaderRoots`.
+
+### Model viewer
+
+`cameraOrbit` is azimuth, polar angle from the top, then radius. Angles take
+`deg` or `rad`; lengths take `m`, `cm` or `mm`. A radius of `100%` fits a
+sphere around the target; `105%` leaves a margin. Unsaid, the orbit is
+`"0deg 75deg 105%"`, `cameraTarget="auto auto auto"` centres the model, and
+`fieldOfView="auto"` frames at 30°. A narrow canvas widens the vertical
+field of view to keep the model in frame. Zoom changes radius.
+
+Changing the orbit, target or field of view animates to that view.
+`postMessage("reset", "modelViewer")` returns to those authored values after
+a drag, including when a view button writes the same values again. The
+record's settled camera values can be saved and bound back as a named view.
+`interpolationDecay` is milliseconds, 50 by default; use 0 to jump, including
+when the app honours the person's reduced-motion preference.
+
+`cameraControls` is off unless written. On, drag to orbit, pinch or wheel to
+zoom, two-finger drag or a modified/right-button drag to pan; focused, use
+arrows, Shift + arrows and Page Up/Down. `disablePan` and `disableZoom` stop
+those camera moves. The canvas reserves all touches and wheels in its box
+at mount, even with zoom disabled. In a scrolling page, leave room beside
+it to scroll. To change input mode, mount another canvas, as
+[the scrolling fixture](../packages/model-viewer/test/fixture/scrolling.contract)
+does. With controls off, that fixture picks from `pointerup` by posting
+`pick <offsetX> <offsetY>` to the surface.
+
+Each `ModelNode` styles its named node and descendants. A deeper entry wins;
+for the same name, the last wins. The whole entry wins, without merging
+fields. `color=""` keeps material colours; otherwise use a CSS colour, with
+`opacity` from 0 to 1 and `visibility="visible"` or `"hidden"`. System
+colours such as `AccentColor` need platform context and are refused.
+Unnamed nodes use `#<index>`; duplicate names share a style.
+
+For the faded-behind style, mark the shell `occluder` and its inner parts
+`revealed`. The inner part draws at `occludedOpacity` where the shell hides
+it. Occluders are always opaque: use `occlusion="none"` when you want a
+translucent shell instead. A tap picks the revealed part through an
+occluder, but ordinary opaque geometry in front still blocks it. Hidden and
+clipped geometry, and non-occluders at zero opacity, cannot be picked.
+`message=pick` receives the deepest mesh node's name, or `""` for a miss.
+
+`clipPosition` is a point on the plane, in model coordinates; its `auto`
+axes use the model's centre. `clipNormal` points towards the half that
+stays. `""` disables it. Drawing, picking and hotspot anchors share the cut;
+the cut faces are not filled.
+
+A `ModelHotspot` anchors a direct canvas child by `testId`. Its position is
+in model coordinates; `position=""` uses the node subtree's bounding-box
+centre. `normal=""` skips the facing test. Labels follow the camera and dim
+to `minHotspotOpacity` (0.25 by default) behind opaque geometry outside
+their own subtree, or when their normal faces away. They stay pressable
+and accessible while dimmed; off-canvas, behind-camera, hidden-node and
+clipped anchors hide them. Write a named group and label on the canvas,
+and give hotspot buttons the same picking action as the model. On the web,
+a label that writes `filter` overrides its occlusion fade; put that filter
+on a child inside the label instead. iOS keyboard focus skips hotspots;
+VoiceOver can reach them. View buttons provide a touch alternative to orbit.
+
+`src` also accepts `app:/data/…`, `app:/cache/…` and `app:/tmp/…`. Data code
+downloads or imports a GLB, writes it under its `fs.write` grant, and returns
+the path to bind. Reading that path needs no surface grant. See
+[the fixture's cacheModel source](../packages/model-viewer/test/fixture/app.ts)
+and its scrolling route for a file created at runtime. Direct `https:`
+sources are refused. Names are ASCII, at most 128 bytes after removing
+`assets/`, with no `.` or `..` path part; files are at most 64 MiB.
+
+The reader supports `KHR_mesh_quantization` and `EXT_meshopt_compression`.
+It draws static triangles with material base colours. `OPAQUE` (the default)
+ignores material alpha; `MASK` keeps or drops the whole primitive at
+`alphaCutoff` (0.5 by default). Both use material opacity 1; `BLEND` uses
+the base colour factor's alpha. Node style `opacity` multiplies that material
+opacity, except for occluders, which stay opaque. Textures, animation, skins
+and morph targets are ignored. `.gltf`, sparse accessors and other required
+extensions are refused. On the web, parsing blocks the page once; native
+parsing runs off the frame thread.
+
+Read `exactSurface("modelViewer")` with the imported `ModelViewerState`:
+
+| Field | Use |
+|---|---|
+| `presented` | Hide the loader after the current picture is presented. |
+| `src`, `loaded`, `error` | The bound source, whether it loaded, and its error sentence (`""` on success). |
+| `triangles` | The displayed model's triangle count. |
+| `nodes` | Names and parent names (`""` at a root), for a parts list. |
+| `cameraOrbit`, `cameraTarget`, `fieldOfView` | The last settled camera, ready to save as a view. |
+| `cameraView` | `front`, `right`, `back` or `left`, optionally prefixed `upper-` or `lower-`. |
+
+A replacement keeps the old picture while loading. Failure clears it and
+sets `presented=true`, `loaded=false` and `error`. The empty frame ends the
+loader; show the error text that remains. The record belongs to the first
+live canvas of that surface name; each canvas's picks still reach its own
+handler. Import the package's shapes: records entering a GPU surface are
+positional, so their declaration order matters.
+
+The generated fixture is the tested model. Web drawing needs WebGPU. tvOS
+shows the model and accepts app view buttons, but has no remote orbit or
+focusable hotspots. Linux has no screen-reader bridge. Android, Windows and
+physical-phone behaviour remain unqualified; watchOS and the terminal have
+no GPU surface.
 
 ### Native SDK dependencies
 
@@ -3901,7 +4020,10 @@ name; two pages that would share a file are refused.
 release build as deploy makes one (no agent mode): a page for each `render=build` route
 (rendered under Bun unless the app has a render entry of its own), `404.html` for a `notfound`
 route rendered so, `shell.html`, and `routes.json`, the route table in the plan's order with each
-route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
+route's pattern, render policy and `notfound`. A route whose render draws randomness
+(`crypto.getRandomValues` or `crypto.randomUUID`, for example) cannot be `render=build`, since
+its page would give every reader the same random values: the build fails, naming the route;
+declare it `render=request` or `render=client` instead. An app with routes also gets `robots.txt`, which
 allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
 by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
 (a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built
@@ -4500,6 +4622,13 @@ which require optional capabilities. `-exact-spring(…)` (a `transition` timing
 function), `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines have
 specific documented behavior;
 they do not admit arbitrary frame callbacks or a second app-state graph.
+
+A native list (`list appearance="auto"`) applies a change at once, as UIKit
+does, unless a row carries a layout transition or an exit animation. Then a
+change in which rows it holds, or in their order, animates on iOS: rows slide
+to their new places and rows that come or go fade, with UIKit's own timing,
+not the written duration. Its first rows, a restyle and a list out of a window
+still apply at once.
 
 macOS and iOS play eligible box `translate`, `scale`, `rotate` and `opacity`
 animations and transitions in Core Animation. A transform stays sampled when
@@ -6372,12 +6501,14 @@ size in points, from the box `layout <target>` prints: `expect layout "status-ma
 fails for a glyph a column stretched), `expect text "id" == "…"`
 (the node's text; a control's value, so a `select` reads its chosen value, not its
 options, and a checkbox with a `checked` binding `true` or `false`; else its descendants' — a button's label — else a field's value), and
-`expect state name == <number|string|bool|none|[]>`, where `name` may go on into
-a record's fields (`board.active.present`) or a list index (`rows.0`), and the
-number may be negative (`== -3`). Numeric bounds use `>=` or `<=` (`expect state offset >= 90`
+`expect state name == <literal>`, where `name` may go on into a record's fields
+(`board.active.present`) or a list index (`rows.0`). A literal is a number (negative
+allowed), string, bool, `none`, `some(literal)`, list (`["a", "b"]`, `[[1, -2], []]`),
+or shape with literal fields (`Point(x=1, y=-2)`). Equality compares the whole value
+structurally. Numeric bounds use `>=` or `<=` (`expect state offset >= 90`
 and `expect state offset <= 110`); they require a number, without coercing strings or bools.
 `expect state mode in "idle" "ready"` checks literal membership; alternatives use the same
-literals as `==`, separated by spaces. A mismatch names the value read. `expect wakelock held|released` reads
+literals as `==`, separated by spaces. A mismatch prints the actual and expected values. `expect wakelock held|released` reads
 `state.wakelock.held`: the runner's record of displayed elements requesting the
 lock, not whether the OS or browser granted it. A mismatch names the holding
 view ids and their testIds when present, or says nothing holds it.

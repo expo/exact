@@ -166,6 +166,7 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
     return response;
   }
   catch (error) {
+    if (globalThis.__exactRender && error?.renderDeferred) throw error;
     if (error instanceof FetchError) throw error;
     if (deadline && signal?.aborted && signal.reason === deadline.signal.reason) throw new FetchError('Timeout', `the request timed out after ${until.ms} ms`);
     // The caller's own abort rejects with its signal's reason, as Fetch and the native prelude do: an
@@ -214,6 +215,7 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
       const response = await fetchWith(admitted, req.url, init, null, redirectOf(req.url, init), within, req.origin ?? UNATTRIBUTED);
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {
+      if (globalThis.__exactRender && error?.renderDeferred) return { refused: error.message };
       return { failed: error?.kind === 'Refused' ? 2 : 1, message: String(error?.message ?? error) };
     }
   };

@@ -7,6 +7,10 @@ use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 static RAN: AtomicUsize = AtomicUsize::new(0);
 
 struct PollsOtherWork;
@@ -16,7 +20,7 @@ impl DataSource for PollsOtherWork {
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
         Ok(Answer::Later(
-            Request::continuation(1).long_poll("since", "seq"),
+            Request::continuation::<TestWork>(1).long_poll("since", "seq"),
         ))
     }
     fn continuation(&mut self, _: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {

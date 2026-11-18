@@ -340,7 +340,7 @@ public final class ExactLaunch: NSObject {
     /// first and waits for the owner, so work sent there before it has
     /// published its batch when `hostOutstanding` reads the published queue.
     static func ledger(_ session: ExactSession) -> (items: [String], failed: [String], poisoned: Bool)? {
-        guard session.state != .destroyed, let data = session.agent("{\"op\":\"outstanding\"}").data(using: .utf8),
+        guard session.state != .destroyed, let data = session.runtime.ask(exact_outstanding, "").data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["error"] == nil else { return nil }
         var out: [String] = []
         for key in ["requests", "streams", "awaiting", "oneShots", "busy"] {

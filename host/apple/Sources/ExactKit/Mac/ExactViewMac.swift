@@ -167,7 +167,7 @@ public final class ExactView: NSView {
                 MainActor.assumeIsolated {
                     guard let self, note.object == nil || note.object as AnyObject? === self.window || note.object is NSApplication else { return }
                     self.session.tellPreferences()
-                    self.session.rasters.displayChanged()
+                    self.session.rasters?.displayChanged()
                     // The title bar leaves the window in full screen and comes back after it.
                     if note.name == NSWindow.didEnterFullScreenNotification || note.name == NSWindow.didExitFullScreenNotification { self.syncInsets() }
                 }
@@ -269,11 +269,11 @@ public final class ExactView: NSView {
         let size = session.presenter.viewportSize
         guard size.width > 0, size.height > 0 else { return }
         let scale = session.devicePixelScale
-        session.rasters.fit(size: size, scale: scale)
+        session.rasters?.fit(size: size, scale: scale)
         if scale != lastDisplayScale {
             lastDisplayScale = scale
             session.apply(session.runtime.canvasDisplay(scale: scale, memory: ProcessInfo.processInfo.physicalMemory))
-            session.rasters.displayChanged()
+            session.rasters?.displayChanged()
             session.controlTextChanged() // text line boxes round to the page's device pixels (LLP 1008 §3)
             session.tellDisplayScale() // a hairline is one device pixel of the page (LLP 1115.000 D10.3)
             session.presenter.regridAll() // every box on the new device pixels (`PixelGridMac.swift`)
@@ -338,7 +338,7 @@ public final class ExactView: NSView {
         if window == nil { session.presenter.menus.reset(); session.presenter.dialogs.reset() }
         session.tellPreferences()
         session.tellPage() // `hasFocus` is this window's (#114)
-        session.rasters.setPaused(window == nil)
+        session.rasters?.setPaused(window == nil)
         session.canvases.refreshLifecycle()
         if session.presenter.toolbar.window !== window { session.presenter.toolbar.detach() }
         else { session.presenter.toolbar.sync() }

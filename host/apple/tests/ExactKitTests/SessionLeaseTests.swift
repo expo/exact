@@ -143,29 +143,29 @@ final class SessionLeaseTests: XCTestCase {
     /// has put its input at the old one's node id.
     func testAPickerShownBeforeAReloadAnswersNoInputAfterIt() throws {
         let session = try session(Self.picking)
-        let old = try XCTUnwrap(session.picker.request("attach"))
-        XCTAssertNil(session.picker.request("attach"), "open: a second showPicker does nothing")
+        let old = try XCTUnwrap(session.pickerHost.request("attach"))
+        XCTAssertNil(session.pickerHost.request("attach"), "open: a second showPicker does nothing")
         XCTAssertTrue(session.apply(try compile(Self.picking)))
-        let new = try XCTUnwrap(session.picker.request("attach"), "the replacement's input opens its own picker at once")
+        let new = try XCTUnwrap(session.pickerHost.request("attach"), "the replacement's input opens its own picker at once")
         XCTAssertEqual(new.view, old.view, "the replacement numbers its nodes afresh")
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).txt")
         try Data("old".utf8).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
-        session.picker.finish(old, files: [(file, "old.txt")])
-        session.picker.finish(old, files: [])
+        session.pickerHost.finish(old, files: [(file, "old.txt")])
+        session.pickerHost.finish(old, files: [])
         XCTAssertEqual(try slots(session)["picked"] as? String, "none", "the old pick changed the new input")
         XCTAssertEqual(try slots(session)["cancels"] as? Int, 0, "the old cancel reached the new input")
-        XCTAssertNil(session.picker.request("attach"), "the new input's picker is still open")
-        session.picker.finish(new, files: [])
+        XCTAssertNil(session.pickerHost.request("attach"), "the new input's picker is still open")
+        session.pickerHost.finish(new, files: [])
         XCTAssertEqual(try slots(session)["cancels"] as? Int, 1, "the current generation's cancel")
     }
 
     func testAPickerCannotAnswerAnotherSessionsInput() throws {
         let a = try session(Self.picking), b = try session(Self.picking)
-        let request = try XCTUnwrap(a.picker.request("attach"))
-        b.picker.finish(request, files: [])
+        let request = try XCTUnwrap(a.pickerHost.request("attach"))
+        b.pickerHost.finish(request, files: [])
         XCTAssertEqual(try slots(b)["cancels"] as? Int, 0)
-        a.picker.finish(request, files: [])
+        a.pickerHost.finish(request, files: [])
         XCTAssertEqual(try slots(a)["cancels"] as? Int, 1)
     }
 
@@ -253,7 +253,7 @@ final class SessionLeaseTests: XCTestCase {
 
     /// A frame whose arm never loads: its entry still takes the arm's events.
     private func framed() throws -> (ExactSession, NodeView, Data) {
-        let session = try session(Self.framing) { $0.webviews.moduleLocation = { "/nonexistent/libexact_web.dylib" } }
+        let session = try session(Self.framing) { $0.webHost.moduleLocation = { "/nonexistent/libexact_web.dylib" } }
         let frame = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "guest" })
         let record: [String: Any] = ["event": "navigatesuccess", "record": ["url": "https://old.example/", "navigationId": 7]]
         return (session, frame, try JSONSerialization.data(withJSONObject: record))
@@ -261,7 +261,7 @@ final class SessionLeaseTests: XCTestCase {
 
     func testAFramesQueuedEventReachesItsHandlerInItsGeneration() throws {
         let (session, frame, event) = try framed()
-        session.webviews.receivedEvent(id: frame.id, kind: 4, data: event)
+        session.webHost.receivedEvent(id: frame.id, kind: 4, data: event)
         drain()
         XCTAssertEqual(try slots(session)["landed"] as? Int, 1)
     }
@@ -272,7 +272,7 @@ final class SessionLeaseTests: XCTestCase {
     func testAFramesQueuedEventIsDroppedWhenItsGenerationOrEntryEnds() throws {
         for replaced in [false, true] {
             let (session, frame, event) = try framed()
-            session.webviews.receivedEvent(id: frame.id, kind: 4, data: event)
+            session.webHost.receivedEvent(id: frame.id, kind: 4, data: event)
             if replaced {
                 session.webviews.destroy(id: frame.id)
                 _ = session.webviews.create(owner: frame)

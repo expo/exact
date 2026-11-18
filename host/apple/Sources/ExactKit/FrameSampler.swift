@@ -434,7 +434,7 @@ final class FrameSampler: NSObject {
     @objc func tick(_ link: CADisplayLink) {
         observe(now: link.timestamp, target: link.targetTimestamp, at: CACurrentMediaTime())
         // Which images show without their pixels this frame (LLP 1145 D2).
-        session?.rasters.sampleBlank()
+        session?.rasters?.sampleBlank()
         // The session's own frame source running is activity too.
         if session?.frames.link != nil || held { active = CACurrentMediaTime() }
         if !observing && CACurrentMediaTime() - active > Self.quiet { stop() }
@@ -627,6 +627,53 @@ final class FrameSampler: NSObject {
 }
 
 extension ExactSession {
+    /// Direct observations bypass the carrier's drain and guest scripting.
+    /// The saved frame ring ends before these reads, which never settle or seek.
+    func traceSnapshot() -> [String: Any] {
+        let read = { (export: (ExactRuntime, Int) -> UInt32) -> Any in
+            (try? JSONSerialization.jsonObject(with: Data(self.runtime.ask(export, "{}").utf8))) ?? ["error": "unreadable reply"]
+        }
+        let started = ExactEnv.wall()
+        let tree = read(exact_tree), state = read(exact_state), layout = AgentLink.layout(self)
+        return ["tree": tree, "state": state, "layout": layout,
+                "observation": executionObservation().merging([
+                                "wallFrom": started, "wallTo": ExactEnv.wall(), "timebase": "milliseconds since process main",
+                                "reads": ["tree": ["class": "passive", "scope": "runner; no guest DOM"],
+                                          "state": ["class": "passive", "scope": "runner; no host settling"],
+                                          "layout": ["class": "passive", "scope": "mounted host geometry"],
+                                          "journal": ["class": "passive"], "perf": ["class": "passive"]],
+                                "frameRingEndsBeforeReads": true, "settlingReads": [] as [String]] as [String: Any]) { _, read in read }]
+    }
+
+    func appFileStorage() -> [String: Any] {
+        let reply = try? JSONSerialization.jsonObject(with: Data(runtime.ask(exact_app_roots, "").utf8))
+        return (reply as? [String: Any])?["storage"] as? [String: Any] ?? ["available": false, "store": "none"]
+    }
+
+    func executionObservation() -> [String: Any] {
+        let frozen = clock != nil, files = appFileStorage()
+        let substitutedFiles = ExactEnv.environment["EXACT_AGENT"] != nil
+        let substitutedSecrets = substitutedFiles && ExactEnv.environment["EXACT_STORE"] != "real"
+        var substitutions = ExactEnv.agentMode
+            ? ["timers", "collection-fill-scheduling", "scroll-velocity", "wheel-routing", "device-facts", "capabilities"] : []
+        if substitutedFiles { substitutions.append("storage") }
+        if substitutedSecrets { substitutions.append("secret-presence") }
+        return ["clockMode": frozen ? "virtual" : "real", "clock": now(), "clockChanged": false,
+                "execution": ExactEnv.agentMode ? "agent" : "normal", "scheduling": ExactEnv.agentMode ? "agent" : "normal",
+                "substitutions": substitutions, "store": files["store"] as? String ?? "none",
+                "performanceClaim": !ExactEnv.agentMode && !substitutedFiles && !substitutedSecrets && !frozen]
+    }
+
+    /// Let a production bake's sampler go once no recording keeps it, or
+    /// its session is destroyed, and the host phases with the last sampler
+    /// any session keeps. A build that measures on its own keeps its sampler.
+    package func releaseSampler(measured: Bool = FrameSampler.measured) {
+        guard !measured, sampler?.recording == nil || state == .destroyed else { return }
+        sampler?.stop()
+        sampler = nil
+        if !app.sessions.contains(where: { $0.sampler != nil }) { HostPhases.shared.on = false }
+    }
+
     /// Save Trace (LLP 1079 D5): this session's journal, its presented frames,
     /// `perf` over every root and its hatches, with who made them and each timing's
     /// proxy, as `trace-<wallclock>.json` in the app's temporary directory;
@@ -644,7 +691,7 @@ extension ExactSession {
         // The sites' work, which a release build counts from here: its live
         // instances, and no work yet.
         runtime.measureWork()
-        let perf = raw(agent("{\"op\":\"perf\"}"))
+        let perf = raw(runtime.ask(exact_perf, "{}"))
         #if canImport(UIKit)
         let host = "ios", device = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"].map { "\($0) (simulator)" } ?? UIDevice.current.model
         #else
@@ -679,7 +726,7 @@ extension ExactSession {
                         "overrun": "iOS and tvOS 18 and later: the UI update's commit past its completionDeadlineTime (UIUpdateLink, afterCATransactionCommit); elsewhere: a main run-loop turn that began before the frame's targetTimestamp and went to sleep after it",
                         "loaf": "none on this host"],
             "plan": (perf as? [String: Any])?["plan"] ?? NSNull(),
-            "journal": raw(agent("{\"op\":\"logs\",\"since\":0}")),
+            "journal": raw(runtime.ask(exact_logs, "{\"since\":0}")),
             "frames": frames,
             "perf": perf,
             // The hatches (LLP 1075.003.000.001 §3.3), read in this same turn, so the sections agree.
@@ -859,6 +906,19 @@ extension Agent {
         }
         // A nested Foundation run loop does not dispatch AppKit's events.
         sampler.observationStopped = { observation.finish($0) }
+    }
+}
+#endif
+
+#if canImport(UIKit)
+extension FrameSampler {
+    /// The node a scroller belongs to, by its test id or id when it has one;
+    /// `page` for the document's, which no node holds.
+    static func scrollerName(_ scroll: UIScrollView) -> String {
+        var view: UIView? = scroll
+        while let v = view, !(v is NodeView) { view = v.superview }
+        guard let node = view as? NodeView else { return "page" }
+        return node.props["testId"] ?? node.props["id"].map { "#\($0)" } ?? "node \(node.id)"
     }
 }
 #endif

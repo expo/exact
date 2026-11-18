@@ -93,7 +93,7 @@ pub struct Batch {
     pub must_finish: Option<bool>,
 }
 
-pub use exact_runner::agent::quote;
+pub use exact_runner::json::quote;
 
 /// A reply whose batch must receive presenter work before it is wrapped.
 pub struct WrappedBatch {
@@ -633,10 +633,10 @@ impl Batch {
     /// (LLP 1133.010 D13), and, with a `service`, the item the host reads
     /// after it, one op per ask. Nothing secret: the value comes back by
     /// `exact_presence`.
-    pub fn presences(&mut self, asks: Vec<exact_runner::presence::PresenceAsk>) {
+    pub fn presences(&mut self, asks: Vec<String>) {
         for ask in asks {
             self.ops
-                .push(format!("{{\"op\":\"presence\",{}", &ask.json()[1..]));
+                .push(format!("{{\"op\":\"presence\",{}", &ask[1..]));
         }
     }
 
@@ -700,9 +700,9 @@ impl Batch {
                     "{{\"op\":\"surfaceWork\",\"mode\":\"canvas\",\"ticket\":{ticket},\"id\":{},\"lifetime\":{},\"generation\":{},\"sequence\":{},\"w\":{},\"h\":{},\"type\":",
                     c.view, c.lifetime, c.generation, c.sequence, c.width, c.height
                 );
-                exact_runner::agent::quote(&c.encoding.media_type, &mut op);
+                exact_runner::json::quote(&c.encoding.media_type, &mut op);
                 if let Some(q) = c.encoding.quality {
-                    op.push_str(&format!(",\"quality\":{}", exact_runner::agent::num(q)));
+                    op.push_str(&format!(",\"quality\":{}", exact_runner::json::num(q)));
                 }
                 op.push('}');
                 op
@@ -798,18 +798,18 @@ impl Batch {
                     let _ = write!(
                         s,
                         "{{\"op\":\"play\",\"id\":{id},\"sound\":{sound},\"at\":{},\"gain\":{}",
-                        exact_runner::agent::num(*at),
-                        exact_runner::agent::num(*gain)
+                        exact_runner::json::num(*at),
+                        exact_runner::json::num(*gain)
                     );
                     if *playback_rate != 1.0 {
                         let _ = write!(
                             s,
                             ",\"playbackRate\":{}",
-                            exact_runner::agent::num(*playback_rate)
+                            exact_runner::json::num(*playback_rate)
                         );
                     }
                     if *pan != 0.0 {
-                        let _ = write!(s, ",\"pan\":{}", exact_runner::agent::num(*pan));
+                        let _ = write!(s, ",\"pan\":{}", exact_runner::json::num(*pan));
                     }
                     write!(s, "}}")
                 }
@@ -825,7 +825,7 @@ impl Batch {
                     let _ = write!(
                         s,
                         "{{\"op\":\"set\",\"id\":{id},\"at\":{}",
-                        exact_runner::agent::num(*at)
+                        exact_runner::json::num(*at)
                     );
                     for (name, v) in [
                         ("gain", gain),
@@ -833,21 +833,21 @@ impl Batch {
                         ("pan", pan),
                     ] {
                         if let Some(v) = v {
-                            let _ = write!(s, ",\"{name}\":{}", exact_runner::agent::num(*v));
+                            let _ = write!(s, ",\"{name}\":{}", exact_runner::json::num(*v));
                         }
                     }
-                    write!(s, ",\"ramp\":{}}}", exact_runner::agent::num(*ramp))
+                    write!(s, ",\"ramp\":{}}}", exact_runner::json::num(*ramp))
                 }
                 SoundOp::End { id, at } => write!(
                     s,
                     "{{\"op\":\"end\",\"id\":{id},\"at\":{}}}",
-                    exact_runner::agent::num(*at)
+                    exact_runner::json::num(*at)
                 ),
                 // A sequence step's haptic, at its time (LLP 1125 D3).
                 SoundOp::Haptic { id, kind, at } => {
                     let _ = write!(s, "{{\"op\":\"haptic\",\"id\":{id},\"kind\":");
                     quote(kind, &mut s);
-                    write!(s, ",\"at\":{}}}", exact_runner::agent::num(*at))
+                    write!(s, ",\"at\":{}}}", exact_runner::json::num(*at))
                 }
                 SoundOp::Unhaptic { id } => write!(s, "{{\"op\":\"unhaptic\",\"id\":{id}}}"),
             };

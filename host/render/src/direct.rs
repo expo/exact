@@ -367,6 +367,9 @@ mod tests {
     use exact_plan::Value;
     use exact_runner::{Answer, DataError, Outcome, Request, Response, Store};
     use std::sync::{mpsc, Arc, Mutex};
+    /// The host work these tests hand out (LLP 1047.001 D12).
+    struct TestWork;
+    impl exact_runner::HostWork for TestWork {}
 
     const SHELL: &str = r#"<!doctype html>
 <html lang="en">
@@ -401,7 +404,7 @@ component Cards
         }
 
         fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-            Ok(Answer::Later(Request::continuation(1)))
+            Ok(Answer::Later(Request::continuation::<TestWork>(1)))
         }
 
         fn continuation(&mut self, _: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {

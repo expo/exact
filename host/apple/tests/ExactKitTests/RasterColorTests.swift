@@ -2,6 +2,7 @@ import XCTest
 import ImageIO
 import CoreGraphics
 @testable import ExactKit
+@testable import ExactImages
 
 /// LLP 1100 §9 V3: each color fixture decodes to the class, storage and
 /// colors its `.json` says. The expected values come from the standards'

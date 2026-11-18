@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1069.011 on UIKit: a `Control` of type `button` is UIKit's own
 /// `UIButton` with the configuration its `buttonStyles` row names, its title

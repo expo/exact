@@ -252,7 +252,7 @@ impl SvgState {
     pub(crate) fn presented(&mut self, kernel: &Kernel, id: ViewId) -> bool {
         if self.elements.contains_key(&id) {
             for root in self.sent.keys() {
-                if exact_kernel::svg::scene_sources(kernel, *root).contains(&id) {
+                if crate::link::families::scene_sources(kernel, *root).contains(&id) {
                     self.dirty.insert(*root);
                 }
             }

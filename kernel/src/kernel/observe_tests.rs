@@ -1439,6 +1439,9 @@ mod provenance;
 #[path = "content_root_tests.rs"]
 mod content_root;
 
+#[path = "keyboard_tests.rs"]
+mod keyboard;
+
 #[path = "reservation_tests.rs"]
 mod reservation;
 

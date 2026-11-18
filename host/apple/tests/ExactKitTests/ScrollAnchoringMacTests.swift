@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// A plain AppKit scroller keeps the reader's content still when a box above
 /// the port changes size or is inserted, as CSS scroll anchoring does in

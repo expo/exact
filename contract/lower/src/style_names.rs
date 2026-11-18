@@ -282,6 +282,10 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     // A content owner's clearance of its chrome, per edge (LLP 1123 D4), and
     // the safe area where a box is, as an author sets it (D9).
     ("-exact-safe-area", "exact LLP 1123 D4", AttrTarget::Styles(&[StyleId::SafeArea])),
+    // What a box takes, and what it adds to the unsafe area inside it (LLP 1123 D4, D11).
+    ("-exact-safe-area-ignore", "exact LLP 1123 D4", AttrTarget::Shorthand),
+    ("-exact-additional-safe-area", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::AdditionalSafeAreaTop, StyleId::AdditionalSafeAreaRight, StyleId::AdditionalSafeAreaBottom, StyleId::AdditionalSafeAreaLeft, ])),
+    ("-exact-safe-area-padding", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::SafeAreaPaddingTop, StyleId::SafeAreaPaddingRight, StyleId::SafeAreaPaddingBottom, StyleId::SafeAreaPaddingLeft, ])),
     ("--exact-safe-area-inset-top", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetTop])),
     ("--exact-safe-area-inset-right", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetRight])),
     ("--exact-safe-area-inset-bottom", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetBottom])),

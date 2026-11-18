@@ -3,6 +3,10 @@
 use super::*;
 use exact_runner::{Answer, DataError, Store, Value};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// Every answer waits on a continuation until the test supplies its outcome.
 #[derive(Default)]
 struct Held;
@@ -11,7 +15,9 @@ impl DataSource for Held {
         Err(DataError::UnknownSource(name.into()))
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-        Ok(Answer::Later(exact_runner::Request::continuation(1)))
+        Ok(Answer::Later(
+            exact_runner::Request::continuation::<TestWork>(1),
+        ))
     }
     fn dispatch(&mut self, _: u64, _: &Store) -> exact_runner::Dispatch {
         exact_runner::Dispatch::Again

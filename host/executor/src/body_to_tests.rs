@@ -6,6 +6,10 @@ use super::*;
 use exact_runner::Answer;
 use ibex2::stdlib::fetch::{Body, BodySource};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// The requests that reached the transport, by URL.
 type Opened = Arc<Mutex<Vec<String>>>;
 
@@ -531,7 +535,7 @@ fn cancelling_after_the_last_read_prevents_publish_before_abort_callbacks() {
         end.recv_timeout(Duration::from_secs(5)).unwrap();
         let (finished, finish) = channel();
         core.run(
-            job(2, Request::continuation(2)),
+            job(2, Request::continuation::<TestWork>(2)),
             Some(Box::new(move || {
                 finished.send(()).unwrap();
                 Outcome::Storage(Vec::new())

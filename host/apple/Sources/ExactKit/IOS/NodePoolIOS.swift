@@ -547,7 +547,7 @@ extension NodeView {
         parkTextRaster()
         liveText = nil
         loadGeneration += 1
-        presenter?.session?.rasters.cancel(id)
+        presenter?.session?.rasters?.cancel(id)
         // A symbol keeps its glyph and key: the same symbol again costs no
         // image, and `finishReuse` reports its size under the new id.
         buttonRasterView = nil

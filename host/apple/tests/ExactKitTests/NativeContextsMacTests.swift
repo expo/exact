@@ -2,6 +2,7 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1069.011.000 on AppKit: a native button is a window toolbar's item,
 /// its prominent style a prominent item (D2), and a tab drawn as a segment

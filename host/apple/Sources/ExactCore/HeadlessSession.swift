@@ -413,7 +413,7 @@ public final class HeadlessSession {
     }
 
     package func agentFacts() -> [String: Any] {
-        let bytes = Data(core.runtime.agent("{\"op\":\"tags\"}").utf8)
+        let bytes = Data(core.runtime.ask(exact_tags, "").utf8)
         return (try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]) ?? [:]
     }
 

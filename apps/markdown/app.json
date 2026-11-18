@@ -32,6 +32,5 @@
     "web": {}
   },
   "deploy": { "store": { "web": "0", "macos": "0", "ios": "0" } },
-  "link": ["io"],
   "rust": { "data": { "crate": "markdown-data", "type": "markdown_data::Markdown", "source": "markdown_data::Markdown::new()" } }
 }

@@ -405,6 +405,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     // A long poll's reply that is no event (LLP 1016.000 D8) is counted by the reader (`replied`) and lands nothing.
     return streamed(req, rustGrantSet, m => { if (!req.longPoll || m.event !== 'exact:reply') message(socket ? { ...m, socket } : m); }, controller, undefined, protocol).then(o => {
       sockets.delete(socket);
+      if (o.refused) return o;
       if (o.close) rt.journal.push(`t=${rt.clock.now} socket close: ${o.close.code} ${o.close.reason} (${controller.streamName})`);
       return o.close ? { closed: o.close } : o.kind ? { failed: o.kind, message: text.decode(o.body) }
         : { status: o.status, headers: o.headers ? o.headers.split('\n').map(l => [l.slice(0, l.indexOf(': ')), l.slice(l.indexOf(': ') + 2)]) : [], body: o.body };

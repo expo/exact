@@ -16,9 +16,9 @@ use exact_runner::{Capability, Uses};
 /// manifest's `link` ahead of use; on Apple, whose boot admits a widget's
 /// entry plan against the same set, what `entries` use too. Development and
 /// unknown grants link every capability (LLP 1047.001 D6). `EXACT_APPLE_LINK`
-/// selects `plan` or `all` explicitly, as Apple's build does. A bundle
-/// needing a capability this binary lacks is then another compatibility id:
-/// a binary change.
+/// selects `plan` or `all` explicitly, as Apple's build does. An update
+/// whose plan needs a capability this set lacks is a binary change
+/// ([`apple_requirement`]).
 pub(crate) fn name_into(
     compat: &mut Compat,
     app: &std::path::Path,
@@ -39,8 +39,14 @@ pub(crate) fn name_into(
         let plan = exact_plan::Plan::decode(&bytes)
             .map_err(|e| format!("the baked plan is invalid: {e:?}"))?;
         let entries = entries.values().map(|entry| &entry.plan);
-        let uses = production_uses(app, &plan, entries, &compat.inputs);
-        ahead(manifest)?.into_iter().fold(uses, Uses::with)
+        composed(
+            app,
+            &plan,
+            entries,
+            &compat.inputs,
+            manifest,
+            compat.host_work,
+        )?
     } else {
         Capability::ALL.into_iter().fold(Uses::NONE, Uses::with)
     };
@@ -53,14 +59,71 @@ pub(crate) fn name_into(
     };
     let names: Vec<&str> = uses.iter().map(Capability::name).collect();
     compat.inputs["linked"] = serde_json::json!(names);
+    // The roster `linked` is drawn from. A capability added to it later was in
+    // this binary's core, and a binary built after has another id: the
+    // classifier requires only what the cohort's roster names (LLP 1047.001
+    // D13).
+    if apple(&compat.inputs) {
+        let roster: Vec<&str> = Capability::ALL.iter().map(|c| c.name()).collect();
+        compat.inputs["linkRoster"] = serde_json::json!(roster);
+    }
     compat.id = compatibility_digest(&compat.inputs);
     Ok(())
 }
 
+/// What a production artifact links: [`production_uses`], the manifest's
+/// `link` ahead of use, and what those bring with them ([`dependents`]). Computed
+/// once for the bake's linked set and for what an update requires.
+pub(crate) fn composed<'a>(
+    app: &std::path::Path,
+    plan: &'a exact_plan::Plan,
+    entries: impl Iterator<Item = &'a exact_plan::Plan>,
+    inputs: &serde_json::Value,
+    manifest: &contract::Manifest,
+    host_work: bool,
+) -> Result<Uses, String> {
+    let uses = production_uses(app, plan, entries, inputs, host_work);
+    let uses = linked_ahead(uses, ahead(manifest)?, inputs);
+    Ok(dependents(uses, inputs, host_work))
+}
+
+/// `uses` with what the manifest links `ahead`; on Apple, an SVG linked
+/// ahead links box effects' engine too, which SVG's filters run on.
+fn linked_ahead(uses: Uses, ahead: Vec<Capability>, inputs: &serde_json::Value) -> Uses {
+    let uses = ahead.into_iter().fold(uses, Uses::with);
+    if apple(inputs) && uses.has(Capability::Svg) {
+        uses.with(Capability::Effects)
+    } else {
+        uses
+    }
+}
+
+/// What a plan requires of an Apple binary it is delivered to (LLP 1047.001
+/// D5, D13): the set [`composed`] names for it, which the classifier
+/// (`classifyArtifacts`, `scripts/app.mjs`) compares as a subset of the
+/// cohort's `linked`. `None` off Apple.
+pub(crate) fn apple_requirement<'a>(
+    app: &std::path::Path,
+    plan: &'a exact_plan::Plan,
+    entries: impl Iterator<Item = &'a exact_plan::Plan>,
+    inputs: &serde_json::Value,
+    manifest: &contract::Manifest,
+    host_work: bool,
+) -> Result<Option<serde_json::Value>, String> {
+    if !apple(inputs) {
+        return Ok(None);
+    }
+    let uses = composed(app, plan, entries, inputs, manifest, host_work)?;
+    Ok(Some(serde_json::json!(uses
+        .iter()
+        .map(Capability::name)
+        .collect::<Vec<_>>())))
+}
+
 /// What a production artifact links for `plan`, with what its grants allow
 /// (`inputs`' ceiling); on Apple, with what the widget `entries` its boot
-/// admits use too, the I/O executor for a source placed on a worker, and
-/// what only the bake can read in `app`, the app's directory: whether a
+/// admits use too, what those bring with them ([`dependents`]), and what
+/// only the bake can read in `app`, the app's directory: whether a
 /// bundled image is an SVG, and whether the app ships a module artifact,
 /// which connects the app-level hatches (LLP 1075.003.000).
 pub(crate) fn production_uses<'a>(
@@ -68,6 +131,7 @@ pub(crate) fn production_uses<'a>(
     plan: &'a exact_plan::Plan,
     entries: impl Iterator<Item = &'a exact_plan::Plan>,
     inputs: &serde_json::Value,
+    host_work: bool,
 ) -> Uses {
     let grants = Uses::NONE.with_grants(inputs["grantCeiling"].as_str().unwrap_or(""));
     if !apple(inputs) {
@@ -77,20 +141,37 @@ pub(crate) fn production_uses<'a>(
     let mut uses = plans.iter().fold(grants, |uses, plan| {
         plan_uses(plan, inputs).iter().fold(uses, Uses::with)
     });
-    // A source placed on a worker answers through continuations, which the
-    // executor runs (LLP 1027.002 D1).
-    if ["rustPlacement", "typescriptPlacement"]
+    // SVG's filters run on box effects' engine.
+    if plans.iter().any(|plan| bundles_svg(app, plan)) {
+        uses = uses.with(Capability::Svg).with(Capability::Effects);
+    }
+    // The app's own module artifact is loaded by the native module family.
+    if ships_module(app, inputs["platform"].as_str().unwrap_or("")) {
+        uses = uses.with(Capability::NativeViews);
+    }
+    dependents(uses, inputs, host_work)
+}
+
+/// `uses` with what Apple links for what it holds: [`production_uses`]
+/// applies it to the plans and grants, and [`composed`] again once
+/// link-ahead is in:
+/// - the I/O executor when something hands it work: a source that declares it
+///   (`host_work`, LLP 1047.001 D12), one placed on a worker, which answers
+///   through continuations (LLP 1027.002 D1), or a native module's calls;
+/// - the native module family, which loads a module's Swift implementation,
+///   with the runner's module seam (`modules`).
+fn dependents(uses: Uses, inputs: &serde_json::Value, host_work: bool) -> Uses {
+    if !apple(inputs) {
+        return uses;
+    }
+    let placed = ["rustPlacement", "typescriptPlacement"]
         .iter()
-        .any(|key| inputs[key] == "worker")
-    {
+        .any(|key| inputs[key] == "worker");
+    let mut uses = uses;
+    if host_work || placed || uses.has(Capability::Modules) {
         uses = uses.with(Capability::Io);
     }
-    if plans.iter().any(|plan| bundles_svg(app, plan)) {
-        uses = uses.with(Capability::Svg);
-    }
-    // A package's Swift implementation is compiled into the artifact too.
-    if uses.has(Capability::Modules) || ships_module(app, inputs["platform"].as_str().unwrap_or(""))
-    {
+    if uses.has(Capability::Modules) {
         uses = uses.with(Capability::NativeViews);
     }
     uses
@@ -106,36 +187,12 @@ fn bundles_svg(app: &std::path::Path, plan: &exact_plan::Plan) -> bool {
         .filter(|name| !name.is_empty())
         .any(|name| {
             let bytes = if let Some(url) = name.strip_prefix("data:") {
-                data_url(url)
+                exact_runner::uses::data_url(url)
             } else {
                 std::fs::read(app.join(name.trim_start_matches('/'))).ok()
             };
             bytes.is_none_or(|bytes| exact_svg_file::sniff(&bytes))
         })
-}
-
-/// A `data:` URL's bytes after `data:` (RFC 2397): base64 after `;base64`,
-/// else percent-decoded.
-fn data_url(url: &str) -> Option<Vec<u8>> {
-    let (meta, body) = url.split_once(',')?;
-    if meta.to_ascii_lowercase().ends_with(";base64") {
-        let body: String = body.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-        return exact_runner::agent::unbase64(&body);
-    }
-    let (body, mut bytes, mut i) = (body.as_bytes(), Vec::new(), 0);
-    while i < body.len() {
-        let hex = body
-            .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok());
-        match hex
-            .filter(|_| body[i] == b'%')
-            .and_then(|h| u8::from_str_radix(h, 16).ok())
-        {
-            Some(byte) => (bytes.push(byte), i += 3),
-            None => (bytes.push(body[i]), i += 1),
-        };
-    }
-    Some(bytes)
 }
 
 /// Whether the app ships a module artifact on Apple: Swift or a framework
@@ -354,13 +411,15 @@ mod tests {
                 &app,
                 [&entry].into_iter(),
                 &inputs,
+                false,
             );
             assert_eq!(uses.has(Capability::Grid), grid, "{platform}");
             assert!(!super::production_uses(
                 std::path::Path::new(""),
                 &app,
                 std::iter::empty(),
-                &inputs
+                &inputs,
+                false,
             )
             .has(Capability::Grid));
         }
@@ -374,70 +433,76 @@ mod tests {
         let hello_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps/hello");
         for platform in ["ios", "macos"] {
             let inputs = serde_json::json!({ "platform": platform, "grantCeiling": "" });
-            let uses = super::production_uses(&hello_dir, &hello, std::iter::empty(), &inputs);
+            let uses =
+                super::production_uses(&hello_dir, &hello, std::iter::empty(), &inputs, false);
             assert_eq!(uses, exact_runner::Uses::NONE, "{platform}: {uses}");
         }
     }
 
-    /// A Rust data source that hands out host work (`Request::continuation`)
-    /// has the executor run it, which an Apple production binary links only
-    /// with `io`. Neither its plan nor its grants need show that, so such an
-    /// app names `io` in its manifest's `link`; without it the work never
-    /// runs and the resource waits for ever. The sources are read as text:
-    /// what a source hands out is in no declaration.
+    /// What an update's plan requires of an Apple cohort is what a bake of
+    /// it would link: a table needs grid, the manifest's `link` and a
+    /// source's declared host work count, and no other platform is asked.
     #[test]
-    fn an_app_whose_source_hands_out_host_work_links_io() {
-        use std::path::Path;
-        fn sources(dir: &Path, text: &mut String) {
-            for entry in std::fs::read_dir(dir).unwrap().flatten() {
-                let path = entry.path();
-                let name = path.to_string_lossy();
-                if path.is_dir() {
-                    sources(&path, text);
-                } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") {
-                    text.push_str(&std::fs::read_to_string(&path).unwrap());
-                }
-            }
-        }
-        let apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps");
-        let dirs: Vec<_> = std::fs::read_dir(&apps)
+    fn an_update_requires_what_its_bake_would_link_on_apple() {
+        let hello = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps/hello");
+        let manifest = contract::Manifest::read(&hello).unwrap();
+        let table = contract::compile(
+            "component W\n  view\n    table\n      tr\n        td\n          text \"a\"\n",
+        )
+        .unwrap();
+        let required = |platform: &str, host_work| {
+            let inputs = serde_json::json!({ "platform": platform, "grantCeiling": "" });
+            super::apple_requirement(
+                &hello,
+                &table,
+                std::iter::empty(),
+                &inputs,
+                &manifest,
+                host_work,
+            )
             .unwrap()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        let crate_dir = |name: &str| {
-            dirs.iter().map(|app| app.join("data")).find(|data| {
-                std::fs::read_to_string(data.join("Cargo.toml"))
-                    .is_ok_and(|toml| toml.contains(&format!("name = \"{name}\"")))
-            })
         };
-        let mut unlinked = Vec::new();
-        for app in dirs.iter().filter(|app| app.join("apple").is_dir()) {
-            let Ok(manifest) = contract::Manifest::read(app) else {
-                continue;
-            };
-            let Some(data) = manifest.json["rust"]["data"]["crate"]
-                .as_str()
-                .and_then(crate_dir)
-            else {
-                continue;
-            };
-            let mut text = String::new();
-            sources(&data.join("src"), &mut text);
-            if text.contains("Request::continuation(")
-                && !ahead(&manifest).unwrap().contains(&Capability::Io)
-            {
-                unlinked.push(app.file_name().unwrap().to_string_lossy().into_owned());
-            }
-        }
-        assert_eq!(unlinked, Vec::<String>::new());
+        assert_eq!(required("ios", false), Some(serde_json::json!(["grid"])));
+        assert_eq!(
+            required("macos", true),
+            Some(serde_json::json!(["grid", "io"]))
+        );
+        assert_eq!(required("linux", true), None);
+        let mut linking = manifest.clone();
+        linking.json["link"] = serde_json::json!(["svg"]);
+        let inputs = serde_json::json!({ "platform": "ios", "grantCeiling": "" });
+        let ahead =
+            super::apple_requirement(&hello, &table, std::iter::empty(), &inputs, &linking, false);
+        // SVG's filters run on box effects' engine, so SVG linked ahead or
+        // drawn requires both, as the device admits it.
+        assert_eq!(
+            ahead.unwrap(),
+            Some(serde_json::json!(["effects", "grid", "svg"]))
+        );
+        let svg = contract::compile(
+            "component S\n  view\n    svg viewBox=\"0 0 10 10\"\n      circle cx=5 cy=5 r=4\n",
+        )
+        .unwrap();
+        let drawn =
+            super::apple_requirement(&hello, &svg, std::iter::empty(), &inputs, &manifest, false);
+        assert_eq!(drawn.unwrap(), Some(serde_json::json!(["effects", "svg"])));
     }
 
-    /// A source placed on a worker answers through the executor, so an Apple
-    /// composition links I/O for it.
+    /// A source that declares host work (LLP 1047.001 D12) and one placed on
+    /// a worker both answer through the executor, so an Apple composition
+    /// links I/O for them.
     #[test]
-    fn a_worker_placement_links_io_on_apple() {
+    fn declared_host_work_and_a_worker_placement_link_io_on_apple() {
         let app = contract::compile("component A\n  view\n    text \"a\"\n").unwrap();
+        let none = std::path::Path::new("");
+        for (platform, io) in [("ios", true), ("macos", true), ("linux", false)] {
+            let inputs = serde_json::json!({ "platform": platform });
+            for (declared, linked) in [(true, io), (false, false)] {
+                let uses =
+                    super::production_uses(none, &app, std::iter::empty(), &inputs, declared);
+                assert_eq!(uses.has(Capability::Io), linked, "{platform} {declared}");
+            }
+        }
         for language in ["rustPlacement", "typescriptPlacement"] {
             for (platform, placed, io) in [
                 ("ios", "worker", true),
@@ -446,12 +511,7 @@ mod tests {
                 ("linux", "worker", false),
             ] {
                 let inputs = serde_json::json!({ "platform": platform, language: placed });
-                let uses = super::production_uses(
-                    std::path::Path::new(""),
-                    &app,
-                    std::iter::empty(),
-                    &inputs,
-                );
+                let uses = super::production_uses(none, &app, std::iter::empty(), &inputs, false);
                 assert_eq!(
                     uses.has(Capability::Io),
                     io,
@@ -459,6 +519,30 @@ mod tests {
                 );
             }
         }
+        // Modules from wherever they come (an entry, link-ahead) bring the
+        // executor that runs their calls and the family that loads their
+        // Swift.
+        let modules = exact_runner::Uses::NONE.with(Capability::Modules);
+        let ios = serde_json::json!({ "platform": "ios" });
+        let brought = super::dependents(modules, &ios, false);
+        assert!(brought.has(Capability::Io) && brought.has(Capability::NativeViews));
+        let linux = serde_json::json!({ "platform": "linux" });
+        assert_eq!(super::dependents(modules, &linux, false), modules);
+    }
+
+    /// A TypeScript bundle reports host work for each route the prelude
+    /// parks an answer on, and none for an answer that settles in its turn.
+    #[test]
+    fn a_typescript_bundle_reports_the_timers_it_can_reach() {
+        use crate::compat::typescript_host_work as work;
+        assert!(work(b"setTimeout(resolve, 10)"));
+        assert!(work(
+            b"AbortSignal.timeout(10).addEventListener('abort', resolve)"
+        ));
+        assert!(work(b"yield scheduler.yield()"));
+        assert!(!work(
+            b"function answer(a) { return Promise.resolve(a + 1); }"
+        ));
     }
 
     /// On Apple the bake reads what the plan cannot say: a bundled image's
@@ -474,7 +558,7 @@ mod tests {
         let linked = |source: &str| {
             let plan = contract::compile(&format!("component A\n  view\n    image \"{source}\"\n"))
                 .unwrap();
-            super::production_uses(&dir, &plan, std::iter::empty(), &ios)
+            super::production_uses(&dir, &plan, std::iter::empty(), &ios, false)
         };
         for (source, svg) in [
             ("assets/a.png", false),

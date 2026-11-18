@@ -39,7 +39,7 @@ extension NodeView {
         guard let parent = nodeAbove(self) else { return false }
         let list = parent.kind == "list" ? parent : parent.props["semanticTag"] == "section" ? nodeAbove(parent) : nil
         guard let list, list.kind == "list" else { return false }
-        return presenter?.collections.entries[list.id]?.snapshot.horizontal != true
+        return presenter?.collections.snapshot(list.id)?.horizontal != true
     }
 
     /// A pressable that is the author's own box, not AppKit's control and

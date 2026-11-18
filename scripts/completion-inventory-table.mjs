@@ -342,6 +342,9 @@ export const classifications = [
   ]),
   group("inspection", ["one-shot"], "synchronous session inspection or diagnostics; no delivered completion", "UI-owned",
     "The declaration reads or reports the current session. It does not establish a durable operation.", [
+    ["apple:host/apple/src/abi/answers.rs",
+      "exact_answer_ticket exact_app_roots exact_declared exact_documents exact_ended_actions exact_frame_request exact_logs exact_must_finish exact_node " +
+      "exact_outstanding exact_perf exact_picked_path exact_picker exact_share_file exact_show_picker exact_state exact_tags exact_tool exact_tree"],
     ["apple:host/apple/src/abi/exports.rs",
       "exact_activities exact_agent exact_baked_compat exact_color_references exact_colors exact_command exact_confirmation_is_alert exact_design_digest " +
       "exact_design_rows exact_entry_timeline exact_evaluates_from_draw exact_field_decorations exact_gesture_constant exact_grouped_list exact_header_shape " +
@@ -454,7 +457,7 @@ export const classifications = [
     ["runner:runner/src/runner/query.rs", "Runner::bake_warnings"],
     ["runner:runner/src/runner/resource_inspection.rs", "Runner::inspection_digest"],
     ["runner:runner/src/runner/forma.rs", "Runner::forma"],
-    ["runner:runner/src/runner/text_axes.rs", "Runner::text_axes_settle_ms"],
+    ["runner:runner/src/runner/seams.rs", "Runner::text_axes_settle_ms"],
     ["runner:runner/src/runner/trace.rs", "Runner::trace_commits"],
     ["runner:runner/src/runner/writes.rs", "Runner::shown_resource Runner::writes"],
     ["web:host/web/src/abi.rs", "exact_agent exact_checkpoint exact_command exact_compat exact_fonts exact_log exact_logic exact_module_artifact exact_plan exact_plan_fonts"],
@@ -564,7 +567,7 @@ export const classifications = [
     ["painted:host/painted/src/presence.rs", "Host::track_presence"],
     ["painted:host/painted/src/presenter.rs", "Presenter::service_commit"],
     ["runner:runner/src/runner/presence_secrets.rs", "LinkedPresence::presence_call#next:1"],
-    ["runner:runner/src/runner/seams.rs", "Runner::presence_answer Runner::presence_reply Runner::take_presence_asks"],
+    ["runner:runner/src/runner/seams.rs", "Runner::presence_answer Runner::presence_reply Runner::take_presence_asks Runner::take_presence_asks_json"],
     ["web:host/web/src/abi.rs", "exact_presence"],
   ]),
   group("presence storage", ["durable operation"], "app/account secret generation and backend queue", "durable",
@@ -674,8 +677,9 @@ export const classifications = [
     ["painted:host/painted/src/presenter/device.rs", "Presenter::reader_replaced"],
     ["painted:host/painted/src/presenter/painter.rs", "Presenter::boot Presenter::boot_with"],
     ["painted:host/painted/src/presenter/window.rs", "Presenter::window"],
+    ["render:host/render/src/cli.rs", "main main_with"],
     ["render:host/render/src/direct.rs", "boot_swap_js render_js"],
-    ["render:host/render/src/lib.rs", "activate main projects_as_booted render render_as render_with render_with_faults_at Rendered::status retire settle_at"],
+    ["render:host/render/src/lib.rs", "activate projects_as_booted render render_as render_with render_with_faults_at Rendered::status retire settle_at"],
     ["render:host/render/src/page.rs", "capture capture_js page page_with_rules scroll_document_js"],
     ["render:host/render/src/pages.rs", "pages"],
     ["render:host/render/src/requests.rs", "render_with_at"],
@@ -725,7 +729,7 @@ export const classifications = [
       "exact_admitted_frame exact_advance exact_fire_native_timer exact_frame exact_frame_at exact_native_timers exact_present_frames exact_pump exact_set_live_clock " +
       "exact_prefer_presented exact_start_on_frame exact_tick exact_tick_at exact_timer_waits"],
     ["painted:host/painted/src/agent.rs", "clock_within"],
-    ["painted:host/painted/src/canvas.rs", "CanvasHost::frame"],
+    ["painted:host/painted/src/canvas.rs", "CanvasHost::frame CanvasHost::frame_held"],
     ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_frame Java_dev_exact_canvas_Native_picturePresented Java_dev_exact_canvas_Native_presentToken Java_dev_exact_canvas_Native_timerHeld Java_dev_exact_canvas_Native_timerObservation"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameTurn"],
     ["painted:host/painted/src/canvas/timers.rs", "CanvasHost::held_timer_waits CanvasHost::timer_observation"],
@@ -991,7 +995,7 @@ export const classifications = [
   ]),
   group("inspection", ["subscription"], "session launch/trace journal and diagnostic subscriptions", "UI-owned",
     "host/painted/src/{journal,launch_marks}.rs record and report the current host launch and command events; they do not establish an independent operation outcome.", [
-    ["painted:host/painted/src/journal.rs", "after_startup Event::json host_command launch_parts_ran LaunchContext::new LaunchContext::state_dir post record subscribe wall"],
+    ["painted:host/painted/src/journal.rs", "after_startup Event::json file_digest host_command launch_parts_ran LaunchContext::new LaunchContext::state_dir post record subscribe wall"],
     ["painted:host/painted/src/launch_marks.rs",
       "boottime items LaunchMarks::activated LaunchMarks::done LaunchMarks::flipped LaunchMarks::launch_end LaunchMarks::line LaunchMarks::new LaunchMarks::report " +
       "LaunchMarks::submitted LaunchMarks::take_done LaunchMarks::timeout_ms LaunchMarks::turn"],
@@ -1045,7 +1049,7 @@ export const classifications = [
       "Runner::update_into_views_inner#nodes_visited:1 Runner::update_into_views_inner#regions_skipped:1 Runner::update_into_views_inner#rows_keyed:1 " +
       "Runner::update_into_views_inner#rows_rebound:1 Runner::update_into_views_inner#rows_reused:1 Runner::update_into_views_inner#rows_scanned:1 " +
       "Runner::update_into_views_inner#store_bytes_copied:1"],
-    ["runner:runner/src/runner/lists.rs", "Runner::update_ops#rows_scanned:1"],
+    ["runner:runner/src/runner/render.rs", "Runner::update_ops#rows_scanned:1"],
     ["runner:runner/src/runner/live_time.rs", "Runner::tick_live_times#batch:1"],
     ["runner:runner/src/runner/mapper_turns.rs", "Behind::hold#bytes:1 Behind::hold#messages:1 Behind::next#bytes:1 Behind::next#messages:1"],
     ["runner:runner/src/runner/modules/pictures.rs", "Runner::picture_admission#0:1 Runner::picture_admission#1:1"],
@@ -1062,8 +1066,8 @@ export const classifications = [
     ["runner:runner/src/runner/router.rs", "RouterContext::commit#activations:1"],
     ["runner:runner/src/runner/settlement.rs", "Runner::settle_pass#derives_evaluated:1"],
     ["runner:runner/src/runner/sockets.rs", "Runner::socket_published#sent:1"],
-    ["runner:runner/src/runner/text_axes.rs", "Runner::settle_text_axes#batch:1"],
-    ["runner:runner/src/runner/text_axes/present.rs", "Runner::tick_text_axes#batch:1"],
+    ["runner:runner/src/runner/text_axes.rs", "Runner::settle_text_axes_linked#batch:1"],
+    ["runner:runner/src/runner/text_axes/present.rs", "Runner::tick_text_axes_linked#batch:1"],
     ["runner:runner/src/runner/theme.rs", "Runner::set_tokens#design_moves:1"],
     ["runner:runner/src/sound.rs", "Sounds::trim#evicted:1"],
     ["runner:runner/src/store.rs", "Store::remember#copied:1"],
@@ -1271,24 +1275,26 @@ export const classifications = [
     "The named public runner-crate source is the session lifecycle API or its value/admission helper. Runner boot constructs session state (runner/src/runner.rs); host ABI buffers and configuration belong to that runtime handle.", [
     ["runner:runner/src/activation.rs", "offers_tools runtime_kept wake"],
     ["runner:runner/src/device.rs", "device_grants granted is_device_line keeps_no_answers permissions_policy"],
-    ["runner:runner/src/grants.rs", "admitting admitting_request declared Grants::lines Grants::presence Grants::secrets launch_names normalized_json parse parse_with redacted refusal validate with_declared"],
+    ["runner:runner/src/runner/links.rs", "Runner::covers"],
+    ["runner:runner/src/grants.rs", "admitting admitting_request declared Grants::lines Grants::presence Grants::secrets launch_names normalized_json parse parse_with redacted refusal session_admits validate with_declared"],
     ["runner:runner/src/hardened.rs", "is_runtime_line runtime_grants"],
     ["runner:runner/src/runner/persist.rs", "decode encode"],
-    ["runner:runner/src/uses/apple.rs", "apple_uses image_sources ImageSource::bundled ImageSource::can_be_svg lays_out_grid"],
+    ["runner:runner/src/uses/apple.rs", "apple_uses data_url image_sources ImageSource::bundled ImageSource::can_be_svg lays_out_grid"],
     ["runner:runner/src/uses.rs",
       "Capability::from_name Capability::name chooses_locale keeps_midi runs_sounds svg_filters svg_islands uses uses_midi uses_picture_in_picture Uses::beyond " +
       "Uses::has Uses::is_empty Uses::iter Uses::with Uses::with_grants zoomable zooms"],
   ]),
   group("holds", ["one-shot"], "held request/node until answer, cancellation or node retirement", "UI-owned",
     "The named public runner-crate source is the holds API or its value/admission helper. runner/src/runner/device.rs:1-12 retires holds with the requesting node or ticket and refuses duplicate answers; the agent hold is not an executor request. runner/auth.rs arm_with_fixture admits or holds the current auth request by ticket, as arm does.", [
-    ["runner:runner/src/agent.rs", "answer"],
+    ["runner:runner/src/agent.rs", "answer answer_ticket picked_path show_picker"],
     ["runner:runner/src/auth.rs",
       "accept arm arm_with_fixture callbacks carrier_callback check_grants complete forgotten hold_opened loopback_callback one_code_or_error receive_callback session_grant_refusal " +
       "Session::from_json Session::summary Session::to_json Sessions::has_settled_for Sessions::live settle take_any_settled take_settled"],
   ]),
   group("inspection", ["one-shot"], "synchronous session inspection or diagnostics; no delivered completion", "UI-owned",
     "The named public runner-crate source is the inspection API or its value/admission helper. The declaration reads or reports the current session. It does not establish a durable operation.", [
-    ["runner:runner/src/agent.rs", "base64 error field_bool field_num field_str frames handle holds logs node num quote shown_value state tags tree typed_json unbase64 untyped_json"],
+    ["runner:runner/src/agent.rs", "base64 frames handle holds logs logs_request node node_request picker shown_value state state_with tags tree tree_request unbase64"],
+    ["runner:runner/src/json.rs", "error field_bool field_num field_str num quote typed_json untyped_json"],
     ["runner:runner/src/agent/row.rs", "row_json"],
     ["runner:runner/src/agent/tree.rs", "tagged"],
     ["runner:runner/src/runner/carry.rs", "Runner::generation Runner::set_replacement_pending"],
@@ -1329,7 +1335,7 @@ export const classifications = [
     ["runner:runner/src/request_preload.rs", "Preload::fill#headers:1"],
     ["runner:runner/src/runner/faults.rs", "Faults::take_response#left:1"],
     ["runner:runner/src/runner/kept_wait.rs", "Runner::carry_waiting_in#waiting:1"],
-    ["runner:runner/src/runner/lists.rs", "Runner::update_ops#store_bytes_copied:1"],
+    ["runner:runner/src/runner/render.rs", "Runner::update_ops#store_bytes_copied:1"],
     ["runner:runner/src/runner/overrun.rs", "Runner::reask#reasks:1"],
     ["runner:runner/src/runner/text_axes.rs", "write#font_stretch:1 write#font_variation_settings:1 write#font_weight:1"],
     ["runner:runner/src/runner/text_axes/present.rs", "one_axis#values:1"],
@@ -1349,7 +1355,7 @@ export const classifications = [
     ["runner:runner/src/instance/index.rs", "SiteIndex::linked SiteIndex::new SiteIndex::row_dependencies"],
     ["runner:runner/src/instance/looks.rs", "Looks::resolve_in"],
     ["runner:runner/src/instance/tabs.rs", "panel_sites sites_need_navigation"],
-    ["runner:runner/src/instance/text.rs", "Tree::list_index Tree::list_text"],
+    ["runner:runner/src/instance/collection/text.rs", "Tree::list_index Tree::list_text"],
     ["runner:runner/src/instance/theme.rs", "ThemedRow::resolve_in ThemeIndex::faces ThemeIndex::is_empty ThemeIndex::len ThemeIndex::look ThemeIndex::looks ThemeIndex::row ThemeIndex::rows"],
   ]),
   group("canvas draws", ["one-shot"], "canvas lifetime, generation and in-flight draw sequence", "UI-owned",
@@ -1381,6 +1387,7 @@ export const classifications = [
     ["runner:runner/src/file_pickers.rs", "start_in_refusal"],
     ["runner:runner/src/fetch_template.rs", "argument encode expand graphql_error pointer"],
     ["runner:runner/src/format/mod.rs", "formatting"],
+    ["runner:runner/src/host_work.rs", "Probe::of"],
     ["runner:runner/src/held.rs", "Held::compiled Held::decoded Held::equivalent Held::get Held::is_compiled Held::new Held::read Held::released Held::same"],
     ["runner:runner/src/lists.rs", "concat flat flat_len index_of position slice sort_by sum"],
     ["runner:runner/src/machine.rs", "equal equal_items exec Machine::new run step"],

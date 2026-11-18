@@ -207,7 +207,7 @@ final class SymbolColorIOSTests: XCTestCase {
             XCTAssertNotNil(control.imageForSegment(at: 0))
             // What the installed segment was drawn from: not the page's image,
             // and made without the written green.
-            let icon = try XCTUnwrap(p.views[owner + 3]), drawn = try XCTUnwrap(p.segments.drawn(of: owner, segment: 0))
+            let icon = try XCTUnwrap(p.views[owner + 3]), drawn = try XCTUnwrap(p.segmentHost.drawn(of: owner, segment: 0))
             XCTAssertFalse(drawn === icon.image, "\(owner): the segment is drawn from its own image")
             let face = try XCTUnwrap(drawn.symbolConfiguration)
             XCTAssertFalse(face.isEqual(face.applying(written)), "\(owner): the segment's image is made without the written green")

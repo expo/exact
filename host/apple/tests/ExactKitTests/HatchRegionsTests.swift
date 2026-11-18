@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 #if os(macOS)
 import AppKit
 #else
@@ -89,7 +90,7 @@ final class HatchRegionsTests: XCTestCase {
     func testBoundsOwnershipAndTombstones() throws {
         let session = ExactApp.shared.makeSession(label: "regions")
         defer { session.destroy() }
-        let regions = session.presenter.elements.regions
+        let regions = session.presenter.hatchElements!.regions
         let view = { PlatformView(frame: CGRect(x: 0, y: 0, width: 12, height: 12)) }
         var keep: [PlatformView] = []
 
@@ -154,7 +155,7 @@ final class HatchRegionsTests: XCTestCase {
     func testAWindowsNewRecognizerIsNamedOnceUnlessARegionBindsIt() throws {
         let session = ExactApp.shared.makeSession(label: "walk")
         defer { session.destroy() }
-        let regions = session.presenter.elements.regions
+        let regions = session.presenter.hatchElements!.regions
         let root = PlatformView(frame: CGRect(x: 0, y: 0, width: 100, height: 100)), inner = PlatformView(frame: root.bounds)
         root.addSubview(inner)
         let old = HatchRecognizer(), added = HatchRecognizer(), declared = HatchRecognizer()

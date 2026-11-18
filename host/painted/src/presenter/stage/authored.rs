@@ -21,8 +21,6 @@ pub(super) struct Authored {
     /// The owner's border box, points: `translate`'s percentages are of it,
     /// and it turns and scales about its centre.
     size: (f32, f32),
-    /// Where it is drawn in the page: a kept drawing is posed there.
-    pub(super) at: (f32, f32),
 }
 
 impl Authored {
@@ -57,6 +55,8 @@ pub(super) struct Top {
     /// It was pushed, not presented full screen: in a sheet, if one is
     /// beneath it.
     pub(super) pushed: bool,
+    /// Its ancestors' keys, nearest first.
+    pub(super) ancestors: Vec<NodeKey>,
 }
 
 /// The part `row` of a route, where it is declared and the route may play
@@ -76,49 +76,26 @@ pub(super) fn part(node: &exact_kernel::NodeRef<'_>, row: StyleId) -> Option<Aut
     Some(Authored {
         animations: animations.clone(),
         size: (node.frame.width, node.frame.height),
-        at: (0.0, 0.0),
     })
 }
 
 impl<D: DataSource> Presenter<D> {
-    /// Where the route at `index` of the stack is drawn in the page: on a
-    /// shell with no bars, one pushed inside a sheet is drawn in its sheet
-    /// route's box (`desktop_stage`).
-    fn drawn_at(&self, stack: &[ViewId], kinds: &[Presented], index: usize) -> (f32, f32) {
-        let shown_in = (!self.stage_presents())
-            .then(|| sheet_of(kinds, index))
-            .flatten()
-            .unwrap_or(index);
-        (self.host.kernel().node(stack[shown_in])).map_or((0.0, 0.0), |n| {
-            (n.frame.x - self.page.0, n.frame.y - self.page.1)
-        })
-    }
-
     /// The entrance the route at `top`, just pushed or presented, declares.
-    pub(super) fn entrance(
-        &self,
-        stack: &[ViewId],
-        kinds: &[Presented],
-        top: usize,
-    ) -> Option<Authored> {
+    pub(super) fn entrance(&self, stack: &[ViewId], top: usize) -> Option<Authored> {
         let node = self.host.kernel().node(*stack.get(top)?)?;
-        let mut part = part(&node, StyleId::ViewTransitionNew)?;
-        part.at = self.drawn_at(stack, kinds, top);
-        Some(part)
+        part(&node, StyleId::ViewTransitionNew)
     }
 
     /// The top route, kept for the pop that may remove it.
     pub(super) fn top_of(&self, stack: &[ViewId], kinds: &[Presented]) -> Option<Top> {
         let index = stack.len().checked_sub(1)?;
-        let node = self.host.kernel().node(stack[index])?;
-        let exit = part(&node, StyleId::ViewTransitionOld).map(|mut part| {
-            part.at = self.drawn_at(stack, kinds, index);
-            part
-        });
+        let kernel = self.host.kernel();
+        let node = kernel.node(stack[index])?;
         Some(Top {
             key: node.key,
-            exit,
+            exit: part(&node, StyleId::ViewTransitionOld),
             pushed: kinds[index] == Presented::Pushed,
+            ancestors: keys_above(kernel, node.id),
         })
     }
 
@@ -167,20 +144,9 @@ impl<D: DataSource> Presenter<D> {
             authored: Some(part),
             alone,
             container: None,
+            through: false,
+            left: Vec::new(),
         });
-    }
-
-    /// Where a kept drawing of `key` is posed: a popped owner where it was.
-    pub(super) fn taped_at(&self, key: NodeKey) -> (f32, f32) {
-        let Some(shift) = self.stage.shift.as_ref().filter(|s| s.outgoing == key) else {
-            return (0., 0.);
-        };
-        shift
-            .authored
-            .as_ref()
-            .map(|part| part.at)
-            .or_else(|| shift.container.map(|c| (c.route.0, c.route.1)))
-            .unwrap_or((0., 0.))
     }
 
     /// The exit predictive Back seeks: the top route's, when the preview is

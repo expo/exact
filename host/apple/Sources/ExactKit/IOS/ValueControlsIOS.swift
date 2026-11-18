@@ -18,6 +18,17 @@ private final class SelectButtonIOS: UIButton {
         get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
         set { super.accessibilityActivationPoint = newValue }
     }
+    /// UIKit's own close target keeps the centre the button had when the
+    /// menu opened; a choice that retitles a select sized to its shown value
+    /// (`field-sizing: content`) resizes it before the menu closes, so the
+    /// closing morph drew the new title around the old centre (over a
+    /// leading label) until it ended. The target is the button where it is now.
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        let preview = super.contextMenuInteraction(interaction, previewForDismissingMenuWithConfiguration: configuration)
+        guard let preview, let container = superview else { return preview }
+        return UITargetedPreview(view: self, parameters: preview.parameters,
+                                 target: UIPreviewTarget(container: container, center: center))
+    }
     var valueAlignment = UIControl.ContentHorizontalAlignment.left {
         didSet { if oldValue != valueAlignment { setNeedsLayout() } }
     }

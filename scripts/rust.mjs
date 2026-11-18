@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { HOST_DEV, cargoReproducibilityFlags, developmentBuildEnv, readBuilds, resolveApp, rustPolicy, rustRemapFlags } from './app.mjs';
 import { channelOrigin } from './origin.mjs';
 import { within } from './paths.mjs';
+import { refreshCargoRustShapes } from './cargo-dep-info.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -79,7 +80,7 @@ export function prepareRustBundle(app, platform, target, env) {
 // is a manifest edit). A resident producer asks on every request.
 const metadataCache = new Map();
 function cargoMetadata(app, env) {
-  const key = JSON.stringify([app.workspace, cargoReproducibilityFlags(app)]), cached = metadataCache.get(key);
+  const key = JSON.stringify([app.workspace, cargoReproducibilityFlags(app), env.CARGO_TARGET_DIR, env.CARGO_BUILD_BUILD_DIR]), cached = metadataCache.get(key);
   if (cached && rustInputDigest(cached.manifests) === cached.digest) return cached.metadata;
   const metadata = JSON.parse(run(app, 'cargo', ['metadata', '--format-version', '1', ...cargoReproducibilityFlags(app)], env));
   const manifests = [...new Set(['Cargo.toml', 'Cargo.lock', '.cargo/config.toml'].map(name => resolve(metadata.workspace_root, name))
@@ -252,6 +253,9 @@ function compile(app, targets, env, profile) {
     const targetEnv = {...moduleEnv, CARGO_ENCODED_RUSTFLAGS:[...flags, ...rustRemapFlags(app, null, env), `--remap-path-prefix=${modules}=/rust-modules`,
       ...(target.includes('apple') ? ['-Clink-arg=-Wl,-install_name,@rpath/app.module.dylib'] : []),
     ].join('\x1f')};
+    targetEnv.EXACT_RUST_SHAPES = '1';
+    const metadata = cargoMetadata(app, targetEnv);
+    refreshCargoRustShapes(modules, target, profile, metadata.packages, targetEnv, metadata.build_directory);
     return run(app, 'cargo', ['build', ...cargoReproducibilityFlags(app), ...configuration, '--lib', '-p', packageName,
       '--target', target, '--profile', profile, '--message-format=json'], targetEnv)
       .split('\n').filter(Boolean).map(line => JSON.parse(line));

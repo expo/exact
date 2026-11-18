@@ -9,6 +9,10 @@
 use exact_runner::{agent, Runner, Value, WakeHow};
 use std::path::PathBuf;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 struct App(PathBuf);
 impl App {
     fn new(name: &str) -> Self {
@@ -627,7 +631,7 @@ impl exact_runner::DataSource for ActionWork {
             return None;
         }
         self.storage_sent = true;
-        Some(exact_runner::Request::continuation(
+        Some(exact_runner::Request::continuation::<TestWork>(
             exact_runner::BACKGROUND,
         ))
     }

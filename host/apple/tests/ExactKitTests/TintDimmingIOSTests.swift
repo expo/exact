@@ -2,6 +2,8 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 /// While UIKit dims tints behind a sheet or an alert, the tint greys wherever it is drawn, as UIKit
 /// greys a view's `tintColor`, and a colour of its own keeps it (HIG, Color: a colour that says a

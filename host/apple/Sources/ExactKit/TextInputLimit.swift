@@ -1,14 +1,14 @@
 // HTML maxlength counts UTF-16, applies to user edits, and leaves authored values alone.
 import Foundation
 
-enum TextInputLimit {
+package enum TextInputLimit {
     static func maximum(_ props: [String: String]) -> Int? {
         let type = (props["type"] ?? "text").lowercased()
         guard props["semanticTag"] == "textarea" || ["text", "search", "email", "url", "tel", "password"].contains(type),
               let value = props["maxlength"].flatMap(Int.init), value >= 0 else { return nil }
         return value
     }
-    static func prefix(_ text: String, props: [String: String]) -> String {
+    static package func prefix(_ text: String, props: [String: String]) -> String {
         guard let maximum = maximum(props) else { return text }
         var length = 0, result = ""
         for scalar in text.unicodeScalars {

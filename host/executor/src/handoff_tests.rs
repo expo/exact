@@ -1,5 +1,9 @@
 use super::*;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const HANG: Duration = Duration::from_secs(5);
 const RETAINED: usize = 120 << 20;
 
@@ -20,7 +24,7 @@ fn core(asynchronous: bool) -> (Core, Receiver<()>) {
 fn hand(core: &Core, ticket: u64, handed: &Sender<(u64, Reply)>) {
     let handed = handed.clone();
     core.run_owned(
-        job(ticket, Request::continuation(ticket)),
+        job(ticket, Request::continuation::<TestWork>(ticket)),
         Some(OwnedWork::Later(Box::new(move |reply| {
             handed.send((ticket, reply)).unwrap();
         }))),
@@ -318,7 +322,7 @@ fn an_ordered_job_waits_for_retained_bytes_instead_of_refusing() {
     // Four undrained outcomes retain 480 MiB of capacity (never touched).
     for ticket in 1..=4 {
         core.run(
-            job(ticket, Request::continuation(ticket)),
+            job(ticket, Request::continuation::<TestWork>(ticket)),
             Some(Box::new(|| Outcome::Storage(Vec::with_capacity(120 << 20)))),
         )
         .unwrap();

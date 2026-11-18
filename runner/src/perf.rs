@@ -8,7 +8,7 @@
 //! measures ([`Runner::measure`]). A read changes nothing: two reads tagged
 //! with the same `incarnation` and `plan` are subtracted by the driver.
 
-use crate::agent::{error, field_bool, num, quote};
+use crate::json::{error, field_bool, num, quote};
 use crate::runner::{DataSource, Runner};
 use exact_plan::NodesId;
 use std::collections::BTreeMap;
@@ -68,9 +68,9 @@ pub struct Work {
     pub reported: std::cell::Cell<u64>,
     /// Measuring waits for the host's first ask ([`Runner::measure_later`]).
     pub later: bool,
-    /// Refused answers by resource index since measuring began (LLP 1142 D4).
+    /// Refused answers by declaring plan resource index since measuring began (LLP 1142 D4).
     pub failures: Vec<Failures>,
-    /// Asks of the app's data source by resource index since measuring
+    /// Asks of the app's data source by declaring plan resource index since measuring
     /// began: `perf`'s `resources` (LLP 1146 D3). Never rolled back.
     pub asked: Vec<u64>,
     /// Whether resource request provenance is being measured (LLP 1142 D9).

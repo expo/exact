@@ -3,12 +3,12 @@
 // An edit — the Contract, TypeScript, Rust data or GPU sources, assets, or
 // this runtime and compiler — rebuilds the app (`host/web-js/build.mjs
 // --render none`, into a stage renamed over dist/, so a request sees the old
-// build or the new one; what did not change is not rebuilt: module.mjs
-// `fresh`) and every open page reloads: the plan is compiled ahead of time,
-// so a new plan is a new program. The old page checkpoints the wasm loop's
-// carried set to this server immediately before that reload; the next
-// document consumes it once. A build that fails
-// shows its errors in the page and the page keeps the last good build.
+// build or the new one). Cargo checks the Rust module's inputs, including
+// generated shapes, and reuses unchanged artifacts. Every open page reloads:
+// the plan is compiled ahead of time, so a new plan is a new program.
+// The old page checkpoints the wasm loop's carried set to this server
+// immediately before that reload; the next document consumes it once.
+// A build that fails shows its errors in the page and the page keeps the last good build.
 // `host/web/dev.mjs --wasm` is the resident wasm loop (a plan restarts in
 // place in ~20 ms, state carried).
 import { spawn, spawnSync } from 'node:child_process';

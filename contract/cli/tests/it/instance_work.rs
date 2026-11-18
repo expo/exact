@@ -1,7 +1,9 @@
 //! Unrelated input must not revisit immutable rows; every relevant input still invalidates.
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::Value;
-use exact_runner::{DataError, DataSource, Event, Runner};
+use exact_runner::{
+    Answer, DataError, DataSource, Event, Outcome, Request, Response, Runner, Store,
+};
 
 struct Rows;
 impl DataSource for Rows {
@@ -474,4 +476,165 @@ fn perf_streams_is_refused_under_production_trust() {
     r.measure_later(None);
     let answered = streams(&r);
     assert_eq!(answered["streamTiming"]["measuring"], true, "{answered}");
+}
+
+struct Refuses {
+    immediate: bool,
+}
+impl DataSource for Refuses {
+    fn grants(&self) -> &str {
+        "net.fetch https://api.test"
+    }
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::Unavailable("answers with a request".into()))
+    }
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        if self.immediate {
+            Err(DataError::Failed(
+                exact_runner::failure::FailureCode::Error,
+                "item refuses".into(),
+                String::new(),
+            ))
+        } else {
+            Ok(Answer::Later(Request::get("https://api.test/item")))
+        }
+    }
+    fn parse(
+        &mut self,
+        _: &mut Store,
+        source: &str,
+        _: &[Value],
+        _: Outcome,
+    ) -> Result<Answer, DataError> {
+        Err(DataError::Unavailable(format!("{source} refuses")))
+    }
+}
+
+const OWNED_PERF_APP: &str = r#"
+routes nav
+  home "/"
+  item "/item/:id"
+component App
+  action open(id: string)
+    nav = go(nav, path("item", id))
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "item"
+          Detail(route=e.id, id=e.params.id)
+        else
+          column navigationKey=`${e.id}`
+            text "home"
+component Detail
+  props
+    route: number
+    id: string
+  resource item = item(id) as shape number else empty()
+  view
+    column navigationKey=`${route}`
+      text `${item}` testId="item"
+"#;
+
+#[test]
+fn a_child_components_refused_resource_is_counted_at_its_declaring_row_while_measuring() {
+    let mut r = Runner::boot(
+        contract::compile(OWNED_PERF_APP).unwrap(),
+        Refuses { immediate: false },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.measure(true, false);
+    r.act("open", vec![Value::str("1")]).unwrap();
+    let asked = r.take_requests();
+    assert_eq!(asked.len(), 1, "the screen asks for its item");
+    for out in asked {
+        r.fulfill(
+            out.ticket,
+            Outcome::Response(Response {
+                status: 200,
+                headers: vec![],
+                body: b"1".to_vec(),
+            }),
+        )
+        .unwrap();
+    }
+    let counts = r.failure_counts();
+    assert_eq!(counts.len(), 1, "{counts:?}");
+    assert!(counts[0].0.starts_with("item"), "{counts:?}");
+    assert_eq!(counts[0].1.count, 1);
+}
+
+#[test]
+fn resource_measurements_aggregate_plan_family_and_instance_rows() {
+    let root = r#"
+component App
+  state opened = false
+  resource unused = item("unused") when false as shape number else empty()
+  resource item = item("1") when opened as shape number else empty()
+  action open
+    opened = true
+  view
+    text `${failed(item)}`
+"#;
+    let family = root.replace(
+        "item(\"1\") when opened as shape number else empty()",
+        "item(id) for id in (opened ? [\"1\", \"2\"] : []) as shape number",
+    );
+    for (source, instances, immediate) in [
+        (root, 1, false),
+        (family.as_str(), 2, false),
+        (OWNED_PERF_APP, 2, false),
+        (OWNED_PERF_APP, 2, true),
+    ] {
+        let mut r = Runner::boot(
+            contract::compile(source).unwrap(),
+            Refuses { immediate },
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.measure(true, false);
+        r.advance(10.0).unwrap();
+        if source == OWNED_PERF_APP {
+            for id in ["1", "2"] {
+                r.act("open", vec![Value::str(id)]).unwrap();
+            }
+        } else {
+            r.act("open", vec![]).unwrap();
+        }
+        let asked = r.take_requests();
+        assert_eq!(asked.len(), if immediate { 0 } else { instances });
+        for out in asked {
+            r.fulfill(
+                out.ticket,
+                Outcome::Response(Response {
+                    status: 401,
+                    headers: vec![],
+                    body: vec![],
+                }),
+            )
+            .unwrap();
+        }
+        let counts = r.failure_counts();
+        assert_eq!(counts.len(), 1, "{counts:?}");
+        let (name, failures) = counts[0];
+        assert!(name.starts_with("item"), "{counts:?}");
+        assert_eq!(failures.count, instances as u64);
+        assert_eq!((failures.first, failures.last), (10.0, 10.0));
+        let perf: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::handle(&r, r#"{"op":"perf"}"#)).unwrap();
+        assert_eq!(
+            perf["resources"],
+            serde_json::json!([{"name": "item", "asked": instances}]),
+            "{perf}"
+        );
+        let state: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::handle(&r, r#"{"op":"state"}"#)).unwrap();
+        assert_eq!(state["failures"][name]["count"], instances);
+        r.measure(false, false);
+        assert!(r.failure_counts().is_empty());
+    }
 }

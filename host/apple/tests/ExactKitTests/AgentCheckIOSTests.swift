@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 @testable import ExactGroupedLists
 import UIKit
 
@@ -298,7 +299,7 @@ final class AgentCheckIOSTests: XCTestCase {
             ["op": "frame", "id": 5, "x": 20, "y": 400, "w": 200, "h": 30],
         ])
         let session = try XCTUnwrap(session), p = session.presenter, pop = try XCTUnwrap(p.views[3])
-        session.natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        session.nativeViews!.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
         let guest = NodeView(id: 10, kind: "native", presenter: p)
         guest.frame = CGRect(x: 0, y: 500, width: 20, height: 20)
         p.viewport.addSubview(guest); p.views[10] = guest

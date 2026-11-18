@@ -5,7 +5,7 @@ use super::*;
 
 /// What a source is answered with; the journal's line for the request says it.
 pub(super) const UNLINKED_IO: &str =
-    "Unlinked(\"io\"): this binary links no I/O, which runs this request; name \"io\" in app.json's link";
+    "Unlinked(\"io\"): this binary links no I/O, which runs this request; the source declares exact_runner::HostWork, or app.json's link names \"io\"";
 
 impl<D: DataSource> Bridge<D> {
     /// An activity's or a surface's work, which the presenter takes whether

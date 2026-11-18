@@ -6,6 +6,7 @@
 // unsupported. The server's half
 // is scripts/forma-builds.mjs; the web page's, host/web/dev.js. A pin sets
 // what the agent's `prefer` sets (Agent.swift), by the same means.
+import CExact
 #if os(macOS)
 import AppKit
 #else
@@ -45,10 +46,10 @@ struct BuildPin: Equatable {
 
 /// The channel's state: the process's (one app, D11), as the agent's
 /// preferences are.
-enum BuildChannel {
+package enum BuildChannel {
     /// A production build (`ExactEnv.productionBake`) neither registers
     /// nor takes a pin, whatever its environment.
-    static let enabled = !ExactEnv.productionBake
+    package static let enabled = !ExactEnv.productionBake
     /// The frame kinds dispatched before any generation handling.
     static let commands: Set<String> = ["pin", "inspect", "outline", "hold"]
     /// What this build speaks: inspect where it is compiled in.
@@ -161,7 +162,7 @@ extension ExactApp {
 
     /// A build-channel frame from the dev stream (`PlanURL`): a hello with a
     /// new nonce registers; a command applies, then reports.
-    func channel(_ frame: [String: Any]) {
+    package func channel(_ frame: [String: Any]) {
         guard BuildChannel.enabled, let connection else { return }
         if frame["hello"] as? Bool == true {
             connection.report(["kind": "register", "id": BuildChannel.id, "host": BuildChannel.host, "capabilities": BuildChannel.capabilities, "planDigest": BuildChannel.planDigest(self) ?? NSNull(), "design": BuildChannel.design ?? NSNull()])
@@ -221,7 +222,7 @@ extension ExactApp {
 
     /// The runner's own root font size (the agent's `state`, `device`).
     private func renderedRootFontSize(_ s: ExactSession) -> Double? {
-        guard let data = s.agent("{\"op\":\"state\"}").data(using: .utf8),
+        guard let data = s.runtime.ask(exact_state, "{}").data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return ((o["device"] as? [String: Any])?["rootFontSize"] as? NSNumber)?.doubleValue
     }

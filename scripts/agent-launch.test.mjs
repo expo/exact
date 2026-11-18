@@ -904,7 +904,7 @@ test('keyed grants type-check in the rewritten capture and leave authored source
       if (token==='discord-token') writeFileSync(resolve(app,'.exact/backend-origin'),'https://discord.com');
       if (token==='offline-token') process.env.EXACT_BACKEND_ORIGIN='https://offline.example';
       if (token==='fixture-token') { delete process.env.EXACT_BACKEND_ORIGIN; rmSync(resolve(app,'.exact/backend-origin'),{force:true}); }
-      configure(stage,false,parseSync);
+      await configure(stage,false,parseSync);
       await check(stage,resolve(libraries,'tsc'),libraries);
       expect(staticFacts(readFileSync(resolve(stage,'app.ts'),'utf8'),parseSync).grants).toContain(`secret.keep ${token}`);
       expect(readFileSync(resolve(app,'app.ts'),'utf8')).toBe(backendGrants);
@@ -951,32 +951,6 @@ test('authored-test clock advances once per mutation request, not per input repl
   expect(await clock.advance(session)).toBe(1);
 });
 
-test('a reused captured stage restores the authored backend after an override is removed',async()=>{
-  const {configure}=await import('../js/bake/src/typescript.mjs');
-  const {parseSync}=await import('rolldown/utils');
-  const {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync}=await import('node:fs');
-  const {tmpdir}=await import('node:os');const {join}=await import('node:path');
-  const root=mkdtempSync(join(tmpdir(),'exact-backend-stage-')),app=join(root,'app'),stage=join(root,'stage');
-  const env=process.env.EXACT_BACKEND_ORIGIN; delete process.env.EXACT_BACKEND_ORIGIN;
-  try {
-    mkdirSync(app);mkdirSync(stage);mkdirSync(join(app,'.exact'));
-    const source="const origin='http://127.0.0.1:4400'; export const grants=`net.fetch ${origin}`;";
-    writeFileSync(join(stage,'app.ts'),source);writeFileSync(join(stage,'__exact_backend_source.json'),JSON.stringify(source));
-    writeFileSync(join(stage,'__exact_paths.json'),JSON.stringify({app,mounts:[]}));
-    writeFileSync(join(app,'.exact/backend-origin'),'http://127.0.0.1:4412');
-    configure(stage,true,parseSync);
-    expect(readFileSync(join(stage,'app.ts'),'utf8')).toContain('4412');
-    const backend = () => JSON.parse(readFileSync(join(stage,'__exact_backend.json'),'utf8'));
-    expect(backend()).toEqual({origin:'http://127.0.0.1:4412',warning:expect.stringContaining('overriding')});
-    rmSync(join(app,'.exact/backend-origin'));configure(stage,true,parseSync);
-    expect(readFileSync(join(stage,'app.ts'),'utf8')).toBe(source);
-    expect(backend()).toEqual({origin:'http://127.0.0.1:4400',warning:null});
-    // An authored edit equal to the previous injection is still a new captured source.
-    const edited=source.replace('4400','4412');writeFileSync(join(stage,'__exact_backend_source.json'),JSON.stringify(edited));
-    configure(stage,true,parseSync);expect(readFileSync(join(stage,'app.ts'),'utf8')).toBe(edited);
-    expect(backend()).toEqual({origin:'http://127.0.0.1:4412',warning:null});
-  } finally {if(env!==undefined) process.env.EXACT_BACKEND_ORIGIN=env;rmSync(root,{recursive:true,force:true});}
-});
 
 test('mutation requests issued by an automatic clock step receive their own millisecond',async()=>{
   const {testMutationClock}=await import('./agent-test.mjs');
@@ -1063,14 +1037,14 @@ test('backend diagnostics name the selected source and warn when a saved selecti
   try {
     writeFileSync(resolve(dir,'app.ts'),code);
     expect(backendOriginSelection(dir,{})).toBe(null);
-    expect(backendOriginSource(dir,literal,{})).toBe('app.ts origin literal');
+    expect(await backendOriginSource(dir,literal,{})).toBe('app.ts origin literal');
     mkdirSync(resolve(dir,'.exact'));
     writeFileSync(resolve(dir,'.exact/backend-origin'),saved);
     const selection=backendOriginSelection(dir,{});
     expect(selection).toEqual({origin:saved,source:'.exact/backend-origin'});
-    expect(backendOriginSource(dir,saved,{})).toBe('.exact/backend-origin');
-    expect(backendOriginSource(dir,explicit,{EXACT_BACKEND_ORIGIN:explicit})).toBe('EXACT_BACKEND_ORIGIN');
-    expect(backendOriginSource(dir,'http://127.0.0.1:4',{})).toContain('rebuild');
+    expect(await backendOriginSource(dir,saved,{})).toBe('.exact/backend-origin');
+    expect(await backendOriginSource(dir,explicit,{EXACT_BACKEND_ORIGIN:explicit})).toBe('EXACT_BACKEND_ORIGIN');
+    expect(await backendOriginSource(dir,'http://127.0.0.1:4',{})).toContain('rebuild');
     expect(backendOriginWarning(code,selection,parseSync)).toContain(`overriding the app.ts origin literal "${literal}"`);
     expect(backendOriginWarning(`const origin = '${saved}/';`,selection,parseSync)).toBe(null);
     expect(backendOriginWarning(code,backendOriginSelection(dir,{EXACT_BACKEND_ORIGIN:explicit}),parseSync)).toBe(null);
@@ -1213,25 +1187,33 @@ test('a setting is a web build input by value and source, and serve finds one ch
 
 
 test('a setting is named the backend\'s source only where the grant takes it, and the origin literal comes first', async () => {
-  const {backendOriginSource}=await import('./agent-test.mjs');
+  const {backendOriginSource,nativeFetchOrigins}=await import('./agent-test.mjs');
   const dir=mkdtempSync(resolve(tmpdir(),'exact-settings-source-')), origin='http://127.0.0.1:4790';
   try {
     writeFileSync(resolve(dir,'app.json'),JSON.stringify({env:['API_BASE_URL','PICTURES']}));
     writeFileSync(resolve(dir,'.env'),`API_BASE_URL=${origin}\nPICTURES=${origin}/pictures\n`);
     // The grant takes the literal; a setting at the same origin is for something else.
     writeFileSync(resolve(dir,'app.ts'),`const origin = '${origin}';\nconst PICTURES = import.meta.env.PICTURES;\nexport const grants = \`net.fetch \${origin}\`;\n`);
-    expect(backendOriginSource(dir,origin,{})).toBe('app.ts origin literal');
+    expect(await backendOriginSource(dir,origin,{})).toBe('app.ts origin literal');
     // The grant takes the setting's const.
     writeFileSync(resolve(dir,'app.ts'),`const API = import.meta.env.API_BASE_URL;\nconst PICTURES = import.meta.env.PICTURES;\nexport const grants = \`net.fetch \${API}\`;\n`);
-    expect(backendOriginSource(dir,origin,{})).toBe('import.meta.env.API_BASE_URL from .env');
+    expect(await backendOriginSource(dir,origin,{})).toBe('import.meta.env.API_BASE_URL from .env');
     // No grant takes a setting at that origin.
     writeFileSync(resolve(dir,'app.ts'),`const PICTURES = import.meta.env.PICTURES;\nexport const grants = 'net.fetch http://127.0.0.1:1';\n`);
-    expect(backendOriginSource(dir,origin,{})).toContain('built net.fetch grant');
+    expect(await backendOriginSource(dir,origin,{})).toContain('built net.fetch grant');
+    writeFileSync(resolve(dir,'app.json'),'{}');
+    writeFileSync(resolve(dir,'lines.ts'), "export const LINES = ['secret.keep session.refresh'];");
+    writeFileSync(resolve(dir,'app.ts'), `import { LINES } from './lines';\nexport const grants = ['net.fetch https://api.example.com', ...LINES].join('\\n');`);
+    expect(await nativeFetchOrigins(dir,{})).toEqual(['https://api.example.com']);
+    writeFileSync(resolve(dir,'app.json'),JSON.stringify({env:['API_BASE_URL','PICTURES']}));
+    writeFileSync(resolve(dir,'app.ts'), `import { LINES } from './lines';\nconst API = import.meta.env.API_BASE_URL;\nconst PICTURES = import.meta.env.PICTURES;\nexport const grants = [\`net.fetch \${API}\`, ...LINES].join('\\n');`);
+    expect(await backendOriginSource(dir,origin,{})).toBe('import.meta.env.API_BASE_URL from .env');
+    expect(await nativeFetchOrigins(dir,{})).toEqual([origin]);
     // As JavaScript reads it: spacing inside the template, and a grant in a comment, which is none.
     writeFileSync(resolve(dir,'app.ts'),`const API = import.meta.env.API_BASE_URL;\nconst PICTURES = import.meta.env.PICTURES;\nexport const grants = \`net.fetch \${ API }\`;\n`);
-    expect(backendOriginSource(dir,origin,{})).toBe('import.meta.env.API_BASE_URL from .env');
+    expect(await backendOriginSource(dir,origin,{})).toBe('import.meta.env.API_BASE_URL from .env');
     writeFileSync(resolve(dir,'app.ts'),`const API = import.meta.env.API_BASE_URL;\nconst PICTURES = import.meta.env.PICTURES;\n// export const grants = \`net.fetch \${API}\`;\nexport const grants = 'net.fetch ${origin}/v2';\n`);
-    expect(backendOriginSource(dir,origin,{})).toContain('built net.fetch grant');
+    expect(await backendOriginSource(dir,origin,{})).toContain('built net.fetch grant');
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 

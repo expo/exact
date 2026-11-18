@@ -203,7 +203,9 @@ fn poison_discards_a_delivery_continuation_not_yet_handed_out() {
             _: u64,
             _: Outcome,
         ) -> Result<Option<Request>, DataError> {
-            Ok(Some(Request::continuation(55)))
+            Ok(Some(Request::continuation::<crate::host_work::TestWork>(
+                55,
+            )))
         }
         fn discard(&mut self, token: u64) {
             self.discarded.lock().unwrap().push(token);

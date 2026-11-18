@@ -8,6 +8,9 @@ use exact_model_gltf::{
 use std::sync::Arc;
 use styles::{NodeStyle, Occlusion};
 
+#[path = "rays_tests.rs"]
+mod rays;
+
 #[path = "hotspots_tests.rs"]
 mod hotspots;
 
@@ -15,6 +18,104 @@ const GLB: &[u8] = include_bytes!("../../test/fixture/assets/assembly.glb");
 const MESHOPT: &[u8] = include_bytes!("../../test/fixture/assets/assembly-meshopt.glb");
 fn args() -> Vec<Value> {
     arguments::defaults()
+}
+
+#[test]
+fn performance_reports_work_only_while_requested() {
+    let mut s = viewer();
+    assert!(s.take_performance(0.).is_none());
+    assert!(s.agent(r#"{"op":"state"}"#).is_none());
+    assert!(s.agent(r#"{"op":"state","performance":true}"#).is_none());
+    s.set_performance_reporting(true);
+    s.asset("assembly.glb", Ok(MESHOPT));
+    message(&mut s, "pick 200 200", 0.);
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&s.take_performance(0.).expect("model timings")).unwrap();
+    for field in ["parseMs", "parseWaitMs", "prepareMs", "pickMs"] {
+        assert!(
+            snapshot[field].as_f64().is_some_and(|ms| ms >= 0.),
+            "{field}"
+        );
+    }
+    assert!(snapshot.get("uploadMs").is_none(), "nothing uploaded yet");
+    for request in [
+        r#"{"op":"state"}"#,
+        r#"{"op":"state","performance":false}"#,
+        r#"{"op":"state","look":true}"#,
+        r#"{"op":"state","draws":true}"#,
+        r#"{"op":"state","visible":true}"#,
+    ] {
+        assert!(s.agent(request).is_none(), "{request}");
+    }
+    let reply: serde_json::Value =
+        serde_json::from_str(&s.agent(r#"{"op":"state","performance":true}"#).unwrap()).unwrap();
+    assert_eq!(reply["performance"]["parseMs"], snapshot["parseMs"]);
+    assert!(reply["performance"]["sinceArrivalMs"].is_number());
+    s.set_performance_reporting(false);
+    assert!(s.take_performance(1000.).is_none());
+    assert!(s.agent(r#"{"op":"state","performance":true}"#).is_none());
+    s.set_performance_reporting(true);
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&s.take_performance(2000.).unwrap()).unwrap();
+    assert_eq!(snapshot, serde_json::json!({"triangles": 108}));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_parse_waits_for_poll_and_reports_only_the_current_source() {
+    let mut s = ModelViewer::default();
+    s.set_performance_reporting(true);
+    let mut a = args();
+    a[0] = text("assets/assembly.glb");
+    s.bind(&a, None).unwrap();
+    s.asset("assembly.glb", Ok(MESHOPT));
+    assert!(s.preparing());
+    assert!(s.model().is_none());
+    assert!(!s.frame_ready());
+    let result = s.receiver.recv().unwrap();
+    assert!(
+        result.scene.as_ref().unwrap().1.bytes() > 0,
+        "the worker built the BVH"
+    );
+    assert!(result.parse_ms.is_some());
+    a[0] = text("assets/other.glb");
+    s.bind(&a, None).unwrap();
+    s.finish(result);
+    assert!(s.model().is_none());
+    assert_eq!(s.take_performance(0.).as_deref(), Some("{}"));
+    s.asset("other.glb", Ok(MESHOPT));
+    let result = s.receiver.recv().unwrap();
+    s.finish(result);
+    assert!(!s.preparing());
+    assert!(s.model().is_some());
+    assert!(!s.frame_ready());
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&s.take_performance(0.).unwrap()).unwrap();
+    assert!(snapshot["parseMs"].is_number());
+    assert!(snapshot["prepareMs"].is_number());
+
+    s.asset("other.glb", Ok(MESHOPT));
+    let result = s.receiver.recv().unwrap();
+    assert!(result.parse_ms.is_some());
+    s.set_performance_reporting(false);
+    s.set_performance_reporting(true);
+    s.finish(result);
+    assert!(!s.preparing());
+    assert!(s.model().is_some());
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&s.take_performance(0.).unwrap()).unwrap();
+    assert!(snapshot.get("parseMs").is_none(), "{snapshot}");
+    assert!(snapshot.get("parseWaitMs").is_none(), "{snapshot}");
+    assert!(snapshot["prepareMs"].is_number());
+
+    s.asset("other.glb", Ok(MESHOPT));
+    let result = s.receiver.recv().unwrap();
+    s.set_performance_reporting(true);
+    s.finish(result);
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&s.take_performance(0.).unwrap()).unwrap();
+    assert!(snapshot["parseMs"].is_number());
+    assert!(snapshot["parseWaitMs"].is_number());
 }
 fn text(s: &str) -> Value {
     Value::str(s)
@@ -177,6 +278,7 @@ fn picking_follows_the_four_passes_visibility_and_clip() {
         let cast = |m: &Model, x: f32, y: f32| {
             pick::pick(
                 &m.scene,
+                &m.bvh,
                 &m.effective,
                 m.clip,
                 [x, y, 5.],
@@ -278,9 +380,14 @@ fn lifecycle_retains_pending_drops_stale_clears_failures_and_reloads() {
     a[0] = text("assets/last.glb");
     s.bind(&a, None).unwrap();
     s.finish(Parsed {
+        timing_session: s.timing_session,
+        parse_ms: None,
         sequence: stale,
         name: "other.glb".into(),
-        scene: glb::parse(MESHOPT),
+        scene: glb::parse(MESHOPT).map(|s| {
+            let b = crate::bvh::Bvh::new(&s);
+            (s, b)
+        }),
     });
     assert!(s.preparing());
     assert_eq!(s.model().unwrap().camera.pose, camera);
@@ -634,6 +741,7 @@ fn a_farther_revealed_triangle_still_takes_the_faded_pick() {
     assert_eq!(
         pick::pick(
             &scene,
+            &crate::bvh::Bvh::new(&scene),
             &effective,
             Clip::default(),
             [0., 0., 5.],
@@ -651,6 +759,7 @@ fn translucent_revealed_back_faces_are_picked_only_when_drawn_faded() {
         assert_eq!(
             pick::pick(
                 &scene,
+                &crate::bvh::Bvh::new(&scene),
                 &effective,
                 Clip::default(),
                 [0., 0., 5.],
@@ -724,6 +833,7 @@ fn gpu_mirrored_translucent_nodes_keep_their_front_faces_and_picks() {
             let a = s.arguments.clone();
             let m = s.model_mut().unwrap();
             m.scene = glb::parse(&gltf_support::glb(&json, &bin)).unwrap();
+            m.bvh = crate::bvh::Bvh::new(&m.scene);
             m.style(&a);
             let pixels = render_srgb(&gpu, &mut s);
             assert!(
@@ -938,9 +1048,14 @@ fn source_lifecycle_table_keeps_subscriptions_and_the_latest_delivery() {
                 }
                 Finish => {
                     s.finish(Parsed {
+                        timing_session: s.timing_session,
+                        parse_ms: None,
                         sequence,
                         name: "assembly.glb".into(),
-                        scene: glb::parse(GLB),
+                        scene: glb::parse(GLB).map(|s| {
+                            let b = crate::bvh::Bvh::new(&s);
+                            (s, b)
+                        }),
                     });
                     assert!(s.jobs.is_empty());
                     match s.arguments.src.as_str() {
@@ -1188,6 +1303,7 @@ fn picks_reject_geometry_outside_the_camera_depth_range() {
         for p in &mut m.scene.vertices[3..] {
             p.p[2] = z;
         }
+        m.bvh = crate::bvh::Bvh::new(&m.scene);
         message(&mut s, &format!("pick {x} 200"), 0.);
         assert_eq!(s.messages(), ["Impeller"]);
         if let Some(gpu) = &gpu {
@@ -1203,6 +1319,7 @@ fn picks_reject_geometry_outside_the_camera_depth_range() {
     for p in &mut m.scene.vertices[..3] {
         p.p[2] = -1000.;
     }
+    m.bvh = crate::bvh::Bvh::new(&m.scene);
     message(&mut s, "pick 200 200", 0.);
     assert_eq!(s.messages(), [""]);
     if let Some(gpu) = &gpu {
@@ -1268,10 +1385,23 @@ fn gpu_readiness_tracks_the_picture_drawn_through_replacements_and_failures() {
         return;
     };
     let mut s = viewer();
+    s.set_performance_reporting(true);
+    s.asset("assembly.glb", Ok(GLB));
     assert!(!s.frame_ready());
     let (first, _) = fixture::render(&gpu, &mut s, &frame(0.)).unwrap();
     assert!(s.frame_ready());
     assert!(s.loaded);
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&s.take_performance(0.).unwrap()).unwrap();
+    assert!(snapshot["uploadMs"].is_number());
+    assert!(snapshot["loadToSubmitMs"].as_f64().unwrap() >= snapshot["parseMs"].as_f64().unwrap());
+    fixture::render(&gpu, &mut s, &frame(0.)).unwrap();
+    let next: serde_json::Value =
+        serde_json::from_str(&s.agent(r#"{"op":"state","performance":true}"#).unwrap()).unwrap();
+    assert_eq!(
+        next["performance"]["loadToSubmitMs"],
+        snapshot["loadToSubmitMs"]
+    );
     let mut a = args();
     a[0] = text("assets/other.glb");
     a[2] = text("0deg 90deg 105%");

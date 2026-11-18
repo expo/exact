@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 final class CollectionOpeningIOSTests: XCTestCase {
     func testScrollendCanRemoveItsRestingListWithoutRetainingIt() throws {
@@ -30,14 +31,14 @@ final class CollectionOpeningIOSTests: XCTestCase {
             node.handlers.insert("scrollend")
             node.scrollEnd = ScrollEnd()
             XCTAssertTrue(node.scrollEnd!.moved(left: 0, top: 20, scale: 0))
-            p.collections.entries[id]?.travelled = true
+            p.listHost.entries[id]?.travelled = true
             node.endScroll()
-            XCTAssertNil(p.collections.entries[id])
-            XCTAssertTrue(p.collections.fillPending.isEmpty)
-            XCTAssertTrue(p.collections.resting.isEmpty, "destroyed lists leave no rest work")
+            XCTAssertNil(p.listHost.entries[id])
+            XCTAssertTrue(p.listHost.fillPending.isEmpty)
+            XCTAssertTrue(p.listHost.resting.isEmpty, "destroyed lists leave no rest work")
         }
         XCTAssertEqual(ended, Array(UInt32(1)...40), "each list still receives its scrollend once")
-        print("T removed_resting_lists=40 retained_resting_lists=\(p.collections.resting.count)")
+        print("T removed_resting_lists=40 retained_resting_lists=\(p.listHost.resting.count)")
     }
 
     func testTheShopWindowFinishesOpeningAndRestingOnDisplayFrames() throws {
@@ -60,31 +61,31 @@ final class CollectionOpeningIOSTests: XCTestCase {
         let scroll = try XCTUnwrap(node.scrollView)
         func waitForWindow() {
             waitFor("the ordinary window, through the run loop alone", facts: {
-                "rows=\(p.collections.entries[node.id]!.snapshot.rows.map(\.index)) pending=\(p.collections.entries[node.id]!.snapshot.pending)"
+                "rows=\(p.listHost.entries[node.id]!.snapshot.rows.map(\.index)) pending=\(p.listHost.entries[node.id]!.snapshot.pending)"
             }) {
-                p.collections.entries[node.id]?.snapshot.pending == false
-                    && p.collections.fillPending.isEmpty && !session.ownerInFlight && !session.hasPublished()
+                p.listHost.entries[node.id]?.snapshot.pending == false
+                    && p.listHost.fillPending.isEmpty && !session.ownerInFlight && !session.hasPublished()
             }
         }
         waitForWindow()
-        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.rows.map(\.index), Array(0...3),
+        XCTAssertEqual(p.listHost.entries[node.id]?.snapshot.rows.map(\.index), Array(0...3),
             "base opens four two-card rows, including the two below the fold")
         let openingViews = p.views.count
-        let flushes = p.collections.flushes
+        let flushes = p.listHost.flushes
         var landings = 0
         session.onLandForTests = { kind, _ in if case .fill = kind { landings += 1 } }
         var reports: [Data] = [], retired: [Int] = []
-        let feedback = p.collections.onFeedback, fill = p.collections.onFill
-        p.collections.onFeedback = { bytes in
+        let feedback = p.listHost.onFeedback, fill = p.listHost.onFill
+        p.listHost.onFeedback = { bytes in
             reports.append(bytes)
-            let before = Set(p.collections.entries[node.id]!.snapshot.rows.map(\.view))
+            let before = Set(p.listHost.entries[node.id]!.snapshot.rows.map(\.view))
             feedback?(bytes)
-            let after = Set(p.collections.entries[node.id]!.snapshot.rows.map(\.view))
+            let after = Set(p.listHost.entries[node.id]!.snapshot.rows.map(\.view))
             let limit = bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 88, as: UInt32.self) }
             retired.append(before.subtracting(after).count)
             XCTAssertLessThanOrEqual(retired.last!, max(Int(limit) * 2, 4))
         }
-        if let fill { p.collections.onFill = { reports.append($1); fill($0, $1) } }
+        if let fill { p.listHost.onFill = { reports.append($1); fill($0, $1) } }
         var callbackDurations: [Double] = [], restWindows: [[Int]] = []
         for direction in [1.0, -1.0] {
             let driver = NSObject()
@@ -93,7 +94,7 @@ final class CollectionOpeningIOSTests: XCTestCase {
             FrameClock.shared.want(driver, .offsetDriver, rate: FrameClock.full(on: window.screen)) { _ in
                 let step = direction * 3000 * pow(0.998, Double(frame) * 1000 / 60) / 60
                 scroll.contentOffset.y = min(scroll.contentSize.height - scroll.bounds.height, max(0, scroll.contentOffset.y + step))
-                XCTAssertTrue(p.collections.covers(node.id), "every fling frame has its visible rows")
+                XCTAssertTrue(p.listHost.covers(node.id), "every fling frame has its visible rows")
                 frame += 1
                 if frame == 60 { FrameClock.shared.drop(driver) }
             }
@@ -116,7 +117,7 @@ final class CollectionOpeningIOSTests: XCTestCase {
             XCTAssertEqual(events.suffix(2), ["scroll", "scrollend"])
             node.handlers.subtract(["scroll", "scrollend"])
             waitForWindow()
-            restWindows.append(p.collections.entries[node.id]!.snapshot.rows.map(\.index))
+            restWindows.append(p.listHost.entries[node.id]!.snapshot.rows.map(\.index))
         }
         XCTAssertEqual(restWindows, [Array(2...8), Array(0...3)], "base's forward and reversed rest windows")
         XCTAssertEqual(p.views.count, openingViews, "the reversed rest has base's opening view count")
@@ -125,7 +126,7 @@ final class CollectionOpeningIOSTests: XCTestCase {
             bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 88, as: UInt32.self) } < UInt32.max - 1
         }, "live pump slices never request an unlimited build or retirement")
         let measured = "T rest async=\(asynchronous) display_frames=120 end_callback_ms=\(callbackDurations) retire_rows=\(retired)"
-            + " reports=\(reports.count) flushes=\(p.collections.flushes - flushes) landings=\(landings)"
+            + " reports=\(reports.count) flushes=\(p.listHost.flushes - flushes) landings=\(landings)"
         XCTContext.runActivity(named: measured) { _ in }
         print(measured)
     }
@@ -138,7 +139,7 @@ final class CollectionOpeningIOSTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { p.reset(); window.isHidden = true }
         var wires: [Data] = []
-        p.collections.onFeedback = { wires.append($0) }
+        p.listHost.onFeedback = { wires.append($0) }
         p.apply(wireBatch([
             ["op": "collections", "items": [["view": 1, "revision": 1, "scrollSequence": 0, "count": 100,
                 "totalExtent": 5000, "pending": false, "rows": [["view": 10, "root": 10, "epoch": 1, "index": 0]], "correction": NSNull()]]],
@@ -149,16 +150,16 @@ final class CollectionOpeningIOSTests: XCTestCase {
             ["op": "frame", "id": 10, "x": 0.0, "y": 0.0, "w": 300.0, "h": 50.0],
             ["op": "content", "id": 1, "w": 300.0, "h": 5000.0],
         ]))
-        p.collections.flushIfNeeded()
+        p.listHost.flushIfNeeded()
         func limit(_ wire: Data) -> UInt32 {
             wire.subdata(in: 88..<92).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
         }
         XCTAssertEqual(limit(try XCTUnwrap(wires.first)), 0, "opening rescues what shows without building the offscreen lead")
         wires.removeAll()
-        p.collections.changed(1)
-        p.collections.flushIfNeeded()
+        p.listHost.changed(1)
+        p.listHost.flushIfNeeded()
         XCTAssertTrue(wires.isEmpty, "unchanged geometry with no pending lead needs no report")
-        p.collections.fillSlice(1, limit: 3)
+        p.listHost.fillSlice(1, limit: 3)
         XCTAssertEqual(limit(try XCTUnwrap(wires.first)), 3, "a later slice can build its bounded lead")
     }
 }

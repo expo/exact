@@ -49,6 +49,7 @@ fn main() {
         Some(grants),
         None,
         Some(&entries),
+        exact_bake::hands_out_work!(caltrain_data::Caltrain),
     )
     .unwrap_or_else(|e| panic!("compatibility id: {e}"));
     let host = if compat.inputs["store"]["L"] == "0" {

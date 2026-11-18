@@ -19,6 +19,7 @@
 // own path, state carried), else from the baked plan, fresh. Host
 // apparatus for the standalone adapter (LLP 1031 D11): an embedder installs
 // none of this.
+import CExact
 #if os(macOS)
 import AppKit
 import ExactCore
@@ -470,7 +471,7 @@ public enum DevMenu {
             lines.append("session: \(session.label) · viewport: \(Int(size.width))×\(Int(size.height)) · \(session.viewCount) views")
             lines.append("boot: \(String(format: "%.1f", session.bootMs)) ms")
             // A resource whose answers are refused keeps showing its last value (LLP 1142 D4).
-            if let state = (try? JSONSerialization.jsonObject(with: Data(session.agent("{\"op\":\"state\"}").utf8))) as? [String: Any],
+            if let state = (try? JSONSerialization.jsonObject(with: Data(session.runtime.ask(exact_state, "{}").utf8))) as? [String: Any],
                let failed = state["failed"] as? [String: String] {
                 let counts = state["failures"] as? [String: [String: Any]] ?? [:]
                 for (name, why) in failed.sorted(by: { $0.key < $1.key }) {

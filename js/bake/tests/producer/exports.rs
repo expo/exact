@@ -1,4 +1,5 @@
 use super::{paired, Fixture, SOURCE};
+use exact_js::Module;
 use exact_js_bake::{bake, Baked, Producer, Tools};
 use exact_kernel::Kernel;
 use exact_runner::{
@@ -35,6 +36,70 @@ fn model_fixture() -> Fixture {
 }
 
 const MODEL_SOURCE: &str = "export const appId = 'test.exact.logic'; export const grants = ''; export const overlay = undefined; export const answer = () => { throw new Error('unknown source'); };\n";
+
+#[test]
+fn imported_grants_are_frozen_and_the_receipt_names_each_lines_literal() {
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    let f = Fixture::new();
+    std::fs::create_dir(f.0.join("src")).unwrap();
+    f.write("src/session.ts", "export const SECRET_GRANTS = ['secret.keep session.refresh', 'secret.keep session.device'];\n");
+    f.write("app.ts", "import type { Answer } from './app.contract.d.ts';\nimport { SECRET_GRANTS } from './src/session';\nSECRET_GRANTS.push('secret.keep later');\nexport const grants = ['net.fetch https://api.example.com', ...SECRET_GRANTS].join('\\n');\nexport const answer: Answer = () => String(SECRET_GRANTS.length);\n");
+    let mut producer = Producer::new(Tools::default()).unwrap();
+    for baked in [f.bake(), producer.bake(&f.0, None).unwrap()] {
+        let receipt: Json = serde_json::from_str(&baked.receipt).unwrap();
+        let expected = "net.fetch https://api.example.com\nsecret.keep session.refresh\nsecret.keep session.device";
+        assert_eq!(receipt["grants"], expected);
+        let module = Module::inspect(baked.bytecode).unwrap();
+        assert_eq!(module.grants(), expected);
+        assert_eq!(
+            receipt["grantSources"],
+            serde_json::json!([
+                {"grant": "net.fetch https://api.example.com", "file": "app.ts", "line": 4, "column": 24},
+                {"grant": "secret.keep session.refresh", "file": "src/session.ts", "line": 1, "column": 31},
+                {"grant": "secret.keep session.device", "file": "src/session.ts", "line": 1, "column": 62}
+            ])
+        );
+        let live = Runner::boot(
+            exact_plan::Plan::decode(&baked.plan).unwrap(),
+            module,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        assert_eq!(live.resource("message"), Some(&Value::str("3")));
+    }
+}
+
+#[test]
+fn reexported_grants_are_frozen_and_listed_in_the_receipt() {
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    let f = Fixture::new();
+    f.write("session.ts", "import type { Answer } from './app.contract.d.ts';\nconst LINES = ['net.fetch https://api.example.com'];\nLINES.push('secret.keep later');\nexport const grants = LINES.join('\\n');\nexport const answer: Answer = () => String(LINES.length);\n");
+    let mut producer = Producer::new(Tools::default()).unwrap();
+    for exports in [
+        "export { grants, answer } from './session';",
+        "export * from './session';",
+    ] {
+        f.write("app.ts", exports);
+        for baked in [f.bake(), producer.bake(&f.0, None).unwrap()] {
+            let expected = "net.fetch https://api.example.com";
+            let receipt: Json = serde_json::from_str(&baked.receipt).unwrap();
+            assert_eq!(receipt["grants"], expected);
+            assert_eq!(
+                receipt["grantSources"],
+                serde_json::json!([
+                    {"grant": expected, "file": "session.ts", "line": 2, "column": 16}
+                ])
+            );
+            assert_eq!(Module::inspect(baked.bytecode).unwrap().grants(), expected);
+        }
+    }
+}
 
 #[test]
 fn literal_language_model_tools_require_compatible_exported_handlers() {

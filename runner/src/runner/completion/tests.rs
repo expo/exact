@@ -59,7 +59,7 @@ impl DataSource for Source {
         }
         Ok(match outcome {
             Outcome::Message(m) if self.yielding && m.data == "yield" => {
-                Answer::Later(Request::continuation(9))
+                Answer::Later(Request::continuation::<crate::host_work::TestWork>(9))
             }
             Outcome::Response(r) if r.body == b"more" => {
                 Answer::Later(Request::get("https://example.test/next"))
@@ -74,7 +74,8 @@ impl DataSource for Source {
         _: InFlight<'_>,
         _: Option<u64>,
     ) -> Option<(u64, Request)> {
-        self.race.then(|| (7, Request::continuation(8)))
+        self.race
+            .then(|| (7, Request::continuation::<crate::host_work::TestWork>(8)))
     }
 
     fn keep_sent(&mut self, _: &Store, flight: &[InFlight<'_>], _: bool) -> Vec<Option<u64>> {
@@ -92,7 +93,8 @@ impl DataSource for Source {
         outcome: Outcome,
     ) -> Result<Option<Request>, DataError> {
         self.module_landed(store, token, outcome)?;
-        Ok(std::mem::take(&mut self.module_yields).then(|| Request::continuation(55)))
+        Ok(std::mem::take(&mut self.module_yields)
+            .then(|| Request::continuation::<crate::host_work::TestWork>(55)))
     }
 
     fn background(&mut self, _: &Store) -> Option<Request> {
@@ -100,7 +102,9 @@ impl DataSource for Source {
             return None;
         }
         self.background_out = true;
-        Some(Request::continuation(crate::BACKGROUND))
+        Some(Request::continuation::<crate::host_work::TestWork>(
+            crate::BACKGROUND,
+        ))
     }
 
     fn background_landed(

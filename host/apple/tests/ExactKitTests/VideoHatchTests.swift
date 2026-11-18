@@ -1,6 +1,7 @@
 import AVFoundation
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 #if os(macOS)
 import AppKit
 #endif
@@ -13,9 +14,9 @@ final class VideoHatchTests: XCTestCase {
     private var firstPlayerMoment: Int?
 
     private func connect(_ session: ExactSession) {
-        session.natives.install(module: Unmanaged.passUnretained(self).toOpaque())
-        session.natives.hatchesConnected = true
-        session.natives.elementCall = { context, event, _, platform, _, _ in
+        session.nativeViews!.install(module: Unmanaged.passUnretained(self).toOpaque())
+        session.nativeViews!.hatchesConnected = true
+        session.nativeViews!.elementCall = { context, event, _, platform, _, _ in
             let test = Unmanaged<VideoHatchTests>.fromOpaque(context!).takeUnretainedValue()
             test.moments.append(event)
             guard let platform else { return 0 }
@@ -86,7 +87,7 @@ final class VideoHatchTests: XCTestCase {
         NativeViews.uninstallTable()
         let session = ExactApp.shared.makeSession(label: "video-configuring-row")
         defer { session.destroy(); NativeViews.uninstallTable() }
-        session.natives.hasAppModule = true
+        session.nativeViews!.hasAppModule = true
         let p = session.presenter
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "list", "style": ["appearance": "none"]],

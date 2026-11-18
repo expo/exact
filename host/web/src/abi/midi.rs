@@ -9,11 +9,11 @@ impl<D: DataSource> Bridge<D> {
     /// length.
     pub fn midi(&mut self, len: usize) -> u32 {
         let Ok(text) = std::str::from_utf8(&self.input[..len.min(self.input.len())]) else {
-            return self.emit(exact_runner::agent::error("midi: invalid UTF-8"));
+            return self.emit(exact_runner::json::error("midi: invalid UTF-8"));
         };
         let text = text.to_owned();
         let out = self.host.as_mut().map_or_else(
-            || exact_runner::agent::error("not booted"),
+            || exact_runner::json::error("not booted"),
             |h| h.midi(&text),
         );
         self.emit(out)

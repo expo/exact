@@ -1,3 +1,4 @@
+use crate::timing::Stamp;
 use crate::{camera::Camera, pick::Clip, Model, ModelViewer, Parsed};
 use exact_gpu::AssetError;
 use exact_model_gltf::glb;
@@ -67,6 +68,9 @@ impl ModelViewer {
     }
 
     pub(super) fn fail(&mut self, error: String) {
+        if let Some(timing) = &mut self.timing {
+            timing.arrival = None;
+        }
         self.source = match self.source.name() {
             Some(name) => Source::Ready {
                 name: name.into(),
@@ -81,6 +85,10 @@ impl ModelViewer {
     }
 
     pub(super) fn request(&mut self) {
+        self.hotspots.reset_timing();
+        if let Some(timing) = &mut self.timing {
+            *timing = Default::default();
+        }
         if let Some(name) = self.source.name() {
             self.assets.retired.push(name.into());
         }
@@ -121,6 +129,11 @@ impl ModelViewer {
     pub(super) fn deliver(&mut self, name: &str, bytes: Result<&[u8], AssetError>) {
         if self.source.name() != Some(name) {
             return;
+        }
+        self.hotspots.reset_timing();
+        if let Some(timing) = &mut self.timing {
+            *timing = Default::default();
+            timing.arrival = Some(Stamp::now());
         }
         let keep_camera = self.source.load().is_none_or(|load| load.keep_camera);
         if let Source::Ready { scene, .. } = std::mem::take(&mut self.source) {
@@ -184,26 +197,33 @@ impl ModelViewer {
             },
         );
         let limit = self.max_buffer_size;
-        if self.seekable || cfg!(target_arch = "wasm32") {
-            self.finish(Parsed {
-                sequence,
-                name,
-                scene: glb::parse_with_limit(&bytes, limit),
+        let timed = self.timing.is_some();
+        let timing_session = self.timing_session;
+        let parsed_name = name.clone();
+        let parse = move || {
+            let start = timed.then(Stamp::now);
+            let scene = glb::parse_with_limit(&bytes, limit).map(|scene| {
+                let bvh = crate::bvh::Bvh::new(&scene);
+                (scene, bvh)
             });
+            Parsed {
+                sequence,
+                name: parsed_name,
+                scene,
+                timing_session,
+                parse_ms: start.map(|s| s.elapsed()),
+            }
+        };
+        if self.seekable || cfg!(target_arch = "wasm32") {
+            self.finish(parse());
         } else {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let sender = self.sender.clone();
-                let parsed_name = name.clone();
                 match std::thread::Builder::new()
                     .name("model-viewer parse".into())
                     .spawn(move || {
-                        let scene = glb::parse_with_limit(&bytes, limit);
-                        let _ = sender.send(Parsed {
-                            sequence,
-                            name: parsed_name,
-                            scene,
-                        });
+                        let _ = sender.send(parse());
                     }) {
                     Ok(handle) => self.parsers.push(handle),
                     Err(e) => {
@@ -241,8 +261,20 @@ impl ModelViewer {
         }
         let name = load.name;
         let sequence = load.sequence;
+        let start = self.timing.as_ref().map(|_| Stamp::now());
+        if let Some(timing) = &mut self.timing {
+            timing.parse_ms = result
+                .parse_ms
+                .filter(|_| result.timing_session == self.timing_session);
+            // Delivery copying, thread dispatch and waiting for a frame to poll the result.
+            timing.parse_wait_ms = timing
+                .arrival
+                .as_ref()
+                .zip(timing.parse_ms)
+                .map(|(arrival, parse)| (arrival.elapsed() - parse).max(0.));
+        }
         match result.scene {
-            Ok(scene) => {
+            Ok((scene, bvh)) => {
                 let mut camera = Camera::new(&scene, &self.arguments);
                 if load.keep_camera {
                     if let Some(old) = &self.previous {
@@ -258,6 +290,7 @@ impl ModelViewer {
                 }
                 let mut model = Box::new(Model {
                     scene,
+                    bvh,
                     camera,
                     effective: vec![],
                     clip: Clip::default(),
@@ -280,6 +313,9 @@ impl ModelViewer {
                 };
                 self.fail(error);
             }
+        }
+        if let Some(timing) = &mut self.timing {
+            timing.prepare_ms = start.map(|s| s.elapsed());
         }
     }
 

@@ -25,6 +25,14 @@ impl Ring {
         self.values.resize(16384, 0.);
     }
     #[doc(hidden)]
+    pub fn clear(&mut self) {
+        self.len = 0;
+        self.next = 0;
+        self.count = 0;
+        self.sum = 0.0;
+        self.max = 0.0;
+    }
+    #[doc(hidden)]
     pub fn push(&mut self, value: f64) {
         if !value.is_finite() || value < 0.0 {
             return;

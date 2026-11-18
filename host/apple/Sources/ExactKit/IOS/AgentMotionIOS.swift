@@ -25,7 +25,7 @@ extension Agent {
     /// still arriving: UIKit presents it on a later turn, then animates it in.
     var systemSheetArriving: Bool {
         #if os(iOS)
-        ShareSheet.arriving(in: session) || session.picker.documentArriving
+        session.shareHost.arriving(session) || session.picker.documentArriving
         #else
         false
         #endif

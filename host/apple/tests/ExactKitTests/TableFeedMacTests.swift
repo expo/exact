@@ -8,6 +8,8 @@
 import AppKit
 import XCTest
 @testable import ExactKit
+@testable import ExactImages
+@testable import ExactCollections
 
 /// One session whose page is a list of `count` rows, in a window, with the
 /// list's rows in a table.
@@ -143,7 +145,7 @@ final class TableFixture {
     /// The mounted rows by item index, as the runner's last snapshot has them.
     var mounted: [Int: NodeView] {
         var out: [Int: NodeView] = [:]
-        for row in presenter.collections.entries[list.id]?.snapshot.rows ?? [] { out[row.index] = presenter.views[row.view] }
+        for row in presenter.listHost.entries[list.id]?.snapshot.rows ?? [] { out[row.index] = presenter.views[row.view] }
         return out
     }
     /// The cells the table has, by row.
@@ -170,7 +172,7 @@ final class TableFeedMacTests: XCTestCase {
     /// holding the runner's own row for that item, where layout put it; and
     /// a mounted row the table has no cell for is in the document.
     private func check(_ f: TableFixture, _ note: String, file: StaticString = #filePath, line: UInt = #line) throws {
-        let snapshot = try XCTUnwrap(f.presenter.collections.entries[f.list.id]?.snapshot, file: file, line: line)
+        let snapshot = try XCTUnwrap(f.presenter.listHost.entries[f.list.id]?.snapshot, file: file, line: line)
         XCTAssertEqual(f.table.numberOfRows, snapshot.count, note, file: file, line: line)
         // The scroller's document is the runner's extent, with the list's padding: nothing of it is the table's guess.
         let content = f.list.contentBox(), port = f.clip.bounds

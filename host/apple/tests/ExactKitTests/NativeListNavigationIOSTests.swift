@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 @testable import ExactGroupedLists
 
 /// LLP 1075.003 Stage 3: a large title collapses with its route's content

@@ -6,6 +6,7 @@ import AppKit
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactNativeViews
 
 final class HatchClockTests: XCTestCase {
     func testCoalescedAftersDoNotDriveSeeksOrSettlement() {
@@ -32,10 +33,10 @@ final class HatchClockTests: XCTestCase {
         // Set up common-mode membership without relying on application startup.
         CFRunLoopAddCommonMode(CFRunLoopGetMain(), CFRunLoopMode(rawValue: mode.rawValue as CFString))
         let session = ExactApp.shared.makeSession()
-        let clock = session.natives.hatchClock
+        let clock = session.nativeViews!.hatchClock
         defer { clock.reset(); session.destroy() }
         session.clock = nil
-        clock.natives = session.natives
+        clock.natives = session.nativeViews
         clock.after(7, ms: 20)
         XCTAssertNotNil(clock.nextAfter)
 
@@ -54,8 +55,8 @@ final class HatchClockTests: XCTestCase {
         #endif
         let session = ExactApp.shared.makeSession()
         session.clock = nil
-        let clock = session.natives.hatchClock
-        clock.natives = session.natives
+        let clock = session.nativeViews!.hatchClock
+        clock.natives = session.nativeViews
         clock.frames(1, on: true)
         XCTAssertNotNil(session.frames.link, "a ticket runs the link")
         session.frames.motion = true

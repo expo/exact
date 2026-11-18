@@ -300,7 +300,7 @@ impl<D: super::DataSource> Runner<D> {
         }
         out.push_str("\"pending\":");
         match self.replacement_pending {
-            Some(pending) => crate::agent::quote(pending, out),
+            Some(pending) => crate::json::quote(pending, out),
             None => out.push_str("null"),
         }
         out.push('}');
@@ -315,16 +315,16 @@ impl<D: super::DataSource> Runner<D> {
         let _ = write!(
             out,
             "{{\"at\":{},\"dropped\":[",
-            crate::agent::num(report.at)
+            crate::json::num(report.at)
         );
         for (i, (name, why)) in report.dropped.iter().enumerate() {
             if i > 0 {
                 out.push(',');
             }
             out.push_str("{\"what\":\"state\",\"name\":");
-            crate::agent::quote(name, out);
+            crate::json::quote(name, out);
             out.push_str(",\"why\":");
-            crate::agent::quote(why, out);
+            crate::json::quote(why, out);
             out.push('}');
         }
         out.push_str("]}");
@@ -409,14 +409,14 @@ mod tests {
             for op in ["tags", "tree", "state", "logs", "unknown"] {
                 let reply = crate::agent::handle(&runner, &format!("{{\"op\":\"{op}\"}}"));
                 assert_eq!(
-                    crate::agent::field_num(&reply, "generation"),
+                    crate::json::field_num(&reply, "generation"),
                     Some(generation as f64),
                     "{reply}"
                 );
             }
             let state = crate::agent::handle(&runner, "{\"op\":\"state\"}");
             assert_eq!(
-                crate::agent::field_num(&state, "generation"),
+                crate::json::field_num(&state, "generation"),
                 Some(generation as f64)
             );
             assert_eq!(runner.kernel().incarnation(), 1);
@@ -530,7 +530,7 @@ mod tests {
         );
         let cached = runner.inspection_digest.get().unwrap();
         assert_eq!(
-            crate::agent::field_str(&first, "planDigest").as_deref(),
+            crate::json::field_str(&first, "planDigest").as_deref(),
             Some(cached.as_str())
         );
         let address = cached.as_ptr();

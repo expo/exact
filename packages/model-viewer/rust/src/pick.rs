@@ -1,4 +1,7 @@
-use crate::styles::{Effective, Occlusion};
+use crate::{
+    bvh::{Bvh, Ray},
+    styles::{Effective, Occlusion},
+};
 use exact_model_gltf::{math::*, scene::Scene};
 
 #[derive(Clone, Copy, Default)]
@@ -34,91 +37,64 @@ pub fn triangle(origin: V3, direction: V3, a: V3, b: V3, c: V3) -> Option<f32> {
     (t > 0.).then_some(t)
 }
 
-fn hits(
-    scene: &Scene,
-    effective: &[Effective],
-    clip: Clip,
-    origin: V3,
-    direction: V3,
-    depth: [f32; 2],
-    occluders: bool,
-    mut visit: impl FnMut(f32, usize, bool),
-) {
-    for (i, p) in scene.primitives.iter().enumerate() {
-        let style = effective[i];
-        if !style.visible || (style.occlusion == Occlusion::Occluder) != occluders {
-            continue;
-        }
-        for tri in scene.indices[p.indices.start as usize..p.indices.end as usize].chunks_exact(3) {
-            let [a, b, c] = std::array::from_fn(|k| scene.vertices[tri[k] as usize].p);
-            if let Some(t) = triangle(origin, direction, a, b, c) {
-                if (depth[0]..=depth[1]).contains(&t) && clip.keeps(add(origin, mul(direction, t)))
-                {
-                    let front = dot(cross(sub(b, a), sub(c, a)), direction) < 0.;
-                    visit(t, i, front);
-                }
-            }
-        }
-    }
-}
-
 pub fn pick(
     scene: &Scene,
+    bvh: &Bvh,
     effective: &[Effective],
     clip: Clip,
     origin: V3,
     direction: V3,
     depth: [f32; 2],
 ) -> String {
-    let nearer = |hit: &mut Option<(f32, usize)>, t, i| {
-        if hit.is_none_or(|(nearest, _)| t < nearest) {
-            *hit = Some((t, i));
+    let nearer = |hit: &mut Option<(f32, usize, u32)>, t, i, offset| {
+        if hit
+            .is_none_or(|(nearest, primitive, first)| (t, i, offset) < (nearest, primitive, first))
+        {
+            *hit = Some((t, i, offset));
         }
     };
     let mut occluder = None;
-    hits(
-        scene,
-        effective,
-        clip,
+    let ray = Ray {
         origin,
         direction,
         depth,
-        true,
-        |t, i, _| {
-            nearer(&mut occluder, t, i);
-        },
-    );
-    let occluder_depth = occluder.map_or(f32::INFINITY, |(t, _)| t);
+        clip,
+    };
+    for (i, style) in effective.iter().enumerate() {
+        if style.visible && style.occlusion == Occlusion::Occluder {
+            bvh.hits(scene, i, ray, |t, offset, _| {
+                nearer(&mut occluder, t, i, offset);
+                false
+            });
+        }
+    }
+    let occluder_depth = occluder.map_or(f32::INFINITY, |(t, _, _)| t);
     let (mut opaque, mut revealed, mut translucent) = (None, None, None);
-    hits(
-        scene,
-        effective,
-        clip,
-        origin,
-        direction,
-        depth,
-        false,
-        |t, i, front| {
-            let style = effective[i];
+    for (i, style) in effective.iter().enumerate() {
+        if !style.visible || style.occlusion == Occlusion::Occluder {
+            continue;
+        }
+        bvh.hits(scene, i, ray, |t, offset, front| {
             if style.opaque() && t < occluder_depth {
-                nearer(&mut opaque, t, i);
+                nearer(&mut opaque, t, i, offset);
             }
             // A primitive can cross the occluder: its nearer hit must not hide its faded hit.
             if style.occlusion == Occlusion::Revealed
                 && t > occluder_depth
                 && style.occluded_opacity > 0.
             {
-                nearer(&mut revealed, t, i);
+                nearer(&mut revealed, t, i, offset);
             }
             if !style.opaque() && front {
-                nearer(&mut translucent, t, i);
+                nearer(&mut translucent, t, i, offset);
             }
-        },
-    );
+            false
+        });
+    }
     opaque
         .or(revealed)
         .or(occluder)
         .or(translucent)
-        .map(|(_, i)| scene.nodes[scene.primitives[i].node].name.clone())
+        .map(|(_, i, _)| scene.nodes[scene.primitives[i].node].name.clone())
         .unwrap_or_default()
 }

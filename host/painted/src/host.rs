@@ -717,7 +717,7 @@ impl<D: DataSource> Host<D> {
     /// The agent API's read operations (LLP 1012): `tree`, `state`, `logs`
     /// from the runner; `settle` from the engine, and a resource's re-ask.
     pub fn agent(&self, request: &str) -> String {
-        if exact_runner::agent::field_str(request, "op").as_deref() == Some("settle") {
+        if exact_runner::json::field_str(request, "op").as_deref() == Some("settle") {
             return match self
                 .engine
                 .settle_time()
@@ -732,7 +732,7 @@ impl<D: DataSource> Host<D> {
                 .chain(self.runner.data_timer_due_ms())
                 .reduce(f64::max)
             {
-                Some(t) => format!("{{\"settle\":{}}}", exact_runner::agent::num(t)),
+                Some(t) => format!("{{\"settle\":{}}}", exact_runner::json::num(t)),
                 None => "{\"settle\":null}".to_string(),
             };
         }
@@ -836,8 +836,7 @@ impl<D: DataSource> Host<D> {
             .kernel()
             .node(view)
             .is_some_and(|n| n.props.str(exact_kernel::PropId::TestId) == Some("open-file"));
-        let granted =
-            exact_runner::save_file::covered(self.runner.data_ref().grants(), "fs.read", "doc:/");
+        let granted = self.runner.covers("fs.read", "doc:/");
         match open_file && granted {
             true => match exact_data::documents::open_route(path, 0) {
                 Some(doc) => Event::Change(exact_runner::ControlValue::Text(doc)),

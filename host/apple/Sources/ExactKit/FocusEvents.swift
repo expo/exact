@@ -23,7 +23,7 @@ extension Presenter {
         get { focusEvents.onEvent }
         set { focusEvents.onEvent = newValue }
     }
-    func focus(_ id: UInt32) {
+    package func focus(_ id: UInt32) {
         #if os(iOS)
         navigation.finishBootOwner()
         #endif
@@ -36,7 +36,7 @@ extension Presenter {
         #endif
         MainActor.assumeIsolated { HeldState.focusMoved(to: textHost(id)) } // the focus coming into a held focus's node or leaving it lets it go (HeldState.swift)
     }
-    func blur(_ id: UInt32) {
+    package func blur(_ id: UInt32) {
         #if os(iOS) || os(tvOS)
         if menus.preservesFocus(id) { return }
         #endif

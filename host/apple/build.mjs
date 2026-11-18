@@ -948,7 +948,11 @@ async function main(args, lockHeld = false) {
     mkdirSync(resolve(embed, 'include'), { recursive: true });
     const archive = `lib${crate.replace(/-/g, '_')}.a`;
     copyFileSync(resolve(libDir, archive), resolve(embed, archive));
-    for (const header of readdirSync(resolve(pkg, 'include'))) copyFileSync(resolve(pkg, 'include', header), resolve(embed, 'include', header));
+    // Every header but an unlinked family's (LLP 1047.001 D4): a family in its own target has an `explicit` submodule
+    // in CExact's module map, and its exports, `exact_<name>.h`, are in the archive only when it is linked.
+    const families = [...readFileSync(resolve(pkg, 'Sources/CExact/module.modulemap'), 'utf8').matchAll(/explicit module \w+ \{\s*header "[^"]*\/(exact_(\w+)\.h)"/g)];
+    const unlinked = new Set(families.filter(([, , name]) => appleLink !== 'all' && !appleLink.split(',').includes(name)).map(([, header]) => header));
+    for (const header of readdirSync(resolve(pkg, 'include')).filter((h) => !unlinked.has(h))) copyFileSync(resolve(pkg, 'include', header), resolve(embed, 'include', header));
     copyAppleGpuProducts(libDir, embed, gpuArtifacts, frameworkBundles);
     const embeddedLibrary = embedLibrary(library, embed, ios); // a package's framework (LLP 1154 D3), which the consumer links and embeds
     // Beside the executable in the embedding app's bundle, as the standalone app has it.
