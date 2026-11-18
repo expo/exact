@@ -548,27 +548,40 @@ impl Kernel {
         if moved.is_empty() {
             return;
         }
-        let readouts = &arena.observations.readouts;
-        let under = |r: u32| {
-            let mut at = arena.parent(r);
+        let reserving = &self.arena.reserving;
+        let observations = &mut self.arena.observations;
+        observations.reserving.retain(|s, _| reserving.contains(*s));
+        observations.reserving.extend(changed);
+        self.forget_under(&moved);
+    }
+
+    /// Measure again the readers and the boxes that ignore below any of
+    /// `roots`, whose reservations or scrollers changed what reaches them.
+    fn forget_under(&mut self, roots: &IdSet<u32>) {
+        let arena = &self.arena;
+        let under = |slot: u32| {
+            let mut at = arena.parent(slot);
             while let Some(a) = at {
-                if moved.contains(&a) {
+                if roots.contains(&a) {
                     return true;
                 }
                 at = arena.parent(a);
             }
             false
         };
-        let readers: Vec<u32> = (arena.readers.observers.iter())
-            .filter(|r| readouts.contains_key(r) && under(*r))
+        let observations = &arena.observations;
+        let readers: Vec<u32> = (observations.readouts.keys().copied())
+            .filter(|&r| under(r))
             .collect();
-        let reserving = &self.arena.reserving;
+        let takers: Vec<u32> = (observations.takings.measured.iter().copied())
+            .filter(|&t| under(t))
+            .collect();
         let observations = &mut self.arena.observations;
-        observations.reserving.retain(|s, _| reserving.contains(*s));
-        observations.reserving.extend(changed);
-        observations.takings.measured.clear();
         for r in readers {
             observations.readouts.remove(&r);
+        }
+        for t in takers {
+            observations.takings.measured.remove(&t);
         }
     }
 }
@@ -602,24 +615,18 @@ impl Kernel {
         let gone = (arena.observations.passing.keys().copied())
             .filter(|&s| !arena.ignoring.contains(s) || !scroll_view(arena, s));
         moved.extend(gone.map(|s| (s, [false; 4])));
-        let readouts = &arena.observations.readouts;
-        let under: Vec<u32> = (arena.readers.observers.iter())
-            .filter(|&r| readouts.contains_key(&r))
-            .filter(|&r| moved.iter().any(|&(s, _)| arena.is_ancestor(s, r)))
-            .collect();
-        let observations = &mut self.arena.observations;
-        if !moved.is_empty() {
-            observations.takings.measured.clear();
+        if moved.is_empty() {
+            return;
         }
+        let roots: IdSet<u32> = moved.iter().map(|&(s, _)| s).collect();
+        let observations = &mut self.arena.observations;
         for (s, now) in moved {
             match now.contains(&true) {
                 true => observations.passing.insert(s, now),
                 false => observations.passing.remove(&s),
             };
         }
-        for r in under {
-            observations.readouts.remove(&r);
-        }
+        self.forget_under(&roots);
     }
 }
 
