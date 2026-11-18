@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { buildPageFiles, writeCrawlerFiles } from './crawl.mjs';
+import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from './crawl.mjs';
 import { warmGameInputs, warmGameEnvironment, publishWarmGame } from '../web-js/module.mjs';
 import { generatedInputFiles } from '../../game/inputs.mjs';
 // Build the web app (LLP 1071): the JS target, `host/web-js/build.mjs`, the
@@ -679,11 +679,9 @@ if (buildLocations.length && renderAt) {
   const rendered = spawnSync('cargo', ['run', '-q', '-p', renderCrate, '--bin', renderBin, '--', '--plan', planOut,
     '--name', webManifest.name, ...(app.origin ? ['--origin', app.origin] : []), '--shell', resolve(stage, 'index.html'), '--build'],
   { cwd: app.dir, env: renderEnv, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-  if (rendered.status !== 0) throw new Error(`${renderBin}: ${rendered.stderr}${rendered.stdout}`);
+  const pages = renderEntryPages(renderBin, rendered);
   const shell = readFileSync(resolve(stage, 'index.html'), 'utf8');
-  const pages = rendered.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   if (pages.length) writeFileSync(resolve(stage, 'shell.html'), shell);
-  for (const doc of pages) if (doc.error) throw new Error(`${renderBin} ${doc.location}: ${doc.error}`);
   // Each page's file as the JS target's writers choose it and the servers look it up (crawl.mjs `buildPageFiles`).
   const routeTable = planRouteTable(planBytes), files = buildPageFiles(stage, pages, routeTable);
   for (const [i, doc] of pages.entries()) {

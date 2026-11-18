@@ -3914,7 +3914,10 @@ name; two pages that would share a file are refused.
 release build as deploy makes one (no agent mode): a page for each `render=build` route
 (rendered under Bun unless the app has a render entry of its own), `404.html` for a `notfound`
 route rendered so, `shell.html`, and `routes.json`, the route table in the plan's order with each
-route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
+route's pattern, render policy and `notfound`. A route whose render draws randomness
+(`crypto.getRandomValues` or `crypto.randomUUID`, for example) cannot be `render=build`, since
+its page would give every reader the same random values: the build fails, naming the route;
+declare it `render=request` or `render=client` instead. An app with routes also gets `robots.txt`, which
 allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
 by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
 (a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built

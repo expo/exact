@@ -4,12 +4,28 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { posix, resolve, win32 } from 'node:path';
-import { buildPageFiles, writeCrawlerFiles } from './crawl.mjs';
+import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from './crawl.mjs';
 import { listPublicFiles, serveBuildTree, serveStatic, staticFile } from './serve.mjs';
 import { webCompiler } from '../web-js/module.mjs';
 
 const ORIGIN = 'https://site.invalid';
 const page = (location, more = {}) => ({ location, notfound: false, status: 200, robots: null, page: '<html>', ...more });
+
+// A render entry's `--build` output (exact_render::main_with): its pages from a run that succeeded; else every page's
+// error and every line that is no page's, a last line cut short passed over, then the entry's stderr or its exit status
+test("a render entry's build gives its pages, or every page's error and why the run failed", () => {
+  const lines = (...pages) => pages.map(p => JSON.stringify(p) + '\n').join('');
+  expect(renderEntryPages('app-render', { status: 0, stdout: lines(page('/')), stderr: '' })).toEqual([page('/')]);
+  const run = more => () => renderEntryPages('app-render', { stdout: '', stderr: '', ...more });
+  expect(run({ status: 1, stdout: lines(page('/'), { location: '/drawn', error: 'refused' }, { location: '/404.html', error: 'refused too' }) + '{"location":"/cu' }))
+    .toThrow(new Error('app-render /drawn: refused\napp-render /404.html: refused too\napp-render exited with 1'));
+  expect(run({ status: 101, stderr: 'error[E0425]: cannot find value\n' })).toThrow(new Error('error[E0425]: cannot find value'));
+  expect(run({ status: null, signal: 'SIGKILL', stdout: lines(page('/')) + '{"loc' })).toThrow(new Error('app-render exited with SIGKILL'));
+  expect(run({ status: 101, stdout: 'debug: asked\n42\nnull\n', stderr: "thread 'main' panicked\n" })).toThrow(new Error(
+    ["app-render printed a line that is no page's: debug: asked", "app-render printed a line that is no page's: 42",
+      "app-render printed a line that is no page's: null", "thread 'main' panicked"].join('\n')));
+  expect(() => renderEntryPages('app-render', { error: new Error('spawnSync cargo ENOBUFS') })).toThrow(new Error('app-render: spawnSync cargo ENOBUFS'));
+});
 const written = (pages, origin = ORIGIN, before = () => {}, routes = []) => {
   const dir = mkdtempSync(resolve(tmpdir(), 'crawl-'));
   try {

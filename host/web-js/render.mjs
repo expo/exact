@@ -19,7 +19,7 @@ import { createDocument, esc } from './dom.js';
 import { cachingFetch, directives, FRESH } from './http-cache.mjs';
 import { canonical, mountedHref, withBase } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
-import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
+import { buildPageFiles, pageRoute, writeCrawlerFiles } from '../web/crawl.mjs';
 import { buildBase, generationOf, withGenerationBase } from '../web/generations.mjs';
 import { lockHeld } from '../web/build-lock.mjs';
 
@@ -603,8 +603,16 @@ if (import.meta.main) {
       const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
       const files = buildPageFiles(dist, pages, routes);
       let origin = null;
+      let drew = false;
       for (const [i, p] of pages.entries()) {
         const page = await render(withBase(p.location, buildBase(dist)));
+        // Write no page whose render drew randomness, which every reader of a page made at build would share (LLP 1048.000
+        // D7, LLP 1069.005 D2)
+        if (page.drew) {
+          drew = true;
+          console.error(`${p.location}: route \`${pageRoute(p, routes)?.name}\` is render=build, but its render drew randomness, and a page made at build would give every reader the same random values (LLP 1069.005 D2). Declare the route render=request, rendered for each request, or render=client, rendered in the browser`);
+          continue;
+        }
         docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
         origin ??= page.origin;
         const file = files[i];
@@ -614,7 +622,8 @@ if (import.meta.main) {
         for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
         for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
       }
-      writeCrawlerFiles(dist, docs, origin, routes, buildBase(dist));
+      if (drew) process.exitCode = 1;
+      else writeCrawlerFiles(dist, docs, origin, routes, buildBase(dist));
     } else for (const location of args.slice(1)) {
       const page = await render(withBase(location, buildBase(dist)));
       for (const failure of page.failed) console.error(`${location}: resource ${failure}`);
