@@ -4,7 +4,7 @@ export interface ExpoPushApp {
 }
 
 export interface ExpoPushSubscription {
-  apple?: { deviceToken: string; appId: string } | null;
+  apple?: { deviceToken: string; appId: string; installationId: string } | null;
   android?: { installationId: string; token: string; appId: string } | null;
 }
 

@@ -8,6 +8,7 @@ export async function getExpoPushTokenAsync(subscription: ExpoPushSubscription, 
   if (!device) throw new TypeError('Expo push needs an APNs device token, or an Android FCM token and installationId');
   if (!projectId) throw new TypeError('app.json extra.eas.projectId is required for Expo push');
   if (!device.appId) throw new TypeError(`${device.platform} push subscription must name its application id`);
+  if (!device.installation) throw new TypeError(`${device.platform} push subscription must name its installationId`);
   if (typeof device.development !== 'boolean') {
     throw new TypeError('Expo push needs options.development for an APNs token: true when the build registers with the APNs sandbox');
   }
@@ -30,12 +31,12 @@ export async function getExpoPushTokenAsync(subscription: ExpoPushSubscription, 
 
 /**
  * What Expo's exchange takes from a platform's credential. `installation` seeds Expo's per-installation UUID, so it
- * needs no separate storage: Firebase's case-sensitive ID, which outlives its token, or the APNs token, which Apple
- * replaces after a restore, on a new device and when the system is reinstalled ("Registering your app with APNs").
+ * stays the same across token rotation: Firebase's case-sensitive installation ID, or the UUID the Apple package keeps
+ * in the Keychain for the installation.
  */
 function deviceOf({ apple, android }: ExpoPushSubscription, options: ExpoPushOptions) {
   if (apple?.deviceToken) {
-    return { type: 'apns', platform: 'Apple', token: apple.deviceToken, installation: apple.deviceToken, appId: apple.appId, development: options.development };
+    return { type: 'apns', platform: 'Apple', token: apple.deviceToken, installation: apple.installationId, appId: apple.appId, development: options.development };
   }
   if (android?.token && android.installationId) {
     return { type: 'fcm', platform: 'Android', token: android.token, installation: android.installationId, appId: android.appId, development: false };

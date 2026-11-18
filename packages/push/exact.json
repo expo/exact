@@ -20,7 +20,8 @@
   "shapes": {
     "ApplePushSubscription": {
       "deviceToken": "string",
-      "appId": "string"
+      "appId": "string",
+      "installationId": "string"
     },
     "AndroidPushSubscription": {
       "installationId": "string",

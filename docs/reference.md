@@ -3553,10 +3553,17 @@ register beside them under this grant.
   ephemeral authorization, it asks nothing. Then the app registers, and the call answers the
   system's answer: the subscription, or `AbortError` with the system's
   message.
-- `pushSubscription()` reads `{apple: {deviceToken, appId}}`, the token's bytes in
-  lowercase hex and the installed bundle id, or on Android
+- `pushSubscription()` reads `{apple: {deviceToken, appId, installationId}}`, the
+  token's bytes in lowercase hex, the installed bundle id and a UUID for the
+  installation, or on Android
   `{android: {installationId, token, appId}}`, the Firebase Installations ID,
-  FCM registration token and installed package id.
+  FCM registration token and installed package id. Apple's `installationId`
+  stays the same when APNs replaces the token, so a server can replace the
+  installation's old token. The package keeps it in the Keychain on this device
+  only, so a backup restored to another device gets a new one. It is empty while
+  the Keychain cannot give one (before the device's first unlock, or a signature
+  without a data-protection Keychain); on iOS readers are told again after the
+  first unlock.
   Otherwise it reads null. It never asks: its
   first read in a launch registers once when permission is already granted, as
   Apple asks of every launch (on Android, once the app has subscribed), and a
@@ -3698,11 +3705,11 @@ app states it because Exact does not read it: iOS has no public call that
 reads the signed `aps-environment` (LLP 1133.004 §9 P3). Without it the call
 throws and sends nothing. An FCM token ignores it.
 
-Expo's `deviceId` is a UUID made from the first 16 bytes of a SHA-256, with the
-v4 version and variant bits set, so it needs no separate storage. On Android
-the hash is of the case-sensitive Firebase installation ID: the UUID stays the
-same while that ID does, including across FCM token rotations. On Apple it is
-of the device token, so a new device token gives a new UUID.
+Expo's `deviceId` is a UUID made from the first 16 bytes of the SHA-256 of the
+subscription's `installationId` (case-sensitive), with the v4 version and
+variant bits set. It stays the same while the installation ID does, including
+across FCM and APNs token rotations, so Expo replaces the installation's token.
+A subscription without an installation ID throws and sends nothing.
 
 The call returns `{type: "expo", data: "ExponentPushToken[…]"}`. An HTTP
 refusal throws with Expo's status and the first 500 characters of its reply;
@@ -3835,7 +3842,7 @@ Under the agent nothing reaches APNs or FCM, and `pushSubscription()` reads null
 while the permission is not granted, as on the phone. A subscribe while
 `prompt` waits on the
 `permission` ticket (`tap @t allow`), then on the subscription's value (`type
-@t '{"apple":{"deviceToken":"ab12","appId":"com.example.app"}}'`); `prefer extension
+@t '{"apple":{"deviceToken":"ab12","appId":"com.example.app","installationId":"6f1d3a52-8c0e-4b7a-9e21-5d4c3b2a1f00"}}'`); `prefer extension
 push.pushSubscription=<json>` sets the value later, as a rotation.
 
 Android's data-message routing, deadline, registration and token rotation have
