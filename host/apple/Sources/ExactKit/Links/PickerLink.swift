@@ -96,7 +96,7 @@ package final class NoPicker: FilePicking {
         let reply = (try? JSONSerialization.jsonObject(with: Data(session.runtime.ask(exact_picker, ask).utf8))) as? [String: Any]
         guard let view = (reply?["view"] as? NSNumber)?.uint32Value else { session.log("picker: refused: no file input with id \"\(id)\""); return }
         session.log("picker: refused: this build links no file picker")
-        session.apply(session.runtime.pickerCancel(view, now: session.now()))
+        session.apply(session.runtime.cancel(view, now: session.now()))
     }
 
     package func save(_ args: [Any]) { rule("saveFile", PickerRequests.save(args, agent: false)) }
@@ -107,7 +107,7 @@ package final class NoPicker: FilePicking {
         guard let view = (ruling["view"] as? NSNumber)?.uint32Value, ruling["refused"] != nil || ruling["present"] as? Bool == true else { return }
         if ruling["refused"] == nil { session.log("\(name): refused: this build links no document picker") }
         session.log("\(name): cancelled")
-        session.apply(session.runtime.pickerCancel(view, now: session.now()))
+        session.apply(session.runtime.cancel(view, now: session.now()))
     }
 
     #if EXACT_AGENT

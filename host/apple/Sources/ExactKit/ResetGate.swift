@@ -129,7 +129,7 @@ enum ResetGate {
         "frameNavigation(_:event:record:now:)": "an old web frame's navigation",
         "message(_:_:now:)": "an old web frame's message",
         "dialogClose(_:now:)": "an old dialog closing as its view goes",
-        "pickerCancel(_:now:)": "an old picker dismissed as its view goes",
+        "cancel(_:now:)": "an old picker, dialog or search dismissed as its view goes",
         "hostBack(_:now:)": "a back gesture the teardown set off is the old navigation's",
         "hostBack(from:to:now:)": "a back the teardown set off is the old navigation's",
         "hostForward(_:now:)": "a forward gesture belongs to the old navigation, whose forward history is not carried",

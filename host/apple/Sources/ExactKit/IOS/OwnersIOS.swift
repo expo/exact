@@ -66,10 +66,12 @@ extension Presenter {
         return viewportPoints(viewport.convert(shown, from: nil))
     }
 
-    /// Ends editing wherever the session is mounted; whether any editor resigned.
+    /// Ends editing wherever the session is mounted; whether any editor resigned. A bar's search field ends
+    /// through its search, which holds the end back while UIKit moves the bar into search (`HeaderSearch.resign`).
     @discardableResult
     package func endEditing() -> Bool {
-        presentations(includingRetiring: true).reduce(documentHost.endEditing(true)) { $1.endEditing(true) || $0 }
+        if navigation.resignSearch() { return true }
+        return presentations(includingRetiring: true).reduce(documentHost.endEditing(true)) { $1.endEditing(true) || $0 }
     }
 
     /// The next view reached by a touch or its listeners: the superview,
@@ -281,7 +283,7 @@ package final class OwnerBlocks {
 
     /// A stack's routes: a navigation controller's, or a plain tab's one route.
     private func routes(of stack: UIViewController, presented: Bool) -> [(route: any RouteSurface, view: UIView, block: CGRect, shown: Bool, presented: Bool)] {
-        var controllers = stack.stackRoutes
+        var controllers = stack.shownStackRoutes
         if let leaving = (stack as? UINavigationController)?.transitionCoordinator?.viewController(forKey: .from),
            !controllers.contains(where: { $0 === leaving }) { controllers.append(leaving) }
         return controllers.compactMap { controller in

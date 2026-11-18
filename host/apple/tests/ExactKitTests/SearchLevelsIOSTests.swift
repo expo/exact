@@ -1,0 +1,434 @@
+#if os(iOS)
+import UIKit
+import XCTest
+@testable import ExactKit
+@testable import ExactGroupedLists
+
+/// A header search's results as a level of the stack (`placingResults`), over `scripts/fixtures/search-levels.contract`:
+/// using the field enters the results route. Collapsed they are drawn in the list's controller, over its whole view,
+/// the field staying in its bar; expanded they are pushed on the detail. UIKit, so a simulator runs it.
+final class SearchLevelsIOSTests: XCTestCase {
+    private var window: UIWindow?
+    private var session: ExactSession?
+
+    override func tearDown() {
+        session?.destroy(); session = nil
+        window?.isHidden = true; window = nil
+        super.tearDown()
+    }
+
+    /// Collapsed at the list, the results cover the list in its own controller and the field stays the person's;
+    /// a result pushes over both and Back returns to them with the keyboard down; the close button leaves them and
+    /// keeps the text.
+    func testTheResultsCoverTheCollapsedListAndKeepItsField() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let (list, search) = try listSearch(split)
+        // UIKit's floating bar can give the bar another field as it moves into search
+        var field: UISearchTextField { search.controller.searchBar.searchTextField }
+        session.presenter.focusElement(["levels-search"])
+        until("the results route is on top") { navigation.selectedKey == routeKey(session, "results") && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        let results = try XCTUnwrap(navigation.resultsInPlace)
+        XCTAssertTrue(results.parent === list, "drawn in the list's controller")
+        XCTAssertEqual(results.view.frame, list.view.bounds, "over the list's whole view")
+        // Core Animation paints by depth, then by place: the results' view must not stand under the list's ranked route
+        let listContent = try XCTUnwrap(list.view.subviews.first { list.node.isDescendant(of: $0) })
+        XCTAssertGreaterThan(list.view.subviews.firstIndex(of: results.view) ?? -1, list.view.subviews.firstIndex(of: listContent) ?? .max)
+        XCTAssertGreaterThanOrEqual(results.view.layer.zPosition, listContent.layer.zPosition, "painted over the list's route")
+        XCTAssertEqual(split.list.viewControllers.map { $0 as? RouteController }, [list], "no push: the field stays in the list's bar")
+        XCTAssertTrue(field.isFirstResponder)
+        XCTAssertFalse(navigation.isInactiveRoute(containing: try node(session, "search")), "the list is live under its results")
+        field.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        XCTAssertTrue(navigation.resultsInPlace === results)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "result-a").id)])["error"])
+        until("the result is pushed") { has(session, "book-a") && navigation.selectedKey == routeKey(session, "book-a") && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("back at the results") { navigation.selectedKey == routeKey(session, "results") && !has(session, "book-a") && !agent.nativeInFlight() }
+        XCTAssertTrue(navigation.resultsInPlace === results, "still drawn in the list")
+        XCTAssertTrue(search.controller.isActive)
+        search.controller.isActive = false
+        until("the close leaves the results") { navigation.resultsInPlace == nil && !has(session, "results") && !agent.nativeInFlight() && search.controller.transitionCoordinator == nil }
+        XCTAssertNil(results.parent)
+        XCTAssertEqual(try node(session, "search").props["value"], "x", "`preventDefault()` on `cancel` keeps the text")
+        XCTAssertEqual(search.controller.searchBar.text, "x")
+    }
+
+    /// At results drawn in the list UIKit shows no Back button: the agent's `back` is the search's close, as the ✕ makes
+    /// it, which leaves the results and keeps the text the app's `cancel` keeps.
+    func testTheAgentsBackAtResultsDrawnInTheListIsTheSearchsClose() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results route is on top") { navigation.resultsInPlace != nil && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        XCTAssertNil(agent.back()["error"])
+        until("the close leaves the results") {
+            !has(session, "results") && navigation.resultsInPlace == nil && !search.controller.isActive && !agent.nativeInFlight()
+                && search.controller.transitionCoordinator == nil
+        }
+        XCTAssertFalse(search.controller.searchBar.searchTextField.isFirstResponder)
+        XCTAssertEqual(try node(session, "search").props["value"], "x", "`preventDefault()` on `cancel` keeps the text")
+        XCTAssertEqual(search.controller.searchBar.text, "x")
+    }
+
+    /// The keyboard put away with nothing typed closes the search into its button and leaves the results.
+    func testAnEmptySearchPutAwayLeavesItsResults() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results route is on top") { navigation.resultsInPlace != nil && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        XCTAssertTrue(search.controller.searchBar.searchTextField.resignFirstResponder())
+        until("the empty search closes and leaves its results") { !search.controller.isActive && !has(session, "results") && navigation.resultsInPlace == nil && !agent.nativeInFlight() }
+    }
+
+    /// Typed at the collapsed list after a Back from a page, an unfold puts that page back under the results, so Back
+    /// from them shows it (LLP 1127 D5.9).
+    func testAnUnfoldPutsThePageLeftUnderTheResults() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is pushed") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("back at the list") { split.shown.count == 1 && !has(session, "book-a") && !agent.nativeInFlight() }
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results route is on top") { navigation.resultsInPlace != nil && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        expand()
+        until("the book is back under the results") {
+            !split.controller.isCollapsed && has(session, "book-a") && navigation.selectedKey == routeKey(session, "results")
+                && split.detail.viewControllers.count == 2 && !agent.nativeInFlight()
+        }
+        XCTAssertNil(navigation.resultsInPlace, "expanded, the results are the detail's")
+        XCTAssertTrue(split.detail.topViewController is RouteController)
+        XCTAssertEqual((split.detail.topViewController as? RouteController)?.key, routeKey(session, "results"))
+        XCTAssertEqual(try node(session, "search").props["value"], "x")
+    }
+
+    /// A result opened over results typed at the collapsed list: an unfold puts the page left under the results and the
+    /// result back over them, so Back from the result shows the results with a Back of their own, and the close shows
+    /// the page (LLP 1127 D5.9).
+    func testAnUnfoldPutsThePageLeftUnderTheResultsAndTheResultOverThem() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is pushed") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("back at the list") { split.shown.count == 1 && !has(session, "book-a") && !agent.nativeInFlight() }
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results route is on top") { navigation.resultsInPlace != nil && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "result-b").id)])["error"])
+        until("the result is pushed") { has(session, "book-b") && navigation.selectedKey == routeKey(session, "book-b") && !agent.nativeInFlight() }
+        expand()
+        let detail = { split.detail.viewControllers.map { ($0 as? RouteController)?.key } }
+        until("the book is back under the results and the result over them") {
+            !split.controller.isCollapsed && !agent.nativeInFlight()
+                && detail() == [routeKey(session, "book-a"), routeKey(session, "results"), routeKey(session, "book-b")]
+        }
+        XCTAssertNil(agent.back()["error"])
+        until("Back shows the results over the book") {
+            detail() == [routeKey(session, "book-a"), routeKey(session, "results")] && !has(session, "book-b") && !agent.nativeInFlight()
+        }
+        search.controller.isActive = false
+        until("the close shows the book") {
+            detail() == [routeKey(session, "book-a")] && !has(session, "results") && !agent.nativeInFlight() && search.controller.transitionCoordinator == nil
+        }
+        XCTAssertEqual(try node(session, "search").props["value"], "x")
+    }
+
+    /// UIKit pads a grouped list's first section while its route's search is open, which moved the rows down as the search
+    /// opened: the list keeps the inset it had.
+    func testAGroupedListKeepsItsRowsInPlaceAsItsSearchOpens() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot()
+        let (_, search) = try listSearch(split)
+        let collection = try XCTUnwrap((session.presenter.groupedLists as? GroupedListHost)?.lists[try node(session, "books").id]?.collection, "the list's collection view")
+        let first = IndexPath(item: 0, section: 0)
+        collection.layoutIfNeeded()
+        let closed = try XCTUnwrap(collection.layoutAttributesForItem(at: first)?.frame.minY)
+        session.presenter.focusElement(["levels-search"])
+        until("the search is open") { opened(search) }
+        collection.layoutIfNeeded()
+        XCTAssertEqual(collection.layoutAttributesForItem(at: first)?.frame.minY, closed, "the first row stays where it was in the list")
+    }
+
+    /// Expanded, the results are pushed on the detail over its page; Back pops them and the search closes, keeping its
+    /// text.
+    func testExpandedTheResultsArePushedOverThePageAndBackClosesTheSearch() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book shows") { has(session, "book-a") && split.detail.viewControllers.count == 1 && !agent.nativeInFlight() }
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results are pushed over the book") { split.detail.viewControllers.count == 2 && !agent.nativeInFlight() }
+        XCTAssertEqual((split.detail.topViewController as? RouteController)?.key, routeKey(session, "results"))
+        XCTAssertNil(navigation.resultsInPlace)
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        XCTAssertNil(agent.back()["error"])
+        until("Back shows the book and closes the search") {
+            split.detail.viewControllers.count == 1 && !has(session, "results") && !search.controller.isActive && !agent.nativeInFlight()
+        }
+        XCTAssertEqual(try node(session, "search").props["value"], "x", "Back keeps the text")
+    }
+
+    /// Expanded, results typed over a page; collapsed (a fold), the list draws them under its field, as when they are
+    /// typed at the collapsed list, the page staying the one the list left; expanded again, the page is back under them
+    /// (LLP 1127.000 D2, D8).
+    func testACollapseUnderTheResultsDrawsThemInTheListAndAnExpansionPutsThePageBack() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book shows") { has(session, "book-a") && split.detail.viewControllers.count == 1 && !agent.nativeInFlight() }
+        let (list, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results are pushed over the book") { split.detail.viewControllers.count == 2 && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        until("UIKit shows the router's stack") { navigation.shownKeys.last == navigation.selectedKey && !agent.nativeInFlight() }
+        collapse()
+        until("collapsed with the results drawn in the list") {
+            split.controller.isCollapsed && navigation.resultsInPlace?.parent === list && navigation.selectedKey == routeKey(session, "results")
+                && !has(session, "book-a") && !agent.nativeInFlight()
+        }
+        XCTAssertEqual(split.list.viewControllers.map { $0 as? RouteController }, [list], "no push: the field stays in the list's bar")
+        XCTAssertEqual(try node(session, "search").props["value"], "x")
+        expand()
+        let detail = { split.detail.viewControllers.map { ($0 as? RouteController)?.key } }
+        until("the book is back under the results") {
+            !split.controller.isCollapsed && !agent.nativeInFlight() && detail() == [routeKey(session, "book-a"), routeKey(session, "results")]
+        }
+        XCTAssertNil(navigation.resultsInPlace, "expanded, the results are the detail's")
+    }
+
+    /// The docked keys are a region of the window, as SwiftUI's keyboard region is: expanded, the detail beside the
+    /// list whose bar field took them takes the part they cover as its bottom cover, as the field's own route does, so
+    /// its content height leaves the keys out (a route's edge scroller is inset instead, LLP 1116.000 D1.2).
+    func testTheDetailBesideTheFieldTakesTheKeysAsItsSafeArea() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let p = session.presenter, navigation = p.navigationHost, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book shows") { has(session, "book-a") && split.detail.viewControllers.count == 1 && !agent.nativeInFlight() }
+        let (list, search) = try listSearch(split)
+        let book = try XCTUnwrap(split.detail.topViewController as? RouteController)
+        let height = book.node.bounds.height
+        guard case .edges(let rest)? = navigation.covers[book.node.id] else { return XCTFail("no cover at rest") }
+        let keys: CGFloat = 300
+        setKeyboard(p, top: 800 - keys, responder: search.controller.searchBar.searchTextField)
+        _ = agent.clock(["settle": true])
+        for route in [list, book] {
+            guard case .edges(let edges)? = navigation.covers[route.node.id] else { return XCTFail("\(route.node.id): no cover") }
+            XCTAssertEqual(edges.bottom, keys, accuracy: 0.5, "\(route.node.id): the keys are its bottom cover")
+        }
+        XCTAssertEqual(book.node.bounds.height, height - (keys - rest.bottom), accuracy: 0.5, "the detail's content ends at the keys")
+        setKeyboard(p, top: nil, responder: search.controller.searchBar.searchTextField)
+        _ = agent.clock(["settle": true])
+        guard case .edges(let edges)? = navigation.covers[book.node.id] else { return XCTFail("no cover") }
+        XCTAssertLessThan(edges.bottom, keys, "the keys gone, its cover is the window's safe area again")
+    }
+
+    /// Expanded, the results' system Back stays hidden for as long as the search is open, the keys put away too, as
+    /// UIKit hides it while the field floats over them; it shows as the search closes. The sidebar's rows follow its bar
+    /// back on a spring (LLP 1127.000 §1 item 9).
+    func testExpandedTheResultsBackShowsOnlyOnceTheSearchCloses() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book shows") { has(session, "book-a") && split.detail.viewControllers.count == 1 && !agent.nativeInFlight() }
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results are pushed over the book") { split.detail.viewControllers.count == 2 && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        let results = try XCTUnwrap(split.detail.topViewController as? RouteController)
+        XCTAssertEqual(results.key, routeKey(session, "results"))
+        XCTAssertTrue(results.navigationItem.hidesBackButton, "hidden while the field edits")
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        XCTAssertTrue(search.controller.searchBar.searchTextField.resignFirstResponder())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(search.controller.isActive, "the search stays open with the keys put away")
+        XCTAssertTrue(results.navigationItem.hidesBackButton, "and its results keep their Back hidden")
+        let sidebar = try XCTUnwrap((session.presenter.groupedLists as? GroupedListHost)?.lists[try node(session, "books").id]?.collection as? GroupedCollectionView)
+        XCTAssertTrue(sidebar.followsBar, "the list is UIKit's sidebar")
+        var sprang = false
+        search.controller.isActive = false
+        until("the search closes") {
+            sprang = sprang || sidebar.layer.animation(forKey: "exact.followsBar") != nil
+            return !search.controller.isActive && search.controller.transitionCoordinator == nil && !agent.nativeInFlight()
+        }
+        XCTAssertTrue(sprang, "the rows follow the bar back on a spring")
+        if let shown = split.detail.topViewController as? RouteController, shown.pushed, split.detail.viewControllers.count > 1 {
+            XCTAssertFalse(shown.navigationItem.hidesBackButton, "Back shows once the search is closed")
+        }
+        XCTAssertFalse(navigation.searchHidesBack(results), "no search keeps it hidden")
+    }
+
+    /// Expanded, two pages under results typed over them: collapsed and expanded again, both pages are back under the
+    /// results, in order (LLP 1127.000 D8).
+    func testACollapseAndExpansionUnderTheResultsKeepEveryPageUnderThem() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the first book shows") { has(session, "book-a") && split.detail.viewControllers.count == 1 && !agent.nativeInFlight() }
+        XCTAssertTrue(session.navigate("/book/b"))
+        until("the second book is over it") { has(session, "book-b") && split.detail.viewControllers.count == 2 && !agent.nativeInFlight() }
+        let (_, search) = try listSearch(split)
+        session.presenter.focusElement(["levels-search"])
+        until("the results are pushed over the books") { split.detail.viewControllers.count == 3 && !agent.nativeInFlight() }
+        until("the search is open") { opened(search) }
+        search.controller.searchBar.searchTextField.insertText("x")
+        until("the app hears the text") { (try? node(session, "search"))?.props["value"] == "x" }
+        until("UIKit shows the router's stack") { navigation.shownKeys.last == navigation.selectedKey && !agent.nativeInFlight() }
+        collapse()
+        until("collapsed with the results drawn in the list") { split.controller.isCollapsed && navigation.resultsInPlace != nil && !agent.nativeInFlight() }
+        expand()
+        let detail = { split.detail.viewControllers.map { ($0 as? RouteController)?.key } }
+        until("both books are back under the results") {
+            !split.controller.isCollapsed && !agent.nativeInFlight()
+                && detail() == [routeKey(session, "book-a"), routeKey(session, "book-b"), routeKey(session, "results")]
+        }
+    }
+
+    /// The search field UIKit floats on the keys as it edits (iOS 26: in a bar of its own, out of every navigation bar)
+    /// covers what lies under that bar as the keys do: the bar is the edge scroller's bottom inset, while the route's
+    /// cover stays the keys, which UIKit places the bar above (LLP 1127.000 D9).
+    func testTheSearchFieldFloatedOnTheKeysInsetsTheEdgeScroller() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, split) = try boot(size: CGSize(width: 1100, height: 800), regular: true)
+        let p = session.presenter, navigation = p.navigationHost, agent = Agent(session: session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        session.presenter.focusElement(["levels-search"])
+        until("the results are the detail") { (split.detail.topViewController as? RouteController)?.key == routeKey(session, "results") && !agent.nativeInFlight() }
+        let results = try XCTUnwrap(split.detail.topViewController as? RouteController)
+        let scroll = try XCTUnwrap(results.edgeScroll?.scrollView, "the results' edge scroller")
+        let keys: CGFloat = 300, gap: CGFloat = 8, bar: CGFloat = 48
+        let floating = UIView(frame: CGRect(x: 200, y: 800 - keys - gap - bar, width: 600, height: bar))
+        let field = UISearchTextField(frame: CGRect(x: 0, y: 10, width: 600, height: 28))
+        floating.addSubview(field)
+        split.controller.view.addSubview(floating)
+        defer { floating.removeFromSuperview() }
+        let rest = scroll.adjustedContentInset.bottom
+        setKeyboard(p, top: 800 - keys, responder: field)
+        _ = agent.clock(["settle": true])
+        guard case .edges(let edges)? = navigation.covers[results.node.id] else { return XCTFail("no cover") }
+        XCTAssertEqual(edges.bottom, keys, accuracy: 0.5, "the keys are the route's cover, which UIKit places the bar above")
+        let end = scroll.convert(scroll.bounds, to: nil).maxY - scroll.adjustedContentInset.bottom
+        XCTAssertEqual(end, floating.frame.minY, accuracy: 0.5, "the scroller's content ends at the top of the field's bar")
+        setKeyboard(p, top: nil, responder: field)
+        _ = agent.clock(["settle": true])
+        XCTAssertEqual(scroll.adjustedContentInset.bottom, rest, accuracy: 0.5, "the keys gone, the inset is the one at rest")
+    }
+
+    // MARK: helpers
+
+    private func boot(size: CGSize = CGSize(width: 402, height: 874), regular: Bool = false) throws -> (ExactSession, SplitIOS) {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        if ExactEnv.authoredChrome { throw XCTSkip("under the agent's chrome the stack is not split") }
+        ExactGroupedLists.install() // the list is UIKit's grouped list, as an app's composition links it
+        let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_SEARCH_LEVELS_PLAN"], "build.mjs --test --ios compiles the fixture")))
+        let session = ExactApp.shared.makeSession(label: "search-levels-\(UUID().uuidString)")
+        self.session = session
+        let view = ExactView(session: session), host = UIViewController()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: size)
+        if regular { window.traitOverrides.horizontalSizeClass = .regular }
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(view)
+        self.window = window
+        XCTAssertNil(session.boot(plan: plan, size: window.bounds.size).error)
+        view.frame = host.view.bounds
+        view.layoutIfNeeded()
+        let agent = Agent(session: session)
+        until("a split") { session.presenter.navigationHost.split != nil && !agent.nativeInFlight() }
+        return (session, try XCTUnwrap(session.presenter.navigationHost.split))
+    }
+
+    private func expand() {
+        guard let window else { return }
+        window.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+        window.rootViewController?.view.subviews.first?.frame = window.bounds
+        window.traitOverrides.horizontalSizeClass = .regular
+    }
+
+    private func collapse() {
+        guard let window else { return }
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController?.view.subviews.first?.frame = window.bounds
+        window.traitOverrides.horizontalSizeClass = .compact
+    }
+
+    /// UIKit has moved the bar into search and its field is the person's to type in: during that move UIKit's floating
+    /// bar can take the field from one view to another, and text typed then can be lost.
+    private func opened(_ search: HeaderSearch) -> Bool {
+        search.controller.isActive && search.controller.transitionCoordinator == nil && search.controller.searchBar.searchTextField.isFirstResponder
+    }
+
+    private func listSearch(_ split: SplitIOS) throws -> (RouteController, HeaderSearch) {
+        let list = try XCTUnwrap(split.list.viewControllers.first as? RouteController)
+        return (list, try XCTUnwrap(list.search, "the list's header search"))
+    }
+
+    private func routeKey(_ session: ExactSession, _ testId: String) -> String? {
+        guard let node = session.presenter.views.values.first(where: { $0.props["testId"] == testId }) else { return nil }
+        return session.presenter.navigationHost.routeKey(containing: node)
+    }
+
+    private func until(_ what: String, _ done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(20)
+        while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05)) }
+        XCTAssertTrue(done(), "\(what): \(state())")
+    }
+
+    /// The stacks and the search as the router and UIKit hold them, for a failed wait.
+    private func state() -> String {
+        guard let session, let split = session.presenter.navigationHost.split else { return "no split" }
+        let navigation = session.presenter.navigationHost
+        let keys = { (nav: UINavigationController) in nav.viewControllers.map { ($0 as? RouteController)?.key ?? "?" }.joined(separator: ",") }
+        let search = (split.list.viewControllers.first as? RouteController)?.search
+        return "router \(navigation.shownKeys) selected \(navigation.selectedKey ?? "-"); list [\(keys(split.list))] detail [\(keys(split.detail))]"
+            + " collapsed \(split.controller.isCollapsed); drawn \(navigation.resultsInPlace?.key ?? "-"); search active \(search?.controller.isActive == true)"
+            + " editing \(search?.controller.searchBar.searchTextField.isFirstResponder == true) text \"\(search?.controller.searchBar.text ?? "")\""
+            + " value \"\((try? node(session, "search"))?.props["value"] ?? "-")\""
+    }
+
+    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+        try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, testId)
+    }
+
+    private func has(_ session: ExactSession, _ testId: String) -> Bool {
+        session.presenter.views.values.contains { $0.props["testId"] == testId }
+    }
+}
+#endif

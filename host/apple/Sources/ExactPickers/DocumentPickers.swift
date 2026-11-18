@@ -148,7 +148,7 @@ extension Picker {
     func documentCancelled(_ view: UInt32, _ name: String, issued: SessionLease? = nil) {
         answerHold(view, nil, issued: issued)
         session.log("\(name): cancelled")
-        session.apply(session.runtime.pickerCancel(view, now: session.now()))
+        session.apply(session.runtime.cancel(view, now: session.now()))
     }
 }
 

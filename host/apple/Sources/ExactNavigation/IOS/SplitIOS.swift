@@ -34,6 +34,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// What UIKit shows changed: it collapsed or expanded, or showed or hid the list.
     var changed: () -> Void = {}
     var columnsWillChange: () -> Void = {}
+    var listWillBeCovered: () -> Void = {}
+    var resultsOnTop: () -> Bool = { false }
     var columnsDidChange: () -> Void = {}
     /// The inspector's column (iOS 26), made when a route first goes there.
     private(set) var inspector: UINavigationController?
@@ -130,6 +132,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private weak var along: UIViewControllerTransitionCoordinator?
 
     /// Whether UIKit nests N1 in N0 now (collapsed, or collapsing).
+    var settledExpanded: Bool { !controller.isCollapsed && !moving }
+    var settledCollapsed: Bool { controller.isCollapsed && !moving }
     var nested: Bool { list.viewControllers.contains { $0 === detail } }
     /// Whether N1's routes are in the stack UIKit shows: in their column, or
     /// nested in N0. Collapsed, a pop of N1 off N0 leaves its routes in it.
@@ -464,7 +468,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
             svc.setViewController(nil, for: .inspector)
         }
         #endif
-        return detailRoutes.isEmpty ? .primary : .secondary
+        let coversList = !detailRoutes.isEmpty && !resultsOnTop()
+        if coversList { listWillBeCovered() }
+        else { for route in detailRoutes { route.held = false } }
+        return coversList ? .secondary : .primary
     }
     func splitViewController(_ svc: UISplitViewController,
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
@@ -479,7 +486,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
     }
 
-    func splitViewControllerDidCollapse(_ svc: UISplitViewController) { settle() }
+    func splitViewControllerDidCollapse(_ svc: UISplitViewController) {
+        if resultsOnTop() { stack = Array(stack.prefix(1)) }
+        settle()
+    }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) { settle() }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
         if let coordinator = svc.transitionCoordinator { holdLayout(until: coordinator) }

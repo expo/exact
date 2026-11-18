@@ -263,11 +263,13 @@ package final class Presenter {
     /// A route's content or its projected search field currently owns text input.
     package func ownsKeyboard(in container: UIView) -> Bool { edits(in: container) || editsInBar(of: container) }
     /// Whether the keyboard's editor is in `container`'s content.
-    func edits(in container: UIView) -> Bool { keyboardEditor?.isDescendant(of: container) == true }
-    /// Whether the keyboard's editor is the search field of the bar over `container`'s route.
+    package func edits(in container: UIView) -> Bool { keyboardEditor?.isDescendant(of: container) == true }
+    /// Whether the keyboard's editor is the search field of the bar over `container`'s route, or the field whose
+    /// results that route is (`aria-controls`).
     package func editsInBar(of container: UIView) -> Bool {
-        guard let editor = keyboardEditor else { return false }
-        return (ViewPresentation.controller(for: container) as? any RouteSurface)?.headerSearchEditor === editor
+        guard let route = ViewPresentation.controller(for: container) as? any RouteSurface else { return false }
+        if let editor = keyboardEditor, route.headerSearchEditor === editor { return true }
+        return navigation.searchEdits(over: route)
     }
     /// The docked keyboard's occupied geometry in its owning container.
     package func keyboardGuideTop(in container: UIView) -> CGFloat? {
@@ -640,6 +642,9 @@ package final class Presenter {
             session?.log("focus \"\(name)\" refused: hidden ancestor")
             return
         }
+        #if os(iOS)
+        target.headerSearch?.keepEditing()
+        #endif
         guard responder.becomeFirstResponder() else {
             session?.log("focus \"\(name)\" refused: UIKit did not accept first responder")
             return
@@ -649,15 +654,20 @@ package final class Presenter {
 
     /// The action's blur(): drop focus and the keyboard, and any focus still
     /// waiting to be delivered; blur(html-id) only when that node holds it.
+    /// A bar's search field ends through its search, which holds the end back
+    /// while UIKit moves the bar into search (`HeaderSearch.resign`).
     func blurElement(_ args: [Any]) {
         pendingFocus = nil
         if let name = args.first as? String {
             guard let target = views.values.sorted(by: { $0.id < $1.id }).first(where: { $0.props["id"] == name }) else { return }
             let responder: UIView = target.headerField ?? target.textArea ?? target.field ?? target
+            #if os(iOS)
+            if let search = target.headerSearch, responder.isFirstResponder || search.presenting { search.resign(); return }
+            #endif
             if responder.isFirstResponder { _ = responder.resignFirstResponder() }
             return
         }
-        // `endEditing` resigns text editors only; a focused control resigns itself.
+        // `endEditing` resigns text editors only (a bar's search through its search); a focused control resigns itself.
         if !endEditing(), let held = views.values.first(where: { $0.isFirstResponder }) { _ = held.resignFirstResponder() }
     }
 

@@ -10,6 +10,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var pageScrollAxes: (x: Bool, y: Bool)?
     private(set) var contentViewport: Viewport?
     private let keyboardInset = KeyboardInset()
+    /// The bar of the search field UIKit floats on the keys, in the edge scroller's bottom inset (`fitContentViewport`).
+    private let fieldBar = KeyboardInset()
+    private weak var fieldBarScroll: UIScrollView?
     weak var bootSurface: UIView?
     var surface: UIView { bootSurface ?? view }
     var contentMount: UIView { contentViewport ?? surface }
@@ -87,6 +90,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var barSpaces: [UInt32: UIBarButtonItem] = [:]
     /// The header's search field as UIKit's search controller (§9.6).
     var search: HeaderSearch?
+    var hidesBack = false
     /// The title Exact drew from the heading's group, and the subtitle it
     /// wrote; whether the root's tablist was hidden when it last looked (§9.10).
     let titleInk = NavigationTitleInk()
@@ -347,13 +351,21 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         let view = surface, ledger = ContributionsIOS.of(self)
         let id = ContributionsIOS.Identity(node: node.id, operation: .keyboardInsets)
         var keys: CGFloat = 0
-        if contentViewport == nil || presenter.keyboardPolicy != "resizes-visual", presenter.editsInBar(of: view), let top = presenter.keyboardTop, let window = view.window {
+        if contentViewport == nil || presenter.keyboardPolicy != "resizes-visual", presenter.keyboardPolicy != "overlays-content",
+           !presenter.edits(in: view), !presentedOver, let top = presenter.keyboardTop, let window = view.window {
             let edge = view.convert(CGPoint(x: 0, y: top), from: window).y
             // Extend the safe area the route has without it (a row beside the tabs, and an app's own
             // addition, included) to the keys; the keyboard and that row obstruct the same edge.
             keys = max(0, view.bounds.maxY - edge - (view.safeAreaInsets.bottom - ledger.effect(of: id).bottom))
         }
         ledger.write(id, UIEdgeInsets(top: 0, left: 0, bottom: keys, right: 0))
+        let scroll = edgeScroll?.scrollView
+        if fieldBarScroll !== scroll {
+            if let old = fieldBarScroll { fieldBar.apply(0, to: old) }
+            fieldBar.reset()
+            fieldBarScroll = scroll
+        }
+        if let scroll { fieldBar.apply(keys > 0 ? presenter.fieldBarInset(over: self) : 0, to: scroll) }
     }
     #endif
 
@@ -588,6 +600,17 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         guard let read = topEdgeRead else { return }
         guard read == (node.setsEdgeEffect, node.edgeEffectHidden(.top)) else { return followTopEdge(contentScrollView(for: .top)) }
         if topEdgeWatch != nil, let list = contentScrollView(for: .top) { showTopEdge(of: list) }
+    }
+}
+
+extension RouteController {
+    /// Whether a presentation covers this route, which then keeps its own safe area under the keys (LLP 1127.000 D9):
+    /// its controller, or one that holds it, presents another, an active search controller aside (UIKit presents one
+    /// over its field's context, covering nothing).
+    var presentedOver: Bool {
+        sequence(first: self as UIViewController, next: \.parent).contains { c in
+            c.presentedViewController.map { !($0 is UISearchController) && !$0.isBeingDismissed } == true
+        }
     }
 }
 
