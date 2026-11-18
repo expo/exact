@@ -32,3 +32,15 @@ extension NodeView {
         presenter?.session?.natives.destroy(id: id)
     }
 }
+
+extension NodeView {
+    /// An iframe's web view, made once the node has its props: the arm then
+    /// builds it with the frame's `partition`, and a hatched frame's moment
+    /// before construction has the node's word and `data-*`. A hatched one
+    /// waits for the module's hatches (LLP 1020.002 §9).
+    package func embedFrame(_ presenter: Presenter) {
+        guard kind == "iframe", !presenter.elements.waits(self) else { return }
+        presenter.leaves.embed(self)
+        updateEmbedded()
+    }
+}

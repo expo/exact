@@ -135,7 +135,7 @@ impl<D: DataSource> Bridge<D> {
             .to_owned();
         self.output = match self.host.as_mut() {
             Some(h) => h.forma_json(&text),
-            None => exact_runner::agent::error("forma: not booted"),
+            None => exact_runner::json::error("forma: not booted"),
         }
         .into_bytes();
         self.output.len() as u32

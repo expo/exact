@@ -3,6 +3,10 @@
 use exact_data::{Mixed, Placed};
 use exact_data_host::Storage;
 use exact_logic::Swappable;
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     exact_canvas::{Context2d, DrawError, Frame},
     Answer, DataError, DataSource, Dispatch, Outcome, Placement, Request, Store, Target, Value,
@@ -31,7 +35,7 @@ impl DataSource for Leaf {
     }
     fn more_for(&mut self, target: Target) -> Vec<Request> {
         assert_eq!(target, Target::Resource(9));
-        let mut request = Request::continuation(7);
+        let mut request = Request::continuation::<TestWork>(7);
         request.fetch = Some(2);
         vec![request]
     }
@@ -74,7 +78,7 @@ impl DataSource for Leaf {
         token: u64,
         _: Outcome,
     ) -> Result<Option<Request>, DataError> {
-        Ok(Some(Request::continuation(token)))
+        Ok(Some(Request::continuation::<TestWork>(token)))
     }
 
     fn draw_2d(

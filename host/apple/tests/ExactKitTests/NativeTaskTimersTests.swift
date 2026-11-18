@@ -145,6 +145,11 @@ final class NativeTaskTimersTests: XCTestCase {
     /// task fires again with nothing else applying a batch, and keeps firing. (That the firings meanwhile add none
     /// beside it is the queue's own, `testARetriedFiringAsksForItselfAndFiringsMeanwhileQueueNoneBesideIt`.)
     private func assertRetriedAndKeepsFiring(_ session: ExactSession, gate: (() -> Void) -> Void) throws {
+        // Settle the session and wait for nothing in flight or queued: a tick in flight in the gate (a still page's link
+        // runs until a tick hears its present) refuses the queue's ask before the runtime sees the firing, and that
+        // refusal would meet the gate's wait as the gate's own does.
+        settleViewlessSession(session)
+        spin(until: { !session.ownerInFlight && !session.applying && !session.taskTimers.hasReady }, "nothing in flight or queued")
         let row = try XCTUnwrap(session.taskTimers.rows.first)
         let timer = try XCTUnwrap(session.taskTimers.timerForTests(row.index))
         while session.now() < row.due + 1 { Thread.sleep(forTimeInterval: 0.002) }

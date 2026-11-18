@@ -6,6 +6,8 @@ import UIKit
 #endif
 import XCTest
 @testable import ExactKit
+@testable import ExactEffects
+@testable import ExactSvg
 
 final class PaintOrderIOSTests: XCTestCase {
     #if os(macOS)

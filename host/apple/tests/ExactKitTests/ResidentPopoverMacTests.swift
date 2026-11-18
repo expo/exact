@@ -18,7 +18,7 @@ final class ResidentPopoverMacTests: XCTestCase {
         let html = "<!doctype html><body>Resident<script>window.residentValue='kept';window.residentDocumentToken=Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');parent.postMessage('resident-ready','*');</script>"
         try Data(html.utf8).write(to: directory.appendingPathComponent("guest.html"))
         let session = ExactApp.shared.makeSession(label: "resident-iframe")
-        session.webviews.moduleLocation = { module }
+        session.webHost.moduleLocation = { module }
         defer { session.destroy() }
         XCTAssertNil(session.boot(plan: try fixturePlan("IFRAME_RESIDENT_POPOVER"), size: CGSize(width: 640, height: 500)).error)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 500), styleMask: [.titled], backing: .buffered, defer: false)

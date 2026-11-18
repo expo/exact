@@ -1,6 +1,5 @@
 {
   "host": {
-    "web": {},
     "ios": {
       "minimumOS": "18.0",
       "deviceFamily": [
@@ -14,7 +13,6 @@
   },
   "deploy": {
     "store": {
-      "web": "0",
       "ios": "0"
     }
   },

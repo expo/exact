@@ -244,6 +244,7 @@ dependencies = [
  "exact-gpu",
  "exact-model-gltf",
  "serde_json",
+ "web-sys",
 ]
 
 [[package]]

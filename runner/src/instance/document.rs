@@ -11,7 +11,6 @@
 //! refused here too, and so is what the fold doesn't cover (a virtualized
 //! list, a relative length): the render then renders again with a kernel.
 
-use super::collection::views::ListChild;
 use super::*;
 use exact_kernel::id::IdMap;
 use exact_kernel::{NodeFacts, PropList, SortedMap, StyleId};
@@ -559,4 +558,17 @@ impl Build<'_> {
         }
         Ok((style, props))
     }
+}
+
+/// One child of a virtualized list's view, as a document written without a
+/// kernel holds it (LLP 1048.004): a spacer, or a mounted row's wrapper
+/// around its root.
+pub(in crate::instance) enum ListChild<'a> {
+    /// A spacer: its view and style (its props are fixed: hidden).
+    Spacer(ViewId, StyleProps),
+    /// An authored fixed root, emitted by the owning node's ordinary children.
+    Fixed(ViewId, bool),
+    /// A mounted row: its wrapper, the wrapper's style and props, and the
+    /// row's roots.
+    Row(ViewId, StyleProps, exact_kernel::PropList, &'a [Child]),
 }

@@ -197,7 +197,7 @@ impl<D: DataSource> Host<D> {
     /// accepted from the browser; the collection certifies the final gap.
     pub fn reorder_motion(&mut self, bytes: &[u8]) -> String {
         self.reorder_input(bytes)
-            .unwrap_or_else(exact_runner::agent::error)
+            .unwrap_or_else(exact_runner::json::error)
     }
     fn reorder_input(&mut self, bytes: &[u8]) -> Result<String, &'static str> {
         let i = Input::decode(bytes)?;

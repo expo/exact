@@ -405,13 +405,13 @@ extension NodeView {
     }
 
     /// The colour of row `key` by `carriedTint`, in its own space
-    func carriedColor(_ key: String) -> UIColor? {
+    package func carriedColor(_ key: String) -> UIColor? {
         style[key].flatMap { $0.cgColor(dark: drawsDark, contrast: drawsHighContrast, elevated: drawsElevated, tint: $0.namesTint ? carriedTint : nil) }.map { UIColor(cgColor: $0) }
     }
 
     /// The node's `accent-color` by `carriedTint`, for a native button's configuration, which draws
     /// colours made from its value (`ButtonConfigurationIOS`)
-    var carriedAccent: UIColor? { carriedChannels("accent_color", dark: drawsDark).map { TextEngine.color($0) } }
+    package var carriedAccent: UIColor? { carriedChannels("accent_color", dark: drawsDark).map { TextEngine.color($0) } }
 
     /// The colour of row `key` for UIKit to draw, nil where it is unset: where it names the tint
     /// (`AccentColor`, `Highlight`), the tint as UIKit draws it (`SystemColor.tint`), which follows

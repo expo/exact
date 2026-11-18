@@ -157,12 +157,12 @@ fn logs_journal_boot_events_refusals_and_the_clock() {
         "a cursor past the end clamps to it: {again}"
     );
     assert_eq!(
-        exact_runner::agent::field_num(&again, "generation"),
+        exact_runner::json::field_num(&again, "generation"),
         Some(1.0)
     );
     let refused = host.agent(r#"{"op":"logs","since":"3"}"#);
     assert_eq!(
-        exact_runner::agent::field_str(&refused, "error").as_deref(),
+        exact_runner::json::field_str(&refused, "error").as_deref(),
         Some("since must be a non-negative number")
     );
     // An unknown action is journaled as a refusal too.
@@ -223,11 +223,11 @@ fn settle_is_null_with_no_spring_in_flight_and_unknown_ops_are_errors() {
     ] {
         let refused = host.agent(request);
         assert_eq!(
-            exact_runner::agent::field_str(&refused, "error").as_deref(),
+            exact_runner::json::field_str(&refused, "error").as_deref(),
             Some(message)
         );
         assert_eq!(
-            exact_runner::agent::field_num(&refused, "generation"),
+            exact_runner::json::field_num(&refused, "generation"),
             Some(1.0)
         );
     }

@@ -1,6 +1,6 @@
 //! Startup timestamps for the display path (a headless run reports none).
 //!
-//! On Linux, marks are seconds on `CLOCK_BOOTTIME`, the clock `/proc/self/stat`
+//! On Linux and Android, marks are seconds on `CLOCK_BOOTTIME`, the clock `/proc/self/stat`
 //! counts the process start in (ticks of 1/`CLK_TCK`, usually 10 ms).
 //! A suspend during startup therefore counts toward the numbers.
 //! DRM flip timestamps are `CLOCK_MONOTONIC` and are converted on read.
@@ -22,14 +22,14 @@ fn clock(id: libc::clockid_t) -> f64 {
     t.tv_sec as f64 + t.tv_nsec as f64 / 1e9
 }
 
-/// Seconds on `CLOCK_BOOTTIME` on Linux, `CLOCK_MONOTONIC` on other Unix hosts,
+/// Seconds on `CLOCK_BOOTTIME` on Linux and Android, `CLOCK_MONOTONIC` on other Unix hosts,
 /// or a process-local `Instant` origin on non-Unix hosts.
 pub fn boottime() -> f64 {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         clock(libc::CLOCK_BOOTTIME)
     }
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
     {
         clock(libc::CLOCK_MONOTONIC)
     }
@@ -48,7 +48,7 @@ fn monotonic_to_boottime(t: Duration) -> f64 {
 }
 
 /// The process start in seconds since boot, and the tick length in ms.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn process_start() -> Option<(f64, f64)> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
     // Field 22 (starttime). Count from the last ')' since the command name may contain spaces.
@@ -60,7 +60,7 @@ fn process_start() -> Option<(f64, f64)> {
     (hz > 0.0).then(|| (ticks / hz, 1000.0 / hz))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn process_start() -> Option<(f64, f64)> {
     None
 }
@@ -128,16 +128,31 @@ impl LaunchMarks {
         }
     }
 
+    /// A reader recorded a frame whose presentation will be acknowledged separately.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn recorded(&mut self) {
+        self.commit.get_or_insert_with(boottime);
+        self.changed = true;
+    }
+
+    /// A frame reached the screen at `at`, on [`boottime`]'s clock. `ready` is
+    /// the frame's readiness; `pending` means a newer frame still awaits presentation.
+    #[cfg(any(target_os = "linux", target_os = "android", test))]
+    pub(crate) fn presented(&mut self, at: f64, ready: bool, pending: bool) {
+        self.present.get_or_insert(at);
+        self.changed = pending;
+        self.expire(boottime());
+        if self.outcome.is_none() && ready && self.activated.is_some() {
+            self.interactive = Some(at);
+            self.outcome = Some("settled");
+        }
+    }
+
     /// A flip completed at `at` (`CLOCK_MONOTONIC`). If nothing is outstanding
     /// and the data module is active, TTI is this flip's time.
     #[cfg(target_os = "linux")]
     pub fn flipped(&mut self, at: Duration, outstanding: &[String]) {
-        self.changed = false;
-        self.expire(boottime());
-        if self.outcome.is_none() && outstanding.is_empty() && self.activated.is_some() {
-            self.interactive = Some(monotonic_to_boottime(at));
-            self.outcome = Some("settled");
-        }
+        self.presented(monotonic_to_boottime(at), outstanding.is_empty(), false);
     }
 
     /// The data module is active.
@@ -196,6 +211,14 @@ impl LaunchMarks {
         let fresh = self.outcome.is_some() && !self.reported;
         self.reported |= fresh;
         fresh
+    }
+
+    /// Publish settled or timed-out startup once, from a turn or a presentation callback.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn record_done(&mut self) {
+        if self.take_done() {
+            crate::journal::record("startup", self.report());
+        }
     }
 
     /// The journal's `startup` fields, shaped like ExactKit's `report()`.
@@ -292,7 +315,7 @@ mod tests {
         assert!(!marks.take_done());
         assert_eq!(marks.timeout_ms(), None);
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             assert_eq!(process_start(), None);
             let report = marks.report();
@@ -318,5 +341,29 @@ mod tests {
         assert_eq!(marks.report()["tti"], "timeout");
         assert!(marks.report()["metrics"].get("timeToInteractive").is_none());
         assert_eq!(marks.timeout_ms(), None);
+    }
+
+    #[test]
+    fn a_recorded_frame_waits_for_presentation_and_activation() {
+        let mut marks = LaunchMarks::new();
+        marks.launch_end();
+        marks.recorded();
+        marks.turn(&[]);
+        assert!(!marks.done());
+        assert!(marks.report()["metrics"].get("timeToFirstRender").is_none());
+        let present = boottime();
+        marks.presented(present, false, false);
+        assert!(!marks.done(), "the data module has not activated");
+        marks.activated();
+        marks.recorded();
+        marks.turn(&[]);
+        assert!(!marks.done(), "activation's frame has not been presented");
+        marks.presented(boottime(), false, false);
+        assert!(!marks.done(), "a request still holds TTI");
+        marks.turn(&[]);
+        assert!(marks.take_done());
+        assert!(!marks.take_done());
+        assert_eq!(marks.present, Some(present));
+        assert!(marks.report()["metrics"]["timeToInteractive"].is_number());
     }
 }

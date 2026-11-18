@@ -5,13 +5,21 @@
 //! and a bar's picture so that the page can draw it under a sheet's scrim.
 //!
 //! A tape is recorded in its own space and replayed through a transform.
-//! It draws no kept rows and opens no reader layers, so nothing it holds is
-//! freed when its subtree goes; a text field the shell hosts is drawn into
-//! it as this painter draws one (`field.rs`), since the shell's own view goes
+//! It opens no reader layers. A kept row the walk drew this frame it may
+//! hold by reference ([`RowPin`]), on a backend that draws one through a
+//! transform ([`Backend::rows_through`]): the backend's recording is then not
+//! freed while the tape holds it. The row also keeps portable commands:
+//! a backend without rows, including a CPU filter, draws those instead.
+//! A transform that scales or turns the tape uses [`Backend::row_draw_through`].
+//! Sticky constraints read surviving scrollers at replay. It may hold another
+//! tape the same paint kept. A text field the shell hosts is drawn into it
+//! as this painter draws one (`field.rs`), since the shell's own view goes
 //! with its node.
 //!
 //! The recorder is Janic Duplessis's, from his exit-animation work on the
 //! appandflow fork (`paint/exit.rs` there).
+use super::rows::RowPin;
+use super::space::mul3;
 use super::svg::Ink;
 use super::*;
 use std::cell::RefCell;
@@ -109,12 +117,64 @@ enum Op {
     PopOpacity,
     Mask(Shape, Transform),
     PopMask(Shape, Result<GradientPaint, [u8; 4]>, Transform),
+    /// A kept row at its top-left, covering bounds relative to it, drawn
+    /// for a placement of this scale.
+    Row(Rc<RowPin>, (f32, f32), Rect4, (f32, f32), Rc<Tape>),
+    Sticky(Sticky, Rc<Tape>, Transform),
+    Filter(Box<box_filter::Filter>, Rc<Tape>, Transform),
+    /// Another tape, through a transform.
+    Tape(Rc<Tape>, Transform),
 }
 
 /// A drawing, in the space it was recorded in.
 #[derive(Default)]
 pub(crate) struct Tape {
     ops: Vec<Op>,
+    rows: bool,
+    dynamic: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Live<'a, 'scene> {
+    pub(super) scene: &'a Scene<'scene>,
+    pub(super) viewport: (f32, f32),
+    pub(super) scale: f32,
+}
+
+/// Removed sticky geometry, evaluated against its surviving scroller.
+pub(super) struct Sticky {
+    constraint: exact_kernel::StickyConstraint,
+    scroller: exact_kernel::NodeKey,
+    recorded: (f32, f32),
+}
+
+impl Sticky {
+    pub(super) fn capture(scene: &Scene<'_>, id: ViewId) -> Option<Self> {
+        let node = scene.kernel.node(id)?;
+        let constraint = scene.kernel.sticky_constraint(node.key)?;
+        let scroller = scene.kernel.node(constraint.scroller)?;
+        Some(Self {
+            constraint,
+            scroller: scroller.key,
+            recorded: constraint.offset(space::sticky_scroll(scene, &scroller)),
+        })
+    }
+
+    fn offset(&self, scene: Option<&Scene<'_>>) -> (f32, f32) {
+        scene
+            .and_then(|scene| {
+                let scroller = scene.kernel.node_by_key(self.scroller)?;
+                Some(
+                    self.constraint
+                        .offset(space::sticky_scroll(scene, &scroller)),
+                )
+            })
+            .unwrap_or(self.recorded)
+    }
+
+    pub(super) fn unplace(&self, inverse: Transform) -> Transform {
+        inverse.post_translate(-self.recorded.0, -self.recorded.1)
+    }
 }
 
 /// The backend a tape is recorded through; a clone shares what it records.
@@ -137,15 +197,59 @@ impl Recorder {
         }
     }
 
+    /// Removed drawings can enter a CPU filter during replay. Record a
+    /// projective subtree's software warp instead of a backend-only plane.
+    pub(super) fn portable(target: &dyn Backend) -> Self {
+        Self {
+            planes: false,
+            ..Self::for_target(target)
+        }
+    }
+
     fn push(&self, op: Op) {
         self.ops.borrow_mut().push(op);
     }
 
+    /// Kept row `pin` with its top-left at `origin`, covering `bounds`
+    /// relative to it, drawn for a placement in the page scaling by `scale`.
+    pub(super) fn row(
+        &self,
+        pin: Rc<RowPin>,
+        origin: (f32, f32),
+        bounds: Rect4,
+        scale: (f32, f32),
+        drawing: Rc<Tape>,
+    ) {
+        self.push(Op::Row(pin, origin, bounds, scale, drawing));
+    }
+
+    pub(super) fn sticky(&self, sticky: Sticky, tape: Rc<Tape>, ts: Transform) {
+        self.push(Op::Sticky(sticky, tape, ts));
+    }
+
+    pub(super) fn filter(&self, filter: box_filter::Filter, tape: Rc<Tape>, ts: Transform) {
+        self.push(Op::Filter(Box::new(filter), tape, ts));
+    }
+
+    /// Another tape, drawn through `ts`.
+    pub(super) fn nest(&self, tape: Rc<Tape>, ts: Transform) {
+        self.push(Op::Tape(tape, ts));
+    }
+
     /// What was recorded, as a tape; the recorder starts again empty.
     pub(crate) fn tape(&self) -> Tape {
-        Tape {
-            ops: std::mem::take(&mut *self.ops.borrow_mut()),
-        }
+        let ops = std::mem::take(&mut *self.ops.borrow_mut());
+        let rows = ops.iter().any(|op| match op {
+            Op::Row(..) => true,
+            Op::Tape(tape, _) | Op::Sticky(_, tape, _) | Op::Filter(_, tape, _) => tape.rows,
+            _ => false,
+        });
+        let dynamic = ops.iter().any(|op| match op {
+            Op::Sticky(..) => true,
+            Op::Tape(tape, _) | Op::Row(_, _, _, _, tape) | Op::Filter(_, tape, _) => tape.dynamic,
+            _ => false,
+        });
+        Tape { ops, rows, dynamic }
     }
 }
 
@@ -303,9 +407,123 @@ impl Backend for Recorder {
 }
 
 impl Tape {
+    /// Conservative paint bounds, including nested drawings and sticky
+    /// constraints evaluated at the same live scroll as replay.
+    pub(super) fn bounds(&self, scene: &Scene<'_>, scale: f32, ts: Transform) -> Option<Rect4> {
+        self.bounds_in(scene, scale, mul(ts, &[1., 0., 0., 0., 1., 0., 0., 0., 1.]))
+    }
+
+    pub(super) fn bounds_in(
+        &self,
+        scene: &Scene<'_>,
+        scale: f32,
+        matrix: [f32; 9],
+    ) -> Option<Rect4> {
+        let mut area = None;
+        let mut planes = vec![matrix];
+        let mut blur = 0.0;
+        for op in &self.ops {
+            let space = *planes.last().unwrap();
+            let mapped = |ts, rect| space::mapped_bounds(&mul3(&space, &mul(ts, &IDENTITY)), rect);
+            let bound = match op {
+                Op::Fill(s, _, ts) | Op::Gradient(s, _, ts) | Op::Backdrop(s, _, ts) => {
+                    mapped(*ts, s.rect)
+                }
+                Op::Shadow(s, _, sigma, _, ts) => mapped(*ts, grow(s.rect, 3.0 * sigma + 2.0)),
+                Op::BoxShadow(blurred, _, bands, ts) => {
+                    let mut b = blurred
+                        .and_then(|(_, sigma, s)| mapped(*ts, grow(s.rect, 3.0 * sigma + 2.0)));
+                    for band in bands {
+                        merge(
+                            &mut b,
+                            path_bounds(&band.region).and_then(|r| mapped(*ts, r)),
+                        );
+                    }
+                    b
+                }
+                Op::Border(b, ts) => path_bounds(&b.region).and_then(|r| mapped(*ts, r)),
+                Op::Image(_, r, _, ts, _, _)
+                | Op::Island(_, r, ts, _)
+                | Op::Canvas(_, r, _, ts) => mapped(*ts, *r),
+                Op::Text(p, _, at, ts) => p
+                    .paint_bounds(scale)
+                    .and_then(|r| mapped(*ts, grow((r.0 + at.0, r.1 + at.1, r.2, r.3), blur))),
+                Op::Svg(s, ts) => s.path.bounds().and_then(|r| {
+                    let stroke = if s.stroke.is_some() {
+                        s.width * s.miter.max(2.0)
+                    } else {
+                        0.0
+                    };
+                    mapped(*ts, grow(r, stroke))
+                }),
+                Op::Row(_, at, _, size, drawing) => {
+                    if size.0 == 0.0 || size.1 == 0.0 {
+                        continue;
+                    }
+                    let ts =
+                        Transform::from_translate(at.0, at.1).pre_scale(1.0 / size.0, 1.0 / size.1);
+                    drawing.bounds_in(scene, scale, mul3(&space, &mul(ts, &IDENTITY)))
+                }
+                Op::Sticky(sticky, drawing, ts) => {
+                    let d = sticky.offset(Some(scene));
+                    drawing.bounds_in(
+                        scene,
+                        scale,
+                        mul3(&space, &mul(ts.pre_translate(d.0, d.1), &IDENTITY)),
+                    )
+                }
+                Op::Filter(filter, drawing, ts) => {
+                    mapped(*ts, filter.region(drawing, scene, scale))
+                }
+                Op::Tape(drawing, ts) => {
+                    drawing.bounds_in(scene, scale, mul3(&space, &mul(*ts, &IDENTITY)))
+                }
+                Op::PlaneBegin(h) => {
+                    planes.push(mul3(&space, h));
+                    None
+                }
+                Op::PlaneEnd => {
+                    if planes.len() > 1 {
+                        planes.pop();
+                    }
+                    None
+                }
+                Op::TextBlur(sigma) => {
+                    blur = 3.0 * sigma;
+                    None
+                }
+                Op::SvgClip(..)
+                | Op::Clip(..)
+                | Op::CssClip(..)
+                | Op::PopClip
+                | Op::Opacity(..)
+                | Op::PopOpacity
+                | Op::Mask(..)
+                | Op::PopMask(..) => None,
+            };
+            merge(&mut area, bound);
+        }
+        area
+    }
+
+    /// Whether it holds kept rows.
+    pub(crate) fn draws_rows(&self) -> bool {
+        self.rows
+    }
+
     /// Draw the tape through `g` into `b`. Inside a plane, ops are in the
     /// plane's own space.
     pub(crate) fn replay(&self, b: &mut dyn Backend, text: &mut TextEngine, g: Transform) {
+        self.replay_live(b, text, g, None);
+    }
+
+    pub(super) fn replay_live(
+        &self,
+        b: &mut dyn Backend,
+        text: &mut TextEngine,
+        g: Transform,
+        live: Option<Live<'_, '_>>,
+    ) {
         let mut planes = 0usize;
         let mut pops: Vec<usize> = Vec::new();
         for op in &self.ops {
@@ -373,9 +591,65 @@ impl Tape {
                 Op::PopOpacity => b.pop_opacity(),
                 Op::Mask(s, ts) => b.push_mask(s, t(*ts)),
                 Op::PopMask(s, mask, ts) => b.pop_mask(s, mask, t(*ts)),
+                Op::Row(pin, origin, bounds, scale, drawing) => {
+                    if scale.0 == 0.0 || scale.1 == 0.0 {
+                        continue;
+                    }
+                    let at = g.pre_translate(origin.0, origin.1);
+                    let ts = at.pre_scale(1.0 / scale.0, 1.0 / scale.1);
+                    if planes != 0 || !b.rows_through() || drawing.dynamic {
+                        drawing.replay_live(b, text, ts, live);
+                    } else {
+                        let near = |a: f32, b: f32| (a - b).abs() <= 1e-4 * b.abs().max(1.0);
+                        if g.kx == 0.0 && g.ky == 0.0 && near(g.sx, scale.0) && near(g.sy, scale.1)
+                        {
+                            let page = (at.tx + bounds.0, at.ty + bounds.1, bounds.2, bounds.3);
+                            if !b.row_culled(page) {
+                                b.row_draw(pin.id(), (at.tx, at.ty), page);
+                            }
+                        } else if !b.row_culled(bbox(ts, *bounds)) {
+                            b.row_draw_through(pin.id(), ts, *bounds);
+                        }
+                    }
+                }
+                Op::Sticky(sticky, tape, ts) => {
+                    let d = sticky.offset(live.map(|l| l.scene));
+                    tape.replay_live(b, text, t(*ts).pre_translate(d.0, d.1), live);
+                }
+                Op::Filter(filter, drawing, ts) => filter.replay(b, text, drawing, t(*ts), live),
+                Op::Tape(tape, ts) => tape.replay_live(b, text, t(*ts), live),
             }
         }
     }
+}
+
+const IDENTITY: [f32; 9] = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
+
+fn merge(area: &mut Option<Rect4>, rect: Option<Rect4>) {
+    if let Some(rect) = rect.filter(|r| r.2 > 0.0 && r.3 > 0.0) {
+        *area = Some(rows::union(*area, rect));
+    }
+}
+
+fn grow((x, y, w, h): Rect4, reach: f32) -> Rect4 {
+    (x - reach, y - reach, w + 2.0 * reach, h + 2.0 * reach)
+}
+
+fn path_bounds(path: &[border::PathOp]) -> Option<Rect4> {
+    let points: Vec<_> = path.iter().flat_map(border::PathOp::points).collect();
+    let (mut x0, mut y0, mut x1, mut y1) = (
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for p in points.as_chunks::<2>().0 {
+        x0 = x0.min(p[0]);
+        y0 = y0.min(p[1]);
+        x1 = x1.max(p[0]);
+        y1 = y1.max(p[1]);
+    }
+    (!points.is_empty()).then_some((x0, y0, x1 - x0, y1 - y0))
 }
 
 /// `g` (affine) after the projective map `h`, both row-major.
@@ -437,6 +711,65 @@ mod tests {
         let pixels = raster.finish().unwrap();
         let below = pixels.pixel(20, 34).unwrap();
         assert!(below.alpha() > 0, "the shadow under the box: {below:?}");
+    }
+
+    /// On Ink a kept drawing holds its rows' draw calls, not the rows, so a
+    /// scale or turn draws each row whole and blending with what is under
+    /// it: a red row multiplied over green at 0.8 is black, and a row longer
+    /// than the viewport turned 90° shows its far end.
+    #[test]
+    fn ink_draws_a_scaled_or_turned_drawing_whole_and_blended() {
+        let mut ink = crate::ink::Ink::new().unwrap();
+        assert!(!ink.rows_through());
+        let mut red = Pixmap::new(100, 100).unwrap();
+        red.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        let red = Arc::new(red);
+        let blended = record(|b| {
+            b.island_image(
+                red.clone(),
+                (0.0, 0.0, 100.0, 100.0),
+                Transform::identity(),
+                1,
+            )
+        });
+        let long = record(|b| {
+            b.fill(
+                &Shape::rect((0.0, 0.0, 400.0, 20.0)),
+                [255, 0, 0, 255],
+                Transform::identity(),
+            )
+        });
+        let turned = Transform::from_translate(60.0, 0.0).pre_concat(Transform::from_rotate(90.0));
+        let cases = [
+            (
+                blended,
+                [0, 255, 0, 255],
+                (100.0, 100.0),
+                Transform::from_row(0.8, 0.0, 0.0, 0.8, 10.0, 10.0),
+                [(50, 50, [0, 0, 0]), (95, 95, [0, 255, 0])],
+            ),
+            (
+                long,
+                [255; 4],
+                (100.0, 400.0),
+                turned,
+                [(50, 350, [255, 0, 0]), (20, 350, [255, 255, 255])],
+            ),
+        ];
+        for (tape, under, size, g, pixels) in cases {
+            ink.begin(size.0, size.1, 1.0);
+            let page = Shape::rect((0.0, 0.0, size.0, size.1));
+            ink.fill(&page, under, Transform::identity());
+            tape.replay(&mut ink, &mut TextEngine::new(), g);
+            let frame = ink.finish().unwrap();
+            for (x, y, rgb) in pixels {
+                let px = frame.pixel(x, y).unwrap();
+                let near = |a: u8, b: u8| a.abs_diff(b) < 30;
+                let ok =
+                    near(px.red(), rgb[0]) && near(px.green(), rgb[1]) && near(px.blue(), rgb[2]);
+                assert!(ok, "{g:?} ({x}, {y}): {px:?}, not {rgb:?}");
+            }
+        }
     }
 
     /// A plane is kept only for a backend that draws one; for another the

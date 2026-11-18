@@ -503,7 +503,7 @@ extension NodeView {
 
     /// Descendant geometry can extend the visible axis without changing this
     /// node's size. Refit each enclosing one-axis clip in the same transaction.
-    func overflowClipGeometryChanged() {
+    package func overflowClipGeometryChanged() {
         var view = superview
         if clipBox != nil, clipsOneAxis { placeClipBox() }
         while let current = view {

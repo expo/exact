@@ -193,7 +193,7 @@ test('a native bake preserves backend flag provenance through its Cargo environm
     writeFileSync(resolve(dir, 'linux/src/main.rs'), 'fn main() {}\n');
     writeFileSync(resolve(dir, 'check.mjs'), `import {configure} from ${JSON.stringify(resolve(root, 'js/bake/src/typescript.mjs'))};
 import {parseSync} from 'rolldown/utils';
-try { configure(import.meta.dir, false, parseSync); }
+try { await configure(import.meta.dir, false, parseSync); }
 catch (error) { console.error('error [' + error.code + ']: ' + error.message); process.exit(1); }
 `);
     writeFileSync(resolve(dir, 'linux/build.rs'), `fn main() {

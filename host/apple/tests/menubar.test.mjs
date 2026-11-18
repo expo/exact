@@ -28,7 +28,7 @@ check(process.env.EXACT_MENU_HELP_ONLY === '1' ? 'AppKit Help search stays first
     mkdirSync(join(bundle, 'MacOS'), { recursive: true });
     const binary = join(bundle, 'MacOS/ExactMac');
     writeFileSync(join(bundle, 'Info.plist'), `<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>ExactMac</string><key>CFBundleIdentifier</key><string>com.exact.menu-focus-test</string><key>CFBundleName</key><string>Menu Focus</string><key>CFBundlePackageType</key><string>APPL</string><key>ExactLaunchMode</key><string>navigate-new</string></dict></plist>`);
-    const objects = ['ExactKit', 'ExactComposition', 'ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag']
+    const objects = ['ExactKit', 'ExactComposition', 'ExactGroupedLists', 'ExactMarkdown', 'ExactCollections', 'ExactSurfaces', 'ExactDrag', 'ExactEffects', 'ExactSvg', 'ExactImages']
       .map(name => join(products, name + '.o')).filter(existsSync);
     const build = spawnSync('xcrun', ['swiftc', '-I', products, '-I', join(root, 'host/apple/Sources/CExact'),
       '-L', process.env.EXACT_LIB_DIR ?? join(root, 'target/host-dev'), '-l' + (process.env.EXACT_LIB ?? 'caltrain_apple'), '-lc++', '-lsqlite3',

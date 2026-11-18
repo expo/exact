@@ -7,6 +7,10 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 const HANG: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
@@ -373,7 +377,11 @@ fn reads_keep_posts_storage_work_and_handoffs_in_their_places() {
         core.run(read_job(&server, 5), None).unwrap();
         let (ran, running) = channel();
         core.run(
-            job(6, Request::continuation(6), RequestClass::Ordered),
+            job(
+                6,
+                Request::continuation::<TestWork>(6),
+                RequestClass::Ordered,
+            ),
             Some(Box::new(move || {
                 ran.send(()).unwrap();
                 Outcome::Storage(vec![6])
@@ -382,7 +390,11 @@ fn reads_keep_posts_storage_work_and_handoffs_in_their_places() {
         .unwrap();
         let (handed, replies) = channel();
         core.run_owned(
-            job(7, Request::continuation(7), RequestClass::Ordered),
+            job(
+                7,
+                Request::continuation::<TestWork>(7),
+                RequestClass::Ordered,
+            ),
             Some(OwnedWork::Later(Box::new(move |reply| {
                 handed.send(reply).unwrap();
             }))),
@@ -822,7 +834,11 @@ fn reads_and_parallel_sends_wait_for_a_handoff_to_be_made_but_not_completed() {
             let (entered, entering) = channel();
             let (release, held) = channel();
             core.run(
-                job(1, Request::continuation(1), RequestClass::Ordered),
+                job(
+                    1,
+                    Request::continuation::<TestWork>(1),
+                    RequestClass::Ordered,
+                ),
                 Some(Box::new(move || {
                     entered.send(()).unwrap();
                     held.recv_timeout(HANG).unwrap();
@@ -833,7 +849,11 @@ fn reads_and_parallel_sends_wait_for_a_handoff_to_be_made_but_not_completed() {
             entering.recv_timeout(HANG).unwrap();
             let (handed, replies) = channel();
             core.run_owned(
-                job(2, Request::continuation(2), RequestClass::Ordered),
+                job(
+                    2,
+                    Request::continuation::<TestWork>(2),
+                    RequestClass::Ordered,
+                ),
                 Some(OwnedWork::Later(Box::new(move |reply| {
                     handed.send(reply).unwrap();
                 }))),

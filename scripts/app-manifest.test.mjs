@@ -5,6 +5,38 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
+test('launch modules must provide a part for every declared host', async () => {
+  const { buildBake, readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-launch-hosts-'));
+  const read = (host, launch = ['observe']) => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Launch', app: { id: 'dev.exact.launch', name: 'Launch' }, host, launch }));
+    return readManifest(dir, 'launch');
+  };
+  try {
+    // An app's module shadows the whole SDK module, including missing parts.
+    const own = resolve(dir, 'modules/observe');
+    mkdirSync(resolve(own, 'linux'), { recursive: true });
+    writeFileSync(resolve(own, 'linux/launch.rs'), 'pub fn launch() {}');
+    assert.doesNotThrow(() => read({ linux: {} }));
+    const selected = { dir, manifest: { launch: ['observe'] } };
+    assert.throws(() => buildBake(selected, 'linux', 'aarch64-linux-android', { kind: 'android' }), /observe has no android launch part/);
+    assert.throws(() => buildBake(selected, 'windows', 'x86_64-pc-windows-msvc'), /observe has no windows launch part/);
+    for (const host of ['android', 'ios', 'macos', 'web', 'windows']) {
+      assert.throws(() => read({ linux: {}, [host]: {} }), new RegExp(`app.json launch: observe has no ${host} launch part`));
+    }
+    rmSync(own, { recursive: true });
+    assert.doesNotThrow(() => read({ android: {}, ios: {}, macos: {}, linux: {}, web: {} }));
+    assert.throws(() => read({ windows: {} }), /observe has no windows launch part/);
+    assert.throws(() => read({ android: {} }, ['missing']), /app.json launch: no module missing/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the native intents fixture declares only hosts its launch module supports', async () => {
+  const { resolveApp } = await import('./app.mjs');
+  const app = resolveApp(resolve(import.meta.dir, '../host/apple/fixtures/native-intents-app'));
+  assert.deepEqual(Object.keys(app.manifest.host).sort(), ['ios', 'macos']);
+});
+
 test('Apple Swift products require a URL, exact semantic version and named products', async () => {
   const { readManifest } = await import('./app.mjs');
   const { swiftPackageGraph, assertSwiftLock } = await import('../host/apple/compose.mjs');

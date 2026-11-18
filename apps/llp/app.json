@@ -28,6 +28,5 @@
     "web": {}
   },
   "deploy": { "store": { "web": "0", "macos": "0", "ios": "0" } },
-  "link": ["io"],
   "rust": { "data": { "crate": "llp-data", "type": "llp_data::Llp", "source": "llp_data::Llp::new()" } }
 }

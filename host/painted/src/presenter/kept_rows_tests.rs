@@ -139,11 +139,15 @@ component App
 }
 
 /// What the backend heard: each row begun, with the row it was said to
-/// have been, and each row freed.
+/// have been, each row freed, each kept row drawn, and each drawn through a
+/// transform.
 #[derive(Default)]
 struct Heard {
     begun: Vec<(u32, Option<u32>)>,
     freed: Vec<u32>,
+    drawn: Vec<u32>,
+    through: Vec<(u32, Transform)>,
+    bounds: Vec<Rect4>,
 }
 
 /// Keeps rows and draws nothing.
@@ -190,16 +194,50 @@ impl Backend for Keeps {
     fn rows(&self) -> bool {
         true
     }
+    fn rows_through(&self) -> bool {
+        true
+    }
     fn row_begin(&mut self, id: u32, _: (f32, f32), previous: Option<u32>) {
         self.row = id;
         self.heard.borrow_mut().begun.push((id, previous));
     }
-    fn row_end(&mut self, _: Rect4) -> u32 {
+    fn row_end(&mut self, bounds: Rect4) -> u32 {
+        self.heard.borrow_mut().bounds.push(bounds);
         self.row
     }
     fn row_free(&mut self, id: u32) {
         self.heard.borrow_mut().freed.push(id);
     }
+    fn row_draw(&mut self, id: u32, _: (f32, f32), _: Rect4) {
+        self.heard.borrow_mut().drawn.push(id);
+    }
+    fn row_draw_through(&mut self, id: u32, ts: Transform, _: Rect4) {
+        self.heard.borrow_mut().through.push((id, ts));
+    }
+}
+
+#[test]
+fn a_row_includes_a_removed_branches_paint_bounds() {
+    let source = stage::tests::SHRINKING_PANELS
+        .replace("EFFECT", "overflow=\"scroll\"")
+        .replace("SCALER", "");
+    let mut p = stage::tests::phone_source(&source);
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.brush.replace_backend(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    stage::tests::after(&mut p, 0.0);
+    heard.borrow_mut().bounds.clear();
+    stage::tests::tap(&mut p, "swap");
+    stage::tests::after(&mut p, 0.0);
+    assert!(p.stage_moving());
+    let heard = heard.borrow();
+    assert!(
+        heard.bounds.iter().any(|r| r.1 + r.3 >= 600.0),
+        "{:?}",
+        heard.bounds
+    );
 }
 
 /// A row a commit bound to another item (LLP 1078) is a new row to the
@@ -523,5 +561,227 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
         p.repaint();
         let fresh = p.frame();
         assert!(kept.data() == fresh.data(), "scroll {offset}");
+    }
+}
+
+/// Tabs whose pages each hold a list of twenty red rows, half as wide as the
+/// list: a plain page, and one that declares its own entrance and exit (LLP
+/// 1013.001).
+fn lists() -> String {
+    let rows: String = (0..20)
+        .map(|i| {
+            format!("              box height=50 width=100 background-color=\"#ff0000\" testId=\"row-{i}\"\n")
+        })
+        .collect();
+    let page = |when: &str, class: &str| {
+        format!(
+            "        if {when}
+          column navigationKey=`${{e.id}}` {class}testId=`route-${{e.name}}` position=\"absolute\" inset=0 background-color=\"#ffffff\"
+            button press=pick(\"people\") testId=`people-${{e.name}}` height=40
+              text \"People\"
+            button press=open(\"/plain\") testId=`plain-${{e.name}}` height=40
+              text \"Plain\"
+            button press=open(\"/slide\") testId=`slide-${{e.name}}` height=40
+              text \"Slide\"
+            scroll testId=`list-${{e.name}}` width=200 height=400
+              column
+{rows}"
+        )
+    };
+    format!(
+        r#"routes nav
+  tab home "/"
+    plain "/plain"
+    slide "/slide"
+  tab people "/people"
+keyframes enter
+  from translate="50% 0"
+keyframes leave
+  to opacity=0 rotate="10deg"
+style Slides
+  ::view-transition-new
+    animation="enter 400ms linear both"
+  ::view-transition-old
+    animation="leave 400ms linear both"
+component App
+  action pick(name: string)
+    nav = select(nav, name)
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${{top(nav).id}}` navigationBack="back" viewport-fit="cover" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+{}{}"#,
+        page("e.name != \"slide\"", ""),
+        page("e.name == \"slide\"", "class=Slides "),
+    )
+}
+
+/// The tabs of [`lists`] in a root that a switch away from home scales.
+fn scaled_lists() -> String {
+    lists().replace(
+        "viewport-fit=\"cover\"",
+        "testId=\"scaler\" scale=(nav.tab == \"home\" ? 1 : 0.8) viewport-fit=\"cover\"",
+    )
+}
+
+/// A phone whose painter keeps rows, painted once.
+fn kept_phone() -> (Presenter<()>, Rc<RefCell<Heard>>) {
+    kept_phone_of(&lists())
+}
+
+fn kept_phone_of(source: &str) -> (Presenter<()>, Rc<RefCell<Heard>>) {
+    let mut p = stage::tests::phone_source(source);
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.brush.replace_backend(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    stage::tests::after(&mut p, 16.0);
+    (p, heard)
+}
+
+fn route(p: &Presenter<()>, name: &str) -> exact_kernel::NodeKey {
+    let id = stage::tests::id(p, &format!("route-{name}"));
+    p.host().kernel().node(id).unwrap().key
+}
+
+/// A page the stage keeps a drawing of holds its rows by reference: while
+/// its list scrolls, the drawing is kept on every frame and walks no row a
+/// second time, and the walk records none again.
+#[test]
+fn a_kept_page_holds_its_rows_while_they_scroll() {
+    let (mut p, heard) = kept_phone();
+    let list = stage::tests::id(&p, "list-home");
+    let (referred, walked) = p.brush.rows_referred();
+    let recorded = p.brush.kept_recorded();
+    let rows = std::mem::take(&mut heard.borrow_mut().begun).len();
+    assert!(rows > 20, "each list row a kept row: {rows}");
+    for step in 1..=10 {
+        p.scroll_to(list, (0.0, step as f32 * 20.0));
+        stage::tests::after(&mut p, 16.0);
+    }
+    assert_eq!(
+        p.brush.kept_recorded(),
+        recorded + 10,
+        "kept on every frame"
+    );
+    let now = p.brush.rows_referred();
+    assert_eq!(now.1, walked, "no row walked a second time");
+    assert_eq!(now.0 - referred, 10 * rows, "every row, by reference");
+    assert!(heard.borrow().begun.is_empty(), "no row recorded again");
+}
+
+/// A page a switch removed keeps its rows until its crossing ends: the
+/// backend is told to free none while the page's drawing fades, which
+/// draws them, and every one once it has.
+#[test]
+fn a_removed_pages_rows_are_freed_once_its_crossing_ends() {
+    let (mut p, heard) = kept_phone();
+    let rows: Vec<u32> = std::mem::take(&mut heard.borrow_mut().begun)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert!(rows.len() > 20, "each list row a kept row");
+    let home = route(&p, "home");
+    stage::tests::tap(&mut p, "people-home");
+    stage::tests::after(&mut p, 20.0);
+    assert!(p.host().kernel().node_by_key(home).is_none());
+    assert!(p.stage_moving());
+    {
+        let heard = heard.borrow();
+        assert!(rows.iter().all(|id| !heard.freed.contains(id)), "held");
+        assert!(rows.iter().all(|id| heard.drawn.contains(id)), "drawn");
+    }
+    stage::tests::after(&mut p, 300.0);
+    assert!(!p.stage_moving());
+    assert!(!p.brush.kept(home));
+    let heard = heard.borrow();
+    assert!(rows.iter().all(|id| heard.freed.contains(id)), "freed");
+}
+
+/// A pop committed before any frame showed Back's preview, and a declared
+/// exit, pose a drawing that holds its rows by reference: the rows are
+/// drawn through the pose, scaled or turned.
+#[test]
+fn a_posed_drawings_rows_are_drawn_through_its_pose() {
+    let (mut p, heard) = kept_phone();
+    stage::tests::tap(&mut p, "plain-home");
+    stage::tests::after(&mut p, 400.0);
+    let now = p.host().now();
+    assert!(p.back_progress(0, 0.0, 0, now));
+    assert!(p.back_progress(1, 0.3, 0, now + 8.0));
+    assert!(p.system_back(now + 8.0));
+    p.run_commands(|| ());
+    heard.borrow_mut().through.clear();
+    stage::tests::after(&mut p, 16.0);
+    assert!(p.stage_moving(), "the pop slides from the preview's pose");
+    let scaled = |ts: &Transform| ts.sx < 0.999 && ts.kx == 0.0 && ts.ky == 0.0;
+    assert!(heard.borrow().through.iter().any(|(_, ts)| scaled(ts)));
+    stage::tests::after(&mut p, 400.0);
+    stage::tests::tap(&mut p, "slide-home");
+    stage::tests::after(&mut p, 500.0);
+    assert!(!p.stage_moving());
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    heard.borrow_mut().through.clear();
+    stage::tests::after(&mut p, 100.0);
+    assert!(p.stage_moving(), "the exit plays");
+    assert!(heard.borrow().through.iter().any(|(_, ts)| ts.kx != 0.0));
+}
+
+/// A switch that scales an ancestor the removed page shared with the page
+/// it shows draws the removed page's rows at the new scale.
+#[test]
+fn a_removed_pages_rows_take_a_surviving_ancestors_scale() {
+    let (mut p, heard) = kept_phone_of(&scaled_lists());
+    let home = route(&p, "home");
+    let referred = p.brush.rows_referred().0;
+    assert!(referred > 0, "the page holds its rows by reference");
+    stage::tests::tap(&mut p, "people-home");
+    stage::tests::after(&mut p, 20.0);
+    assert!(p.host().kernel().node_by_key(home).is_none());
+    let heard = heard.borrow();
+    assert!(heard.through.len() > 5, "{}", heard.through.len());
+    let near = |a: f32| (a - 0.8).abs() < 1e-4;
+    assert!((heard.through.iter()).all(|(_, ts)| near(ts.sx) && near(ts.sy) && ts.kx == 0.0));
+}
+
+/// The same on backends that draw: the removed page's rows, half as wide
+/// as their list, end where they scale to, not a scale-1 row's width past
+/// their origin. vello holds them by reference; Ink records their draw
+/// calls into the drawing.
+#[test]
+fn a_removed_pages_rows_scale_in_pixels() {
+    let backends: [(Box<dyn Backend>, bool); 2] = [
+        (
+            Box::new(crate::ink::Ink::new().expect("an Ink device")),
+            false,
+        ),
+        (Box::new(crate::gpu::Gpu::new().expect("a GPU")), true),
+    ];
+    for (backend, referred) in backends {
+        let mut p = stage::tests::phone_source(&scaled_lists());
+        p.brush.replace_backend(backend);
+        stage::tests::after(&mut p, 16.0);
+        assert_eq!(p.brush.rows_referred().0 > 0, referred);
+        let mut rect = |name: &str| {
+            let id = stage::tests::id(&p, name);
+            p.rect_of(id).unwrap()
+        };
+        let (scaler, list) = (rect("scaler"), rect("list-home"));
+        let centre = (scaler.0 + scaler.2 / 2.0, scaler.1 + scaler.3 / 2.0);
+        let scaled = |x: f32, c: f32| c + (x - c) * 0.8;
+        let y = scaled(list.1 + list.3 / 2.0, centre.1) as u32;
+        let left = scaled(list.0, centre.0);
+        stage::tests::tap(&mut p, "people-home");
+        stage::tests::after(&mut p, 20.0);
+        let frame = p.frame();
+        let row = frame.pixel((left + 40.0) as u32, y).unwrap();
+        assert!(row.red() > 150 && row.green() < 150, "a row: {row:?}");
+        let past = frame.pixel((left + 90.0) as u32, y).unwrap();
+        assert!(past.green() > 150, "the list past its rows: {past:?}");
     }
 }

@@ -49,7 +49,7 @@ final class AgreementMacTests: XCTestCase {
             ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 400.0, "h": 200.0],
         ]))
         let owner = try XCTUnwrap(p.views[2])
-        owner.addSubview(RegionSurfaceMac(controller: session.regions), positioned: .above, relativeTo: nil)
+        owner.addSubview(RegionSurfaceMac(controller: session.regionHost), positioned: .above, relativeTo: nil)
         let kernel = KernelFrames([KernelFrame(id: 1, parent: nil, rect: CGRect(x: 0, y: 0, width: 400, height: 400), bits: 0),
                                    KernelFrame(id: 2, parent: 1, rect: CGRect(x: 0, y: 0, width: 400, height: 200), bits: 0)])
         func agree() -> AgreementReport {

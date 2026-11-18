@@ -294,7 +294,9 @@ fn taking(kernel: &Kernel, slot: u32) -> (Option<Taken>, bool) {
         return (None, held);
     };
     let sides = area(arena, slot, &space, band);
-    let named = edges(arena, slot, crate::generated::SafeAreaIgnore::Container);
+    let named = edges(arena, slot, SafeAreaIgnore::Container);
+    let layer = super::keyboard::layer_at(arena, slot, &space);
+    let keyboard = layer > 0.0 && edges(arena, slot, SafeAreaIgnore::Keyboard)[2];
     // Its edges where its parent placed it: its frame less what it took
     let stored = arena.observations.taken(slot);
     let [top, right, bottom, left] = space.edges(arena, slot);
@@ -305,10 +307,13 @@ fn taking(kernel: &Kernel, slot: u32) -> (Option<Taken>, bool) {
     let at: [f32; 4] = std::array::from_fn(|e| placed[e] - margins[e]);
     let by: [f32; 4] = std::array::from_fn(|e| {
         let [outer, inner] = sides[e];
-        match named[e] && at[e] <= inner + tolerance {
-            true => (at[e] - outer).max(0.0),
-            false => 0.0,
-        }
+        // The keyboard layer lies on the bottom edge alone
+        let reach = match e == 2 && layer > 0.0 {
+            true => past_keyboard(at[e], sides[e], layer, [named[e], keyboard], tolerance),
+            false if named[e] && at[e] <= inner + tolerance => outer,
+            false => at[e],
+        };
+        (at[e] - reach).max(0.0)
     });
     // An edge it took, gave back and touches again in one solve keeps its
     // padding whole, since filling it moved the box clear, until its place
@@ -322,15 +327,45 @@ fn taking(kernel: &Kernel, slot: u32) -> (Option<Taken>, bool) {
     (taken, held)
 }
 
-/// Whether `style` takes the container region on some edge.
-pub(crate) fn ignores(style: &StyleProps) -> bool {
-    let bits = style.rare.safe_area_ignore;
-    let regions = bit(SafeAreaIgnore::Container) | bit(SafeAreaIgnore::Keyboard);
-    bits != 0 && (bits & regions == 0 || bits & bit(SafeAreaIgnore::Container) != 0)
+/// How far in from the space's edge a bottom edge `at` in reaches over the
+/// keyboard layer, which runs `layer` in from the allocation's edge (D4's
+/// keyboard region, D9). Going outward, the edge passes the container area
+/// `[outer, inner]` where it touches it and the box ignores the container
+/// region, and otherwise stops there. Touching the layer, it then stops at
+/// the keyboard's top where it observes the keyboard, and otherwise passes
+/// it, to the container base's inner side where it observes the container
+/// region and to the allocation's edge where it ignores both. It never moves
+/// inward of `at`: an ignore only extends a box.
+fn past_keyboard(
+    at: f32,
+    [outer, inner]: [f32; 2],
+    layer: f32,
+    [container, keyboard]: [bool; 2],
+    tolerance: f32,
+) -> f32 {
+    let touches = at <= inner + tolerance;
+    if touches && !container {
+        return at;
+    }
+    let reach = if touches { outer.min(at) } else { at };
+    if reach > layer + tolerance {
+        return reach;
+    }
+    match (keyboard, container) {
+        (false, _) => at.min(reach.max(layer)),
+        (true, true) => 0.0,
+        (true, false) => reach.min(inner),
+    }
 }
 
-/// `slot`'s part of its engine style inside the root. A box that ignores the
-/// container region is laid out as `display: flow-root` and gives its parent
+/// Whether `style` takes a region on some edge (D4): the container region,
+/// or the keyboard's, whose layer a box takes under `resizes-content`.
+pub(crate) fn ignores(style: &StyleProps) -> bool {
+    style.rare.safe_area_ignore != 0
+}
+
+/// `slot`'s part of its engine style inside the root. A box that ignores a
+/// region is laid out as `display: flow-root` and gives its parent
 /// no baseline, so that its children's margins stay inside the box it may
 /// extend and a parent aligning by baselines does not place it by content
 /// the extension moves. An extended box carries what it takes, and its

@@ -18,7 +18,7 @@ extension NodeView {
         }
         #if os(iOS)
         // A painted swipe row's full swipe decides where it rests (PaintedSwipesIOS.swift).
-        defer { if swipeOwner { presenter?.swipeActions.painted.willEnd(self, scrollView, target: targetContentOffset) } }
+        defer { if swipeOwner { presenter?.swipeActions.paintedWillEnd(self, scrollView, target: targetContentOffset) } }
         #endif
         targetContentOffset.pointee = snappedOffset(targetContentOffset.pointee, in: scrollView, release: scrollView.contentOffset,
                                                     drag: (dragStart(scrollView), velocity))
@@ -152,7 +152,7 @@ extension NodeView {
         let wanted = proposed + shift
         // A virtualized list's rows past its mounted ones (LLP 1008 §9, as amended for #219).
         let distance = areas.map { abs(min($0.to, max($0.from, wanted)) - wanted) }.min() ?? .infinity
-        if distance > 0, held.isEmpty, let entry = presenter?.collections.entries[id], entry.snapshot.horizontal != vertical,
+        if distance > 0, held.isEmpty, let snapshot = presenter?.collections.snapshot(id), snapshot.horizontal != vertical,
            let position = presenter?.session?.runtime.collectionSnap(id, proposed: Double(wanted), port: Double(port),
                 minimum: Double(range.lowerBound), maximum: Double(range.upperBound), distance: Double(distance)) {
             areas.append(ScrollSnap.Area(from: CGFloat(position), to: CGFloat(position), stop: false))
@@ -166,7 +166,7 @@ extension NodeView {
         }
         guard var rest = pick() else { return nil }
         // An unmounted `always` row between the release and the rest holds it too.
-        if held.isEmpty, !keeping, abs(rest - release - shift) > 0.5, presenter?.collections.entries[id]?.snapshot.horizontal == !vertical,
+        if held.isEmpty, !keeping, abs(rest - release - shift) > 0.5, presenter?.collections.snapshot(id)?.horizontal == !vertical,
            let stop = presenter?.session?.runtime.collectionSnapStop(id, release: Double(release + shift), rest: Double(rest), port: Double(port),
                                                                      minimum: Double(range.lowerBound), maximum: Double(range.upperBound)) {
             areas.append(ScrollSnap.Area(from: CGFloat(stop), to: CGFloat(stop), stop: true))

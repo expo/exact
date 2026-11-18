@@ -1,5 +1,6 @@
 // The GPU module's optional input, message and agent seams (LLP 1046.002 §3).
 // The runner never learns what a surface's world is; the web host is the oracle.
+import CExact
 import Foundation
 #if os(macOS)
 import AppKit
@@ -406,7 +407,7 @@ extension CanvasesHost {
         let resolver = session?.app.resolver
         var roots: [String: URL] = [:]
         if names.contains(where: { $0.hasPrefix("app:/") }), let session,
-           let reply = try? JSONSerialization.jsonObject(with: Data(session.runtime.agent(#"{"op":"appRoots"}"#).utf8)) as? [String: Any],
+           let reply = try? JSONSerialization.jsonObject(with: Data(session.runtime.ask(exact_app_roots, "").utf8)) as? [String: Any],
            let paths = reply["roots"] as? [String: String] {
             roots = paths.filter { ["data", "cache", "tmp"].contains($0.key) }.mapValues { URL(fileURLWithPath: $0, isDirectory: true) }
         }
@@ -654,6 +655,7 @@ extension CanvasesHost {
         let pending = world.filter { $0["quiescent"] as? Bool == false }
         return WorldClock(pending: settle && !pending.isEmpty,
                           settleAt: pending.compactMap { $0["settleAt"] as? Double }.filter(\.isFinite).max(),
+                          nextTickAt: world.compactMap { $0["nextTickAt"] as? Double }.filter(\.isFinite).min(),
                           reply: world.isEmpty ? [:] : ["world": world.map { $0.filter { ["canvas", "tick", "hash", "quiescent", "error", "assets", "changing"].contains($0.key) } }])
     }
 }

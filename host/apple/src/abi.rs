@@ -334,7 +334,7 @@ impl<D: DataSource> Bridge<D> {
             if h.runner_mut().collected_aborts() {
                 x.notify();
             }
-            presenter.presences(h.runner_mut().take_presence_asks());
+            presenter.presences(h.runner_mut().take_presence_asks_json());
             h.runner_mut().publish_sockets(|batch| x.socket(batch)); // LLP 1016.000 D7
             presenter.prepend_to(s);
         }
@@ -392,11 +392,11 @@ impl<D: DataSource> Bridge<D> {
                 Outcome::Surface(SurfaceOutcome::Captured(body))
             }
             7 if body.is_empty() => Outcome::Surface(SurfaceOutcome::Restored),
-            8 if self.host.is_some() => self
-                .host
-                .as_mut()
-                .expect("booted")
-                .canvas_captured(ticket, &body),
+            8 if self.host.is_some() => self.host.as_mut().expect("booted").canvas_captured(
+                ticket,
+                &body,
+                self.links.io.map(|io| io.write_file),
+            ),
             2..=4 => Outcome::Failed {
                 kind: match kind {
                     2 => FailureKind::Refused,
@@ -1400,13 +1400,13 @@ impl<D: DataSource> Bridge<D> {
         // D4) before any view is looked up.
         let out = match self.host.as_mut() {
             Some(h)
-                if exact_runner::agent::field_str(&request, "op").as_deref() == Some("actions")
-                    && exact_runner::agent::field_bool(&request, "drain") =>
+                if exact_runner::json::field_str(&request, "op").as_deref() == Some("actions")
+                    && exact_runner::json::field_bool(&request, "drain") =>
             {
                 h.take_ended_actions()
             }
             Some(h) => h.answer_hold(&request).unwrap_or_else(|| h.agent(&request)),
-            None => exact_runner::agent::error("not booted"),
+            None => exact_runner::json::error("not booted"),
         };
         // An answered auth hold is delivered by the next pump (LLP 1069.006 D7).
         if out.contains("\"capability\":\"auth\"") {
@@ -1429,6 +1429,7 @@ fn escape(s: &str) -> String {
 /// A thread-local bridge cell, for the exports.
 pub type Cell<D> = RefCell<Bridge<D>>;
 
+mod answers;
 mod boot;
 mod canvas_performance;
 use boot::PreparedHost;

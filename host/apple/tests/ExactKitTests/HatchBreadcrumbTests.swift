@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// The crash breadcrumb (LLP 1075.003.000.001 §4.4): what a process that
 /// died inside a hatch call left is read by the next launch; a call that
@@ -87,13 +88,13 @@ final class HatchBreadcrumbTests: XCTestCase {
         var ended: [ExactSession] = [], slots: [Int?] = []
         for i in 1...9 {
             let session = ExactApp.shared.makeSession(label: "crumb-\(i)")
-            session.natives.openHatches(connect, module)
-            slots.append(session.natives.crumbSlot)
+            session.nativeViews!.openHatches(connect, module)
+            slots.append(session.nativeViews!.crumbSlot)
             session.destroy()
             ended.append(session)
         }
         XCTAssertNotNil(slots[0])
         XCTAssertEqual(slots, Array(repeating: slots[0], count: 9))
-        XCTAssertTrue(ended.allSatisfy { $0.natives.crumbSlot == nil })
+        XCTAssertTrue(ended.allSatisfy { $0.nativeViews!.crumbSlot == nil })
     }
 }

@@ -201,7 +201,7 @@ extension Presenter {
         if !w.limits.isEmpty { coverage["excluded"] = w.limits }
         var elements = w.elements
         // Each part, and whether the platform exposes an element for it: no finding either way (§3.5).
-        let parts = self.elements.regions.coverage(joined: Set(elements.compactMap { $0["part"] as? String }))
+        let parts = self.elements.regionCoverage(joined: Set(elements.compactMap { $0["part"] as? String }))
         if !parts.isEmpty { coverage["parts"] = parts }
         var ancestors: [[String: Any]] = []
         if let scope {
@@ -398,7 +398,7 @@ extension Presenter {
         e["id"] = id ?? NSNull()
         e["via"] = via
         // A hatch's part, joined by its bound view (LLP 1075.003.000.001 §3.5).
-        if let part = elements.regions.part(owning: obj) { e["part"] = part }
+        if let part = elements.regionPart(owning: obj) { e["part"] = part }
         var states: [String: Any] = [:]
         var native: [String: Any] = ["class": String(describing: type(of: obj))]
         #if os(iOS) || os(tvOS)
@@ -425,7 +425,7 @@ extension Presenter {
         // The joined view or native class identifies the role; the platform's value supplies its state.
         if forced == nil, names.contains("toggleButton") || Self.isSwitch(obj),
            let role = id.flatMap({ views[$0] }).flatMap(Self.toggleRole)
-                ?? (Self.isSwitch(obj) ? "switch" : obj is ExactCheckbox ? "checkbox" : names.contains("button") ? "button" : nil) {
+                ?? (Self.isSwitch(obj) ? "switch" : ControlLink.drawnToggle?(obj) != nil ? "checkbox" : names.contains("button") ? "button" : nil) {
             e["role"] = role
             let state = role == "button" ? "pressed" : "checked"
             if value == "2" { states[state] = "mixed" }
@@ -433,7 +433,7 @@ extension Presenter {
         }
         // UIKit has no radio trait: the drawn radio (x2apps survey #2) says
         // what it is by its class, its state by `selected`.
-        if let radio = obj as? ExactRadio, forced == nil { e["role"] = "radio"; states["checked"] = radio.isOn }
+        if let toggle = ControlLink.drawnToggle?(obj), toggle.radio, forced == nil { e["role"] = "radio"; states["checked"] = toggle.on }
         // Nor a progress trait: a `progress`'s indicator (LLP 1069.001,
         // amended 2026-10-07) is ARIA's busy `progressbar` by its class.
         if obj is UIActivityIndicatorView, forced == nil { e["role"] = "progressbar"; states["busy"] = true }

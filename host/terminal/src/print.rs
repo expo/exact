@@ -368,7 +368,7 @@ fn write_json<D: DataSource>(
         object.push(',');
     }
     object.push_str("\"navigation\":{\"url\":");
-    exact_runner::agent::quote(location, &mut object);
+    exact_runner::json::quote(location, &mut object);
     object.push_str(&format!("}},\"exit\":{}}}\n", outcome.json()));
     out.write_all(object.as_bytes()).map_err(Stop::Failed)?;
     out.flush().map_err(Stop::Failed)

@@ -4,6 +4,7 @@ import ImageIO
 import XCTest
 import CExact
 @testable import ExactKit
+@testable import ExactImages
 
 /// A box Core Animation can paint keeps no bitmap on AppKit, as on UIKit
 /// (`BoxLayerIOSTests`): background, one radius over a mask of corners, a

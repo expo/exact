@@ -2,7 +2,8 @@
 //! `border-width`, `border-style`, `border-color`, `scroll-padding`,
 //! `scroll-margin` (CSS Box 4 §6, CSS Backgrounds 3 §4, CSS Position 3 §3.1,
 //! CSS Scroll Snap 1 §6), `border-radius` (CSS Backgrounds 3 §5.1) and
-//! Exact's `-exact-hit-slop`, spelled as `padding` is. The
+//! Exact's `-exact-hit-slop`, `-exact-additional-safe-area` and
+//! `-exact-safe-area-padding` (LLP 1123 D11), spelled as `padding` is. The
 //! compiler splits a literal, or a template at its text's white space, into
 //! its four rows, as the browser expands the shorthand, and refuses another
 //! computed list (LLP 1001 §1): no row splits one.
@@ -13,7 +14,7 @@ use crate::generated::StyleId;
 /// The shorthands' rows, in top, right, bottom, left order, and
 /// `border-radius`'s corners in top-left, top-right, bottom-right,
 /// bottom-left order, which CSS fills from fewer values the same way.
-pub const FAMILIES: [[StyleId; 4]; 10] = [
+pub const FAMILIES: [[StyleId; 4]; 12] = [
     [
         StyleId::PaddingTop,
         StyleId::PaddingRight,
@@ -68,6 +69,18 @@ pub const FAMILIES: [[StyleId; 4]; 10] = [
         StyleId::HitSlopRight,
         StyleId::HitSlopBottom,
         StyleId::HitSlopLeft,
+    ],
+    [
+        StyleId::AdditionalSafeAreaTop,
+        StyleId::AdditionalSafeAreaRight,
+        StyleId::AdditionalSafeAreaBottom,
+        StyleId::AdditionalSafeAreaLeft,
+    ],
+    [
+        StyleId::SafeAreaPaddingTop,
+        StyleId::SafeAreaPaddingRight,
+        StyleId::SafeAreaPaddingBottom,
+        StyleId::SafeAreaPaddingLeft,
     ],
 ];
 

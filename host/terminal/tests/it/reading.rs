@@ -11,6 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// Forty numbered lines in a scroller under a one-row header, a status
 /// line with two shortcuts, and actions that bring a line into view.
 const PAGE: &str = r#"component App
@@ -128,7 +132,7 @@ impl DataSource for Slow {
         Ok(if self.done.load(Ordering::SeqCst) {
             Answer::Now(Value::record(vec![Value::str("read")]))
         } else {
-            Answer::Later(Request::continuation(7))
+            Answer::Later(Request::continuation::<TestWork>(7))
         })
     }
 
@@ -323,7 +327,7 @@ impl DataSource for PollsOtherWork {
 
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
         Ok(Answer::Later(
-            Request::continuation(7).long_poll("since", "seq"),
+            Request::continuation::<TestWork>(7).long_poll("since", "seq"),
         ))
     }
 

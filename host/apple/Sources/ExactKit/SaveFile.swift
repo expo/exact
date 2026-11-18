@@ -21,16 +21,7 @@ extension Picker {
     /// text)` for `text=`, from any action; `startIn=` makes either five
     /// (`none` in the fourth for a copy; LLP 1173 D2).
     func save(_ args: [Any]) {
-        var request: [String: Any] = ["command": "saveFile", "agent": ExactEnv.agentMode]
-        let strings = args.map { $0 as? String }
-        let copy = args.count == 3 || (args.count == 5 && strings[3] == nil)
-        if copy, let id = strings[0], let from = strings[1], let name = strings[2] {
-            request["id"] = id; request["from"] = from; request["suggestedName"] = name
-        } else if args.count >= 4, strings[1] == nil, let id = strings[0], let name = strings[2], let text = strings[3] {
-            request["id"] = id; request["text"] = text; request["suggestedName"] = name
-        }
-        if args.count == 5, let startIn = strings[4] { request["startIn"] = startIn }
-        let ruling = session.runtime.command(request)
+        let ruling = session.runtime.command(PickerRequests.save(args, agent: ExactEnv.agentMode))
         let view = (ruling["view"] as? NSNumber)?.uint32Value
         if ruling["refused"] != nil { if let view { saveCancelled(view) }; return }
         guard ruling["present"] as? Bool == true, let view, let name = ruling["suggestedName"] as? String else { return }

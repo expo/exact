@@ -119,6 +119,51 @@ pub fn compile_path_for_rust(
     Ok((plan, call_records))
 }
 
+/// Generate `OUT_DIR/shapes.rs` for a data crate. Exact refreshes this file
+/// before Cargo, so Cargo watches the Rust it compiles. Direct Cargo builds
+/// watch the Contract source graph themselves.
+pub fn build_rust(path: &Path) -> Result<(), String> {
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?)
+        .join("shapes.rs");
+    println!("cargo:rerun-if-env-changed=EXACT_RUST_SHAPES");
+    if std::env::var_os("EXACT_RUST_SHAPES").is_some() {
+        let source = std::path::absolute(path).map_err(|e| e.to_string())?;
+        let inputs = out.with_file_name("shapes.inputs.json");
+        let graph = crate::source_graph(path);
+        let paths: BTreeSet<_> = std::iter::once(source.clone())
+            .chain(
+                graph
+                    .sources
+                    .into_iter()
+                    .map(|s| s.path)
+                    .filter(|p| p.is_absolute()),
+            )
+            .chain(graph.consulted)
+            .collect();
+        let text = serde_json::to_vec(&paths).map_err(|e| e.to_string())?;
+        if std::fs::read(&inputs).ok().as_deref() != Some(text.as_slice()) {
+            std::fs::write(&inputs, text).map_err(|e| e.to_string())?;
+        }
+        println!("cargo:rerun-if-changed={}", out.display());
+        println!(
+            "cargo:metadata=exact-rust-shapes={}",
+            serde_json::json!({
+                "source": source,
+                "package": std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?,
+                "inputs": inputs,
+            })
+        );
+    } else {
+        crate::rerun_if_changed(path);
+    }
+    let (plan, calls) = compile_path_for_rust(path).map_err(|e| format!("{e:?}"))?;
+    let text = rust(&plan, &calls)?;
+    if std::fs::read(&out).ok().as_deref() != Some(text.as_bytes()) {
+        std::fs::write(out, text).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Generate Rust structs for authored Contract shapes, data source signatures,
 /// and the records their fields reach. Each has `From<&T> for Value` and
 /// `TryFrom<&Value> for T` in the declared field order.

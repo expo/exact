@@ -1,6 +1,10 @@
 //! Upload marks follow the reply through mapper turns (LLP 1016.000 D10).
 use exact_kernel::Kernel;
 use exact_plan::Value;
+
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
 use exact_runner::{
     Answer, DataError, DataSource, FailureKind, Message, Outcome, Request, Response, Runner, Store,
     UploadEnd,
@@ -32,7 +36,7 @@ impl Source {
             Answer::Now(Value::Number(value))
         } else {
             self.waiting = Some((turns - 1, value));
-            Answer::Later(Request::continuation(17))
+            Answer::Later(Request::continuation::<TestWork>(17))
         }
     }
 }

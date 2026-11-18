@@ -10,14 +10,15 @@
 //! moves its clocks (the runner's through `Runner::advance`; motion's through
 //! the host's engine, whose `settle` this module also answers for it).
 //!
-//! Requests and replies are JSON built and read by hand (no serde anywhere
-//! in the runtime): a request is `{"op":"…"}` with at most a couple of flat
-//! fields, so [`field_str`] and [`field_num`] are the whole parser.
+//! Requests and replies are JSON built and read by hand ([`crate::json`]).
 
 use crate::instance::InstanceStep;
+use crate::json::{
+    after_key, error, field_bool, field_num, field_str, num, quote, typed_json, untyped_json,
+};
 use crate::runner::{DataSource, Runner};
 use exact_kernel::{Frame, Kernel, NodeRef, PropValue, RowValue, StyleId};
-use exact_plan::{BindingKind, Plan, TypeKind, TypesId, Value};
+use exact_plan::BindingKind;
 use std::fmt::Write as _;
 
 mod lineage;
@@ -44,7 +45,7 @@ pub use tree::tagged;
 /// `{"error":…}`.
 pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     let reply = match field_str(request, "op").as_deref() {
-        Some("tree") => tree::request(runner, request),
+        Some("tree") => tree_request(runner, request),
         Some("state") => state_with(runner, request),
         Some("tags") => tags(runner),
         Some("frames") => frames(runner, request, &|_| false),
@@ -71,19 +72,7 @@ pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         // The runner's outstanding work, which time-to-interactive waits on.
         Some("outstanding") => runner.outstanding().json(),
         Some("perf") => crate::perf::reply(runner, request),
-        // What `showPicker(id)` names (LLP 1069.002 D2): the file input's
-        // view, `accept` and `multiple`, for the host that presents it.
-        Some("picker") => match field_str(request, "id") {
-            Some(id) => match runner
-                .device_links()
-                .picker
-                .and_then(|picker| (picker.picker)(runner, &id))
-            {
-                Some(p) => p.json(&id, true),
-                None => error(&format!("no file input with id \"{id}\"")),
-            },
-            None => error("picker needs an id"),
-        },
+        Some("picker") => picker(runner, request),
         // Every view's plan site, and the plan's digest (LLP 1122 D5): what a
         // development page outlines by, without a node's whole explanation.
         Some("sites") => runner.view_sites_json(),
@@ -93,31 +82,64 @@ pub fn handle<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
             Some(n) if n >= 0.0 && n == n.trunc() => lineage::ancestors(runner, n as u32),
             _ => error("ancestors needs a numeric id"),
         },
-        Some("node") => match field_num(request, "id") {
-            Some(n) if n >= 0.0 && n == n.trunc() => {
-                let mut reply = node(runner, n as u32);
-                if field_bool(request, "plan") && !reply.starts_with("{\"error\"") {
-                    // The digest and site belong to this exact synchronous read.
-                    // Kernel incarnations can repeat across host replacements.
-                    // Only an explicit development inspection computes identity.
-                    reply.pop();
-                    reply.push_str(",\"planDigest\":");
-                    quote(runner.inspection_digest(), &mut reply);
-                    reply.push('}');
-                }
-                reply
-            }
-            _ => error("node needs an id"),
-        },
-        Some("logs") => match (after_key(request, "since"), field_num(request, "since")) {
-            (None, _) => logs(runner, 0),
-            (Some(_), Some(n)) if n >= 0.0 => logs(runner, n as usize),
-            (Some(_), _) => error("since must be a non-negative number"),
-        },
+        Some("node") => node_request(runner, request),
+        Some("logs") => logs_request(runner, request),
         Some(other) => error(&format!("unknown op: {other}")),
         None => error("no op"),
     };
     tagged(runner, reply)
+}
+
+/// `{"op":"picker","id":I}` (LLP 1069.002 D2): what `showPicker(id)`
+/// names, the file input's view, `accept` and `multiple`, for the host that
+/// presents it.
+pub fn picker<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
+    match field_str(request, "id") {
+        Some(id) => match runner
+            .device_links()
+            .picker
+            .and_then(|picker| (picker.picker)(runner, &id))
+        {
+            Some(p) => p.json(&id, true),
+            None => error(&format!("no file input with id \"{id}\"")),
+        },
+        None => error("picker needs an id"),
+    }
+}
+
+/// `{"op":"node","id":V}`, with `"plan":true` the plan's digest beside it:
+/// [`node`] for a request.
+pub fn node_request<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
+    match field_num(request, "id") {
+        Some(n) if n >= 0.0 && n == n.trunc() => {
+            let mut reply = node(runner, n as u32);
+            if field_bool(request, "plan") && !reply.starts_with("{\"error\"") {
+                // The digest and site belong to this exact synchronous read.
+                // Kernel incarnations can repeat across host replacements.
+                // Only an explicit development inspection computes identity.
+                reply.pop();
+                reply.push_str(",\"planDigest\":");
+                quote(runner.inspection_digest(), &mut reply);
+                reply.push('}');
+            }
+            reply
+        }
+        _ => error("node needs an id"),
+    }
+}
+
+/// `{"op":"logs","since":N}`: [`logs`] for a request.
+pub fn logs_request<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
+    match (after_key(request, "since"), field_num(request, "since")) {
+        (None, _) => logs(runner, 0),
+        (Some(_), Some(n)) if n >= 0.0 => logs(runner, n as usize),
+        (Some(_), _) => error("since must be a non-negative number"),
+    }
+}
+
+/// `{"op":"tree",…}`: the view tree, or the subtree a `target` names.
+pub fn tree_request<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
+    tree::request(runner, request)
 }
 
 /// `{"generation":G,"epoch":E,"incarnation":I,"clock":C}`: what every reply carries (LLP
@@ -271,37 +293,10 @@ pub fn answer<D: DataSource>(
     // `showPicker` is held for the agent (D9), and each picked file is named
     // under `app:/tmp/picked/` before a host copies it in (D3).
     if op == "showPicker" {
-        let id = field_str(request, "id").unwrap_or_default();
-        let Some(picker) = runner.device_links().picker else {
-            return Some((
-                error("the file picker is not linked into this artifact"),
-                None,
-            ));
-        };
-        let held = match field_num(request, "view") {
-            Some(view) if view >= 0.0 && view <= u32::MAX as f64 && view == view.trunc() => {
-                (picker.hold_view)(runner, view as u32)
-            }
-            Some(_) => Err("showPicker needs a valid view".into()),
-            None => (picker.hold)(runner, &id),
-        };
-        return Some(match held {
-            Ok(ticket) => (format!("{{\"ticket\":{ticket}}}"), None),
-            Err(e) => (error(&e), None),
-        });
+        return Some((show_picker(runner, request), None));
     }
     if op == "pickedPath" {
-        let name = field_str(request, "name").unwrap_or_default();
-        let mut s = String::from("{\"path\":");
-        let Some(picker) = runner.device_links().picker else {
-            return Some((
-                error("the file picker is not linked into this artifact"),
-                None,
-            ));
-        };
-        quote(&(picker.picked_path)(runner, &name), &mut s);
-        s.push('}');
-        return Some((s, None));
+        return Some((picked_path(runner, request), None));
     }
     if op == "frameRequest" {
         let reply = runner.hold_frame_request(request);
@@ -328,26 +323,69 @@ pub fn answer<D: DataSource>(
     if !matches!(op.as_str(), "tap" | "type") || after_key(request, "ticket").is_none() {
         return None;
     }
+    Some(answer_ticket(runner, &op, request))
+}
+
+/// `{"op":"showPicker","id":I}` or `{…,"view":V}` (LLP 1069.002 D9): hold
+/// the file input's picker for an answer; the reply names its ticket.
+pub fn show_picker<D: DataSource>(runner: &mut Runner<D>, request: &str) -> String {
+    let id = field_str(request, "id").unwrap_or_default();
+    let Some(picker) = runner.device_links().picker else {
+        return error("the file picker is not linked into this artifact");
+    };
+    let held = match field_num(request, "view") {
+        Some(view) if view >= 0.0 && view <= u32::MAX as f64 && view == view.trunc() => {
+            (picker.hold_view)(runner, view as u32)
+        }
+        Some(_) => Err("showPicker needs a valid view".into()),
+        None => (picker.hold)(runner, &id),
+    };
+    match held {
+        Ok(ticket) => format!("{{\"ticket\":{ticket}}}"),
+        Err(e) => error(&e),
+    }
+}
+
+/// `{"op":"pickedPath","name":N}` (LLP 1069.002 D3): the `app:/tmp/picked/`
+/// path a picked file named `N` is copied in at.
+pub fn picked_path<D: DataSource>(runner: &mut Runner<D>, request: &str) -> String {
+    let name = field_str(request, "name").unwrap_or_default();
+    let Some(picker) = runner.device_links().picker else {
+        return error("the file picker is not linked into this artifact");
+    };
+    let mut s = String::from("{\"path\":");
+    quote(&(picker.picked_path)(runner, &name), &mut s);
+    s.push('}');
+    s
+}
+
+/// `{"op":"tap","ticket":T,"choice":C}` or `{"op":"type","ticket":T,
+/// "text":V}`: answer held device request `T`, as [`answer`] describes.
+pub fn answer_ticket<D: DataSource>(
+    runner: &mut Runner<D>,
+    op: &str,
+    request: &str,
+) -> (String, Option<crate::Hold>) {
     let Some(ticket) = field_num(request, "ticket")
         .filter(|n| *n >= 1.0 && *n <= u32::MAX as f64 && *n == n.trunc())
         .map(|n| n as u64)
     else {
-        return Some((error("ticket must be a positive whole number"), None));
+        return (error("ticket must be a positive whole number"), None);
     };
     let reply = if op == "tap" {
         match field_str(request, "choice") {
             Some(choice) => crate::HoldAnswer::Choice(choice),
-            None => return Some((error(&format!("tap @{ticket} needs a choice")), None)),
+            None => return (error(&format!("tap @{ticket} needs a choice")), None),
         }
     } else {
         match field_str(request, "text") {
             Some(text) => crate::HoldAnswer::Value(text),
-            None => return Some((error(&format!("type @{ticket} needs a value")), None)),
+            None => return (error(&format!("type @{ticket} needs a value")), None),
         }
     };
     if runner.holds(ticket) && !runner.device_holds().iter().any(|h| h.ticket == ticket) {
         let e = format!("@{ticket} is a network request; only a held device request is answered");
-        return Some((error(&e), None));
+        return (error(&e), None);
     }
     match runner.answer_hold(ticket, &reply) {
         Ok(hold) => {
@@ -379,18 +417,10 @@ pub fn answer<D: DataSource>(
                 crate::HoldAnswer::Value(_) => s.push_str("\"value\""),
             }
             s.push_str(",\"delivery\":\"substituted\"}");
-            Some((s, Some(hold)))
+            (s, Some(hold))
         }
-        Err(e) => Some((error(&e), None)),
+        Err(e) => (error(&e), None),
     }
-}
-
-/// `{"error":"…"}`.
-pub fn error(message: &str) -> String {
-    let mut s = String::from("{\"error\":");
-    quote(message, &mut s);
-    s.push('}');
-    s
 }
 
 /// The view a request's `target` names — a view id, or a testId's first
@@ -749,7 +779,7 @@ pub fn state<D: DataSource>(runner: &Runner<D>) -> String {
 }
 
 /// [`state`] for a request, which may ask `"sounds":"all"` (LLP 1096 D10).
-fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
+pub fn state_with<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
     let plan = runner.plan();
     let mut s = String::new();
     let _ = write!(
@@ -1188,141 +1218,6 @@ pub fn logs<D: DataSource>(runner: &Runner<D>, since: usize) -> String {
     s
 }
 
-/// A plan value as JSON under its declared type: numbers, strings, booleans;
-/// `null` for unit and `none`; lists; records as objects keyed by field
-/// name. A value that does not match its type (never, past the runner's
-/// conformance checks) falls back to the positional form.
-pub fn typed_json(plan: &Plan, ty: TypesId, v: &Value, out: &mut String) {
-    let row = plan.type_(ty);
-    match (row.kind, v) {
-        (_, Value::Number(n)) => {
-            let _ = write!(out, "{}", num(*n));
-        }
-        (_, Value::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
-        (_, v @ exact_plan::str_value!()) => quote(v.text(), out),
-        (_, Value::Unit) | (_, Value::Option(None)) => out.push_str("null"),
-        (TypeKind::Option, Value::Option(Some(inner))) => match row.elem {
-            Some(elem) => typed_json(plan, elem, inner, out),
-            None => untyped_json(inner, out),
-        },
-        (_, Value::Option(Some(inner))) => untyped_json(inner, out),
-        (TypeKind::List, Value::List(items)) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                match row.elem {
-                    Some(elem) => typed_json(plan, elem, item, out),
-                    None => untyped_json(item, out),
-                }
-            }
-            out.push(']');
-        }
-        (TypeKind::Record, Value::Record(fields)) if row.fields.len as usize == fields.len() => {
-            out.push('{');
-            for (i, (f, value)) in row.fields.iter().zip(fields.iter()).enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                let field = plan.field(f);
-                quote(plan.str(field.name), out);
-                out.push(':');
-                typed_json(plan, field.ty, value, out);
-            }
-            out.push('}');
-        }
-        (_, Value::List(_)) | (_, Value::Record(_)) => untyped_json(v, out),
-    }
-}
-
-/// A plan value as JSON with no type to hand: records positional.
-pub fn untyped_json(v: &Value, out: &mut String) {
-    match v {
-        Value::Number(n) => {
-            let _ = write!(out, "{}", num(*n));
-        }
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        v @ exact_plan::str_value!() => quote(v.text(), out),
-        Value::Unit | Value::Option(None) => out.push_str("null"),
-        Value::Option(Some(inner)) => untyped_json(inner, out),
-        Value::List(items) | Value::Record(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                untyped_json(item, out);
-            }
-            out.push(']');
-        }
-    }
-}
-
-/// Format a finite number as JSON, or `null`, without a temporary string.
-pub fn num(n: f64) -> Num {
-    Num(n)
-}
-
-/// [`num`]'s number: a piece of `exact_num::text!` for the journal's lines,
-/// which skip `core::fmt`, and `Display` (the same text) for the agent's
-/// replies.
-pub struct Num(f64);
-
-impl std::fmt::Display for Num {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use exact_num::Piece;
-        let mut text = String::new();
-        self.push_to(&mut text);
-        f.write_str(&text)
-    }
-}
-
-impl exact_num::Piece for Num {
-    fn push_to(&self, out: &mut String) {
-        let n = self.0;
-        if !n.is_finite() {
-            out.push_str("null");
-        } else if n == n.trunc() && n.abs() < 1e15 {
-            (n as i64).push_to(out);
-        } else {
-            exact_num::Shortest(n).push_to(out);
-        }
-    }
-}
-
-/// A JSON string.
-pub fn quote(s: &str, out: &mut String) {
-    out.push('"');
-    let mut start = 0;
-    let bytes = s.as_bytes();
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        let i = cursor;
-        let byte = bytes[i];
-        cursor += 1;
-        if !matches!(byte, b'"' | b'\\' | 0..=0x1f) {
-            continue;
-        }
-        // Every escape is ASCII, so both slice boundaries are UTF-8 boundaries.
-        // Copy ordinary text together instead of decoding and pushing each char.
-        out.push_str(&s[start..i]);
-        match byte {
-            b'"' => out.push_str("\\\""),
-            b'\\' => out.push_str("\\\\"),
-            b'\n' => out.push_str("\\n"),
-            b'\r' => out.push_str("\\r"),
-            b'\t' => out.push_str("\\t"),
-            _ => {
-                let _ = write!(out, "\\u{byte:04x}");
-            }
-        }
-        start = i + 1;
-    }
-    out.push_str(&s[start..]);
-    out.push('"');
-}
-
 fn ids(ids: &[u32], out: &mut String) {
     out.push('[');
     for (i, id) in ids.iter().enumerate() {
@@ -1368,115 +1263,6 @@ fn faults<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
         }
     }
     format!("{{\"faults\":{}}}", table.json())
-}
-
-/// The string value of a top-level `"key":"…"` field in a JSON object, with
-/// JSON's escapes decoded (surrogate pairs included). `None` when the key is
-/// absent at the top level, the value is not a string, or the string never
-/// ends.
-pub fn field_str(json: &str, key: &str) -> Option<String> {
-    let rest = after_key(json, key)?;
-    let rest = rest.strip_prefix('"')?;
-    let mut out = String::new();
-    let mut chars = rest.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '"' => return Some(out),
-            '\\' => match chars.next()? {
-                'n' => out.push('\n'),
-                't' => out.push('\t'),
-                'r' => out.push('\r'),
-                'b' => out.push('\u{8}'),
-                'f' => out.push('\u{c}'),
-                'u' => {
-                    let mut unit = hex4(&mut chars)?;
-                    if (0xD800..0xDC00).contains(&unit) {
-                        // A high surrogate: the low one must follow as `\uXXXX`.
-                        if chars.next()? != '\\' || chars.next()? != 'u' {
-                            return None;
-                        }
-                        let low = hex4(&mut chars)?;
-                        if !(0xDC00..0xE000).contains(&low) {
-                            return None;
-                        }
-                        unit = 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00);
-                    }
-                    out.push(char::from_u32(unit)?);
-                }
-                other => out.push(other),
-            },
-            c => out.push(c),
-        }
-    }
-    None
-}
-
-fn hex4(chars: &mut std::str::Chars<'_>) -> Option<u32> {
-    let hex: String = chars.by_ref().take(4).collect();
-    if hex.len() != 4 {
-        return None;
-    }
-    u32::from_str_radix(&hex, 16).ok()
-}
-
-/// The numeric value of a top-level `"key":N` field.
-pub fn field_num(json: &str, key: &str) -> Option<f64> {
-    let rest = after_key(json, key)?;
-    let end = rest
-        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '-' | '+' | '.' | 'e' | 'E')))
-        .unwrap_or(rest.len());
-    exact_num::parse_f64(&rest[..end]).ok()
-}
-
-/// Whether a top-level `"key":true` field is set.
-pub fn field_bool(json: &str, key: &str) -> bool {
-    after_key(json, key).is_some_and(|rest| rest.starts_with("true"))
-}
-
-/// What follows `"key":` at the top level of a JSON object — a one-pass scan
-/// that steps over string tokens and nested objects and arrays, so a key
-/// inside a string value or a nested object never matches. The whole
-/// parser: requests are flat.
-fn after_key<'a>(json: &'a str, key: &str) -> Option<&'a str> {
-    let b = json.as_bytes();
-    let mut i = 0;
-    let mut depth = 0i32;
-    while i < b.len() {
-        match b[i] {
-            b'"' => {
-                let start = i + 1;
-                let mut j = start;
-                loop {
-                    let c = *b.get(j)?;
-                    if c == b'\\' {
-                        j += 2;
-                    } else if c == b'"' {
-                        break;
-                    } else {
-                        j += 1;
-                    }
-                }
-                let token = &json[start..j.min(b.len())];
-                i = j + 1;
-                if depth == 1 && token == key {
-                    let rest = json.get(i..)?.trim_start();
-                    if let Some(rest) = rest.strip_prefix(':') {
-                        return Some(rest.trim_start());
-                    }
-                }
-            }
-            b'{' | b'[' => {
-                depth += 1;
-                i += 1;
-            }
-            b'}' | b']' => {
-                depth -= 1;
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    None
 }
 
 #[cfg(test)]

@@ -45,7 +45,7 @@
     },
     "launch": {
       "type": "array",
-      "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Its apple/launch/*.swift is linked into the executable. Its apple/service/*.swift becomes lib<name>_service.dylib, loaded after startup.",
+      "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Every declared host must have a part: apple/launch/*.swift, web/service.js, linux/launch.rs or android/launch.rs. Apple service sources in apple/service/*.swift become lib<name>_service.dylib, loaded after startup. A missing part refuses the build.",
       "items": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9]*$"

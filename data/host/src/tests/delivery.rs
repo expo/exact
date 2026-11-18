@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// A child whose answers wait on its continuation 40 and whose kept reply's
 /// delivery waits on its continuation 1; it records what it dispatches.
 struct Delivering(std::rc::Rc<std::cell::RefCell<Vec<u64>>>);
@@ -11,7 +15,7 @@ impl DataSource for Delivering {
         Ok(Value::Unit)
     }
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
-        Ok(Answer::Later(Request::continuation(40)))
+        Ok(Answer::Later(Request::continuation::<TestWork>(40)))
     }
     fn module_delivery(
         &mut self,
@@ -19,7 +23,7 @@ impl DataSource for Delivering {
         _: u64,
         _: Outcome,
     ) -> Result<Option<Request>, DataError> {
-        Ok(Some(Request::continuation(1)))
+        Ok(Some(Request::continuation::<TestWork>(1)))
     }
     fn host_continuation(&self, token: u64) -> bool {
         token == 1

@@ -6,13 +6,23 @@ use contract::DataSource;
 use exact_js::Module;
 use std::path::Path;
 
+/// Whether a Rust source's type hands out host work (LLP 1047.001 D12), for
+/// the mixed bakes' `host_work`.
+pub use exact_runner::hands_out_work;
+
 /// Bake a mixed app using each source's own identity and grants. Metadata reads
 /// never invoke or activate the Rust implementation; first-frame values bake
-/// through TypeScript alone.
-pub fn build_mixed(app: &Path, platform: &str, rust: &dyn DataSource) -> Result<(), BakeError> {
+/// through TypeScript alone. `host_work`: the Rust source's
+/// `exact_bake::hands_out_work!` (LLP 1047.001 D12).
+pub fn build_mixed(
+    app: &Path,
+    platform: &str,
+    rust: &dyn DataSource,
+    host_work: bool,
+) -> Result<(), BakeError> {
     library::link(app, platform, false).map_err(BakeError)?;
     icon::link();
-    build_sources(app, platform, Some(rust), None, false).map_err(BakeError)
+    build_sources(app, platform, Some((rust, host_work)), None, false).map_err(BakeError)
 }
 
 /// Bake a mixed app through its own composer (LLP 1027.002 §5 step 0): the
@@ -20,7 +30,8 @@ pub fn build_mixed(app: &Path, platform: &str, rust: &dyn DataSource) -> Result<
 /// `compose`, so a resource only Rust owns bakes its first-frame value
 /// through Rust, with no TypeScript placeholder. `rust_sources` names what
 /// Rust owns, for the TypeScript provider types and the receipt the
-/// development producer seeds from.
+/// development producer seeds from. `host_work`: the Rust source's
+/// `exact_bake::hands_out_work!` (LLP 1047.001 D12).
 ///
 /// The source's type is the one app.json's `rust.data` names, when it names one (LLP 1153.003 D2): the web build
 /// runs that one.
@@ -28,6 +39,7 @@ pub fn build_mixed_with<D: DataSource>(
     app: &Path,
     platform: &str,
     rust: &D,
+    host_work: bool,
     rust_sources: &[&str],
     compose: impl Fn(Module) -> Box<dyn DataSource>,
 ) -> Result<(), BakeError> {
@@ -47,17 +59,26 @@ pub fn build_mixed_with<D: DataSource>(
         rust_sources: rust_sources.iter().map(|s| s.to_string()).collect(),
         compose: Box::new(compose),
     };
-    build_sources(app, platform, Some(rust), Some(composer), false).map_err(BakeError)
+    build_sources(
+        app,
+        platform,
+        Some((rust, host_work)),
+        Some(composer),
+        false,
+    )
+    .map_err(BakeError)
 }
 
 /// A generated host crate's bake for an app with app.ts beside its Rust data crate (LLP 1153.003 D2): `rust`
 /// answers `rust_sources` and app.ts the rest. `compose` is given the TypeScript module and the names of the sources
 /// it answers, as the crate composes them at run time (`TYPESCRIPT_SOURCES`, which the bake writes into
-/// `module.rs`). On `android`, the Canvas host's bake, as `build_android` makes it.
+/// `module.rs`). `host_work`: `rust`'s [`hands_out_work!`]. On `android`, the Canvas host's bake, as
+/// `build_android` makes it.
 pub fn build_beside<D: DataSource>(
     app: &Path,
     platform: &str,
     rust: &D,
+    host_work: bool,
     rust_sources: &[&str],
     compose: impl Fn(Module, &[&str]) -> Box<dyn DataSource>,
 ) -> Result<(), BakeError> {
@@ -68,7 +89,7 @@ pub fn build_beside<D: DataSource>(
             .map(|plan| contract::typescript_sources(&plan, &owned))
             .unwrap_or_default();
         let typescript: Vec<&str> = typescript.iter().map(String::as_str).collect();
-        build_mixed_with(app, platform, rust, rust_sources, |javascript| {
+        build_mixed_with(app, platform, rust, host_work, rust_sources, |javascript| {
             compose(javascript, &typescript)
         })
     };

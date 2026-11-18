@@ -145,17 +145,17 @@ enum ShareAnchorCase {
             ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 200.0, "h": 40.0],
         ]))
         // The pressed button anchors itself.
-        let (pressed, rect) = p.shareAnchor(2)
+        let (pressed, rect) = p.presentationAnchor(2)
         XCTAssertTrue(pressed === p.views[2])
         XCTAssertEqual(rect, p.views[2]!.bounds)
         // A menu row off screen anchors to the invoker of its popover.
         p.views[3]!.isHidden = true
-        XCTAssertTrue(p.shareAnchor(4).0 === p.views[5])
+        XCTAssertTrue(p.presentationAnchor(4).0 === p.views[5])
         // So does one that invokes it by command alone.
         p.views[5]!.props = ["commandfor": "more", "command": "toggle-popover"]
-        XCTAssertTrue(p.shareAnchor(4).0 === p.views[5])
+        XCTAssertTrue(p.presentationAnchor(4).0 === p.views[5])
         // No input: the content, centred.
-        let (content, centre) = p.shareAnchor(nil)
+        let (content, centre) = p.presentationAnchor(nil)
         #if canImport(UIKit)
         XCTAssertTrue(content === root.view)
         // On an iPad the sheet's popover is the anchor's (an iPhone's sheet

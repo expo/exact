@@ -4,6 +4,7 @@ import XCTest
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactCollections
 @testable import ExactCore
 
 final class RuntimeCompletionTests: XCTestCase {
@@ -257,13 +258,13 @@ final class RuntimeCompletionTests: XCTestCase {
         XCTAssertTrue(landed.isEmpty)
         XCTAssertTrue(session.hasPublished())
         XCTAssertNil(p.views[1_000_000])
-        XCTAssertTrue(p.collections.covers(node.id))
+        XCTAssertTrue(p.listHost.covers(node.id))
         waitForMainQueue("the ordered publications drain together")
         XCTAssertEqual(landed, Array(0..<8))
         XCTAssertEqual(session.publishedDrainCountForTests - drains, 1, "all ready publications share one scheduled drain")
         XCTAssertFalse(session.hasPublished())
         XCTAssertNotNil(p.views[1_001_999])
-        XCTAssertTrue(p.collections.covers(node.id))
+        XCTAssertTrue(p.listHost.covers(node.id))
         XCTContext.runActivity(named: "T large publication ops=4000 scroll_callback_ms=\(duration * 1000)") { _ in }
     }
 
@@ -271,7 +272,7 @@ final class RuntimeCompletionTests: XCTestCase {
         let (session, window, node, scroll) = try grid()
         defer { session.destroy(); window.isHidden = true }
         let p = session.presenter
-        let target = try XCTUnwrap(p.collections.entries[node.id]?.snapshot.rows.first?.root)
+        let target = try XCTUnwrap(p.listHost.entries[node.id]?.snapshot.rows.first?.root)
         let view = try XCTUnwrap(p.views[target])
         var landed: [Int] = []
         session.onLandForTests = { _, batch in landed += batch.journal.compactMap(Int.init) }
@@ -346,15 +347,15 @@ final class RuntimeCompletionTests: XCTestCase {
         let (session, window, node, _) = try grid()
         defer { session.destroy(); window.isHidden = true }
         let p = session.presenter
-        let entry = try XCTUnwrap(p.collections.entries[node.id])
+        let entry = try XCTUnwrap(p.listHost.entries[node.id])
         let pin = try XCTUnwrap(entry.snapshot.rows.first?.root)
         XCTAssertNotNil(entry.lastFacts)
-        XCTAssertEqual(p.collections.owningCollection(pin), node.id)
+        XCTAssertEqual(p.listHost.owningCollection(pin), node.id)
         var reports = 0
-        let feedback = p.collections.onFeedback
-        p.collections.onFeedback = { reports += 1; feedback?($0) }
+        let feedback = p.listHost.onFeedback
+        p.listHost.onFeedback = { reports += 1; feedback?($0) }
         session.holdFillForTests()
-        p.collections.pointer(pin)
+        p.listHost.pointer(pin)
         XCTAssertEqual(reports, 0, "a pin report waits for the in-flight fill")
         session.publish(.fill(node.id), RuntimeCompletion(lease: session.runtime.completionLease, batch: wireBatch([])))
         waitFor("the landed fill releases its pin report") { entry.lastFacts?.interaction == pin }

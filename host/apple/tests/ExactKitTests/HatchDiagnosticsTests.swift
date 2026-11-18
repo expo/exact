@@ -1,5 +1,6 @@
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// What hatch code records is bounded (LLP 1075.003.000.001 §3.2): each
 /// bound refuses and counts past it, a call's time is its own, counts from
@@ -14,6 +15,18 @@ final class HatchDiagnosticsTests: XCTestCase {
     private func refusals(_ store: HatchDiagnostics) -> [String: Int] {
         let state = store.state(words: [:])
         return ["rejected": state["rejected"] as? Int ?? -1, "abandoned": state["abandoned"] as? Int ?? -1, "dropped": state["dropped"] as? Int ?? -1]
+    }
+
+    /// A development composition without the native module family has no
+    /// hatch store, and `perf hatches` answers empty.
+    func testASessionWithoutTheNativeModuleFamilyHasNoHatchStore() {
+        let make = NativeModuleLink.make
+        NativeModuleLink.make = nil
+        defer { NativeModuleLink.make = make }
+        let session = ExactApp.shared.makeSession()
+        defer { session.destroy() }
+        XCTAssertNil(session.hatchDiagnostics)
+        XCTAssertTrue(session.hatchPerf().isEmpty)
     }
 
     func testEachBoundRefusesAndCountsPastIt() throws {

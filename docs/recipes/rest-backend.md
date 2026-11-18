@@ -22,9 +22,12 @@ request failure.
 
 The sample `persona` values are public development identities. A real app should
 put a stable, non-secret principal id in the resource call and keep bearer
-credentials in the granted store. It should await an app-owned current-session
-helper inside the data source before issuing authenticated requests, then verify
-that the session authorizes the principal named by the resource. Exact does not
+credentials in the granted store on native hosts. On the web, use a server-set
+HttpOnly, Secure cookie. Select the transport inside the data source with
+`exactHost()`, as [web sessions](web-sessions.md) shows; one deploy serves both
+hosts. Await an app-owned current-session helper inside the data source before
+issuing authenticated requests, then verify that the session authorizes the
+principal named by the resource. Exact does not
 provide that session helper. This starter demonstrates owner gating, not a full
 authentication lifecycle; a real authenticated view must also gate retained
 answers by the app-owned authorized principal and auth generation.

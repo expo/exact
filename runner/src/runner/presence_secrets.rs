@@ -328,7 +328,32 @@ pub(in crate::runner) fn presence_body(body: &[u8]) -> Option<(&'static str, Str
 /// The presence seam, linked: the calls above.
 pub(crate) struct LinkedPresence;
 
+/// Presence code reaches the runner's presence state as `self.presence`. It
+/// is [`Presence`] wherever that code runs: the boot makes the state with
+/// the seam it chose for the runner, and presence code is reached only
+/// through that seam.
+impl std::ops::Deref for super::seams::PresenceState {
+    type Target = Presence;
+    fn deref(&self) -> &Presence {
+        self.0
+            .downcast_ref()
+            .expect("the linked seam made this state")
+    }
+}
+
+impl std::ops::DerefMut for super::seams::PresenceState {
+    fn deref_mut(&mut self) -> &mut Presence {
+        self.0
+            .downcast_mut()
+            .expect("the linked seam made this state")
+    }
+}
+
 impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
+    fn state(&self) -> Box<dyn std::any::Any> {
+        Box::new(Presence::default())
+    }
+
     /// The host's presence backend for this session, reconciled before boot
     /// (its occupancy is in the boot snapshot). The runner runs it from now
     /// on: its queue, the checks, and every committed write of its names.
@@ -386,6 +411,11 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
     /// The checks the host's platform makes, since the last take.
     fn take_presence_asks(&self, r: &mut Runner<D>) -> Vec<PresenceAsk> {
         std::mem::take(&mut r.presence.asks)
+    }
+
+    fn take_presence_asks_json(&self, r: &mut Runner<D>) -> Vec<String> {
+        let asks = std::mem::take(&mut r.presence.asks);
+        asks.iter().map(PresenceAsk::json).collect()
     }
 
     /// How a check the host made ended. A call let go meanwhile is dropped.
@@ -561,7 +591,7 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
         let now_ms = r.now_ms;
         let (events, lines) = {
             let faults = &r.faults;
-            let p = &mut r.presence;
+            let p: &mut Presence = &mut r.presence;
             let Some(backend) = p.backend.as_mut() else {
                 return;
             };

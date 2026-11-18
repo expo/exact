@@ -1,6 +1,7 @@
 import XCTest
 import ExactPackage
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// A package's context names the session's directories and a label the same
 /// at every launch (#315): what the host makes a session's module with, which

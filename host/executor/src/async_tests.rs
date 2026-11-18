@@ -10,6 +10,10 @@ use ibex2::stdlib::fetch_async::{Exchange, Head, HopMetrics, HopRequest, Sink};
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
+/// The host work these tests hand out (LLP 1047.001 D12).
+struct TestWork;
+impl exact_runner::HostWork for TestWork {}
+
 /// One exchange the core started, to answer by hand, with what it sent
 /// (an upload's buffer stays alive with it, as the platform's would).
 pub(super) struct Started {
@@ -310,7 +314,7 @@ fn a_timeout_frees_the_ordered_lane_while_its_transport_has_not_ended() {
     let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let seen = ran.clone();
     core.run(
-        job(2, Request::continuation(1)),
+        job(2, Request::continuation::<TestWork>(1)),
         Some(Box::new(move || {
             seen.store(true, Ordering::SeqCst);
             Outcome::Storage(vec![2])
@@ -750,7 +754,7 @@ fn a_refused_scope_never_runs_its_closure() {
     let (core, woke) = core(&script, ORIGINS);
     let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let seen = ran.clone();
-    let mut request = Request::continuation(1);
+    let mut request = Request::continuation::<TestWork>(1);
     request.grants = Some("net.fetch https://outside.test".into());
     core.run(
         job(1, request),

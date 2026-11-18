@@ -24,8 +24,9 @@ test "a repeat is refused and keeps its text; the list survives a relaunch"
 | `type "id" "text"`, `type "id" key "Enter"` | Sets a value (a `select`'s, a date `"2026-10-10"`, a checkbox `"true"`); presses a key. |
 | `expect text "id" == "…"` | Its text, else its value, else its descendants' text. |
 | `expect tree has "id"` (`missing`) · `expect disabled "id"` (`enabled`) · `expect focused "id"` · `expect state draft == ""` | In the tree or not · its `disabled` · focused · a state, derive or resource. |
-| `clock data` · `clock settle` · `clock +5000` · `reload` | Lands replies · ends transitions · moves virtual time · reloads on the same storage and date: web at its URL, native at a path or scheme `--url`, else its cold launch location. |
+| `clock data` · `clock settle` · `clock +5000` · `reload` | Lands replies · ends transitions · moves virtual time · reloads on the same storage and date. |
 | `back` | The platform's Back: cancels a dialog, else dismisses a sheet, else pops the route. |
+| `presence allow` (`cancel`, `fail`, `lockout`, `invalidated`) | Answers the user-presence prompt. |
 | `fail fetch "<prefix>"`, `pass fetch …` | Fails fetches, then clears. |
 | `answer fetch "<prefix>" with 200 {"text":"Hello"}` | Supplies a response; leading the test, before its first load. |
 | `request POST "/items" {…} as grace expect 409` | Writes as another person through [the app's server](rest-backend.md#where-the-server-lives), empty per test; a status not 2xx fails, or with `expect 409` any other. |

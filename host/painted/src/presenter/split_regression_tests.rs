@@ -773,3 +773,71 @@ fn a_scrollable_split_list_reports_enter_and_leave_across_the_threshold() {
         );
     }
 }
+
+/// [`APP`] split, its routes declaring an entrance and an exit, the detail
+/// red on a white list.
+fn sliding() -> String {
+    let motion = r#"keyframes enter
+  from translate="50% 0"
+keyframes leave
+  to translate="-100% 0"
+style Slides
+  ::view-transition-new
+    animation="enter 400ms linear both"
+  ::view-transition-old
+    animation="leave 400ms linear both"
+component App"#;
+    APP.replace("SPLIT", "auto")
+        .replace("component App", motion)
+        .replace(
+            "testId=`route-${e.name}`",
+            "class=Slides background-color=(e.name == \"home\" ? \"#ffffff\" : \"#ff0000\") testId=`route-${e.name}`",
+        )
+}
+
+fn after(p: &mut Presenter<()>, ms: f64) {
+    let now = p.host.now() + ms;
+    p.tick(now);
+    p.frame();
+}
+
+/// A detail pushed into a split view's pane plays its entrance there, and
+/// one popped plays its exit from where it stood, clipped to the pane.
+#[test]
+fn a_split_detail_plays_its_motion_in_its_pane() {
+    let mut p = boot_source(1200., &sliding());
+    after(&mut p, 16.);
+    tap(&mut p, "a");
+    after(&mut p, 0.);
+    after(&mut p, 200.);
+    let pane = split(&p).pane();
+    let x = |p: &mut Presenter<()>| {
+        let deeper = id(p, "deeper-item");
+        p.box_of(deeper).unwrap().rect.0
+    };
+    let entering = x(&mut p);
+    assert!(
+        entering > pane.0 + pane.2 * 0.2,
+        "entering: {entering}, {pane:?}"
+    );
+    after(&mut p, 400.);
+    let rest = x(&mut p);
+    assert!(rest < pane.0 + 10., "at rest: {rest}, {pane:?}");
+    assert!(p.system_back(p.host.now() + 1.));
+    p.run_commands(|| ());
+    after(&mut p, 0.);
+    after(&mut p, 200.);
+    assert!(p.host.kernel().find_by_test_id("deeper-item").is_empty());
+    let frame = p.frame();
+    let y = (pane.1 + pane.3 / 2.) as u32;
+    let red = |x: f32| {
+        let px = frame.pixel(x as u32, y).unwrap();
+        px.red() > 200 && px.green() < 60
+    };
+    assert!(
+        red(pane.0 + pane.2 * 0.25),
+        "the leaving detail, in its pane"
+    );
+    assert!(!red(pane.0 + pane.2 * 0.75), "half of it gone");
+    assert!(!red(pane.0 - DIVIDER - 20.), "none of it over the list");
+}

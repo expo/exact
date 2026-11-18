@@ -30,7 +30,7 @@ impl<D: super::DataSource> super::Runner<D> {
 
 /// A line as the journal keeps it: stamped with the clock.
 pub(super) fn stamped(now_ms: f64, line: &str) -> String {
-    text!("t={} {}", crate::agent::num(now_ms), line)
+    text!("t={} {}", crate::json::num(now_ms), line)
 }
 
 pub(super) fn boot(carried: bool, nodes: usize, epoch: u64) -> String {
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn each_line_is_the_text_format_wrote() {
         for now in [0.0, 16.0, 1234.5, -0.0, 1e15, 1e16, 0.1 + 0.2, f64::NAN] {
-            let n = crate::agent::num(now);
+            let n = crate::json::num(now);
             assert_eq!(
                 stamped(now, "boot: 3 nodes"),
                 format!("t={n} boot: 3 nodes")
@@ -353,7 +353,11 @@ mod tests {
                 format!("storage {n} (s)")
             );
             assert_eq!(
-                enqueued(n, "m", &Request::continuation(n / 3)),
+                enqueued(
+                    n,
+                    "m",
+                    &Request::continuation::<crate::host_work::TestWork>(n / 3)
+                ),
                 format!("continuation {n} (m): executor token {}", n / 3)
             );
         }

@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 import ExactGroupedLists
 
 /// LLP 1130: a page with no native container keeps the area it is laid out
@@ -516,7 +517,7 @@ final class PageEdgesIOSTests: XCTestCase {
 
         p.press(try node(session, "use-list").id)
         until("a virtualized list is banded") {
-            guard let l = list(), l.scrollView != nil, p.collections.entries[l.id] != nil else { return false }
+            guard let l = list(), l.scrollView != nil, p.listHost.entries[l.id] != nil else { return false }
             return abs(l.pageBand.bottom - cover.bottom) < 0.5
         }
     }

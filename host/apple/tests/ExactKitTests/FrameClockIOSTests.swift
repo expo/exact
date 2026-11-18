@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 @testable import ExactCore
 @testable import ExactKit
+@testable import ExactCollections
 
 /// One display link for the app's life: made once, paused while no one
 /// wants frames, at the highest rate its users ask for.

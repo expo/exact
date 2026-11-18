@@ -55,11 +55,11 @@ final class NodeAside {
     var content = CGSize.zero
     var fitContentHeight: CGFloat?
     var image: UIImage?
-    var raster: NativeRasterLease?
-    var imageLayer: CALayer?
+    var raster: (any ImageLease)?
+    package var imageLayer: CALayer?
     var imageSource: String?
-    var loadGeneration = 0
-    var buttonRasterView: UInt32?
+    package var loadGeneration = 0
+    package var buttonRasterView: UInt32?
     var paintGhosts = 0
     weak var ghostParent: NodeView?
 }
@@ -116,7 +116,7 @@ final class NodeExtras {
     var heightRecognizer: UIPanGestureRecognizer?
     var heightHold: DragInput?
     var contextTransform = CGAffineTransform.identity
-    var flightLook: FlightLook?
+    package var flightLook: FlightLook?
     var columnRecord: ColumnRecord?
     var liveText: String?
     var reorderPan: UIPanGestureRecognizer?
@@ -145,7 +145,7 @@ final class NodeExtras {
     var pendingValue: String?
     /// A native field in a grouped list's row (`isCellField`).
     var fieldInCell = false
-    var video: VideoView?
+    var video: (any VideoPlaying)?
     var web: UIView?
     var metal: MetalView?
     var canvasInput: CanvasInput?
@@ -153,7 +153,7 @@ final class NodeExtras {
     var needsCapture: Bool = false
     var paintedThisTurn: Bool = false
     var placement: [Double]?
-    var symbolView: UIImageView?
+    package var symbolView: UIImageView?
     var symbolFound = false
     var symbolKey: String?
     var symbolRefusal: String?
@@ -271,14 +271,14 @@ extension NodeView {
     package var rotate: CGFloat { get { aside?.rotate ?? 0 } set { if newValue != 0 || aside != nil { asideMade.rotate = newValue } } }
     /// A scroll container's content extent (the `content` op), before the
     /// axes that do not scroll are held to the box.
-    var content: CGSize { get { aside?.content ?? .zero } set { if newValue != .zero || aside != nil { asideMade.content = newValue } } }
+    package var content: CGSize { get { aside?.content ?? .zero } set { if newValue != .zero || aside != nil { asideMade.content = newValue } } }
     var fitContentHeight: CGFloat? { get { aside?.fitContentHeight } set { if newValue != nil || aside != nil { asideMade.fitContentHeight = newValue } } }
     /// An image node's picture, once loaded (decoded off the main thread),
     /// the source it came from, and which load is current: a completion
     /// from an older load, or for a view that was destroyed, is dropped.
-    var buttonRasterView: UInt32? { get { aside?.buttonRasterView } set { if newValue != nil || aside != nil { asideMade.buttonRasterView = newValue } } }
+    package var buttonRasterView: UInt32? { get { aside?.buttonRasterView } set { if newValue != nil || aside != nil { asideMade.buttonRasterView = newValue } } }
     var image: UIImage? { get { aside?.image } set { if newValue != nil || aside != nil { asideMade.image = newValue } } }
-    var raster: NativeRasterLease? {
+    package var raster: (any ImageLease)? {
         get { aside?.raster }
         set {
             if newValue != nil || aside != nil { asideMade.raster = newValue }
@@ -287,9 +287,9 @@ extension NodeView {
         }
     }
     /// An image's pixels as a sublayer's contents (`applyImageLayer`).
-    var imageLayer: CALayer? { get { aside?.imageLayer } set { if newValue != nil || aside != nil { asideMade.imageLayer = newValue } } }
+    package var imageLayer: CALayer? { get { aside?.imageLayer } set { if newValue != nil || aside != nil { asideMade.imageLayer = newValue } } }
     var imageSource: String? { get { aside?.imageSource } set { if newValue != nil || aside != nil { asideMade.imageSource = newValue } } }
-    var loadGeneration: Int { get { aside?.loadGeneration ?? 0 } set { if newValue != 0 || aside != nil { asideMade.loadGeneration = newValue } } }
+    package var loadGeneration: Int { get { aside?.loadGeneration ?? 0 } set { if newValue != 0 || aside != nil { asideMade.loadGeneration = newValue } } }
     var paintGhosts: Int { get { aside?.paintGhosts ?? 0 } set { if newValue != 0 || aside != nil { asideMade.paintGhosts = newValue } } }
     var ghostParent: NodeView? { get { aside?.ghostParent } set { if newValue != nil || aside != nil { asideMade.ghostParent = newValue } } }
 
@@ -322,7 +322,7 @@ extension NodeView {
     var insetCaster: InsetShadowCaster? { get { paintExtras?.insetCaster } set { if newValue != nil || paintExtras != nil { paintMore.insetCaster = newValue } } }
     var clipBox: PlainView? { get { extras?.clipBox } set { if newValue != nil || extras != nil { more.clipBox = newValue } } }
     var layoutOffset: CGPoint { get { extras?.layoutOffset ?? .zero } set { if newValue != .zero || extras != nil { more.layoutOffset = newValue } } }
-    var stickyOffset: CGPoint { get { extras?.stickyOffset ?? .zero } set { if newValue != .zero || extras != nil { more.stickyOffset = newValue } } }
+    package var stickyOffset: CGPoint { get { extras?.stickyOffset ?? .zero } set { if newValue != .zero || extras != nil { more.stickyOffset = newValue } } }
     var zoomFactor: CGFloat { get { extras?.zoomFactor ?? 1 } set { if newValue != 1 || extras != nil { more.zoomFactor = newValue } } }
     var zoomShift: CGPoint { get { extras?.zoomShift ?? .zero } set { if newValue != .zero || extras != nil { more.zoomShift = newValue } } }
     var authoredAccentTint: UIColor? { get { extras?.authoredAccentTint } set { if newValue != nil || extras != nil { more.authoredAccentTint = newValue } } }
@@ -354,7 +354,7 @@ extension NodeView {
         }
     }
     /// While it flies as a shared element (LLP 1013.000 D4): where its image is drawn.
-    var flightLook: FlightLook? { get { extras?.flightLook } set { if newValue != nil || extras != nil { more.flightLook = newValue } } }
+    package var flightLook: FlightLook? { get { extras?.flightLook } set { if newValue != nil || extras != nil { more.flightLook = newValue } } }
     /// LLP 1093 D7: fragments or columns.
     var columnRecord: ColumnRecord? { get { extras?.columnRecord } set { if newValue != nil || extras != nil { more.columnRecord = newValue } } }
     var liveText: String? { get { extras?.liveText } set { if newValue != nil || extras != nil { more.liveText = newValue } } }
@@ -377,8 +377,8 @@ extension NodeView {
     var toldText: String? { get { extras?.toldText } set { if newValue != nil || extras != nil { more.toldText = newValue } } }
     /// A `value` that arrived while text was marked, applied when the composition ends.
     var pendingValue: String? { get { extras?.pendingValue } set { if newValue != nil || extras != nil { more.pendingValue = newValue } } }
-    var video: VideoView? { get { extras?.video } set { if newValue != nil || extras != nil { more.video = newValue } } }
-    var web: UIView? { get { extras?.web } set { if newValue != nil || extras != nil { more.web = newValue } } }
+    var video: (any VideoPlaying)? { get { extras?.video } set { if newValue != nil || extras != nil { more.video = newValue } } }
+    package internal(set) var web: UIView? { get { extras?.web } set { if newValue != nil || extras != nil { more.web = newValue } } }
     package var metal: MetalView? { get { extras?.metal } set { if newValue != nil || extras != nil { more.metal = newValue } } }
     package var canvasInput: CanvasInput? { get { extras?.canvasInput } set { if newValue != nil || extras != nil { more.canvasInput = newValue } } }
     package var overlay: PlainView? { get { extras?.overlay } set { if newValue != nil || extras != nil { more.overlay = newValue } } }
@@ -422,7 +422,7 @@ extension NodeView {
         let hidden = isHidden || drawnBySurface
         if picture.isHidden != hidden { CATransaction.begin(); CATransaction.setDisableActions(true); picture.isHidden = hidden; CATransaction.commit() }
     }
-    var symbolView: UIImageView? { get { extras?.symbolView } set { if newValue != nil || extras != nil { more.symbolView = newValue } } }
+    package var symbolView: UIImageView? { get { extras?.symbolView } set { if newValue != nil || extras != nil { more.symbolView = newValue } } }
     var symbolFound: Bool { get { extras?.symbolFound ?? false } set { if newValue || extras != nil { more.symbolFound = newValue } } }
     var symbolKey: String? { get { extras?.symbolKey } set { if newValue != nil || extras != nil { more.symbolKey = newValue } } }
     var symbolRefusal: String? { get { extras?.symbolRefusal } set { if newValue != nil || extras != nil { more.symbolRefusal = newValue } } }
@@ -486,7 +486,7 @@ extension NodeView {
     var scrollOrigin: CGFloat { get { extras?.scrollOrigin ?? 0 } set { if newValue != 0 || extras != nil { more.scrollOrigin = newValue } } }
     var scrollCollapsed: CGFloat { get { extras?.scrollCollapsed ?? 0 } set { if newValue != 0 || extras != nil { more.scrollCollapsed = newValue } } }
     var scrollWritten: String? { get { extras?.scrollWritten } set { if newValue != nil || extras != nil { more.scrollWritten = newValue } } }
-    var hatchReusable: Bool { get { extras?.hatchReusable ?? false } set { if newValue || extras != nil { more.hatchReusable = newValue } } }
+    package var hatchReusable: Bool { get { extras?.hatchReusable ?? false } set { if newValue || extras != nil { more.hatchReusable = newValue } } }
     var clearsNavigation: Bool { get { extras?.clearsNavigation ?? false } set { if newValue || extras != nil { more.clearsNavigation = newValue } } }
     /// Where CSS's `scrollTop` 0 is in UIKit's offsets: past the scroller's
     /// top inset when UIKit insets it — a collapsing title's bar, or the bar
@@ -499,7 +499,7 @@ extension NodeView {
             ? sv.adjustedContentInset.top : (extras?.nativeScrollContentInsets.top ?? 0) + bandInset.top
     }
     /// Its page band (`NodeExtras.pageBand`), zero for most.
-    var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
+    package var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
     var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
@@ -541,7 +541,7 @@ extension NodeView {
     /// A keyboard toolbar's inset leaves the port too: a short transcript
     /// rises only by what the keyboard would cover of its rows, as a
     /// collection view's does, not by the whole keyboard.
-    func scrollFloor(_ sv: UIScrollView) -> CGFloat {
+    package func scrollFloor(_ sv: UIScrollView) -> CGFloat {
         let keyboard = extras?.keyboardInset ?? 0
         guard case .inset(let top, let bottom)? = presenter?.navigation.covers[id] else { return max(0, sv.bounds.height - pageBand.top - pageBand.bottom - keyboard) }
         return max(0, sv.bounds.height - top - bottom - pageBand.top - pageBand.bottom - keyboard)
@@ -617,7 +617,7 @@ extension NodeView {
     /// clamped to the content as it is now (`CollectionHost.animationEnded`);
     /// nil with no target.
     func endedAtTarget(_ scrollView: UIScrollView) -> Bool? {
-        presenter?.collections.animationTargets[id].map { t -> Bool in
+        presenter?.collections.animationTarget(id).map { t -> Bool in
             let o = scrollView.contentOffset, i = scrollView.adjustedContentInset
             let x = min(max(t.x, -i.left), max(-i.left, scrollView.contentSize.width + i.right - scrollView.bounds.width))
             let y = min(max(t.y, -i.top), max(-i.top, scrollView.contentSize.height + i.bottom - scrollView.bounds.height))

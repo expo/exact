@@ -1045,6 +1045,9 @@ test('docs prints the section on its words first, matching whole words', () => {
     return { where, text: text.slice(0, 40).join('\n') };
   };
   for (const [words, file, shows] of [
+    [['web', 'tokens'], 'docs/recipes/web-sessions.md', /HttpOnly/],
+    [['web', 'sessions'], 'docs/recipes/web-sessions.md', /HttpOnly/],
+    [['HttpOnly'], 'docs/recipes/web-sessions.md', /cookie/],
     [['exit', 'animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
     [['-exact-exit-animation'], 'docs/recipes/motion.md', /-exact-exit-animation/],
     [['call'], 'docs/recipes/native-module.md', /`native\.call`/],

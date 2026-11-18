@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 /// LLP 1075.003 Stage 1 over the native fixture's own plan and hatch module,
 /// which `build.mjs --test --ios` compiles for this simulator: Exact's bar on

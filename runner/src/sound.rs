@@ -33,7 +33,7 @@
 //!   cut as any other end.
 //! - **The record** keeps the last [`RECORD`] voices for the driver (D10).
 
-use crate::agent::num;
+use crate::json::num;
 use exact_plan::{Plan, Value};
 use std::collections::VecDeque;
 

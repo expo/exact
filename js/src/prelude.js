@@ -149,6 +149,12 @@
           "; call it inside an answer"
       );
   }
+  global.exactHost = function exactHost() {
+    answerOnly("exactHost()");
+    var kind = host(12, "host", "");
+    if (kind === undefined) throw storageError("exactHost() is unavailable during bake", "bake");
+    return kind;
+  };
   // Host work an answer waits on that is neither a fetch nor storage (the
   // browser's digest settles in a later task): on the web it joins the
   // answer's storage turn, so the answer is pending on it, not on nothing.

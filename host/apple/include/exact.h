@@ -1154,6 +1154,24 @@ uint32_t exact_grouped_list(ExactRuntime rt, uint32_t view);
  * buffer — JSON, not a batch. */
 uint32_t exact_agent(ExactRuntime rt, size_t len);
 
+/* The agent operations the core asks in a production build, each its own
+ * export (LLP 1047.001 D11). Each answers as exact_agent answers its
+ * operation, reading only the request fields named here, and returns the
+ * JSON reply's length in the output buffer: the runner's outstanding work;
+ * whether a quit waits ({"mustFinish":B}); the view tree ({"target"},
+ * {"shallow"}); the state; one view's rows ({"id":V}, {"plan":true}); the
+ * session's identity; the app's file roots; and the answer to a held
+ * device request ({"op":"tap"|"type","ticket":T,"choice"|"text"}). A
+ * family's own are in its header. */
+uint32_t exact_outstanding(ExactRuntime rt, size_t len);
+uint32_t exact_must_finish(ExactRuntime rt, size_t len);
+uint32_t exact_tree(ExactRuntime rt, size_t len);
+uint32_t exact_state(ExactRuntime rt, size_t len);
+uint32_t exact_node(ExactRuntime rt, size_t len);
+uint32_t exact_tags(ExactRuntime rt, size_t len);
+uint32_t exact_app_roots(ExactRuntime rt, size_t len);
+uint32_t exact_answer_ticket(ExactRuntime rt, size_t len);
+
 /* A host line for the runner's journal (LLP 1012 §3; LLP 1035.001 D6): the
  * input buffer's first len bytes — a refused intent and its reason. Returns 0. */
 uint32_t exact_log(ExactRuntime rt, size_t len);

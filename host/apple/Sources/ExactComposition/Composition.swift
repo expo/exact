@@ -15,6 +15,9 @@ import ExactGroupedLists
 #if EXACT_LINK_MARKDOWN
 import ExactMarkdown
 #endif
+#if EXACT_LINK_COLLECTIONS
+import ExactCollections
+#endif
 #if EXACT_LINK_SURFACES
 import ExactSurfaces
 #endif
@@ -35,6 +38,18 @@ import ExactTips
 #endif
 #if EXACT_LINK_PRESENCE
 import ExactPresence
+#endif
+#if EXACT_LINK_EFFECTS
+import ExactEffects
+#endif
+#if EXACT_LINK_SVG
+import ExactSvg
+#endif
+#if EXACT_LINK_IMAGES
+import ExactImages
+#endif
+#if EXACT_LINK_NATIVE_VIEWS
+import ExactNativeViews
 #endif
 public enum ExactComposition {
     public static let app: ExactApp = {
@@ -61,6 +76,9 @@ public enum ExactComposition {
         #if EXACT_LINK_MARKDOWN
         ExactMarkdown.install()
         #endif
+        #if EXACT_LINK_COLLECTIONS
+        ExactCollections.install()
+        #endif
         #if EXACT_LINK_SURFACES
         ExactSurfaces.install()
         #endif
@@ -81,6 +99,18 @@ public enum ExactComposition {
         #endif
         #if EXACT_LINK_PRESENCE
         ExactPresence.install()
+        #endif
+        #if EXACT_LINK_EFFECTS
+        ExactEffects.install()
+        #endif
+        #if EXACT_LINK_SVG
+        ExactSvg.install()
+        #endif
+        #if EXACT_LINK_IMAGES
+        ExactImages.install()
+        #endif
+        #if EXACT_LINK_NATIVE_VIEWS
+        ExactNativeViews.install()
         #endif
     }
 }

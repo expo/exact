@@ -416,6 +416,21 @@ test('resource declarations refuse incomplete or malformed source spans', async 
   }
 });
 
+test('the live world row shows reported hook work and leaves absent measurements blank', () => {
+  const report = world => render('perf', { period: { ms: 16.7 }, lifetime: {}, world });
+  const perf = { ticksPerFrame: { max: 2, count: 1 } };
+  const prepare = { p50: 0.2, p95: 0.3, p99: 0.4, mean: 0.25, count: 4 };
+  const hooks = { cpuMs: { prepare }, frame: {
+    draws: { max: 3, count: 1 }, triangles: { max: 36, count: 1 }, uploadBytes: { max: 0, count: 1 },
+  } };
+  expect(report([{ canvas: 7, perf, renderHooks: hooks }])).toContain(
+    ' · hooks prepare p50 0.2 ms p95 0.3 ms p99 0.4 ms mean 0.25 ms · draws max 3 · triangles max 36 · upload max 0 B · ticks/frame max 2');
+  expect(report([{ canvas: 7, perf: {}, renderHooks: { frame: null } }])).toContain(
+    ' · hooks prepare — · draws max — · triangles max — · upload max — · ticks/frame max —');
+  expect(report([{ canvas: 7, perf, renderHooks: { frame: { draws: { max: 0, count: 0 } } } }])).toContain(' · draws max —');
+  expect(report([{ canvas: 7, perf }])).not.toContain(' · hooks prepare');
+});
+
 // LLP 1144 D3: a scroll handler that changed the tree on every event of a fling is said once, with what to do; one that
 // commits rarely, or a press, is only counted.
 test('perf names a scroll handler that commits on every event', () => {

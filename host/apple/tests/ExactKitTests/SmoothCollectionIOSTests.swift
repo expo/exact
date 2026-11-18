@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactCollections
 
 /// LLP 1070.000 §6.2, LLP 1010 §6.8: a correction marked smooth (a smooth
 /// `scrollIntoView`, or a `scroll-behavior: smooth` list following its end)
@@ -56,7 +57,7 @@ final class SmoothCollectionIOSTests: XCTestCase {
             return "frames seen \(seen) over \(String(format: "%.3f", delivered())) s of link time, largest gap \(String(format: "%.3f", max(gap, CACurrentMediaTime() - at))) s, link \(link == nil ? "none" : link!.isPaused ? "paused" : "running"), app \(UIApplication.shared.applicationState.rawValue), scene \(window?.windowScene?.activationState.rawValue ?? -9)"
         }, done)
     }
-    private func moving(_ p: Presenter) -> Bool { p.collections.offsetDrivers[1] != nil }
+    private func moving(_ p: Presenter) -> Bool { p.listHost.offsetDrivers[1] != nil }
     private func list(_ p: Presenter, correction: Any) {
         p.apply(wireBatch([collections(revision: 1, correction: correction),
             ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]],
@@ -73,22 +74,22 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
         XCTAssertEqual(scroll.contentOffset.y, 0)
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 1700, "smooth": true])]))
-        XCTAssertTrue(p.collections.animating.contains(1), "the host animates to it")
-        XCTAssertEqual(try XCTUnwrap(p.collections.geometry(1)).offset, 1700, accuracy: 0.5, "the runner plans from where it is headed")
-        XCTAssertNil(p.collections.motion?(1), "no travel reported while it runs")
+        XCTAssertTrue(p.listHost.animating.contains(1), "the host animates to it")
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, 1700, accuracy: 0.5, "the runner plans from where it is headed")
+        XCTAssertNil(p.listHost.motion?(1), "no travel reported while it runs")
         wait("the port animates to it, from the next turn") { self.moving(p) }
-        wait("the animation ended") { !p.collections.animating.contains(1) }
+        wait("the animation ended") { !p.listHost.animating.contains(1) }
         XCTAssertEqual(scroll.contentOffset.y, 1700, accuracy: 0.5)
         // A smooth correction while one runs retargets it at once, from what
         // shows: never held to land without animation.
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([collections(revision: 3, correction: ["scrollSequence": seq, "offset": 1000, "smooth": true])]))
-        XCTAssertTrue(p.collections.animating.contains(1))
+        XCTAssertTrue(p.listHost.animating.contains(1))
         p.apply(wireBatch([collections(revision: 4, correction: ["scrollSequence": seq, "offset": 1200, "smooth": true])]))
-        XCTAssertNil(p.collections.owedTargets[1], "retargeted, not held")
-        XCTAssertEqual(p.collections.animationTargets[1]?.y, 1200)
+        XCTAssertNil(p.listHost.owedTargets[1], "retargeted, not held")
+        XCTAssertEqual(p.listHost.animationTargets[1]?.y, 1200)
         wait("moving") { self.moving(p) }
-        wait("landed") { !p.collections.animating.contains(1) }
+        wait("landed") { !p.listHost.animating.contains(1) }
         XCTAssertEqual(scroll.contentOffset.y, 1200, accuracy: 0.5)
     }
 
@@ -114,10 +115,10 @@ final class SmoothCollectionIOSTests: XCTestCase {
         }
         guard let y0 = start else { throw XCTSkip("this display hands every grid offset back exactly at scale \(scale): nothing to drive") }
         XCTAssertTrue(PixelGrid.same(scroll.contentOffset.y, y0, in: scroll), "a ULP off, within the read-back slop")
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": seq, "offset": 1700, "smooth": true])]))
         wait("moving") { self.moving(p) }
-        wait("landed") { !p.collections.animating.contains(1) }
+        wait("landed") { !p.listHost.animating.contains(1) }
         XCTAssertEqual(scroll.contentOffset.y, 1700, accuracy: 0.5, "from \(y0), read back \(scroll.contentOffset.y)")
     }
 
@@ -128,16 +129,16 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let p = presenter()
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
-        let sequence = p.collections.entries[1]?.cursor.sequence
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
+        let sequence = p.listHost.entries[1]?.cursor.sequence
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": seq, "offset": 1700, "smooth": true])]))
         wait("on its way") { scroll.contentOffset.y > 200 }
         let mid = scroll.contentOffset.y
         XCTAssertLessThan(mid, 1700, "on its way, the offset is what shows")
-        XCTAssertEqual(p.collections.entries[1]?.cursor.sequence, sequence, "its frames are not the reader's travel")
+        XCTAssertEqual(p.listHost.entries[1]?.cursor.sequence, sequence, "its frames are not the reader's travel")
         p.apply(wireBatch([collections(revision: 3, correction: ["scrollSequence": seq, "offset": 1200, "smooth": true])]))
         XCTAssertEqual(scroll.contentOffset.y, mid, accuracy: 0.5, "retargeted where it is, no jump")
-        wait("landed") { !p.collections.animating.contains(1) }
+        wait("landed") { !p.listHost.animating.contains(1) }
         XCTAssertEqual(scroll.contentOffset.y, 1200, accuracy: 0.5)
         // A target past the content is driven only as far as it can go.
         p.apply(wireBatch([collections(revision: 4, correction: ["scrollSequence": seq, "offset": 1500, "smooth": true])]))
@@ -145,8 +146,8 @@ final class SmoothCollectionIOSTests: XCTestCase {
         scroll.contentSize.height = 1600 // the content shrank under it: the end is now 1300
         var past = false
         wait("landed at the edge") {
-            if p.collections.animating.contains(1), scroll.contentOffset.y > 1300.5 { past = true }
-            return !p.collections.animating.contains(1)
+            if p.listHost.animating.contains(1), scroll.contentOffset.y > 1300.5 { past = true }
+            return !p.listHost.animating.contains(1)
         }
         XCTAssertFalse(past, "no frame past the new edge")
         XCTAssertEqual(scroll.contentOffset.y, 1300, accuracy: 0.5)
@@ -156,7 +157,7 @@ final class SmoothCollectionIOSTests: XCTestCase {
         wait("on its way down") { scroll.contentOffset.y < 1250 }
         let stopped = scroll.contentOffset.y
         p.views[1]?.scrollViewWillBeginDragging(scroll)
-        XCTAssertFalse(moving(p)); XCTAssertFalse(p.collections.animating.contains(1))
+        XCTAssertFalse(moving(p)); XCTAssertFalse(p.listHost.animating.contains(1))
         spin(0.2)
         XCTAssertEqual(scroll.contentOffset.y, stopped, accuracy: 0.5, "left where the drag found it")
     }
@@ -170,16 +171,16 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let p = presenter()
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         var flags: [UInt32] = []
-        p.collections.onFeedback = { data in flags.append((0..<4).reduce(UInt32(0)) { $0 | UInt32(data[92 + $1]) << ($1 * 8) }) }
+        p.listHost.onFeedback = { data in flags.append((0..<4).reduce(UInt32(0)) { $0 | UInt32(data[92 + $1]) << ($1 * 8) }) }
         var request = collections(revision: 2, correction: ["scrollSequence": seq, "offset": 800, "smooth": true])
         request["items"] = (request["items"] as? [[String: Any]])?.map { $0.merging(["seeking": true, "request": 1]) { _, new in new } }
         p.apply(wireBatch([request]))
         wait("on its way") { scroll.contentOffset.y > 200 }
-        XCTAssertFalse(try XCTUnwrap(p.collections.entries[1]).gesture)
+        XCTAssertFalse(try XCTUnwrap(p.listHost.entries[1]).gesture)
         XCTAssertTrue(try XCTUnwrap(p.views[1]).scrollViewShouldScrollToTop(scroll))
-        XCTAssertFalse(moving(p)); XCTAssertFalse(p.collections.animating.contains(1))
+        XCTAssertFalse(moving(p)); XCTAssertFalse(p.listHost.animating.contains(1))
         let stopped = scroll.contentOffset.y
         spin(0.2)
         XCTAssertEqual(scroll.contentOffset.y, stopped, accuracy: 0.5, "left where the tap found it")
@@ -199,7 +200,7 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let p = presenter()
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": seq, "offset": 900]),
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 280.0]]))
         XCTAssertEqual(scroll.contentOffset.y, 900, accuracy: 0.5)
@@ -211,13 +212,13 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let p = presenter()
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": seq, "offset": 1700, "smooth": true])]))
-        XCTAssertTrue(p.collections.animating.contains(1))
+        XCTAssertTrue(p.listHost.animating.contains(1))
         let at = Double(scroll.contentOffset.y)
         p.apply(wireBatch([collections(revision: 3, correction: ["scrollSequence": seq, "offset": at])]))
-        XCTAssertFalse(p.collections.animating.contains(1))
-        XCTAssertEqual(try XCTUnwrap(p.collections.geometry(1)).offset, at, accuracy: 0.5)
+        XCTAssertFalse(p.listHost.animating.contains(1))
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, at, accuracy: 0.5)
     }
 
     /// The end of an animation that was stopped and replaced ends nothing:
@@ -226,15 +227,15 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let p = presenter()
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
-        let seq = String(try XCTUnwrap(p.collections.entries[1]?.cursor.sequence))
+        let seq = String(try XCTUnwrap(p.listHost.entries[1]?.cursor.sequence))
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": seq, "offset": 1700, "smooth": true])]))
         p.apply(wireBatch([collections(revision: 3, correction: ["scrollSequence": seq, "offset": 0])]))
         XCTAssertFalse(moving(p), "an ordinary correction stops it where it is")
         XCTAssertEqual(scroll.contentOffset.y, 0, accuracy: 0.5)
         p.apply(wireBatch([collections(revision: 4, correction: ["scrollSequence": seq, "offset": 900, "smooth": true])]))
-        XCTAssertTrue(p.collections.animating.contains(1))
-        wait("its own end") { !p.collections.animating.contains(1) }
-        XCTAssertNil(p.collections.animationSerial[1], "nothing kept for a list that is not animating")
+        XCTAssertTrue(p.listHost.animating.contains(1))
+        wait("its own end") { !p.listHost.animating.contains(1) }
+        XCTAssertNil(p.listHost.animationSerial[1], "nothing kept for a list that is not animating")
         XCTAssertEqual(scroll.contentOffset.y, 900, accuracy: 0.5)
     }
 
@@ -243,7 +244,7 @@ final class SmoothCollectionIOSTests: XCTestCase {
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 900])]))
-        XCTAssertFalse(p.collections.animating.contains(1))
+        XCTAssertFalse(p.listHost.animating.contains(1))
         XCTAssertEqual(scroll.contentOffset.y, 900, accuracy: 0.5)
     }
 
@@ -310,9 +311,9 @@ final class SmoothCollectionIOSTests: XCTestCase {
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 64, "smooth": true])]))
         p.apply(wireBatch([collections(revision: 3, correction: ["scrollSequence": "0", "offset": 0.49, "smooth": true])]))
-        wait("the deferred start ran") { !p.collections.startOwed.contains(1) }
-        XCTAssertNil(p.collections.offsetDrivers[1], "no motion")
-        XCTAssertFalse(p.collections.animating.contains(1))
+        wait("the deferred start ran") { !p.listHost.startOwed.contains(1) }
+        XCTAssertNil(p.listHost.offsetDrivers[1], "no motion")
+        XCTAssertFalse(p.listHost.animating.contains(1))
         XCTAssertGreaterThan(scroll.contentOffset.y, 0.2, "set there, to the pixel")
     }
 
@@ -325,8 +326,8 @@ final class SmoothCollectionIOSTests: XCTestCase {
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 1200, "smooth": true])]))
-        XCTAssertFalse(p.collections.animating.contains(1))
-        XCTAssertNil(p.collections.offsetDrivers[1])
+        XCTAssertFalse(p.listHost.animating.contains(1))
+        XCTAssertNil(p.listHost.offsetDrivers[1])
         XCTAssertEqual(scroll.contentOffset.y, 1200, accuracy: 0.5)
     }
 
@@ -337,8 +338,8 @@ final class SmoothCollectionIOSTests: XCTestCase {
         list(p, correction: NSNull())
         let scroll = try XCTUnwrap(p.views[1]?.scroll)
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 0.4, "smooth": true])]))
-        XCTAssertFalse(p.collections.animating.contains(1))
-        XCTAssertNil(p.collections.offsetDrivers[1])
+        XCTAssertFalse(p.listHost.animating.contains(1))
+        XCTAssertNil(p.listHost.offsetDrivers[1])
         XCTAssertGreaterThan(scroll.contentOffset.y, 0.1, "set at once")
     }
 
@@ -374,10 +375,10 @@ final class SmoothCollectionIOSTests: XCTestCase {
         p.apply(wireBatch([collections(revision: 2, correction: ["scrollSequence": "0", "offset": 2000, "smooth": false])]))
         let end = { scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height }
         XCTAssertEqual(scroll.contentOffset.y, end(), accuracy: 0.5, "opened at its end, below the bar")
-        let start = try XCTUnwrap(p.collections.geometry(1)).offset
+        let start = try XCTUnwrap(p.listHost.geometry(1)).offset
         p.apply(wireBatch([["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 400.0]]))
         XCTAssertEqual(scroll.adjustedContentInset.top, bar, accuracy: 0.5, "under the bar, which UIKit insets it by")
-        XCTAssertEqual(try XCTUnwrap(p.collections.geometry(1)).offset, start, accuracy: 0.5, "the port starts where it did")
+        XCTAssertEqual(try XCTUnwrap(p.listHost.geometry(1)).offset, start, accuracy: 0.5, "the port starts where it did")
         XCTAssertEqual(scroll.contentOffset.y, end(), accuracy: 0.5, "and its end is still the end")
     }
 }

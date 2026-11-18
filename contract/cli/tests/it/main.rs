@@ -68,6 +68,7 @@ mod diagnostics;
 mod disabled_look;
 mod docs;
 mod document;
+mod duo_lab;
 mod entropy;
 mod fetch_faults;
 mod first;

@@ -202,7 +202,7 @@ final class PlanURLReconnectTests: XCTestCase {
         defer { server.stop() }
         try server.start(program: Self.program, plan: Data("plan one".utf8))
         server.status = ("503 Service Unavailable", #"{"exact":1,"status":"preparing","message":"building the module producer"}"#)
-        var said: [String] = [], shown: [PlanURL.DevNotice?] = []
+        var said: [String] = [], shown: [DevNotice?] = []
         let host = Host.open(server.page) { connection in
             connection.log = { said.append($0) }
             connection.onDevNotice = { shown.append($0) }
@@ -233,7 +233,7 @@ final class PlanURLReconnectTests: XCTestCase {
         let server = try DevServerStub()
         defer { server.stop() }
         try server.start(program: Self.program, plan: Data("plan one".utf8))
-        var shown: [PlanURL.DevNotice?] = []
+        var shown: [DevNotice?] = []
         let host = Host.open(server.page) { $0.onDevNotice = { shown.append($0) } }
         defer { host.close() }
         // Its stream is open before a frame is pushed down it.

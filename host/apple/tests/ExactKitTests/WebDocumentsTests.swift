@@ -77,7 +77,7 @@ final class WebDocumentsTests: XCTestCase {
         _ = NSApplication.shared
         #endif
         let session = ExactApp.shared.makeSession(label: "app-text-frame")
-        session.webviews.moduleLocation = { path }
+        session.webHost.moduleLocation = { path }
         defer { session.destroy() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -117,7 +117,7 @@ final class WebDocumentsTests: XCTestCase {
         _ = NSApplication.shared
         #endif
         let session = ExactApp.shared.makeSession(label: "app-file-frame")
-        session.webviews.moduleLocation = { path }
+        session.webHost.moduleLocation = { path }
         defer { session.destroy() }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
