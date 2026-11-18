@@ -104,12 +104,8 @@ impl<D: DataSource> Host<D> {
         self.finished_deadline =
             (finished && error.is_none() && !self.resize_pending).then_some(deadline);
         let key = repeatable.then(|| self.quiet_collection_key()).flatten();
-        let out = batch.finish(
-            deadline,
-            !self.engine.quiescent() || self.awaits_present(),
-            self.runner.now_ms(),
-            error,
-        );
+        let motion = self.motion_onto(&mut batch);
+        let out = batch.finish(deadline, motion, self.runner.now_ms(), error);
         if let Some(key) = key {
             self.quiet_collection = Some((key, out.clone()));
         }
@@ -122,9 +118,19 @@ impl<D: DataSource> Host<D> {
         self.state_onto(&mut batch);
         let (timers, motion) = (
             self.route_overflow_due(self.runner.timer_due_ms()),
-            !self.engine.quiescent() || self.awaits_present(),
+            self.motion_onto(&mut batch),
         );
         batch.finish(timers, motion, self.runner.now_ms(), error.as_deref())
+    }
+
+    /// Whether the display link runs for the batch: something animates or
+    /// waits for a frame, or the page awaits its first present. Sets
+    /// `present_only` when it is that wait alone on a page with no canvas
+    /// (a canvas's ticks draw).
+    fn motion_onto(&self, batch: &mut Batch) -> bool {
+        let (quiescent, awaits) = (self.engine.quiescent(), self.awaits_present());
+        batch.present_only = quiescent && awaits && self.runner.plan().surfaces.is_empty();
+        !quiescent || awaits
     }
 
     pub(super) fn state_onto(&self, batch: &mut Batch) {

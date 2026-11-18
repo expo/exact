@@ -172,3 +172,40 @@ component A
     bridge.host.as_mut().unwrap().prefer_presented(None);
     assert!(seen(&bridge));
 }
+
+/// LLP 1164 D4 on Apple: the motion a still page reports only to await its
+/// first present says so (`presentOnly`), so the host enters that tick as no
+/// event; once it has presented, or while anything animates, it does not.
+#[test]
+fn a_still_page_awaiting_its_present_says_its_motion_is_only_that() {
+    let boot = |source: &str| {
+        let plan = contract::compile(source).unwrap().encode();
+        let mut bridge = Bridge::new();
+        bridge.start_on_frame(true, 0.0);
+        let len = bridge.boot(&plan, Feed, Hooks::none(), 390., 844.);
+        let booted = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+        (bridge, booted)
+    };
+    let (mut still, booted) =
+        boot("component A\n  view\n    column\n      box width=24 height=24\n");
+    assert!(
+        booted.contains("\"motion\":true") && booted.contains("\"presentOnly\":true"),
+        "{booted}"
+    );
+    let presented = still.host.as_mut().unwrap().tick_at(10.0, 16.0);
+    assert!(presented.contains("\"motion\":false"), "{presented}");
+    assert!(!presented.contains("\"presentOnly\""), "{presented}");
+    let (_, animating) = boot(
+        "keyframes enter\n  from opacity=0\ncomponent A\n  view\n    column\n      box width=24 height=24 animation=\"enter 400ms ease-out both\"\n",
+    );
+    assert!(
+        animating.contains("\"motion\":true") && !animating.contains("\"presentOnly\""),
+        "{animating}"
+    );
+    let (_, canvas) =
+        boot("component A\n  view\n    column\n      canvas surface=tile() width=100 height=50\n");
+    assert!(
+        canvas.contains("\"motion\":true") && !canvas.contains("\"presentOnly\""),
+        "a canvas's ticks draw: {canvas}"
+    );
+}

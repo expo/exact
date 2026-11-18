@@ -45,6 +45,9 @@ public struct Batch {
     public var canvas = false
     /// A frame task wants every display frame (LLP 1073 D5).
     public var frames = false
+    /// The display link runs only for the present of the page's first picture, on a page with no canvas: its tick sets
+    /// the page's `presented` fact as the page's other facts are set (LLP 1069.000 D2 r7), and enters as they do
+    public var presentOnly = false
     public var nativeTimers: [NativeTimerWake]?
     public var timerWaits: [Double] = []
     public var waitContinue = false
@@ -207,6 +210,7 @@ package final class Runtime {
     package func takeHeldCalls() -> [String] { defer { heldCalls = [] }; return heldCalls }
     /// Whether held; if so, `caller` is named in `heldCalls` (a call held outside `on`: `selection`, a notice's `later`).
     package func holds(_ caller: String = #function) -> Bool { if held { heldCalls.append(caller) }; return held }
+    /// `layout`: an entry that is no event (a layout report, a page fact), which admits nothing (`beforeEvent`)
     package func enter(_ caller: String = #function, layout: Bool = false) -> Bool {
         if !held, !layout, Thread.isMainThread { beforeEvent?() }
         return holds(caller)
@@ -624,10 +628,11 @@ package final class Runtime {
         post(count: calls.count, done: done) { [self] index in calls[index](self) }
     }
     /// A frame's tick on the owner, not waited for (LLP 1072 §7.1); `frame`
-    /// is the display frame it is for (LLP 1003.001 D5).
-    package func tickAsync(now: Double, frame: Double? = nil, capture: UInt64 = 0, measureFrame: Bool = false, done: @escaping (RuntimeCompletion) -> Void) {
+    /// is the display frame it is for (LLP 1003.001 D5), and `presentOnly` as `tick`'s.
+    package func tickAsync(now: Double, frame: Double? = nil, capture: UInt64 = 0, measureFrame: Bool = false, presentOnly: Bool = false,
+                           done: @escaping (RuntimeCompletion) -> Void) {
         let queued = capture == 0 ? 0 : hostMediaTime()
-        post(done: done) { [self] _ in
+        post(layout: presentOnly, done: done) { [self] _ in
             let began = capture == 0 ? 0 : hostMediaTime()
             var batch = read(frame.map { exact_tick_at(rt, now, $0) } ?? exact_tick(rt, now))
             if measureFrame || capture != 0 { batch.frameWorkTiming = FrameWorkTiming(capture: capture, frame: frame,
@@ -1021,7 +1026,10 @@ package final class Runtime {
         return on(layout: true) { read(exact_view(rt, write(bytes))) }
     }
 
-    package func tick(now: Double, frame: Double? = nil) -> Batch { on { read(frame.map { exact_tick_at(rt, now, $0) } ?? exact_tick(rt, now)) } }
+    /// `presentOnly`: the tick only hears the present of the page's first picture, and enters as the page's facts do
+    package func tick(now: Double, frame: Double? = nil, presentOnly: Bool = false) -> Batch {
+        on(layout: presentOnly) { read(frame.map { exact_tick_at(rt, now, $0) } ?? exact_tick(rt, now)) }
+    }
     package func scheme(dark: Bool) -> Batch { on(layout: true) { read(exact_scheme(rt, dark ? 1 : 0)) } }
     package func viewScheme(_ view: UInt32, dark: Bool) -> Batch { on(layout: true) { read(exact_view_scheme(rt, view, dark ? 1 : 0)) } }
 

@@ -1007,6 +1007,34 @@ final class NavigationBootIOSTests: XCTestCase {
         session.runtime.observeBatch = nil
     }
 
+    /// A still first screen's motion is only the wait for its first present (LLP 1069.000 D2 r7). A UI update runs
+    /// that tick before its commit, as it runs here inside an open transaction, and the tick is no event: the holder
+    /// stays, and the hand-off is the draw's.
+    func testAStillFirstScreensPresentTickKeepsTheHolder() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "boot comparisons need a visible scene") }
+        CATransaction.begin()
+        var open = true
+        defer { if open { CATransaction.commit() } }
+        let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigation
+        let holder = try XCTUnwrap(nav.bootOwner)
+        XCTAssertTrue(session.frames.motion && session.frames.presentOnly, "the link runs only for the present")
+        session.frames.run(true)
+        let link = try XCTUnwrap(session.frames.link)
+        var ticked = false
+        session.runtime.observeBatch = { _, _ in ticked = true }
+        defer { session.runtime.observeBatch = nil }
+        session.frames.tick(link)
+        session.drainFill()
+        XCTAssertTrue(ticked, "the tick reaches the runner")
+        XCTAssertFalse(session.frames.presentOnly, "the tick heard the present")
+        XCTAssertTrue(nav.bootOwner === holder, "a tick that only hears the present ends no wait")
+        XCTAssertNil(nav.primaryOwner)
+        open = false
+        CATransaction.commit()
+        CATransaction.flush()
+        waitFor("the hand-off after the first draw") { nav.primaryOwner != nil && nav.bootOwner == nil }
+    }
+
     func testPlainListInstallsSynchronously() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "boot comparisons need a visible scene") }
         let session = try fixture("BOOT_PLAIN"), nav = session.presenter.navigation

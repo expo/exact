@@ -150,7 +150,7 @@ struct OracleBatch: Decodable {
 struct OracleBatchMetadata: Decodable {
     let canvas, waitContinue, frames, canvasOwed, controls, layoutProvisional: Bool?
     let unchanged, storeReadPending, storeActivationPending, busy, requests, spatial: Bool?
-    let landing, stored, unsupported, facts, wakelock, mustFinish: Bool?
+    let landing, stored, unsupported, facts, wakelock, mustFinish, presentOnly: Bool?
     let waits: [Double]?
     let canvasImages, alerts, journal, announced: [String]?
     let live: String?

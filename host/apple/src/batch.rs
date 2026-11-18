@@ -36,6 +36,11 @@ pub struct Batch {
     /// A frame task wants each display frame (LLP 1073 D5): the display
     /// link runs and each tick is `exact_frame`.
     pub frames: bool,
+    /// The display link runs only for the present of the page's first
+    /// picture, on a page with no canvas (`motion` with nothing animating or
+    /// held for a frame, LLP 1069.000 D2 r7): that tick sets
+    /// `exactPage().presented` as `set_page` sets the page's other facts.
+    pub present_only: bool,
     /// Pending timer observation deadlines and held kinds (LLP 1147).
     pub waits: Option<exact_runner::Waits>,
     /// Independent platform timer instances, including an empty cancellation list.
@@ -1152,6 +1157,9 @@ impl Batch {
         }
         if self.frames {
             s.push_str(",\"frames\":true");
+        }
+        if self.present_only {
+            s.push_str(",\"presentOnly\":true");
         }
         if self.canvas_owed {
             s.push_str(",\"canvasOwed\":true");

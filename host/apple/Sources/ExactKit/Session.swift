@@ -1217,6 +1217,7 @@ public final class ExactSession {
         presenter.reorder?.raiseLifted()
         frames.motion = batch.motion
         frames.spatial = batch.spatial
+        frames.presentOnly = batch.presentOnly
         frames.canvas2d = batch.canvas
         frames.tasks = batch.frames
         updateTimerState(batch)

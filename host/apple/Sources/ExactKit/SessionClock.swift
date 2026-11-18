@@ -86,8 +86,9 @@ extension ExactSession {
 
     /// A frame's tick on the owner, not waited for: motion sampled at this
     /// frame lands with the next main-queue turn (LLP 1072 §7.1).
-    func sendTick(now: Double, frame: Double? = nil) {
+    func sendTick(now: Double, frame: Double? = nil, presentOnly: Bool = false) {
         tickInFlight = true
-        runtime.tickAsync(now: now, frame: frame, capture: frameHealth.captureID, measureFrame: frameHealth.enabled && clock == nil) { [weak self] batch in self?.publish(.tick, batch) }
+        runtime.tickAsync(now: now, frame: frame, capture: frameHealth.captureID, measureFrame: frameHealth.enabled && clock == nil,
+                          presentOnly: presentOnly) { [weak self] batch in self?.publish(.tick, batch) }
     }
 }

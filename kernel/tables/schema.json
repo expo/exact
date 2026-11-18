@@ -5785,6 +5785,10 @@
           "member": "frames",
           "codec": "bool"
         },
+        "presentOnly": {
+          "member": "presentOnly",
+          "codec": "bool"
+        },
         "canvasOwed": {
           "member": "canvasOwed",
           "codec": "bool"

@@ -106,9 +106,9 @@ extension ExactSession {
     }
     /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
     /// viewless contents, LLP 1069.011 §9, page facts, or an orientation request that changes the lock or
-    /// turns the scene), asks for or lets go no canvas image, and leaves the motion, spatial, frame-task, canvas and owed-draw state as they stand.
+    /// turns the scene), asks for or lets go no canvas image, and leaves the motion (and whether it only awaits the page's present), spatial, frame-task, canvas and owed-draw state as they stand.
     func showsNothing(_ batch: Batch) -> Bool {
-        !batch.changesScreen && !presenter.orientationChangesScreen(batch) && batch.canvasImages.isEmpty && batch.canvasImagesDropped.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial
+        !batch.changesScreen && !presenter.orientationChangesScreen(batch) && batch.canvasImages.isEmpty && batch.canvasImagesDropped.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial && batch.presentOnly == frames.presentOnly
             && batch.canvasOwed == canvasOwed && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
     }
     func clockUnchanged(_ batch: Batch) -> Bool {

@@ -46,10 +46,11 @@ extension Runtime {
 
     /// Refused jobs still answer once per expected batch so the caller can
     /// retire its in-flight work. No lease lock is held across a main callback.
-    package func post(count: Int = 1, caller: String = #function, prepare: () -> Void = {},
+    /// `layout` as `enter`'s.
+    package func post(count: Int = 1, caller: String = #function, layout: Bool = false, prepare: () -> Void = {},
                       done: @escaping (RuntimeCompletion) -> Void, _ body: @escaping (Int) -> Batch) {
         let lease = completionLease
-        let held = enter(caller)
+        let held = enter(caller, layout: layout)
         if !held { prepare() }
         Owner.shared.post { [self] in
             for index in 0..<count {

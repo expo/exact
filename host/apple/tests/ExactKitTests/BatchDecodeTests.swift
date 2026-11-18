@@ -52,10 +52,10 @@ final class BatchDecodeTests: XCTestCase {
         XCTAssertEqual(new.timerDueMs?.bitPattern, old.timerDueMs?.bitPattern, file: file, line: line)
         XCTAssertEqual([new.canvas, new.waitContinue, new.frames, new.canvasOwed, new.controls, new.layoutProvisional,
                         new.unchanged, new.storeReadPending, new.storeActivationPending, new.busy, new.requests, new.spatial,
-                        new.landing, new.stored, new.unsupported, new.facts],
+                        new.landing, new.stored, new.unsupported, new.facts, new.presentOnly],
                        [metadata.canvas, metadata.waitContinue, metadata.frames, metadata.canvasOwed, metadata.controls, metadata.layoutProvisional,
                         metadata.unchanged, metadata.storeReadPending, metadata.storeActivationPending, metadata.busy, metadata.requests, metadata.spatial,
-                        metadata.landing, metadata.stored, metadata.unsupported, metadata.facts].map { $0 ?? false }, file: file, line: line)
+                        metadata.landing, metadata.stored, metadata.unsupported, metadata.facts, metadata.presentOnly].map { $0 ?? false }, file: file, line: line)
         XCTAssertEqual(new.wakelock, metadata.wakelock, file: file, line: line)
         XCTAssertEqual(new.mustFinish, metadata.mustFinish, file: file, line: line)
         XCTAssertEqual(new.timerWaits, metadata.waits ?? [], file: file, line: line)
@@ -192,7 +192,7 @@ final class BatchDecodeTests: XCTestCase {
     func testEnvelopeSchedulingAndNativeTimerRecords() throws {
         let fields = #"""
         "ops":[],"timers":true,"motion":true,"canvas":true,"waits":[-2,50,-1,100],
-        "waitContinue":true,"frames":true,"canvasOwed":true,"controls":true,"layoutProvisional":true,
+        "waitContinue":true,"frames":true,"presentOnly":true,"canvasOwed":true,"controls":true,"layoutProvisional":true,
         "canvasImages":["map"],"unchanged":true,"storeReadPending":true,"storeActivationPending":true,
         "pending":true,"requests":true,"busy":true,"spatial":true,"clock":-0.0,"timer_due_ms":123.25,
         "landing":true,"stored":true,"error":"problem","modes":{"theme":"dark","ignored":false},

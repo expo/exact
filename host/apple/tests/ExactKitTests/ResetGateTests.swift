@@ -277,7 +277,7 @@ final class ResetGateTests: XCTestCase {
         let (session, _) = try boot()
         until("no tick in flight") { !session.tickInFlight }
         let (held, replays, _) = held(session) { session.sendTick(now: session.now()) }
-        XCTAssertEqual(held, ["tickAsync(now:frame:capture:measureFrame:done:)"])
+        XCTAssertEqual(held, ["tickAsync(now:frame:capture:measureFrame:presentOnly:done:)"])
         XCTAssertEqual(replays, [.advance])
         until("the held tick's answer lands, ending the tick in flight") { !session.tickInFlight }
     }
