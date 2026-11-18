@@ -34,6 +34,13 @@ const MAX_SIDE: f32 = 8192.0;
 const FILTER_WINDOWS: f32 = 2.0;
 const HELD_WINDOWS: f32 = 4.0;
 
+/// Frames a freed row's layers count, the one that frees it included: the
+/// reader lets a row's node go as it takes the stream after the one that
+/// frees it (`ExactView.free`). While the row replacing it is still recorded
+/// on the reader's worker it holds the node until that lands, which the
+/// stream does not report.
+const RELEASE: u64 = 2;
+
 impl Recorder {
     /// Open a filter over `region` in `ts`'s space; whether its chain is one
     /// the reader runs.
@@ -60,13 +67,11 @@ impl Recorder {
         }
         let window = self.direct.size.0 * self.direct.size.1 * s * s;
         let area = page.2 * page.3 * s * s;
-        // The row this one replaces is let go once it is recorded.
-        let replaced = self.row.as_ref().and_then(|r| r.previous);
-        let kept: f32 = (self.filter_areas.iter())
-            .filter(|(id, _)| Some(**id) != replaced)
-            .map(|(_, a)| a)
-            .sum();
-        let held = kept + self.page_area + self.row.as_ref().map_or(0.0, |r| r.area);
+        // The row this one replaces still counts: the reader draws it until
+        // this one is made. So do rows freed and not yet let go.
+        let kept: f32 = self.filter_areas.values().sum();
+        let leaving: f32 = self.filter_leaving.iter().map(|(a, _)| a).sum();
+        let held = kept + leaving + self.page_area + self.row.as_ref().map_or(0.0, |r| r.area);
         if area > FILTER_WINDOWS * window || held + area > HELD_WINDOWS * window {
             return false;
         }
@@ -88,6 +93,20 @@ impl Recorder {
         self.ops.push(count);
         self.ops.extend(words);
         true
+    }
+
+    /// A frame begins: rows the reader has let go no longer count.
+    pub(super) fn filter_frame(&mut self) {
+        let frames = self.frames;
+        self.filter_leaving.retain(|(_, until)| *until > frames);
+    }
+
+    /// Row `id` is freed: its layers count until the reader can have let it
+    /// go.
+    pub(super) fn filter_free(&mut self, id: u32) {
+        if let Some(area) = self.filter_areas.remove(&id) {
+            self.filter_leaving.push((area, self.frames + RELEASE));
+        }
     }
 
     pub(super) fn filter_close(&mut self) {
@@ -200,11 +219,62 @@ mod tests {
             r.row_end((0.0, 0.0, 100.0, 150.0));
         }
         r.row_free(1);
+        // The reader lets row 1 go as it takes the next stream.
         r.row_begin(4, (0.0, 0.0), None);
+        assert!(
+            !r.filter_open(&blur(4.0), (0.0, 0.0, 100.0, 150.0), ts),
+            "row 1 still held"
+        );
+        r.row_end((0.0, 0.0, 100.0, 150.0));
+        r.begin(100.0, 100.0, 2.0);
+        r.begin(100.0, 100.0, 2.0);
+        r.row_begin(5, (0.0, 0.0), None);
         assert!(
             r.filter_open(&blur(4.0), (0.0, 0.0, 100.0, 150.0), ts),
             "row 1 let go"
         );
+    }
+
+    #[test]
+    fn a_replaced_rows_layers_count_until_the_reader_lets_it_go() {
+        let blur = |s: f32| {
+            [Primitive {
+                op: Op::Blur(s, s),
+                inputs: [Input::SourceGraphic, Input::None],
+                subregion: (0.0, 0.0, 0.0, 0.0),
+                linear: false,
+            }]
+        };
+        let (ts, region) = (Transform::identity(), (0.0, 0.0, 100.0, 150.0));
+        let mut r = Recorder::new();
+        // A window of 200 × 200 device pixels; two rows of 1.5 windows.
+        r.begin(100.0, 100.0, 2.0);
+        for id in 1..=2 {
+            r.row_begin(id, (0.0, 0.0), None);
+            assert!(r.filter_open(&blur(4.0), region, ts));
+            r.filter_close();
+            r.row_end(region);
+        }
+        // Row 1 recorded again with another chain: the reader draws it until
+        // the new recording is made, so both count, 4.5 windows.
+        r.row_begin(3, (0.0, 0.0), Some(1));
+        assert!(
+            !r.filter_open(&blur(5.0), region, ts),
+            "row 1 is still held"
+        );
+        r.row_end(region);
+        r.row_free(1);
+        r.begin(100.0, 100.0, 2.0);
+        r.row_begin(4, (0.0, 0.0), Some(3));
+        assert!(
+            !r.filter_open(&blur(5.0), region, ts),
+            "the reader takes the stream that frees row 1 now"
+        );
+        r.row_end(region);
+        r.row_free(3);
+        r.begin(100.0, 100.0, 2.0);
+        r.row_begin(5, (0.0, 0.0), Some(4));
+        assert!(r.filter_open(&blur(5.0), region, ts), "row 1 let go");
     }
 
     #[test]

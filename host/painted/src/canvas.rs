@@ -341,6 +341,9 @@ pub struct Recorder {
     /// page's in this stream (`canvas/filter.rs`).
     filter_areas: HashMap<u32, f32>,
     page_area: f32,
+    /// Freed rows' filter pixels, and the frame from which each no longer
+    /// counts (`canvas/filter.rs`, `RELEASE`).
+    filter_leaving: Vec<(f32, u64)>,
     /// Deletions may arrive between frames; keep them until a stream is finished.
     freed_rows: Vec<u32>,
     /// While a picture slot records: the row's ops so far, its matrix, and
@@ -415,6 +418,7 @@ impl Recorder {
             kept: HashMap::new(),
             filter_areas: HashMap::new(),
             page_area: 0.0,
+            filter_leaving: Vec::new(),
             freed_rows: Vec::new(),
             slot: None,
             slots: HashMap::new(),
@@ -553,6 +557,7 @@ impl Backend for Recorder {
         self.page_area = 0.0;
         GROUPS.with(|g| g.borrow_mut().clear());
         self.frames += 1;
+        self.filter_frame();
         // Pictures the presenter dropped, and those not drawn for a while
         // that the reader copied: its copy goes, and is sent again when it
         // draws again. Kept rows hold their own reference.
@@ -1012,7 +1017,7 @@ impl Backend for Recorder {
 
     fn row_free(&mut self, id: u32) {
         self.kept.remove(&id);
-        self.filter_areas.remove(&id);
+        self.filter_free(id);
         self.slot_contexts.remove(&id);
         self.layers.row_free(id);
         self.shared.rows.remove(&id);
