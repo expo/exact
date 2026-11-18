@@ -39,6 +39,24 @@ rest. `bench/bakeoff/round.mjs` passes a spec's `feel-steps.txt` (lines starting
 If the screen the steps reach has no shown scroll view whose content is at least 1.5 × its height + 100 pt, the
 result is `no-scrollable-list` (exit 0), not a failure.
 
+## Measuring a transition
+
+`measure <step>` in `--steps` times one step's transition (a push, Back, a sheet, a picker's switch) instead of
+scrolling a list: the step, then a window of 1.8 s in which the recorder keeps recording after the touch
+(`FEEL_HOLD`). For each one `feel.txt` and `feel.json`'s `measures` give the main thread's busy time over the window,
+its late frames, and whose their sampled time was, by the same labels as the scrolling's hitches:
+
+```sh
+bun host/apple/feel/probe.mjs --udid U --app B --steps 'measure tap "Mount Fuji";measure tap "Info"'
+measure tap "Info": main thread busy 445 ms in 2191 ms, 3 late frames (276 ms late, the longest 240 ms); late frames' time: Exact host 315 ms (in maps 116, UIKit 89) · …
+```
+
+What a label shows "in" a platform framework is that framework's work under the label's frames: in a push, Exact's
+host starting UIKit's own transition, which a hand-built app pays too; in Info above, MapKit making and laying out the
+app's map. The app's own native modules (`libexact_modules.dylib`) are `app code`. The busy time includes the
+accessibility work the touch runner's accessibility adds (labelled `accessibility`); compare runs with each other, not
+with a Time Profiler trace of a plain launch. With measured steps, no list is scrolled.
+
 ## What it does
 
 The recorder hooks `-[UIApplication sendEvent:]` to log touches and runs a display link at the screen's maximum

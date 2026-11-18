@@ -8,7 +8,9 @@
 //   bun host/apple/feel/probe.mjs --udid U --app BUNDLE [--steps 'tap "All";tap x,y;wait 1;drag x,y,x,y[,v]']
 //       [--at x,y] [--out DIR] [--sample N] [--dump DIR] [--short]
 // --steps: `;` between steps; a newline between lists, each probed from a fresh launch into DIR/list-N (the first
-// into DIR), lines starting with # ignored; `tap "label"` taps what a person reads (host/apple/elements.mjs).
+// into DIR), lines starting with # ignored; `tap "label"` taps what a person reads (host/apple/elements.mjs);
+// `measure <step>` times the step's transition and says whose its main thread's late time was, and no list is
+// scrolled after it.
 // --sample N measures blank bands every Nth moving frame (0: never; 4); --dump DIR saves the first sampled
 // images and any with a blank band; --short plays verify's script.
 import { spawnSync } from 'node:child_process';
@@ -16,7 +18,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, resolve } from 'node:path';
 import { readTree, tapPoint } from '../elements.mjs';
 import { openTouches } from '../touches.mjs';
-import { analyze, pickList, readTrace, report, summary } from './analyze.mjs';
+import { analyze, measures, measuresReport, pickList, readTrace, report, summary } from './analyze.mjs';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(new URL(import.meta.url)));
@@ -40,8 +42,10 @@ export function recorder() {
 }
 
 /** The environment that inserts the recorder into an app, writing to `tracePath`; simctl passes each as SIMCTL_CHILD_<name>. */
-export const recorderEnv = (tracePath, { sample, dump } = {}) => ({ DYLD_INSERT_LIBRARIES: recorder(), FEEL_OUT: tracePath,
-  ...(sample != null ? { FEEL_SAMPLE: String(sample) } : {}), ...(dump ? { FEEL_DUMP: resolve(dump) } : {}) });
+export const recorderEnv = (tracePath, { sample, dump, hold } = {}) => ({ DYLD_INSERT_LIBRARIES: recorder(), FEEL_OUT: tracePath,
+  ...(sample != null ? { FEEL_SAMPLE: String(sample) } : {}), ...(dump ? { FEEL_DUMP: resolve(dump) } : {}), ...(hold ? { FEEL_HOLD: String(hold) } : {}) });
+/** How long a measured step's window lasts after its touch (`measure <step>`), and the recorder records */
+export const MEASURE_HOLD_S = 1.8;
 
 /** `--steps` as lists to probe, each its steps: a newline between lists, `;` between steps outside quotes; lines
  * starting with # left out. One empty list when there are none. */
@@ -112,6 +116,16 @@ export async function play({ touches, tracePath, steps = '', at = null, script =
     const stepList = Array.isArray(steps) ? steps : stepLists(steps)[0];
     for (const step of stepList) {
       const op = step.split(/\s+/, 1)[0], arg = step.slice(op.length).trim();
+      // `measure <step>`: the step, then its window (its transition) timed apart (`measures` in analyze.mjs)
+      if (op === 'measure') {
+        const start = Date.now();
+        await runStep(arg);
+        await sleep(MEASURE_HOLD_S * 1000);
+        gestures.push({ name: `measure ${arg}`, kind: 'measure', start, end: Date.now() });
+      } else await runStep(step);
+    }
+    async function runStep(step) {
+      const op = step.split(/\s+/, 1)[0], arg = step.slice(op.length).trim();
       const n = arg.split(',').map(Number);
       if (op === 'tap' && /^-?[\d.]+,-?[\d.]+$/.test(arg)) await tap(`step tap ${arg}`, n);
       else if (op === 'tap' && arg) {
@@ -129,6 +143,8 @@ export async function play({ touches, tracePath, steps = '', at = null, script =
       else if (op === 'drag') await drag(`step drag ${arg}`, [n[0], n[1]], [n[2], n[3]], n[4] || 1000);
       else throw new Error(`unknown step "${step}"`);
     }
+    // Measured steps are the probe's whole work: no list is scrolled after them
+    if (gestures.some((g) => g.kind === 'measure')) return { display, steps: gestures.length, gestures, list: null, measured: true };
     if (stepList.length) await rest(3000);
     await sleep(600); // the next scan
     const stepCount = gestures.length;
@@ -308,11 +324,14 @@ export async function play({ touches, tracePath, steps = '', at = null, script =
 export function finish(out, app, played, udid) {
   const tracePath = resolve(out, 'trace.jsonl');
   writeFileSync(resolve(out, 'gestures.json'), JSON.stringify({ app, udid, display: played.display, steps: played.steps, gestures: played.gestures, listId: played.list?.id ?? null }, null, 1));
-  const result = played.list
-    ? analyze(traceOf(tracePath), { app, steps: played.steps, gestures: played.gestures, listId: played.list.id })
-    : { app, verdict: 'no-scrollable-list', scan: played.scan ?? null };
+  const trace = traceOf(tracePath);
+  const result = played.list ? analyze(trace, { app, steps: played.steps, gestures: played.gestures, listId: played.list.id })
+    : played.measured ? { app, verdict: 'measured' } : { app, verdict: 'no-scrollable-list', scan: played.scan ?? null };
+  const measured = measures(trace, played.gestures);
+  if (measured.length) result.measures = measured;
   writeFileSync(resolve(out, 'feel.json'), JSON.stringify(result, null, 1));
-  writeFileSync(resolve(out, 'feel.txt'), played.list ? report(result) : `${app}: no-scrollable-list (no shown scroll view whose content is meaningfully taller than its bounds)\n`);
+  const head = played.list ? report(result) : played.measured ? '' : `${app}: no-scrollable-list (no shown scroll view whose content is meaningfully taller than its bounds)\n`;
+  writeFileSync(resolve(out, 'feel.txt'), head + measuresReport(measured));
   return result;
 }
 
@@ -341,7 +360,8 @@ if (import.meta.main) {
       const tracePath = resolve(dir, 'trace.jsonl');
       const dump = opts.dump && (i ? resolve(opts.dump, `list-${i + 1}`) : opts.dump);
       if (dump) mkdirSync(resolve(dump), { recursive: true });
-      const env = Object.fromEntries(Object.entries(recorderEnv(tracePath, { ...opts, dump })).map(([k, v]) => [`SIMCTL_CHILD_${k}`, v]));
+      const hold = steps.some((s) => /^measure\s/.test(s)) ? MEASURE_HOLD_S : null;
+      const env = Object.fromEntries(Object.entries(recorderEnv(tracePath, { ...opts, dump, hold })).map(([k, v]) => [`SIMCTL_CHILD_${k}`, v]));
       if (lists.length > 1) say(`list ${i + 1} of ${lists.length}: ${steps.join('; ') || 'the first screen'}`);
       let played = null;
       try {
@@ -358,7 +378,7 @@ if (import.meta.main) {
       }
       const result = finish(dir, app, played, udid);
       results.push({ steps, dir, result });
-      say(result.verdict === 'probed' ? dir : `no-scrollable-list; ${dir}`);
+      say(result.verdict === 'no-scrollable-list' ? `no-scrollable-list; ${dir}` : dir);
     }
   } finally {
     await touches.close().catch((e) => say(`closing the touch runner: ${e.message}`));
@@ -370,5 +390,5 @@ if (import.meta.main) {
     first.others = results.slice(1).map((r) => ({ steps: r.steps, dir: r.dir, verdict: r.result.verdict, summary: summary(r.result) }));
     writeFileSync(resolve(out, 'feel.json'), JSON.stringify(first, null, 1));
   }
-  for (const r of results) if (r.result.verdict === 'probed') process.stdout.write((results.length > 1 ? `# ${r.steps.join('; ') || 'the first screen'}\n` : '') + report(r.result));
+  for (const r of results) if (r.result.verdict === 'probed' || r.result.measures) process.stdout.write((results.length > 1 ? `# ${r.steps.join('; ') || 'the first screen'}\n` : '') + readFileSync(resolve(r.dir, 'feel.txt'), 'utf8'));
 }

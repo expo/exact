@@ -208,6 +208,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |rows added and removed in a form|`editable-rows`|
 |JSON from an HTTP endpoint (a `GET`, a GraphQL query) with no data module, so no JavaScript engine|`declared-source`|
 |a write that may be refused|`after-a-write`|
+|a slow screen, transition or hitch: measure, and whose it is|`performance`|
 |a failure the person must acknowledge (an alert with OK)|`error-alert`|
 |tabular digits: numeric columns or values changing in place|`numeric-readout`|
 |a number field, a stepper's `step`|`number-field`, `stepper`|

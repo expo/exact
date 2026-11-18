@@ -502,3 +502,31 @@ still breaks the gate's budget.
   symbolicated backtrace at every wait on a lower-priority thread, and its
   diagnostics collection can wait out a 600 s timeout; `build.mjs --test --ios`
   runs without both.
+
+## Measuring the host's speed
+
+- **Measure the release build with the feel probe.** `host/apple/feel/probe.mjs`
+  with `measure <step>` times a transition and labels whose its late frames'
+  time was (Exact's host, its runtime, the app's JS or modules, a platform
+  framework); a SwiftUI twin of the screen, probed the same way, is the baseline
+  (`host/apple/feel/README.md`).
+- **Keep the work under accessibility's overrides.** A Time Profiler trace of a
+  drive by the touch runner has accessibility on, and
+  `-[UIApplicationAccessibility sendEvent:]` wraps every touch: an override that
+  calls the same selector passes through, and the app's work is under it. Such a
+  trace still shows where the time goes: drop only accessibility's own frames,
+  and compare its absolute numbers only with runs that had accessibility on too.
+  A Mac benchmark does not stand for iOS: measure on the simulator or a phone.
+- **Hot paths do only the needed work.** A trace that names a host function
+  and its cost is evidence enough to change that function. No unconditional
+  `NSLog` or `print` (`caps` counts them); a class check before a protocol
+  check, whose first test of a class searches every loaded conformance (Swift's
+  runtime lookups under UIKit's or SwiftUI's own frames are the platform's); a
+  private class looked up once, not by its name's string; the first responder
+  found once per pass; a derived image kept across a resize and remade off the
+  main thread.
+- **Read why a speed-up was not taken before you try it.** A comment at the
+  code may name the test that failed or the measurement that showed no gain.
+  Do not land that change, or a narrower form of it, after a failed test until
+  you know its cause, or after no gain until a measurement on the target shows
+  one; a temporary change to find either is fine. Keep the named test passing.

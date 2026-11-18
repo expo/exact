@@ -102,6 +102,7 @@ static pthread_t gMainPthread;
 static _Atomic int gSamplerOn;
 static BOOL gExactApp;  // the executable is Exact's host: its code that is not the app's JS is Exact's
 static BOOL gStacks = YES;  // FEEL_STACKS=0 turns the sampler off
+static double gHold = 0.5;  // FEEL_HOLD=s: how long recording goes on after the last touch or motion (a measured step's transition)
 typedef struct { double t; uint8_t who, what, via, idle; } FeelSample;
 enum { kRing = 8192 };
 static FeelSample gRing[kRing];
@@ -146,6 +147,7 @@ static void readImages(void) {
         {"UIKitCore", "UIKit"}, {"QuartzCore", "Core Animation"},
         {"CoreText", "text & drawing"}, {"libFontParser.dylib", "text & drawing"}, {"CoreGraphics", "text & drawing"},
         {"UIFoundation", "text & drawing"}, {"ImageIO", "images"}, {"CoreImage", "images"}, {"Metal", "Metal"},
+        {"MapKit", "maps"}, {"VectorKit", "maps"}, {"GeoServices", "maps"},
         {"UIAccessibility", "accessibility"}, {"AccessibilityUtilities", "accessibility"}, {"AXRuntime", "accessibility"},
         {"UIKitCoreAccessibility", "accessibility"}, {"SwiftUIAccessibility", "accessibility"}, {"AXCoreUtilities", "accessibility"},
       };
@@ -163,12 +165,13 @@ static const FeelImage *imageOf(uintptr_t pc) {
   return NULL;
 }
 
-/// What a return address in the app's bundle is: Exact's runtime (Rust), the app's JS (Hermes and its JSI
-/// adapter), Exact's host (Swift and Objective-C named Exact…, and in an Exact app everything else: its author
-/// writes no native code), else the app's own code.
+/// What a return address in the app's bundle is: the app's own native modules (`libexact_modules.dylib`, which an
+/// Exact app's `modules/` build), Exact's runtime (Rust), the app's JS (Hermes and its JSI adapter), Exact's host
+/// (Swift and Objective-C named Exact…, and in an Exact app everything else), else the app's own code.
 static uint8_t authorLabel(uintptr_t pc) {
-  Dl_info info;
+  Dl_info info = {0};
   const char *name = dladdr((void *)pc, &info) && info.dli_sname ? info.dli_sname : "";
+  if (info.dli_fname && strstr(info.dli_fname, "libexact_modules")) return labelId("app code");
   if (strstr(name, "hermes") || strstr(name, "facebook3jsi") || strstr(name, "ibex2")) return labelId("app JS");
   if (!strncmp(name, "_R", 2) || strstr(name, "exact_")) return labelId("Exact runtime");
   if (!strncmp(name, "$s", 2)) {
@@ -758,7 +761,7 @@ static const NSUInteger kChecks = 10;
   }
   FeelView *now = active ?: touched ?: shifted;
   if (now) { self.focus = now; self.lastMotion = t0; }
-  BOOL record = touching || now || t0 - self.lastMotion < 0.5 || t0 - gLastTouchT < 0.5;
+  BOOL record = touching || now || t0 - self.lastMotion < gHold || t0 - gLastTouchT < gHold;
   double busy = busyNow(), busyMs = (busy - self.lastBusy) * 1000;
   self.lastBusy = busy;
   double stamp = l.timestamp, prev = self.lastStamp, dt = prev > 0 ? (stamp - prev) * 1000 : 0;
@@ -834,6 +837,7 @@ __attribute__((constructor)) static void feel_init(void) {
   if (!path.length) return;
   if (env[@"FEEL_SAMPLE"]) gSample = [env[@"FEEL_SAMPLE"] integerValue];
   if ([env[@"FEEL_STACKS"] isEqual:@"0"]) gStacks = NO;
+  if (env[@"FEEL_HOLD"]) gHold = [env[@"FEEL_HOLD"] doubleValue];
   if ([env[@"FEEL_DUMP"] length]) gDump = env[@"FEEL_DUMP"];
   gOut = fopen(path.fileSystemRepresentation, "w");
   gSwitch = strdup([path stringByAppendingString:@".sample"].fileSystemRepresentation);

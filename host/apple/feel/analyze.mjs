@@ -100,6 +100,34 @@ export function whereLine(c) {
   return `${c.gesture}: ${c.frames} late frame${c.frames === 1 ? '' : 's'} (${c.ticks} on a timer's tick), ${Math.round(c.lateMs)} ms late; ${parts.join(' · ') || 'the main thread was idle (the delay was elsewhere)'}${via ? `; in ${via}` : ''}`;
 }
 
+/** Each measured step (`measure <step>` in the probe's steps): over its window, the main thread's busy time, its late
+ * frames, and where their time went by who (`whereOf`). */
+export function measures(t, gestures) {
+  if (!t.hello) return [];
+  const P = 1000 / (t.hello.maxFps || 60), media = (wall) => t.hello.media + (wall - t.hello.wall) / 1000;
+  return gestures.filter((g) => g.kind === 'measure').map((g) => {
+    const m0 = media(g.start) - 0.03, m1 = media(g.end), within = (x) => x.t >= m0 && x.t <= m1;
+    const frames = t.frames.filter(within), late = frames.filter((f) => f.dt > 1.5 * P);
+    const hitches = t.wheres.filter(within).map((w) => ({ where: w.ms, via: w.via ?? {} }));
+    return { step: g.name.replace(/^measure /, ''), windowMs: round((m1 - m0) * 1000, 0), busyMs: round(frames.reduce((s, f) => s + (f.busy ?? 0), 0), 0),
+      lateFrames: late.length, lateMs: round(late.reduce((s, f) => s + f.dt - P, 0), 0), longestFrameMs: round(Math.max(0, ...frames.map((f) => f.dt)), 0),
+      ...whereOf(hitches) };
+  });
+}
+
+/** The measured steps as lines, and once how to read whose the time is. */
+export function measuresReport(ms) {
+  if (!ms.length) return '';
+  const lines = ms.map((m) => {
+    const parts = m.by.filter((b) => b.ms >= 2).slice(0, 3).map((b) => {
+      const what = b.what.filter(([, ms]) => ms >= 2).slice(0, 2).map(([k, ms]) => `${k} ${Math.round(ms)}`).join(', ');
+      return `${b.who} ${Math.round(b.ms)} ms${what ? ` (in ${what})` : ''}`;
+    });
+    return `measure ${m.step}: main thread busy ${m.busyMs} ms in ${m.windowMs} ms, ${m.lateFrames} late frame${m.lateFrames === 1 ? '' : 's'} (${m.lateMs} ms late, the longest ${m.longestFrameMs} ms); late frames' time: ${parts.join(' · ') || 'none sampled'}`;
+  });
+  return `${lines.join('\n')}\nWhose: app JS (and Exact's runtime it waits on) is the app's Contract and data work; app code is the app's own native code; Exact host is Exact's Swift, and what it shows "in" UIKit or Core Animation is mostly the platform's own transition, which a native app pays too; a platform framework alone (UIKit, MapKit, the keyboard) is the platform's. Measure the release build; a run with accessibility on (any tree read) adds accessibility work, labelled as such.\n`;
+}
+
 export function analyze(t, meta) {
   const P = 1 / (t.hello?.maxFps || 60);
   const media = (wall) => t.hello.media + (wall - t.hello.wall) / 1000;
