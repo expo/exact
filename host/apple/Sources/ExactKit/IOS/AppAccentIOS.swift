@@ -25,6 +25,7 @@ final class AppAccent {
     /// before it joins the window: set after, UIKit tells every view in the
     /// tree its tint changed.
     func roots(_ roots: [NodeView]) {
+        // Re-entry: while the accent lets its window go, only that release's own restyle of the roots comes here
         guard !releasing else { return }
         set(roots.lazy.compactMap(Self.own).first)
     }

@@ -56,6 +56,7 @@ package final class Presenter {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             projectionSyncOwed = false
+            // Re-entry: a batch being applied runs these syncs as it ends, after what this would read
             guard !applying else { return }
             // Rows stay carried: a trait refresh never pulls a row (and a
             // first responder or a touch in it) out of its cell. Lists mount

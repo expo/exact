@@ -71,6 +71,7 @@ final class RouteSafeArea {
     }
 
     private func drain() {
+        // Re-entry sets pending, which the current drain reads before it ends.
         guard !syncing else { return }
         syncing = true
         defer { syncing = false }

@@ -77,11 +77,13 @@ private final class ExactSegmentedControl: NSSegmentedControl {
         return segments[index]
     }
     override func accessibilityChildren() -> [Any]? {
+        // Re-entry: inside `nativeSegment`'s own query AppKit's children answer, and nothing is dropped
         if exposingNativeChildren { return super.accessibilityChildren() }
         if segmentElements.count != segmentCount { segmentElements = (0..<segmentCount).map { SegmentAccessibility(self, $0) } }
         return segmentElements
     }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
+        // Re-entry: as `accessibilityChildren`
         if exposingNativeChildren { return super.accessibilityAttributeValue(attribute) }
         if attribute == .children { return accessibilityChildren() }
         return super.accessibilityAttributeValue(attribute)

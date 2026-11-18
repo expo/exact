@@ -1009,6 +1009,7 @@ package final class TableFeed: NSObject, NSTableViewDataSource, NSTableViewDeleg
         return url.hasPrefix("/") && !url.hasPrefix("//")
     }
     package func tableViewSelectionDidChange(_ notification: Notification) {
+        // Re-entry: a selection change while `syncing` is the host's own (`selectRowIndexes`), not the person's
         guard !syncing else { return }
         let row = table.selectedRow, mounted = self.row(at: row)
         remember(mounted)
