@@ -4501,6 +4501,13 @@ function), `-exact-exit-animation`, `-exact-layout-transition`, and presentation
 specific documented behavior;
 they do not admit arbitrary frame callbacks or a second app-state graph.
 
+A native list (`list appearance="auto"`) applies a change at once, as UIKit
+does, unless a row carries a layout transition or an exit animation. Then a
+change in which rows it holds, or in their order, animates on iOS: rows slide
+to their new places and rows that come or go fade, with UIKit's own timing,
+not the written duration. Its first rows, a restyle and a list out of a window
+still apply at once.
+
 macOS and iOS play eligible box `translate`, `scale`, `rotate` and `opacity`
 animations and transitions in Core Animation. A transform stays sampled when
 the box takes input, contains an interactive view, uses a noncentral origin,

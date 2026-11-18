@@ -614,7 +614,7 @@ impl<D: DataSource> Bridge<D> {
     /// "header","footer","headerLook","footerLook","card","spaceAbove","rows":[{"view","custom","symbol",("symbolPath","symbolViewBox": an
     /// svg-only icon's, `icon_path::push_json`),"title",
     /// "secondary","subtitle","accessory","accessoryView","target","pressable","action",
-    /// "checked","destructive","disabled","authoredEdge","nextAuthoredTop","titleLook","secondaryLook"}]}],"spaceBelow"}`,
+    /// "checked","destructive","disabled","authoredEdge","nextAuthoredTop","titleLook","secondaryLook"}]}],"spaceBelow","animates"}`,
     /// `null` for a node that is not one. A look is `{"lines","ellipsis",
     /// "color","font"}`: a colour row's wire form and `{"size","weight",
     /// "italic","family","numeric"}`, each `null` where the author said nothing.
@@ -743,8 +743,9 @@ impl<D: DataSource> Bridge<D> {
                     json.push_str("]}");
                 }
                 json.push_str(&format!(
-                    "],\"spaceBelow\":{}}}",
-                    list.space_below.map_or("null".into(), |v| v.to_string())
+                    "],\"spaceBelow\":{},\"animates\":{}}}",
+                    list.space_below.map_or("null".into(), |v| v.to_string()),
+                    list.animates
                 ));
             }
         }
