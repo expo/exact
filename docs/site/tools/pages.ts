@@ -3,7 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 
 // Makes the tree Cloudflare Pages serves from the one `bun run build` writes: bun tools/pages.ts [dist] [dist.pages].
 // Pages answers /start from start/index.html with a redirect to /start/, and _redirects sends /start/ back to
-// /start, so a page loops (wrangler 3.114.17). It answers /start from start.html directly, and still redirects
+// /start, so a page loops. It answers /start from start.html directly, and still redirects
 // /start/ and /start.html to /start. Pages also reads at most 100 _headers rules
 // (developers.cloudflare.com/pages/platform/limits), fewer than the rule for each page that postbuild.ts writes.
 // Those rules give a page text/html, which a .html file has without one. The tree also gets the worker
