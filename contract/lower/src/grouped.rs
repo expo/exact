@@ -1002,15 +1002,6 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
     let content = cell::texts(children.iter().filter(|c| !hidden(c)).collect(), false);
     let stack = matches!(content.as_slice(), [Node::Element { tag, children, .. }]
         if tag == "column" && standard_text_lines(children));
-    // A stack of lines in the row (an author's `column` that is not the
-    // subtitle cell) keeps the cell's margins, as a hand-built cell pins its
-    // content to its content view's: the subtitle cell's space above and
-    // below (15 on iOS), as a `column` row has it. On the stack, not the row,
-    // so a taller part beside it (an avatar with its own margins) sets the
-    // height as before; a row whose author wrote its vertical padding has
-    // said the space. Without them its first line touched the card and its
-    // last the separator. Where the row itself is padded (the Mac's), the
-    // stack's share is nothing.
     let lines = !stack
         && !attrs.iter().any(|a| {
             matches!(
@@ -1021,6 +1012,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
     // A label beside a field: the row wraps, so where both do not fit (the
     // accessibility text sizes) the field goes under the label, as in a
     // SwiftUI `Form`, rather than squeezing the label to nothing.
+    let row_padding = cell::row_padding(attrs, children, class, span);
     let field = field_beside_label(children);
     let mut sheet = vec![
         s("display", "flex", span),
@@ -1041,8 +1033,8 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         } else {
             m("min-height", row_minimum, span)
         },
-        m("padding-top", "row-padding-block", span),
-        m("padding-bottom", "row-padding-block", span),
+        attr("padding-top", row_padding.clone(), span),
+        attr("padding-bottom", row_padding, span),
         s("font-size", BODY, span),
         attr("color", tint(ink), span),
         s("text-align", "start", span),
@@ -1050,6 +1042,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
         // value beside it, as a UILabel's does.
         s("overflow-wrap", "break-word", span),
     ];
+    sheet.retain(|a| !matches!(a.value, Expr::None(_)));
     // The standard cell's labels hyphenate (UIListContentConfiguration's
     // text has a hyphenationFactor of 1, iOS 27: "Alice Ander-son"). An
     // author's own content is a custom cell's, whose UILabel's factor is 0,

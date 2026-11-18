@@ -103,6 +103,7 @@ fn a_custom_header_starts_at_the_platform_lists_margins() {
         Some(GroupedMargins {
             card: [0.0, 0.0],
             cell: [20.0, 24.0],
+            width: None,
         }),
     )
     .unwrap();
@@ -141,6 +142,7 @@ fn a_custom_headers_written_inline_padding_is_from_the_cards_edge() {
     let uikit = Some(GroupedMargins {
         card: [16.0, 16.0],
         cell: [20.0, 20.0],
+        width: None,
     });
     let both = " padding-left=16 padding-right=16";
     assert_eq!(
@@ -167,6 +169,7 @@ fn a_custom_headers_written_inline_padding_is_from_the_cards_edge() {
     let uneven = Some(GroupedMargins {
         card: [10.0, 30.0],
         cell: [20.0, 20.0],
+        width: None,
     });
     assert_eq!(
         ends("inset-grouped", both, uneven),
@@ -176,6 +179,7 @@ fn a_custom_headers_written_inline_padding_is_from_the_cards_edge() {
     let plain = Some(GroupedMargins {
         card: [0.0, 0.0],
         cell: [20.0, 20.0],
+        width: None,
     });
     assert_eq!(
         ends("plain", both, plain),

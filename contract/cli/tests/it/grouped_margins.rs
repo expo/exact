@@ -128,6 +128,7 @@ fn custom_rows_follow_the_platforms_cards_and_cell_margins() {
     let duo = GroupedMargins {
         card: [20.0, 0.0],
         cell: [20.0, 20.0],
+        width: None,
     };
     let native = edges(&r, "native", false);
     report(&mut r, Some(duo));
@@ -243,6 +244,7 @@ fn a_plain_lists_rows_follow_its_cells_margins() {
         Some(GroupedMargins {
             card: [0.0, 0.0],
             cell: [20.0, 0.0],
+            width: None,
         }),
     );
     assert_eq!(content(&r, "box", "custom-end"), (20.0, 402.0));
@@ -261,6 +263,7 @@ fn a_margin_that_is_no_length_is_refused() {
         let margins = GroupedMargins {
             card: [bad, 0.0],
             cell: [16.0, 16.0],
+            width: None,
         };
         assert!(r
             .kernel_mut()

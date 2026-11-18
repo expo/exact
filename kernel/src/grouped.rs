@@ -762,6 +762,8 @@ pub struct GroupedMargins {
     pub card: [f32; 2],
     /// The cell's left and right layout margins.
     pub cell: [f32; 2],
+    /// The cell border box width when measured directly by the host.
+    pub width: Option<f32>,
 }
 
 /// The margins of the list `slot` holds the rows of, when it is a section's
@@ -801,6 +803,9 @@ pub(crate) fn apply_card_margins(arena: &NodeArena, slot: u32, s: &mut taffy::st
     if let Some(m) = group_margins(arena, slot) {
         s.margin.left = Lpa::length(m.card[0]);
         s.margin.right = Lpa::length(m.card[1]);
+        if let Some(width) = m.width {
+            s.size.width = taffy::style::Dimension::length(width);
+        }
     }
 }
 

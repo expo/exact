@@ -173,15 +173,19 @@ fn nullable_boxes_keep_padding_unless_their_presence_is_known() {
                 continue;
             }
             let (row, column) = if on_row { (own, "") } else { ("", own) };
-            let mut r = box_app(&format!("row {row}\n  column {column} testId=\"tile\"\n    text \"Title\"\n    text \"Detail\""));
+            let mut r = box_app(&format!("row {row} testId=\"row\"\n  column {column} testId=\"tile\"\n    text \"Title\"\n    text \"Detail\""));
             for custom in [false, true, false] {
                 let root = node(&r, "root");
                 r.kernel_mut()
                     .compute_layout(root, Offer::definite(402.0, 874.0))
                     .unwrap();
                 let k = r.kernel();
+                // The cell's content margins are the row's padding, its subtitle column's none
+                let row = k.node(node(&r, "row")).unwrap();
+                let padding = k.resolved_padding(row.key).unwrap();
                 let tile = k.node(node(&r, "tile")).unwrap();
-                let padding = k.resolved_padding(tile.key).unwrap();
+                let stack = k.resolved_padding(tile.key).unwrap();
+                assert_eq!((stack.1, stack.3), (0.0, 0.0), "{own}, on_row={on_row}");
                 assert_eq!(
                     k.grouped_list(node(&r, "list")).unwrap().sections[0].rows[0].custom,
                     custom,
@@ -209,13 +213,14 @@ fn nullable_boxes_keep_padding_unless_their_presence_is_known() {
 
 #[test]
 fn literal_absent_boxes_keep_standard_subtitle_padding() {
-    let r = box_app("row height=(true ? none : 300)\n  column height=(true ? none : 300) testId=\"tile\"\n    text \"Title\"\n    text \"Detail\"");
+    let r = box_app("row height=(true ? none : 300) testId=\"row\"\n  column height=(true ? none : 300) testId=\"tile\"\n    text \"Title\"\n    text \"Detail\"");
     let k = r.kernel();
     let row = &k.grouped_list(node(&r, "list")).unwrap().sections[0].rows[0];
     assert!(!row.custom);
     assert!(row.subtitle);
+    // The cell's content margins are the row's padding
     let padding = k
-        .resolved_padding(k.node(node(&r, "tile")).unwrap().key)
+        .resolved_padding(k.node(node(&r, "row")).unwrap().key)
         .unwrap();
     assert_eq!((padding.1, padding.3), (15.0, 15.0));
 }
