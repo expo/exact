@@ -355,3 +355,54 @@ fn height_targets_cost() {
         );
     }
 }
+
+/// What a bulk mount costs where a reader exists (D9 "Cost"): one reader in
+/// an owner, then a commit that mounts 1,000 rows each a chain of `DEPTH`
+/// boxes, and the layout after it, against the same mount with no reader;
+/// the median of 21 mounts, with the test build's size counting off. Run it
+/// with `cargo test --release -p exact-kernel --lib mount_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "times; run with --release --ignored --nocapture"]
+fn mount_cost() {
+    use std::time::{Duration, Instant};
+    let median = |mut all: Vec<Duration>| {
+        all.sort();
+        all[all.len() / 2]
+    };
+    for depth in [1u32, 10, 30] {
+        for reader in [false, true] {
+            let times = (0..21).map(|_| {
+                let mut ops = create(3..=4);
+                let pad = match reader {
+                    true => vec![(StyleId::PaddingTop, observed(Edge::Top, None))],
+                    false => vec![],
+                };
+                ops.push(style(4, pad, &[(StyleId::Height, "10")]));
+                ops.extend([children(1, &[2]), children(2, &[3, 4])]);
+                let mut k = owner(390.0, 844.0, ops);
+                k.set_owner_band(2, Some([47.0, 0.0, 0.0, 0.0]), &[])
+                    .unwrap();
+                lay_out(&mut k);
+                k.tree_mut().track_sizes(false);
+                // 1,000 rows under 3, each a chain of `depth` boxes
+                let mut ops = Vec::new();
+                let mut rows = Vec::new();
+                for row in 0..1_000u32 {
+                    let first = 10 + row * depth;
+                    rows.push(first);
+                    ops.extend(create(first..first + depth));
+                    for d in 0..depth - 1 {
+                        ops.push(children(first + d, &[first + d + 1]));
+                    }
+                }
+                ops.push(children(3, &rows));
+                let t = Instant::now();
+                k.apply(0, 2, &ops).unwrap();
+                lay_out(&mut k);
+                t.elapsed()
+            });
+            let t = median(times.collect());
+            println!("mount of 1,000 rows {depth} deep, a reader {reader}: {t:.2?}");
+        }
+    }
+}

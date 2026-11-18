@@ -299,8 +299,10 @@ impl Kernel {
             observations.invalidate();
         }
         let mut moved = std::mem::take(&mut observations.moved);
+        // Walk each moved subtree once, though a mount moves every box in it
+        let mut seen: IdSet<u32> = IdSet::default();
         while let Some(s) = moved.pop() {
-            if self.arena.is_live(s) {
+            if seen.insert(s) && self.arena.is_live(s) {
                 self.arena.observations.readouts.remove(&s);
                 moved.extend_from_slice(self.arena.children(s));
             }
