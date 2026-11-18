@@ -219,6 +219,24 @@ final class GalleryUITests: XCTestCase {
         }
     }
 
+    /// The sidebar floats over the content's column, which UIKit insets by its width: the page's text and
+    /// the range controls start beside it, not under it.
+    func testPageContentStartsBesideTheSidebar() throws {
+        let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
+        app.launch()
+        let sidebar = app.tables["gallery-sidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
+        XCTAssertGreaterThan(app.windows.firstMatch.frame.width, 800)
+        let cell = app.cells["sidebar-panel-css"]
+        for _ in 0..<4 where !cell.isHittable { sidebar.swipeDown() }
+        cell.tap()
+        let intro = app.staticTexts["intro-css"], rangeTitle = app.staticTexts["range-css-title"]
+        XCTAssertTrue(intro.waitForExistence(timeout: 10))
+        try save(["sidebarEnd": sidebar.frame.maxX, "introStart": intro.frame.minX, "rangeStart": rangeTitle.frame.minX], as: "sidebar-inset.json")
+        XCTAssertGreaterThanOrEqual(intro.frame.minX, sidebar.frame.maxX, "The page's text starts beside the sidebar")
+        XCTAssertGreaterThanOrEqual(rangeTitle.frame.minX, sidebar.frame.maxX, "The range controls start beside the sidebar")
+    }
+
     private var output: URL {
         URL(fileURLWithPath: ProcessInfo.processInfo.environment["REACH_OUT"]!)
     }
