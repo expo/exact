@@ -725,8 +725,8 @@ final class GroupedListIOSTests: GroupedListFixture {
         XCTAssertFalse(toggle.isOn)
     }
 
-    /// A carried custom row given a new box outside a batch keeps it, and is
-    /// carried into its cell again on the next turn.
+    /// A carried custom row given a new box outside a batch keeps it, and is carried into its cell again on the next turn;
+    /// a regrid (a new display scale), which draws every box again, carries it again before it returns.
     func testAReplayedBoxReachesACarriedRow() throws {
         let p = presenter { self.model(custom: true) }
         let row = try XCTUnwrap(p.views[21])
@@ -737,6 +737,8 @@ final class GroupedListIOSTests: GroupedListFixture {
         let after = try cell(p, 21)
         XCTAssertEqual(row.frame.height, 80, "the replayed box, not the one saved at the last carry")
         XCTAssertTrue(row.superview === after.contentView, "carried again")
+        p.regridAll()
+        XCTAssertTrue(row.superview === (try cell(p, 21)).contentView, "carried again before the regrid returns")
     }
 
     /// A card-less section (`section background-color="transparent"`): its

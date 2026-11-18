@@ -227,8 +227,9 @@ extension Presenter {
 
     /// Every box drawn again on a new display's grid, parents first, each
     /// from its authored parent (carried rows go home for it, as before a
-    /// batch); a flying view is left to its flight, which lands it. Then
-    /// the flat leaves, and each scroller's end and offset.
+    /// batch, and are carried into their cells again before it returns); a
+    /// flying view is left to its flight, which lands it. Then the flat
+    /// leaves, and each scroller's end and offset.
     func regridAll() {
         groupedLists?.prepare()
         func depth(_ v: UIView) -> Int { var d = 0, s = v.superview; while let x = s { d += 1; s = x.superview }; return d }
@@ -253,6 +254,11 @@ extension Presenter {
             if sv.contentOffset != offset { sv.contentOffset = offset }
         }
         flats.flush()
+        // Carry the rows into their cells again in the same work, as a
+        // batch does as it ends: a frame drawn before the projection's turn
+        // would show the cells without them. Inside a batch, its own sync
+        // carries them.
+        if !applying { groupedLists?.sync(changed: []) }
         requestProjectionSync()
     }
 
