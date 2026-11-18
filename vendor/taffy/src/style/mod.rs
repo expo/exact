@@ -159,6 +159,11 @@ pub trait CoreStyle {
     fn inset_credit(&self) -> u8 {
         0
     }
+    /// EXACT PATCH 81: whether the box is a bar, which its parent places rather than the
+    /// absolute pass of its containing block.
+    fn is_bar(&self) -> bool {
+        false
+    }
 
     // Size properies
     /// Sets the initial size of the item
@@ -887,6 +892,9 @@ impl<S: CheapCloneStr> CoreStyle for Style<S> {
     fn inset_credit(&self) -> u8 {
         self.rare.inset_credit
     }
+    fn is_bar(&self) -> bool {
+        self.rare.bar.is_some()
+    }
     #[inline(always)]
     fn size(&self) -> Size<Dimension> {
         self.size
@@ -973,6 +981,9 @@ impl<T: CoreStyle> CoreStyle for &'_ T {
     }
     fn inset_credit(&self) -> u8 {
         (*self).inset_credit()
+    }
+    fn is_bar(&self) -> bool {
+        (*self).is_bar()
     }
     #[inline(always)]
     fn size(&self) -> Size<Dimension> {

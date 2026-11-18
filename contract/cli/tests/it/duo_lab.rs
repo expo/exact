@@ -129,6 +129,70 @@ fn the_composer_rests_on_the_keyboard_by_its_guide() {
 }
 
 #[test]
+fn the_list_lies_between_its_bars() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/duo-lab/fixtures/bars.contract");
+    let mut r = plan(&std::fs::read_to_string(&path).unwrap());
+    let k = r.kernel_mut();
+    let (root, route) = (id_of(k, "root"), id_of(k, "route"));
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(SIZE.0),
+        height: BlockAxis::Is(SIZE.1),
+    };
+    k.set_host_block(route, Some(block)).unwrap();
+    k.set_owner_band(route, Some(BAND), &[]).unwrap();
+    k.compute_layout(root, Offer::definite(SIZE.0, SIZE.1))
+        .unwrap();
+    let frame = |t: &str| k.node(id_of(k, t)).unwrap().frame;
+    let (filters, list, toolbar) = (frame("filters"), frame("list"), frame("toolbar"));
+    // The filters lie at the top band's inner side and the toolbar ends at the bottom band's,
+    // both across the safe width, and the list lies between them
+    let safe = SIZE.1 - BAND[2];
+    assert_eq!(
+        (filters.x, filters.y, filters.width),
+        (0.0, BAND[0], SIZE.0)
+    );
+    assert_eq!(
+        (toolbar.x, toolbar.y + toolbar.height, toolbar.width),
+        (0.0, safe, SIZE.0)
+    );
+    assert_eq!(list.y, filters.y + filters.height);
+    assert_eq!(list.y + list.height, toolbar.y);
+    assert!(filters.height > 0.0 && toolbar.height > 0.0);
+}
+
+#[test]
+fn a_bar_names_one_edge_then_its_options() {
+    let lowers = |value: &str| {
+        let source = format!(
+            "component A\n  view\n    column\n      column -exact-safe-area-bar=\"{value}\"\n"
+        );
+        contract::compile(&source)
+            .map(|_| ())
+            .map_err(|e| e.message)
+    };
+    for good in [
+        "none",
+        "top",
+        "end edge-effect",
+        "bottom region",
+        "left edge-effect region",
+    ] {
+        assert_eq!(lowers(good), Ok(()), "{good}");
+    }
+    for bad in [
+        "top bottom",
+        "edge-effect",
+        "region top",
+        "bottom region edge-effect",
+    ] {
+        let refused = lowers(bad).unwrap_err();
+        assert!(refused.contains("one edge"), "{bad}: {refused}");
+    }
+}
+
+#[test]
 fn the_safe_area_attributes_lower_to_their_rows() {
     let source = "component A\n  view\n    column\n      column testId=\"a\" -exact-safe-area-ignore=\"keyboard bottom align top\" -exact-additional-safe-area=\"0 0 20 0\" -exact-safe-area-padding=\"auto 0\"\n      column testId=\"b\" -exact-safe-area-ignore=\"align center\"\n";
     let mut r = plan(source);

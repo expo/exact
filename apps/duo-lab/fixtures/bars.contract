@@ -1,0 +1,22 @@
+// Duo Lab's bars (LLP 1123 D12): a route holds a filter bar on its top edge and
+// a toolbar on its bottom one, each `-exact-safe-area-bar`, as an app pins a
+// custom bar to its view's safe-area guide and adds its depth to its content's
+// safe area. Each bar lies inside the safe area at its edge, across the safe
+// width, and the list between them starts below the filter bar and ends above
+// the toolbar. It joins Duo Lab's stack when hosts report their bands (LLP 1123
+// stage 5); until then `contract/cli/tests/it/duo_lab.rs` lays it out with what
+// a host would report.
+routes nav
+  home "/"
+
+component Bars
+  view
+    main testId="root" navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+          row testId="filters" -exact-safe-area-bar="top" padding=8 column-gap=8 background-color="-exact-secondary-fill"
+            text "Filters lie on the top edge"
+          column testId="list" flex=1 min-height=0 overflow-y="scroll" padding=16 row-gap=8
+            text "The list lies between the bars: it starts below the filters and ends above the toolbar."
+          row testId="toolbar" -exact-safe-area-bar="bottom" padding=8 justify-content="space-between" background-color="-exact-secondary-fill"
+            text "The toolbar lies on the bottom edge"

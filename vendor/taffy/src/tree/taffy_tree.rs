@@ -212,6 +212,8 @@ pub struct TaffyTree<NodeContext = ()> {
     grid_origins: SecondaryMap<DefaultKey, Point<f32>>,
     /// EXACT PATCH 80: each outset box's padding as its subtree was last laid out with it.
     outset_paddings: SecondaryMap<DefaultKey, Rect<f32>>,
+    /// EXACT PATCH 81: each bar's slot depth on its parent's last final layout.
+    bar_depths: SecondaryMap<DefaultKey, f32>,
 
     // EXACT PATCH 29: the layouts of marked roots, by what they read.
     memo: Memo,
@@ -400,6 +402,11 @@ where
     /// ordinary box.
     pub(crate) memoizing: bool,
 }
+
+// EXACT PATCH 81 (LLP 1123 D12): bars, a child module so that it reaches the view's fields
+#[cfg(all(feature = "flexbox", feature = "grid", feature = "block_layout"))]
+#[path = "bars.rs"]
+mod bars;
 
 impl<'t, NodeContext, MeasureFunction> TaffyView<'t, NodeContext, MeasureFunction>
 where
@@ -624,11 +631,27 @@ where
                 // answers apart from its algorithm, neither of which a trace holds
                 && tree.taffy.nodes[node_key].style.rare.outset == Rect::ZERO
                 && !tree.taffy.nodes[node_key].style.rare.no_baseline
+                // EXACT PATCH 81: a box with bars places them apart from its algorithm
+                && !tree.taffy.nodes[node_key].style.rare.bars
                 && !tree.memoizing
                 && !tree.taffy.memo.off
                 && matches!(display_mode, Display::Flex | Display::Grid)
             {
                 return tree.memo_layout(node_id, inputs);
+            }
+
+            // EXACT PATCH 81 (LLP 1123 D12): a box some of whose children are bars measures them
+            // before its algorithm and places them after it (`bars.rs`)
+            #[cfg(all(feature = "flexbox", feature = "grid", feature = "block_layout"))]
+            if has_children && display_mode != Display::None && tree.taffy.nodes[node_key].style.rare.bars {
+                let output = tree.barred_layout(node_id, inputs, |tree, inputs| match display_mode {
+                    Display::Block => compute_block_layout(tree, node_id, inputs, block_ctx),
+                    Display::Flex => compute_flexbox_layout(tree, node_id, inputs),
+                    Display::Grid => tree.grid(node_id, inputs),
+                    _ => compute_block_layout(tree, node_id, inputs, None),
+                });
+                tree.taffy.size_counts.computed(node_id, &inputs, &output);
+                return output;
             }
 
             // Dispatch to a layout algorithm based on the node's display style and whether the node has children or not.
@@ -712,6 +735,8 @@ where
             // answers apart from its algorithm, neither of which a trace holds
             && node.style.rare.outset == Rect::ZERO
             && !node.style.rare.no_baseline
+            // EXACT PATCH 81: a box with bars places them apart from its algorithm
+            && !node.style.rare.bars
     }
 
     /// A box's layout computed outside the trace being recorded: the trace
@@ -1433,6 +1458,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
             multicol_bounds: SecondaryMap::new(),
             grid_origins: SecondaryMap::new(),
             outset_paddings: SecondaryMap::new(),
+            bar_depths: SecondaryMap::new(),
             memo: Memo::default(),
         }
     }
@@ -1527,6 +1553,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.multicol_bounds.clear();
         self.grid_origins.clear();
         self.outset_paddings.clear();
+        self.bar_depths.clear();
     }
 
     /// Remove a specific node from the tree and drop it
@@ -1559,6 +1586,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.multicol_bounds.remove(key);
         self.grid_origins.remove(key);
         self.outset_paddings.remove(key);
+        self.bar_depths.remove(key);
         if let Some(index) = self.changed_layout_indices.remove(key) {
             self.changed_layouts.swap_remove(index);
             if let Some(&moved) = self.changed_layouts.get(index) {
@@ -1896,6 +1924,12 @@ impl<NodeContext> TaffyTree<NodeContext> {
     /// own layout's `padding`, the one its parent placed it with, is not.
     pub fn outset_padding(&self, node: NodeId) -> Option<Rect<f32>> {
         self.outset_paddings.get(node.into()).copied()
+    }
+
+    /// EXACT PATCH 81: the depth of the slot a bar was last laid out in, its margin box across
+    /// its edge; `None` for a box that is no bar, or a bar that took no slot.
+    pub fn bar_depth(&self, node: NodeId) -> Option<f32> {
+        self.bar_depths.get(node.into()).copied()
     }
 
     /// EXACT PATCH 34: forget recorded layouts when a calc handle's environment changes.

@@ -236,6 +236,14 @@ pub(super) fn publish(
             || flags.has(NodeFlags::CHILDREN_DIRTY)
             || tree.tables.anon(slot).is_some();
         arena.set_frame(slot, frame);
+        // A bar's slot depth is what it reserves of its parent (LLP 1123 D12), and one that
+        // took no slot reserves none
+        if arena.observations.bars.styled.contains(slot) {
+            match arena.taffy(slot).and_then(|n| tree.bar_depth(n)) {
+                Some(depth) => arena.observations.bars.depths.insert(slot, depth),
+                None => arena.observations.bars.depths.remove(&slot),
+            };
+        }
         arena.consume_layout_flags(slot);
         if moved {
             arena.mark_geometry_changed(slot, root);
@@ -331,6 +339,16 @@ impl LayoutTree {
     /// outset (Taffy patch 80).
     pub(crate) fn outset_padding(&self, node: NodeId) -> Option<taffy::geometry::Rect<f32>> {
         self.taffy.outset_padding(node)
+    }
+
+    /// Whether `node`'s engine style lays bars out (Taffy patch 81, LLP 1123 D12).
+    pub(crate) fn has_bars(&self, node: NodeId) -> bool {
+        self.taffy.style(node).is_ok_and(|s| s.rare.bars)
+    }
+
+    /// The depth of the slot the bar `node` was last laid out in.
+    pub(crate) fn bar_depth(&self, node: NodeId) -> Option<f32> {
+        self.taffy.bar_depth(node)
     }
 
     /// `node`'s used margins on its last layout, top right bottom left, an

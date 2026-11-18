@@ -621,6 +621,7 @@ fn enum_rows_resolve_names_and_others_do_not() {
                 | StyleId::FontVariantLigatures
                 | StyleId::SafeArea
                 | StyleId::SafeAreaIgnore
+                | StyleId::SafeAreaBar
         );
         assert_eq!(
             names.is_empty(),

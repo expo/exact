@@ -1465,6 +1465,9 @@ mod content_root;
 #[path = "keyboard_tests.rs"]
 mod keyboard;
 
+#[path = "bar_tests.rs"]
+mod bar;
+
 #[path = "reservation_tests.rs"]
 mod reservation;
 

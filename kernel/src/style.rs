@@ -1441,7 +1441,8 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     // After the mirror: a table's sides are what they cancel, physically.
     table::apply(arena, slot, &mut s);
     // After the mirror and a table's padding: a reservation is physical
-    crate::kernel::block::reservation::lay_out(arena, slot, &style, &env, &mut s);
+    let reserved = crate::kernel::block::reservation::lay_out(arena, slot, &style, &env, &mut s);
+    crate::kernel::bar::lay_out(arena, slot, reserved, &mut s);
     crate::kernel::ignore::lay_out(arena, slot, &mut s);
     // @ref LLP 1115.002 D8.2 — the containing block a host gave the subtree.
     crate::kernel::apply_block(arena, slot, &mut s);

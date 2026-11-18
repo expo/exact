@@ -50,12 +50,14 @@ impl Changes {
 }
 
 impl LayoutTree {
+    /// `children` in their parent's flow, a bar among them: it is laid out
+    /// absolutely, and its depth is in its parent's size (LLP 1123 D12).
     fn in_flow(&self, children: impl Iterator<Item = NodeId>) -> Vec<NodeId> {
         children
             .filter(|c| {
                 self.taffy
                     .style(*c)
-                    .is_ok_and(|s| s.position != taffy::Position::Absolute)
+                    .is_ok_and(|s| s.position != taffy::Position::Absolute || s.rare.bar.is_some())
             })
             .collect()
     }
@@ -141,8 +143,11 @@ impl LayoutTree {
             source
         } else {
             let mut at = source;
-            while self.taffy.style(at).ok()?.position != taffy::Position::Absolute
-                || self.absolute.repositioned.contains(&at)
+            // A bar is no absolutely positioned box here: its parent's size holds it
+            while {
+                let s = self.taffy.style(at).ok()?;
+                s.position != taffy::Position::Absolute || s.rare.bar.is_some()
+            } || self.absolute.repositioned.contains(&at)
             {
                 at = self.taffy.parent(at)?;
             }

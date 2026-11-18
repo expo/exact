@@ -57,6 +57,11 @@ impl NodeArena {
             true => self.reserving.insert(slot),
             false => self.reserving.remove(slot),
         };
+        // And those whose style makes them a bar (LLP 1123 D12)
+        match style.rare.safe_area_bar != 0 {
+            true => self.observations.bars.styled.insert(slot),
+            false => self.observations.bars.styled.remove(slot),
+        };
         // And those that ignore, forgetting what one that stopped took
         if crate::kernel::ignore::ignores(&style) {
             self.ignoring.insert(slot);

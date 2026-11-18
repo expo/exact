@@ -45,6 +45,8 @@ pub(crate) fn rows(name: &str) -> &'static [StyleId] {
         "view-timeline" => &[ViewTimelineName, ViewTimelineAxis, ViewTimelineInset],
         // @ref LLP 1123 D4 — the regions and edges, then `align`'s alignment.
         "-exact-safe-area-ignore" => &[SafeAreaIgnore, SafeAreaIgnoreAlign],
+        // @ref LLP 1123 D12 — one row, its grammar checked here.
+        "-exact-safe-area-bar" => &[SafeAreaBar],
         _ => unreachable!("known shorthand"),
     }
 }
@@ -65,6 +67,9 @@ pub(crate) fn component(value: &Expr, name: &str, index: usize) -> Result<Expr, 
         Expr::Str(text, span) if name == "font" => out = font(text, *span)?[index].clone(),
         Expr::Str(text, span) if name == "-exact-safe-area-ignore" => {
             out = Expr::Str(safe_area_ignore(text, *span)?[index].clone(), *span);
+        }
+        Expr::Str(text, span) if name == "-exact-safe-area-bar" => {
+            out = Expr::Str(safe_area_bar(text, *span)?, *span);
         }
         Expr::Str(text, span) if name.ends_with("-timeline") => {
             out = Expr::Str(timeline(name, text, *span)?[index].clone(), *span);
@@ -492,6 +497,31 @@ fn safe_area_ignore(text: &str, span: Span) -> Result<[String; 2], LowerError> {
         taken => taken,
     };
     Ok([regions, alignment.to_string()])
+}
+
+/// `-exact-safe-area-bar: none | <edge> [edge-effect] [region]` (LLP 1123
+/// D12), in that order: the row's keywords accept any set, and a bar names
+/// exactly one edge.
+fn safe_area_bar(text: &str, span: Span) -> Result<String, LowerError> {
+    let words: Vec<&str> = text.split_ascii_whitespace().collect();
+    let edge = ["top", "right", "bottom", "left", "start", "end"];
+    let flags = ["edge-effect", "region"];
+    let ordered = |rest: &[&str]| {
+        let at: Vec<usize> = rest
+            .iter()
+            .filter_map(|w| flags.iter().position(|f| f == w))
+            .collect();
+        at.len() == rest.len() && at.windows(2).all(|p| p[0] < p[1])
+    };
+    match words.as_slice() {
+        ["none"] => Ok("none".into()),
+        [e, rest @ ..] if edge.contains(e) && ordered(rest) => Ok(words.join(" ")),
+        _ => err(
+            "lower-attr-value",
+            "`-exact-safe-area-bar` is `none` or one edge (`top`, `right`, `bottom`, `left`, `start` or `end`), then `edge-effect` and `region` if wanted, in that order: e.g. `bottom edge-effect`",
+            span,
+        ),
+    }
 }
 
 fn text_box(name: &str, text: &str, span: Span) -> Result<[String; 2], LowerError> {

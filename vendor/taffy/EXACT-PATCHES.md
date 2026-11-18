@@ -2508,3 +2508,45 @@ axes and a maximum on either axis, a ratio, a hoisted absolute box under
 an extended and under a moved box, a baseline-aligned row, list rows laid
 out by a replay and fresh, a clean box placed anew, and a row's change
 that lays out only its path.
+
+## Patch 81: a parent measures its bars, reserves them and places them — Exact only
+
+LLP 1123 D12. A child whose `RareStyle::bar` names an edge (top 0, right 1,
+bottom 2, left 3) is a bar of its parent, which `RareStyle::bars` marks; the
+kernel lays the bar out `position: absolute`, so the parent's algorithm
+leaves it out of flow, never hoists it to an outer containing block, and the
+absolute pass places nothing for it (`AbsolutePass::place`, through
+`CoreStyle::is_bar`). The parent's layout (`tree/bars.rs`, from
+`placed_layout`) first measures each bar in tree order as the only flex item
+of a slot whose main axis crosses the edge, a bar laid out `display: none`
+taking no slot and keeping no depth. Its extent along the edge is the parent's size there less the
+border, `RareStyle::bar_inset` (what the parent's own reservations add to its
+padding) and the earlier bars on the edges beside it, where that size is
+known; otherwise the bar is measured in the space the parent is offered
+there, less the same. The bar stretches along it within its minimum and
+maximum, which a `content-box` bar's padding and border add to, unless its
+`align-self`, its own size or an `auto` margin along the edge says otherwise;
+its depth is its margin box across the edge. The parent's algorithm then runs
+with each edge's bar depths added to its padding; under `content-box` its
+definite size, minimum and maximum shrink by them, so they keep their border
+box as under `border-box`; and on an axis its parent left unknown, its least
+size is raised to its widest bar's there with the borders, insets and earlier
+side bars. For a final layout each bar is then laid out in its slot,
+stretched to the slot's final extent within its bounds or placed by
+`align-self` (`left` and `right` physical, start and end following the
+parent's direction) or its `auto` margins, held by its margins, at the depth
+it was measured at, which is definite only where the bar authored it. Each
+bar adds its scrollable overflow at its slot to the parent's, and its slot's
+depth is kept for publication (`TaffyTree::bar_depth`). A parent with bars is
+no marked root's recorded algorithm and is laid out outside a trace being
+recorded, as an outset box is.
+
+**Held by** `kernel/src/kernel/bar_tests.rs`: bars on the top and bottom of a
+content root and the content between them, later bars inside earlier ones on
+any edge, `align-self`, margins, a bar's bounds and `auto` margins, a
+content-sized parent as wide as its widest bar, a definite size, a minimum
+and a maximum keeping their border box under a block and a flex parent, a bar
+past its parent's reservation in a flex row, two panes whose bars hold
+wrapping text, a positioned parent's bar in a scroller's content, a bar its
+host replaces, and the boxes that are no bars; `contract/cli/tests/it/duo_lab.rs`'s
+bars screen.

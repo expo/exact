@@ -82,6 +82,7 @@ export const ALLOWED = [
   { file: 'kernel/src/arena/defaults.rs', text: '(StyleId::PositionType, "-exact-header-position")', why: "the neutral route header's platform start: a row it sets, not a read" },
   { file: 'kernel/src/kernel/cover.rs', text: 'StyleId::PositionType,', why: "a row list, not a value: a change of the row moves a box on the bottom edge's chain (style_changed); a popover's prop change does too (top_layer::prop_changed)" },
   { file: 'host/painted/src/scroll_anchor.rs', text: 'StyleId::PositionType,', why: 'a row list, not a value: a change of the row is a layout change' },
+  { file: 'kernel/src/kernel/bar.rs', text: 'mask.has(StyleId::PositionType)', why: "a row's change, not a value: a bar that becomes absolutely positioned stops being one (LLP 1123 D12)" },
   { file: 'host/apple/Sources/ExactKit/LayoutPosition.swift', text: 'let authored = style["position_type"]', why: 'the accessor itself' },
   { file: 'host/apple/Sources/ExactKit/LayoutPosition.swift', text: '.contains(.string("position_type"))', why: 'the accessor itself: whether the author wrote the sticky' },
   { file: 'host/apple/Sources/ExactKit/ScrollAnchoring.swift', text: '"inset", "position_type",', why: 'a key list, not a value: a change of the row is a layout change' },

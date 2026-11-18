@@ -32,6 +32,10 @@ impl LayoutTree {
             if !is_static(&self.taffy, parent) {
                 continue; // Its parent contains it.
             }
+            // A bar is its parent's, which places it in its slot (LLP 1123 D12)
+            if self.taffy.style(node).is_ok_and(|s| s.rare.bar.is_some()) {
+                continue;
+            }
             let mut owner = parent;
             while let Some(above) = self.taffy.parent(owner) {
                 self.hoist_paths.insert(owner);

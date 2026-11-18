@@ -135,6 +135,10 @@ impl AbsolutePass {
     ) -> Rect<f32> {
         let AbsoluteArea { size: area_size, offset: area_offset, clearance } = area.unwrap_or_else(|| self.inner_area());
         let style = tree.get_core_container_style(node);
+        // EXACT PATCH 81: a bar's parent places it in its slot, and adds its overflow there
+        if style.is_bar() {
+            return Rect::ZERO;
+        }
         let Some(mut absolute) = AbsoluteBox::of(&style, area_size, |val, basis| tree.calc(val, basis)) else {
             return Rect::ZERO;
         };

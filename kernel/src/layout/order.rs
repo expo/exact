@@ -27,7 +27,14 @@ pub(super) fn laid_out(
                 .children(parent)
                 .iter()
                 .filter(|&&c| !arena.blocks.holds(c))
-                .filter_map(|&c| Some((arena.style(c).order, handle(c)?))),
+                // `order` moves no bar, which is out of the flow (LLP 1123 D12)
+                .filter_map(|&c| {
+                    let order = match crate::kernel::bar::edge(arena, c) {
+                        Some(_) => 0,
+                        None => arena.style(c).order,
+                    };
+                    Some((order, handle(c)?))
+                }),
         )
         .collect();
     ordered(arena, parent, items)

@@ -23,13 +23,14 @@ pub(super) fn depth([outer, inner]: [f32; 2], at: f32) -> f32 {
 /// padding edge to its observation there plus its reservations, and from
 /// further out where that edge lies in the area; an owner's root from the
 /// allocation's edge, with the band as its observation and its padding
-/// stacked on the keyboard it clears. A box's own reservations are not
-/// among them.
+/// stacked on the keyboard it clears. An ancestor's bars reserve past its
+/// own reservations, each its slot's depth, and a bar observes only the
+/// bars before it (D12). A box's own reservations are not among them.
 pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2]; 4] {
     let from = |open: [bool; 4]| -> [[f32; 2]; 4] {
         std::array::from_fn(|e| [0.0, if open[e] { band[e] } else { 0.0 }])
     };
-    if arena.reserving.is_empty() {
+    if arena.reserving.is_empty() && arena.observations.bars.styled.is_empty() {
         return from(open_edges(arena, slot, space, band));
     }
     let mut reserving = Vec::new();
@@ -39,12 +40,15 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
         .flatten();
     // What each box reserves this round, which `check_reservations` resolved
     let (observations, tolerance) = (&arena.observations, arena.observations.tolerance());
+    let mut via = slot;
     while let Some(s) = above {
         let r =
             (observations.held_reservation(s)).unwrap_or_else(|| reservation::reserved(arena, s));
-        if let Some(r) = r {
-            reserving.push((s, r, open));
+        let bars = super::bar::reserved(arena, s, Some(via));
+        if r.is_some() || bars != [0.0; 4] {
+            reserving.push((s, r.unwrap_or_default(), bars, open));
         }
+        via = s;
         if scroll_view(arena, s) {
             open = scrolled(arena, s, space, band, open);
             if !open.contains(&true) {
@@ -54,7 +58,7 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
     let mut sides = from(open);
-    for (s, r, open) in reserving.into_iter().rev() {
+    for (s, r, bars, open) in reserving.into_iter().rev() {
         let edges = match space.owner == Some(s) {
             true => [0.0; 4],
             false => space.padding_edges(arena, s),
@@ -68,14 +72,28 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
         };
         let cover = std::array::from_fn(|e| if r.padding[e] > 0.0 { cover[e] } else { 0.0 });
         let inside = r.inside_covered(observed, cover);
+        // The slots begin where the engine places them, inside the box's border:
+        // at an owner's root's content root, past what its host clears, and past
+        // another box's own reservations (`bar::lay_out`)
+        let slots = match space.owner == Some(s) {
+            true => {
+                let (clear, border) = (super::block::clearance(arena, s), border(arena, s));
+                std::array::from_fn(|e| clear[e] + border[e])
+            }
+            false => r.inside([0.0; 4]),
+        };
         for e in 0..4 {
-            if open[e] && (r.added[e] != 0.0 || r.padding[e] != 0.0) {
+            if open[e] && (r.added[e] != 0.0 || r.padding[e] != 0.0 || bars[e] != 0.0) {
                 // A padding edge at or past the area's inner side joins it
                 let outer = match edges[e] <= sides[e][1] + tolerance {
                     true => sides[e][0].min(edges[e]),
                     false => edges[e],
                 };
-                sides[e] = [outer, edges[e] + inside[e]];
+                let inner = match bars[e] != 0.0 {
+                    true => inside[e].max(slots[e] + bars[e]),
+                    false => inside[e],
+                };
+                sides[e] = [outer, edges[e] + inner];
             }
         }
     }
@@ -116,12 +134,16 @@ impl Space {
 
     /// [`Self::edges`] for `slot`'s padding edges, inside its border.
     pub(super) fn padding_edges(&self, arena: &NodeArena, slot: u32) -> [f32; 4] {
-        let edges = self.edges(arena, slot);
-        // A published inset's sides are left, top, right, bottom
-        let [left, top, right, bottom] = arena.inset(slot).unwrap_or_default().border;
-        let border = [top, right, bottom, left];
+        let (edges, border) = (self.edges(arena, slot), border(arena, slot));
         std::array::from_fn(|e| edges[e] + border[e])
     }
+}
+
+/// `slot`'s border widths as last published, top right bottom left.
+fn border(arena: &NodeArena, slot: u32) -> [f32; 4] {
+    // A published inset's sides are left, top, right, bottom
+    let [left, top, right, bottom] = arena.inset(slot).unwrap_or_default().border;
+    [top, right, bottom, left]
 }
 
 /// The band `slot` observes: an owner's, in its block's space; or, for a

@@ -284,6 +284,7 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-safe-area", "exact LLP 1123 D4", AttrTarget::Styles(&[StyleId::SafeArea])),
     // What a box takes, and what it adds to the unsafe area inside it (LLP 1123 D4, D11).
     ("-exact-safe-area-ignore", "exact LLP 1123 D4", AttrTarget::Shorthand),
+    ("-exact-safe-area-bar", "exact LLP 1123 D12", AttrTarget::Shorthand),
     ("-exact-additional-safe-area", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::AdditionalSafeAreaTop, StyleId::AdditionalSafeAreaRight, StyleId::AdditionalSafeAreaBottom, StyleId::AdditionalSafeAreaLeft, ])),
     ("-exact-safe-area-padding", "exact LLP 1123 D11", AttrTarget::Styles(&[ StyleId::SafeAreaPaddingTop, StyleId::SafeAreaPaddingRight, StyleId::SafeAreaPaddingBottom, StyleId::SafeAreaPaddingLeft, ])),
     ("--exact-safe-area-inset-top", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetTop])),

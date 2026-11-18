@@ -2492,6 +2492,21 @@
       ],
       "default": "none"
     },
+    "SafeAreaBar": {
+      "_comment": "@ref LLP 1123 D12: `-exact-safe-area-bar`, the keywords of the safe_area_bar row, not a wire enum. none is 0; each other value is one bit in this order (top bit 0, region bit 7). A bar names one edge, then optionally `edge-effect` and `region`; a value naming no edge or more than one makes no bar.",
+      "values": [
+        "none",
+        "top",
+        "right",
+        "bottom",
+        "left",
+        "start",
+        "end",
+        "edge-effect",
+        "region"
+      ],
+      "default": "none"
+    },
     "SafeAreaIgnoreAlign": {
       "_comment": "@ref LLP 1123 D4: the alignments of `-exact-safe-area-ignore`'s `align`, SwiftUI's `Alignment` values, with `leading` and `trailing` resolved against the box's `direction`. none is 0, no `align`.",
       "values": [
@@ -5399,6 +5414,16 @@
       "codec": "enum:SafeAreaIgnoreAlign",
       "layout": true,
       "_comment": "@ref LLP 1123 D4: `-exact-safe-area-ignore`'s `align <alignment>`, SwiftUI's `ignoresSafeArea(_:edges:alignment:)`: a box that touches the area it ignores keeps the size it is laid out at and is placed by the alignment within what its margin box reaches. `none`, the initial value, extends the box instead. Not inherited."
+    },
+    {
+      "bit": 266,
+      "field": "safe_area_bar",
+      "codec": "u8",
+      "keywords": "SafeAreaBar",
+      "rare": true,
+      "layout": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D12: `-exact-safe-area-bar: none | <edge> [edge-effect] [region]`, SwiftUI's `safeAreaInset(edge:)` and `safeAreaBar(edge:)`: an in-flow child that names an edge is a bar of its parent, out of its flow and laid out in a slot on that edge past the parent's unsafe area and the earlier bars, as the slot's only flex item, placed along the edge by `align-self`. The parent lays its in-flow children out clear of it as with that much more padding, counts it toward its intrinsic size along the edge, and its descendants observe it (D9). `start` and `end` resolve against the parent's `direction`. `edge-effect` registers the bar with the scrollers beneath it and `region` places an owner's root's bar on UIKit's bar layout region, both the host's. An owner's authored root, an absolutely positioned or fixed box, and a box with `display: none` or `contents` are no bars. Not inherited."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",

@@ -1200,6 +1200,7 @@ fn sync_children(arena: &NodeArena, layout: &mut dyn LayoutMirror, parent: u32) 
     // Styles that read a box's children.
     arena.alert_children_changed(layout, parent, node);
     crate::segmented::children_changed(arena, layout, parent);
+    crate::kernel::bar::children_changed(arena, layout, parent, node);
     #[cfg(test)]
     count(_entries, 0);
 }
@@ -1446,6 +1447,14 @@ pub(crate) fn style_changed(
         }
         // What a cover takes of the box's parent or covered box (`cover::style_changed`).
         crate::kernel::cover_style_changed(arena, layout, slot, &mask);
+        // A bar's parent places it: one that becomes or stops being a bar restyles it,
+        // and moves in an ordered parent's child list, where `order` moves no bar
+        for parent in crate::kernel::bar::style_changed(arena, layout, slot, &mask)
+            .into_iter()
+            .flatten()
+        {
+            sync_children(arena, layout, parent);
+        }
         receipt.layout_invalidated = true;
     }
     if arena.remeasures(slot, mask) {

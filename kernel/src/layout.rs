@@ -541,11 +541,14 @@ impl LayoutTree {
         if self.taffy.style(node).is_ok_and(|old| *old == style) {
             return;
         }
-        // A changed position changes which box contains which absolute one.
+        // A changed position changes which box contains which absolute one, and so does
+        // a box becoming or stopping being a bar (LLP 1123 D12), which is laid out
+        // `position: absolute` in its parent's slot and no containing block's
+        let placed = |s: &taffy::style::Style| (s.position, s.rare.bar.is_some());
         if self
             .taffy
             .style(node)
-            .map_or(true, |old| old.position != style.position)
+            .map_or(true, |old| placed(old) != placed(&style))
         {
             if style.position == taffy::Position::Absolute {
                 self.absolutes.insert(node);

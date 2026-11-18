@@ -51,6 +51,10 @@ const _: () = assert!(COMPONENTS <= 16);
 /// unavailable.
 pub type Reading = [Option<f32>; 4];
 
+/// What a box that reserves reserved, where its padding edges lay, top right
+/// bottom left, and how deep its bars were.
+type Held = (Option<reservation::Reserved>, [f32; 4], [f32; 4]);
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Observations {
     /// Each owner root's incoming band, top right bottom left in its
@@ -77,9 +81,9 @@ pub(crate) struct Observations {
     tolerance: f32,
     /// The roots of the subtrees moved since the last solve.
     moved: Vec<u32>,
-    /// What each box that reserves reserved and where its edges lay when
-    /// its descendants were last measured (D11).
-    reserving: IdMap<u32, (Option<reservation::Reserved>, [f32; 4])>,
+    /// What each box that reserves held when its descendants were last
+    /// measured (D11, D12).
+    reserving: IdMap<u32, Held>,
     /// What the boxes that ignore take, and what measuring it again needs
     /// (D4).
     pub(super) takings: ignore::Takings,
@@ -89,6 +93,8 @@ pub(crate) struct Observations {
     /// The scrollers that ignore and passed a docked keyboard to their
     /// content when its readers were last measured (D7).
     passing_keyboard: IdSet<u32>,
+    /// The bars (D12): which boxes are styled as one, and their slots' depths.
+    pub(crate) bars: super::bar::Bars,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
     /// The keyboard each owner's host reports, and the policy (D7).
@@ -157,7 +163,7 @@ impl Observations {
     /// What `slot` reserved when its descendants were last measured, if the
     /// solve resolved it (D11).
     pub(super) fn held_reservation(&self, slot: u32) -> Option<Option<reservation::Reserved>> {
-        self.reserving.get(&slot).map(|(r, _)| *r)
+        self.reserving.get(&slot).map(|(r, ..)| *r)
     }
 
     /// What a reset keeps: what the host reported for the session, its band,
@@ -208,6 +214,7 @@ impl Observations {
         self.forget_taken(slot);
         self.passing.remove(&slot);
         self.passing_keyboard.remove(&slot);
+        self.bars.forget(slot);
         self.keyboards.forget(slot);
         self.stopped_reading(slot);
     }
@@ -576,18 +583,28 @@ impl Kernel {
     /// reader.
     fn check_reservations(&mut self) {
         let arena = &self.arena;
-        if arena.reserving.is_empty() && arena.observations.reserving.is_empty() {
+        if arena.reserving.is_empty()
+            && arena.observations.bars.styled.is_empty()
+            && arena.observations.reserving.is_empty()
+        {
             return;
         }
+        // The boxes that reserve, and those whose bars reserve (D12)
+        let barred = super::bar::parents(arena);
+        let reserves = |s: u32| arena.reserving.contains(s) || barred.binary_search(&s).is_ok();
         // A box that stopped reserving moved what its descendants observe
         let held = &arena.observations.reserving;
-        let stopped = held
-            .keys()
-            .copied()
-            .filter(|&s| !arena.reserving.contains(s));
+        let stopped = held.keys().copied().filter(|&s| !reserves(s));
         let mut moved: IdSet<u32> = stopped.collect();
         let mut changed = Vec::new();
-        for s in arena.reserving.iter() {
+        let mut all: Vec<u32> = arena.reserving.iter().collect();
+        all.extend(
+            barred
+                .iter()
+                .copied()
+                .filter(|&s| !arena.reserving.contains(s)),
+        );
+        for s in all {
             let f = arena.frame(s);
             let [left, top, right, bottom] = arena.inset(s).unwrap_or_default().border;
             let edges = [
@@ -596,7 +613,11 @@ impl Kernel {
                 f.y + f.height - bottom,
                 f.x + left,
             ];
-            let now = (reservation::reserved(arena, s), edges);
+            let now = (
+                reservation::reserved(arena, s),
+                edges,
+                super::bar::reserved(arena, s, None),
+            );
             if held.get(&s) != Some(&now) {
                 moved.insert(s);
                 changed.push((s, now));
@@ -605,9 +626,10 @@ impl Kernel {
         if moved.is_empty() {
             return;
         }
-        let reserving = &self.arena.reserving;
         let observations = &mut self.arena.observations;
-        observations.reserving.retain(|s, _| reserving.contains(*s));
+        observations
+            .reserving
+            .retain(|s, _| !moved.contains(s) || changed.iter().any(|(c, _)| c == s));
         observations.reserving.extend(changed);
         self.forget_under(&moved);
     }

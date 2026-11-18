@@ -46,6 +46,16 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
     /// places them, so that an absolutely positioned descendant its containing block holds
     /// outside the box is placed as though it did not move.
     pub shift: Point<f32>,
+    /// EXACT PATCH 81 (LLP 1123 D12): the edge this box is a bar of its parent on, top 0, right
+    /// 1, bottom 2, left 3, or `None`. A bar is laid out `position: absolute`, out of its
+    /// parent's flow, and its parent places it.
+    pub bar: Option<u8>,
+    /// EXACT PATCH 81: whether some child of this box is a bar, which it measures before its
+    /// algorithm lays out the others and places after.
+    pub bars: bool,
+    /// EXACT PATCH 81: how far in from this box's border its bars' slots begin on each edge: the
+    /// part of its padding that its own reservations make.
+    pub bar_inset: Rect<f32>,
     /// Keeps the custom identifier type when grid layout is disabled.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub dummy: core::marker::PhantomData<S>,
@@ -112,6 +122,9 @@ impl<S: CheapCloneStr> RareStyle<S> {
         outset_padding: Rect::zero(),
         no_baseline: false,
         shift: Point::ZERO,
+        bar: None,
+        bars: false,
+        bar_inset: Rect::ZERO,
         dummy: core::marker::PhantomData,
         #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
         calc_owners: crate::sys::Vec::new(),
