@@ -761,7 +761,7 @@ On iOS and macOS, an optional `configuration` lets the person choose in Edit Wid
 entry becomes WidgetKit's
 [`AppIntentConfiguration`](https://developer.apple.com/documentation/widgetkit/appintentconfiguration),
 its [`WidgetConfigurationIntent`](https://developer.apple.com/documentation/appintents/widgetconfigurationintent)
-generated with one enum parameter per row, and the build extracts the extension's
+generated with one parameter per row, and the build extracts the extension's
 App Intents metadata, through which the sheet shows them:
 
 ```json
@@ -770,7 +770,7 @@ App Intents metadata, through which the sheet shows them:
     "values":[{"value":"automatic","title":"Automatic"},{"value":"one","title":"1"},{"value":"three","title":"3"}]}]}
 ```
 
-On Android the same parameters are the widget's settings, one list of choices
+On Android the same enum parameters are the widget's settings, one list of choices
 each: a placed widget starts with the defaults, and the launcher's long-press
 menu opens the settings. A choice there changes that widget's render alone:
 Android keeps one timeline for a kind, and its refresh receives each parameter's
@@ -785,6 +785,7 @@ each label also includes the choices' UTF-8 hex identifiers to distinguish them.
 with watch families may declare at most 64 combinations (the product of its
 parameter value counts); the bake refuses more and asks for fewer values or
 parameters. This Exact bound keeps the watch picker and generated bundle small.
+Entity parameters, below, take no part: only enum values combine and count.
 
 `title` and `description` (defaulting to the title) are the intent's; the sheet itself
 is headed by the widget's own `title` and `description`, as on iOS 27. Each
@@ -808,9 +809,39 @@ The shape has one field per parameter, typed `string` or an `enum` of exactly it
 values; every injecting component names one shape. A configuration that no component
 reads, or an inject without one, fails the bake with an edit.
 
+A parameter of `type: "entity"` offers the app's own content in place of a fixed
+list (LLP 1126; LLP 1133.023 D2):
+
+```json
+"intents": {"entities": {"book": {"title": "Book"}}},
+"widgets": [{"kind": "library", "configuration": {"title": "Your Shelf",
+  "parameters": [{"name": "book", "type": "entity", "title": "Book", "entity": "book"}]}}]
+```
+
+`entity` names a key of `intents.entities`, whose `title` names the type in the
+sheet. The row takes no `values` and no `default`. Its choices are the entries of
+that kind that the app last published with `setContentIndex`
+(`@exact/search-index`): Edit Widget lists each entry's `title`, with its
+`description` beneath, in the app's order, and searches both. No app code runs
+when the sheet opens, so the list is as fresh as the app's last publication.
+Publish again when the content changes, and publish an empty list when the
+person signs out. The entries are in the system's search too, as every
+content-index entry is.
+
+In the shape the field is `option<string>`: `none` until the person chooses, then
+the entry's `id`. The refresh receives the same field (`string | null` in
+TypeScript) and decides what to show for `none` and for an id it does not know.
+Exact keeps a saved id when the published list no longer has it, so a list
+cleared at sign-out does not turn a chosen widget into an unchosen one.
+
+Edit Widget on iOS and macOS offers the entries. watchOS and Android offer none:
+the field is `none` there, and a widget whose parameters are all entities has no
+choices on those hosts.
+
 A configured widget's refresh receives the configuration too, as its second
 argument: a record with one field per parameter, in the order the injected shape
-declares them, each one of that parameter's values. In TypeScript it is
+declares them, each one of that parameter's values or, for an entity parameter,
+the chosen id or `none`. In TypeScript it is
 `nextTrains: ([date, { rows }]) => …`. On iOS, macOS and watchOS the refresh runs
 for each configuration a person has placed, with that placement's values, so it
 can fetch different data for each. The timeline it returns serves that
@@ -824,8 +855,9 @@ identifiers stable across updates; changing a title does not change a choice.
 A removed or renamed parameter is ignored, and a missing or removed value uses
 that parameter's current default. Other valid choices are retained. Reordering
 entries, parameters or values does not reassign a saved choice. The refresh
-receives a saved choice by the same rules. Data-backed options are not supported:
-a person chooses among the values `app.json` declares.
+receives a saved choice by the same rules. Not supported: choices computed when
+Edit Widget opens, entities that are not content-index entries, an image for an
+entry, and a parameter whose choices depend on another's.
 
 `component` and the `props` shape are declared or imported by `app.contract`;
 every component prop must match a field of that shape. `preview` supplies all
@@ -6528,10 +6560,12 @@ mode presentation are stand-ins; archive fidelity needs the real extension.
 | `bun scripts/agent.mjs ios widget next-trains --configuration '{"rows":"one"}' "screenshot target/one.png" state` | A configured widget's refresh and render with that choice; `state` reports the `configuration` and the props its refresh returned |
 
 A configured widget's cells render its defaults, then each other value of each
-parameter (the rest at their defaults) in full colour, light and dark;
+enum parameter (the rest at their defaults) in full colour, light and dark;
 `--configuration <json>` names parameters and values over the defaults, and a name or
-value the configuration does not declare is refused with the ones it does. Each
-cell's refresh receives the values it renders.
+value the configuration does not declare is refused with the ones it does. An
+entity parameter takes any entry's id, as `--configuration '{"book":"<id>"}'`:
+the gallery reads no published list. Each cell's refresh receives the values it
+renders.
 
 An immediate refresh answer supplies its first timeline entry. Pending, empty
 or unavailable data keeps the preview; `state` reports which. The gallery's

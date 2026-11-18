@@ -549,7 +549,7 @@ origin `tool`. Consumer: Shelf's Add Book, Continue Reading, books in
 Spotlight and Log Pages. Unblocks reaching an app's screens and writes
 without opening it. Take: none named; the ruling is its own waiver. Still
 out, each until a consumer asks (LLP 1133.023 §13): further App Intents in
-widgets beyond the fixed enum configuration below; controls and Live Activities; interactive snippets and
+widgets beyond the configuration below; controls and Live Activities; interactive snippets and
 `requestConfirmation`'s snippet content; assistant schemas; `IndexedEntity`
 and Spotlight's semantic index; `NSUserActivity` and Handoff; long-running
 intents; an App Intents extension; a structured `returns` through a face;
@@ -564,8 +564,8 @@ complication recommendations. Each placement's choices reach only its snapshot
 render; refresh and its cache remain shared.
 The Categories consumer unblocks this first stage. Take: none named; Charlie's
 2026-11-12 decision to the maintainers' agent waives the trade for enum-only
-configuration on Apple. Data-backed options and entity queries stay deferred,
-and configuration-dependent refresh until the entry below.
+configuration on Apple. Data-backed options, entity queries and
+configuration-dependent refresh stay deferred until the entries below.
 
 **Expanded (pending Charlie's ruling on the pull request; asked by Nathan, 2026-11-18; LLP 1126):**
 on Apple, a configured widget's refresh receives its placement's choices, and
@@ -574,8 +574,22 @@ Services app's Active Users widget (expo/expo-services-app-ios#156), which
 needs a project and a period per placement; one timeline shared by every
 placement cannot hold each project's data. Take: none named; needs Charlie's
 waiver. Until Charlie rules, this entry is a request and not a ruling. Still
-deferred: data-backed options and entity queries, and per-placement refresh on
-Android, whose refresh receives the defaults (LLP 1126.003 D5).
+deferred: data-backed options and entity queries, until the entry below, and
+per-placement refresh on Android, whose refresh receives the defaults
+(LLP 1126.003 D5).
+
+**Expanded (pending Charlie's ruling on the pull request; asked by Nathan, 2026-11-18; LLP 1126 and LLP 1133.023):**
+on iOS and macOS, a widget parameter of type `entity` offers the content-index
+entries of one kind, as the app last published them with `setContentIndex`, and
+the placement's refresh and render receive the chosen entry's id. Edit Widget
+reads the published list in the extension; no app code runs. Consumer: the
+Expo Services app's Active Users widget (expo/expo-services-app-ios#156), where
+a person chooses one of their projects for each placement; a fixed list in
+`app.json` cannot name a person's projects. Take: none named; needs Charlie's
+waiver. Until Charlie rules, this entry is a request and not a ruling. Still
+deferred: choices computed when Edit Widget opens, entities that are not
+content-index entries, entity images, dependent parameters, and entity choices
+on watchOS and Android.
 
 **Admitted (Charlie, 2026-10-06: "this is pretty great. commit and push this
 and document that TUI is now an officially supported platform for Exact2";
