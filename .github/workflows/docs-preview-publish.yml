@@ -1,0 +1,132 @@
+# Publishes a pull request's docs build (the artifact of a run of docs.yml) to Cloudflare Pages, project
+# exact-docs, at https://pr-<number>.exact-docs.pages.dev. It publishes for an open pull request into main that
+# has the `docs-preview` label, and never to the site itself, which docs.yml publishes.
+#
+# This workflow holds the Cloudflare token, so it runs none of the code it publishes. GitHub runs a
+# workflow_run workflow as the default branch has it, the steps below use main's checkout and main's lockfile,
+# and a build reaches it as files to upload.
+name: docs preview
+
+on:
+  workflow_run:
+    workflows: [docs]
+    types: [completed]
+
+jobs:
+  publish:
+    # Another workflow may take the name `docs`, so the file is named too. A build from a fork is never published.
+    if: >-
+      github.repository == 'expo/exact' && github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.path == '.github/workflows/docs.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: docs
+    # A branch's newer build replaces the publish of its older one. A run this job does not publish gets a
+    # group of its own, so it stops nothing.
+    concurrency:
+      group: >-
+        ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.path == '.github/workflows/docs.yml'
+        && format('docs-preview-{0}', github.event.workflow_run.head_branch) || format('docs-preview-run-{0}', github.run_id) }}
+      cancel-in-progress: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    env:
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # Which pull request a build is for is read from GitHub, never from the build. A branch with more than one
+      # open pull request is refused: a second one, into another branch, builds with that branch's workflow.
+      - name: Find the pull request
+        id: target
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const { owner, repo } = context.repo;
+            const refuse = why => core.notice(`Not published: ${why}.`);
+            const open = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', head: `${owner}:${run.head_branch}` });
+            if (open.length !== 1) return refuse(`${open.length} open pull requests have the branch ${run.head_branch}`);
+            const [pull] = open;
+            if ((run.pull_requests ?? []).some(p => p.number !== pull.number)) return refuse('the build names another pull request');
+            if (pull.head.repo.full_name !== `${owner}/${repo}` || pull.base.ref !== 'main') return refuse('the pull request is not from a branch of this repository into main');
+            if (pull.head.sha !== run.head_sha) return refuse(`${run.head_sha} is no longer the pull request's head`);
+            if (!pull.labels.some(l => l.name === 'docs-preview')) return refuse('the pull request has no docs-preview label');
+            core.setOutput('pull', pull.number);
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.target.outputs.pull
+        with:
+          sparse-checkout: docs/site
+
+      # no-cache: a cache is written by workflows that run other code.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: steps.target.outputs.pull
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+
+      - name: Install wrangler from main's lockfile
+        if: steps.target.outputs.pull
+        working-directory: docs/site
+        run: bun install --frozen-lockfile
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.target.outputs.pull
+        with:
+          name: docs-site
+          path: docs/site/dist.pages
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # --no-bundle: tools/pages.ts has bundled the worker, and a bundler here would read files the build names.
+      - name: Publish
+        if: steps.target.outputs.pull
+        working-directory: docs/site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PULL: ${{ steps.target.outputs.pull }}
+        run: >-
+          bun x --no-install wrangler pages deploy dist.pages --project-name=exact-docs --branch="pr-$PULL"
+          --commit-hash="$HEAD_SHA" --commit-dirty=true --no-bundle
+
+      # The pull request may have closed, lost its label or moved on while this ran, after its cleanup.
+      - name: Check the pull request again
+        id: again
+        if: steps.target.outputs.pull
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PULL: ${{ steps.target.outputs.pull }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: Number(process.env.PULL) });
+            const wanted = pull.state === 'open' && pull.labels.some(l => l.name === 'docs-preview');
+            core.setOutput('wanted', wanted);
+
+      - name: Delete a preview that is no longer wanted
+        if: steps.target.outputs.pull && steps.again.outputs.wanted != 'true'
+        working-directory: docs/site
+        env:
+          CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PULL: ${{ steps.target.outputs.pull }}
+        run: bun tools/prune-cloudflare-deployments.mjs --project=exact-docs --branch="pr-$PULL" --keep=0
+
+      - name: Comment with the preview's address
+        if: steps.again.outputs.wanted == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PULL: ${{ steps.target.outputs.pull }}
+        with:
+          script: |
+            const issue_number = Number(process.env.PULL);
+            const body = `The docs [preview](https://pr-${issue_number}.exact-docs.pages.dev/) is ready.`;
+            const { owner, repo } = context.repo;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.startsWith('The docs [preview]'));
+            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });
