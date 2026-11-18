@@ -1,0 +1,899 @@
+[
+ {
+  "typeName": "ExactWidgets.Entity_73746174696f6e",
+  "mangledTypeName": "12ExactWidgets21Entity_73746174696f6eV",
+  "kind": "struct",
+  "conformances": [
+   "AppIntents.AppEntity",
+   "ExactWidgets.ExactConfigurationEntity",
+   "AppIntents.AppValue",
+   "AppIntents.DisplayRepresentable",
+   "Swift.Identifiable",
+   "AppIntents.PersistentlyIdentifiable",
+   "AppIntents.TypeDisplayRepresentable",
+   "AppIntents._IntentValue",
+   "Swift.Sendable",
+   "AppIntents.InstanceDisplayRepresentable",
+   "Swift.SendableMetatype",
+   "Foundation.CustomLocalizedStringResourceConvertible"
+  ],
+  "allConformances": [
+   {
+    "protocolName": "AppIntents.AppEntity",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "ExactWidgets.ExactConfigurationEntity",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.AppValue",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.DisplayRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.Identifiable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.PersistentlyIdentifiable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.TypeDisplayRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents._IntentValue",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.Sendable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.InstanceDisplayRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.SendableMetatype",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Foundation.CustomLocalizedStringResourceConvertible",
+    "conformanceDefiningModule": "ExactWidgets"
+   }
+  ],
+  "associatedTypeAliases": [
+   {
+    "typeAliasName": "DefaultQuery",
+    "substitutedTypeName": "ExactWidgets.Entity_73746174696f6e_Query",
+    "substitutedMangledTypeName": "12ExactWidgets27Entity_73746174696f6e_QueryV"
+   },
+   {
+    "typeAliasName": "ID",
+    "substitutedTypeName": "Swift.String",
+    "substitutedMangledTypeName": "SS"
+   },
+   {
+    "typeAliasName": "ValueType",
+    "substitutedTypeName": "ExactWidgets.Entity_73746174696f6e",
+    "substitutedMangledTypeName": "12ExactWidgets21Entity_73746174696f6eV"
+   },
+   {
+    "typeAliasName": "UnwrappedType",
+    "substitutedTypeName": "ExactWidgets.Entity_73746174696f6e",
+    "substitutedMangledTypeName": "12ExactWidgets21Entity_73746174696f6eV"
+   },
+   {
+    "typeAliasName": "Specification",
+    "substitutedTypeName": "AppIntents.EmptyResolverSpecification<ExactWidgets.Entity_73746174696f6e>",
+    "substitutedMangledTypeName": "10AppIntents26EmptyResolverSpecificationVy12ExactWidgets21Entity_73746174696f6eVG"
+   }
+  ],
+  "properties": [
+   {
+    "label": "id",
+    "type": "Swift.String",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "false",
+    "valueKind": "Runtime"
+   },
+   {
+    "label": "title",
+    "type": "Swift.String",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "false",
+    "valueKind": "Runtime"
+   },
+   {
+    "label": "subtitle",
+    "type": "Swift.Optional<Swift.String>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "false",
+    "valueKind": "Runtime"
+   },
+   {
+    "label": "typeDisplayRepresentation",
+    "type": "AppIntents.TypeDisplayRepresentation",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "RawLiteral",
+    "value": "Station"
+   },
+   {
+    "label": "defaultQuery",
+    "type": "ExactWidgets.Entity_73746174696f6e_Query",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "InitCall",
+    "value": {
+     "type": "ExactWidgets.Entity_73746174696f6e_Query",
+     "arguments": []
+    }
+   },
+   {
+    "label": "exactKind",
+    "type": "Swift.String",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "RawLiteral",
+    "value": "station"
+   },
+   {
+    "label": "exactTitle",
+    "type": "Swift.String",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "RawLiteral",
+    "value": "Station"
+   },
+   {
+    "label": "displayRepresentation",
+    "type": "AppIntents.DisplayRepresentation",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "InitCall",
+    "value": {
+     "type": "AppIntents.DisplayRepresentation",
+     "arguments": [
+      {
+       "label": "title",
+       "type": "Foundation.LocalizedStringResource",
+       "valueKind": "InterpolatedStringLiteral",
+       "value": {
+        "segments": [
+         {
+          "valueKind": "RawLiteral",
+          "value": ""
+         },
+         {
+          "valueKind": "Runtime"
+         },
+         {
+          "valueKind": "RawLiteral",
+          "value": ""
+         }
+        ]
+       }
+      },
+      {
+       "label": "subtitle",
+       "type": "Swift.Optional<Foundation.LocalizedStringResource>",
+       "valueKind": "MemberFunctionCall",
+       "value": {
+        "baseValue": {
+         "valueKind": "Runtime"
+        },
+        "calls": [
+         {
+          "memberLabel": "map",
+          "arguments": [
+           {
+            "label": "",
+            "type": "(Swift.String) -> Foundation.LocalizedStringResource",
+            "valueKind": "Runtime"
+           }
+          ]
+         }
+        ]
+       }
+      },
+      {
+       "label": "image",
+       "type": "Swift.Optional<AppIntents.DisplayRepresentation.Image>",
+       "valueKind": "NilLiteral"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "typeName": "ExactWidgets.Entity_73746174696f6e_Query",
+  "mangledTypeName": "12ExactWidgets27Entity_73746174696f6e_QueryV",
+  "kind": "struct",
+  "conformances": [
+   "AppIntents.EntityStringQuery",
+   "AppIntents.EntityQuery",
+   "AppIntents.DynamicOptionsProvider",
+   "AppIntents.PersistentlyIdentifiable",
+   "Swift.Sendable",
+   "AppIntents._SupportsAppDependencies",
+   "Swift.SendableMetatype",
+   "Swift.BitwiseCopyable"
+  ],
+  "allConformances": [
+   {
+    "protocolName": "AppIntents.EntityStringQuery",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.EntityQuery",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.DynamicOptionsProvider",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.PersistentlyIdentifiable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.Sendable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents._SupportsAppDependencies",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.SendableMetatype",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.BitwiseCopyable",
+    "conformanceDefiningModule": "ExactWidgets"
+   }
+  ],
+  "associatedTypeAliases": [
+   {
+    "typeAliasName": "Entity",
+    "substitutedTypeName": "ExactWidgets.Entity_73746174696f6e",
+    "substitutedMangledTypeName": "12ExactWidgets21Entity_73746174696f6eV"
+   },
+   {
+    "typeAliasName": "Result",
+    "substitutedTypeName": "Swift.Array<ExactWidgets.Entity_73746174696f6e>",
+    "substitutedMangledTypeName": "Say12ExactWidgets21Entity_73746174696f6eVG"
+   },
+   {
+    "typeAliasName": "Result",
+    "substitutedTypeName": "Swift.Array<ExactWidgets.Entity_73746174696f6e>",
+    "substitutedMangledTypeName": "Say12ExactWidgets21Entity_73746174696f6eVG"
+   },
+   {
+    "typeAliasName": "DefaultValue",
+    "substitutedTypeName": "ExactWidgets.Entity_73746174696f6e",
+    "substitutedMangledTypeName": "12ExactWidgets21Entity_73746174696f6eV"
+   }
+  ],
+  "properties": []
+ },
+ {
+  "typeName": "ExactWidgets.Configure_6e6578742d747261696e73_726f7773",
+  "mangledTypeName": "12ExactWidgets41Configure_6e6578742d747261696e73_726f7773O",
+  "kind": "enum",
+  "conformances": [
+   "Swift.Equatable",
+   "Swift.Hashable",
+   "Swift.RawRepresentable",
+   "AppIntents.AppEnum",
+   "AppIntents.AppValue",
+   "AppIntents.StaticDisplayRepresentable",
+   "AppIntents.PersistentlyIdentifiable",
+   "AppIntents.TypeDisplayRepresentable",
+   "AppIntents._IntentValue",
+   "Swift.Sendable",
+   "AppIntents.CaseDisplayRepresentable",
+   "Swift.SendableMetatype",
+   "Foundation.CustomLocalizedStringResourceConvertible",
+   "Swift.CaseIterable",
+   "Swift.BitwiseCopyable"
+  ],
+  "allConformances": [
+   {
+    "protocolName": "Swift.Equatable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.Hashable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.RawRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.AppEnum",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.AppValue",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.StaticDisplayRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.PersistentlyIdentifiable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.TypeDisplayRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents._IntentValue",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.Sendable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.CaseDisplayRepresentable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.SendableMetatype",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Foundation.CustomLocalizedStringResourceConvertible",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.CaseIterable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.BitwiseCopyable",
+    "conformanceDefiningModule": "ExactWidgets"
+   }
+  ],
+  "associatedTypeAliases": [
+   {
+    "typeAliasName": "RawValue",
+    "substitutedTypeName": "Swift.String",
+    "substitutedMangledTypeName": "SS"
+   },
+   {
+    "typeAliasName": "ValueType",
+    "substitutedTypeName": "ExactWidgets.Configure_6e6578742d747261696e73_726f7773",
+    "substitutedMangledTypeName": "12ExactWidgets41Configure_6e6578742d747261696e73_726f7773O"
+   },
+   {
+    "typeAliasName": "UnwrappedType",
+    "substitutedTypeName": "ExactWidgets.Configure_6e6578742d747261696e73_726f7773",
+    "substitutedMangledTypeName": "12ExactWidgets41Configure_6e6578742d747261696e73_726f7773O"
+   },
+   {
+    "typeAliasName": "Specification",
+    "substitutedTypeName": "some AppIntents.ResolverSpecification",
+    "substitutedMangledTypeName": "10AppIntents0A4EnumPAAE28defaultResolverSpecificationQrvpZQOy12ExactWidgets41Configure_6e6578742d747261696e73_726f7773O_Qo_",
+    "opaqueTypeProtocolRequirements": [
+     "AppIntents.ResolverSpecification"
+    ],
+    "opaqueTypeSameTypeRequirements": []
+   },
+   {
+    "typeAliasName": "AllCases",
+    "substitutedTypeName": "Swift.Array<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+    "substitutedMangledTypeName": "Say12ExactWidgets41Configure_6e6578742d747261696e73_726f7773OG"
+   }
+  ],
+  "properties": [
+   {
+    "label": "exactValue",
+    "type": "Swift.String",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "Runtime"
+   },
+   {
+    "label": "typeDisplayRepresentation",
+    "type": "AppIntents.TypeDisplayRepresentation",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "RawLiteral",
+    "value": "Departures"
+   },
+   {
+    "label": "caseDisplayRepresentations",
+    "type": "Swift.Dictionary<ExactWidgets.Configure_6e6578742d747261696e73_726f7773, AppIntents.DisplayRepresentation>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "Dictionary",
+    "value": [
+     {
+      "key": {
+       "valueKind": "Enum",
+       "value": {
+        "name": "v6f6e65"
+       }
+      },
+      "value": {
+       "valueKind": "RawLiteral",
+       "value": "1"
+      }
+     },
+     {
+      "key": {
+       "valueKind": "Enum",
+       "value": {
+        "name": "v74776f"
+       }
+      },
+      "value": {
+       "valueKind": "RawLiteral",
+       "value": "2"
+      }
+     }
+    ]
+   },
+   {
+    "label": "allCases",
+    "type": "Swift.Array<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "true",
+    "valueKind": "Array",
+    "value": [
+     {
+      "valueKind": "Enum",
+      "value": {
+       "name": "v6f6e65"
+      }
+     },
+     {
+      "valueKind": "Enum",
+      "value": {
+       "name": "v74776f"
+      }
+     }
+    ]
+   },
+   {
+    "label": "rawValue",
+    "type": "Swift.String",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "Runtime"
+   }
+  ],
+  "cases": [
+   {
+    "name": "v6f6e65",
+    "rawValue": "6f6e65"
+   },
+   {
+    "name": "v74776f",
+    "rawValue": "74776f"
+   }
+  ]
+ },
+ {
+  "typeName": "ExactWidgets.Configure_6e6578742d747261696e73",
+  "mangledTypeName": "12ExactWidgets32Configure_6e6578742d747261696e73V",
+  "kind": "struct",
+  "conformances": [
+   "AppIntents.WidgetConfigurationIntent",
+   "ExactWidgets.ExactConfigurationIntent",
+   "AppIntents.AppIntent",
+   "AppIntents.PersistentlyIdentifiable",
+   "AppIntents._SupportsAppDependencies",
+   "Swift.Sendable",
+   "Swift.SendableMetatype"
+  ],
+  "allConformances": [
+   {
+    "protocolName": "AppIntents.WidgetConfigurationIntent",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "ExactWidgets.ExactConfigurationIntent",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.AppIntent",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents.PersistentlyIdentifiable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "AppIntents._SupportsAppDependencies",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.Sendable",
+    "conformanceDefiningModule": "ExactWidgets"
+   },
+   {
+    "protocolName": "Swift.SendableMetatype",
+    "conformanceDefiningModule": "ExactWidgets"
+   }
+  ],
+  "associatedTypeAliases": [
+   {
+    "typeAliasName": "NeverResult",
+    "substitutedTypeName": "Swift.Never",
+    "substitutedMangledTypeName": "s5NeverO"
+   },
+   {
+    "typeAliasName": "PerformResult",
+    "substitutedTypeName": "Swift.Never",
+    "substitutedMangledTypeName": "s5NeverO"
+   },
+   {
+    "typeAliasName": "SummaryContent",
+    "substitutedTypeName": "some AppIntents.ParameterSummary",
+    "substitutedMangledTypeName": "10AppIntents0A6IntentPAAE16parameterSummaryQrvpZQOy12ExactWidgets32Configure_6e6578742d747261696e73V_Qo_",
+    "opaqueTypeProtocolRequirements": [
+     "AppIntents.ParameterSummary"
+    ],
+    "opaqueTypeSameTypeRequirements": []
+   }
+  ],
+  "properties": [
+   {
+    "label": "_parameter_rows",
+    "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "false",
+    "valueKind": "InitCall",
+    "value": {
+     "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>>",
+     "arguments": [
+      {
+       "label": "title",
+       "type": "Foundation.LocalizedStringResource",
+       "valueKind": "RawLiteral",
+       "value": "Departures"
+      },
+      {
+       "label": "description",
+       "type": "Swift.Optional<Foundation.LocalizedStringResource>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "default",
+       "type": "Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+       "valueKind": "Enum",
+       "value": {
+        "name": "v74776f"
+       }
+      },
+      {
+       "label": "requestValueDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "requestDisambiguationDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "inputConnectionBehavior",
+       "type": "AppIntents.InputConnectionBehavior",
+       "valueKind": "Runtime"
+      },
+      {
+       "label": "supportedValues",
+       "type": "Swift.Array<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+       "valueKind": "Runtime"
+      }
+     ]
+    }
+   },
+   {
+    "label": "_parameter_station",
+    "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Entity_73746174696f6e>>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "false",
+    "valueKind": "InitCall",
+    "value": {
+     "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Entity_73746174696f6e>>",
+     "arguments": [
+      {
+       "label": "title",
+       "type": "Foundation.LocalizedStringResource",
+       "valueKind": "RawLiteral",
+       "value": "Station"
+      },
+      {
+       "label": "description",
+       "type": "Swift.Optional<Foundation.LocalizedStringResource>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "default",
+       "type": "Swift.Optional<ExactWidgets.Entity_73746174696f6e>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "requestValueDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "requestDisambiguationDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "inputConnectionBehavior",
+       "type": "AppIntents.InputConnectionBehavior",
+       "valueKind": "Runtime"
+      }
+     ]
+    }
+   },
+   {
+    "label": "title",
+    "type": "Foundation.LocalizedStringResource",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "RawLiteral",
+    "value": "Departures"
+   },
+   {
+    "label": "description",
+    "type": "AppIntents.IntentDescription",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "true",
+    "isComputed": "false",
+    "valueKind": "RawLiteral",
+    "value": "Departures"
+   },
+   {
+    "label": "parameter_rows",
+    "type": "Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "InitCall",
+    "value": {
+     "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>>",
+     "arguments": [
+      {
+       "label": "title",
+       "type": "Foundation.LocalizedStringResource",
+       "valueKind": "RawLiteral",
+       "value": "Departures"
+      },
+      {
+       "label": "description",
+       "type": "Swift.Optional<Foundation.LocalizedStringResource>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "default",
+       "type": "Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+       "valueKind": "Enum",
+       "value": {
+        "name": "v74776f"
+       }
+      },
+      {
+       "label": "requestValueDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "requestDisambiguationDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "inputConnectionBehavior",
+       "type": "AppIntents.InputConnectionBehavior",
+       "valueKind": "Runtime"
+      },
+      {
+       "label": "supportedValues",
+       "type": "Swift.Array<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+       "valueKind": "Runtime"
+      }
+     ]
+    },
+    "propertyWrappers": [
+     {
+      "type": "AppIntents.IntentParameter",
+      "arguments": [
+       {
+        "label": "title",
+        "type": "Foundation.LocalizedStringResource",
+        "valueKind": "RawLiteral",
+        "value": "Departures"
+       },
+       {
+        "label": "default",
+        "type": "Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>",
+        "valueKind": "Enum",
+        "value": {
+         "name": "v74776f"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "label": "$parameter_rows",
+    "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Configure_6e6578742d747261696e73_726f7773>>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "Runtime"
+   },
+   {
+    "label": "parameter_station",
+    "type": "Swift.Optional<ExactWidgets.Entity_73746174696f6e>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "InitCall",
+    "value": {
+     "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Entity_73746174696f6e>>",
+     "arguments": [
+      {
+       "label": "title",
+       "type": "Foundation.LocalizedStringResource",
+       "valueKind": "RawLiteral",
+       "value": "Station"
+      },
+      {
+       "label": "description",
+       "type": "Swift.Optional<Foundation.LocalizedStringResource>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "default",
+       "type": "Swift.Optional<ExactWidgets.Entity_73746174696f6e>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "requestValueDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "requestDisambiguationDialog",
+       "type": "Swift.Optional<AppIntents.IntentDialog>",
+       "valueKind": "NilLiteral"
+      },
+      {
+       "label": "inputConnectionBehavior",
+       "type": "AppIntents.InputConnectionBehavior",
+       "valueKind": "Runtime"
+      }
+     ]
+    },
+    "propertyWrappers": [
+     {
+      "type": "AppIntents.IntentParameter",
+      "arguments": [
+       {
+        "label": "title",
+        "type": "Foundation.LocalizedStringResource",
+        "valueKind": "RawLiteral",
+        "value": "Station"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "label": "$parameter_station",
+    "type": "AppIntents.IntentParameter<Swift.Optional<ExactWidgets.Entity_73746174696f6e>>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "Runtime"
+   },
+   {
+    "label": "exactConfiguration",
+    "type": "Swift.Dictionary<Swift.String, Swift.String>",
+    "mangledTypeName": "n/a - deprecated",
+    "isStatic": "false",
+    "isComputed": "true",
+    "valueKind": "MemberFunctionCall",
+    "value": {
+     "baseValue": {
+      "valueKind": "Dictionary",
+      "value": [
+       {
+        "key": {
+         "valueKind": "RawLiteral",
+         "value": "rows"
+        },
+        "value": {
+         "valueKind": "Runtime"
+        }
+       }
+      ]
+     },
+     "calls": [
+      {
+       "memberLabel": "merging",
+       "arguments": [
+        {
+         "label": "",
+         "type": "Swift.Dictionary<Swift.String, Swift.String>",
+         "valueKind": "MemberFunctionCall",
+         "value": {
+          "baseValue": {
+           "valueKind": "Dictionary",
+           "value": [
+            {
+             "key": {
+              "valueKind": "RawLiteral",
+              "value": "station"
+             },
+             "value": {
+              "valueKind": "Runtime"
+             }
+            }
+           ]
+          },
+          "calls": [
+           {
+            "memberLabel": "compactMapValues",
+            "arguments": [
+             {
+              "label": "",
+              "type": "(Swift.Optional<Swift.String>) throws -> Swift.Optional<Swift.String>",
+              "valueKind": "Runtime"
+             }
+            ]
+           }
+          ]
+         }
+        },
+        {
+         "label": "uniquingKeysWith",
+         "type": "(Swift.String, Swift.String) -> Swift.String",
+         "valueKind": "Runtime"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  ]
+ }
+]

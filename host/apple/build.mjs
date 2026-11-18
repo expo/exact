@@ -39,7 +39,7 @@ import { writeAppleBatchReader } from '../../kernel/build/apple-batch.mjs';
 // its own (AppDrop, a store's resigner). The simulator and phone helpers live
 // in devices.mjs, shared with scripts/agent.mjs, which launches the same bundle.
 // These developer builds explicitly allow unsigned updates. --release, --distribution, --archive (or EXACT_UPDATE_TRUST=production) build a signed-update-only artifact.
-import { platformWidgetEntries, activityEntries, hasEntries, widgetGroup, prepareWidgetCore, sharedWidgetCore, placeCoreFramework, dropLeftoverCore, entryProfiles, alarmActivity } from './widgets.mjs';
+import { platformWidgetEntries, widgetEntityKeys, activityEntries, hasEntries, widgetGroup, prepareWidgetCore, sharedWidgetCore, placeCoreFramework, dropLeftoverCore, entryProfiles, alarmActivity } from './widgets.mjs';
 import { assembleMac, assembleIOS, buildIntents, shortcutKeys, placeMacDylibs } from './bundle.mjs';
 import { EXTENSION_KINDS, assertNotificationServiceGrants, extensionKinds, notificationService, notificationServiceDirectory, notificationServicePlatformRefusal, withoutExtensions } from './extensions.mjs';
 import { buildWatch, watchCompanion, watchProfiles, watchSyncSelected } from './watch.mjs';
@@ -427,7 +427,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
   };
   // An entry of either kind makes the app the group store's writer (`ExactWidgetKinds`, empty with activities
   // alone, is what WidgetContainer.configure reads); the activity keys are ActivityKit's (LLP 1126.001 §1).
-  if (!tv && id === app.id && hasEntries(app)) Object.assign(dict, { ExactAppGroup: widgetGroup(app), ExactAppIdentifier: app.id, ExactWidgetKinds: platformWidgetEntries(app).map(e => e.kind),
+  if (!tv && id === app.id && hasEntries(app)) Object.assign(dict, { ExactAppGroup: widgetGroup(app), ExactAppIdentifier: app.id, ExactWidgetKinds: platformWidgetEntries(app).map(e => e.kind), ...widgetEntityKeys(app),
     ...(activityEntries(app).length ? { NSSupportsLiveActivities: true, ...(activityEntries(app).some(e => e.frequent === true) ? { NSSupportsLiveActivitiesFrequentUpdates: true } : {}) } : {}) });
   Object.assign(dict, transportSecurity(ios, localNetworking(ios, reach), { web: !tv }));
   if (ios.localNetworking) dict.NSLocalNetworkUsageDescription = typeof ios.localNetworking === 'string' ? ios.localNetworking : 'Connects to your dev server on the local network.';

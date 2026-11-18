@@ -34,6 +34,27 @@ test('a configured widget generates an AppIntentConfiguration whose intent names
   assert.match(source, /IntentDescription\("Piggybank \\"plan\\""\)/, 'the description defaults to the title');
 });
 
+test('an entity parameter generates one entity type for its kind and an optional parameter', () => {
+  const book = { name: 'book', type: 'entity', title: 'Favourite', entity: 'book' };
+  const rows = { name: 'rows', type: 'enum', title: 'Rows', values: [{ value: 'one', title: '1' }] };
+  const entries = [{ kind: 'library', families: ['systemSmall'], configuration: { title: 'Shelf', parameters: [book] } },
+    { kind: 'reading', families: ['accessoryRectangular'], configuration: { title: 'Reading', parameters: [rows, book] } }];
+  const entities = { book: { title: 'Book "kind"' } };
+  const source = widgetBundleSource(entries, { entities });
+  assert.equal(source.match(/struct Entity_626f6f6b: AppEntity/g).length, 1, 'two parameters of one kind share its type');
+  assert.ok(source.includes('static var typeDisplayRepresentation: TypeDisplayRepresentation = "Book \\"kind\\""'));
+  assert.ok(source.includes('static let exactTitle = "Book \\"kind\\""'));
+  assert.ok(source.includes('@Parameter(title: "Favourite") var `parameter_book`: Entity_626f6f6b?'), 'no default: nothing is chosen until the person chooses');
+  assert.ok(source.includes('{ ["book": `parameter_book`?.id].compactMapValues { $0 } }'));
+  assert.ok(source.includes('{ ["rows": (`parameter_rows` ?? .v6f6e65).exactValue].merging(["book": `parameter_book`?.id].compactMapValues { $0 }) { $1 } }'));
+  // The watch offers fixed values only: an entry with none left is a static widget there.
+  const watch = widgetBundleSource(entries, { platform: 'watchos', entities });
+  assert.ok(!watch.includes('Entity_') && !watch.includes('parameter_book'));
+  assert.ok(watch.includes('let kind = "library"\n    var body: some WidgetConfiguration {\n        StaticConfiguration('));
+  assert.deepEqual([...watch.matchAll(/description: ("[^"]*")\) \}\(\)/g)].map(m => m[1]), ['"Rows: 1"']);
+  assert.ok(watch.includes('{ ["rows": (`parameter_rows` ?? .v6f6e65).exactValue] }'));
+});
+
 for (const [platform, sdkName, triple, alarm] of [
   ['ios', 'iphonesimulator', 'arm64-apple-ios17.0-simulator', 'ExactAlarms'],
   ['macos', 'macosx', 'arm64-apple-macos14.0', null],
@@ -55,6 +76,10 @@ struct ExactTimelineProvider: TimelineProvider {
     func getTimeline(in context: Context, configuration: Data?, completion: @escaping (Timeline<ExactWidgetEntry>) -> Void) { completion(Timeline(entries: [placeholder(in: context)], policy: .never)) }
 }
 extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } set {} } }
+extension ExactConfigurationEntity {
+    static func exactPublished(matching text: String? = nil) -> [Self] { [] }
+    static func exactChosen(_ ids: [String]) -> [Self] { ids.map { Self(id: $0, title: exactTitle, subtitle: nil) } }
+}
 `);
       const runApple = (cmd, args) => {
         // `swiftc` leaves a `TemporaryDirectory.*` in TMPDIR each run: the children's TMPDIR is this test's directory, removed after.
@@ -65,11 +90,12 @@ extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } se
       const configuration = { title: 'Piggybank "plan"', parameters: [
         { name: 'categories', type: 'enum', title: 'Categories', default: 'two', values: [{ value: 'one', title: '1' }, { value: 'two', title: '2' }] },
         { name: 'detail', type: 'enum', title: 'Detail', values: [{ value: '\u00e9', title: 'Composed' }, { value: 'e\u0301', title: 'Decomposed' }] },
+        { name: 'book', type: 'entity', title: 'Book', entity: 'book' },
       ] };
       const families = platform === 'watchos' ? ['accessoryRectangular'] : ['systemSmall'];
       const entries = [{ kind: 'add', families }, ...['plan-card', 'plan_card'].map(kind => ({ kind, families, configuration }))];
       const file = resolve(dir, 'WidgetBundle.swift'), values = resolve(dir, 'values.swiftconstvalues');
-      writeFileSync(file, widgetBundleSource(entries, { platform, alarmMember: alarm ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '' }));
+      writeFileSync(file, widgetBundleSource(entries, { platform, entities: { book: { title: 'Book' } }, alarmMember: alarm ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '' }));
       const compilation = widgetCompilation({ entries, platform, activities: false, alarm, source: file, values, directory: dir });
       assert.equal(compilation.args.filter(a => a === '-module-name').length, 1);
       assert.equal(compilation.moduleName, alarm ?? 'ExactWidgets');
@@ -83,6 +109,11 @@ extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } se
       const actions = JSON.parse(readFileSync(resolve(metadata, 'extract.actionsdata'), 'utf8'));
       assert.ok(JSON.stringify(actions).includes('Configure_706c616e2d63617264'), `${platform}: configuration metadata missing`);
       for (const parameter of ['categories', 'detail']) assert.ok(JSON.stringify(actions).includes(parameter), `${platform}: parameter metadata missing`);
+      // Edit Widget lists an entity parameter's choices through its type's query; the watch has no such parameter.
+      const offered = platform !== 'watchos';
+      assert.deepEqual(Object.keys(actions.entities), offered ? ['Entity_626f6f6b'] : []);
+      assert.deepEqual(Object.keys(actions.queries), offered ? ['Entity_626f6f6b_Query'] : []);
+      assert.equal(actions.actions.Configure_706c616e2d63617264.parameters.some(p => p.name === 'parameter_book' && p.isOptional), offered);
       if (platform === 'macos') {
         writeFileSync(file, readFileSync(file, 'utf8').replace('@main struct ExactWidgets', 'struct ExactWidgets'));
         const checks = resolve(dir, 'RoundTrip.swift');
@@ -95,6 +126,9 @@ extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } se
           return `intent.parameter_detail = ${enumeration}(rawValue: ${enumeration}.v${bytes.toString('hex')}.rawValue)!
         precondition(Array(intent.exactConfiguration["detail"]!.utf8) == [${[...bytes].join(', ')}])`;
         }).join('\n        ')}
+        precondition(intent.exactConfiguration["book"] == nil)
+        intent.parameter_book = Entity_626f6f6b(id: "b1", title: "Piranesi", subtitle: nil)
+        precondition(intent.exactConfiguration["book"] == "b1")
     }
 }`);
         const executable = resolve(dir, 'RoundTrip');

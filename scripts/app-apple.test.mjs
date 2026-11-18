@@ -906,7 +906,7 @@ test.skipIf(!packagingTools)('simulator App Clips embed their own entitlements a
 
 test('widgets share the owner Keychain groups and leave the host sample outside the group', async () => {
   const {entitlements, infoPlist} = await import('../host/apple/build.mjs');
-  const app = {id:'com.exact.test',displayName:'Test',manifest:{widgets:[{kind:'next-trains',families:['systemSmall']}],host:{ios:{}}}};
+  const app = {id:'com.exact.test',displayName:'Test',manifest:{widgets:[{kind:'next-trains',families:['systemSmall'],configuration:{title:'Trains',parameters:[{name:'station',title:'Station',type:'entity',entity:'station'}]}}],host:{ios:{}}}};
   for (const target of [app, {...app,id:app.id+'.widgets',widgetAppId:app.id}]) {
     const ent = entitlements(target,null,true,null,{simulator:true});
     assert.match(ent, /<key>keychain-access-groups<\/key><array><string>SIMULATORX.com.exact.test<\/string><string>com.exact.test<\/string><\/array>/);
@@ -916,7 +916,7 @@ test('widgets share the owner Keychain groups and leave the host sample outside 
   assert.doesNotMatch(host, /application-groups/);
   assert.match(host, /SIMULATORX.com.exact.test.host/);
   assert.doesNotMatch(infoPlist(app,false,{id:app.id+'.host',executable:'ExactHostIOS'}), /ExactAppGroup|ExactAppIdentifier|ExactWidgetKinds/);
-  assert.match(infoPlist(app,false,{executable:'Test'}), /ExactAppGroup/);
+  assert.match(infoPlist(app,false,{executable:'Test'}), /ExactAppGroup[^]*<key>ExactWidgetEntities<\/key><array><string>station<\/string><\/array>/, 'the app publishes the kinds its widgets offer');
   assert.doesNotMatch(infoPlist(app,false,{executable:'Test'}), /NSSupportsLiveActivities/);
   assert.doesNotMatch(entitlements(app,null,true,null,{simulator:true}), /aps-environment/);
 });

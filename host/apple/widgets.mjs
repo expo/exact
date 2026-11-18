@@ -23,6 +23,18 @@ export function platformWidgetEntries(app, platform = 'ios') {
   });
 }
 export const widgetEntries = app => app.manifest.widgets ?? [];
+/** The rows a platform's widget offers. A watch face has no parameter form, and the watch has no list the app
+ * published, so an entity parameter stays unchosen there (LLP 1126 D10). */
+const offeredParameters = (entry, platform) => (entry.configuration?.parameters ?? []).filter(p => p.type !== 'entity' || platform !== 'watchos');
+/** Whether any entry has an intent on the platform: its extension then carries App Intents metadata. */
+const hasIntents = (entries, platform) => entries.some(entry => offeredParameters(entry, platform).length);
+/** The content-index kinds the platform's widgets offer as choices. */
+const widgetEntityKinds = (entries, platform) => [...new Set(entries.flatMap(entry => offeredParameters(entry, platform)).filter(p => p.type === 'entity').map(p => p.entity))].sort();
+/** The app's Info.plist key that names those kinds: `ExactContentIndex` publishes their entries for the extension. */
+export const widgetEntityKeys = (app, platform = 'ios') => {
+  const kinds = widgetEntityKinds(platformWidgetEntries(app, platform), platform);
+  return kinds.length ? { ExactWidgetEntities: kinds } : {};
+};
 export const activityEntries = app => app.manifest.live_activities ?? [];
 /** Whether the app has an entry of either kind: what the extension, the shared framework, the App Group and the
  * Keychain group are gated on (LLP 1126.001 WP13). */
@@ -90,7 +102,7 @@ export function macWidgetSigning(app, identity, { distribution = false, store = 
 /** Shared widget metadata on the owning app; signing supplies the group's and Keychain's identities. */
 export function widgetAppKeys(app, platform, { group, keychain, generation }) {
   return { ExactAppGroup: group, ExactAppIdentifier: app.id,
-    ExactWidgetKinds: platformWidgetEntries(app, platform).map(entry => entry.kind),
+    ExactWidgetKinds: platformWidgetEntries(app, platform).map(entry => entry.kind), ...widgetEntityKeys(app, platform),
     ExactWidgetTypeScript: existsSync(resolve(app.dir, 'app.ts')), ExactWidgetGeneration: generation,
     ...(platform === 'macos' ? { ExactWidgetRequiresSecrets: platformWidgetEntries(app, 'macos').filter(entry => entry.requiresSecrets).map(entry => entry.kind) } : {}),
     ...(keychain ? { ExactKeychainAccessGroup: keychain } : {}) };
@@ -321,10 +333,12 @@ export function widgetReload({ directory, triple, sdk, device, platform = 'ios',
   return binary;
 }
 /** The extension's generated Swift: one `Widget` per entry, static or, with a `configuration`, an
- * `AppIntentConfiguration` whose intent has one `AppEnum` parameter per row (`widget/Configuration.swift`'s
- * `ExactIntentTimelineProvider` gives its values to the refresh and each entry). Labels and values are Swift string literals:
+ * `AppIntentConfiguration` whose intent has one parameter per row (`widget/Configuration.swift`'s
+ * `ExactIntentTimelineProvider` gives its values to the refresh and each entry): an `AppEnum` for fixed values, or an
+ * optional `AppEntity` of the row's content-index kind, one type per kind, whose query reads the list the app published.
+ * `entities` is the manifest's `intents.entities`, for each kind's title. Labels and values are Swift string literals:
  * the manifest admits no control characters in them, and JSON's escapes are Swift's for the rest. */
-export function widgetBundleSource(entries, { platform = 'ios', activities = false, alarmMember = '' } = {}) {
+export function widgetBundleSource(entries, { platform = 'ios', activities = false, alarmMember = '', entities = {} } = {}) {
   const mac = platform === 'macos', literal = JSON.stringify;
   const names = entries.map((_, i) => `Entry${i}`);
   const human = kind => kind.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -332,8 +346,26 @@ export function widgetBundleSource(entries, { platform = 'ios', activities = fal
   // LLP 1126: these identifiers survive reordering and distinguish punctuation. UTF-8 hex is injective.
   const identifier = text => Buffer.from(text, 'utf8').toString('hex');
   const intentName = entry => `Configure_${identifier(entry.kind)}`;
-  const intent = (configuration, name) => {
-    const parameters = configuration.parameters;
+  const entityName = kind => `Entity_${identifier(kind)}`;
+  // One binding to a declaration: Xcode's metadata pass reads no other form.
+  const entityTypes = widgetEntityKinds(entries, platform).map(kind => `struct ${entityName(kind)}: AppEntity, ExactConfigurationEntity {
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = ${literal(entities[kind].title)}
+    static var defaultQuery = ${entityName(kind)}_Query()
+    static let exactKind = ${literal(kind)}
+    static let exactTitle = ${literal(entities[kind].title)}
+    let id: String
+    let title: String
+    let subtitle: String?
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\\(title)", subtitle: subtitle.map { "\\($0)" }) }
+}
+struct ${entityName(kind)}_Query: EntityStringQuery {
+    func entities(for identifiers: [String]) async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactChosen(identifiers) }
+    func entities(matching string: String) async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactPublished(matching: string) }
+    func suggestedEntities() async throws -> [${entityName(kind)}] { ${entityName(kind)}.exactPublished() }
+}
+`).join('');
+  const intent = (configuration, name, offered) => {
+    const parameters = offered.filter(p => p.type !== 'entity'), entityRows = offered.filter(p => p.type === 'entity');
     const enums = parameters.map(p => `enum ${name}_${identifier(p.name)}: String, AppEnum {
     ${p.values.map(v => `case v${identifier(v.value)} = ${literal(identifier(v.value))}`).join('; ')}
     var exactValue: String { switch self { ${p.values.map(v => `case .v${identifier(v.value)}: ${literal(v.value)}`).join('; ')} } }
@@ -356,19 +388,25 @@ export function widgetBundleSource(entries, { platform = 'ios', activities = fal
       const label = labels[i] + (repeated ? ` [${row.map(({ v }) => identifier(v.value)).join('-')}]` : '');
       return `{ let intent = Self(); ${row.map(({ p, v }) => `intent.\`parameter_${p.name}\` = .v${identifier(v.value)}`).join('; ')}; return AppIntentRecommendation(intent: intent, description: ${literal(label)}) }()`;
     });
+    const fixed = `[${parameters.map(p => `${literal(p.name)}: (\`parameter_${p.name}\` ?? .${fallback(p)}).exactValue`).join(', ')}]`;
+    // An entity nobody chose is left out, so the refresh and the render read `none`.
+    const ids = `[${entityRows.map(p => `${literal(p.name)}: \`parameter_${p.name}\`?.id`).join(', ')}].compactMapValues { $0 }`;
+    const chosen = !entityRows.length ? fixed : !parameters.length ? ids : `${fixed}.merging(${ids}) { $1 }`;
     return `${enums.join('\n')}
 struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
     static var title: LocalizedStringResource = ${literal(configuration.title)}
     static var description = IntentDescription(${literal(configuration.description ?? configuration.title)})
-    ${parameters.map(p => `@Parameter(title: ${literal(p.title)}, default: .${fallback(p)}) var \`parameter_${p.name}\`: ${name}_${identifier(p.name)}?`).join('\n    ')}
+    ${offered.map(p => p.type === 'entity'
+      ? `@Parameter(title: ${literal(p.title)}) var \`parameter_${p.name}\`: ${entityName(p.entity)}?`
+      : `@Parameter(title: ${literal(p.title)}, default: .${fallback(p)}) var \`parameter_${p.name}\`: ${name}_${identifier(p.name)}?`).join('\n    ')}
     ${platform === 'watchos' ? `static var exactRecommendations: [AppIntentRecommendation<Self>] { [\n        ${recommendations.join(',\n        ')}\n    ] }` : ''}
-    var exactConfiguration: [String: String] { [${parameters.map(p => `${literal(p.name)}: (\`parameter_${p.name}\` ?? .${fallback(p)}).exactValue`).join(', ')}] }
+    var exactConfiguration: [String: String] { ${chosen} }
 }
 `;
   };
   const generated = entries.map((entry, i) => {
-    const configured = entry.configuration && intentName(entry);
-    return `${configured ? intent(entry.configuration, configured) : ''}struct ${names[i]}: Widget {
+    const offered = offeredParameters(entry, platform), configured = offered.length > 0 && intentName(entry);
+    return `${configured ? intent(entry.configuration, configured, offered) : ''}struct ${names[i]}: Widget {
     let kind = ${literal(entry.kind)}
     var body: some WidgetConfiguration {
         ${configured
@@ -382,12 +420,12 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
 }`;
   }).join('\n');
   if (activities) names.push('ExactActivities');
-  return `import AppIntents\nimport SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${generated}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${names.map(n => `${n}()`).join('; ')}${alarmMember} } }\n`;
+  return `import AppIntents\nimport SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${entityTypes}${generated}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${names.map(n => `${n}()`).join('; ')}${alarmMember} } }\n`;
 }
 
 /** One module name for compilation and metadata, including AlarmKit's shared attributes. */
 export function widgetCompilation({ entries, platform, activities, alarm, source, values, directory }) {
-  const configured = entries.some(entry => entry.configuration);
+  const configured = hasIntents(entries, platform);
   const moduleName = platform === 'ios' && alarm ? alarm : 'ExactWidgets';
   const sources = [resolve(pkg, 'widget/Timeline.swift'), resolve(pkg, 'widget/Configuration.swift'),
     resolve(pkg, 'widget/WidgetTimelineWaiters.swift'), ...(activities ? [resolve(pkg, 'widget/Activity.swift')] : []),
@@ -435,7 +473,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const source = resolve(directory, 'WidgetBundle.swift');
   // An alarm's countdown beside them, from iOS 26 (LLP 1133.030 D8 item 2).
   const alarmMember = alarm && platform === 'ios' ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '';
-  writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember }));
+  writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember, entities: app.manifest.intents?.entities }));
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
@@ -443,7 +481,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).
-  const configured = entries.some(entry => entry.configuration);
+  const configured = hasIntents(entries, platform);
   const intents = resolve(directory, 'widget-intents'), values = resolve(intents, 'ExactWidgets.swiftconstvalues');
   if (configured) { rmSync(intents, { recursive: true, force: true }); mkdirSync(intents, { recursive: true }); }
   const compilation = widgetCompilation({ entries, platform, activities, alarm: alarmMember ? alarm : null, source, values, directory: intents });

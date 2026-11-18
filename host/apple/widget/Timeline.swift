@@ -208,6 +208,20 @@ func footprint() -> UInt64 {
     return status == KERN_SUCCESS ? max(info.phys_footprint, UInt64(max(0, info.ledger_phys_footprint_peak))) : 0
 }
 #endif
+// An entity parameter's choices are the entries the app published to the App Group
+// (LLP 1126 D2): Edit Widget runs these in the extension, where no session boots.
+extension ExactConfigurationEntity {
+    private init(_ entry: ContentIndexEntries.Entry) {
+        self.init(id: entry.id, title: entry.title, subtitle: entry.description)
+    }
+    static func exactPublished(matching text: String? = nil) -> [Self] {
+        ContentIndexEntries.published(kind: exactKind, matching: text).map(Self.init)
+    }
+    static func exactChosen(_ ids: [String]) -> [Self] {
+        ContentIndexEntries.chosen(kind: exactKind, ids: ids, title: exactTitle).map(Self.init)
+    }
+}
+
 // SwiftUI has no public gamut environment key. The configuration seeds this
 // from UIKit traits or the Mac screen; the archived view carries it.
 private struct WidgetDisplayGamut: EnvironmentKey { static let defaultValue = "srgb" }

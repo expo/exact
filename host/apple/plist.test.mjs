@@ -71,7 +71,7 @@ test('metadata refusals reserve specific advice for proven grants', () => {
     ['macos', 'entitlements', 'com.apple.developer.team-identifier'],
     ['ios', 'entitlements', 'keychain-access-groups'],
     ...['ios', 'macos'].map(p => [p, 'entitlements', 'com.apple.security.application-groups']),
-    ...['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup'].map(k => ['ios', 'infoPlist', k]),
+    ...['ExactAppGroup', 'ExactAppIdentifier', 'ExactWidgetKinds', 'ExactWidgetEntities', 'ExactWidgetTypeScript', 'ExactWidgetGeneration', 'ExactKeychainAccessGroup'].map(k => ['ios', 'infoPlist', k]),
     ...['allow-jit', 'allow-unsigned-executable-memory', 'disable-library-validation'].map(k => ['macos', 'entitlements', `com.apple.security.cs.${k}`]),
     ['ios', 'infoPlist', 'ExactCapturesInBackground'],
     ['ios', 'infoPlist', 'UIBackgroundModes'],
