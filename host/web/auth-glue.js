@@ -83,7 +83,8 @@ export function arm(op, env) {
   const available = waiting && !waiting.claimed && !waiting.window.closed ? waiting : null;
   const reserved = [...(globalThis.exact?.authReservations?.values() ?? [])].some(entry => !entry.window.closed);
   const activated = navigator.userActivation ? navigator.userActivation.isActive : true;
-  const fixture = env.agent ? new URLSearchParams(location.search ?? '').get('authFixture') : null;
+  // Read the drive's auth fixture from its launch: the query of the route the page is at is the app's (LLP 1146 D4)
+  const fixture = env.agent ? new URL(globalThis.performance?.getEntriesByType?.('navigation')[0]?.name ?? location.href).searchParams.get('authFixture') : null;
   const reply = env.call({ op: 'arm', ticket: op.ticket, agent: env.agent, origin: location.origin,
     popup: activated || !!available || reserved, ...(fixture ? { fixture } : {}) });
   if (reply.error) { env.log(`auth ${op.ticket}: ${reply.error}`); return; }

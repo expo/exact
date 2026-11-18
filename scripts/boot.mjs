@@ -22,6 +22,7 @@ const MODULES = {
     'host/web/engagement.js',
   ],
   'host/web/navigation.js': [
+    'host/web/navigation/agent-parameters.js',
     'host/web/navigation/assets.js',
     'host/web/navigation/controls.js',
     'host/web/navigation/environment.js',

@@ -41,13 +41,13 @@ const publish = () => {
 let Dev = null;
 // Asked again until it is so: the page names its plan once it has started.
 const dev = () => Dev ||= globalThis.exact?.plan != null;
-// `EXACT_HATCHES=off`, on the web `?hatches=off` (§2.6): a development page
-// connects no hatch and says so once; the module's views and calls work. A
-// production page does not read the name.
+// `EXACT_HATCHES=off`, on the web `?hatches=off` at the page's launch (§2.6):
+// a development page connects no hatch and says so once; the module's views
+// and calls work. A production page does not read the name.
 let Off = null;
 const off = () => {
   if (Off == null && dev()) {
-    Off = typeof location !== "undefined" && new URLSearchParams(location.search).get("hatches") === "off";
+    Off = typeof location !== "undefined" && new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href).searchParams.get("hatches") === "off";
     if (Off) say("hatches: off (?hatches=off); no hatch is connected or called");
   }
   return Off === true;

@@ -1,5 +1,6 @@
 import { viewChildren, unwrapListItem, viewParent } from "./lists.js";
 import { fold, launched, onFold, launchLocation, launchVisits } from "./environment.js";
+import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
 import { sheetGone, sheetsLeft, stackSheets } from "./sheet-stack.js";
@@ -445,18 +446,6 @@ export function routeFlags(root) {
 const routesOf = (nav) => stacksOf(nav).find((routes) => routes.some((r) => r.getAttribute("navigationKey") === nav.getAttribute("navigationKey"))) ?? [];
 const selectedRoute = (nav) => routesOf(nav).find((r) => r.getAttribute("navigationKey") === nav.getAttribute("navigationKey"));
 const browserIndex = () => globalThis.navigation?.currentEntry?.index ?? null;
-// Agent launch facts belong to the carrier, not the router's typed URL. Keep
-// them on every History entry so a browser reload retains its agent adapter.
-const agentParameters = [
-  "agent",
-  "seed",
-  "locale",
-  "formatLocale",
-  "timeZone",
-  "epoch",
-  "storage",
-  "failFetch"
-];
 export function historyURL(path) {
   // (exported for its test) the document's URL with the route's path, query and fragment: History refuses a URL whose userinfo differs (HTML, "can have its URL rewritten")
   // "/." keeps a leading "//" a path, as the router has it (route/src/location.rs): the URL parser drops the dot segment, where alone it would read "//b" as a host
@@ -464,10 +453,14 @@ export function historyURL(path) {
   url.pathname = route.pathname;
   url.search = route.search;
   url.hash = route.hash;
+  // Carry exactly the drive's launch parameters: a listed name the launch lacks is the app's, which the launch route
+  // leaves out (`launchLocation`) and a reload would read as the drive's
   if (AGENT_ADMITTED && ["", "1"].includes(facts?.get("agent"))) {
     for (const key of agentParameters) {
       if (facts.has(key)) {
         url.searchParams.set(key, facts.get(key));
+      } else {
+        url.searchParams.delete(key);
       }
     }
   }
@@ -1418,4 +1411,4 @@ export const navigation = {
     },
   }),
 };
-export { queue, sheet, commit, root, log, settled, agentParameters, pop, last };
+export { queue, sheet, commit, root, log, settled, pop, last };

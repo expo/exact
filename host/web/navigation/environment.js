@@ -1,5 +1,5 @@
 import { beneathApp } from "./type.js";
-import { agentParameters } from "./routes.js";
+import { agentParameters } from "./agent-parameters.js";
 const AGENT_ADMITTED = true; // false in a release, as the release gate writes it (agent-gate.mjs, LLP 1069.007 D2)
 // Read safe-area insets from probe padding and keyboard height from the visual viewport
 let probe;

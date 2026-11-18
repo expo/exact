@@ -119,8 +119,8 @@ function summary(s) {
   return Object.assign(out, { callback: unsafeCallback(parse(s.callback)) ? "<redacted callback>" : s.callback, state: s.state, logout: s.logout, ephemeral: s.ephemeral });
 }
 
-/** The auth fixture the drive declared (`?authFixture=`, LLP 1146 D4), only under the agent. */
-const fixtureOrigin = () => { const o = clock.agent && typeof location === "object" ? new URLSearchParams(location.search).get("authFixture") : null; return o && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(o) ? o : null; };
+/** The auth fixture the drive launched with (`?authFixture=`, LLP 1146 D4), only under the agent. */
+const fixtureOrigin = () => { const o = clock.agent && typeof location === "object" ? new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href).searchParams.get("authFixture") : null; return o && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(o) ? o : null; };
 
 // ---------------------------------------------------------------- sessions
 /** Live sessions: { ticket, target, session, done(status, body), held }. */

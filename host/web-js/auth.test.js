@@ -14,7 +14,7 @@ mock.module("./auth-glue.js", () => {
 const { install, holds, answer } = await import("./auth.js");
 
 test("authorization URL userinfo is refused without disclosure", async () => {
-  globalThis.location = { origin: "https://app.example" };
+  globalThis.location = new URL("https://app.example/");
   clock.agent = true;
   const grants = "auth.session https://*.example.com\nauth.callback https://app.example/.exact/auth/callback";
   install(grants, () => "login");
@@ -31,7 +31,7 @@ test("authorization URL userinfo is refused without disclosure", async () => {
 });
 
 test("callback userinfo is refused without disclosure", async () => {
-  globalThis.location = { origin: "https://app.example" };
+  globalThis.location = new URL("https://app.example/");
   clock.agent = true;
   install("auth.session https://login.example.com", () => "login");
   const pending = openAuthSession("https://login.example.com/authorize", { callback: "https://user:review-secret@app.example/cb", state: "s" });
@@ -42,7 +42,7 @@ test("callback userinfo is refused without disclosure", async () => {
 });
 
 test("single-slash https callback cannot disclose userinfo", async () => {
-  globalThis.location = { origin: "https://app.example" };
+  globalThis.location = new URL("https://app.example/");
   clock.agent = true;
   install("auth.session https://login.example.com", () => "login");
   const pending = openAuthSession("https://login.example.com/authorize", { callback: "https:/user:review-secret@app.example/cb", state: "s" });
@@ -54,7 +54,7 @@ test("single-slash https callback cannot disclose userinfo", async () => {
 
 test("backslashed or tabbed https callbacks cannot disclose userinfo", async () => {
   for (const callback of ["https:\\/user:review-secret@app.example/cb", "https://\\/user:review-secret@app.example/cb", "https://app.example/c\tb@user:review-secret"]) {
-    globalThis.location = { origin: "https://app.example" };
+    globalThis.location = new URL("https://app.example/");
     clock.agent = true;
     install("auth.session https://login.example.com", () => "login");
     const pending = openAuthSession("https://login.example.com/authorize", { callback, state: "s" });
@@ -65,8 +65,26 @@ test("backslashed or tabbed https callbacks cannot disclose userinfo", async () 
   }
 });
 
+// The drive's auth fixture is its launch's (LLP 1146 D4), not a query the app's route may hold: a held sign-in at the
+// fixture the page launched with shows its URL whole wherever the page is
+test("a held sign-in at the drive's launched auth fixture shows its URL whole at any route", async () => {
+  const entries = performance.getEntriesByType;
+  performance.getEntriesByType = type => type === "navigation" ? [{ name: "https://app.example/?agent=1&authFixture=http%3A%2F%2F127.0.0.1%3A4400" }] : entries.call(performance, type);
+  globalThis.location = new URL("https://app.example/next?authFixture=http%3A%2F%2F127.0.0.1%3A5");
+  clock.agent = true;
+  install("auth.session http://127.0.0.1:4400\nauth.callback https://app.example/.exact/auth/callback", () => "login");
+  try {
+    const url = "http://127.0.0.1:4400/authorize?code=shown";
+    const pending = openAuthSession(url, { callback: authCallback(), state: "s" });
+    const [hold] = holds();
+    expect(hold.device.args.url).toBe(url);
+    answer({ ticket: hold.ticket, op: "tap", choice: "cancel" });
+    expect((await pending.catch(e => e)).status).toBe(499);
+  } finally { performance.getEntriesByType = entries; }
+});
+
 test("ordinary exact-origin sessions still reach a held callback", async () => {
-  globalThis.location = { origin: "https://app.example" };
+  globalThis.location = new URL("https://app.example/");
   clock.agent = true;
   install("auth.session https://login.example.com\nauth.callback https://app.example/.exact/auth/callback", () => "login");
   const pending = openAuthSession("https://login.example.com/authorize?code=hidden", { callback: authCallback(), state: "s" });
@@ -78,7 +96,7 @@ test("ordinary exact-origin sessions still reach a held callback", async () => {
 });
 
 test("a loopback callback answers as the runner's arm does on the web (LLP 1133.005 D9)", async () => {
-  globalThis.location = { origin: "http://localhost:8080" };
+  globalThis.location = new URL("http://localhost:8080/");
   clock.agent = true;
   install("auth.session https://login.example.com\nauth.callback http://127.0.0.1/oauth/loopback", () => "login");
   const failed = (callback) => openAuthSession("https://login.example.com/authorize", { callback, state: "s" }).catch(e => e);
@@ -98,7 +116,7 @@ test("a loopback callback answers as the runner's arm does on the web (LLP 1133.
 });
 
 test("a state outside the BMP is matched whole, as auth.rs decodes it", async () => {
-  globalThis.location = { origin: "https://app.example" };
+  globalThis.location = new URL("https://app.example/");
   clock.agent = true;
   install("auth.session https://login.example.com\nauth.callback https://app.example/cb", () => "login");
   const pending = openAuthSession("https://login.example.com/authorize", { callback: "https://app.example/cb", state: "s😀" });
@@ -108,7 +126,7 @@ test("a state outside the BMP is matched whole, as auth.rs decodes it", async ()
 });
 
 test('auth grants trim Rust whitespace and keep FEFF as part of a declaration', async () => {
-  globalThis.location = { origin: 'https://app.example' };
+  globalThis.location = new URL('https://app.example/');
   clock.agent = true;
   install('\u0085auth.session https://login.example\u0085\nauth.callback https://app.example/cb', () => 'login');
   const pending = openAuthSession('https://login.example/authorize', { callback: 'https://app.example/cb', state: 's' });
@@ -183,7 +201,7 @@ test('an agent-fulfilled auth request closes its unadopted prepared window', asy
   clock.agent = true;
   globalThis.window = { open: () => popup };
   globalThis.navigator = { userActivation: { isActive: true } };
-  globalThis.location = { origin: 'https://app.example' };
+  globalThis.location = new URL('https://app.example/');
   globalThis.exact = {};
   try {
     install('auth.session https://login.example.com\nauth.callback https://app.example/.exact/auth/callback', () => 'logout');
@@ -301,7 +319,7 @@ test.each(['a clock-adjusted auth timeout', 'a logout opener response', 'a logou
 });
 
 test("fragment callbacks retain their parameters and require one exact state across query and fragment", async () => {
-  globalThis.location = { origin: "https://app.example" };
+  globalThis.location = new URL("https://app.example/");
   clock.agent = true;
   install("auth.session https://login.example.com\nauth.callback https://app.example/cb", () => "login");
   const pending = openAuthSession("https://login.example.com/authorize", { callback: "https://app.example/cb", state: "s +😀" });

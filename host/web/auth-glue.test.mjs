@@ -271,8 +271,10 @@ test("the test's browser delivers every message and timer in a later task", asyn
   discard('double-b');
 });
 
-test("the wasm auth arm forwards the agent drive's fixture", async () => {
-  location.search = '?agent=1&authFixture=http%3A%2F%2F127.0.0.1%3A4400';
+// The fixture is the drive's launch parameter (LLP 1146 D4), not the query of the route the page is at
+test("the wasm auth arm forwards the fixture the agent drive launched with, at any route", async () => {
+  performance.getEntriesByType = type => type === 'navigation' ? [{ name: 'https://app.example/?agent=1&authFixture=http%3A%2F%2F127.0.0.1%3A4400' }] : [];
+  location.search = '?agent=1';
   try {
     const { arm } = await import('./auth-glue.js?agent-fixture');
     let request;
@@ -282,7 +284,7 @@ test("the wasm auth arm forwards the agent drive's fixture", async () => {
     });
     expect(request).toEqual({ op: 'arm', ticket: 21, agent: true, origin: location.origin,
       popup: true, fixture: 'http://127.0.0.1:4400' });
-  } finally { location.search = ''; }
+  } finally { location.search = ''; delete performance.getEntriesByType; }
 });
 
 test('a broadcast callback ends only the sign-in whose state it carries, in either order', async () => {

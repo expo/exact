@@ -372,3 +372,21 @@ test('regions and parts are bounded, bound to their elements, and end as tombsto
   end();
   expect(globalThis.exact.hatchRegions.of(n)).toBe(null);
 });
+
+// The switch is read from the page's launch (§2.6): a page launched with `?hatches=off` connects no hatch at a route
+// whose URL names none, as after the app's first route change
+test('a page launched with ?hatches=off connects no hatch at a route without it', async () => {
+  const entries = performance.getEntriesByType;
+  globalThis.location = { search: '', href: 'http://127.0.0.1:9/next' };
+  performance.getEntriesByType = type => type === 'navigation' ? [{ name: 'http://127.0.0.1:9/?hatches=off' }] : entries.call(performance, type);
+  try {
+    // A module of its own, which reads the switch afresh
+    const hatches = await import(resolve(dir, 'hatches.js') + '?launched-off');
+    const before = handles.length;
+    await mount(hatches, node('meter', 8));
+    expect([handles.length - before, journal.some(l => l.includes('hatch hatches: off (?hatches=off)'))]).toEqual([0, true]);
+  } finally {
+    delete globalThis.location;
+    performance.getEntriesByType = entries;
+  }
+});

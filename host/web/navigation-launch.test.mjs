@@ -2,19 +2,27 @@ import { expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { historyURL } from './navigation/routes.js';
 import { launchLocation, launchVisits } from './navigation/environment.js';
-import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { agentParameters } from './navigation/agent-parameters.js';
+import { agentPage, launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { renderedPages } from '../web-js/rendered-pages.mjs';
 
-// A drive's launch facts (scripts/agent-launch.mjs) are the carrier's, not the app's: none reaches the launch
-// route, and every History entry keeps them, so a reload relaunches with them. `formatLocale` (#952) among them.
+// A drive's launch parameters (scripts/agent-launch.mjs) are the carrier's, not the app's: none reaches the launch
+// route, and every History entry keeps them, so a reload relaunches with them: `formatLocale` (#952), the auth
+// fixture (LLP 1146 D4) and the hatches switch among them.
 // One module serves both web hosts: the wasm glue and the JS target (rt.js) navigate through it.
-const DRIVE = 'agent=1&seed=3&locale=en-US&formatLocale=en-KR&timeZone=UTC';
+const DRIVE = 'agent=1&seed=3&locale=en-US&formatLocale=en-KR&timeZone=UTC&authFixture=http%3A%2F%2F127.0.0.1%3A4400&hatches=off';
 // The page's navigation entry names the URL the document launched at (Navigation Timing)
 const launchedAt = url => ({ getEntriesByType: type => type === 'navigation' ? [{ name: url }] : [] });
 // A platform at `path` in a document launched at `launch`
 const at = (path, launch = path) => ({ location: new URL(path, 'http://127.0.0.1:9'), performance: launchedAt(new URL(launch, 'http://127.0.0.1:9').href) });
 
-test('a drive\'s formatLocale stays out of the launch route', () => {
+test('the router\'s drive parameters are the ones a drive opens its page with', () => {
+  const facts = launchFacts({ formatLocale: 'en-GB', failFetch: 'https://api.example/' });
+  const page = agentPage(new URL('http://127.0.0.1:9/'), { facts, storage: 'drive', env: { EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4400', EXACT_HATCHES: 'off' } });
+  expect([...new Set(page.searchParams.keys())].sort()).toEqual([...agentParameters].sort());
+});
+
+test('a drive\'s parameters stay out of the launch route', () => {
   expect(launchLocation(at(`/detail/3?${DRIVE}&q=a`))).toBe('/detail/3?q=a');
   // An ordinary visit's own query is the route's.
   expect(launchLocation(at('/?formatLocale=x'))).toBe('/?formatLocale=x');
@@ -54,15 +62,20 @@ test('a History entry is made under a location with no origin, as the render ser
   } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
 });
 
-test('every History entry keeps a drive\'s formatLocale, so navigation and reload keep it', () => {
+test('every History entry keeps a drive\'s parameters, so navigation and reload keep them', () => {
   const saved = Object.getOwnPropertyDescriptor(globalThis, 'location');
   Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://127.0.0.1:9', href: `http://127.0.0.1:9/?${DRIVE}` } });
   try {
     const next = new URL(historyURL('/next?page=2'));
     expect(next.pathname).toBe('/next');
-    expect(Object.fromEntries(next.searchParams)).toEqual({ page: '2', agent: '1', seed: '3', locale: 'en-US', formatLocale: 'en-KR', timeZone: 'UTC' });
+    expect(Object.fromEntries(next.searchParams)).toEqual({ page: '2', agent: '1', seed: '3', locale: 'en-US', formatLocale: 'en-KR', timeZone: 'UTC',
+      authFixture: 'http://127.0.0.1:4400', hatches: 'off' });
     // Reloaded there, the launch route is the app's alone again.
     expect(launchLocation(at(next.pathname + next.search))).toBe('/next?page=2');
+    // A drive launched without some of them: the app's own query under their names is no drive's
+    Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://127.0.0.1:9', href: 'http://127.0.0.1:9/?agent=1&seed=3' } });
+    const own = new URL(historyURL('/next?page=2&hatches=on&authFixture=http%3A%2F%2F127.0.0.1%3A5'));
+    expect(Object.fromEntries(own.searchParams)).toEqual({ page: '2', agent: '1', seed: '3' });
   } finally { if (saved) Object.defineProperty(globalThis, 'location', saved); else delete globalThis.location; }
 });
 
