@@ -16,11 +16,20 @@ final class ColorReference: ExactModule {
     #if os(iOS)
     private let sharedBackgrounds = NSMapTable<UIViewController, NSNumber>.weakToStrongObjects()
 
+    /// Whether the gallery draws the header's material itself, before iOS 26, where the bar draws one of
+    /// its own: the bar's is cleared over the range bar and one material lies beneath both. From iOS 26
+    /// the bar and its scroll edge effect are UIKit's own, as in an app that sets neither, and iOS 27.0
+    /// leaves the large title undrawn under an appearance set on the item or a material over the bar.
+    private static var sharesMaterial: Bool {
+        if #available(iOS 26, *) { return false }
+        return true
+    }
+
     override func tabContainer(_ contents: ExactTabContents) -> UIViewController? { GallerySplit(contents) }
 
     override func route(_ route: ExactRoute) {
         let shared = route.element("range-bar") != nil
-        if route.isNew || sharedBackgrounds.object(forKey: route.controller)?.boolValue != shared {
+        if Self.sharesMaterial, route.isNew || sharedBackgrounds.object(forKey: route.controller)?.boolValue != shared {
             let appearance = UINavigationBarAppearance()
             if shared {
                 // Draw the header and range controls through one material instead of overlapping two blurs
@@ -54,9 +63,9 @@ final class ColorReference: ExactModule {
     override func element(_ element: ExactElement) {
         #if os(iOS)
         guard let view = element.view else { return }
-        if element.hatch == .stickyLimit, element.isNew {
-            // Keep the authored wrapper unpainted so Exact recognizes it as a native control bar. Every
-            // version clears the bar over it (`route`), so every version draws this material.
+        if Self.sharesMaterial, element.hatch == .stickyLimit, element.isNew {
+            // Keep the authored wrapper unpainted so Exact recognizes it as a native control bar. `route`
+            // clears the bar over it, so this material is the header's and the controls' one.
             let background = RangeBarBackground(frame: view.bounds)
             background.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.insertSubview(background, at: 0)
