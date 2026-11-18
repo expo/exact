@@ -1453,9 +1453,10 @@ Not built of D11:
   Compose's `SingleChoiceSegmentedButtonRow` treatment (`kernel/src/segmented.rs`, `host/painted/src/paint/segment.rs`).
   A header's tablist stays in the page under the bar, as its search field does. Tabs keep their tab semantics
   and `aria-selected`; root navigation tabs keep the navigation bar, and `appearance="none"` keeps authored paint.
-  Headless kernel and presenter tests cover the treatment. A phone run and comparison with the Material oracle's
-  `segmented-buttons` specimen remain owed, as does Compose's motion (the label slides and the check grows;
-  here both change at once).
+  Headless kernel and presenter tests cover the treatment. The Material oracle's `segmented-buttons` specimen
+  matches Compose's height, corners, outline, colours and baselines, headless and on an API 36 emulator; a hugging
+  group is 2 dp wider (QUEUE). The outline is whole pixels, as `Modifier.border` rounds it. A phone run remains
+  owed, as does Compose's motion (the label slides and the check grows; here both change at once).
 - **List items** and their dividers (rows as cells land on every host at once).
 - **A header's rich title**: the avatar, the subtitle and the tap on the title that iOS shows are not read here.
 - **`onSecondaryContainer`** for the selected symbol, badges, a navigation rail on a wide window, and hiding the
