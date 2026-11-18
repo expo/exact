@@ -8,9 +8,12 @@ const IMPORT_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 const IMPORT_WAITS: u32 = 5;
 
 impl<D: exact_runner::DataSource> crate::Host<D> {
+    /// `configuration` is the placement's chosen values, JSON, which a
+    /// configured widget's refresh receives (`exact_runner::entry::refresh_args`).
     pub(crate) fn entry_timeline(
         &mut self,
         now: f64,
+        configuration: Option<&[u8]>,
         io: Option<crate::link::IoLinks>,
         module: Option<(&str, &[u8])>,
         deadline: std::time::Instant,
@@ -86,64 +89,67 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
             }
             let mut executor = None;
             let mut bindings = endowed.bindings;
-            let result =
-                self.runner
-                    .snapshot_timeline(now, snapshot, deadline, |mut request, work| {
+            let result = self.runner.snapshot_timeline(
+                now,
+                configuration,
+                snapshot,
+                deadline,
+                |mut request, work| {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err("widget refresh timed out".into());
+                    }
+                    let io = io.ok_or("this build links no I/O; every request is refused")?;
+                    let executor = executor.get_or_insert_with(|| {
+                        let executor = (io.start)(
+                            bindings.take(),
+                            &grants,
+                            Some((
+                                notify,
+                                (&*wake as *const std::thread::Thread).cast_mut().cast(),
+                            )),
+                        );
+                        if let Some(roots) = roots.clone() {
+                            executor.set_app_roots(roots);
+                        }
+                        executor
+                    });
+                    if request.continuation.is_none() {
+                        let ms = remaining.as_millis().max(1).min(u32::MAX as u128) as u32;
+                        request.timeout_ms = Some(request.timeout_ms.map_or(ms, |own| own.min(ms)));
+                    }
+                    let class = if work.is_none() && request.is_plain_http() {
+                        exact_runner::RequestClass::Read
+                    } else {
+                        exact_runner::RequestClass::Ordered
+                    };
+                    executor
+                        .run(
+                            exact_runner::RequestOut {
+                                completion: None,
+                                class,
+                                ticket: 1,
+                                target: "widget refresh".into(),
+                                request,
+                                forced: false,
+                            },
+                            work,
+                        )
+                        .map_err(str::to_owned)?;
+                    loop {
+                        executor.begin_pump();
+                        if let Some((_, outcome, _)) = executor.drain().into_iter().next() {
+                            return Ok(outcome);
+                        }
                         let remaining = deadline.saturating_duration_since(Instant::now());
                         if remaining.is_zero() {
+                            executor.forget(&|_| false, false);
                             return Err("widget refresh timed out".into());
                         }
-                        let io = io.ok_or("this build links no I/O; every request is refused")?;
-                        let executor = executor.get_or_insert_with(|| {
-                            let executor = (io.start)(
-                                bindings.take(),
-                                &grants,
-                                Some((
-                                    notify,
-                                    (&*wake as *const std::thread::Thread).cast_mut().cast(),
-                                )),
-                            );
-                            if let Some(roots) = roots.clone() {
-                                executor.set_app_roots(roots);
-                            }
-                            executor
-                        });
-                        if request.continuation.is_none() {
-                            let ms = remaining.as_millis().max(1).min(u32::MAX as u128) as u32;
-                            request.timeout_ms =
-                                Some(request.timeout_ms.map_or(ms, |own| own.min(ms)));
-                        }
-                        let class = if work.is_none() && request.is_plain_http() {
-                            exact_runner::RequestClass::Read
-                        } else {
-                            exact_runner::RequestClass::Ordered
-                        };
-                        executor
-                            .run(
-                                exact_runner::RequestOut {
-                                    completion: None,
-                                    class,
-                                    ticket: 1,
-                                    target: "widget refresh".into(),
-                                    request,
-                                    forced: false,
-                                },
-                                work,
-                            )
-                            .map_err(str::to_owned)?;
-                        loop {
-                            executor.begin_pump();
-                            if let Some((_, outcome, _)) = executor.drain().into_iter().next() {
-                                return Ok(outcome);
-                            }
-                            let remaining = deadline.saturating_duration_since(Instant::now());
-                            if remaining.is_zero() {
-                                executor.forget(&|_| false, false);
-                                return Err("widget refresh timed out".into());
-                            }
-                            std::thread::park_timeout(remaining);
-                        }
-                    });
+                        std::thread::park_timeout(remaining);
+                    }
+                },
+            );
             drop(executor);
             drop(wake);
             result

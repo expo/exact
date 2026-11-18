@@ -591,6 +591,7 @@ pub(super) fn compile_file(
         .expect("props slot")
         .ty;
     let mut plan = plan;
+    let mut configuration_ty = None;
     if let Some(configuration) = widget.configuration {
         // LLP 1126: the boot slot keeps the fixed vocabulary even when the inject
         // reads strings. Its first enum member is the current fallback for a saved choice.
@@ -626,11 +627,14 @@ pub(super) fn compile_file(
                 (name.as_str(), builder.string_enum(&values))
             })
             .collect::<Vec<_>>();
-        let ty = builder.record("SnapshotConfiguration", &fields);
+        // Unnamed, so the declarations of two widgets with different
+        // configurations cannot print one shape under a shared name.
+        let ty = builder.record("", &fields);
         plan = builder
             .finish()
             .map_err(|e| vec![fail(format!("invalid configuration: {e:?}"))])?;
         plan.slots[slot].ty = ty;
+        configuration_ty = Some(ty);
     }
     if let Some(refresh) = widget.refresh {
         let mut builder = exact_plan::builder::PlanBuilder::from_plan(plan);
@@ -640,7 +644,9 @@ pub(super) fn compile_file(
             &[("date", number), ("props", props)],
         );
         let timeline = builder.list(entry);
-        let refresh = builder.source(refresh, &[number], timeline);
+        // A configured widget's refresh also receives its placement's choices.
+        let params: Vec<_> = [number].into_iter().chain(configuration_ty).collect();
+        let refresh = builder.source(refresh, &params, timeline);
         plan = builder
             .finish()
             .map_err(|e| vec![fail(format!("invalid refresh signature: {e:?}"))])?;

@@ -212,7 +212,12 @@ fn caltrain_refresh_returns_a_timeline_within_its_budget() {
     let entries = timeline.as_array().expect("an array of entries");
     assert!(!entries.is_empty(), "{json}");
     assert!(entries[0]["date"].is_number(), "{json}");
-    assert!(entries[0]["props"]["departures"].is_array(), "{json}");
+    let departures = entries[0]["props"]["departures"].as_array();
+    assert_eq!(
+        departures.map(Vec::len),
+        Some(2),
+        "no configuration is the default rows: {json}"
+    );
 }
 
 #[test]

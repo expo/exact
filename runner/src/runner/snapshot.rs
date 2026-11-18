@@ -1,19 +1,22 @@
 //! Snapshot refresh is separate from rendering (LLP 1126 D3/D8).
 use super::{DataSource, Runner};
-use crate::{Answer, Dispatch, Outcome, Request, Store, Value, Work};
+use crate::{Answer, Dispatch, Outcome, Request, Store, Work};
 use std::time::Instant;
 
 impl<D: DataSource> Runner<D> {
     /// Stage 1 never writes the store: refresh returns props only, so there is
     /// no second writer. Each awaited request uses the host's existing carrier.
+    /// `configuration` is the placement's chosen values, JSON; a configured
+    /// widget's refresh receives them (`entry::refresh_args`).
     pub fn snapshot_timeline(
         &mut self,
         now: f64,
+        configuration: Option<&[u8]>,
         snapshot: Vec<(String, Vec<u8>)>,
         deadline: Instant,
         execute: impl FnMut(Request, Option<Work>) -> Result<Outcome, String>,
     ) -> Result<String, String> {
-        let result = self.refresh_snapshot(now, snapshot, deadline, execute);
+        let result = self.refresh_snapshot(now, configuration, snapshot, deadline, execute);
         // What the module journaled since its last answer or reply, however
         // the refresh ended: the host closes the session after it.
         self.take_data_logs();
@@ -23,6 +26,7 @@ impl<D: DataSource> Runner<D> {
     fn refresh_snapshot(
         &mut self,
         now: f64,
+        configuration: Option<&[u8]>,
         snapshot: Vec<(String, Vec<u8>)>,
         deadline: Instant,
         mut execute: impl FnMut(Request, Option<Work>) -> Result<Outcome, String>,
@@ -34,6 +38,7 @@ impl<D: DataSource> Runner<D> {
         let signature = self.plan.source(source);
         let name = self.plan.str(signature.name).to_owned();
         let ty = signature.ty;
+        let args = crate::entry::refresh_args(&self.plan, now, configuration)?;
         if Instant::now() >= deadline {
             return Err("widget refresh timed out".into());
         }
@@ -41,7 +46,6 @@ impl<D: DataSource> Runner<D> {
             .activate()
             .map_err(|e| format!("refresh activation: {e:?}"))?;
         let mut store = Store::new_linked(self.data.grants(), snapshot, self.links.grants);
-        let args = [Value::Number(now)];
         if Instant::now() >= deadline {
             return Err("widget refresh timed out".into());
         }

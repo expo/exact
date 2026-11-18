@@ -187,8 +187,9 @@ export const classifications = [
       "Presenter::zoomable_from Presenter::zoomable_under"],
   ]),
   group("background work", ["durable operation"], "app/module background round or widget refresh until completion, deadline or session shutdown; process-local today", "durable",
-    "runner/src/runner/background.rs:87-105 resumes a background round outside Contract slots and then arms its successor; no UI then/commit owns that round. painted snapshot.rs timeline and its JNI adapter run a widget refresh without a presenter, reading the store and pumping requests until completion or deadline; no crash recovery is provided.", [
+    "runner/src/runner/background.rs:87-105 resumes a background round outside Contract slots and then arms its successor; no UI then/commit owns that round. painted snapshot.rs timeline and its JNI adapter run a widget refresh without a presenter, reading the store and pumping requests until completion or deadline; no crash recovery is provided. runner/entry.rs refresh_args builds a refresh's arguments from its date and its placement's configuration, and starts nothing.", [
     ["runner:runner/src/runner/background.rs", "Runner::background_operations Runner::background_state Runner::send_background#next_ticket:1"],
+    ["runner:runner/src/entry.rs", "refresh_args"],
     ["painted:host/painted/src/snapshot.rs", "timeline"],
     ["painted:host/painted/src/snapshot/jni.rs", "Java_dev_exact_widgets_Native_timeline"],
   ]),

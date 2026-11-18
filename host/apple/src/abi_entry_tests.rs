@@ -93,7 +93,7 @@ fn entry_refresh_answers_without_mutating_the_preview() {
             .slot("snapshot_props")
             .cloned();
         let picker_roots = crate::picker::roots();
-        let n = bridge.refresh_entry(Timeline(response, app_id.clone()), 1000.0);
+        let n = bridge.refresh_entry(Timeline(response, app_id.clone()), 1000.0, 0);
         let result: serde_json::Value =
             serde_json::from_slice(bridge.output_bytes(n as usize)).unwrap();
         assert_eq!(crate::picker::roots(), picker_roots);

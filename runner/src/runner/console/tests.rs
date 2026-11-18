@@ -297,7 +297,7 @@ fn a_snapshot_refresh_writes_its_lines_however_it_ends() {
     let line = |method: Console, line: &str| (method, line.to_string());
     let ran = std::cell::Cell::new(0);
     let refresh = |r: &mut Runner<Refreshing>, before: &[(Console, String)]| {
-        r.snapshot_timeline(1.0, Vec::new(), deadline, |request, _| {
+        r.snapshot_timeline(1.0, None, Vec::new(), deadline, |request, _| {
             ran.set(ran.get() + 1);
             assert_eq!(request.url, FEED);
             assert_eq!(*written.borrow(), before, "written before the request runs");

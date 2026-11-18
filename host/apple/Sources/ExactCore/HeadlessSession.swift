@@ -215,10 +215,11 @@ public final class HeadlessSession {
     }
 
     /// Typed source refresh; the render boot itself never opens the store.
-    public func timeline(at date: Date, moduleRoot: URL? = nil, deadline: DispatchTime = .now() + .milliseconds(900)) throws -> Data {
+    /// A configured widget's refresh receives `configuration`, its placement's chosen values, or its defaults.
+    public func timeline(at date: Date, configuration: Data? = nil, moduleRoot: URL? = nil, deadline: DispatchTime = .now() + .milliseconds(900)) throws -> Data {
         let receipt = try moduleRoot.map { try Data(contentsOf: $0.appendingPathComponent("typescript/app.module.json")) } ?? Data()
         let module = try moduleRoot.map { try Data(contentsOf: $0.appendingPathComponent("typescript/app.hbc"), options: .mappedIfSafe) } ?? Data()
-        let bytes = core.runtime.entryTimeline(at: date.timeIntervalSince1970 * 1000, deadline: deadline, receipt: receipt, module: module)
+        let bytes = core.runtime.entryTimeline(at: date.timeIntervalSince1970 * 1000, configuration: configuration, deadline: deadline, receipt: receipt, module: module)
         if let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any], let error = object["error"] as? String {
             throw Failure(description: error)
         }
@@ -287,8 +288,8 @@ public final class HeadlessSession {
     }
 
     /// Gallery refresh never opens the app's storage or executes requests.
-    package func previewTimeline(at date: Date) throws -> [String: Any] {
-        let bytes = core.runtime.previewTimeline(at: date.timeIntervalSince1970 * 1000)
+    package func previewTimeline(at date: Date, configuration: Data? = nil) throws -> [String: Any] {
+        let bytes = core.runtime.previewTimeline(at: date.timeIntervalSince1970 * 1000, configuration: configuration)
         let result = try JSONSerialization.jsonObject(with: bytes) as? [String: Any] ?? [:]
         if let error = result["error"] as? String { throw Failure(description: error) }
         return result

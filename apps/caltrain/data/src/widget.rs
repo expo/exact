@@ -1,9 +1,21 @@
 //! The widget refresh uses the app's schedule. The fixture repeats that
 //! seeded day on the requested day; render receives only dated props.
 
-use super::{departures, station, Value, DAY_START_MS};
+use super::{departures, station, DataError, Value, DAY_START_MS};
 
-pub(super) fn timeline(now: f64) -> Value {
+/// How many departures a placement shows: its configuration's `rows`.
+pub(super) fn rows(configuration: &Value) -> Result<usize, DataError> {
+    let Value::Record(fields) = configuration else {
+        return Err(DataError::BadArguments("configuration".into()));
+    };
+    match fields.first().and_then(Value::as_str) {
+        Some("one") => Ok(1),
+        Some("two") => Ok(2),
+        _ => Err(DataError::BadArguments("rows".into())),
+    }
+}
+
+pub(super) fn timeline(now: f64, rows: usize) -> Value {
     const DAY: f64 = 86_400_000.0;
     let today = now.div_euclid(DAY) * DAY;
     let station = station("mv").expect("fixture station");
@@ -38,7 +50,7 @@ pub(super) fn timeline(now: f64) -> Value {
                 let departures = trains
                     .iter()
                     .filter(|(at, _)| *at >= date)
-                    .take(2)
+                    .take(rows)
                     .map(|(_, train)| train.clone())
                     .collect();
                 Value::record(vec![
@@ -55,16 +67,39 @@ mod tests {
     use super::*;
     use exact_runner::DataSource;
 
+    fn refresh(now: f64, rows: &str) -> Result<Value, DataError> {
+        let configuration = Value::record(vec![Value::str(rows)]);
+        super::super::Caltrain.query("nextTrains", &[Value::Number(now), configuration])
+    }
+
+    fn departures(entry: &Value) -> &[Value] {
+        let Value::Record(row) = entry else {
+            panic!("entry")
+        };
+        let Value::Record(props) = &row[1] else {
+            panic!("props")
+        };
+        let Value::List(trains) = &props[1] else {
+            panic!("departures")
+        };
+        trains
+    }
+
     #[test]
     fn refresh_returns_dated_props_and_removes_departed_trains() {
         let now = DAY_START_MS + 9.0 * 3_600_000.0;
-        let value = super::super::Caltrain
-            .query("nextTrains", &[Value::Number(now)])
-            .unwrap();
-        let Value::List(entries) = value else {
+        let Value::List(entries) = refresh(now, "two").unwrap() else {
             panic!("timeline")
         };
         assert_eq!(entries.len(), 20);
+        let Value::List(single) = refresh(now, "one").unwrap() else {
+            panic!("timeline")
+        };
+        assert_eq!(single.len(), 20);
+        for (one, two) in single.iter().zip(entries.iter()) {
+            assert_eq!(departures(one), &departures(two)[..1]);
+        }
+        assert!(refresh(now, "three").is_err(), "not one of the choices");
         let mut previous = now - 1.0;
         for entry in entries.iter() {
             let Value::Record(row) = entry else {

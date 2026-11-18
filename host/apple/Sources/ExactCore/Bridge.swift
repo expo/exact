@@ -378,18 +378,19 @@ package final class Runtime {
         }
         return islands(batch)
     }
-    package func previewTimeline(at now: Double) -> Data {
+    package func previewTimeline(at now: Double, configuration: Data? = nil) -> Data {
         on(busy: Data()) {
-            let count = exact_refresh_entry(rt, now)
+            let count = exact_refresh_entry(rt, now, configuration.map { write($0) } ?? 0)
             return Data(bytes: exact_out(rt), count: Int(count))
         }
     }
-    package func entryTimeline(at now: Double, deadline: DispatchTime, receipt: Data = Data(), module: Data = Data()) -> Data {
+    package func entryTimeline(at now: Double, configuration: Data? = nil, deadline: DispatchTime, receipt: Data = Data(), module: Data = Data()) -> Data {
         on(busy: Data()) {
+            let chosen = configuration.map { write($0) } ?? 0
             let current = DispatchTime.now().uptimeNanoseconds
             let remaining = Double(deadline.uptimeNanoseconds > current ? deadline.uptimeNanoseconds - current : 0) / 1_000_000
             return receipt.withUnsafeBytes { receipt in module.withUnsafeBytes { module in
-                let count = exact_entry_timeline(rt, now, remaining, receipt.bindMemory(to: UInt8.self).baseAddress, receipt.count, module.bindMemory(to: UInt8.self).baseAddress, module.count)
+                let count = exact_entry_timeline(rt, now, remaining, chosen, receipt.bindMemory(to: UInt8.self).baseAddress, receipt.count, module.bindMemory(to: UInt8.self).baseAddress, module.count)
                 return Data(bytes: exact_out(rt), count: Int(count))
             } }
         }

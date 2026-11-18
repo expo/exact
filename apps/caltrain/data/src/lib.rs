@@ -270,8 +270,11 @@ impl DataSource for Caltrain {
     fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
         match source {
             "nextTrains" => {
-                arity(args, 1)?;
-                Ok(widget::timeline(finite_number(args, 0)?))
+                arity(args, 2)?;
+                Ok(widget::timeline(
+                    finite_number(args, 0)?,
+                    widget::rows(&args[1])?,
+                ))
             }
             "defaultLocation" => {
                 arity(args, 0)?;

@@ -64,6 +64,7 @@ fn runner(root: &super::storage::Root, turn: Option<Duration>) -> Runner<Module>
 fn refresh(runner: &mut Runner<Module>, date: f64) -> Result<String, String> {
     runner.snapshot_timeline(
         date,
+        None,
         vec![("session".into(), b"kept secret".to_vec())],
         Instant::now() + Duration::from_secs(30),
         |request, work| {
@@ -195,6 +196,7 @@ fn a_refresh_s_turns_spend_its_deadline_together() {
     let error = r
         .snapshot_timeline(
             2.,
+            None,
             vec![],
             Instant::now() + Duration::from_secs(30),
             |_, _| {
@@ -220,6 +222,7 @@ fn expired_refresh_never_dispatches_io() {
     let error = r
         .snapshot_timeline(
             -1000.,
+            None,
             vec![],
             Instant::now() + Duration::from_secs(30),
             |_, _| panic!("expired first call started I/O"),
@@ -306,7 +309,7 @@ fn apple_bridge_admits_the_plan_it_booted_with_borrowed_module_bytes() {
         160.,
     );
     let hang = Instant::now() + Duration::from_secs(30);
-    let len = bridge.entry_timeline_module_until(1., hang, receipt().as_bytes(), HBC) as usize;
+    let len = bridge.entry_timeline_module_until(1., 0, hang, receipt().as_bytes(), HBC) as usize;
     let rows: serde_json::Value = serde_json::from_slice(bridge.output_bytes(len)).unwrap();
     assert_eq!(
         rows,

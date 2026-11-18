@@ -164,9 +164,10 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   const question = 'host/apple/tests/ExactKitTests/SnapshotFixtures/open-question';
   const refusing = resolve(dir, 'entries/refusing');
   mkdirSync(refusing, { recursive: true });
-  writeFileSync(resolve(refusing, 'app.contract'), 'shape Props\n  title: string\ncomponent App\n  view\n    text "App"\ncomponent Card\n  props\n    title: string\n  view\n    text title\n');
-  writeFileSync(resolve(refusing, 'app.json'), JSON.stringify({ name: 'Refusing refresh', app: { id: appId, name: 'Refusing refresh' }, widgets: [{ kind: 'refusing', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'nextTrains', preview: { title: 'Preview' } }] }));
-  // Caltrain's nextTrains answers a different Props shape: the refresh must refuse.
+  writeFileSync(resolve(refusing, 'app.contract'), 'shape Props\n  title: string\nshape Rows\n  rows: enum<"one", "two">\ncomponent App\n  view\n    text "App"\ncomponent Card\n  props\n    title: string\n  inject\n    snapshot_configuration: Rows\n  view\n    text title\n');
+  writeFileSync(resolve(refusing, 'app.json'), JSON.stringify({ name: 'Refusing refresh', app: { id: appId, name: 'Refusing refresh' }, widgets: [{ kind: 'refusing', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'nextTrains', preview: { title: 'Preview' },
+    configuration: { title: 'Card', parameters: [{ name: 'rows', type: 'enum', title: 'Rows', values: [{ value: 'one', title: '1' }, { value: 'two', title: '2' }] }] } }] }));
+  // Caltrain's nextTrains takes this configuration and answers a different Props shape: the refresh must refuse.
   contract([resolve(refusing, 'app.contract'), '--entry', 'refusing', '-o', env[`${prefix}_SNAPSHOT_REFUSING_PLAN`] = resolve(dir, 'refusing.plan')]);
   // WidgetGalleryTests: an accented bar at a half through the agent's widget screenshot.
   const barCard = resolve(dir, 'entries/bar-card');

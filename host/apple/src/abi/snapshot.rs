@@ -91,13 +91,16 @@ impl<D: DataSource> Bridge<D> {
     #[cfg(test)]
     pub fn entry_timeline(&mut self, now: f64) -> u32 {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        self.entry_timeline_until(now, deadline, "", &[])
+        self.entry_timeline_until(now, 0, deadline, "", &[])
     }
-    /// Borrow the pinned pair for admission; no bridge input or concatenation.
+    /// The placement's configuration JSON is the input buffer's first
+    /// `configuration` bytes, none when zero. Borrow the pinned pair for
+    /// admission; no bridge input or concatenation.
     pub fn entry_timeline_module(
         &mut self,
         now: f64,
         remaining_ms: f64,
+        configuration: usize,
         receipt: &[u8],
         module: &[u8],
     ) -> u32 {
@@ -106,7 +109,7 @@ impl<D: DataSource> Bridge<D> {
         }
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs_f64(remaining_ms / 1000.0);
-        self.entry_timeline_module_until(now, deadline, receipt, module)
+        self.entry_timeline_module_until(now, configuration, deadline, receipt, module)
     }
     /// The same until `deadline`, not within WidgetKit's 900 ms: a test of
     /// admission bounds only a hang.
@@ -114,6 +117,7 @@ impl<D: DataSource> Bridge<D> {
     pub fn entry_timeline_module_until(
         &mut self,
         now: f64,
+        configuration: usize,
         deadline: std::time::Instant,
         receipt: &[u8],
         module: &[u8],
@@ -128,7 +132,7 @@ impl<D: DataSource> Bridge<D> {
             return self
                 .emit(serde_json::json!({"error":"invalid snapshot module receipt"}).to_string());
         };
-        self.entry_timeline_until(now, deadline, text, module)
+        self.entry_timeline_until(now, configuration, deadline, text, module)
     }
     fn invalid(&mut self) -> u32 {
         self.emit(
@@ -138,10 +142,15 @@ impl<D: DataSource> Bridge<D> {
     fn entry_timeline_until(
         &mut self,
         now: f64,
+        configuration: usize,
         deadline: std::time::Instant,
         receipt: &str,
         module: &[u8],
     ) -> u32 {
+        if configuration > self.input.len() {
+            return self.invalid();
+        }
+        let configuration = (configuration > 0).then(|| self.input[..configuration].to_vec());
         let result = self
             .host
             .as_mut()
@@ -149,6 +158,7 @@ impl<D: DataSource> Bridge<D> {
             .and_then(|host| {
                 host.entry_timeline(
                     now,
+                    configuration.as_deref(),
                     self.links.io,
                     (!receipt.is_empty()).then_some((receipt, module)),
                     deadline,
@@ -196,9 +206,14 @@ mod tests {
             if self.writes {
                 store.set("test", "never persisted").unwrap();
             }
+            // A configured widget's refresh titles its entry with the chosen rows.
+            let title = match args.get(1) {
+                Some(Value::Record(chosen)) => chosen[0].clone(),
+                _ => Value::str("fresh"),
+            };
             Ok(Answer::Now(Value::list(vec![Value::record(vec![
                 args[0].clone(),
-                Value::record(vec![Value::str("fresh")]),
+                Value::record(vec![title]),
             ])])))
         }
     }
@@ -307,8 +322,9 @@ mod tests {
 
     /// A configured widget renders the values the host supplies, its
     /// defaults when it supplies none, and defaults removed values and parameters.
+    /// Its refresh receives the same values.
     #[test]
-    fn entry_boot_renders_the_chosen_configuration() {
+    fn entry_boot_and_refresh_read_the_chosen_configuration() {
         let manifest = contract::Manifest {
             json: serde_json::json!({"widgets":[{"kind":"card","families":["systemSmall"],"component":"Card",
                 "props":"Props","refresh":"refresh","preview":{"title":"preview"},
@@ -322,22 +338,24 @@ mod tests {
         for field in ["string", "enum<\"one\", \"three\">"] {
             let entry = contract::snapshot::compile(&"shape Props\n  title: string\nshape Rows\n  rows: enum<\"one\", \"three\">\ncomponent Card\n  props\n    title: string\n  inject\n    snapshot_configuration: Rows\n  view\n    text `${title} rows=${snapshot_configuration.rows}`\n".replace("enum<\"one\", \"three\">", field), &widget).unwrap().encode();
             let mut bridge = Bridge::new();
-            for (props, configuration, expected) in [
-                ("", "", "preview rows=three"),
-                ("", "{\"rows\":\"one\"}", "preview rows=one"),
+            for (props, configuration, title, rows) in [
+                ("", "", "preview", "three"),
+                ("", "{\"rows\":\"one\"}", "preview", "one"),
                 (
                     "",
                     "{\"rows\":\"one\",\"removed\":\"old\"}",
-                    "preview rows=one",
+                    "preview",
+                    "one",
                 ),
-                ("", "{}", "preview rows=three"),
+                ("", "{}", "preview", "three"),
                 (
                     "{\"title\":\"supplied\"}",
                     "{\"rows\":\"one\"}",
-                    "supplied rows=one",
+                    "supplied",
+                    "one",
                 ),
-                ("", "{\"rows\":\"seven\"}", "preview rows=three"),
-                ("", "{\"columns\":\"one\"}", "preview rows=three"),
+                ("", "{\"rows\":\"seven\"}", "preview", "three"),
+                ("", "{\"columns\":\"one\"}", "preview", "three"),
             ] {
                 let mut bytes = entry.clone();
                 bytes.extend_from_slice(b"card");
@@ -359,7 +377,16 @@ mod tests {
                     160.0,
                 );
                 let output = String::from_utf8_lossy(&bridge.output);
-                assert!(output.contains(expected), "{configuration}: {output}");
+                let expected = format!("{title} rows={rows}");
+                assert!(output.contains(&expected), "{configuration}: {output}");
+                bridge.input_write(configuration.as_bytes());
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                bridge.entry_timeline_module_until(1234.0, configuration.len(), deadline, &[], &[]);
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&bridge.output).unwrap(),
+                    serde_json::json!([{"date":1234,"props":{"title":rows}}]),
+                    "{configuration}"
+                );
             }
         }
     }

@@ -144,7 +144,8 @@ pub struct Module<'a> {
 }
 
 /// Run the entry's refresh at `now` (ms since the epoch) within `deadline`:
-/// the timeline its refresh function returns, JSON (`[{date, props}]`).
+/// the timeline its refresh function returns, JSON (`[{date, props}]`). A
+/// configured widget's refresh receives `entry.configuration`, or its defaults.
 pub fn timeline<D: DataSource>(
     entry: Entry<'_>,
     data: D,
@@ -207,53 +208,59 @@ pub fn timeline<D: DataSource>(
     // (LLP 1126 D3, stage 1).
     let (snapshot, _) = crate::host::system::store_read(&app, false);
     let mut executor: Option<crate::executor::Executor> = None;
-    let result = runner.snapshot_timeline(now, snapshot, deadline, |mut request, work| {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err("widget refresh timed out".into());
-        }
-        let executor = executor.get_or_insert_with(|| {
-            let executor = crate::executor::Executor::start(&grants);
-            if let Some(roots) = roots.clone() {
-                executor.set_app_roots(roots);
-            }
-            executor
-        });
-        if request.continuation.is_none() {
-            let ms = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
-            request.timeout_ms = Some(request.timeout_ms.map_or(ms, |own| own.min(ms)));
-        }
-        let class = if work.is_none() && request.is_plain_http() {
-            exact_runner::RequestClass::Read
-        } else {
-            exact_runner::RequestClass::Ordered
-        };
-        executor
-            .run(
-                exact_runner::RequestOut {
-                    completion: None,
-                    class,
-                    ticket: 1,
-                    target: "widget refresh".into(),
-                    request,
-                    forced: false,
-                },
-                work,
-            )
-            .map_err(str::to_owned)?;
-        loop {
-            executor.begin_pump();
-            if let Some((_, outcome, _)) = executor.drain().into_iter().next() {
-                return Ok(outcome);
-            }
+    let result = runner.snapshot_timeline(
+        now,
+        entry.configuration,
+        snapshot,
+        deadline,
+        |mut request, work| {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                executor.forget(|_| false);
                 return Err("widget refresh timed out".into());
             }
-            wait_readable(executor, remaining);
-        }
-    });
+            let executor = executor.get_or_insert_with(|| {
+                let executor = crate::executor::Executor::start(&grants);
+                if let Some(roots) = roots.clone() {
+                    executor.set_app_roots(roots);
+                }
+                executor
+            });
+            if request.continuation.is_none() {
+                let ms = remaining.as_millis().clamp(1, u32::MAX as u128) as u32;
+                request.timeout_ms = Some(request.timeout_ms.map_or(ms, |own| own.min(ms)));
+            }
+            let class = if work.is_none() && request.is_plain_http() {
+                exact_runner::RequestClass::Read
+            } else {
+                exact_runner::RequestClass::Ordered
+            };
+            executor
+                .run(
+                    exact_runner::RequestOut {
+                        completion: None,
+                        class,
+                        ticket: 1,
+                        target: "widget refresh".into(),
+                        request,
+                        forced: false,
+                    },
+                    work,
+                )
+                .map_err(str::to_owned)?;
+            loop {
+                executor.begin_pump();
+                if let Some((_, outcome, _)) = executor.drain().into_iter().next() {
+                    return Ok(outcome);
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    executor.forget(|_| false);
+                    return Err("widget refresh timed out".into());
+                }
+                wait_readable(executor, remaining);
+            }
+        },
+    );
     drop(executor);
     let _ = cancel.send(());
     if let Some(watchdog) = watchdog {

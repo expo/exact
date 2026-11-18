@@ -559,9 +559,11 @@ uint32_t exact_boot(ExactRuntime rt, float width, float height);
  * and configuration JSON. Pure boot reads no store or secrets. Timeline refresh
  * is the only data step. */
 uint32_t exact_boot_entry(ExactRuntime rt, size_t plan, size_t kind, size_t props, size_t configuration, float width, float height);
-uint32_t exact_entry_timeline(ExactRuntime rt, double now_ms, double remaining_ms, const uint8_t *receipt, size_t receipt_len, const uint8_t *module, size_t module_len);
+/* A configured widget's refresh receives its placement's configuration: the
+ * input buffer's first `configuration` bytes, JSON, or its defaults when zero. */
+uint32_t exact_entry_timeline(ExactRuntime rt, double now_ms, double remaining_ms, size_t configuration, const uint8_t *receipt, size_t receipt_len, const uint8_t *module, size_t module_len);
 /* Gallery-only query: a fresh data seam and scratch store, no host activation. */
-uint32_t exact_refresh_entry(ExactRuntime rt, double now_ms);
+uint32_t exact_refresh_entry(ExactRuntime rt, double now_ms, size_t configuration);
 uint32_t exact_boot_plan(ExactRuntime rt, size_t len, float width, float height);
 /* First root's literal viewport-fit=cover, without settlement. Input plan
  * bytes of length len, or the baked plan when len is zero. */

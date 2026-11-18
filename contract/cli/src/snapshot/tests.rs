@@ -1283,6 +1283,8 @@ fn watch_configuration_refuses_more_than_64_recommendations() {
 
 #[test]
 fn a_configuration_is_read_fills_its_defaults_and_refuses_with_an_edit() {
+    use exact_plan::Value;
+    use exact_runner::{DataError, DataSource};
     let widget = configured();
     let configuration = widget.configuration.clone().unwrap();
     assert_eq!(configuration.description, None);
@@ -1376,11 +1378,45 @@ fn a_configuration_is_read_fills_its_defaults_and_refuses_with_an_edit() {
         assert!(slot.owner.is_none(), "{field}");
         assert!(plan.strings.iter().any(|s| s == "automatic"), "{field}");
         // The app's plan is untouched by the entry's slot.
-        assert!(!crate::compile(&src)
-            .unwrap()
+        let app = crate::compile(&src).unwrap();
+        assert!(!app
             .slots
             .iter()
-            .any(|s| crate::compile(&src).unwrap().str(s.name) == CONFIGURATION_SLOT));
+            .any(|s| app.str(s.name) == CONFIGURATION_SLOT));
+        // The refresh takes the date, then the slot's record; the bake asks with the defaults.
+        let refresh = plan.source(plan.snapshot_refresh.unwrap());
+        let parameters: Vec<_> = refresh.params.iter().collect();
+        assert_eq!(parameters.len(), 2, "{field}");
+        assert_eq!(plan.source_param(parameters[1]).ty, slot.ty, "{field}");
+        struct Asked(Vec<Value>);
+        impl DataSource for Asked {
+            fn query(&mut self, _: &str, args: &[Value]) -> Result<Value, DataError> {
+                self.0 = args.to_vec();
+                Err(DataError::Unavailable("checked by declarations".into()))
+            }
+        }
+        let entry = |kind: &str, widget: &Widget, plan: Plan| {
+            let declaration = Declaration::Widget(widget.clone());
+            (kind.to_owned(), Entry { declaration, plan })
+        };
+        let mut entries = std::collections::BTreeMap::from([entry("card", &widget, plan)]);
+        let mut asked = Asked(vec![]);
+        check_refreshes(&entries, &mut asked).unwrap();
+        let defaults = Value::record(vec![Value::str("automatic")]);
+        assert_eq!(asked.0, [Value::Number(0.0), defaults], "{field}");
+        let declarations = crate::typescript(&source_plan(&entries, &app).unwrap()).unwrap();
+        let written =
+            r#"refreshCard: (args: [number, { rows: "automatic" | "one" | "three" }]) =>"#;
+        assert!(declarations.contains(written), "{field}: {declarations}");
+        // One refresh name has one signature, so one configuration.
+        let plain = compile(&source("    text title", "", ""), &super::tests::widget()).unwrap();
+        entries.extend([entry("plain", &super::tests::widget(), plain)]);
+        let error = source_plan(&entries, &app).unwrap_err();
+        let edit = "widgets `card` and `plain` share refresh `refreshCard`";
+        assert!(
+            error.contains(edit) && error.contains("`configuration`"),
+            "{error}"
+        );
     }
     let inject = "  inject\n    snapshot_configuration: Configuration\n";
     for (shape, members, widget, edit) in [

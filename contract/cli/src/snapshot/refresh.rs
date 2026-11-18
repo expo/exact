@@ -18,7 +18,8 @@ pub fn entries(app: &Path) -> Result<BTreeMap<String, Entry>, String> {
 
 /// Check immediate refresh answers; pending and unavailable answers are checked
 /// by their source declarations. No host executes requests during this check.
-/// Epoch zero is the bake's unknown date, as on the app's data seam.
+/// Epoch zero is the bake's unknown date, as on the app's data seam, and a
+/// configured widget's refresh is asked with its defaults.
 pub fn check_refreshes(
     entries: &BTreeMap<String, Entry>,
     data: &mut impl DataSource,
@@ -32,7 +33,9 @@ pub fn check_refreshes(
         let name = plan.str(signature.name);
         data.bind(plan);
         let mut store = Store::new(data.grants(), []);
-        match data.answer(&mut store, name, &[Value::Number(0.0)]) {
+        let args = exact_runner::entry::refresh_args(plan, 0.0, None)
+            .map_err(|e| format!("widget {kind}: refresh `{name}`: {e}"))?;
+        match data.answer(&mut store, name, &args) {
             Ok(Answer::Now(value)) => {
                 if let Some(mismatch) = mismatch(plan, signature.ty, &value, "result") {
                     return Err(format!("widget {kind}: refresh `{name}` {mismatch}; repair the data module to match its declared source signature"));
@@ -171,11 +174,15 @@ fn mismatch(plan: &Plan, ty: TypesId, value: &Value, at: &str) -> Option<String>
 /// This copy is not the app's shipped render plan.
 pub fn source_plan(entries: &BTreeMap<String, Entry>, plan: &Plan) -> Result<Plan, String> {
     let mut builder = PlanBuilder::from_plan(plan.clone());
+    // Each name's signature, and the widget that declared it when no app source did.
     let mut signatures = BTreeMap::new();
     for source in &plan.sources {
-        signatures.insert(plan.str(source.name).to_string(), signature(plan, source));
+        signatures.insert(
+            plan.str(source.name).to_string(),
+            (signature(plan, source), None),
+        );
     }
-    for entry in entries.values() {
+    for (kind, entry) in entries {
         let from = &entry.plan;
         let Some(refresh) = from.snapshot_refresh else {
             continue;
@@ -183,13 +190,16 @@ pub fn source_plan(entries: &BTreeMap<String, Entry>, plan: &Plan) -> Result<Pla
         let source = from.source(refresh);
         let name = from.str(source.name);
         let wanted = signature(from, source);
-        if let Some(existing) = signatures.get(name) {
+        if let Some((existing, widget)) = signatures.get(name) {
             if existing != &wanted {
-                return Err(format!("refresh `{name}` and the app declare different source signatures; make their parameters and result agree"));
+                return Err(match widget {
+                    Some(other) => format!("widgets `{other}` and `{kind}` share refresh `{name}` with different source signatures; a refresh receives its widget's configuration and returns its props, so give both the same `configuration` and props or name a refresh for each"),
+                    None => format!("refresh `{name}` and the app declare different source signatures; make their parameters and result agree (a configured widget's refresh takes the date, then its configuration)"),
+                });
             }
             continue;
         }
-        signatures.insert(name.into(), wanted);
+        signatures.insert(name.into(), (wanted, Some(kind)));
         let params: Vec<_> = source
             .params
             .iter()
