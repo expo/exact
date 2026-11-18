@@ -7,10 +7,17 @@
 //! would move it clear of the area, as where its own size places that edge,
 //! the padding stays whole. Its subtree is laid out in its box outset by
 //! what it takes (the engine's `outset`), or, with `align`, it keeps its
-//! size and is moved within that. The solve measures what each box takes
-//! from the frames, as it measures readers (`observe.rs`).
+//! size and is moved within that. The readers' solve (`observe.rs`) measures
+//! what each box takes from the frames in its rounds, through the part here:
+//! which boxes are due (`takers_due`), what each takes (`taking`), and the
+//! layout again of those that took more or less (`check_taken`).
+use super::area::{area, band_at};
+use super::observe::{in_branches, within};
+use super::Kernel;
 use crate::arena::NodeArena;
 use crate::generated::{SafeAreaIgnore, SafeAreaIgnoreAlign, StyleProps};
+use crate::id::{IdMap, IdSet};
+use crate::layout::{LayoutMirror, LayoutReceipt};
 use crate::Direction;
 
 /// What a box that ignores takes past the box its parent places, as the
@@ -75,6 +82,244 @@ impl Taken {
             (None, true) => (right, top),
         }
     }
+}
+
+/// What the boxes that ignore take, and what the solve needs to measure it
+/// again only where it may have moved (D4).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Takings {
+    /// What each box that ignores and touches takes past its place.
+    taken: IdMap<u32, Taken>,
+    /// Each box that ignores's used margins as its layout last placed it, an
+    /// `auto` one 0, from whichever tree laid it out.
+    margins: IdMap<u32, [f32; 4]>,
+    /// The edges each box that ignores gave the band back on in this solve.
+    pub(super) released: IdMap<u32, [bool; 4]>,
+    /// The boxes that ignore whose taking is current: their frames, their
+    /// styles and the area above them held since they were measured, so the
+    /// solve measures them again only when one of those moves.
+    pub(super) measured: IdSet<u32>,
+}
+
+impl Takings {
+    pub(super) fn taken(&self, slot: u32) -> Option<Taken> {
+        match self.taken.is_empty() {
+            true => None,
+            false => self.taken.get(&slot).copied(),
+        }
+    }
+
+    pub(super) fn forget(&mut self, slot: u32) {
+        self.taken.remove(&slot);
+        self.margins.remove(&slot);
+        self.measured.remove(&slot);
+    }
+
+    pub(super) fn set_margins(&mut self, slot: u32, margins: [f32; 4]) {
+        // Measure it again where its margins moved and its frame need not
+        if self.margins.insert(slot, margins) != Some(margins) {
+            self.measured.remove(&slot);
+        }
+    }
+}
+
+impl Kernel {
+    /// The boxes under `root` that ignore whose taking may have moved since
+    /// they were measured: those whose frames `receipt`'s layout moved and
+    /// those not measured since what they take from changed. In a content
+    /// region, whose passes lay its branches out apart from the receipt,
+    /// every one.
+    pub(super) fn takers_due(&self, root: u32, receipt: &LayoutReceipt) -> Vec<u32> {
+        let arena = &self.arena;
+        if arena.ignoring.is_empty() {
+            return Vec::new();
+        }
+        let measured = &arena.observations.takings.measured;
+        let mut due: Vec<u32> = match self.region.is_some() {
+            true => arena.ignoring.iter().collect(),
+            false => (receipt.changed.iter())
+                .map(|k| k.index)
+                .filter(|&s| arena.ignoring.contains(s))
+                .collect(),
+        };
+        // Skip the walk over every box that ignores while each is measured
+        if measured.len() < arena.ignoring.len() {
+            due.extend(arena.ignoring.iter().filter(|s| !measured.contains(s)));
+        }
+        due.sort_unstable();
+        due.dedup();
+        due.retain(|&s| within(arena, s, root));
+        due
+    }
+
+    /// Measure what each box in `due` takes (D4), keep each measurement
+    /// where `keep`, and return the boxes whose frames it moves by more than
+    /// half a device pixel.
+    pub(super) fn check_taken(&mut self, due: &[u32], keep: bool) -> Vec<u32> {
+        if due.is_empty() {
+            return Vec::new();
+        }
+        let arena = &self.arena;
+        let tolerance = arena.observations.tolerance();
+        // Two agree where both extend or both move the box, by frames within tolerance
+        let near = |a: Option<Taken>, b: Option<Taken>| match (a, b) {
+            (Some(a), Some(b)) => {
+                let (x, y) = (a.frame(), b.frame());
+                a.offset.is_some() == b.offset.is_some()
+                    && (0..4).all(|e| (x[e] - y[e]).abs() <= tolerance)
+            }
+            (a, b) => a == b,
+        };
+        let measured: Vec<(u32, Option<Taken>, bool)> = (due.iter())
+            .map(|&s| {
+                let (t, held) = taking(self, s);
+                (s, t, held)
+            })
+            .collect();
+        // One within tolerance of what it took keeps that, so it does not drift
+        let changed: Vec<(u32, Option<Taken>)> = (measured.iter())
+            .filter(|&&(s, t, _)| !near(arena.observations.taken(s), t))
+            .map(|&(s, t, _)| (s, t))
+            .collect();
+        let observations = &mut self.arena.observations;
+        for &(s, _, held) in &measured {
+            match held && keep {
+                true => observations.takings.measured.insert(s),
+                false => observations.takings.measured.remove(&s),
+            };
+        }
+        if keep {
+            for &(s, t) in &changed {
+                if let Some(was) = observations.takings.taken.get(&s) {
+                    let gave: [bool; 4] = std::array::from_fn(|e| {
+                        was.by[e] > tolerance && t.is_none_or(|t| t.by[e] <= tolerance)
+                    });
+                    let released = observations.takings.released.entry(s).or_default();
+                    *released = std::array::from_fn(|e| released[e] || gave[e]);
+                }
+                match t {
+                    Some(t) => observations.takings.taken.insert(s, t),
+                    None => observations.takings.taken.remove(&s),
+                };
+            }
+        }
+        changed.into_iter().map(|(s, _)| s).collect()
+    }
+
+    /// Let the band fill again the padding each box kept whole where its
+    /// parent is to be laid out anew, since what moved the box clear may have
+    /// changed, so that the layout reaches what a fresh one of the tree does.
+    /// A content region's branches are laid out by trees of their own, which
+    /// it builds afresh, so a box in one is tested again only where its place
+    /// moves (`taking`).
+    pub(super) fn reopen_whole(&mut self) {
+        let taken = &self.arena.observations.takings.taken;
+        if !taken.values().any(|t| t.whole.contains(&true)) {
+            return;
+        }
+        let Some(tree) = self.layout.as_deref().and_then(LayoutMirror::tree_ref) else {
+            return;
+        };
+        let arena = &self.arena;
+        let branches =
+            (self.region.as_ref()).map(|r| [r.binding.content.index, r.binding.pending.index]);
+        let laid_anew = |slot: u32| {
+            if branches.is_some_and(|b| in_branches(arena, b, slot)) {
+                return false;
+            }
+            let mut at = arena.parent(slot);
+            while let Some(p) = at {
+                if let Some(node) = arena.taffy(p) {
+                    return tree.is_dirty(node);
+                }
+                at = arena.parent(p);
+            }
+            true
+        };
+        let reopened: Vec<u32> = (taken.iter())
+            .filter(|(_, t)| t.whole.contains(&true))
+            .map(|(&s, _)| s)
+            .filter(|&s| laid_anew(s))
+            .collect();
+        for &s in &reopened {
+            if let Some(t) = self.arena.observations.takings.taken.get_mut(&s) {
+                t.whole = [false; 4];
+            }
+        }
+        self.restyle_taken(&reopened);
+    }
+
+    /// Lay out and publish again each box that took more or less: an
+    /// extended one's engine style carries it, and publication places a
+    /// moved one.
+    pub(super) fn restyle_taken(&mut self, taking: &[u32]) {
+        if taking.is_empty() {
+            return;
+        }
+        if let Some(r) = &mut self.region {
+            r.invalidate();
+        }
+        let mut unmirrored = crate::layout::Unmirrored;
+        let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+        for &s in taking {
+            self.arena.layout_dirty.insert(s);
+            if let Some(node) = self.arena.taffy(s) {
+                layout.restyle(&self.arena, s, node);
+            }
+        }
+    }
+}
+
+/// What `slot`, which ignores, takes past its place on the layout just made
+/// (D4): on each edge it names, where its margin box, an `auto` margin
+/// counting 0, meets the inner side of the area its parent passes it or
+/// lies inside the area, that area to its outer side, `None` where it
+/// takes nothing; and whether that holds while its frame, its style and the
+/// area above it do, which it does not in a top-layer box, whose block can
+/// move in the viewport.
+fn taking(kernel: &Kernel, slot: u32) -> (Option<Taken>, bool) {
+    let arena = &kernel.arena;
+    let hidden = arena.flags(slot).has(crate::id::NodeFlags::HIDDEN);
+    if hidden
+        || arena.taffy(slot).is_none()
+        || arena.is_inline_run(slot)
+        || super::block::owns(arena, slot)
+    {
+        return (None, true);
+    }
+    let space = band_at(kernel, slot);
+    // One in a top-layer box can move in the viewport without its frame
+    let held = space.owner.is_some() || space.root.is_none();
+    let Some(band) = space.band else {
+        return (None, held);
+    };
+    let sides = area(arena, slot, &space, band);
+    let named = edges(arena, slot, crate::generated::SafeAreaIgnore::Container);
+    // Its edges where its parent placed it: its frame less what it took
+    let stored = arena.observations.taken(slot);
+    let [top, right, bottom, left] = space.edges(arena, slot);
+    let [x, y, width, height] = stored.map_or([0.0; 4], |t| t.frame());
+    let placed = [top - y, right + x + width, bottom + y + height, left - x];
+    let margins = (arena.observations.takings.margins.get(&slot)).map_or([0.0; 4], |m| *m);
+    let tolerance = arena.observations.tolerance();
+    let at: [f32; 4] = std::array::from_fn(|e| placed[e] - margins[e]);
+    let by: [f32; 4] = std::array::from_fn(|e| {
+        let [outer, inner] = sides[e];
+        match named[e] && at[e] <= inner + tolerance {
+            true => (at[e] - outer).max(0.0),
+            false => 0.0,
+        }
+    });
+    // An edge it took, gave back and touches again in one solve keeps its
+    // padding whole, since filling it moved the box clear, until its place
+    // there moves
+    let released = (arena.observations.takings.released.get(&slot)).map_or([false; 4], |r| *r);
+    let whole: [bool; 4] = std::array::from_fn(|e| {
+        let kept = stored.is_some_and(|t| t.whole[e] && (t.at[e] - at[e]).abs() <= tolerance);
+        by[e] > tolerance && (released[e] || kept)
+    });
+    let taken = (by.iter().any(|&b| b > tolerance)).then(|| Taken::of(arena, slot, by, whole, at));
+    (taken, held)
 }
 
 /// Whether `style` takes the container region on some edge.

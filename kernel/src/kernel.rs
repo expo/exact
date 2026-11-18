@@ -22,6 +22,7 @@ use crate::text::{MonospaceMeasurer, TextMeasurer, TextRun, TextStyle};
 use crate::txn::{self, CommitReceipt, Target};
 use crate::wire::{self, Op};
 mod alert;
+pub(crate) mod area;
 pub(crate) mod block;
 mod cover;
 mod document;

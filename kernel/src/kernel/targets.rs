@@ -9,7 +9,7 @@
 //! when a move, a block gained or given back, or a box joining or leaving
 //! the top layer gives it another holder.
 
-use super::observe::{holder, holds, Holder};
+use super::area::{holder, holds, Holder};
 use super::Kernel;
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
