@@ -10,7 +10,9 @@ import XCTest
 /// alike; a box outside every route reads the screen's insets, and a sheet's
 /// content its sheet's. And over `scripts/fixtures/bar-hero.contract`, a
 /// route whose scroller starts at its top opts that edge out of its
-/// clearance (D4), so the scroller's first box reaches under the bar.
+/// clearance (D4), so the scroller's first box reaches under the bar. And
+/// over `scripts/fixtures/bar-control.contract`, a box between the bar and
+/// the scroller is content: the scroller gets no inset for it.
 final class LocalInsetsIOSTests: XCTestCase {
     private var window: UIWindow?
     private var sessions: [ExactSession] = []
@@ -148,6 +150,29 @@ final class LocalInsetsIOSTests: XCTestCase {
         XCTAssertEqual(onScreen(hero).minY, 0, accuracy: 0.5, "the hero's background starts at the screen's top, under the bar")
         XCTAssertEqual(sv.contentOffset.y + sv.adjustedContentInset.top, 0, accuracy: 0.5, "at its start")
         if case .edges(let edges)? = session.presenter.navigation.covers[route.id] { XCTAssertEqual(edges.top, 0, "no top cover") }
+    }
+
+    func testAScrollerBelowAControlBarGetsNoInsetForIt() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the bars and the safe area are a scene window's")
+        }
+        let (session, _) = try fixture(scene, "BAR_CONTROL")
+        until("the route shows its scroller under its bar") {
+            guard let route = self.node(session, "route"), let c = session.presenter.navigation.controllers[route.id] else { return false }
+            return c.viewIfLoaded?.window != nil && c.view.safeAreaInsets.top > 0 && self.node(session, "first") != nil
+        }
+        let route = try XCTUnwrap(node(session, "route"))
+        let c = try XCTUnwrap(session.presenter.navigation.controllers[route.id])
+        let control = try XCTUnwrap(node(session, "control")), list = try XCTUnwrap(node(session, "list"))
+        let sv = try XCTUnwrap(list.scrollView)
+        // The route clears the bar, the control sits under it and the scroller under the control
+        XCTAssertEqual(onScreen(control).minY, c.view.safeAreaInsets.top, accuracy: 0.5, "the control under the bar")
+        XCTAssertEqual(onScreen(list).minY, onScreen(control).maxY, accuracy: 0.5, "the scroller under the control")
+        until("the first row starts at the scroller's top") {
+            guard let first = self.node(session, "first") else { return false }
+            return abs(self.onScreen(first).minY - self.onScreen(list).minY) < 0.5
+        }
+        XCTAssertEqual(sv.adjustedContentInset.top, 0, accuracy: 0.5, "no inset: the scroller overlaps no safe area")
     }
 }
 #endif
