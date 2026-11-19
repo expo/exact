@@ -40,7 +40,9 @@ import { conforms } from './shape.js';
 // clock runs, null before then. It may be 0 or less: a paused test clock can read 0 at the mount, and an adopted
 // render's clock may have run longer than the page has.
 export let Booting = false,
-  start = null;
+  start = null,
+  // Whether the boot adopted the rendered page, so its document is the one the server sent (marks.js)
+  Adopted = false;
 export const booting = () => Booting;
 export let Adopt = false,
   // The parents whose rows a keyed list adopted: one holding rows past the list's (a page built ahead, opened at a
@@ -576,7 +578,7 @@ export function mount(f) {
     Lazy.length = LazyAt = 0;
     LazyRows.clear();
   }
-  const adopted = adopting && built;
+  Adopted = adopting && built;
   if (!built && adopting) {
     // The document isn't this plan's projection: build afresh (and say so).
     say(`adoption abandoned ${Why}`);
@@ -595,7 +597,7 @@ export function mount(f) {
   }
   // the runner's journal line (LLP 1012 logs)
   say(`boot: ${root.getElementsByTagName('*').length} nodes, epoch ${clock.epoch}`);
-  if (adopted) say('adopted the document');
+  if (Adopted) say('adopted the document');
   autofocus(root); // the document's autofocus (LLP 1035.000 D9), then each commit's mounts (`commit`, focus.js)
   // Rows waiting are in flight, for the agent's `clock settle`.
   if (Lazy.length) {

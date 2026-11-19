@@ -6,7 +6,7 @@
 // starts at an input within 1 s before it, else at the commit. A page hidden
 // during startup reports no further startup marks.
 // Events go to each launch module's web service, which receives earlier events first.
-import { inflight, Resources, clock, After, Hosts, Routes, routeAt, busy } from './rt.js';
+import { inflight, Resources, clock, After, Hosts, Routes, routeAt, busy, Adopted } from './rt.js';
 import { Counting } from './held.js';
 
 const STARTUP_TIMER_WINDOW_MS = 1000, TTI_TIMEOUT_MS = 30000;
@@ -101,8 +101,9 @@ function startNavigation(url) {
 function presentFrom(c0, served) {
   // The first of: Element Timing on the boot tree's first text leaves, the
   // first-contentful-paint at or after the commit, or the next rendering
-  // opportunity. A server-rendered page painted before this script ran, so
-  // its first-contentful-paint counts even though it precedes the commit.
+  // opportunity. A document the server sent, which the boot adopted, painted
+  // before this script ran, so its first-contentful-paint counts even though
+  // it precedes the commit.
   let done = false;
   const take = (t, method) => { if (done || hidden) return; done = true; marks.present = method === 'served_fcp' ? t : Math.max(t, c0); marks.presentMethod = method; record('mark', { mark: 'present', method }); evaluate(); };
   try {
@@ -134,8 +135,6 @@ export function install(modules) {
   Hosts.observeAttributes = (...rest) => record('app.attributes', { attributes: pairs(rest) });
   Hosts.observeError = (message, type) => record('app.error', { source: 'reportedByUser', message, type: type ?? 'ContractError' });
   globalThis.exact = Object.assign(globalThis.exact ?? {}, { observe: () => ({ marks: { ...marks }, outcome, trace, events: events.length }) });
-  // A server-rendered document carries capture.js's checkpoint script.
-  const served = !!document.querySelector('script[type="application/vnd.exact.checkpoint"]');
   return {
     mounted() {
       const c0 = performance.now();
@@ -148,7 +147,8 @@ export function install(modules) {
         if (n >= 4) break;
         if (el.childElementCount === 0 && el.textContent.trim()) el.setAttribute('elementtiming', `exact-boot-${n++}`);
       }
-      presentFrom(c0, served);
+      // the document the server sent, when the boot adopted it
+      presentFrom(c0, Adopted);
       After.push(() => { dirty = true; queueMicrotask(evaluate); });
       location0 = location.pathname + location.search;
       seen.add(location0);
