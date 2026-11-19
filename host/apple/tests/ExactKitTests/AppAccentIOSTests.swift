@@ -504,7 +504,7 @@ final class AppAccentIOSTests: XCTestCase {
 
     /// LLP 1011 §4: a symbol in a box of another shape keeps its aspect under
     /// CSS's default `object-fit: fill`, as an SVG does; `cover` and `none` say otherwise.
-    /// The fit places the symbol's view, which draws the glyph undistorted in its frame.
+    /// `object-fit` places the symbol's view, which draws the glyph undistorted in its frame.
     func testASymbolKeepsItsAspectUnderFill() throws {
         func symbol(_ id: Int, _ style: [String: Any]) -> [[String: Any]] {
             [["op": "create", "id": id, "kind": "image", "props": ["imageSource": "symbol:sf/chevron.right", "symbolName": "chevron.right"], "handlers": [],
@@ -513,16 +513,20 @@ final class AppAccentIOSTests: XCTestCase {
         }
         let p = presenter(view(1) + symbol(2, [:]) + symbol(3, ["object_fit": "cover"]) + symbol(4, ["object_fit": "none"])
                           + [["op": "children", "id": 1, "ids": [2, 3, 4]], ["op": "roots", "ids": [1]]])
-        // Laid out as UIKit lays out a view on screen: the symbol is placed in its node's content box, which its frame sets
-        for id: UInt32 in 2...4 { p.views[id]?.layoutIfNeeded() }
+        // Lay the nodes out now, as UIKit would at its next commit: `layoutSubviews` places each symbol in the content
+        // box its node's frame op gave it
+        p.viewport.layoutIfNeeded()
         let fill = try XCTUnwrap(p.views[2]?.symbolView), cover = try XCTUnwrap(p.views[3]?.symbolView), none = try XCTUnwrap(p.views[4]?.symbolView)
-        let box = CGRect(x: 0, y: 0, width: 16, height: 16), glyph = try XCTUnwrap(none.image).size
+        let box = CGRect(x: 0, y: 0, width: 16, height: 16), glyph = try XCTUnwrap(p.views[4]?.image).size
         XCTAssertNotEqual(glyph.width, glyph.height, "the chevron is not square, so the fits differ")
         XCTAssertEqual(fill.frame, box)
         XCTAssertEqual(fill.contentMode, .scaleAspectFit, "unsaid `fill` draws the glyph undistorted in the box")
-        let covered = cover.frame.size
-        XCTAssertEqual(min(covered.width, covered.height), 16, accuracy: 0.001, "`cover` fills the box along the glyph's short side")
-        XCTAssertGreaterThan(max(covered.width, covered.height), 16, "and runs past it along the long one")
+        let covered = cover.frame, scale = 16 / min(glyph.width, glyph.height)
+        XCTAssertEqual(covered.width, glyph.width * scale, accuracy: 0.001, "`cover` scales the glyph until its short side spans the box")
+        XCTAssertEqual(covered.height, glyph.height * scale, accuracy: 0.001, "keeping its aspect")
+        XCTAssertEqual(covered.midX, box.midX, accuracy: 0.001)
+        XCTAssertEqual(covered.midY, box.midY, accuracy: 0.001)
+        XCTAssertNotNil(cover.layer.mask, "and is clipped to the box")
         XCTAssertEqual(none.frame.size, glyph, "`none` keeps the glyph's own size")
     }
 
