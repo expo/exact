@@ -873,7 +873,7 @@ fn artifact_graph(
         }
     }
     Ok(
-        json!({"version":1,"appleIcons":icons,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
+        json!({"version":1,"appleIcons":icons,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"launchGround":launch_ground(plan),"artifacts":artifacts}),
     )
 }
 
@@ -896,43 +896,193 @@ fn listens(inputs: &Value) -> bool {
     })
 }
 
-/// LLP 1116.011 D2.3: the ground the app's first route stands on, which the
-/// iOS launch screen shows until its first frame: `"grouped"` where the first
-/// route's `background-color` is the metric the compiler gives a route that
-/// scrolls a grouped list (`-exact-grouped-page-ground`, LLP 1116.007 D5),
-/// iOS's grouped grey, or that role written (`-exact-grouped-background`),
-/// `"system"` for any other (the platform's page, `systemBackground`). A route
-/// is a node with a `navigationKey` and no `navigationBack` (the navigation
-/// root has both); the first in the plan's order, past the page the compiler
-/// writes for an unknown address (its test id `not-found`), is the first one
-/// the author declared. A route whose background is written or computed is
-/// the author's: the manifest's `background_color` names its launch colour.
+/// LLP 1116.011 D2.3: the ground the app's first screen stands on, which the
+/// iOS launch screen shows until its first frame: `"grouped"` where it is
+/// the metric the compiler gives a route that scrolls a grouped list
+/// (`-exact-grouped-page-ground`, LLP 1116.007 D5), iOS's grouped grey, or
+/// that role written (`-exact-grouped-background`), `"system"` for any other
+/// (the platform's page, `systemBackground`). The first screen is the first
+/// of [`screens`]: the plan does not say which route the app opens on. A
+/// ground that names a colour is [`launch_ground`]'s.
 fn launch_background(plan: &exact_plan::Plan) -> &'static str {
-    use exact_kernel::PropId;
-    use exact_plan::BindingKind::{Prop, Style};
-    let literal = |node: &exact_plan::NodesRow, kind, id: u16| {
-        node.bindings.iter().find_map(|b| {
-            let b = plan.binding(b);
-            (b.kind == kind && b.id == id).then(|| crate::colors::literal(plan, &b))
-        })
-    };
-    let route = plan.nodes.iter().find(|node| {
-        let has = |id: PropId| literal(node, Prop, id as u16).is_some();
-        has(PropId::NavigationKey)
-            && !has(PropId::NavigationBack)
-            && literal(node, Prop, PropId::TestId as u16) != Some(Some("not-found"))
-    });
-    let ground = route.and_then(|node| {
-        literal(&node, Style, exact_kernel::StyleId::BackgroundColor as u16).flatten()
-    });
     if matches!(
-        ground,
+        screens(plan).first().and_then(|(_, written)| *written),
         Some("-exact-grouped-page-ground" | "-exact-grouped-background")
     ) {
         "grouped"
     } else {
         "system"
     }
+}
+
+/// LLP 1163 D2: the app's own ground, light and dark, which the iOS launch
+/// screen shows where the manifest names no `background_color`: the ground
+/// every screen the app can open on stands on ([`screens`]), a colour
+/// written as such or a theme's name for one, on one side in both schemes
+/// where that screen or the root fixes a `color-scheme`. The plan does not
+/// say which route the app opens on, so the screens must agree. Null, and
+/// the launch screen the platform's page, wherever the first frame may show
+/// another colour: screens that disagree; a role, a platform colour or a
+/// wide-gamut one, which the host draws as the OS, the app's tint or the
+/// display has it; a theme's colour that varies by an app mode; a computed,
+/// translucent or pictured ground; a computed `color-scheme`; and an app
+/// with a tab panel, whose routes may stand on the panel or a box above it.
+fn launch_ground(plan: &exact_plan::Plan) -> Value {
+    use exact_kernel::PropId;
+    let panel = plan.nodes.iter().any(|node| {
+        matches!(
+            literal(
+                plan,
+                &node,
+                exact_plan::BindingKind::Prop,
+                PropId::AccessibilityRole as u16
+            ),
+            Some(None | Some("tabpanel"))
+        )
+    });
+    if panel {
+        return Value::Null;
+    }
+    // Build the theme table for this plan, never another's whose buffers this one's reuse
+    exact_runner::bridge::role_overrides(plan);
+    let table = (!plan.theme.is_empty()).then(|| exact_runner::bridge::theme_table(plan));
+    let _theme = table.as_ref().map(exact_kernel::style::theme::bind);
+    let mut grounds = screens(plan)
+        .into_iter()
+        .map(|(node, written)| ground(plan, &node, written, table.as_deref().unwrap_or_default()));
+    let first = grounds.next().unwrap_or(Value::Null);
+    if grounds.all(|g| g == first) {
+        first
+    } else {
+        Value::Null
+    }
+}
+
+/// One screen's ground as [`launch_ground`] reads it, while the app's theme
+/// (`theme`) is bound. A theme's colour that varies by an app mode is the
+/// default mode's here, and a `-exact-mode` pin or a mode the app sets may
+/// show another.
+fn ground(
+    plan: &exact_plan::Plan,
+    node: &exact_plan::NodesRow,
+    written: Option<&str>,
+    theme: &[exact_kernel::style::theme::Entry],
+) -> Value {
+    use exact_kernel::style::{theme::recorded, Color, ColorValue};
+    let (value, read) = recorded(|| {
+        written.and_then(|text| {
+            ColorValue::parse_light_dark(text).or_else(|| Color::parse(text).map(ColorValue::Fixed))
+        })
+    });
+    let varies = read
+        .iter()
+        .any(|name| theme.iter().any(|e| e.name == *name && e.varies));
+    let (Some(value @ (ColorValue::Fixed(_) | ColorValue::LightDark(..))), false) = (value, varies)
+    else {
+        return Value::Null;
+    };
+    let scheme = |node: &exact_plan::NodesRow| {
+        literal(
+            plan,
+            node,
+            exact_plan::BindingKind::Style,
+            exact_kernel::StyleId::ColorScheme as u16,
+        )
+    };
+    let (light, dark) =
+        match scheme(node).or_else(|| plan.nodes.iter().next().and_then(|root| scheme(&root))) {
+            None => (false, true),
+            Some(Some("dark")) => (true, true),
+            Some(Some("light")) => (false, false),
+            Some(_) => return Value::Null,
+        };
+    // An opaque colour only: a translucent ground is not what the first frame shows
+    let hex = |dark| {
+        let Color(rgba) = value.resolve(dark);
+        (rgba & 0xff == 0xff).then(|| format!("#{:06x}", rgba >> 8))
+    };
+    match (hex(light), hex(dark)) {
+        (Some(light), Some(dark)) => json!({"light": light, "dark": dark}),
+        _ => Value::Null,
+    }
+}
+
+/// The screens the app can open on, each as the node whose `background-color`
+/// is its ground and that colour as written (`None` where it is computed,
+/// unwritten or under a `background-image`): each route's where it writes
+/// one, else the app root's (the plan's first node, the root of the
+/// component the app starts from), or the root's alone in an app without
+/// routes, in the plan's order. A route is a node with a `navigationKey` and
+/// no `navigationBack` (a stack's navigation root has both; a tab root is
+/// the app root) and no `navigationPresentation` (a sheet or a full-screen
+/// cover is shown over another), past the page the compiler writes for an
+/// unknown address (its test id `not-found`). The compiler places a route
+/// only in the navigation root, the app root, or in a tab panel.
+fn screens(plan: &exact_plan::Plan) -> Vec<(exact_plan::NodesRow, Option<&str>)> {
+    use exact_kernel::PropId;
+    let Some(root) = plan.nodes.iter().next() else {
+        return Vec::new();
+    };
+    let pictured = |node: &exact_plan::NodesRow| {
+        literal(
+            plan,
+            node,
+            exact_plan::BindingKind::Style,
+            exact_kernel::StyleId::BackgroundImage as u16,
+        )
+        .is_some()
+    };
+    let on_root = background(plan, &root)
+        .flatten()
+        .filter(|_| !pictured(&root));
+    let mut screens: Vec<_> = plan
+        .nodes
+        .iter()
+        .filter(|node| {
+            let prop = |id: PropId| literal(plan, node, exact_plan::BindingKind::Prop, id as u16);
+            prop(PropId::NavigationKey).is_some()
+                && prop(PropId::NavigationBack).is_none()
+                && prop(PropId::NavigationPresentation).is_none()
+                && prop(PropId::TestId) != Some(Some("not-found"))
+        })
+        .map(|route| match background(plan, &route) {
+            _ if pictured(&route) => (route, None),
+            Some(written) => (route, written),
+            None => (root.clone(), on_root),
+        })
+        .collect();
+    if screens.is_empty() {
+        screens.push((root, on_root));
+    }
+    screens
+}
+
+/// A node's `background-color`: none where it writes none, `Some(None)`
+/// where its value is computed.
+fn background<'p>(
+    plan: &'p exact_plan::Plan,
+    node: &exact_plan::NodesRow,
+) -> Option<Option<&'p str>> {
+    literal(
+        plan,
+        node,
+        exact_plan::BindingKind::Style,
+        exact_kernel::StyleId::BackgroundColor as u16,
+    )
+}
+
+/// The literal a node's binding of `kind` and `id` holds: none where the
+/// node has no such binding, `Some(None)` where its value is computed.
+fn literal<'p>(
+    plan: &'p exact_plan::Plan,
+    node: &exact_plan::NodesRow,
+    kind: exact_plan::BindingKind,
+    id: u16,
+) -> Option<Option<&'p str>> {
+    node.bindings.iter().find_map(|b| {
+        let b = plan.binding(b);
+        (b.kind == kind && b.id == id).then(|| crate::colors::literal(plan, &b))
+    })
 }
 
 /// Refresh the resident compiler's candidate graph beside its plan. The
@@ -1088,5 +1238,7 @@ fn hash(bytes: &[u8]) -> String {
     exact_update::sha256_hex(bytes)
 }
 
+#[cfg(test)]
+mod launch_tests;
 #[cfg(test)]
 mod tests;

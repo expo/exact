@@ -1309,9 +1309,12 @@ What shows before the first frame is `app.json`'s Web App Manifest
 (`#RGB`, `#RRGGBB` or `#RRGGBBAA`); a fixed `userInterfaceStyle` takes its side
 alone. The web page has it until the first frame, the iOS launch screen centres
 `host.ios.launchImage` on it, and the Android launch window is it, with the bars'
-icons dark over a light colour. Unset, each is the platform's surface: iOS's
-`systemBackground` (its grouped background under a first route that scrolls a
-grouped list) and Android's `surface`.
+icons dark over a light colour. Unset, the iOS launch screen is the app's own
+background where the build can read it and every route it can open on agrees
+(each route's `background-color`, else its root's, written as a colour or a
+theme's colour, LLP 1163 D2), else `systemBackground` (its grouped background under a first route
+that scrolls a grouped list); the web and Android show the platform's surface,
+Android's `surface`.
 
 From Android 12 the launch window (the starting window) shows the launcher icon
 in its middle, as every app's does. `host.android.launchImage` replaces it:

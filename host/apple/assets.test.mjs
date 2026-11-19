@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { appleAssets, appleAssetCatalogInventory, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
+import { appleAssets, appleAssetCatalogInventory, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, launchScreen, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
 import { pngPixels } from './image.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 import { alternateIcons } from '../../scripts/app-icons.mjs';
@@ -64,6 +64,23 @@ test('Mac resource trees cannot replace the generated privacy manifest', () => {
   for (const to of ['Resources/PrivacyInfo.xcprivacy', 'Resources/PrivacyInfo.xcprivacy/data']) {
     assert.throws(() => nativeResourceMappings({ host: { macos: { resources: [{ from: 'shipped', to }] } } }), /host\.macos\.resources\.to/);
   }
+});
+
+test('the launch colour is the manifest\'s, else the app\'s own ground, else the platform\'s page', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-launch-rule-'));
+  try {
+    const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).concat(1);
+    const color = (manifest, ground, launch) => launchScreen({ manifest }, dir, launch, null, ground).ExactLaunchColor;
+    const ground = { light: '#f5f6f8', dark: '#1c1814' };
+    // LLP 1163 D2: a named colour is the author's word, in a dark scheme too unless a dark one is named
+    assert.deepEqual(color({ background_color: '#ffffff' }, ground), { light: rgb('#ffffff') });
+    assert.deepEqual(color({ background_color: '#ffffff', color_scheme_dark: { background_color: '#123456' } }, ground), { light: rgb('#ffffff'), dark: rgb('#123456') });
+    // Named none: the app's own ground, else the platform's page
+    assert.deepEqual(color({}, ground), { light: rgb('#f5f6f8'), dark: rgb('#1c1814') });
+    assert.deepEqual(color({}, ground, 'grouped'), { light: rgb('#f5f6f8'), dark: rgb('#1c1814') });
+    assert.deepEqual(color({}, null, 'grouped'), { light: rgb('#f2f2f7'), dark: rgb('#000000') });
+    assert.equal(color({}), undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test.skipIf(process.platform !== 'darwin')('the host receives the catalogue launch components without resolving an asset', () => {

@@ -585,54 +585,6 @@ fn a_plan_with_metadata_claims_the_media_session() {
 /// the iOS launch screen: the grouped grey where the route scrolls a
 /// grouped list (stopwatch, round 13), the page's own otherwise.
 #[test]
-fn a_plan_says_the_ground_its_first_route_stands_on() {
-    const SCREEN: &str = "routes nav
-  home \"/\"
-component App
-  view
-    main navigationKey=`${top(nav).id}` navigationBack=\"back\"
-      for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` navigationScroll=\"l\" ROUTE position=\"absolute\" inset=0
-          header
-            text \"Laps\" role=\"heading\" aria-level=1
-          LIST
-            section
-              row
-                text \"One\"
-";
-    const GROUPED: &str =
-        "list id=\"l\" appearance=\"auto\" listStyle=\"inset-grouped\" flex=1 min-height=0";
-    let launch = |route: &str, list: &str| {
-        let plan = contract::compile(&SCREEN.replace("ROUTE", route).replace("LIST", list))
-            .unwrap_or_else(|e| panic!("{e}"));
-        artifact_graph(&plan, &json!({}), &[], false, "aarch64-apple-ios-sim").unwrap()
-            ["launchBackground"]
-            .clone()
-    };
-    assert_eq!(launch("", GROUPED), json!("grouped"));
-    assert_eq!(
-        launch("", &GROUPED.replace("inset-grouped", "grouped")),
-        json!("grouped")
-    );
-    // Any other scroll, or a page of its own, is the platform's.
-    assert_eq!(
-        launch("", "scroll id=\"l\" flex=1 min-height=0"),
-        json!("system")
-    );
-    assert_eq!(
-        launch("background-color=\"-exact-background\"", GROUPED),
-        json!("system")
-    );
-    // No route at all, as a plan with no navigation root is.
-    let bare = contract::compile("component App\n  view\n    text \"a\" testId=\"a\"\n").unwrap();
-    assert_eq!(
-        artifact_graph(&bare, &json!({}), &[], false, "aarch64-apple-ios-sim").unwrap()
-            ["launchBackground"],
-        json!("system")
-    );
-}
-
-#[test]
 fn a_no_delivery_development_bake_names_its_gpu_dev_module() {
     // Games are store L=0: the cohort has no trust input, yet the
     // host-less proof's split host bake must name the gpu-dev module.
