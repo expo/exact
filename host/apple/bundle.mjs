@@ -5,7 +5,8 @@ import { packageActivityArm, assertActivityRefusals } from './activities.mjs';
 import { packageWidgets, packageAlarmExtension, widgetId, entryProfiles, activityEntries, platformWidgetEntries, macWidgetGroup, macWidgetEntitlements, widgetGroup, widgetAppKeys } from './widgets.mjs';
 import { packageNotificationService, packageShareExtension, notificationServiceEntitlements, notificationServiceProfile, shareInfo, shareId, macShareEntitlements } from './extensions.mjs';
 import { createHash } from 'node:crypto';
-import { experimental, spawnSync } from './toolchain.mjs';
+import { spawnSync } from './toolchain.mjs';
+import { repackBase } from './native-extras.mjs';
 import { resolve, basename, dirname } from 'node:path';
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { verifyBakeFiles } from '../../scripts/app.mjs';
@@ -261,7 +262,7 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
   const assetKeys = iosAssets(app, bundle, device, { tv, catalog: production, requireIcon: distribution, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, ...bakedAssetInputs(buildReceipt.graph), expected: buildReceipt.binary.metadata.appleAssetCatalogs ?? [], ...(tv ? {} : { expectedLaunchImage: buildReceipt.binary.metadata.launchImage ?? null }) });
   // Experimental: a development archive records what its icons were made from and the keys they gave Info.plist, so a
   // repack (repack.mjs) whose icon inputs are the same takes the base's icons instead of drawing them again.
-  if (ipa && args.includes('--development') && !tv && experimental()) buildReceipt.assets = { key: appleAssetsKey(app, { platform: 'ios', device, catalog: production, stamp: swiftc, ...bakedAssetInputs(buildReceipt.graph) }), keys: assetKeys, stamp: swiftc };
+  if (repackBase({ ios: true, tv, device, ipa, developmentArchive: args.includes('--development'), distribution: distribution || production })) buildReceipt.assets = { key: appleAssetsKey(app, { platform: 'ios', device, catalog: production, stamp: swiftc, ...bakedAssetInputs(buildReceipt.graph) }), keys: assetKeys, stamp: swiftc };
   const stamp = { ...rosterKeys, ...(production ? distributionKeys(sdkName) : {}), ...buildInfo(app, { root, archive: !!ipa && distribution, production: production || distribution, ...stampSdk }) };
   writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, device, { development, distributed: distribution, reach: appleReach, icon: { ...assetKeys, ...(!tv ? watchSyncKeys(app, bakedCompat.inputs?.grantCeiling) : {}) }, distribution: stamp, tv }));
   if (!tv && watchSyncSelected(app)) writeFileSync(resolve(bundle, 'watch-sync.plan'), bakedPlan);

@@ -15,8 +15,10 @@ import { widgetsDigest } from './widgets.mjs';
 
 /** Experimental (`EXACT_EXPERIMENTAL=1`): whether an iPhone development archive is one repack.mjs can rebuild from a
  * later bake. Its executable links the plan's sections with room to spare (an app with widgets links its plan into its
- * own ExactCore, which reserves room already), and its receipt records repackReceipt. */
-export const repackBase = ({ ios, tv, device, ipa, developmentArchive }) => !!(ios && !tv && device && ipa && developmentArchive && experimental());
+ * own ExactCore, which reserves room already), and its receipt records repackReceipt. Never a distributed build, nor
+ * one that bakes production trust. */
+export const repackBase = ({ ios, tv, device, ipa, developmentArchive, distribution = false }, env = process.env) =>
+  !!(ios && !tv && device && ipa && developmentArchive && !distribution && env.EXACT_UPDATE_TRUST !== 'production' && experimental(env));
 /** The linked plan directory a repack base links from: its sections reserved (sections.mjs). */
 export const reservedPlan = (dir, base) => dir && base ? reserveLinkedPlan(dir) : dir;
 /** A repack base's plan, fitted into its reserved sections after the link. */

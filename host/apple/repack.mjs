@@ -39,12 +39,13 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appClip, COMPATIBLE_SDK, compiledTargets, designCompatible, distributionKeys, entitlements, infoPlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
 import { modulePlist } from './plist.mjs';
-import { bakeOutput, bakeWatchEnv, developmentBuildEnv, appleExecutableName, gpuModules, HOST_DEV, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
+import { awaitBuildOutput, bakeOutput, bakeWatchEnv, developmentBuildEnv, appleExecutableName, gpuModules, HOST_DEV, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { HOST_MACOS, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { prepareRustBundle, nativeSource } from '../../scripts/rust.mjs';
-import { bakeOutside } from '../../scripts/linked-plan.mjs';
+import { bakeOutside, linkedInputs } from '../../scripts/linked-plan.mjs';
+import { bakedSettings } from '../../js/bake/src/__exact_env.mjs';
 import { hasEntries, platformWidgetEntries, widgetExtensionInfo, widgetId, widgetsDigest } from './widgets.mjs';
-import { EXTENSION_KINDS, extensionKinds, withoutExtensions } from './extensions.mjs';
+import { EXTENSION_KINDS, extensionKinds, notificationService, withoutExtensions } from './extensions.mjs';
 import { appleAssetsKey, bakedAssetInputs, frameworkInfo, iosAssets, plistFile } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
 import { fitLinkedSections, occurrencesOutsideLinked, readLinkedSections } from './sections.mjs';
@@ -76,8 +77,9 @@ const REBUILT = (name) => ['Info.plist', 'receipt.json', '_CodeSignature', 'asse
 /** compat.json's parts the binary acts on: what it was built to provide (`inputs`, but for the app's identity and
  * grants), its target and trust. A plan-only change leaves all of them as they were. */
 const BINDING = ['inputs', 'target', 'embedded'];
-/** `embedded`'s digests of the plan and the bundle's assets are the bundle's own: they move with every plan edit. */
-const bindingOf = (compat, key) => key === 'embedded' && compat.embedded && typeof compat.embedded === 'object' ? (({ plan: _p, assets: _a, ...rest }) => rest)(compat.embedded) : key === 'inputs' && compat.inputs && typeof compat.inputs === 'object' ? withoutApp(compat.inputs) : compat[key] ?? null;
+/** `embedded`'s digests of the plan, each entry's plan and the bundle's assets are the bundle's own: they move with every
+ * plan edit, and repack writes the plans again. */
+const bindingOf = (compat, key) => key === 'embedded' && compat.embedded && typeof compat.embedded === 'object' ? (({ plan: _p, plans: _ps, assets: _a, ...rest }) => rest)(compat.embedded) : key === 'inputs' && compat.inputs && typeof compat.inputs === 'object' ? withoutApp(compat.inputs) : compat[key] ?? null;
 /** compat.json's inputs but for the app's identity, its icons and its grants, which reach no compiled code
  * (`inputs.linked` says what the grants link; the icons are bundle resources repack draws again): the base may be
  * another app's, such as a template built with the placeholder icon. */
@@ -107,6 +109,14 @@ export const widgetBaseRefusal = (upload, base) =>
   : base.digest !== upload.digest ? 'the widget or Live Activity declarations changed (a kind, family, configuration or title), or the extensions packaged'
   : base.alarm ? 'an alarm countdown in the widget extension builds in full' : null;
 
+/** The extension kinds this build packages, as build.mjs takes them: `--extensions`, less a notification service the
+ * app does not have (so a widget app's widgetsDigest is its full build's). */
+export const packagedKinds = (args, app) => {
+  const kinds = extensionKinds(args);
+  if (!notificationService(app)) kinds.delete('notifications');
+  return kinds;
+};
+
 export async function repack(args) {
   if (!experimental()) refuse('repack is experimental: set EXACT_EXPERIMENTAL=1');
   const at = (flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : null;
@@ -116,7 +126,7 @@ export async function repack(args) {
   const started = Date.now(), times = {}, mark = (name) => { times[name] = (Date.now() - started) / 1000; };
   const app = resolveApp(appArg);
   // The extensions this build packages, as build.mjs takes them (--extensions): a widget left out is no widget here.
-  const packaged = extensionKinds(args);
+  const packaged = packagedKinds(args, app);
   if (packaged.size < EXTENSION_KINDS.length) app.manifest = withoutExtensions(app.manifest, packaged);
   // An app with widgets or Live Activities: its plan is in its own ExactCore's sections (see above).
   const widgets = hasEntries(app);
@@ -129,6 +139,10 @@ export async function repack(args) {
   if (existsSync(resolve(app.dir, 'data/Cargo.toml'))) refuse('an app with a Rust data crate bakes with its own compiled code');
   if (existsSync(resolve(app.dir, 'library')) || app.manifest.library) refuse('a package framework builds in full');
 
+  // The app's build claim, as build.mjs holds it: the one writer of its bake directory (bakeOutside) until this is done.
+  const release = awaitBuildOutput(app, appleArtifacts(app).lock, () => console.error(`waiting for the Apple build of ${app.name} already running`));
+  let work = null, unzipping = null;
+  try {
   // The bake, as build.mjs's buildBake prepares it for a development device archive, outside Cargo.
   const sdk = tool('xcrun', ['--sdk', SDK_NAME, '--show-sdk-path']).stdout.trim();
   let env = withHostDeployment({ ...process.env, ...developmentBuildEnv(), EXACT_WIDGET_GALLERY: '0', SDKROOT: sdk, MACOSX_DEPLOYMENT_TARGET: process.env.MACOSX_DEPLOYMENT_TARGET || HOST_MACOS, IPHONEOS_DEPLOYMENT_TARGET: compiledTargets(app, 'development').ios, EXACT_APPLE_LINK: 'all' });
@@ -140,8 +154,8 @@ export async function repack(args) {
   Object.assign(env, bakeWatchEnv(app));
   mark('setup');
   // The base IPA unzips while the bake runs (a process of its own); both are needed only after it.
-  const work = mkdtempSync(resolve(tmpdir(), 'exact-repack-'));
-  const unzipping = Bun.spawn(['unzip', '-q', resolve(baseIpa), '-d', work], { stdout: 'ignore', stderr: 'pipe' });
+  work = mkdtempSync(resolve(tmpdir(), 'exact-repack-'));
+  unzipping = Bun.spawn(['unzip', '-q', resolve(baseIpa), '-d', work], { stdout: 'ignore', stderr: 'pipe' });
   // The SDK here is a compiled, read-only one the native fingerprint pinned: its bake tool is built.
   const baked = bakeOutside(app, 'ios', TARGET, env, undefined, { toolBuilt: true });
   const plan = readFileSync(resolve(baked, 'app.plan')), compatText = readFileSync(resolve(baked, 'compat.json')), compat = JSON.parse(compatText);
@@ -151,7 +165,6 @@ export async function repack(args) {
   mark('bake');
 
   // The base bundle.
-  try {
     if (await unzipping.exited !== 0) throw new Error(`unzip of the base IPA failed: ${(await new Response(unzipping.stderr).text()).trim().slice(-500)}`);
     mark('unzip');
     const apps = readdirSync(resolve(work, 'Payload')).filter(name => name.endsWith('.app'));
@@ -296,7 +309,10 @@ export async function repack(args) {
     // full build makes it so (bundle.mjs: every archive shipped, or only a production one), as the base's is. A whole
     // one names this bake's linked plan, not the base's.
     const whole = 'linkedPlan' in (baseReceipt.build ?? {}) || Array.isArray(baseReceipt.build?.binary?.inputs);
-    const build = { ...baseReceipt.build, compat, graph, assets: { key: assetsKey, keys: assetKeys, stamp: swiftc }, ...(whole && 'linkedPlan' in (baseReceipt.build ?? {}) ? { linkedPlan: baked } : {}) };
+    // What the bake read (its TypeScript sources and settings, its linked inputs) is this bake's, as app.mjs records it.
+    const { settings: _s, typescriptSources: _t, linkedInputs: _l, ...baseNative } = baseReceipt.build ?? {};
+    const build = { ...baseNative, compat, graph, assets: { key: assetsKey, keys: assetKeys, stamp: swiftc }, ...bakedSettings(baked, app.dir),
+      ...(whole && 'linkedPlan' in (baseReceipt.build ?? {}) ? { linkedPlan: baked, linkedInputs: linkedInputs(baked) } : {}) };
     mark('entitlements');
     const written = receipt(app, { compatibilityId: compat.id, build, composition: baseReceipt.composition, platform: 'ios', target: TARGET, sdk, identity: '-', profile: null, entitlements: readFileSync(ent, 'utf8'), gpu: null, development: null, repackedFrom: baseCompat.id });
     writeFileSync(resolve(bundle, 'receipt.json'), whole ? written : shippedReceipt(written));
@@ -326,7 +342,12 @@ export async function repack(args) {
     mark('archive');
     console.log(`host/apple: ${ipa} (repacked from the base's native build: ${Object.entries(times).map(([step, s], i, all) => `${step} ${(s - (all[i - 1]?.[1] ?? 0)).toFixed(2)}`).join(', ')})`);
     return { times, compat: compat.id };
-  } finally { rmSync(work, { recursive: true, force: true }); }
+  } finally {
+    // An unzip still running on an early failure stops before its destination goes.
+    if (unzipping) { unzipping.kill(); await unzipping.exited; }
+    if (work) rmSync(work, { recursive: true, force: true });
+    release();
+  }
 }
 
 const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value ?? null);

@@ -588,9 +588,9 @@ async function main(args, lockHeld = false) {
   // `--development` packages the development build `--run` installs (host-dev, development trust): an
   // agent's own iteration build that a service re-signs, not an artifact to distribute.
   const developmentArchive = args.includes('--development');
-  // Experimental: an archive repack.mjs can rebuild from a later bake reserves its plan's sections (native-extras.mjs).
-  const repackable = repackBase({ ios, tv, device, ipa, developmentArchive }), reservesPlan = () => repackable && !widgets, planArgs = (dir) => linkedPlanArgs(reservedPlan(dir, reservesPlan()));
   const appstore = !ios && args.includes('--appstore'), distribution = appstore || (!!ipa && !developmentArchive) || args.includes('--distribution');
+  // Experimental: an archive repack.mjs can rebuild from a later bake reserves its plan's sections (native-extras.mjs).
+  const repackable = repackBase({ ios, tv, device, ipa, developmentArchive, distribution }), reservesPlan = () => repackable && !widgets, planArgs = (dir) => linkedPlanArgs(reservedPlan(dir, reservesPlan()));
   // What is stamped `release` or `archive` (buildinfo.mjs) bakes production trust, as --release does, so the stamp and
   // the trust every production policy reads (compat.json's `embedded.trust`) cannot disagree.
   if (distribution && process.env.EXACT_UPDATE_TRUST !== 'production') {
@@ -1234,7 +1234,7 @@ async function main(args, lockHeld = false) {
       // swift build does not see the Rust archive (or that plist, or a linked plan) change, so the executable is
       // dropped to be linked again: 0.4 s, and it was every build's. A development build drops only one linked from
       // other bytes, which `<product>.linked` beside it says: the archive's hash, whose it is, the plist, the plan's.
-      const linked = resolve(swiftBinDir, `${p}.linked`), from = JSON.stringify({ launchFrameworks: appleLaunchFrameworks(destination, p), archive: archive ?? null, libDir, lib: env.EXACT_LIB ?? null, link: appleLink, entitled, shared: shared?.xcframework ?? null, plan: linkedPlan?.digest ?? null, reserved: reservesPlan(), intents: intents?.digest ?? null, library: library?.sha256 ?? null });
+      const linked = resolve(swiftBinDir, `${p}.linked`), from = JSON.stringify({ launchFrameworks: appleLaunchFrameworks(destination, p), archive: archive ?? null, libDir, lib: env.EXACT_LIB ?? null, link: appleLink, entitled, shared: shared?.xcframework ?? null, plan: linkedPlan?.digest ?? null, ...(reservesPlan() ? { reserved: true } : {}), intents: intents?.digest ?? null, library: library?.sha256 ?? null });
       const same = cargoProfile === HOST_DEV && archive && existsSync(resolve(swiftBinDir, p)) && existsSync(linked) && readFileSync(linked, 'utf8') === from;
       if (!same) for (const stale of [p, `${p}.linked`]) rmSync(resolve(swiftBinDir, stale), { force: true });
       // The early build was this one's when nothing it linked from has changed.
