@@ -635,6 +635,17 @@ fn words(manifest: &Manifest, kind: &Words) -> Result<Vec<String>, String> {
 /// app at `app_root` declares; the package views the file places, for the
 /// plan's `views` table.
 pub(super) fn check(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<CompileError>> {
+    // Lowering also reads the resolved manifest, including the game's targets.
+    Manifest::prepare_game(app_root).map_err(|message| {
+        vec![CompileError {
+            pass: "app",
+            id: "app-manifest".into(),
+            message,
+            span: Span::default(),
+            file: None,
+            related: Box::new([]),
+        }]
+    })?;
     let (views, mut errors) = match check_modules(file, app_root) {
         Ok(views) => (views, Vec::new()),
         Err(errors) => (Vec::new(), errors),

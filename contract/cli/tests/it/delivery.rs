@@ -203,6 +203,36 @@ fn a_field_the_runner_cannot_fill_is_refused_at_bake_by_name() {
 }
 
 #[test]
+fn a_game_manifest_read_before_compiling_uses_the_bakes_identity() {
+    let scratch = Scratch::new(format!("exact-game-manifest-{}", std::process::id()));
+    let directory = scratch.join("a-renamed-clone");
+    std::fs::create_dir_all(directory.join("logic/src")).unwrap();
+    std::fs::write(
+        directory.join("logic/src/lib.rs"),
+        "impl Game for Starter { const ID: &'static str = \"starter\"; }",
+    )
+    .unwrap();
+    let authored = r#"{"userInterfaceStyle":"dark"}"#;
+    std::fs::write(directory.join("app.json"), authored).unwrap();
+    let manifest = contract::Manifest::read(&directory).unwrap();
+    assert_eq!(manifest.id, "com.exact.starter");
+    assert_eq!(manifest.name, "A Renamed Clone");
+    assert_eq!(manifest.json["userInterfaceStyle"], "dark");
+    assert!(!contract::Manifest::generated_stale(&directory));
+    assert_eq!(
+        std::fs::read_to_string(directory.join("app.json")).unwrap(),
+        authored
+    );
+    std::fs::write(directory.join("app.json"), "{}").unwrap();
+    assert!(contract::Manifest::generated_stale(&directory));
+    assert_eq!(
+        contract::Manifest::read(&directory).unwrap().json,
+        manifest.json
+    );
+    assert!(contract::Manifest::generated_stale(&directory));
+}
+
+#[test]
 fn manifest_identity_survives_an_unnamed_data_standin_and_conflicts_fail() {
     let directory = Scratch::new(format!("exact-manifest-plan-{}", std::process::id()));
     std::fs::write(

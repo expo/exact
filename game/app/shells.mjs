@@ -723,7 +723,12 @@ export function bakeGameArt(dir, env = process.env) {
 
 if (import.meta.main) {
   const args = process.argv.slice(2), requested = args.find(arg => !arg.startsWith('--'));
-  if (args.includes('--check')) {
+  if (args.includes('--if-game')) {
+    try {
+      const dir = resolve(requested ?? '.'), app = gameDefaults(dir);
+      if (app) gameShells(dir, app.game, gameRoot);
+    } catch (error) { console.error(error.message); process.exitCode = 1; }
+  } else if (args.includes('--check')) {
     try { console.log(checkGame(resolve(requested ?? '.'))); }
     catch (error) { console.error(error.message); process.exitCode = 1; }
   } else if (args.includes('--test')) {

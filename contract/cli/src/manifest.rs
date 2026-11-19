@@ -35,6 +35,29 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Create missing game shells with the bake's defaults. Existing shells
+    /// stay untouched so `generated_stale` can still name an outdated copy.
+    pub(crate) fn prepare_game(app_dir: &Path) -> Result<(), String> {
+        if app_dir.join(".shells/app.json").is_file() || !app_dir.join("logic/src/lib.rs").is_file()
+        {
+            return Ok(());
+        }
+        let bun = std::env::var_os("BUN").unwrap_or_else(|| "bun".into());
+        let output = std::process::Command::new(&bun)
+            .arg(crate::root::sdk_root().join("game/app/shells.mjs"))
+            .arg("--if-game")
+            .arg(app_dir)
+            .output()
+            .map_err(|e| format!("game manifest: {}: {e}", Path::new(&bun).display()))?;
+        if !output.status.success() {
+            return Err(format!(
+                "game manifest: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(())
+    }
+
     /// The unsuffixed `app.id` when a variant is selected (LLP 1030.008 D2).
     pub fn variant_base(&self) -> Option<&str> {
         self.json
@@ -144,6 +167,7 @@ impl Manifest {
     }
 
     fn read_selected(app_dir: &Path, selected: Option<&str>) -> Result<Manifest, String> {
+        Self::prepare_game(app_dir)?;
         let name = app_dir
             .canonicalize()
             .ok()

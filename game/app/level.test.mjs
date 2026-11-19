@@ -3,6 +3,56 @@ import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync,
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {gameDefaults, gameShells, renderGraph, sharesAppleEntry} from './shells.mjs';
+import {spawnSync} from 'node:child_process';
+import {createGame} from '../new.mjs';
+
+test('contract build resolves a fresh game manifest just as shells does', () => {
+  const root = resolve(import.meta.dir, '../..'), parent = mkdtempSync(resolve(tmpdir(), 'exact-game-manifest-'));
+  const dir = resolve(parent, 'starter');
+  const env = {...process.env, EXACT:root, EXACT_ROOT:root, EXACT_FEEDBACK:'0'};
+  delete env.EXACT_APP_DIR;
+  const run = (...args) => {
+    const result = spawnSync(process.execPath, ['exact.mjs', ...args], {cwd:dir, env, encoding:'utf8', timeout:600_000});
+    expect(result.status, result.stderr + result.stdout).toBe(0);
+    return result;
+  };
+  try {
+    createGame(dir);
+    for (const [authored, identity] of [
+      [{userInterfaceStyle:'dark'}, {id:'com.exact.starter', name:'Starter'}],
+      [{app:{id:'org.example.custom', name:'Named Game'}}, {id:'org.example.custom', name:'Named Game'}],
+      [{app:{id:'org.example.custom'}}, {id:'org.example.custom', name:'Starter'}],
+      [null, {id:'com.exact.starter', name:'Starter'}],
+    ]) {
+      rmSync(resolve(dir, '.shells'), {recursive:true, force:true});
+      const path = resolve(dir, 'app.json'), text = JSON.stringify(authored);
+      if (authored) writeFileSync(path, text);
+      else rmSync(path, {force:true});
+      expect(existsSync(resolve(dir, '.shells'))).toBe(false);
+      run('contract', 'build', 'app.contract', '--json', '-o', 'out.plan');
+      const compiled = JSON.parse(readFileSync(resolve(dir, '.shells/app.json'), 'utf8'));
+      expect(compiled.app).toEqual(identity);
+      if (authored?.userInterfaceStyle) expect(compiled.userInterfaceStyle).toBe('dark');
+      const plan = readFileSync(resolve(dir, 'out.plan'));
+      expect(plan.subarray(36, 36 + plan.readUInt32LE(32)).toString()).toBe(identity.id);
+      run('shells');
+      expect(JSON.parse(readFileSync(resolve(dir, '.shells/app.json'), 'utf8'))).toEqual(compiled);
+      if (authored) expect(readFileSync(path, 'utf8')).toBe(text);
+      else expect(existsSync(path)).toBe(false);
+    }
+    // Non-game apps still require both identity fields, even with Rust sources.
+    writeFileSync(resolve(dir, 'logic/src/lib.rs'), 'pub struct Data;');
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Ready"\n');
+    for (const [authored, missing] of [[{userInterfaceStyle:'dark'}, 'app.id'], [{app:{id:'org.example.custom'}}, 'app.name']]) {
+      rmSync(resolve(dir, '.shells'), {recursive:true, force:true});
+      writeFileSync(resolve(dir, 'app.json'), JSON.stringify(authored));
+      const result = spawnSync(process.execPath, ['exact.mjs', 'contract', 'build', 'app.contract', '--json'], {cwd:dir, env, encoding:'utf8', timeout:600_000});
+      expect(result.status, result.stderr + result.stdout).toBe(1);
+      expect(JSON.parse(result.stdout).some(d => d.message.includes(`\`${missing}\` is required`))).toBe(true);
+      expect(existsSync(resolve(dir, '.shells'))).toBe(false);
+    }
+  } finally { rmSync(parent, {recursive:true, force:true}); }
+}, 600_000);
 
 test('external shells use the SDK toolchain and refresh stale generated pins', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-shell-toolchain-'));
