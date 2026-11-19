@@ -3,7 +3,9 @@ import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { appleCommand, crossSdk, spawn as appleSpawn, spawnSync as appleSpawnSync } from './toolchain.mjs';
+import { appleCommand, crossSdk, experimental, spawn as appleSpawn, spawnSync as appleSpawnSync, swiftOptimization, swiftOptimizationKey } from './toolchain.mjs';
+import { widgetReload } from './widgets.mjs';
+import { createHash } from 'node:crypto';
 import { decodeProfile, xcodeRefusal } from './devices.mjs';
 import { appleCrossReport, CROSS_IOS_ROWS, distributionToolchain, ensureWatchSDK, installWatchSDK } from './sdk.mjs';
 import { iosTestRuns } from './xctest.mjs';
@@ -593,3 +595,56 @@ for (const [phase, kept] of [['setup', false], ['handoff', false], ['test and cl
   if (phase === 'test and cleanup') expect(reported.errors).toEqual([failure, cleanupFailure]);
   else expect(reported).toBe(failure);
 }));
+
+test('EXACT_EXPERIMENTAL=1 alone turns on experimental features, and only a development archive compiles Swift unoptimized', () => {
+  const development = ['bun', 'host/apple/build.mjs', '--device', '--archive', 'a.ipa', '--unsigned', '--development'];
+  for (const value of [undefined, '', '0', 'true', 'yes', ' 1']) {
+    expect(experimental({ EXACT_EXPERIMENTAL: value })).toBe(false);
+    expect(swiftOptimization({ EXACT_EXPERIMENTAL: value }, development)).toBe('-O');
+    expect(swiftOptimizationKey({ EXACT_EXPERIMENTAL: value }, development)).toEqual([]);
+  }
+  const on = { EXACT_EXPERIMENTAL: '1' };
+  expect(experimental(on)).toBe(true);
+  expect(swiftOptimization(on, development)).toBe('-Onone');
+  expect(swiftOptimizationKey(on, development)).toEqual(['-Onone']);
+  for (const args of [['bun', 'host/apple/build.mjs', '--ios', '--run'], ['bun', 'host/apple/build.mjs', '--device', '--archive', 'a.ipa'], ['bun', 'host/apple/build.mjs', '--release']]) {
+    expect(swiftOptimization(on, args)).toBe('-O');
+    expect(swiftOptimizationKey(on, args)).toEqual([]);
+  }
+});
+
+test('the widget reload dylib compiles and is kept as before without EXACT_EXPERIMENTAL, and unoptimized beside it with it in a development archive', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-experimental-'));
+  const was = { flag: process.env.EXACT_EXPERIMENTAL, argv: process.argv };
+  try {
+    const source = resolve(dir, 'WidgetContainer.swift');
+    writeFileSync(source, 'let reload = 1\n');
+    const reload = () => {
+      const compiles = [];
+      const runApple = (tool, args) => { compiles.push(args); const out = args[args.indexOf('-o') + 1]; writeFileSync(out, 'dylib'); };
+      const binary = widgetReload({ directory: dir, triple: 'arm64-apple-ios17.0', sdk: '/sdk', device: true, production: false, runApple, source });
+      return { binary, compiles };
+    };
+    process.argv = [...was.argv, '--development'];
+    delete process.env.EXACT_EXPERIMENTAL;
+    const plain = reload();
+    // The digest as it was computed before experimental features existed: its source and [triple, sdk, production].
+    const digest = createHash('sha256').update(readFileSync(source)).update(JSON.stringify(['arm64-apple-ios17.0', '/sdk', false])).digest('hex').slice(0, 16);
+    expect(plain.binary).toBe(resolve(dir, `widget-reload-${digest}`, 'libexact_widget_reload.dylib'));
+    expect(plain.compiles).toHaveLength(1);
+    expect(plain.compiles[0]).toContain('-O');
+    expect(plain.compiles[0]).not.toContain('-Onone');
+    process.env.EXACT_EXPERIMENTAL = '1';
+    const unoptimized = reload();
+    expect(unoptimized.binary).not.toBe(plain.binary);
+    expect(unoptimized.compiles).toHaveLength(1);
+    expect(unoptimized.compiles[0]).toContain('-Onone');
+    expect(unoptimized.compiles[0]).not.toContain('-O');
+    process.argv = was.argv;
+    expect(reload()).toEqual({ binary: plain.binary, compiles: [] });
+  } finally {
+    process.argv = was.argv;
+    if (was.flag === undefined) delete process.env.EXACT_EXPERIMENTAL; else process.env.EXACT_EXPERIMENTAL = was.flag;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

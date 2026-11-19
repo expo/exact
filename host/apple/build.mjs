@@ -43,7 +43,7 @@ import { platformWidgetEntries, widgetEntityKeys, activityEntries, hasEntries, w
 import { assembleMac, assembleIOS, buildIntents, shortcutKeys, placeMacDylibs } from './bundle.mjs';
 import { EXTENSION_KINDS, assertNotificationServiceGrants, extensionKinds, notificationService, notificationServiceDirectory, notificationServicePlatformRefusal, staleModuleCache, withoutExtensions } from './extensions.mjs';
 import { buildWatch, watchCompanion, watchProfiles, watchSyncSelected } from './watch.mjs';
-import { spawn, spawnSync } from './toolchain.mjs';
+import { spawn, spawnSync, swiftOptimization } from './toolchain.mjs';
 import { metalRequired, metalToolchainInstructions } from './metal.mjs';
 import { metalVersion, svgFilterLibrary, svgFilterLibraryName } from './svg-filter.mjs';
 export { metalVersion, svgFilterLibrary, svgFilterLibraryName };
@@ -1151,7 +1151,7 @@ async function main(args, lockHeld = false) {
   const simulatorArch = iosTriple.startsWith('arm64') ? 'arm64' : 'x86_64', iosArch = device ? 'arm64' : simulatorArch;
   const moduleArgs = (sdkFor, targetArgs, out, forIos = false, simulator = false, arch = macArch, packagesIn = packageDir, probe = false) => {
     placePackages(packagesIn);
-    return ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, '-L', packagesIn, ...packageObjects(packagesIn)] : []), ...packageImports(packagesIn), ...(app.manifest.host?.[forIos ? 'ios' : 'macos']?.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...packageLink(packagesIn)] : []), ...frameworksFor(forIos, simulator, arch).args, ...(probe ? ['-Xlinker', '-rpath', '-Xlinker', '@loader_path/Frameworks'] : []), ...linkArgs(forIos), ...moduleLibraryLinkArgs({ wrapped: forIos && production && !probe }), '-o', out, ...targetArgs];
+    return ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', swiftOptimization(), '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, '-L', packagesIn, ...packageObjects(packagesIn)] : []), ...packageImports(packagesIn), ...(app.manifest.host?.[forIos ? 'ios' : 'macos']?.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...packageLink(packagesIn)] : []), ...frameworksFor(forIos, simulator, arch).args, ...(probe ? ['-Xlinker', '-rpath', '-Xlinker', '@loader_path/Frameworks'] : []), ...linkArgs(forIos), ...moduleLibraryLinkArgs({ wrapped: forIos && production && !probe }), '-o', out, ...targetArgs];
   };
   const moduleLibraries = modulesBuilt ? frameworksFor(ios, ios && !device, ios ? iosArch : macArch).libraries : [];
   const macTarget = ['-target', moduleTripleFor(app, false)];

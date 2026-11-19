@@ -5,7 +5,7 @@ import { mkdirSync, readdirSync, existsSync, writeFileSync, readFileSync, copyFi
 import { createHash, X509Certificate } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName, singleFramework } from './assets.mjs';
-import { WATCH_MINIMUM_OS } from './toolchain.mjs';
+import { WATCH_MINIMUM_OS, swiftOptimization, swiftOptimizationKey } from './toolchain.mjs';
 import { assertCapabilityFrameworks, stripProductionExecutable } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
@@ -322,11 +322,11 @@ const writeIfChanged = (path, text) => { if (!existsSync(path) || readFileSync(p
 /** The reload artifact has no app-specific inputs. Reuse it until its source or target changes. */
 export function widgetReload({ directory, triple, sdk, device, platform = 'ios', production = false, runApple, source = resolve(pkg, 'Sources/ExactWidgetPublication/WidgetPublication.swift') }) {
   // One file per digest: apps sharing `directory` may ask for different triples at once.
-  const digest = createHash('sha256').update(readFileSync(source)).update(JSON.stringify([triple, sdk, production])).digest('hex').slice(0, 16);
+  const digest = createHash('sha256').update(readFileSync(source)).update(JSON.stringify([triple, sdk, production, ...swiftOptimizationKey()])).digest('hex').slice(0, 16);
   const binary = resolve(directory, `widget-reload-${digest}`, 'libexact_widget_reload.dylib');
   if (existsSync(binary)) return binary;
   mkdirSync(dirname(binary), { recursive: true });
-  runApple('xcrun', ['--sdk', platform === 'macos' ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O',
+  runApple('xcrun', ['--sdk', platform === 'macos' ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', swiftOptimization(),
     '-D', 'EXACT_WIDGET_RELOAD', ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-module-name', 'ExactWidgetReload', '-target', triple, '-sdk', sdk,
     '-module-cache-path', extensionModuleCache, source, '-o', `${binary}.${process.pid}.tmp`]);
   renameSync(`${binary}.${process.pid}.tmp`, binary);
@@ -486,7 +486,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   if (configured) { rmSync(intents, { recursive: true, force: true }); mkdirSync(intents, { recursive: true }); }
   const compilation = widgetCompilation({ entries, platform, activities, alarm: alarmMember ? alarm : null, source, values, directory: intents });
   const { moduleName, sources: swiftSources } = compilation;
-  runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? (device ? 'watchos' : 'watchsimulator') : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
+  runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? (device ? 'watchos' : 'watchsimulator') : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOptimization(), ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
     ...compilation.args,
     '-module-cache-path', extensionModuleCache, '-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
     '-Xlinker', '-rpath', '-Xlinker', mac ? '@executable_path/../../../../Frameworks' : '@executable_path/../../Frameworks',
@@ -536,7 +536,7 @@ export function packageAlarmExtension({ app, bundle, directory, sdk, triple, dev
     CFBundleSupportedPlatforms: appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}),
     ...(appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
-  runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, '-target', triple, '-sdk', sdk,
+  runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOptimization(), ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, '-target', triple, '-sdk', sdk,
     '-module-cache-path', extensionModuleCache, ...(!device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     ...alarmArgs(alarm), source, '-o', resolve(extension, 'ExactWidgets')]);
   stripProductionExecutable(resolve(extension, 'ExactWidgets'), { production, dsym: resolve(symbols, 'ExactWidgets.appex.dSYM'), sourceDsym: resolve(extension, 'ExactWidgets.dSYM') });

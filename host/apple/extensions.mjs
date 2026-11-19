@@ -8,6 +8,7 @@ import { plistFile } from './assets.mjs';
 import { stripProductionExecutable } from './link.mjs';
 import { appleActivationRule, applePresentation, appleShareMembers, appleSharePage } from '../../scripts/share-target.mjs';
 import { embeddedProfile } from './devices.mjs';
+import { swiftOptimization } from './toolchain.mjs';
 import { notificationServiceDirectoryExists, notificationServiceSourceRoot, snapshotNotificationService } from '../../scripts/notification-service.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -171,7 +172,7 @@ export function packageShareExtension({ app, bundle, directory, sdk, triple, dev
   mkdirSync(directory, { recursive: true });
   const entitlementPath = resolve(directory, 'share-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
-  runApple('xcrun', ['--sdk', mac ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs,
+  runApple('xcrun', ['--sdk', mac ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOptimization(), ...(production ? ['-g'] : []), ...appexArgs,
     ...(page ? ['-D', 'EXACT_SHARE_PAGE'] : []), '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', extensionModuleCache,
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     resolve(root, 'host/apple/share/ShareInbox.swift'), resolve(root, 'host/apple/share', presentationSource), '-o', binary]);
@@ -208,7 +209,7 @@ export function packageNotificationService({ service, identity, app, bundle, dir
     }));
     const entitlementPath = resolve(directory, 'notification-service-entitlements.plist'), binary = resolve(extension, service.name);
     writeFileSync(entitlementPath, plistFile(entitlements));
-    runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs,
+    runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOptimization(), ...(production ? ['-g'] : []), ...appexArgs,
       '-module-name', service.module, '-target', triple, '-sdk', sdk, '-module-cache-path', extensionModuleCache,
       ...(!device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
       ...sources, '-o', binary]);

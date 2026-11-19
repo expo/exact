@@ -8,6 +8,16 @@ import { fileURLToPath } from 'node:url';
 import { plistCommand } from './plist.mjs';
 import { windowsMetalCommand } from './metal.mjs';
 
+/** `EXACT_EXPERIMENTAL=1` turns on the Apple build's experimental features; each says where it applies. With any other
+ *  value, or unset, a build is byte for byte the one it is without them. */
+export const experimental = (env = process.env) => env.EXACT_EXPERIMENTAL === '1';
+/** The optimization the Swift a build compiles itself (app modules, packages, extensions, intents) takes. Experimental:
+ *  `-Onone` in a `--development` archive, a build to iterate on rather than ship, since an optimized whole-module
+ *  compile runs mostly on one core and takes minutes for some packages and extensions. Otherwise `-O`. */
+export const swiftOptimization = (env = process.env, args = process.argv) => experimental(env) && args.includes('--development') ? '-Onone' : '-O';
+/** `swiftOptimization()` as part of a cache key: empty for `-O`, so a key without the experiment is unchanged. */
+export const swiftOptimizationKey = (env = process.env, args = process.argv) => swiftOptimization(env, args) === '-O' ? [] : [swiftOptimization(env, args)];
+
 /** The watch app's deployment target: arm64 runs from watchOS 26, and the watch app is built for arm64 alone (LLP 1126.002 D7). */
 export const WATCH_MINIMUM_OS = '26.0';
 const SDK_KEYS = { iphoneos: 'arm64-apple-ios', iphonesimulator: 'arm64-apple-ios-simulator', macosx: 'arm64-apple-macosx', watchos: 'arm64-apple-watchos', watchsimulator: 'arm64-apple-watchos-simulator' };

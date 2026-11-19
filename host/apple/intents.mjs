@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { intentsMetadata as emittedIntentsMetadata } from './intents-metadata.mjs';
 import { DOCUMENT_UTIS } from '../../scripts/app.mjs';
 import { extensionModuleCache } from './extensions.mjs';
+import { swiftOptimization, swiftOptimizationKey } from './toolchain.mjs';
 import { launchPartsObjects } from './launch-parts.mjs';
 
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
@@ -299,7 +300,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
   if (hasFileParameters(app.manifest.intents) && parseFloat(deployment) < fileFloor[platform]) throw new Error(`host/apple: intents: a file parameter with supportedContentTypes needs host.${platform}.minimumOS ${fileFloor[platform]}.0 or later`);
   const source = intentsSource(faces, app.manifest.intents?.entities ?? {});
   const emitter = process.platform === 'linux' ? Buffer.concat([readFileSync(new URL('./intents-metadata.mjs', import.meta.url)), readFileSync(new URL(import.meta.url))]) : '';
-  const digest = createHash('sha256').update(JSON.stringify([source, swiftc, triple, sdk, deployment, nativeModules.map(m => [m.moduleName, readFileSync(m.values, 'utf8'), createHash('sha256').update(readFileSync(m.binary)).digest('hex')])])).update(emitter).digest('hex').slice(0, 16);
+  const digest = createHash('sha256').update(JSON.stringify([source, swiftc, triple, sdk, deployment, ...swiftOptimizationKey(), nativeModules.map(m => [m.moduleName, readFileSync(m.values, 'utf8'), createHash('sha256').update(readFileSync(m.binary)).digest('hex')])])).update(emitter).digest('hex').slice(0, 16);
   const dir = resolve(directory, digest), object = resolve(dir, 'ExactIntents.o'), metadata = resolve(dir, 'Metadata.appintents');
   if (!existsSync(resolve(metadata, 'extract.actionsdata'))) {
     rmSync(dir, { recursive: true, force: true });
@@ -307,7 +308,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
     const file = resolve(dir, 'ExactIntents.swift'), values = resolve(dir, 'ExactIntents.swiftconstvalues');
     writeFileSync(file, source);
     const started = Date.now();
-    runApple('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-wmo', '-O', '-swift-version', '5', '-module-name', 'ExactIntents',
+    runApple('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-wmo', swiftOptimization(), '-swift-version', '5', '-module-name', 'ExactIntents',
       '-module-cache-path', extensionModuleCache, '-target', triple, '-sdk', sdk,
       ...constValueArgs(values, dir),
       '-c', file, '-o', object]);

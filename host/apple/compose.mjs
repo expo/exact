@@ -3,7 +3,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync,
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { directDependencies } from '../../scripts/package-libraries.mjs';
-import { spawnSync } from './toolchain.mjs';
+import { spawnSync, swiftOptimization } from './toolchain.mjs';
 import { evictArms, probeDigest } from './arms.mjs';
 import { swiftPackagesProblems } from '../../scripts/app.mjs';
 import { appleImplementations, moduleInterfaces } from '../../js/bake/src/typescript.mjs';
@@ -132,7 +132,7 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
   };
   const flags = dir => ['--sdk', packageTargets.get(dir)[0], 'swiftc',
     '-module-cache-path', resolve(packagesRoot, 'modules-module-cache'),
-    '-parse-as-library', '-O', '-swift-version', '5', ...packageTargets.get(dir)[1]];
+    '-parse-as-library', swiftOptimization(), '-swift-version', '5', ...packageTargets.get(dir)[1]];
   const objectArgs = (name, sources, dir, linkName = name) => [...flags(dir), '-wmo', '-module-name', name,
     ...(linkName ? ['-module-link-name', linkName] : []),
     '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`),
