@@ -1298,10 +1298,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let since = self.tracks_epoch;
         self.tracks_epoch = epoch;
         for (id, key, base) in alive {
-            // An indicator's tracks change only with the device's motion
-            // setting: sent with its layer, and again when that changes.
-            if crate::host::lower::is_spinner(key) {
-                let words = self.p.host().spinner_tracks();
+            // A layer's own tracks (an indicator's, a ripple's): sent with
+            // it, and again when they change.
+            if let Some(words) = self.p.own_tracks(key) {
                 if self.tracks.get(&id) != Some(&words) {
                     ops.extend([layer::TRACKS, id, words.len() as u32]);
                     ops.extend(&words);

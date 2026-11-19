@@ -174,6 +174,7 @@ impl<D: DataSource> Presenter<D> {
         self.sync_media(&mut dirty);
         self.brush.numerals.now = self.host.now();
         self.brush.numerals.still = self.host.runner().viewport().preferences.reduced_motion;
+        self.brush.ripples.reader = self.host.lowering;
         self.brush.rows_dirty(self.host.kernel(), dirty);
         self.sync_stage();
         let stage = self.stage_paint();
