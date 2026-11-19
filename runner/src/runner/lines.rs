@@ -143,6 +143,15 @@ pub(super) fn kept_argument_unknown(n: usize, inputs: &[String]) -> String {
     }
 }
 
+/// A page's answer the fresh one contradicts (LLP 1048.000 D6, LLP 1102
+/// §3.17).
+pub(super) fn page_contradicted(resource: &str) -> String {
+    text!(
+        "{} answered differently from the page's answer: the first frame showed the rendered page's value until its source answered",
+        resource
+    )
+}
+
 /// A kept answer the fresh one contradicts (LLP 1027 D4, LLP 1102 §3.17).
 pub(super) fn kept_contradicted(resource: &str) -> String {
     text!(

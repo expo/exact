@@ -141,6 +141,7 @@ impl<D: DataSource> Runner<D> {
             store_revision,
             placeholder: false,
             kept_seed: false,
+            from_page: true,
             answered_for: None,
             asleep: false,
             slept: false,

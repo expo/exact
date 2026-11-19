@@ -426,7 +426,8 @@ fn an_element_without_a_fitting_answer_asks_and_the_others_find_theirs() {
 
 /// Only an element whose stream was open is asked again, its answer showing
 /// meanwhile: now when its source can answer, as the launch's own ask, not a
-/// refresh (LLP 1162.000 D1), else at `data_ready`.
+/// refresh (LLP 1162.000 D1), else at `data_ready`, when a fresh answer that
+/// differs is journaled as the page's.
 #[test]
 fn only_an_element_whose_stream_was_open_is_asked_again() {
     let plan = contract::compile(SOURCE).unwrap();
@@ -443,6 +444,16 @@ fn only_an_element_whose_stream_was_open_is_asked_again() {
     r.data_ready().unwrap();
     assert_eq!(*source.asked.borrow(), ["b"]);
     assert_eq!(text(&r, "phases"), "phase-a,phase-b,phase-c");
+    // Its stream's first message differs: the first frame showed the page's
+    // answer, and the journal says so (LLP 1102 §3.17)
+    let requests = r.take_requests();
+    r.fulfill(requests[0].ticket, reply(200, "fresh")).unwrap();
+    assert_eq!(text(&r, "phases"), "phase-a,fresh,phase-c");
+    let journal: Vec<&str> = r.journal().collect();
+    assert!(
+        journal.iter().any(|l| l.ends_with("got answered differently from the page's answer: the first frame showed the rendered page's value until its source answered")),
+        "{journal:?}"
+    );
 
     let source = Receiver::default();
     let mut r = boot(&plan, source.clone(), &checkpoint, &[]);

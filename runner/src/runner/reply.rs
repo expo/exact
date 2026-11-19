@@ -506,6 +506,7 @@ impl<D: DataSource> Runner<D> {
                     store_revision: self.store.revision(),
                     placeholder: false,
                     kept_seed: false,
+                    from_page: false,
                     answered_for: None,
                     asleep: false,
                     slept: false,

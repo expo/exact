@@ -138,6 +138,7 @@ pub use queue::QUEUE_BOUND;
 mod history;
 pub mod router;
 pub use crate::list_api::{ListTextPolicy, ListTextPosition};
+mod revalidation;
 mod settlement;
 pub(crate) use settlement::zero;
 mod sockets;
@@ -217,6 +218,10 @@ struct ResourceState {
     /// readiness (LLP 1027.005 D3). Settlement and rollback copy this with
     /// its value; activation or losing that identity consumes it.
     kept_seed: bool,
+    /// The rendered page's answer, seeded from its checkpoint (LLP 1048.000
+    /// D6), until another value replaces it: what the first frame showed is
+    /// the page's, not the last session's.
+    from_page: bool,
     /// The sequence when this answer was asked (0 for a compiled, kept,
     /// carried or placeholder value): a write that landed before it is
     /// answered by it (`writes.rs`).
@@ -1044,6 +1049,7 @@ impl<D: DataSource> Runner<D> {
                         store_revision: runner.store.revision(),
                         placeholder: false,
                         kept_seed: false,
+                        from_page: false,
                         answered_for: None,
                         asleep: false,
                         slept: false,

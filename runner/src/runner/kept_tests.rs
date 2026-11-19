@@ -606,6 +606,85 @@ fn carried_and_document_answers_keep_full_argument_admission() {
     }
 }
 
+/// A page's answer asked again at `data_ready`, here an open stream's, is the
+/// rendered page's value: a fresh answer that differs is journaled as the
+/// page's, never as the last session's (LLP 1048.000 D6, LLP 1102 §3.17).
+#[test]
+fn a_page_answer_asked_again_is_journaled_as_the_pages() {
+    let checkpoint = super::Checkpoint {
+        answers: vec![(
+            "answer".into(),
+            "answer".into(),
+            full("A", "100", 0.),
+            Value::str("rendered"),
+        )],
+        open: vec![0],
+        ..Default::default()
+    };
+    let mut r = Runner::boot_checkpoint(
+        plan(2, false),
+        Source::default(),
+        Kernel::with_monospace(),
+        &checkpoint,
+        vec![],
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    shows(&r, "rendered");
+    assert!(r.resources[0].stale && state(&r).from_page && !state(&r).kept_seed);
+    r.data.ready = true;
+    assert!(r.data_ready().unwrap().is_some());
+    assert_eq!(r.data.asks, [full("A", "100", 0.)]);
+    shows(&r, "fresh");
+    assert!(!state(&r).from_page);
+    let journal: Vec<_> = r.journal().collect();
+    assert!(
+        journal.iter().any(|l| l.ends_with("answer answered differently from the page's answer: the first frame showed the rendered page's value until its source answered")),
+        "{journal:?}"
+    );
+    assert!(
+        !journal.iter().any(|l| l.contains("last session")),
+        "{journal:?}"
+    );
+}
+
+/// A value a reload carried is the replaced runner's, neither the page's nor
+/// kept: asked again at `data_ready`, a fresh answer that differs writes no
+/// line naming either.
+#[test]
+fn a_carried_value_asked_again_is_journaled_as_neither_kept_nor_the_pages() {
+    let carried = Carried {
+        resources: vec![(
+            "answer".into(),
+            "answer".into(),
+            full("A", "100", 0.),
+            Value::str("carried"),
+        )],
+        ..Default::default()
+    };
+    let mut r = Runner::boot_carrying(
+        plan(2, false),
+        Source::default(),
+        Kernel::with_monospace(),
+        &carried,
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    shows(&r, "carried");
+    assert!(r.resources[0].stale && !state(&r).from_page && !state(&r).kept_seed);
+    r.data.ready = true;
+    assert!(r.data_ready().unwrap().is_some());
+    shows(&r, "fresh");
+    let journal: Vec<_> = r.journal().collect();
+    assert!(
+        !journal.iter().any(|l| l.contains("answered differently")),
+        "{journal:?}"
+    );
+}
+
 #[test]
 fn a_ready_source_gets_no_kept_seed_even_when_its_first_answer_is_slow() {
     let mut r = boot(
