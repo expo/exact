@@ -296,3 +296,34 @@ fn a_replaced_tree_keeps_no_ripple() {
         "the old tree's ripple is gone"
     );
 }
+
+/// A press that removes what it pressed (a scrim closing its drawer) leaves
+/// no ripple behind to ask for frames.
+#[test]
+fn a_ripple_on_a_removed_node_owes_no_frames() {
+    if !material_process() {
+        return;
+    }
+    const SCRIM: &str = r##"component App
+  state open = true
+  action close
+    open = false
+  view
+    column width=400 height=600 background-color="#ffffff"
+      if open
+        column press=close background-color="#ffffff" color="#000000" width=300 height=120 testId="scrim"
+"##;
+    let mut p = boot_app(SCRIM, false);
+    let scrim = rect(&mut p, "scrim");
+    let at = (scrim.0 + 150., scrim.1 + 60.);
+    p.clock(1000.);
+    p.pointer_down(at.0, at.1, 1000.).unwrap();
+    p.pointer_up(at.0, at.1, 1040.).unwrap();
+    p.clock(1100.);
+    p.frame();
+    assert!(
+        p.host().kernel().find_by_test_id("scrim").is_empty(),
+        "closed"
+    );
+    assert!(!p.needs_animation_frame(), "its ripple owes none");
+}

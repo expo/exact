@@ -48,6 +48,8 @@ pub(crate) struct Ripple {
     start: f64,
     /// When the finger lifted, ms after `start`.
     released: Option<f64>,
+    /// The paint drew it on its node.
+    drawn: bool,
 }
 
 impl Ripple {
@@ -58,6 +60,7 @@ impl Ripple {
             at,
             start: now,
             released: None,
+            drawn: false,
         }
     }
 
@@ -287,9 +290,12 @@ impl Ripples {
             .reduce(f64::max)
     }
 
-    /// After a paint: the ripples that have gone.
+    /// After a paint: the ripples that have gone, and those it did not
+    /// draw, whose node left the tree or no longer shows, as the platform's
+    /// ripple goes with its view.
     pub(super) fn painted(&mut self, now: f64, still: bool) {
-        self.live.retain(|_, (_, r)| !r.gone(now, still));
+        self.live
+            .retain(|_, (_, r)| !r.gone(now, still) && std::mem::take(&mut r.drawn));
     }
 }
 
@@ -384,6 +390,9 @@ impl Painter {
             }
             None => return,
         };
+        if let Some((key, r)) = self.ripples.live.get_mut(&node.id) {
+            r.drawn |= *key == node.key;
+        }
         // A ripple moves: its row is drawn by the walk, never from a recording.
         self.row_refuse();
         fill(self.backend.as_mut(), shape, ink, wave, ts);
@@ -453,6 +462,7 @@ mod tests {
         r.release(a, 150.0, false);
         assert!(r.moving(200.0, false));
         assert_eq!(r.settles_at(200.0), Some(100.0 + 450.0 + 375.0));
+        r.live.get_mut(&a).unwrap().1.drawn = true;
         r.painted(924.0, false);
         assert_eq!(r.keys().count(), 1);
         r.painted(925.0, false);
