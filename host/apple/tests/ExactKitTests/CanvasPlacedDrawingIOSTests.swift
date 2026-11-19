@@ -569,10 +569,10 @@ final class CanvasPlacedDrawingIOSTests: XCTestCase {
         let child = node(101, d.session.presenter, CGRect(x: 0, y: 0, width: 100, height: 100), in: d.overlay)
         paint(.red, into: child)
         _ = d.host.tick(now: 0)
-        waitForMainQueue()
-        d.session.frames.run(false)
-        XCTAssertFalse(d.host.wantsFrames)
-        XCTAssertNil(d.session.frames.link)
+        // The child's capture can wait past this tick for its presentation to settle; the frame it then asks for draws it
+        waitFor("the canvas captures and draws its child, and rests") {
+            !d.canvas.needsCapture && d.host.rendered > 0 && !d.host.wantsFrames && d.session.frames.link == nil
+        }
         let rendered = d.host.rendered
         capturedChildPixels = []
 
