@@ -111,6 +111,45 @@ fn a_custom_header_starts_at_the_platform_lists_margins() {
     assert_eq!(content(&r, "header-Ryu"), (20.0, 24.0));
 }
 
+/// UIKit's header view in an inset-grouped list spans the card, so a hand-built
+/// header's own inset (16 points) is from the card's edge, not the list's.
+#[test]
+fn a_custom_headers_written_inline_padding_is_from_the_cards_edge() {
+    let source = |padding: &str| {
+        format!(
+            "component App\n  view\n    column testId=\"root\" width=402 height=874\n      list testId=\"list\" appearance=\"auto\" listStyle=\"inset-grouped\" flex=1\n        section\n          header testId=\"header\"{padding}\n            row gap=8 align-items=\"center\"\n              text \"Ken\"\n              text \"25\"\n          row\n            text \"x\"\n"
+        )
+    };
+    let padding = |extra: &str| {
+        let mut r = boot_source(&source(extra));
+        let list = id(&r, "list");
+        let k = r.kernel_mut();
+        k.set_grouped_margins(
+            list,
+            Some(GroupedMargins {
+                card: [16.0, 16.0],
+                cell: [20.0, 20.0],
+            }),
+        )
+        .unwrap();
+        let root = k.node_by_key(k.find_by_test_id("root")[0]).unwrap().id;
+        k.compute_layout(root, Offer::definite(402.0, 874.0))
+            .unwrap();
+        let k = r.kernel();
+        let p = k
+            .resolved_padding(k.node(id(&r, "header")).unwrap().key)
+            .unwrap();
+        (p.0, p.2)
+    };
+    assert_eq!(padding(""), (36.0, 36.0), "the card's and the cell's");
+    assert_eq!(padding(" padding-left=16 padding-right=16"), (32.0, 32.0));
+    assert_eq!(
+        padding(" padding-left=16"),
+        (32.0, 36.0),
+        "an unsaid side keeps the platform's"
+    );
+}
+
 #[test]
 fn a_header_still_refuses_texts_with_no_layout_and_a_footer_boxes() {
     assert!(refused("header\n  text \"a\"\n  text \"b\"").contains("lay them out in a `row`"));
