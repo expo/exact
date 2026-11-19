@@ -680,12 +680,20 @@ fn a_popover_observes_the_session_band_where_it_is() {
     let mut k = owner(390.0, 844.0, ops);
     k.set_session_band([40.0, 0.0, 0.0, 0.0]).unwrap();
     lay_out(&mut k);
+    // Its frame is placed where it shows, the document's space, as a geometry fact reads it (D6)
+    let shown_at = |k: &Kernel| {
+        let (owner, (_, dy)) = k.frame_space(3).unwrap();
+        assert_eq!(owner, None);
+        k.node(3).unwrap().frame.y + dy
+    };
     assert_eq!(k.top_layer_origin(3, (390.0, 844.0)).unwrap().1, 10.0);
+    assert_eq!(shown_at(&k), 10.0);
     assert_eq!(k.observation(3).unwrap()[0], Some(30.0), "its margin once");
     k.apply(0, 2, &[style(3, vec![], &[(StyleId::Top, "30")])])
         .unwrap();
     lay_out(&mut k);
     assert_eq!(k.top_layer_origin(3, (390.0, 844.0)).unwrap().1, 40.0);
+    assert_eq!(shown_at(&k), 40.0);
     assert_eq!(k.observation(3).unwrap()[0], Some(0.0));
 }
 

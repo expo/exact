@@ -107,7 +107,7 @@ impl Kernel {
             std::mem::replace(&mut self.arena, copies.0),
             self.layout.replace(Box::new(copies.1)),
             self.region.take(),
-            (self.provisional_layouts, self.symbol_revision),
+            (self.provisional_layouts, self.layouts, self.symbol_revision),
         );
         let measured = self
             .compute_layout_presented(root, offer, &[])
@@ -117,7 +117,7 @@ impl Kernel {
             });
         let trial = std::mem::replace(&mut self.arena, kept.0);
         (self.layout, self.region) = (kept.1, kept.2);
-        (self.provisional_layouts, self.symbol_revision) = kept.3;
+        (self.provisional_layouts, self.layouts, self.symbol_revision) = kept.3;
         self.arena.spend_text_revisions(&trial);
         measured
     }

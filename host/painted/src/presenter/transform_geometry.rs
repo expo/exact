@@ -31,6 +31,9 @@ pub(super) struct State {
     /// round that follows is this loop's, not a nested one.
     resizing: bool,
     intersecting: bool,
+    /// Geometry facts are being delivered: their commits lay out, and the delivery that
+    /// follows is this loop's.
+    delivering: bool,
 }
 impl<D: DataSource> Presenter<D> {
     fn transform_geometry(&self, binding: TransformDragBinding) -> Option<Geometry> {
@@ -200,7 +203,11 @@ impl<D: DataSource> Presenter<D> {
         // though its dimensions are intentionally deferred to an external turn.
         self.retire_pointer();
         let resized = self.deliver_resizes();
-        error.or(resized).or(self.deliver_intersections())
+        let intersected = self.deliver_intersections();
+        error
+            .or(resized)
+            .or(intersected)
+            .or(self.deliver_geometry())
     }
 
     /// The element resize event after layout, as the browser's loop runs
@@ -235,6 +242,39 @@ impl<D: DataSource> Presenter<D> {
 }
 
 impl<D: DataSource> Presenter<D> {
+    /// The geometry facts the layout changed, each delivery's commit laid out before the next
+    /// looks (LLP 1123 D6); the runner stops a chain of them at its bound.
+    fn deliver_geometry(&mut self) -> Option<String> {
+        // Return from a call nested in a delivery's commit, or in a resize or intersection round:
+        // the loop below asks again after that commit's layout, and `refresh_transform_geometry`
+        // delivers after both rounds, so the call loses nothing
+        let g = &self.transform_geometry;
+        if g.delivering || g.resizing || g.intersecting {
+            return None;
+        }
+        self.transform_geometry.delivering = true;
+        let mut error = None;
+        loop {
+            match self.host.runner_mut().refresh_geometry() {
+                Ok(Some(receipt)) => {
+                    let at_ms = self.host.now();
+                    let committed = self
+                        .host
+                        .commit(&[exact_runner::Timed { at_ms, receipt }], None);
+                    let after = self.after_commit();
+                    error = error.or(committed).or(after);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    error.get_or_insert(format!("geometry: {e:?}"));
+                    break;
+                }
+            }
+        }
+        self.transform_geometry.delivering = false;
+        error
+    }
+
     /// One observation batch after layout or scroll, sharing the runner's
     /// geometry with Apple. A handler's geometry changes wait for the next pump.
     fn deliver_intersections(&mut self) -> Option<String> {

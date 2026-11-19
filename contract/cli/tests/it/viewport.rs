@@ -344,8 +344,8 @@ component App
     r.kernel_mut()
         .set_env(exact_kernel::Env::new(24., 1., 34., 2.))
         .unwrap();
-    assert!(r.refresh_viewport_geometry().unwrap().is_some());
-    assert!(r.refresh_viewport_geometry().unwrap().is_none());
+    assert!(r.refresh_geometry().unwrap().is_some());
+    assert!(r.refresh_geometry().unwrap().is_none());
     let v = &state(&r)["resources"]["viewport"];
     assert_eq!(
         [
@@ -413,13 +413,13 @@ component App
     r.kernel_mut()
         .set_env(exact_kernel::Env::new(24., 0., 0., 0.))
         .unwrap();
-    assert!(r.refresh_viewport_geometry().is_err());
+    assert!(r.refresh_geometry().is_err());
     assert_eq!(r.kernel().env().top, 0.);
     assert_eq!(state(&r)["resources"]["viewport"]["safeAreaTop"], 0.);
     r.kernel_mut()
         .set_env(exact_kernel::Env::new(12., 0., 0., 0.))
         .unwrap();
-    assert!(r.refresh_viewport_geometry().unwrap().is_some());
+    assert!(r.refresh_geometry().unwrap().is_some());
     assert_eq!(state(&r)["resources"]["viewport"]["safeAreaTop"], 12.);
 }
 

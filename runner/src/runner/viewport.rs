@@ -135,10 +135,18 @@ impl<D: DataSource> Runner<D> {
         result
     }
 
-    /// Publish changed document insets or segment rectangles after the host
-    /// updates the kernel environment. Unchanged geometry commits nothing.
-    pub fn refresh_viewport_geometry(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
-        self.replace_viewport(self.viewport, "viewport geometry")
+    /// Publish what the host's latest update of the kernel environment, or
+    /// its latest layout, changed of the geometry facts: the document's
+    /// insets and segment rectangles first, and where they did not change,
+    /// every geometry resource whose answer the layout moved (LLP 1123 D6,
+    /// [`Runner::deliver_geometry`]). A host calls it after an environment
+    /// update and after each layout, laying out again while it commits.
+    /// Unchanged geometry commits nothing.
+    pub fn refresh_geometry(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
+        match self.replace_viewport(self.viewport, "viewport geometry")? {
+            Some(receipt) => Ok(Some(receipt)),
+            None => self.deliver_geometry(),
+        }
     }
 
     pub(super) fn viewport_answer(&self, i: usize) -> Result<Value, DataError> {

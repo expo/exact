@@ -22,6 +22,7 @@ mod format_locales;
 mod frame_origin;
 mod frames_agent;
 mod gate_settlement;
+mod geometry_facts;
 mod height_binding;
 mod incremental;
 mod keep_mounted;

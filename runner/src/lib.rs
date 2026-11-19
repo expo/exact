@@ -94,6 +94,7 @@ pub use runner::picker::shared as share_in;
 pub mod canvas_performance;
 pub mod machine;
 pub mod midi;
+pub mod native_geometry;
 pub mod rows;
 pub mod secrets;
 pub mod share;

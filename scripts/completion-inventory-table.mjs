@@ -35,7 +35,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/timers.rs", "CanvasHost::background"],
   ]),
   group("UI facts", ["subscription"], "current session, viewport, page or rendered geometry", "UI-owned",
-    "runner/src/runner/viewport.rs and page.rs settle facts of the live session; these entries carry no app/account operation identity. painted presenter/zoom.rs sync_zoom retains zoom state only for matching live node keys; settle_zoom reconciles authored values with the current gesture.", [
+    "runner/src/runner/viewport.rs and page.rs settle facts of the live session, and geometry_facts.rs answers the geometry facts from its layout, counting their answers and a chain's commits; these entries carry no app/account operation identity. painted presenter/zoom.rs sync_zoom retains zoom state only for matching live node keys; settle_zoom reconciles authored values with the current gesture.", [
     ["apple:host/apple/src/abi/exports.rs",
       "exact_control_text_changed exact_insets exact_orientation_applied exact_resize exact_scrolled exact_segments exact_set_button_measure exact_set_console " +
       "exact_set_control_text exact_set_display_scale exact_set_fonts exact_set_inline_boxes exact_set_inline_geometry exact_set_lines exact_set_measure exact_set_mode " +
@@ -93,12 +93,14 @@ export const classifications = [
       "Runner::row_in Runner::row_token Runner::set_mode Runner::set_modes Runner::tuple_at Runner::view_sites_json"],
     ["runner:runner/src/runner/page.rs", "Runner::page Runner::reads_page_field Runner::set_page"],
     ["runner:runner/src/runner/resize.rs", "Runner::resize_delivered Runner::resize_due Runner::resize_settled"],
+    ["runner:runner/src/native_geometry.rs", "chain geometry is_geometry project query templates unsettled"],
+    ["runner:runner/src/runner/geometry_facts.rs", "Runner::deliver_geometry#chain:1 Runner::deliver_geometry#generation:1"],
     ["runner:runner/src/runner/root_font.rs", "Runner::display_scale Runner::host_root_font_size Runner::root_font_size Runner::set_bold_text Runner::set_display_scale Runner::set_root_font_size"],
     ["runner:runner/src/runner/shown.rs", "Runner::place_blocks Runner::top_layer Runner::top_layer_backdrop Runner::top_layer_frames"],
     ["runner:runner/src/runner/surface_record.rs", "Runner::set_surface_record Runner::surface_refusals"],
     ["runner:runner/src/runner/theme.rs", "Runner::set_token Runner::set_tokens"],
     ["runner:runner/src/runner/time.rs", "Runner::chosen_locale Runner::direction Runner::place Runner::resolved_locale Runner::set_place Runner::set_place_formatted Runner::set_time Runner::wall_time"],
-    ["runner:runner/src/runner/viewport.rs", "Runner::refresh_viewport_geometry Runner::set_fold Runner::set_keyboard_height Runner::set_preferences Runner::set_view Runner::set_viewport Runner::viewport"],
+    ["runner:runner/src/runner/viewport.rs", "Runner::refresh_geometry Runner::set_fold Runner::set_keyboard_height Runner::set_preferences Runner::set_view Runner::set_viewport Runner::viewport"],
     ["web:host/web/src/abi.rs", "exact_motion exact_report_colors exact_resize exact_set_display_scale exact_set_page exact_set_place exact_set_root_font_size exact_set_screen_reader exact_set_time exact_set_update exact_set_viewport_geometry"],
     ["web:host/web/src/abi/mode.rs", "exact_set_mode"],
     ["web:host/web/src/canvas2d.rs", "exact_surface_record"],
@@ -1215,7 +1217,7 @@ export const classifications = [
       "Presenter::split_placeholder Presenter::sync_split"],
     ["painted:host/painted/src/presenter/status_bar.rs", "Presenter::status_bar_in_page Presenter::status_bar_scheme Presenter::status_bar_shows"],
     ["painted:host/painted/src/presenter/timeline_scroll.rs", "Presenter::scroll_timelines"],
-    ["painted:host/painted/src/presenter/transform_geometry.rs", "Presenter::deliver_intersections Presenter::refresh_transform_geometry Presenter::transform_geometry"],
+    ["painted:host/painted/src/presenter/transform_geometry.rs", "Presenter::deliver_geometry Presenter::deliver_intersections Presenter::refresh_transform_geometry Presenter::transform_geometry"],
     ["painted:host/painted/src/presenter/window.rs", "Presenter::env_insets Presenter::fit_view"],
   ]),
   group("timer fires", ["subscription"], "session timer generation/deadline or one frame task", "UI-owned",

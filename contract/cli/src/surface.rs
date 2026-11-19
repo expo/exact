@@ -166,3 +166,30 @@ pub(super) fn fact_shape(
     }
     Ok(())
 }
+
+/// The geometry facts' declared shapes (LLP 1123 D6): each field one the source answers, and
+/// every answer it can give fillable, so a nested field it lacks or a quantity it may not have
+/// in a field that is not an `option` is refused here, naming it, not dropped at run time.
+pub(super) fn geometry_shapes(plan: &Plan) -> Result<(), BakeError> {
+    use exact_runner::native_geometry as geometry;
+    for (source, fields) in geometry::SOURCES {
+        fact_shape(plan, source, fields, "bake-geometry-field")?;
+        let templates = geometry::templates(source);
+        for row in plan
+            .resources
+            .iter()
+            .filter(|r| plan.str(r.source) == source)
+        {
+            for template in &templates {
+                if let Err(e) = geometry::project(plan, row.ty, template, source) {
+                    return Err(BakeError::Lint {
+                        site: None,
+                        id: "bake-geometry-field",
+                        message: format!("`resource {}`'s shape: {e}", plan.str(row.name)),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}

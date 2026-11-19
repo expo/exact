@@ -338,10 +338,36 @@ impl Kernel {
         Some(std::array::from_fn(|e| readout.observed[at + e]))
     }
 
+    /// The space `view`'s frame is placed in (D2, D6): the owner whose
+    /// space it is, its root's view, or `None` for the document's, outside
+    /// every owner; and what places the frame there, a document top-layer
+    /// box's translation into the viewport, or none. `None` for a view that
+    /// is gone, or a top-layer box its host places (a painted
+    /// `position-area` popover), where the kernel is not told.
+    pub fn frame_space(&self, view: ViewId) -> Option<(Option<ViewId>, (f32, f32))> {
+        let slot = self.arena.slot_of(view)?;
+        let space = band_at(self, slot);
+        let owner = space.owner.map(|o| self.arena.local_id(o));
+        space.placed().then_some((owner, space.origin))
+    }
+
+    /// What `view` observes of each family on the layout just made, top
+    /// right bottom left, measured now whether or not it reads any: a
+    /// geometry fact's (D6), as every UIKit view has a safe area. A box that
+    /// reads none cannot move its own frame by it, so the layout it was
+    /// measured on stands. `None` for a view that is gone.
+    pub fn observations_now(&self, view: ViewId) -> Option<Vec<(Family, Reading)>> {
+        let slot = self.arena.slot_of(view)?;
+        let all = Family::ALL.iter().fold(0, |bits, f| bits | f.bits());
+        let readout = measure_families(&self.arena, slot, &band_at(self, slot), all);
+        let reading = |f: Family| std::array::from_fn(|e| readout.observed[f as usize * 4 + e]);
+        Some(Family::ALL.iter().map(|&f| (f, reading(f))).collect())
+    }
+
     /// The readers the last layout left unsettled, whose inputs are not
     /// within half a device pixel of their measurements, and the boxes
     /// whose taking of the band had not settled (D9, D4,
-    /// `safeAreaUnsettled`).
+    /// `exactSafeAreaUnsettled()`).
     pub fn safe_area_unsettled(&self) -> Vec<ViewId> {
         let observations = &self.arena.observations;
         (observations.unsettled.iter())
@@ -892,9 +918,15 @@ impl Readout {
 /// keyboard, as UIKit gives a view its keyboard guide (D7); and of the layout
 /// regions, as UIKit gives a view's margins and readable content (D8).
 fn measure(arena: &NodeArena, slot: u32, space: &Space) -> Readout {
-    let (mut observed, mut depths) = ([None; COMPONENTS], [0.0; COMPONENTS]);
     // Each family is measured only for a box that reads it
     let read = arena.readers.observed.get(&slot).copied().unwrap_or(0);
+    measure_families(arena, slot, space, read)
+}
+
+/// [`measure`] of the families whose components `read` holds, whether or
+/// not the box reads them.
+fn measure_families(arena: &NodeArena, slot: u32, space: &Space, read: Components) -> Readout {
+    let (mut observed, mut depths) = ([None; COMPONENTS], [0.0; COMPONENTS]);
     // The margins families follow D8's rule where the owner's host reports
     // its margins, and resolve to the safe area where it reports none (D10,
     // "Other hosts")

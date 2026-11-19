@@ -984,7 +984,7 @@ impl<D: DataSource> Host<D> {
             .map_err(|e| format!("safe area: {e:?}"))?;
         match self
             .runner
-            .refresh_viewport_geometry()
+            .refresh_geometry()
             .map_err(|e| format!("safe area: {e:?}"))?
         {
             Some(receipt) => {

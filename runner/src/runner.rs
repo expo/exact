@@ -49,6 +49,7 @@ mod reorder_group;
 pub use intersect::Intersection;
 pub use shown::BlockPlacement;
 mod box_resize;
+mod geometry_facts;
 mod resize;
 pub use resize::{ResizeRect, UNDELIVERED as RESIZE_UNDELIVERED};
 mod held;
@@ -598,6 +599,8 @@ pub struct Runner<D: DataSource> {
     // @ref LLP 1039 D2 — the layout size before settlement.
     viewport: crate::Viewport,
     viewport_geometry: crate::viewport::Geometry,
+    // @ref LLP 1123 D6 — the geometry facts' answers and their bound.
+    geometry: geometry_facts::Facts,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     page: crate::page::Page,
     presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
@@ -981,6 +984,7 @@ impl<D: DataSource> Runner<D> {
             delivery,
             viewport,
             viewport_geometry,
+            geometry: Default::default(),
             page: Default::default(),
             presented: crate::page::Presented::at_boot(),
             time: crate::time::launch_time(),

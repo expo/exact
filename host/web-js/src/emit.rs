@@ -200,6 +200,9 @@ const HOST_FACTS: &[&str] = &[
     "exactTransport",
     "exactMIDI",
     "exactActivities",
+    "exactGeometry",
+    "exactNativeChain",
+    "exactSafeAreaUnsettled",
 ];
 
 pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, String> {

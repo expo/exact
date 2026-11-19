@@ -142,6 +142,19 @@ export function activities(readers) {
   (data.reserved ??= {}).exactActivities = (_, a, name) => byName(readers, name, { activities: [], frequentPushesEnabled: false, linked: false, pushToStartToken: null, pushToStartActivities: [] });
 }
 
+/** The geometry facts (LLP 1123 D6), which the web does not have until its owners report
+ * them (D17): unavailable, each quantity `none`, the unsettled list too. */
+const geometryAbsent = { available: false, generation: 0, size: null, frame: null, observations: null, cornerInsets: null, cornerRadii: null, margins: null, regions: null, scroll: null, keyboard: null, chrome: null };
+export function geometry(readers) {
+  (data.reserved ??= {}).exactGeometry = (_, a, name) => byName(readers, name, geometryAbsent);
+}
+export function nativeChain(readers) {
+  (data.reserved ??= {}).exactNativeChain = (_, a, name) => byName(readers, name, { available: false, generation: 0, entries: null });
+}
+export function safeAreaUnsettled(readers) {
+  (data.reserved ??= {}).exactSafeAreaUnsettled = (_, a, name) => byName(readers, name, { available: false, generation: 0, count: 0, ids: [] });
+}
+
 // Replaced with string literals by build.mjs for both the page and its renderer.
 export const deliveryFacts = { stream: "embedded", seq: 0, embeddedSeq: 0, staged: false, sunset: "", interpreted: [], compatibilityId: "", version: globalThis.__exactVersion ?? "", buildNumber: globalThis.__exactBuildNumber ?? "", production: globalThis.__exactProduction ?? false, L: "0", E: [] };
 export function delivery(readers) {

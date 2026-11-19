@@ -1464,7 +1464,7 @@
         "runner/src/runner/time.rs: Runner::set_place",
         "runner/src/runner/time.rs: Runner::set_place_formatted",
         "runner/src/runner/time.rs: Runner::set_time",
-        "runner/src/runner/viewport.rs: Runner::refresh_viewport_geometry",
+        "runner/src/runner/viewport.rs: Runner::refresh_geometry",
         "runner/src/runner/viewport.rs: Runner::set_fold",
         "runner/src/runner/viewport.rs: Runner::set_keyboard_height",
         "runner/src/runner/viewport.rs: Runner::set_preferences",

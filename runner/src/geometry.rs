@@ -1418,7 +1418,7 @@ impl Point<'_> {
 
 /// The view an id names: the first live node whose `id` prop it is, as
 /// `showPicker` and `scrollIntoView` resolve names.
-fn view_of(kernel: &Kernel, id: &str) -> Option<ViewId> {
+pub(crate) fn view_of(kernel: &Kernel, id: &str) -> Option<ViewId> {
     kernel
         .find_by_id(id)
         .first()

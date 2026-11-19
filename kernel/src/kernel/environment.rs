@@ -139,6 +139,13 @@ impl Kernel {
         self.provisional_layouts
     }
 
+    /// How many layouts the kernel has made whose frames and observations stand, a trial's
+    /// not among them: a reader of the layout's facts compares it to know a new layout from
+    /// a report the next layout has yet to take (LLP 1123 D6).
+    pub fn layouts(&self) -> u64 {
+        self.layouts
+    }
+
     /// Set the insets, the layout regions (LLP 1123 D10), the default padding (D11), the
     /// title-bar area and control text styles of the environment — what the host reports with the viewport (a
     /// rotation changes them); the segment grid

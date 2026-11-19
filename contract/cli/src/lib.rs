@@ -1299,25 +1299,16 @@ fn first_frame<D: DataSource>(
         "bake-activities-field",
     )?;
     activities::shape(plan)?;
-    fact_shape(
-        plan,
-        delivery::SOURCE,
-        &delivery::FIELDS,
-        "bake-delivery-field",
-    )?;
-    fact_shape(
-        plan,
-        viewport::SOURCE,
-        viewport::FIELDS,
-        "bake-viewport-field",
-    )?;
-    fact_shape(plan, page::SOURCE, page::FIELDS, "bake-page-field")?;
-    fact_shape(
-        plan,
-        transport::SOURCE,
-        transport::FIELDS,
-        "bake-transport-field",
-    )?;
+    let facts: [(&str, &[&str], &str); 4] = [
+        (delivery::SOURCE, &delivery::FIELDS, "bake-delivery-field"),
+        (viewport::SOURCE, viewport::FIELDS, "bake-viewport-field"),
+        (page::SOURCE, page::FIELDS, "bake-page-field"),
+        (transport::SOURCE, transport::FIELDS, "bake-transport-field"),
+    ];
+    for (source, fields, id) in facts {
+        fact_shape(plan, source, fields, id)?;
+    }
+    surface::geometry_shapes(plan)?; // @ref LLP 1123 D6 — the geometry facts
     surface::shape(plan)?;
     // The bake answers `presented` false: no picture of it was presented.
     let was = exact_runner::page::set_awaits_present(true);

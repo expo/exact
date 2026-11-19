@@ -486,3 +486,20 @@ fn a_rotation_is_one_commit() {
     assert_eq!(commits, 1);
     assert_eq!(field(&p), before, "the field was never made again");
 }
+
+/// LLP 1123 D6: a geometry fact follows each layout the window makes, answered after it and
+/// laid out before the window's update returns.
+#[test]
+fn a_geometry_fact_follows_the_window() {
+    let mut p = boot(
+        "shape Rect\n  x: number\n  y: number\n  width: number\n  height: number\nshape G\n  frame: option<Rect>\ncomponent App\n  resource g = exactGeometry(\"hero\") as shape G\n  derive width = match g.frame { case some(f) => f.width, case none => 0 }\n  view\n    main width=\"100%\" height=\"100%\"\n      column id=\"hero\" width=\"50%\" height=40\n      column testId=\"half\" width=width height=10\n",
+    );
+    assert!(p.set_window(phone()).is_none());
+    assert_eq!(frame_of(&p, "half").2, 200.0);
+    let wide = Window {
+        size: (800., 400.),
+        ..phone()
+    };
+    assert!(p.set_window(wide).is_none());
+    assert_eq!(frame_of(&p, "half").2, 400.0);
+}

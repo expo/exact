@@ -5240,8 +5240,9 @@ across a launch: a root `task restore mount` with `after(1, applySize)` sets the
 stored size again. Do not multiply a scale factor into every size instead.
 
 Platform facts are reserved sources (`exactViewport`, `exactPage`, `exactDelivery`,
-`exactSurface`, `exactCanvasPerformance`, `exactTime`); the bake refuses a declared field the source does
-not have. `exactDelivery()` includes the string fields `version` and `buildNumber`: the
+`exactSurface`, `exactCanvasPerformance`, `exactTime`, `exactGeometry`, `exactNativeChain`,
+`exactSafeAreaUnsettled`); the bake refuses a declared field the source does not have.
+`exactDelivery()` includes the string fields `version` and `buildNumber`: the
 installed binary's `EXACT_VERSION` and `EXACT_BUILD_NUMBER` at bake time (defaults
 `0.1.0` and `1` only when unset). Over-the-air updates leave them unchanged; an
 older bake without them answers `""`. The web JS build uses the same variables
@@ -5256,6 +5257,35 @@ overrides out of a shipped binary, and an over-the-air update cannot change it.
 Gate a developer-only control on it, and gate what that control reads as well, so
 a production build never asks for it:
 `resource overrides = loadOverrides() when not build.production as shape Overrides`.
+
+`exactGeometry(id[, space[, node[, regions]]])` reads a node's geometry from the layout
+just committed (LLP 1123 D6). `space` is `"owner"` (the default, the document's outside
+every content owner), `"window"`, or `"node"` with the `id` of the node whose border box
+is the space; `regions` is UIKit's region query options, `"inactive"`, `"mirrored"` or
+both. Its declared shape chooses what it reads: `available`, `generation`, `size`,
+`frame`, `observations` and `margins`. `generation` is the number of the layout the
+answer reads, 0 before the first. `observations` has an inset set (`top`, `right`,
+`bottom`, `left`) per family: `safeArea`, `keyboard`, `keyboardUndocked`,
+`safeAreaCorners`, `layoutMargins`, `layoutMarginsCorners`, `readableContent`,
+`readableContentCorners`, `readableContentGuide` and `systemMinimumLayoutMargins`.
+`margins` has the `layoutMargins`, `readableContent` and `readableContentGuide`
+rectangles (`x`, `y`, `width`, `height`). Declare every field but `available` and
+`generation` an `option`, and each family and rectangle in them too: each is `none`
+before the node is laid out and wherever the host does not have it, and the bake refuses
+a shape that does not say so. `frame` is the border box as laid out, before the scroll
+offsets and transforms above it; it is `none` in `"window"`, which only the host can
+place, and in a `"node"` space in another owner. Until hosts report an owner's band,
+keyboard and margins and the session view's band (LLP 1123 stage 3), a node inside an
+owner reads `none` for its safe area and margins and 0 for the keyboard, and one outside
+every owner reads 0 for each; on the web every quantity is `none`, and the terminal host
+does not deliver the facts. A later layout that changes what it reads answers it again in
+a commit of its own, so a branch on it lays out after the layout it read; a chain of such
+commits stops after eight, holding the last answer until a layout with another cause, and
+a development build alerts `geometry-feedback`. A report that owes no layout, such as a
+band no style reads, reaches the facts at the next layout. `exactNativeChain(id)` answers
+`available` false, its `entries` `none`, until hosts report their native chains.
+`exactSafeAreaUnsettled()` answers `available`, `count`, the boxes the last layout left
+unsettled, and `ids`, the `id`s of those that have one.
 
 A TypeScript-only update currently removes the plan's source-shape requirement
 when it pairs the plan with its module. If that update first reads a field of a

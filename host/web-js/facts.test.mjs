@@ -196,3 +196,22 @@ test('a render answers the bake default for frozen', async () => {
     expect(data.reserved.exactPage(null, null, 'page')).toEqual([false]);
   } finally { globalThis.document = document; rmSync(dir, {recursive:true, force:true}); }
 });
+
+test('the geometry facts are unavailable on the web, each quantity none', async () => {
+  // LLP 1123 D6: the web has no owner's geometry to report until D17, so a reader is answered,
+  // not failed, with what it declares
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-geometry-facts-'));
+  try {
+    writeFileSync(resolve(dir, 'facts.js'), await Bun.file(resolve(import.meta.dir, 'facts.js')).text());
+    writeFileSync(resolve(dir, 'navigation.js'), await bundleHostModule(resolve(import.meta.dir, '../..'), 'navigation.js'));
+    writeFileSync(resolve(dir, 'rt.js'), `export const deferForReplacement = () => false; export const data = {}, Sounds = {}, Resources = []; export function commit() {} export function R() {} export const Refusal = Error, Kept = () => '', say = () => {};`);
+    const { geometry, nativeChain, safeAreaUnsettled } = await import(resolve(dir, 'facts.js'));
+    const { data } = await import(resolve(dir, 'rt.js'));
+    geometry({ g: [['available', 'frame', 'observations']] });
+    nativeChain({ c: [['available']] });
+    safeAreaUnsettled({ u: [['available', 'count', 'ids']] });
+    expect(data.reserved.exactGeometry(null, ['hero'], 'g')).toEqual([false, null, null]);
+    expect(data.reserved.exactNativeChain(null, ['hero'], 'c')).toEqual([false]);
+    expect(data.reserved.exactSafeAreaUnsettled(null, [], 'u')).toEqual([false, 0, []]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

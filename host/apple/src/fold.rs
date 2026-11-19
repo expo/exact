@@ -78,7 +78,7 @@ impl<D: DataSource> Host<D> {
         let changed = self.environment_into(env, None, &mut batch);
         let mut error = changed.as_ref().err().cloned();
         if error.is_none() {
-            match self.runner.refresh_viewport_geometry() {
+            match self.runner.refresh_geometry() {
                 Ok(Some(receipt)) => {
                     return self.commit_into(
                         &[Timed {

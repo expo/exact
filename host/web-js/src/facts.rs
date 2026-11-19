@@ -10,7 +10,9 @@ use std::fmt::Write as _;
 /// `exactSurface` readers with their surface and shape. `exactTime`'s
 /// readers too, though the entry answers it (build.mjs). Returns the import.
 pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
-    use exact_runner::{delivery, page, surface_record, time, viewport};
+    use exact_runner::{
+        delivery, native_geometry as geometry, page, surface_record, time, viewport,
+    };
     let mut imports = Vec::new();
     for (source, fields, name) in [
         ("exactViewport", viewport::FIELDS, "viewport"),
@@ -29,6 +31,14 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
                 "pushToStartActivities",
             ][..],
             "activities",
+        ),
+        // @ref LLP 1123 D6 — unavailable until the web's owners report geometry (D17)
+        (geometry::GEOMETRY, geometry::GEOMETRY_FIELDS, "geometry"),
+        (geometry::CHAIN, geometry::CHAIN_FIELDS, "nativeChain"),
+        (
+            geometry::UNSETTLED,
+            geometry::UNSETTLED_FIELDS,
+            "safeAreaUnsettled",
         ),
     ] {
         // Each reader by its resource name: its fields (by its own shape),

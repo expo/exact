@@ -74,6 +74,13 @@ impl<D: DataSource> Runner<D> {
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }
+        // @ref LLP 1123 D6 — the geometry facts, answered from the layout committed.
+        if crate::native_geometry::is_geometry(&source) {
+            return self
+                .geometry_answer(i, args)
+                .map(Answer::Now)
+                .map_err(|error| RunnerError::Data { resource, error });
+        }
         // @ref LLP 1039 D1 — host facts never reach the app data source.
         if source == crate::viewport::SOURCE {
             return self
