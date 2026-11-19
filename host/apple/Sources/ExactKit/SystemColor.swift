@@ -309,7 +309,8 @@ extension NodeView {
     /// The tint `row` resolves `@tint` by: this view's inherited
     /// `tintColor` on iOS, so a second window's is its own (LLP 1095 D8);
     /// on macOS the nearest authored `accent-color` at or above it (LLP
-    /// 1115.000 D3.4), nil where there is none: the system's accent.
+    /// 1115.000 D3.4), nil where there is none or a written `auto` is
+    /// nearer: the app's accent.
     func ownTint(for row: BatchValue?) -> PlatformColor? {
         row?.namesTint == true ? viewTint : nil
     }

@@ -1,9 +1,10 @@
 // @ref LLP 1115.000 D3.4 — on the Mac an authored `accent-color` is its
 // subtree's tint, as it is UIKit's inherited `tintColor` on iOS (LLP 1116.001
 // D2, `SystemColorIOSTests`): it reaches every row beneath that names the
-// tint, a text's ink, a box's fill, a symbol, and not only a control. AppKit
-// gives a view no tint to inherit, so the presenter reads the nearest one up
-// the view chain and applies what names the tint again when it changes.
+// tint, a text's ink, a box's fill, a symbol, and not only a control, until a
+// written `auto`, beneath which is the app's accent (D3 item 4). AppKit gives
+// a view no tint to inherit, so the presenter reads the nearest one up the
+// view chain and applies what names the tint again when it changes.
 #if os(macOS)
 import AppKit
 import XCTest
@@ -92,6 +93,9 @@ final class AccentColorMacTests: XCTestCase {
         // The nearest accent wins over one above it.
         p.apply(wireBatch([["op": "style", "id": 1, "style": ["accent_color": teal]]]))
         try assertTinted(p, under: [173, 20, 87, 255], beside: [48, 176, 199, 255], dark: false, "the nearest of two")
+        // A written `auto` stops the accent above it: beneath it is the app's.
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["accent_color": "auto"]]]))
+        try assertTinted(p, under: system, beside: [48, 176, 199, 255], dark: false, "auto beneath an accent")
         p.apply(wireBatch([["op": "style", "id": 1, "style": [:]], ["op": "style", "id": 2, "style": [:]]]))
         try assertTinted(p, under: system, beside: system, dark: false, "none: the system's accent")
         // The symbol beside moves under an accent, and back out.
