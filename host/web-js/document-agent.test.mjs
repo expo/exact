@@ -213,6 +213,8 @@ export const kept = (source: string, [u]: string[], value: string): void => { fe
       rendered: reply.html,
       moved: page([first, b, s, a, last]),
       misfit: page([['first', 'echo', ['z'], 7], ['heard', 'echo', ['a'], 7], s, b, ['last', 'other', ['y'], 'got-y']]),
+      // the open stream's answer, in place, one its next message contradicts
+      stale: reply.html.replace(written, JSON.stringify({ ...checkpoint, answers: [first, a, ['heard', 'echo', ['s'], 'stale'], b, last] })),
     };
     let served = 'rendered';
     site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -244,6 +246,10 @@ export const kept = (source: string, [u]: string[], value: string): void => { fe
     const rendered = await visit();
     expect(await rendered.evaluate(() => globalThis.__shown)).toEqual(['got-a,first,got-b', 'got-a,second,got-b']);
     expect(asked).toEqual(['s']);
+    // The open stream's page answer, asked again, is journaled as the page's, never as a build-time answer (LLP 1102
+    // §3.17, as the runner's `revalidated`); which message lands first is the browser's
+    const journal = page => page.evaluate(() => globalThis.exact.journal);
+    expect((await journal(rendered)).filter(l => l.includes(' heard ') && l.includes('build-time'))).toEqual([]);
     // An element that joins after the boot asks, though the page answered it
     await rendered.click('[data-testid="drop"]');
     await rendered.waitForFunction(() => document.querySelector('[data-testid="heard"]')?.textContent === 'second,got-b');
@@ -257,6 +263,10 @@ export const kept = (source: string, [u]: string[], value: string): void => { fe
     const moved = await visit();
     expect(await moved.evaluate(() => globalThis.__shown)).toEqual(['got-a,first,got-b', 'got-a,second,got-b']);
     expect(asked).toEqual(['s']);
+    // A page answer the stream's next message contradicts is journaled as the page's
+    served = 'stale';
+    const stale = await visit();
+    expect((await journal(stale)).some(l => l.endsWith("heard answered differently from the page's answer: the first frame showed the rendered page's value until its source answered")), (await journal(stale)).join('\n')).toBe(true);
     // An answer that no longer fits or names another source is asked, a declared resource's and an element's, as the
     // runner asks them
     served = 'misfit';

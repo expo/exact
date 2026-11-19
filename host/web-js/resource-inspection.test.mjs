@@ -1019,3 +1019,30 @@ test('web builds expose their version inputs in the view and delivery state', as
     }
   } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 60000);
+
+// A page's answer asked again is journaled as the page's, never as a build-time answer (LLP 1102 §3.17, the runner's
+// `revalidated`): nothing when the fresh answer agrees, the page's line when it contradicts, an immediate answer or one
+// that lands later alike, and no line at the ask.
+test('a page answer asked again is journaled as the page\'s, and nothing when it agrees', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const lines = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const later = Promise.withResolvers();
+      rt.data.answer = (source, [x]) => x === 'same' ? { v: 'page' } : x === 'now' ? { v: 'fresh' } : { promise: later.promise };
+      rt.mount(() => {
+        // Each starts from the page's answer at its arguments, which the page lists in `open`
+        for (const x of ['same', 'now', 'later']) {
+          const r = rt.res(x, 'echo', () => [x], undefined, undefined, 's', undefined, false, [[x], 'page', true, false]);
+          rt.effect(() => r());
+        }
+      });
+      later.resolve('fresh');
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      return rt.journal.filter(l => / (same|now|later)\b/.test(l) && /answer/.test(l)).map(l => l.replace(/^t=\S+ /, ''));
+    });
+    const contradicted = name => `${name} answered differently from the page's answer: the first frame showed the rendered page's value until its source answered`;
+    expect(lines).toEqual([contradicted('now'), contradicted('later')]);
+  } finally { await page.close(); server.stop(true); }
+}, 30000);

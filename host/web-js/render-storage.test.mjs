@@ -432,12 +432,12 @@ component App
       text reader testId="reader"
       text writer.toString()
 `);
-    // The writer answers after the reader's first answer, changing its arguments; its second answer reads a file.
+    // The writer answers after the reader's first answer, changing its arguments; its second answer reads a file, which
+    // the render refuses and the device does not have, so the reader's ask on the device shows.
     writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'fs.read app:/data/reader';
-let readerCalls = 0;
-export const answer = async (name: string, _args: unknown[], _store: unknown, storage: any): Promise<any> => {
+export const answer = async (name: string, [written]: unknown[], _store: unknown, storage: any): Promise<any> => {
   if (name === 'writer') { await Promise.resolve(); await Promise.resolve(); return 1; }
-  if (++readerCalls === 1) return 'first';
+  if (written !== 1) return 'first';
   try { return new TextDecoder().decode(await storage.fs.readFile('app:/data/reader')); } catch { return 'asked on the device'; }
 };
 `);
@@ -458,7 +458,8 @@ export const answer = async (name: string, _args: unknown[], _store: unknown, st
     await browser.clock('settle');
     const journal = await browser.carrier.evaluate('globalThis.exact.journal');
     expect(journal.some(l => l.endsWith('adopted the document')), journal.join('\n')).toBe(true);
-    expect(journal.some(l => /^t=\d+ reader answered:/.test(l)), journal.join('\n')).toBe(true);
+    expect(await browser.carrier.evaluate(`document.querySelector('[data-testid="reader"]').textContent`), journal.join('\n')).toBe('asked on the device');
+    expect(journal.some(l => l.endsWith("reader answered differently from the page's answer: the first frame showed the rendered page's value until its source answered")), journal.join('\n')).toBe(true);
   } finally {
     await browser?.close(); site?.stop(true);
     rmSync(dir, { recursive: true, force: true });
