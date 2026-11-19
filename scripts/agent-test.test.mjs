@@ -9,7 +9,7 @@ import { Readable } from 'node:stream';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { failureMark, backendFetchPrefixes, churnLines, disabledExpectation, focusedExpectation, layoutExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
+import { failureMark, backendFetchPrefixes, churnLines, disabledExpectation, focusedExpectation, layoutExpectation, nativeFetchOrigins, NO_FAILURES, perfExpectation, pickHint, propertyHolds, testMutationClock, refusalExpectation, refuseDisabled, reloadWeb, runTests, serverRequest, testScope, textExpectation, treeExpectation, unarranged } from './agent-test.mjs';
 import { axFindings } from './agent-ax.mjs';
 import { withEpoch } from './agent-launch.mjs';
 import { serveBuildTree } from '../host/web/serve.mjs';
@@ -1001,6 +1001,11 @@ test "a host refuses an unsupported page fact"
       expect(textExpectation((await s.tree()).nodes, 'scheme', dark ? 'dark' : 'light')).toBeNull();
       expect(await rootSize()).toBe(fontSize);
       if (t.launch.media.online != null) expect((await s.state()).resources.page.onLine).toBe(false);
+      // A new session starts without the last one's display mode; a drive's reload, which sends no preference again,
+      // keeps it from the new document's boot (LLP 1039 D7).
+      const display = t.launch.media['display-mode'];
+      expect((await s.state()).device.displayMode).toBe(display ?? 'browser');
+      if (display) { await reloadWeb(s); expect((await s.state()).device.displayMode).toBe(display); }
       ends.push(t.launch.media);
       return {};
     } });

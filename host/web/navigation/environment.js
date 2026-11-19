@@ -239,17 +239,18 @@ const queries = () => preferenceQueries ??= [
 ].map(([q, bits]) => [matchMedia(q), bits]);
 export const preferences = () => {
   const bits = queries().reduce((bits, [q, bit]) => bits | (q.matches ? bit : 0), 0), meta = globalThis.document?.querySelector?.("meta[name=\"color-scheme\"]")?.content, pinned = globalThis.exact?.systemScheme ?? (meta === "light" || meta === "dark" ? meta : null);
-  const schemed = pinned ? bits & ~16 | (pinned === "dark" ? 16 : 0) : bits, mode = DISPLAY_MODES.indexOf(globalThis.exact?.displayModeSubstitute);
+  const schemed = pinned ? bits & ~16 | (pinned === "dark" ? 16 : 0) : bits, mode = DISPLAY_MODES.indexOf(globalThis.__exactDisplayMode);
   return mode < 0 ? schemed : schemed & ~(7 << 29) | mode << 29;
 };
 // @ref LLP 1039 D7 — the agent's `prefer display-mode`, which Chrome's emulation cannot set: the facts read `value`
-// until the next one, and the page's own `display-mode` query does not change. It is kept on `globalThis`, as the
-// fold's substitute is, since the web-js agent reads its own copy of this module. The caller re-answers the runner.
+// until the next one, and the page's own `display-mode` query does not change. It is a global of its own, which the
+// carrier also sets in each new document before the page's scripts run: the web-js agent reads its own copy of this
+// module, and the wasm glue replaces `globalThis.exact` at boot. The caller re-answers the runner.
 export function preferDisplayMode(value) {
   if (!DISPLAY_MODES.includes(value)) {
     throw Object.assign(new Error(`prefer: display-mode: ${value} is not a display mode`), { malformed: true });
   }
-  (globalThis.exact ??= {}).displayModeSubstitute = value;
+  globalThis.__exactDisplayMode = value;
 }
 // a dev pin's scheme is the system's (LLP 1122 D4; dev.js), else the manifest's fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs), as `UIUserInterfaceStyle` is an iOS app's
 export const displayMode = () => DISPLAY_MODES[preferences() >>> 29 & 7];

@@ -150,7 +150,7 @@ export async function preferWeb({ media, page, fold = {}, mode = {}, emulated, c
   const pageReply = Object.keys(page).length || foldRequest || hasMode || display != null ? await ask({ op: 'prefer', ...(Object.keys(page).length ? { page } : {}), ...(foldRequest ? { fold: foldRequest } : {}), ...(hasMode ? { mode } : {}), ...(display != null ? { media: { 'display-mode': display } } : {}) }) : null;
   if (pageReply?.error) throw new Error(pageReply.error);
   if (pageReply) await frame();
-  return { media: await evaluate(`({ ...Object.fromEntries(${JSON.stringify(Object.entries(PREFERENCES))}.map(([name, values]) => [name, values.find(v => matchMedia('(' + name + ': ' + v + ')').matches) ?? values.at(-1)])), ...(globalThis.exact?.displayModeSubstitute ? { 'display-mode': globalThis.exact.displayModeSubstitute } : {}) })`), ...(pageReply ? { page: pageReply.page, fold: pageReply.fold, ...(hasMode ? { mode: pageReply.mode } : {}) } : {}) };
+  return { media: await evaluate(`({ ...Object.fromEntries(${JSON.stringify(Object.entries(PREFERENCES))}.map(([name, values]) => [name, values.find(v => matchMedia('(' + name + ': ' + v + ')').matches) ?? values.at(-1)])), ...(globalThis.__exactDisplayMode ? { 'display-mode': globalThis.__exactDisplayMode } : {}) })`), ...(pageReply ? { page: pageReply.page, fold: pageReply.fold, ...(hasMode ? { mode: pageReply.mode } : {}) } : {}) };
 }
 
 export function faultRequest(op, args) {

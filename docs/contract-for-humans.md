@@ -1731,9 +1731,10 @@ viewport metadata uses the root element's `viewport-fit` and `interactive-widget
 attributes. `exactViewport` also carries `prefersReducedMotion`,
 `prefersReducedTransparency`, `prefersContrast` and `prefersColorScheme`: facts
 for the app to honor, not automatic engine policy. `displayMode: string` reads
-CSS's current `display-mode`: the browser's media query on the web,
-`fullscreen` or `standalone` for the window on macOS, and `standalone` on
-other native hosts. `navigationType` is how the browser loaded the page
+CSS's current `display-mode`: the browser's media query on the web (in Chrome,
+an agent's `prefer display-mode` replaces the reading and leaves the query
+alone), `fullscreen` or `standalone` for the window on macOS, and `standalone`
+on other native hosts. `navigationType` is how the browser loaded the page
 (`navigate`, `reload` or `back_forward`), and empty in a native app. Available fields are documented beside their source validation (LLP 1039); start with [the viewport corpus](../contract/corpus/viewport.contract).
 
 Localized strings live in the app's `strings/<locale>.json` files. Author calls

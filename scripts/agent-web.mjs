@@ -476,6 +476,15 @@ async function openWebUnlocked({
       faultScript = (await call('Page.addScriptToEvaluateOnNewDocument', { source })).identifier;
     };
     await installFaults(facts.failFetch);
+    // `prefer display-mode`'s substitute (LLP 1039 D7), set in each new document before the page's scripts run, as
+    // CDP's emulated media are in place at boot: a reload keeps it, and a new session starts without it.
+    let displayScript;
+    const carryDisplayMode = async value => {
+      if (displayScript) await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: displayScript });
+      displayScript = value == null ? undefined : (await call('Page.addScriptToEvaluateOnNewDocument', {
+        source: `if (window === window.top && location.origin === ${JSON.stringify(page.origin)}) globalThis.__exactDisplayMode = ${JSON.stringify(value)};`,
+      })).identifier;
+    };
     // Display preferences are the agent's from launch, never the machine's (LLP 1069.007 D2); `prefer` changes them.
     const emulated = { ...LAUNCH_MEDIA };
     await call('Emulation.setEmulatedMedia', {
@@ -571,6 +580,7 @@ async function openWebUnlocked({
        * never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
       async reset({ keep = false, failFetch, epoch, session = false } = {}) {
         if (session) {
+          await carryDisplayMode(null);
           for (const name of Object.keys(emulated)) delete emulated[name];
           Object.assign(emulated, LAUNCH_MEDIA);
           await call('Emulation.setEmulatedMedia', {
@@ -624,9 +634,11 @@ async function openWebUnlocked({
         if (r.scrolled) await frame();
         return r;
       },
-      prefer: (media, page, fold, mode) =>
-        // the browser's emulation through CDP, the glue's substitute where it offers none (agent-prefer.mjs)
-        preferWeb({ media, page, fold, mode, emulated, call, evaluate, frame, ask, scale }),
+      // the browser's emulation through CDP, the glue's substitute where it offers none (agent-prefer.mjs)
+      async prefer(media, page, fold, mode) {
+        if (media['display-mode'] != null) await carryDisplayMode(media['display-mode']);
+        return preferWeb({ media, page, fold, mode, emulated, call, evaluate, frame, ask, scale });
+      },
       // A click with modifiers named holds them as a keyboard does (`heldForClick`; Charlie, 2026-10-07).
       input(id, kind, opts) {
         return heldForClick(call, kind, opts, () => this.deliverInput(id, kind, opts));

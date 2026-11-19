@@ -61,25 +61,25 @@ test('Chrome\'s display-mode is the glue\'s substitute, not its emulation', asyn
     expect(asked).toEqual([{ op: 'prefer', media: { 'display-mode': 'standalone' } }]);
     expect(reply.media['display-mode']).toBe('standalone');
     expect(matchMedia('(display-mode: browser)').matches).toBe(true);
-  } finally { globalThis.matchMedia = saved; delete globalThis.exact.displayModeSubstitute; }
+  } finally { globalThis.matchMedia = saved; delete globalThis.__exactDisplayMode; }
 });
 
-// The facts word's bits 29–31 are the substitute's, 6 (`tabbed`) setting the sign bit, and no other bit moves.
+// The facts word's bits 29–31 are the substitute's, 6 (`tabbed`) setting the sign bit, and no other bit moves. The
+// module keeps the first `matchMedia` lists it reads, so the test compares against its own first reading.
 test('the display-mode substitute replaces the page\'s reading and nothing else', () => {
   const saved = globalThis.matchMedia;
   globalThis.matchMedia = (query) => ({ matches: ['(display-mode: browser)', '(prefers-color-scheme: dark)', '(pointer: coarse)'].includes(query), addEventListener() {} });
   try {
-    const read = preferences(), others = (bits) => bits & ~(7 << 29);
-    expect(displayMode()).toBe('browser');
+    const read = preferences(), own = displayMode(), others = (bits) => bits & ~(7 << 29);
     for (const mode of ['standalone', 'tabbed']) {
       preferDisplayMode(mode);
       expect([displayMode(), others(preferences())]).toEqual([mode, others(read)]);
     }
     const refused = (() => { try { preferDisplayMode('kiosk'); } catch (e) { return e; } })();
     expect([refused?.message, refused?.malformed, displayMode()]).toEqual(['prefer: display-mode: kiosk is not a display mode', true, 'tabbed']);
-    preferDisplayMode('browser');
+    preferDisplayMode(own);
     expect(preferences()).toBe(read);
-  } finally { globalThis.matchMedia = saved; delete globalThis.exact.displayModeSubstitute; }
+  } finally { globalThis.matchMedia = saved; delete globalThis.__exactDisplayMode; }
 });
 
 test('segments and gap are malformed', async () => {
