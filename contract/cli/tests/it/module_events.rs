@@ -759,3 +759,32 @@ fn an_app_wide_value_is_one_app_s() {
         (serde_json::json!(3), serde_json::Value::Null)
     );
 }
+
+#[test]
+fn a_devices_event_runs_its_action_without_the_person_for_the_geometry_fence() {
+    // `chime` is the device's (`emit`), so an action it runs that focuses by a geometry fact is
+    // refused as a task's would be (LLP 1123 D6)
+    let app = App::new("fence");
+    app.write(
+        "app.contract",
+        r#"use chime from "@fixture/bell"
+shape G
+  available: bool
+component App
+  resource g = exactGeometry("hero") as shape G
+  action hear(v: string)
+    if g.available
+      focus("name")
+  view
+    column chime=hear id="hero"
+      input aria-label="Name" id="name"
+"#,
+    );
+    let errors = app.compile().expect_err("refused");
+    let fenced = errors.iter().find(|e| e.id == "bake-geometry-feedback");
+    let message = fenced.map(|e| e.message.as_str()).unwrap_or_default();
+    assert!(
+        message.contains("`chime` runs `hear` without the person"),
+        "{errors:?}"
+    );
+}

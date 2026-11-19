@@ -497,3 +497,28 @@ fn a_declared_event_runs_its_handler_with_the_record_sent() {
         "{refused:?}"
     );
 }
+
+#[test]
+fn a_views_declared_event_runs_its_action_without_the_person_for_the_geometry_fence() {
+    // `moveend` is the view's own event, which its implementation sends, so an action it runs
+    // that focuses by a geometry fact is refused as a task's would be (LLP 1123 D6)
+    let src = APP
+        .replace(
+            "component App\n",
+            "shape G\n  available: bool\ncomponent App\n  resource g = exactGeometry(\"hero\") as shape G\n",
+        )
+        .replace(
+            "    zoom = c.zoom\n",
+            "    zoom = c.zoom\n    if g.available\n      focus(\"name\")\n",
+        )
+        .replace("    column\n", "    column id=\"hero\"\n")
+        + "      input aria-label=\"Name\" id=\"name\"\n";
+    let app = App::new("fence", &src);
+    let errors = app.compile().map(|_| ()).unwrap_err();
+    let fenced = errors.iter().find(|e| e.id == "bake-geometry-feedback");
+    let message = fenced.map(|e| e.message.as_str()).unwrap_or_default();
+    assert!(
+        message.contains("`moveend` runs `ended` without the person"),
+        "{errors:?}"
+    );
+}

@@ -19,6 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 contract-analyze = { path = "../analyze" }
+contract-checking = { path = "../checking" }
 contract-lower = { path = "../lower" }
 contract-syntax = { path = "../syntax" }
 contract-types = { path = "../types" }

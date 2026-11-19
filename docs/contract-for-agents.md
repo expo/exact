@@ -5281,7 +5281,21 @@ every owner reads 0 for each; on the web every quantity is `none`, and the termi
 does not deliver the facts. A later layout that changes what it reads answers it again in
 a commit of its own, so a branch on it lays out after the layout it read; a chain of such
 commits stops after eight, holding the last answer until a layout with another cause, and
-a development build alerts `geometry-feedback`. A report that owes no layout, such as a
+a development build alerts `geometry-feedback`. The bake refuses a path from a geometry
+fact to what moves the geometry it reads (`bake-geometry-feedback`): any route's
+`navigation*` attributes, its bar (its first `header`) and a branch before that header,
+the root's tab bar, a toolbar the host places, the system bars, a write of the router's
+slot, a popover, a sheet's detents, a picker, full screen, picture in picture or sharing,
+a scroll position or snap, `scrollIntoView`, focus, and the window's fitting or
+orientation. The path may be direct or run through a branch, a `display` or a class that
+hides the node, a `for` key, a derive, a resource, state, a mutation, a child's prop, or
+an action that runs without the person: a task's, a sequence's `ended=`, that of an event
+the person does not make, such as an image's `load`, or that of a layout event (`resize`,
+`intersect`, `reachstart`, `reachend`, `transformgeometry`), which runs on the fact
+whenever the view reads one. An action the person runs, by a press, a key, a scroll or
+focus, may read a fact, as a UIKit app chooses a popover or a sheet by its width when a
+button is pressed: it runs once per event, so it cannot feed back. A fact may decide
+content: sizes, text and which content shows. A report that owes no layout, such as a
 band no style reads, reaches the facts at the next layout. `exactNativeChain(id)` answers
 `available` false, its `entries` `none`, until hosts report their native chains.
 `exactSafeAreaUnsettled()` answers `available`, `count`, the boxes the last layout left

@@ -125,6 +125,7 @@ mod function_graph;
 mod gallery;
 mod gamepad;
 mod geometry;
+mod geometry_fence;
 mod glass_tint;
 mod grouped_action;
 mod grouped_card;

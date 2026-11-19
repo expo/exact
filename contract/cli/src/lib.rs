@@ -15,6 +15,7 @@ pub use build_advice::{compile_path_advised, resource_clock_warnings, surface_fi
 
 mod activities;
 mod excerpt;
+mod fence;
 pub use excerpt::excerpt;
 
 /// Whether an attribute writes paint rows alone (LLP 1122 D14): `set-row`
@@ -1128,6 +1129,11 @@ fn compile_file_warned(
             let unused = contract_lower::lint_unused(file);
             if !unused.is_empty() {
                 return Err(each(unused, |e| e));
+            }
+            // @ref LLP 1123 D6 — no path from a geometry fact to what moves it
+            let refused = fence::check(&checked);
+            if !refused.is_empty() {
+                return Err(each(refused, |e| e));
             }
             if let Some(app) = asset_root {
                 package_gpu::check(app, &checked.expanded.root.view)?;

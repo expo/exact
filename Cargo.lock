@@ -930,6 +930,7 @@ name = "contract"
 version = "0.1.0"
 dependencies = [
  "contract-analyze",
+ "contract-checking",
  "contract-lower",
  "contract-syntax",
  "contract-types",
