@@ -19,14 +19,19 @@ export function install(names) {
  * no build-time answer, the resource shows its placeholder while its source is not ready (resources.js `hold`); a
  * placeholder with nothing to show leaves the build-time answer. */
 export const reader = (res, declared) => (name, source, args, initial, initialArgs, type, ph, ...rest) => {
+  let r, bake;
   if (declared && opened) {
-    const bake = initial;
+    bake = initial;
     let said = false;
     const placeholder = ph;
     initial = undefined;
     ph = () => {
       const v = typeof placeholder === 'function' ? placeholder() : placeholder;
-      if (v === undefined) return bake;
+      // nothing to show: the build-time answer stands in after all
+      if (v === undefined) {
+        if (bake !== undefined) r.stand = 'build';
+        return bake;
+      }
       if (!said) {
         said = true;
         say(`${name} shows its placeholder until its source answers: the store holds secrets its build-time answer did not see`);
@@ -35,7 +40,11 @@ export const reader = (res, declared) => (name, source, args, initial, initialAr
     };
   }
   const out = res(name, source, args, initial, initialArgs, type, ph, ...rest);
+  r = out.r;
+  // Mark a passed-over build-time answer as the launch's to ask again, so that ask keeps it stale, as `res` marks any
+  // other; one the page or a reload carried is `res`'s
+  if (bake !== undefined && r.value === undefined) r.baked = true;
   // a reader before its first answer: a store write asks it again (rt.js `revise`), as the runner's `store_reader`
-  out.r.store = true;
+  r.store = true;
   return out;
 };

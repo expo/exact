@@ -539,7 +539,7 @@ export function mount(f) {
   // checkpoint, so this rule does not apply to them, as in the runner's carried boot.
   if (Store.map.size && checkpoint().kept) {
     for (const r of Resources) {
-      if (r.store) {
+      if (r.store && r.stand === 'page') {
         r.baked = true;
       }
     }
