@@ -3,7 +3,7 @@
   "name": "UI Gallery",
   "short_name": "UI Gallery",
   "version": "0.1.1",
-  "buildNumber": 19,
+  "buildNumber": 20,
   "id": "com.exact.uigallery",
   "start_url": "/",
   "display": "standalone",
