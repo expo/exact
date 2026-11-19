@@ -138,14 +138,15 @@ final class DimmedPixelsIOSTests: XCTestCase {
     // MARK: - The stage
 
     /// The fixture and its twins (by the test id of the node each stands beside) drawn before an alert,
-    /// behind it and after it
+    /// behind it and after it, and where each is in the stage's root, read while its window shows them: the
+    /// window leaves its scene as the first test ends (`TestWindows`)
     private struct Stage {
         let before: Picture, behind: Picture, after: Picture
-        let views: [String: UIView], twins: [String: UIView], cells: [String: GroupedCell]
-        let root: UIView
+        /// Each node's and twin's frame (a twin's under `"<id> twin"`), each list row's symbol centre and
+        /// switch, and each button's image view and title label (`"<part> <id>"`, `"<part> <id> twin"`)
+        let frames: [String: CGRect], rowSymbols: [String: CGPoint], rowSwitches: [String: CGRect], parts: [String: CGRect]
         func frame(_ testId: String, twin: Bool = false) throws -> CGRect {
-            let view = try XCTUnwrap((twin ? twins : views)[testId], "the stage has \(testId)\(twin ? "'s twin" : "")")
-            return view.convert(view.bounds, to: root)
+            try XCTUnwrap(frames[Self.key(testId, twin)], "the stage has \(testId)\(twin ? "'s twin" : "")")
         }
         func centre(_ testId: String, twin: Bool = false) throws -> CGPoint {
             let f = try frame(testId, twin: twin)
@@ -153,24 +154,17 @@ final class DimmedPixelsIOSTests: XCTestCase {
         }
         /// The centre of the symbol a list row's cell draws (`UIListContentView.imageLayoutGuide`)
         func rowSymbol(_ testId: String) throws -> CGPoint {
-            let cell = try XCTUnwrap(cells[testId], "the list shows \(testId)")
-            let content = try XCTUnwrap(cell.contentView as? UIListContentView, "\(testId) is a standard row")
-            let guide = try XCTUnwrap(content.imageLayoutGuide, "\(testId) shows a symbol")
-            let f = content.convert(guide.layoutFrame, to: root)
-            return CGPoint(x: f.midX, y: f.midY)
+            try XCTUnwrap(rowSymbols[testId], "the list shows \(testId) as a standard row with a symbol")
         }
         /// The switch UIKit shows as a list row's accessory
         func rowSwitch(_ testId: String) throws -> CGRect {
-            func first(_ view: UIView) -> UISwitch? { view as? UISwitch ?? view.subviews.lazy.compactMap(first).first }
-            let toggle = try XCTUnwrap(cells[testId].flatMap(first), "\(testId) shows a switch")
-            return toggle.convert(toggle.bounds, to: root)
+            try XCTUnwrap(rowSwitches[testId], "\(testId) shows a switch")
         }
         /// A button's image view or title label
         func part(_ part: String, _ testId: String, twin: Bool = false) throws -> CGRect {
-            let button = try XCTUnwrap((twin ? twins : views)[testId] as? UIButton, "\(testId) is a button")
-            let view = try XCTUnwrap(part == "imageView" ? button.imageView : button.titleLabel, "\(testId) shows its \(part)")
-            return view.convert(view.bounds, to: root)
+            try XCTUnwrap(parts["\(part) \(Self.key(testId, twin))"], "\(testId) is a button that shows its \(part)")
         }
+        static func key(_ testId: String, _ twin: Bool) -> String { twin ? "\(testId) twin" : testId }
     }
 
     private func stage() throws -> Stage {
@@ -215,7 +209,26 @@ final class DimmedPixelsIOSTests: XCTestCase {
         var dismissed = false
         controller.dismiss(animated: false) { dismissed = true }
         until("UIKit dismisses the alert and restores the screen's tint") { dismissed && controller.view.tintAdjustmentMode != .dimmed }
-        let staged = Stage(before: before, behind: behind, after: settled(controller.view), views: views, twins: twins, cells: cells, root: controller.view)
+        let root: UIView = controller.view, after = settled(root)
+        var frames: [String: CGRect] = [:], rowSymbols: [String: CGPoint] = [:], rowSwitches: [String: CGRect] = [:], parts: [String: CGRect] = [:]
+        for (twin, nodes) in [(false, views), (true, twins)] {
+            for (id, view) in nodes {
+                frames[Stage.key(id, twin)] = view.convert(view.bounds, to: root)
+                guard let button = view as? UIButton else { continue }
+                for (part, shown) in [("imageView", button.imageView as UIView?), ("titleLabel", button.titleLabel)] {
+                    if let shown { parts["\(part) \(Stage.key(id, twin))"] = shown.convert(shown.bounds, to: root) }
+                }
+            }
+        }
+        func first(_ view: UIView) -> UISwitch? { view as? UISwitch ?? view.subviews.lazy.compactMap(first).first }
+        for (id, cell) in cells {
+            if let content = cell.contentView as? UIListContentView, let guide = content.imageLayoutGuide {
+                let f = content.convert(guide.layoutFrame, to: root)
+                rowSymbols[id] = CGPoint(x: f.midX, y: f.midY)
+            }
+            if let toggle = first(cell) { rowSwitches[id] = toggle.convert(toggle.bounds, to: root) }
+        }
+        let staged = Stage(before: before, behind: behind, after: after, frames: frames, rowSymbols: rowSymbols, rowSwitches: rowSwitches, parts: parts)
         Self.staged = staged
         return staged
     }
