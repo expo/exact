@@ -95,34 +95,57 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: docs
-    # A publish is never stopped by a newer one, which waits for it.
+    # A publish is never stopped by a newer one, which waits for it. GitHub does not promise the order of the
+    # jobs in a group, and a run can be run again, so the first step refuses a commit that main has moved past.
     concurrency:
       group: docs-deploy
       cancel-in-progress: false
     permissions:
       contents: read
     steps:
+      # This commit is the newest to publish when it has main's last commit to each path that starts this
+      # workflow. Otherwise a later run publishes, or has published, a newer site.
+      - name: Check that main has no newer docs
+        id: newest
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { data: main } = await github.rest.repos.getBranch({ owner, repo, branch: 'main' });
+            for (const path of ['docs', '.github/workflows/docs.yml']) {
+              const { data: [last] } = await github.rest.repos.listCommits({ owner, repo, sha: main.commit.sha, path, per_page: 1 });
+              if (!last || last.sha === context.sha) continue;
+              const { data: { status } } = await github.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead: `${last.sha}...${context.sha}`, per_page: 1 });
+              if (status !== 'ahead' && status !== 'identical') return core.notice(`Not published: main has a newer commit to ${path}, ${last.sha}.`);
+            }
+            core.setOutput('publish', true);
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.newest.outputs.publish
         with:
           sparse-checkout: docs/site
 
       # no-cache: a cache is written by workflows that run other code.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: steps.newest.outputs.publish
         with:
           bun-version: 1.4.2
           no-cache: true
 
       - name: Install wrangler from the lockfile
+        if: steps.newest.outputs.publish
         working-directory: docs/site
         run: bun install --frozen-lockfile
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: steps.newest.outputs.publish
         with:
           name: docs-site
           path: docs/site/dist.pages
 
       # --no-bundle: tools/pages.ts has bundled the worker, and a bundler here would read files the build names.
       - name: Publish
+        if: steps.newest.outputs.publish
         working-directory: docs/site
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
@@ -132,6 +155,7 @@ jobs:
           --commit-hash="$GITHUB_SHA" --commit-dirty=true --no-bundle
 
       - name: Delete older deployments of the site
+        if: steps.newest.outputs.publish
         working-directory: docs/site
         env:
           CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
