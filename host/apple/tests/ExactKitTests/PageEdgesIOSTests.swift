@@ -498,8 +498,10 @@ final class PageEdgesIOSTests: XCTestCase {
     /// last scroller, with nothing under it, is drawn on under the bar and inset by the gap,
     /// as a hand-built table runs under its tab bar: layout is unchanged, its end rests where
     /// its box ends, UIKit adds no inset of its own and the bar's edge effect follows it. The
-    /// route's own `env()` padding is reached through too; a caption under the scroller keeps
-    /// it above the bar; content that fits gains no scroll range; a virtualized list is banded.
+    /// route clears the status bar itself and its scroller runs under that too (LLP 1123 D3);
+    /// the route's own `env()` padding counts once, inside the cover; a caption under the
+    /// scroller keeps it above the bar; content that fits gains no scroll range; a virtualized
+    /// list is banded.
     func testUnderACoverRootARoutesLastScrollerRunsUnderTheTabBar() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
@@ -512,10 +514,11 @@ final class PageEdgesIOSTests: XCTestCase {
         until("the scroller runs under the tab bar") { (list()?.pageBand.bottom ?? 0) > 0.5 }
         guard case .edges(let cover)? = p.navigationHost.covers[routeNode.id] else { return XCTFail("the route keeps the tab bar's cover") }
         XCTAssertGreaterThan(cover.bottom, 0.5)
+        XCTAssertGreaterThan(cover.top, 0.5, "the route clears the status bar itself")
         var v = try XCTUnwrap(list()), sv = try XCTUnwrap(v.scrollView)
         let box = v.convert(v.bounds, to: nil)
         XCTAssertEqual(box.maxY, foot() - cover.bottom, accuracy: 0.5, "laid out above the cover, as before")
-        XCTAssertEqual(v.pageBand, UIEdgeInsets(top: 0, left: 0, bottom: cover.bottom, right: 0))
+        XCTAssertEqual(v.pageBand, UIEdgeInsets(top: cover.top, left: 0, bottom: cover.bottom, right: 0), "under the status bar too, as a tab's table runs")
         XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot(), accuracy: 0.5, "its scroll view reaches the route's foot, under the bar")
         XCTAssertEqual(sv.adjustedContentInset.bottom, cover.bottom, accuracy: 0.5, "inset by the band alone")
         XCTAssertTrue(route.contentScrollView(for: .bottom) === sv, "the tab bar's edge effect follows it")
@@ -524,14 +527,16 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(end.convert(end.bounds, to: nil).maxY, box.maxY, accuracy: 0.5, "at its end the content rests where the box ends, above the bar")
 
         p.press(try node(session, "use-padded").id)
-        until("the route's env() padding is reached through") { (list()?.pageBand.bottom ?? 0) > cover.bottom + 0.5 }
+        until("the route pads its bottom by its own inset") { ((routeNode.kernelPadding?[2] ?? nil) ?? 0) > 0.5 && list() != nil }
         v = try XCTUnwrap(list()); sv = try XCTUnwrap(v.scrollView)
-        XCTAssertEqual(v.pageBand.bottom, foot() - v.convert(v.bounds, to: nil).maxY, accuracy: 0.5)
+        XCTAssertEqual(v.convert(v.bounds, to: nil).maxY, foot() - cover.bottom, accuracy: 0.5, "the padding counts once, inside the cover")
+        XCTAssertEqual(v.pageBand.bottom, cover.bottom, accuracy: 0.5)
         XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot(), accuracy: 0.5)
         XCTAssertEqual(sv.adjustedContentInset.bottom, v.pageBand.bottom, accuracy: 0.5, "the padding and the cover, once")
 
         p.press(try node(session, "use-footer").id)
-        until("a caption under the scroller keeps it above the bar") { list()?.pageBand == .zero }
+        until("a caption under the scroller keeps it above the bar") { list()?.pageBand.bottom == 0 }
+        XCTAssertEqual(list()?.pageBand, UIEdgeInsets(top: cover.top, left: 0, bottom: 0, right: 0))
         XCTAssertNil(route.bandedBottom)
 
         p.press(try node(session, "use-short").id)
