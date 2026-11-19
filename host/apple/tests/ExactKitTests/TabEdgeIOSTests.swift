@@ -170,6 +170,7 @@ final class TabEdgeIOSTests: XCTestCase {
     /// positioned: it paints over the native container that stands in for them, and takes its touches, as CSS
     /// paints positioned boxes in tree order (LLP 1083.000).
     func testABarNestedBesideThePanelsPaintsOverTheContainerAndTakesItsTouches() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         try nestedBar(positioned: true)
     }
 
@@ -177,12 +178,12 @@ final class TabEdgeIOSTests: XCTestCase {
     /// in-flow row below the panels while the tab bar is hidden, it paints over the container all the same
     /// (LLP 1083.000 D4).
     func testAnInFlowBarNestedBesideThePanelsPaintsOverTheContainer() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         try nestedBar(positioned: false)
     }
 
     private func nestedBar(positioned: Bool) throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
-        guard hostedWindowScene() != nil else { throw missing("scene", "the screen's pixels need a window the system draws") }
         _ = try fixture(wholeScreen: true)
         try tap("tab-grid", route: "grid")
         try press("wrap-bar", route: "grid")
