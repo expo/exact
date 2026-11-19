@@ -42,7 +42,7 @@ test('a store reader shows its declared placeholder until its Rust source is rea
           install(['token']);
           const checkpoint = document.createElement('script');
           checkpoint.type = 'application/vnd.exact.checkpoint';
-          checkpoint.textContent = JSON.stringify({ answers: [
+          checkpoint.textContent = JSON.stringify({ location: '/', answers: [
             ['kept', 'rust', [], 'kept answer'], ['invalid', 'rust', [], 42],
           ], readers: [0, 1], open: [0] });
           document.head.append(checkpoint);

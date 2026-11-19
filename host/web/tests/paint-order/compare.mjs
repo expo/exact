@@ -49,7 +49,8 @@ try {
       const css = readFileSync(resolve(dir, 'app.css'), 'utf8');
       const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" data-entry src="./app.js"></script></body></html>`;
       writeFileSync(resolve(dir, 'shell.html'), shell);
-      const rendered = (await renderer(dir)('/')).html;
+      // rendered at the path it is served from, where its runtime adopts it (LLP 1048.000 D6)
+      const rendered = (await renderer(dir)(`/${i}/index.html`)).html;
       const rust = readFileSync(resolve(dir, 'rust.html'), 'utf8');
       const page = await browser.newPage();
       const steps = JSON.parse(readFileSync(resolve(dir, 'steps.json')));

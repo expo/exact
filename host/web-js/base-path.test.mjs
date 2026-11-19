@@ -126,6 +126,8 @@ engineTest.chromium('build, request and cached pages, generation assets and inst
       page.on('pageerror', error => errors.push(error.message)); page.on('request', request => requests.push(new URL(request.url()).pathname));
       await page.goto(origin + '/app/item'); await page.getByTestId('name-item').waitFor();
       await page.getByTestId('replace-item').click(); await page.waitForURL('**/app/kept?q=1#part');
+      // The page at its own location under the mount is adopted (LLP 1048.000 D6)
+      expect(await page.evaluate(() => exact.journal.filter(l => / document: | adopted the document$/.test(l)).map(l => l.slice(l.indexOf(' ') + 1)))).toEqual(['adopted the document']);
       await page.getByTestId('back-kept').click(); await page.waitForURL('**/app/');
       await page.getByTestId('item-home').click(); await page.waitForURL('**/app/item');
       await page.goBack(); await page.waitForURL('**/app/');

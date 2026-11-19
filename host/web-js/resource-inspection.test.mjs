@@ -355,7 +355,7 @@ test.each([
       globalThis.__exactRender = true;
       const cp = document.createElement('script');
       cp.type = 'application/vnd.exact.checkpoint';
-      cp.textContent = JSON.stringify({ answers: [
+      cp.textContent = JSON.stringify({ location: '/', answers: [
         ['items', source, withArgs ? [1] : [], { r: ['rendered 1'] }],
         ['items', source, withArgs ? [2] : [], { r: ['rendered 2'] }],
         ['title', 'title', [], 'Hello'],
@@ -389,6 +389,30 @@ test.each([
       requests: requests.map(request => JSON.stringify(request)).sort(), items: shown.map(text => [text]), title: 'Hello',
       answers: [...written.map(element), ['title', 'title', [], 'Hello']],
     });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
+// LLP 1048.000 D6 — a page rendered at another location seeds no answer: its resource asks, showing its placeholder
+test('a page rendered at another location seeds no answer and journals that it renders fresh', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const boot = await page.evaluate(async () => {
+      const cp = document.createElement('script');
+      cp.type = 'application/vnd.exact.checkpoint';
+      cp.textContent = JSON.stringify({ location: '/elsewhere', answers: [['title', 'title', [], 'Hello']], pending: [], readers: [] });
+      document.head.append(cp);
+      const rt = await import('/host/web-js/rt.js');
+      const requests = [];
+      rt.data.answer = (source, args) => {
+        requests.push([source, args]);
+        return { promise: new Promise(() => {}) };
+      };
+      const title = rt.res('title', 'title', () => [], undefined, undefined, 's', '');
+      rt.mount(root => rt.hd(root, { headTitle: () => title() }));
+      return { requests, title: title(), journal: rt.journal.filter(l => / document: | adopted the document$/.test(l)).map(l => l.slice(l.indexOf(' ') + 1)) };
+    });
+    expect(boot).toEqual({ requests: [['title', []]], title: '', journal: ['document: rendered at /elsewhere, not /; rendering fresh'] });
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 

@@ -30,6 +30,7 @@ import {
   presentRows,
   Why,
 } from './rt.js';
+import { canonical } from './route-pattern.js';
 import { clock, agentMode } from './clock.js';
 import { at, mark, Mismatch } from './tree.js';
 import { Leave, exiting } from './pieces.js';
@@ -544,6 +545,7 @@ export function mount(f) {
     }
   }
   let built = false;
+  if (checkpoint().elsewhere) root.textContent = '';
   Adopt = !!(checkpoint().kept && root.firstElementChild);
   // Elapsed time continues from where a render's clock stopped.
   start = clock.start = performance.now() - clock.now;
@@ -617,7 +619,7 @@ export function mount(f) {
 }
 /** The page's checkpoint (LLP 1048.000 D6): the time the render stopped at, and by resource name the `source` and
  * `answers` its document used, each `[args, value, open, reads]`: one, or a list's elements', where a new element
- * looks first at `next`. */
+ * looks first at `next`; or `elsewhere`, and nothing kept, for a page rendered at another location. */
 export let Checkpoint = null,
   // A document's answer from the reader's own device was the render's: `res` asks it again, as a bake's
   // (LLP 1048.007 D2).
@@ -628,8 +630,16 @@ export function checkpoint() {
   const el =
     typeof document !== 'undefined' && document.querySelector('script[type="application/vnd.exact.checkpoint"]');
   if (!el) return Checkpoint;
-  const cp = JSON.parse(el.textContent),
-    open = new Set(cp.open),
+  const cp = JSON.parse(el.textContent);
+  // Render fresh, seeding nothing, where the browser's path is not the page's once both are canonical, the query aside
+  // (LLP 1048.000 D6): a page a static host serves at another path, its `404.html` or its fallback to `/`, is another
+  // location's document, and its answers are another location's. Both paths keep a mounted build's base.
+  if (canonical(location.pathname) !== canonical(cp.location).split('?')[0]) {
+    Checkpoint.elsewhere = true;
+    say(`document: rendered at ${cp.location}, not ${location.pathname}; rendering fresh`);
+    return Checkpoint;
+  }
+  const open = new Set(cp.open),
     readers = new Set(cp.readers);
   // A drive starts at zero even when its document was rendered on a wall clock.
   const driven = typeof location !== 'undefined' && agentMode() && !globalThis.__exactRender;

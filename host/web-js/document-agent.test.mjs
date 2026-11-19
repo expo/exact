@@ -917,8 +917,7 @@ component TabsDocument
     expect(html).toContain('data-testid="bump-b"');
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
       const path = new URL(req.url).pathname;
-      // `/b` is served the page rendered for `/`, which selects tab A.
-      const file = Bun.file(resolve(dist, path === '/' || path === '/b' ? 'index.html' : path.slice(1)));
+      const file = Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1)));
       // (the agent asks a page's /exact.json, a dev envelope this build doesn't write)
       return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
     } });
@@ -932,13 +931,51 @@ component TabsDocument
     await browser.tap('bump-b');
     expect((await browser.state()).slots).toMatchObject({ n: 2 });
     expect(await panels()).toEqual({ 'panel-a': false, 'panel-b': false });
-    // A launch that selects B over the page rendered with A selected adopts it, B's panel included.
-    await browser.close();
-    browser = await open({ host: 'web', url: new URL('b', server.url).href, size: [420, 900] });
-    expect(await browser.carrier.evaluate('exact.journal.some(l => l.endsWith("adopted the document"))')).toBe(true);
-    expect((await browser.state()).navigation).toMatchObject({ url: '/b' });
-    await browser.tap('bump-b');
-    expect((await browser.state()).slots).toMatchObject({ n: 1 });
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 30000);
+
+// LLP 1048.000 D6 — a page adopts only at its own location: a static host's fallback to `/` serves another location's
+// document, which the launch would otherwise adopt with that location's text and elements.
+test('a page served at another location renders fresh', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/unclaimed-document-agent-test-'));
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Unclaimed Document Agent Test', app: { id: 'test.unclaimed-document', name: 'Unclaimed Document Agent Test' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=build
+  other "/other"
+
+component UnclaimedDocument
+  view
+    column testId="page"
+      if top(nav).name == "home"
+        text "first" testId="first"
+        text "second" testId="second"
+        text "third" testId="third"
+      if top(nav).name == "other"
+        text "only" testId="only"
+`);
+    const dist = resolve(dir, 'dist');
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'unclaimed-document-agent-test', '--out', dist, '--render', 'js'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    expect(readFileSync(resolve(dist, 'index.html'), 'utf8')).toContain('data-testid="third"');
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+      const path = new URL(req.url).pathname;
+      // `/other` is served the page rendered for `/`, as a static host falls back to it
+      const file = Bun.file(resolve(dist, path === '/' || path === '/other' ? 'index.html' : path.slice(1)));
+      return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
+    } });
+    browser = await open({ host: 'web', url: new URL('other', server.url).href, size: [420, 900] });
+    expect((await browser.state()).navigation).toMatchObject({ url: '/other' });
+    const shown = await browser.carrier.evaluate(`[...document.querySelectorAll('[data-testid="page"] [data-testid]')].map(e => e.dataset.testid + ' ' + e.textContent)`);
+    const journal = await browser.carrier.evaluate('exact.journal.filter(l => / document: | adopted the document$/.test(l)).map(l => l.slice(l.indexOf(" ") + 1))');
+    expect([shown, journal]).toEqual([['only only'], ['document: rendered at /, not /other; rendering fresh']]);
   } finally {
     await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
   }
