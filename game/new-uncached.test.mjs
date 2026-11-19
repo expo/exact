@@ -8,6 +8,11 @@ test('a new game defers its Cargo graph only for crates the cache lacks', () => 
   const missing = { ok: false, message: 'error: failed to download `glam v0.30.0`\nattempting to make an HTTP request, but --offline was specified' };
   expect(uncachedCrates(graph, () => missing)).toBe(true);
   expect(uncachedCrates('game Cargo graph: error: failed to download `accesskit v0.25.2` … --offline was specified', () => missing)).toBe(true);
+  // A cache fetched before the SDK lock moved a crate to a newer version: Cargo's index has only the older one.
+  const older = 'error: failed to select a version for the requirement `rustls-platform-verifier = "^0.7.1"` (locked to 0.7.1)\ncandidate versions found which didn\'t match: 0.7.0\nnote: offline mode (via `--offline`) can sometimes cause surprising resolution failures';
+  expect(uncachedCrates(`game Cargo graph: ${older}`, () => ({ ok: false, message: older }))).toBe(true);
+  // A requirement no version satisfies, with no lock pinning one, is a real resolution failure.
+  expect(uncachedCrates('game Cargo graph: error: failed to select a version for the requirement `glam = "^9"`\ncandidate versions found which didn\'t match: 0.30.0', () => missing)).toBe(false);
   // The SDK's crates are all cached: the graph error is a real resolution failure.
   expect(uncachedCrates(graph, () => ({ ok: true, message: '' }))).toBe(false);
   // No Cargo, or a broken Cargo config, is not a missing crate.

@@ -57,8 +57,9 @@ function withModel(destination, directory) {
  * below what it prints after the game, so it is the last thing said. */
 export const UNCACHED_CRATES = "Cargo's cache lacks the game SDK's crates.";
 /** Cargo's words for a crate an offline cache lacks: an index never fetched has no match for the package, a cached
- * index without the .crate stopped the download. */
-const MISSING_CRATE = /no matching package named|attempting to make an HTTP request|in the offline mode|--offline was specified|failed to download/;
+ * index older than the lock has no version matching the locked one, a cached index without the .crate stopped the
+ * download. */
+const MISSING_CRATE = /no matching package named|\(locked to [^)\n]+\)\ncandidate versions found which didn't match|attempting to make an HTTP request|in the offline mode|--offline was specified|failed to download/;
 /** Whether a new game's Cargo graph error (`message`) is only a cache without the SDK's crates, so exact new can
  * make the game and leave the fetch to a build. Both must say so: the error itself, and fetching the SDK lock
  * offline (`fetch`, sdkFetch, as exact setup --check asks), since that wording is also a stale SDK lock's. No Cargo,
