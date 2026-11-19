@@ -55,7 +55,14 @@ final class LaunchServiceTests: XCTestCase {
     func testAnInterruptedCommitKeepsWatchingUntilItsPresentation() {
         let launch = ExactLaunch()
         let session = ExactApp.shared.makeSession(label: "interrupted-launch")
-        defer { session.destroy() }
+        // Bring the app back to the foreground as the test ends, and let `AppBackground` read UIKit again: it keeps the
+        // edge it last heard, and later tests in the process would read the page hidden
+        defer {
+            launch.link?.invalidate()
+            session.destroy()
+            NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+            AppBackground.invalidate()
+        }
         launch.delegateInit()
         launch.didFinishLaunching()
         launch.bootEntered(session)
