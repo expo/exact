@@ -267,12 +267,12 @@ fn the_safe_area_attributes_lower_to_their_rows() {
         exact_kernel::SafeAreaIgnore::css(a.rare.safe_area_ignore),
         "keyboard bottom"
     );
-    assert_eq!(format!("{:?}", &a.rare.safe_area_ignore_align), "Top");
+    assert_eq!(format!("{:?}", a.rare.safe_area_ignore_align), "Top");
     assert_eq!(
         exact_kernel::SafeAreaIgnore::css(b.rare.safe_area_ignore),
         "container keyboard"
     );
-    assert_eq!(format!("{:?}", &b.rare.safe_area_ignore_align), "Center");
+    assert_eq!(format!("{:?}", b.rare.safe_area_ignore_align), "Center");
     // CSS's one-to-four-value expansion, `auto` the platform's padding
     let added = [
         a.rare.additional_safe_area_top.clone(),
