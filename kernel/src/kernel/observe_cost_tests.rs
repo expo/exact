@@ -149,7 +149,7 @@ fn observation_cost_of_many_owners() {
                     generation: 1,
                     insets: Some([0.0, right, 0.0, left]),
                 };
-                let chain = vec![ChainEntry { target, kind: None }];
+                let chain = vec![ChainEntry { target, kinds: 0 }];
                 let report = NativeTargets {
                     chain,
                     relations: Vec::new(),

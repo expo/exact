@@ -10,7 +10,9 @@
 //! size a person dragged a box's `resize` grip to (`Runner::resize_box`).
 
 use super::Host;
-use exact_kernel::{BlockMeasure, GroupedMargins, HostBlock, HostCover, ViewId};
+use exact_kernel::{
+    BlockMeasure, GroupedMargins, HostBlock, HostCover, KernelError, LayoutError, ViewId,
+};
 use exact_runner::DataSource;
 
 /// A host's restyle of a box under the claims' layout.
@@ -29,7 +31,7 @@ impl<D: DataSource> Host<D> {
     /// for one view (it is gone) leaves the others set and is the batch's
     /// error.
     pub fn set_covers(&mut self, covers: &[(ViewId, Option<HostCover>)]) -> String {
-        self.set_claims(covers, &[], &[], &[], &[], &[], &[])
+        self.set_claims(covers, &[], &[], &[], &[], &[], &[], Vec::new())
     }
 
     /// What UIKit covers of list `view`'s port at its start and end
@@ -58,14 +60,19 @@ impl<D: DataSource> Host<D> {
     /// layout: each root's frame comes back in its block's space, with the
     /// block's used size.
     pub fn set_blocks(&mut self, blocks: &[(ViewId, Option<HostBlock>)]) -> String {
-        self.set_claims(&[], blocks, &[], &[], &[], &[], &[])
+        self.set_claims(&[], blocks, &[], &[], &[], &[], &[], Vec::new())
     }
 
     /// Covers, containing blocks and the blocks' placements under one
     /// layout, and the canvases' work after it: a canvas in a box given
     /// back is laid out and drawn in this batch. And content owners' local
     /// insets (`None` for the session root's; LLP 1123 D9), which change
-    /// only the lengths that read them.
+    /// only the lengths that read them. And content owners' updates (LLP
+    /// 1123 D2), each applied after its block: every update is checked
+    /// before the call changes anything, and one the kernel refuses, or two
+    /// for one owner, refuses the call; an update whose block the kernel
+    /// refuses is not applied, and one whose view is gone is not applied and
+    /// is the batch's error (`Host::blocks_into`).
     #[allow(clippy::too_many_arguments)]
     pub fn set_claims(
         &mut self,
@@ -76,7 +83,11 @@ impl<D: DataSource> Host<D> {
         list_margins: &[(ViewId, Option<[f32; 2]>)],
         restyles: &[(ViewId, Restyle)],
         locals: &[(Option<ViewId>, Option<[f32; 4]>)],
+        updates: Vec<(ViewId, exact_kernel::OwnerUpdate)>,
     ) -> String {
+        if let Some(why) = self.refused_update(&updates) {
+            return self.finish(crate::batch::Batch::new(), Some(why));
+        }
         self.presence.unauthored = true;
         let mut local_layout = false;
         let mut error = None;
@@ -90,7 +101,7 @@ impl<D: DataSource> Host<D> {
                 Err(e) => drop(error.get_or_insert(format!("local insets: {e:?}"))),
             }
         }
-        let needs_layout = local_layout
+        let mut needs_layout = local_layout
             || !(covers.is_empty()
                 && blocks.is_empty()
                 && margins.is_empty()
@@ -122,7 +133,9 @@ impl<D: DataSource> Host<D> {
                 error.get_or_insert(format!("cover: {e:?}"));
             }
         }
-        error = error.or(self.blocks_into(blocks, placements));
+        let (blocked, owed) = self.blocks_into(blocks, placements, updates);
+        error = error.or(blocked);
+        needs_layout |= owed;
         for &(view, list) in margins {
             if let Err(e) = self.runner.kernel_mut().set_grouped_margins(view, list) {
                 error.get_or_insert(format!("grouped margins: {e:?}"));
@@ -147,29 +160,77 @@ impl<D: DataSource> Host<D> {
         }
         self.finish(batch, error)
     }
-    /// Set allocations and placements before the caller's single layout.
+    /// Set `blocks` and `placements`, then the content owners' `updates`
+    /// (LLP 1123 D2), before the caller's single layout, so a keyboard is
+    /// held against the bounds its block gives; an update whose view's block
+    /// the kernel refuses is not applied. A layout an update owes is a host's
+    /// fact, as a block's is: a box it moves takes its place without a
+    /// transition. Returns the first refusal, and whether an update owes a
+    /// layout.
     pub(super) fn blocks_into(
         &mut self,
         blocks: &[(ViewId, Option<HostBlock>)],
         placements: &[(ViewId, Option<exact_runner::BlockPlacement>)],
-    ) -> Option<String> {
+        updates: Vec<(ViewId, exact_kernel::OwnerUpdate)>,
+    ) -> (Option<String>, bool) {
         let mut error = None;
         if !blocks.is_empty() {
             self.presence.unauthored = true;
             self.height_targets_dirty = true;
         }
+        let mut refused = Vec::new();
         for &(view, block) in blocks {
             let captured = self.native_captured_id(view);
             match self.runner.kernel_mut().set_host_block(view, block) {
                 // Its frame is in another space now: sent whatever it is.
                 Ok(()) => self.queue_layout(view),
-                Err(e) => drop(error.get_or_insert(format!("block: {e:?}"))),
+                Err(e) => {
+                    refused.push(view);
+                    error.get_or_insert(format!("block: {e:?}"));
+                }
             }
             if captured != self.native_captured_id(view) {
                 self.native_moved();
             }
         }
         self.runner.place_blocks(placements);
-        error
+        let mut owed = false;
+        for (view, update) in updates.into_iter().filter(|(v, _)| !refused.contains(v)) {
+            match self.runner.kernel_mut().update_owner(view, update) {
+                Ok(o) => owed |= o,
+                Err(e) => drop(error.get_or_insert(format!("owner update: {e:?}"))),
+            }
+        }
+        if owed {
+            self.presence.unauthored = true;
+            self.height_targets_dirty = true;
+        }
+        (error, owed)
+    }
+
+    /// Why a call carrying `updates` is refused before it changes anything,
+    /// if it is: an update the kernel refuses (`Kernel::check_owner_update`),
+    /// or two for one owner, since the first changes the generations the
+    /// second is checked against. An update for a view that is gone is
+    /// passed over here, as a block for one is: it has no owner to leave half
+    /// updated, and `blocks_into` reports it beside what the call applies.
+    pub(super) fn refused_update(
+        &self,
+        updates: &[(ViewId, exact_kernel::OwnerUpdate)],
+    ) -> Option<String> {
+        let kernel = self.runner.kernel();
+        updates.iter().enumerate().find_map(|(i, (view, update))| {
+            if updates[..i].iter().any(|(v, _)| v == view) {
+                return Some(format!(
+                    "owner update: two for view {view} in one call; send one per owner"
+                ));
+            }
+            match kernel.check_owner_update(*view, update) {
+                Ok(()) | Err(KernelError::Layout(LayoutError::UnknownView(_))) => None,
+                Err(e) => Some(format!(
+                    "owner update: {e:?}; nothing in the call was applied"
+                )),
+            }
+        })
     }
 }

@@ -69,8 +69,8 @@ impl<D: DataSource> Bridge<D> {
     /// left, the viewport's width and height, the regions' count (20, or 0
     /// when every region is the safe area) and their insets, then, with 16,
     /// the segments' count and their `x y w h`, then, with 32, the software
-    /// keyboard's overlap (LLP 1039 D9), then, with 64, owner block and
-    /// placement records in `exact_host_covers`' format.
+    /// keyboard's overlap (LLP 1039 D9), then, with 64, owner block,
+    /// placement and update records in `exact_host_covers`' format.
     pub fn view(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let word = |i: usize| {
@@ -115,7 +115,9 @@ impl<D: DataSource> Bridge<D> {
                 match owners.push(record) {
                     Ok(true) => {}
                     Ok(false) => return self.refuse("view: invalid block record"),
-                    Err(_) => return self.refuse("view: invalid try tactic"),
+                    Err(why) => {
+                        return self.refuse(&format!("view: {}", why.trim_start_matches("block: ")))
+                    }
                 }
             }
         }
@@ -141,6 +143,7 @@ impl<D: DataSource> Bridge<D> {
                 keyboard,
                 &owners.blocks,
                 &owners.placements,
+                owners.updates,
                 observed,
             )
         });

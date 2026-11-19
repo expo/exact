@@ -52,6 +52,12 @@ struct Reports {
 }
 
 impl Targets {
+    /// The highest generation the owner `slot`'s reports gave each target,
+    /// against which a new report is checked (`NativeTargets::refusal`).
+    pub(crate) fn seen(&self, slot: u32) -> Option<&crate::id::IdMap<u64, u64>> {
+        self.owners.get(&slot).map(|r| &r.seen)
+    }
+
     /// What `slot` reads raw insets from, where it reads any.
     pub(crate) fn scope(&self, arena: &NodeArena, slot: u32) -> Option<Scope> {
         if !arena.readers.targets.contains_key(&slot) {
@@ -90,8 +96,10 @@ impl Kernel {
     /// returns whether any was (a layout is owed then). A report is refused
     /// whole: nonfinite or negative insets, a target at a generation older
     /// than an earlier report gave it, a chain entry of kind `owner` or
-    /// `parent` (entries 1 and 2 by position), a relation twice, or a chain
-    /// past 255.
+    /// `parent` (entries 1 and 2 by position) or of a kind bit past the
+    /// kinds, a relation twice, or a chain past 255.
+    /// A host reports this field with the owner's others through
+    /// [`Kernel::update_owner`], which applies them whole or not at all.
     pub fn set_owner_targets(
         &mut self,
         view: ViewId,

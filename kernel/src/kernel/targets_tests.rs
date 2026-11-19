@@ -14,7 +14,7 @@ fn native(id: u64, top: f32) -> NativeTarget {
 fn entry(id: u64, top: f32, kind: Option<Kind>) -> ChainEntry {
     ChainEntry {
         target: native(id, top),
-        kind,
+        kinds: kind.map_or(0, Kind::bit),
     }
 }
 
@@ -71,7 +71,7 @@ fn a_reader_reads_its_owners_targets_by_number_kind_and_relation() {
             insets: None,
             ..native(4, 0.0)
         },
-        kind: Some(Kind::Column),
+        kinds: Kind::Column.bit(),
     };
     let targets = NativeTargets {
         chain: vec![
@@ -340,7 +340,7 @@ fn a_reader_with_no_fallback_follows_its_targets_availability() {
             insets: None,
             ..native(1, 0.0)
         },
-        kind: None,
+        kinds: 0,
     };
     let report = NativeTargets {
         chain: vec![unattached],
@@ -364,7 +364,7 @@ fn a_report_is_refused_whole() {
             generation: 0,
             ..native(1, 20.0)
         },
-        kind: None,
+        kinds: 0,
     };
     let refused = [
         NativeTargets {
@@ -670,5 +670,40 @@ fn a_capture_in_a_nested_owner_reads_that_owners_report() {
     assert_eq!(top(&k, 5), 30.0);
 }
 
+#[test]
+fn a_navigation_controller_that_is_a_splits_column_answers_both_names() {
+    // UIKit wraps a split's column, the compact one's excepted, in a navigation controller: entry
+    // 2 is both, so 3 reads it
+    // as the navigation controller and 4 as the column; 5 reads the split, entry 3
+    let mut ops = create(3..=5);
+    ops.extend([
+        reads(3, Target::Kind(Kind::Navigation)),
+        reads(4, Target::Kind(Kind::Column)),
+        reads(5, Target::Kind(Kind::Split)),
+    ]);
+    ops.extend([children(1, &[2]), children(2, &[3, 4, 5])]);
+    let mut k = owner(390.0, 844.0, ops);
+    let mut column = entry(2, 20.0, Some(Kind::Navigation));
+    column.kinds |= Kind::Column.bit();
+    let targets = NativeTargets {
+        chain: vec![
+            entry(1, 10.0, None),
+            column,
+            entry(3, 30.0, Some(Kind::Split)),
+        ],
+        relations: Vec::new(),
+    };
+    k.set_owner_targets(2, targets.clone()).unwrap();
+    lay_out(&mut k);
+    assert_eq!([top(&k, 3), top(&k, 4), top(&k, 5)], [20.0, 20.0, 30.0]);
+    // A bit past the kinds is refused
+    let mut unknown = targets;
+    unknown.chain[2].kinds = 1 << Kind::ALL.len();
+    assert!(k.set_owner_targets(2, unknown).is_err());
+}
+
 #[path = "segments_tests.rs"]
 mod segments;
+
+#[path = "owner_update_tests.rs"]
+mod owner_update;

@@ -18,6 +18,8 @@ impl Kernel {
     /// was (a layout is owed then). Refused: a grid of one segment or past 16
     /// columns or rows, a count of rects that is not `cols × rows`, and a
     /// rect that is nonfinite or of negative size.
+    /// A host reports this field with the owner's others through
+    /// [`Kernel::update_owner`], which applies them whole or not at all.
     pub fn set_owner_segments(
         &mut self,
         view: ViewId,

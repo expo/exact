@@ -212,7 +212,16 @@ impl<D: DataSource> Host<D> {
         placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
     ) -> String {
         self.set_view_at(
-            screen, insets, regions, size, segments, keyboard, blocks, placements, None,
+            screen,
+            insets,
+            regions,
+            size,
+            segments,
+            keyboard,
+            blocks,
+            placements,
+            Vec::new(),
+            None,
         )
     }
 
@@ -229,6 +238,7 @@ impl<D: DataSource> Host<D> {
         keyboard: Option<f32>,
         blocks: &[(exact_kernel::ViewId, Option<exact_kernel::HostBlock>)],
         placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
+        updates: Vec<(exact_kernel::ViewId, exact_kernel::OwnerUpdate)>,
         now_ms: Option<f64>,
     ) -> String {
         let keyboard = keyboard.map(f64::from);
@@ -269,6 +279,9 @@ impl<D: DataSource> Host<D> {
                 return self.finish(Batch::new(), Some("view: segments off the grid".into()));
             }
         }
+        if let Some(why) = self.refused_update(&updates) {
+            return self.finish(Batch::new(), Some(why));
+        }
         let (mut batch, error) = if size.is_some() {
             if let Some(now) = now_ms {
                 self.now_ms = now.max(self.now_ms);
@@ -277,7 +290,8 @@ impl<D: DataSource> Host<D> {
         } else {
             (Batch::new(), None)
         };
-        let error = error.or(self.blocks_into(blocks, placements));
+        let (blocked, owed) = self.blocks_into(blocks, placements, updates);
+        let error = error.or(blocked);
         let changed = self.environment_into(env, segments, &mut batch);
         if let Err(error) = changed {
             return self.geometry_refused(error, Some(previous));
@@ -304,7 +318,7 @@ impl<D: DataSource> Host<D> {
                     }
                     Ok(None) => {}
                 }
-                if changed != Ok(true) && blocks.is_empty() {
+                if changed != Ok(true) && blocks.is_empty() && !owed {
                     return self.finish(batch, error);
                 }
                 let laid_out = self.layout(&mut batch).err();

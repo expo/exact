@@ -236,6 +236,8 @@ impl Kernel {
     /// it, or `None` where it reports none, whose boxes read their safe area in place of each
     /// region (D10). Returns whether a layout is owed: a box in the owner reads a region. A
     /// length that is not finite or is negative is refused, keeping the last.
+    /// A host reports this field with the owner's others through
+    /// [`Kernel::update_owner`], which applies them whole or not at all.
     pub fn set_owner_margins(
         &mut self,
         view: ViewId,
@@ -246,19 +248,7 @@ impl Kernel {
             .slot_of(view)
             .ok_or(LayoutError::UnknownView(view))?;
         if let Some(m) = &margins {
-            let lengths = m
-                .root
-                .iter()
-                .chain(&m.plain)
-                .chain(&m.minimum)
-                .chain([&m.readable_width]);
-            if !lengths.into_iter().all(|v| v.is_finite() && *v >= 0.0) {
-                return Err(LayoutError::Margins(
-                    "a length is not finite or is negative: report each margin, the system \
-                     minimum and the readable width as UIKit gives them, in points",
-                )
-                .into());
-            }
+            check(m)?;
         }
         let owners = &mut self.arena.observations.margins;
         if owners.get(&slot) == margins.as_ref() {
@@ -271,5 +261,19 @@ impl Kernel {
         let bits = super::observe::margins_bits();
         let observations = &mut self.arena.observations;
         Ok(observations.forget_readings(&self.arena.readers.observed, bits, |o| o == Some(slot)))
+    }
+}
+
+/// Why `margins` are refused, if they are: a length that is not finite or is negative.
+pub(super) fn check(margins: &OwnerMargins) -> Result<(), KernelError> {
+    let m = margins;
+    let lengths = (m.root.iter().chain(&m.plain).chain(&m.minimum)).chain([&m.readable_width]);
+    match lengths.into_iter().all(|v| v.is_finite() && *v >= 0.0) {
+        true => Ok(()),
+        false => Err(LayoutError::Margins(
+            "a length is not finite or is negative: report each margin, the system minimum and \
+             the readable width as UIKit gives them, in points",
+        )
+        .into()),
     }
 }

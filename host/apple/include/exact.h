@@ -995,11 +995,11 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
  * viewport's width and height, the regions' count (20 or 0) and their insets,
  * then, with 16, the rects' count and each rect's x y w h, on the grid
  * exact_segments set, then, with 32, the software keyboard's overlap with the
- * viewport (exactViewport().keyboardHeight), then, with 64, block and
- * placement records as exact_host_covers kinds 4, 5, 6, 7 and 13:
- * exact_screen, exact_insets,
- * exact_regions, exact_resize and a keyboard's segment extents in one batch
- * under one layout. Rects off the grid, or not finite, are refused and change
+ * viewport (exactViewport().keyboardHeight), then, with 64, block,
+ * placement and owner update records as exact_host_covers kinds 4, 5, 6,
+ * 7, 13 and 21, each update checked and applied as exact_host_covers does.
+ * The call is exact_screen, exact_insets, exact_regions, exact_resize and a
+ * keyboard's segment extents in one batch under one layout. Rects off the grid, or not finite, are refused and change
  * nothing. */
 uint32_t exact_view(ExactRuntime rt, size_t len);
 /* @ref LLP 1078 D4: the device's posture (0 continuous, 1 folded) and the
@@ -1046,7 +1046,15 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * the offset. Kind 7 forgets either placement. Kind 10 is a cells
  * list's rows' cell margin (LLP 1138: float left, right, then two unused),
  * 11 clears it. Kind 14 shows a split's `navigationSplit="placeholder"` box
- * and kind 15 hides it again (LLP 1116.006 D2; the floats unused). */
+ * and kind 15 hides it again (LLP 1116.006 D2; the floats unused). Kind 21
+ * is a content owner's update (LLP 1123 D2): after the view and the kind, a
+ * uint32 byte length, then the update as the kernel's `OwnerUpdate::encode`
+ * writes it, applied after the call's blocks. Every update is checked
+ * before the call changes anything: one that is malformed or that the
+ * kernel refuses, or two for one owner, refuses the call; an update whose
+ * view's block the kernel refuses is not applied, and one whose view is
+ * gone is not applied and is the batch's error. An update for a view with
+ * no block holds its keyboard against no bounds, so it occupies nothing. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as

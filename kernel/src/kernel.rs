@@ -38,6 +38,7 @@ mod keyboard;
 pub(crate) mod margins;
 pub(crate) mod observe;
 pub(crate) mod owner;
+mod owner_update;
 mod provenance;
 pub(crate) mod readers;
 mod segments;
@@ -59,6 +60,7 @@ pub(crate) use cover::{
 pub use cover::{credited_edges, HostCover};
 pub use keyboard::{Keyboard, KeyboardPolicy};
 pub use margins::OwnerMargins;
+pub use owner_update::OwnerUpdate;
 pub use provenance::{Contribution, Operation};
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;

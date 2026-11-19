@@ -274,6 +274,8 @@ impl Kernel {
     /// keeping the last, for
     /// nonfinite or negative insets, a nonfinite effect, or a
     /// contribution's identity twice.
+    /// A host reports this field with the owner's others through
+    /// [`Kernel::update_owner`], which applies them whole or not at all.
     pub fn set_owner_band(
         &mut self,
         view: ViewId,
@@ -284,10 +286,7 @@ impl Kernel {
             .arena
             .slot_of(view)
             .ok_or(LayoutError::UnknownView(view))?;
-        if band.is_some_and(|b| !b.iter().all(|v| v.is_finite() && *v >= 0.0)) {
-            return Err(LayoutError::InvalidEnv.into());
-        }
-        provenance::check(contributions)?;
+        check_band(band.as_ref(), contributions)?;
         let cleared = super::block::clearance(&self.arena, slot);
         let observations = &mut self.arena.observations;
         let band = band.map(|raw| provenance::incoming(raw, contributions));
@@ -1038,3 +1037,15 @@ fn merge(into: &mut LayoutReceipt, round: LayoutReceipt) {
 #[cfg(test)]
 #[path = "observe_tests.rs"]
 mod tests;
+
+/// Why an owner's band and Exact's contributions to it are refused, if they are:
+/// nonfinite or negative insets, a nonfinite effect, or a contribution's identity twice.
+pub(super) fn check_band(
+    band: Option<&[f32; 4]>,
+    contributions: &[Contribution],
+) -> Result<(), KernelError> {
+    if band.is_some_and(|b| !b.iter().all(|v| v.is_finite() && *v >= 0.0)) {
+        return Err(LayoutError::InvalidEnv.into());
+    }
+    provenance::check(contributions)
+}

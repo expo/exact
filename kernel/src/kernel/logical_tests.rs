@@ -74,7 +74,7 @@ fn a_targets_start_takes_the_readers_direction_and_a_captures_its_declarers() {
         insets: Some([10.0, 20.0, 30.0, 40.0]),
     };
     let report = NativeTargets {
-        chain: vec![ChainEntry { target, kind: None }],
+        chain: vec![ChainEntry { target, kinds: 0 }],
         relations: Vec::new(),
     };
     let start = "var(--exact-owner-safe-area-inset-start, 7px)";

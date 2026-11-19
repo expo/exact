@@ -139,3 +139,6 @@ fn a_blocks_tactic_reaches_the_trial_and_the_layout_through_the_abi() {
         );
     }
 }
+
+#[path = "abi_owner_update_tests.rs"]
+mod owner_update;

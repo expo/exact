@@ -48,6 +48,16 @@ pub enum Operation {
     KeyboardInsets,
 }
 
+impl Operation {
+    /// Every operation, in wire order (`OwnerUpdate::encode`).
+    pub const ALL: [Operation; 4] = [
+        Operation::AdditionalInsets,
+        Operation::SafeAreaPadding,
+        Operation::BarReservation,
+        Operation::KeyboardInsets,
+    ];
+}
+
 /// `raw` less the sum of `contributions`' effects, at least 0 on each edge
 /// against rounding in the host's subtractions.
 pub(crate) fn incoming(raw: [f32; 4], contributions: &[Contribution]) -> [f32; 4] {

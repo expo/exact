@@ -43,7 +43,7 @@ fn report(k: &mut Kernel, raw: f32, contributions: &[Contribution]) -> (bool, f3
             generation: 1,
             insets: Some(band),
         },
-        kind: None,
+        kinds: 0,
     };
     let targets = NativeTargets {
         chain: vec![controller],

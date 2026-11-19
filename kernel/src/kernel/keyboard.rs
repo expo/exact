@@ -283,6 +283,8 @@ impl Kernel {
     /// (D4, D9); or a box in the owner reads the keyboard (D7). A frame
     /// that is not finite, or whose size is negative, is refused, keeping
     /// the last.
+    /// A host reports this field with the owner's others through
+    /// [`Kernel::update_owner`], which applies them whole or not at all.
     pub fn set_owner_keyboard(
         &mut self,
         view: ViewId,
@@ -393,7 +395,7 @@ impl Kernel {
 }
 
 /// Refuse a frame that is not finite or has a negative size.
-fn check(keyboard: &Keyboard) -> Result<(), KernelError> {
+pub(super) fn check(keyboard: &Keyboard) -> Result<(), KernelError> {
     let [.., w, h] = keyboard.frame;
     match keyboard.frame.iter().all(|v| v.is_finite()) && w >= 0.0 && h >= 0.0 {
         true => Ok(()),

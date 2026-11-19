@@ -104,6 +104,12 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Its bit among a chain entry's kinds, by its discriminant, which is its
+    /// index in [`Kind::ALL`].
+    pub const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+
     /// Every kind, in wire order.
     pub const ALL: [Kind; 6] = [
         Kind::Owner,
@@ -190,9 +196,10 @@ pub struct NativeTarget {
 pub struct ChainEntry {
     /// The controller's view.
     pub target: NativeTarget,
-    /// The controller it is, where [`Kind`] names one: `Navigation`, `Tab`,
-    /// `Split` or `Column`; `None` for any other.
-    pub kind: Option<Kind>,
+    /// The kinds it is, as [`Kind::bit`]s: `Navigation`, `Tab`, `Split` or
+    /// `Column`, a navigation controller that is a split's column both, and
+    /// none for any other controller.
+    pub kinds: u8,
 }
 
 /// An owner's native targets, or the session view's (D2's owner update).
@@ -214,7 +221,7 @@ impl NativeTargets {
             Target::Kind(Kind::Owner) => chain(0),
             Target::Kind(Kind::Parent) => chain(1),
             Target::Kind(kind) => (self.chain.iter())
-                .find(|e| e.kind == Some(*kind))
+                .find(|e| e.kinds & kind.bit() != 0)
                 .map(|e| &e.target),
             Target::Relation(r) => (self.relations.iter())
                 .find(|(x, _)| x == r)
@@ -236,9 +243,15 @@ impl NativeTargets {
         if self.chain.len() > usize::from(u8::MAX) {
             return Some("a native chain longer than 255 entries; numbered names reach 255");
         }
-        if (self.chain.iter()).any(|e| matches!(e.kind, Some(Kind::Owner | Kind::Parent))) {
+        let positional = Kind::Owner.bit() | Kind::Parent.bit();
+        if (self.chain.iter()).any(|e| e.kinds & positional != 0) {
             return Some(
                 "a chain entry of kind owner or parent; those are entries 1 and 2 by position",
+            );
+        }
+        if (self.chain.iter()).any(|e| e.kinds >> Kind::ALL.len() != 0) {
+            return Some(
+                "a chain entry of an unknown kind; report navigation, tab, split or column",
             );
         }
         let relations = &self.relations;
