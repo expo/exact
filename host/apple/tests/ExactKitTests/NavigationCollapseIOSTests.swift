@@ -760,10 +760,11 @@ final class NavigationCollapseIOSTests: XCTestCase {
                 ended.append(CACurrentMediaTime() - began)
                 scroll.isScrollEnabled = false
             }
-            var cancelledAt: Double?
+            var cancelledAt: Double?, stopped: CGFloat?
             let observation = scroll.observe(\.contentOffset, options: [.new]) { _, _ in
                 if mode == "cancelled", cancelledAt == nil, scroll.contentOffset.y >= end - 50 {
                     cancelledAt = CACurrentMediaTime() - began
+                    stopped = scroll.contentOffset.y
                     scroll.isScrollEnabled = false
                 }
             }
@@ -775,13 +776,17 @@ final class NavigationCollapseIOSTests: XCTestCase {
             RunLoop.main.add(reads, forMode: .common)
             defer { observation.invalidate(); reads.invalidate() }
             p.press(try node(session, "wait-for-rest").id)
-            let reply = agent.tap(["id": Int(feed.id), "scrollDrag": [0.0, -1000.0], "ms": 500.0])
+            // Drag for the agent's longest in the cancelled mode, which ends at the cancellation anyway: only a stall of
+            // nearly that long lets the drag run out before it sees the scroller disabled
+            let reply = agent.tap(["id": Int(feed.id), "scrollDrag": [0.0, -1000.0], "ms": mode == "cancelled" ? 2000.0 : 500.0])
             let elapsed = CACurrentMediaTime() - began
             XCTAssertNil(reply["error"], "\(mode): \(reply)")
             XCTAssertEqual(reply["cancelled"] as? Bool ?? false, mode == "cancelled", "\(mode): \(reply)")
             if mode == "cancelled" {
                 XCTAssertGreaterThanOrEqual(try XCTUnwrap(ended.first), try XCTUnwrap(cancelledAt))
-                XCTAssertLessThan(scroll.contentOffset.y, end)
+                // The content stays where the cancellation left it, which is the end itself when a delayed sample steps
+                // that far
+                XCTAssertEqual(scroll.contentOffset.y, try XCTUnwrap(stopped), accuracy: 0.5)
             } else {
                 XCTAssertGreaterThanOrEqual(elapsed, 0.5)
                 XCTAssertEqual(scroll.contentOffset.y, end, accuracy: 0.5)
