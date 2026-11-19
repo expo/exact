@@ -12,7 +12,7 @@ import { resolve } from 'node:path';
 
 export const LINKED_SECTIONS = { plan: '__exact_plan', compat: '__exact_compat', bytecode: '__exact_hbc' };
 const FILES = { plan: 'app.plan', compat: 'compat.json', bytecode: 'app.hbc' };
-const MH_MAGIC_64 = 0xfeedfacf, LC_SEGMENT_64 = 0x19, LC_UUID = 0x1b;
+const MH_MAGIC_64 = 0xfeedfacf, LC_SEGMENT_64 = 0x19, LC_UUID = 0x1b, LC_CODE_SIGNATURE = 0x1d;
 
 /** The room a section is linked with: twice its bytes, and never less than twice `minimum`, in 16 KiB pages. Every
  * bake up to `minimum` gets the same room, so apps that differ only in their plans link with one layout (a repack onto
@@ -124,6 +124,22 @@ export function fitLinkedSections(executable, contents, { renewUuid = false } = 
   } finally { closeSync(fd); }
 }
 
+/** How often `text` appears in a thin Mach-O outside its linked sections (their whole room) and its code signature:
+ * the bytes a repack keeps from the base. An app's id there is compiled in, and would ship in another app's repack. */
+export function occurrencesOutsideLinked(executable, text) {
+  const bytes = readFileSync(executable), needle = Buffer.from(text, 'utf8');
+  if (!needle.length) return 0;
+  if (bytes.length < 32 || bytes.readUInt32LE(0) !== MH_MAGIC_64) throw new Error(`${executable} is not a thin 64-bit Mach-O`);
+  const commands = bytes.subarray(0, 32 + bytes.readUInt32LE(20));
+  const skip = textSections(commands).filter(s => Object.values(LINKED_SECTIONS).includes(s.name)).map(s => [s.offset, s.offset + s.room]);
+  const signature = loadCommand(commands, LC_CODE_SIGNATURE);
+  if (signature !== null) { const off = commands.readUInt32LE(signature + 8); skip.push([off, off + commands.readUInt32LE(signature + 12)]); }
+  let count = 0;
+  for (let at = bytes.indexOf(needle); at !== -1; at = bytes.indexOf(needle, at + 1)) {
+    if (!skip.some(([from, to]) => at >= from && at + needle.length <= to)) count++;
+  }
+  return count;
+}
 
 /** The offset of the first load command `cmd` in a Mach-O's header bytes, or null. */
 function loadCommand(bytes, cmd) {

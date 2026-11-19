@@ -191,7 +191,7 @@ function fresh(record, dir, env, tool, outputs) {
  * (`appleBakeTool`).
  * The caller holds the app's build claim (host/apple/build.mjs `appleBuildLock`), the one
  * writer of the directory. */
-export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs, outputs = [] } = {}) {
+export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs, outputs = [], toolBuilt = false } = {}) {
   const dir = linkedBakeDir(env, platform, target), at = resolve(dir, 'inputs.json');
   let executable, args = [app.dir, '--cargo', platform, target, dir], cwd = app.dir, runEnv = cargoEnvironment(env);
   const rust = existsSync(resolve(app.dir, 'data/Cargo.toml'));
@@ -205,7 +205,10 @@ export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs
     if (!existsSync(baker.executable)) return dir;
     executable = baker.executable; args = []; cwd = baker.cwd;
     runEnv = { ...runEnv, ...baker.env, OUT_DIR: dir, EXACT_BAKED: dir, EXACT_RUST_BAKE: '1' };
-  } else executable = appleBakeTool(env, cargoArgs);
+  } else {
+    // `toolBuilt`: the caller knows this checkout's tool is built (a read-only compiled SDK), so Cargo's check is skipped.
+    executable = toolBuilt && existsSync(bakeTool.built) ? bakeTool.built : appleBakeTool(env, cargoArgs);
+  }
   const tool = `${executable} ${statSync(executable).mtimeMs}`;
   // Its warnings are said on every build, as Cargo replays a build script's: the SF Symbols only the web draws blank
   // one line where the first was, as `contract build` says them (18 of them every euxy build).

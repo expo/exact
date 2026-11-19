@@ -5,7 +5,7 @@ import { packageActivityArm, assertActivityRefusals } from './activities.mjs';
 import { packageWidgets, packageAlarmExtension, widgetId, entryProfiles, activityEntries, platformWidgetEntries, macWidgetGroup, macWidgetEntitlements, widgetGroup, widgetAppKeys } from './widgets.mjs';
 import { packageNotificationService, packageShareExtension, notificationServiceEntitlements, notificationServiceProfile, shareInfo, shareId, macShareEntitlements } from './extensions.mjs';
 import { createHash } from 'node:crypto';
-import { spawnSync } from './toolchain.mjs';
+import { experimental, spawnSync } from './toolchain.mjs';
 import { resolve, basename, dirname } from 'node:path';
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { verifyBakeFiles } from '../../scripts/app.mjs';
@@ -13,7 +13,7 @@ import { unclaimedNote } from '../../scripts/links.mjs';
 import { webRefusal, browserEntitlements } from './documents.mjs';
 import { memoryEntitlements, alarmKeys } from './plist.mjs';
 import { listAssets } from '../web/serve.mjs';
-import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, iconFiles, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks, plistFile } from './assets.mjs';
+import { appIcon, buildInfo, iosAssets, appleAssets, appleAssetsKey, bakedAssetInputs, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, iconFiles, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks, plistFile } from './assets.mjs';
 import { allows, profile, identity, embeddedProfile, installedProfiles } from './devices.mjs';
 import { grantEntitlements, grantEntitlementValues, macHostIdentity, namedClip } from './presence.mjs';
 import { stripForDistribution, stripProductionExecutable } from './link.mjs';
@@ -258,7 +258,10 @@ export function assembleIOS({intents, shared, library, moduleLibraries = [], pac
   // `host.ios.resources`, before anything is signed: `bundle:/` (LLP 1133.007 D6).
   copyNativeResources(app, resolve(bundle, IOS_RESOURCE_ROOT), buildReceipt.binary.metadata.nativeResources ?? [], 'ios');
   verifyBakeFiles(bakedCompat, bakedPlan, listAssets(bundle, true, ['typescript']));
-  const assetKeys = iosAssets(app, bundle, device, { tv, catalog: production, requireIcon: distribution, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, icons: buildReceipt.graph.appleIcons ?? [], expected: buildReceipt.binary.metadata.appleAssetCatalogs ?? [], ...(tv ? {} : { expectedLaunchImage: buildReceipt.binary.metadata.launchImage ?? null }), launch: buildReceipt.graph.launchBackground, ground: buildReceipt.graph.launchGround });
+  const assetKeys = iosAssets(app, bundle, device, { tv, catalog: production, requireIcon: distribution, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, ...bakedAssetInputs(buildReceipt.graph), expected: buildReceipt.binary.metadata.appleAssetCatalogs ?? [], ...(tv ? {} : { expectedLaunchImage: buildReceipt.binary.metadata.launchImage ?? null }) });
+  // Experimental: a development archive records what its icons were made from and the keys they gave Info.plist, so a
+  // repack (repack.mjs) whose icon inputs are the same takes the base's icons instead of drawing them again.
+  if (ipa && args.includes('--development') && !tv && experimental()) buildReceipt.assets = { key: appleAssetsKey(app, { platform: 'ios', device, catalog: production, stamp: swiftc, ...bakedAssetInputs(buildReceipt.graph) }), keys: assetKeys, stamp: swiftc };
   const stamp = { ...rosterKeys, ...(production ? distributionKeys(sdkName) : {}), ...buildInfo(app, { root, archive: !!ipa && distribution, production: production || distribution, ...stampSdk }) };
   writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, device, { development, distributed: distribution, reach: appleReach, icon: { ...assetKeys, ...(!tv ? watchSyncKeys(app, bakedCompat.inputs?.grantCeiling) : {}) }, distribution: stamp, tv }));
   if (!tv && watchSyncSelected(app)) writeFileSync(resolve(bundle, 'watch-sync.plan'), bakedPlan);

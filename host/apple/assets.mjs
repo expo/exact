@@ -332,6 +332,18 @@ export function appleRefusals(app, platform, { archive = false } = {}) {
 export function iosAssets(app, dir, device, options = {}) {
   return appleAssets(app, dir, { ...options, device, platform: options.tv ? 'tvos' : 'ios' });
 }
+/** The bake graph's inputs to an app's icons and launch assets, as appleAssets and appleAssetsKey take them. */
+export const bakedAssetInputs = (graph) => ({ icons: graph.appleIcons ?? [], launch: graph.launchBackground, ground: graph.launchGround });
+/** What an app's compiled icons and launch assets are made from: the key of their kept compile. */
+export function appleAssetsKey(app, { platform = 'ios', device = false, catalog = false, launch = 'system', ground = null, stamp = null, icons = [], catalogs = appleAssetCatalogInventory({ ...app, appleIcons: icons }, platform), launchImage = platform === 'ios' ? launchImageInventory(app) : null } = {}) {
+  const minimum = platform === 'watchos' ? WATCH_MINIMUM_OS : app.manifest.host?.[platform === 'tvos' ? 'ios' : platform]?.minimumOS ?? (platform === 'macos' ? '14.0' : '17.0');
+  return createHash('sha256').update(JSON.stringify([catalogs, iconDigests(app.manifest, app.dir), schemeColours(app.manifest, 'background_color'), app.manifest.userInterfaceStyle ?? null, launch, ground, launchImage,
+    minimum, platform, device, catalog, stamp,
+    // What the compile itself writes: a cache from before `--accent-color` named no accent,
+    // one from before `ExactLaunchImageSource` no launch image's source or digest,
+    // one from before `digest` launch assets under fixed names
+    'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components', 'declared-alternate-icons', 'launch-ground', 'launch-per-scheme'])).digest('hex').slice(0, 16);
+}
 export function appleAssets(app, dir, { platform = 'macos', device = false, catalog = false, requireIcon = catalog, kept = null, expected, expectedLaunchImage, icons = [], launch = 'system', ground = null } = {}) {
   // tvOS takes the manifest's iOS section.
   const minimum = platform === 'watchos' ? WATCH_MINIMUM_OS : app.manifest.host?.[platform === 'tvos' ? 'ios' : platform]?.minimumOS ?? (platform === 'macos' ? '14.0' : '17.0');
@@ -346,12 +358,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
   if (refused) throw new Error(refused);
   if (platform === 'macos' && !catalogs.length) { rmSync(resolve(dir, 'Assets.car'), { force: true }); return {}; }
   if (kept) {
-    const key = createHash('sha256').update(JSON.stringify([catalogs, iconDigests(app.manifest, app.dir), schemeColours(app.manifest, 'background_color'), app.manifest.userInterfaceStyle ?? null, launch, ground, launchImage,
-      minimum, platform, device, catalog, kept.stamp,
-      // What the compile itself writes: a cache from before `--accent-color` named no accent,
-      // one from before `ExactLaunchImageSource` no launch image's source or digest,
-      // one from before `digest` launch assets under fixed names
-      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components', 'declared-alternate-icons', 'launch-ground', 'launch-per-scheme'])).digest('hex').slice(0, 16);
+    const key = appleAssetsKey(app, { platform, device, catalog, launch, ground, stamp: kept.stamp, catalogs, launchImage });
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;

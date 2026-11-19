@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { fitLinkedSections, readLinkedSections, reserveLinkedPlan, reservedSize, textSections } from './sections.mjs';
+import { fitLinkedSections, occurrencesOutsideLinked, readLinkedSections, reserveLinkedPlan, reservedSize, textSections } from './sections.mjs';
 
 const dirs = []; afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 const temp = () => { const d = mkdtempSync(resolve(tmpdir(), 'sections-')); dirs.push(d); return d; };
@@ -69,3 +69,20 @@ test('a link takes each file padded to its reserved room, rewritten only when it
   expect(readFileSync(resolve(out, 'app.plan')).subarray(0, 300_000).every(b => b === 1)).toBe(true);
 });
 
+test('an app id counts only where a repack keeps the base\'s bytes: not in the linked sections or the code signature', () => {
+  const id = 'com.example.base';
+  // The fixture plus an LC_CODE_SIGNATURE whose blob, after __TEXT, names the id as a real signature does.
+  const base = readFileSync(macho()), blob = Buffer.from(`\0\0${id}\0`), bytes = Buffer.concat([base, blob]);
+  const sizeofcmds = bytes.readUInt32LE(20), at = 32 + sizeofcmds;
+  bytes.writeUInt32LE(0x1d, at); bytes.writeUInt32LE(16, at + 4); bytes.writeUInt32LE(base.length, at + 8); bytes.writeUInt32LE(blob.length, at + 12);
+  bytes.writeUInt32LE(3, 16); bytes.writeUInt32LE(sizeofcmds + 16, 20);
+  const sections = textSections(bytes), put = (name, skip = 0) => { const s = sections.find(x => x.name === name); bytes.write(id, s.offset + skip, 'utf8'); };
+  put('__exact_plan'); put('__exact_compat', 20); put('__exact_hbc', 40); // the id in each linked section, even in its reserve
+  const exe = resolve(temp(), 'App'); writeFileSync(exe, bytes);
+  expect(occurrencesOutsideLinked(exe, id)).toBe(0);
+  expect(occurrencesOutsideLinked(exe, 'com.example.other')).toBe(0);
+  // Compiled in: a literal in __text (rust_entry's `.named("<app.id>")`, 6c2c8bda22), and one in __unwind_info.
+  put('__text', 3); put('__unwind_info'); writeFileSync(exe, bytes);
+  expect(occurrencesOutsideLinked(exe, id)).toBe(2);
+  expect(occurrencesOutsideLinked(exe, '')).toBe(0);
+});

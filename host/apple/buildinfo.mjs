@@ -8,7 +8,7 @@
 import { spawnSync } from './toolchain.mjs';
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { recordedSources } from './shader-libraries.mjs';
 
 const git = (dir, args) => {
@@ -89,3 +89,15 @@ export function buildInfo(app, { root, archive = false, production = false, sdk 
     ...(!production && !archive && app.dir && ['macosx', 'iphonesimulator', 'appletvsimulator'].includes(sdk) ? { ExactMetalSources: recordedSources(app) } : {}),
   };
 }
+
+/** The receipt a distributed bundle carries: the same, without the list of every file the binary was
+ * compiled from (3,600 rows with this machine's paths, 1.4 of the receipt's 1.9 MB), where its plan was
+ * baked, what its bake read or the generated files the host compile read (products marked `input`), which
+ * are the driver's evidence and nothing an installed app reads, and with each Cargo product by its name
+ * alone. The whole receipt is written beside the artifact. */
+export const shippedReceipt = (text) => {
+  const whole = JSON.parse(text), evidence = ['linkedPlan', 'linkedInputs', 'watchedDirectories', 'optionalInputs'];
+  const build = Object.fromEntries(Object.entries(whole.build ?? {}).filter(([key]) => !evidence.includes(key)));
+  return JSON.stringify({ ...whole, build: { ...build, binary: { sha256: build.binary?.sha256 },
+    products: (build.products ?? []).filter((product) => !product.input).map((product) => ({ ...product, path: basename(product.path) })) } }, null, 2) + '\n';
+};

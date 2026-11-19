@@ -1,0 +1,4 @@
+{
+  "//": "What host/apple/repack.mjs can repack, for a caller that decides before running it, without running this checkout's code: widgets = an app with widgets or Live Activities repacks on its own previous build.",
+  "widgets": 1
+}

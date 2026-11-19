@@ -78,8 +78,10 @@ import { quiet, quietFor } from './quiet.mjs';
 import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
+import { fitReservedPlan, repackBase, repackReceipt, reservedPlan } from './native-extras.mjs';
+import { shippedReceipt } from './buildinfo.mjs';
 import { appleDeadStrip, recordMinimumOS, stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, linksByPlan } from './link.mjs';
-export { appIcon, appleEmbedOnly, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
+export { appIcon, appleEmbedOnly, iosAssets, shippedReceipt, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
 import { runMac, IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulatorAppContainer, simulators, useXcode, appleEmbedOnly, appleSdkName, compilesSwiftHost, xcodeRefusal } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -547,17 +549,6 @@ export function receipt(app, fields) {
   }, null, 2) + '\n';
 }
 
-/** The receipt a distributed bundle carries: the same, without the list of every file the binary was
- * compiled from (3,600 rows with this machine's paths, 1.4 of the receipt's 1.9 MB), where its plan was
- * baked, what its bake read or the generated files the host compile read (products marked `input`), which
- * are the driver's evidence and nothing an installed app reads, and with each Cargo product by its name
- * alone. The whole receipt is written beside the artifact. */
-export const shippedReceipt = (text) => {
-  const whole = JSON.parse(text), evidence = ['linkedPlan', 'linkedInputs', 'watchedDirectories', 'optionalInputs'];
-  const build = Object.fromEntries(Object.entries(whole.build ?? {}).filter(([key]) => !evidence.includes(key)));
-  return JSON.stringify({ ...whole, build: { ...build, binary: { sha256: build.binary?.sha256 },
-    products: (build.products ?? []).filter((product) => !product.input).map((product) => ({ ...product, path: basename(product.path) })) } }, null, 2) + '\n';
-};
 
 export function copyAppleGpuProducts(capture, destination, artifacts, archive = false) {
   for (const m of artifacts) {
@@ -597,6 +588,8 @@ async function main(args, lockHeld = false) {
   // `--development` packages the development build `--run` installs (host-dev, development trust): an
   // agent's own iteration build that a service re-signs, not an artifact to distribute.
   const developmentArchive = args.includes('--development');
+  // Experimental: an archive repack.mjs can rebuild from a later bake reserves its plan's sections (native-extras.mjs).
+  const repackable = repackBase({ ios, tv, device, ipa, developmentArchive }), reservesPlan = () => repackable && !widgets, planArgs = (dir) => linkedPlanArgs(reservedPlan(dir, reservesPlan()));
   const appstore = !ios && args.includes('--appstore'), distribution = appstore || (!!ipa && !developmentArchive) || args.includes('--distribution');
   // What is stamped `release` or `archive` (buildinfo.mjs) bakes production trust, as --release does, so the stamp and
   // the trust every production policy reads (compat.json's `embedded.trust`) cannot disagree.
@@ -835,7 +828,7 @@ async function main(args, lockHeld = false) {
     if (was.plan && !existsSync(resolve(expected.scratch, 'plan/app.hbc'))) return null;
     let claim;
     try { claim = claimBuildOutput(app, expected.swiftLock); } catch { return null; }
-    const step = startApple('swift', [...swiftArgs, ...executableLink, ...appleLaunchLinkArgs(destination, sole), ...entitledArgs(expected.scratch, sole), ...appleLinkArgs(library, ios), ...linkedPlanArgs(was.plan && resolve(expected.scratch, 'plan')), '--product', sole], resolve(webBuildDir, 'swift-compile.log'),
+    const step = startApple('swift', [...swiftArgs, ...executableLink, ...appleLaunchLinkArgs(destination, sole), ...entitledArgs(expected.scratch, sole), ...appleLinkArgs(library, ios), ...planArgs(was.plan && resolve(expected.scratch, 'plan')), '--product', sole], resolve(webBuildDir, 'swift-compile.log'),
       { cwd: pkg, env: swiftEnv(expected.capture, expected.composition, was.link) });
     beside.push(step);
     return { claim, step };
@@ -1227,7 +1220,7 @@ async function main(args, lockHeld = false) {
       // executable. `exact_advance` stays, because the scroll recorder finds an Exact app by it (`feel/feel.m`);
       // it is named as a pattern, which a product without the symbol still links with.
       const unexported = production && !shared ? ['-Xlinker', '-exported_symbol', '-Xlinker', '_exact_advance*'] : [];
-      const productArgs = [...swiftArgs, ...executableLink, ...appleLaunchLinkArgs(destination, p), ...unexported, ...entitledArgs(linkRoot, p), ...(intents ? ['-Xlinker', intents.object, ...intents.launchLink] : []), ...(shared ? ['-Xlinker', '-rpath', '-Xlinker', ios ? '@executable_path/Frameworks' : '@executable_path/../Frameworks'] : []), ...appleLinkArgs(library, ios, shared ? null : undefined), ...linkedPlanArgs(shared ? null : linkedPlan?.dir)];
+      const productArgs = [...swiftArgs, ...executableLink, ...appleLaunchLinkArgs(destination, p), ...unexported, ...entitledArgs(linkRoot, p), ...(intents ? ['-Xlinker', intents.object, ...intents.launchLink] : []), ...(shared ? ['-Xlinker', '-rpath', '-Xlinker', ios ? '@executable_path/Frameworks' : '@executable_path/../Frameworks'] : []), ...appleLinkArgs(library, ios, shared ? null : undefined), ...planArgs(shared ? null : linkedPlan?.dir)];
       let entitled = null;
       if (ios && !device) {
         // Simulator Security reads entitlements from the Mach-O text section.
@@ -1241,7 +1234,7 @@ async function main(args, lockHeld = false) {
       // swift build does not see the Rust archive (or that plist, or a linked plan) change, so the executable is
       // dropped to be linked again: 0.4 s, and it was every build's. A development build drops only one linked from
       // other bytes, which `<product>.linked` beside it says: the archive's hash, whose it is, the plist, the plan's.
-      const linked = resolve(swiftBinDir, `${p}.linked`), from = JSON.stringify({ launchFrameworks: appleLaunchFrameworks(destination, p), archive: archive ?? null, libDir, lib: env.EXACT_LIB ?? null, link: appleLink, entitled, shared: shared?.xcframework ?? null, plan: linkedPlan?.digest ?? null, intents: intents?.digest ?? null, library: library?.sha256 ?? null });
+      const linked = resolve(swiftBinDir, `${p}.linked`), from = JSON.stringify({ launchFrameworks: appleLaunchFrameworks(destination, p), archive: archive ?? null, libDir, lib: env.EXACT_LIB ?? null, link: appleLink, entitled, shared: shared?.xcframework ?? null, plan: linkedPlan?.digest ?? null, reserved: reservesPlan(), intents: intents?.digest ?? null, library: library?.sha256 ?? null });
       const same = cargoProfile === HOST_DEV && archive && existsSync(resolve(swiftBinDir, p)) && existsSync(linked) && readFileSync(linked, 'utf8') === from;
       if (!same) for (const stale of [p, `${p}.linked`]) rmSync(resolve(swiftBinDir, stale), { force: true });
       // The early build was this one's when nothing it linked from has changed.
@@ -1255,6 +1248,7 @@ async function main(args, lockHeld = false) {
       // -oso_prefix in the link made SwiftPM compile the scratch again for every app (expo/exact-build#177).
       const debugMap = device && args.includes('--development') ? read('strip', ['-S', executable]) : null;
       if (debugMap && debugMap.status !== 0) throw new Error(`host/apple: strip -S ${executable} failed: ${debugMap.stderr || debugMap.error?.message || debugMap.status}`);
+      if (linkedPlan && !shared && reservesPlan()) fitReservedPlan(executable, linkedPlan.dir);
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.
@@ -1356,6 +1350,8 @@ async function main(args, lockHeld = false) {
     if (args.includes('--run')) process.exitCode = runMac(bundlePath ? resolve(bundlePath, 'Contents/MacOS', paths.executable) : paths.binary, { ...env, ...launchEnv, EXACT_ASSETS: paths.capture });
     return;
   }
+  // An app with widgets fits its plan into its own ExactCore (`reserve`), and a repack keeps its extension's binary.
+  if (reservesPlan() || (repackable && shared && reserve)) Object.assign(buildReceipt, repackReceipt(app, buildReceipt.graph, shared && reserve ? [...packaged] : null));
   const { bundles, frameworkSymbols } = assembleIOS({intents, shared, library, moduleLibraries, packageLibraries, packageResources, serviceDylibs, triple: iosTripleFor(app, device, tv, compiled.ios), app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm: ios && !tv && packaged.has('alarms') ? alarmActivity(packages) : null, notification: packaged.has('notifications') ? notification : null, watch: device && !tv && packaged.has('watch') && watchCompanion(app)}, bundleTools);
   publishProducts();
   release();

@@ -6,7 +6,7 @@ import { createHash, X509Certificate } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName, singleFramework } from './assets.mjs';
 import { WATCH_MINIMUM_OS, swiftOptimization, swiftOptimizationKey } from './toolchain.mjs';
-import { assertCapabilityFrameworks, stripProductionExecutable } from './link.mjs';
+import { assertCapabilityFrameworks, compiledTargets, deploymentTargets, stripProductionExecutable } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
@@ -39,6 +39,27 @@ export const activityEntries = app => app.manifest.live_activities ?? [];
 /** Whether the app has an entry of either kind: what the extension, the shared framework, the App Group and the
  * Keychain group are gated on (LLP 1126.001 WP13). */
 export const hasEntries = app => platformWidgetEntries(app).length > 0 || activityEntries(app).length > 0;
+/** What an iOS app's widget extension's binary and Metadata.appintents are generated from, as one digest, which a
+ * development archive records (receipt `build.widgets`). A repack keeps the base's extension binary only when this is
+ * the base's (host/apple/repack.mjs) and writes everything else of the extension again (plans, TypeScript, Info.plist).
+ * Each input, by what reads it in packageWidgets:
+ * - the generated WidgetBundle.swift (widgetBundleSource: every widget's kind, families, title, description and
+ *   configuration intent, and whether activities add their member), and the entries themselves;
+ * - the activity entries (packageActivityArm, the Activity.swift member) and the packaged extension kinds;
+ * - whether an entry is configured (widgetCompilation's -wmo and const values, and the metadata pass);
+ * - the triple's deployment target (compiledTargets, a development archive's) and the app's minimum OS, which
+ *   intentsMetadata's --deployment-target reads;
+ * - the SDK's widget Swift sources the extension compiles (widgetSwiftSources, beside the generated one).
+ * The compiler, SDK commit, ExactCore and ExactSnapshot builds and build flags are the base's, which a repack's
+ * caller has established. `read` is a test's. */
+export const widgetsDigest = (app, extensions = [], { read = readFileSync } = {}) => {
+  const entries = platformWidgetEntries(app), activities = activityEntries(app);
+  const source = widgetBundleSource(entries, { platform: 'ios', activities: activities.length > 0, entities: app.manifest.intents?.entities });
+  const hash = createHash('sha256').update(JSON.stringify({ version: 1, source, widgets: entries, activities, extensions: [...extensions].sort(),
+    configured: hasIntents(entries, 'ios'), targets: { compiled: compiledTargets(app, 'development').ios, minimumOS: deploymentTargets(app).ios } }));
+  for (const file of widgetSwiftSources(activities.length > 0)) hash.update(file.slice(root.length)).update(read(file));
+  return hash.digest('hex');
+};
 export const widgetGroup = app => `group.${app.widgetAppId ?? app.clipParent ?? app.id}`;
 export const widgetId = app => `${app.id}.widgets`;
 
@@ -423,16 +444,31 @@ struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
   return `import AppIntents\nimport SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${entityTypes}${generated}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${names.map(n => `${n}()`).join('; ')}${alarmMember} } }\n`;
 }
 
+/** The SDK's Swift a widget extension compiles beside its generated WidgetBundle.swift (and an alarm's). */
+export const widgetSwiftSources = (activities) => [resolve(pkg, 'widget/Timeline.swift'), resolve(pkg, 'widget/Configuration.swift'),
+  resolve(pkg, 'widget/WidgetTimelineWaiters.swift'), ...(activities ? [resolve(pkg, 'widget/Activity.swift')] : [])];
+
 /** One module name for compilation and metadata, including AlarmKit's shared attributes. */
 export function widgetCompilation({ entries, platform, activities, alarm, source, values, directory }) {
   const configured = hasIntents(entries, platform);
   const moduleName = platform === 'ios' && alarm ? alarm : 'ExactWidgets';
-  const sources = [resolve(pkg, 'widget/Timeline.swift'), resolve(pkg, 'widget/Configuration.swift'),
-    resolve(pkg, 'widget/WidgetTimelineWaiters.swift'), ...(activities ? [resolve(pkg, 'widget/Activity.swift')] : []),
-    ...(platform === 'ios' && alarm ? alarmSources : []), source];
+  const sources = [...widgetSwiftSources(activities), ...(platform === 'ios' && alarm ? alarmSources : []), source];
   const args = ['-module-name', moduleName, ...(configured ? ['-wmo', ...constValueArgs(values, directory)] : []),
     ...(platform === 'ios' && alarm ? ['-Xlinker', '-weak_framework', '-Xlinker', 'AlarmKit'] : [])];
   return { moduleName, sources, args };
+}
+
+/** The widget extension's Info.plist, from the app's own (`appInfo`, as plutil's JSON): what packageWidgets writes,
+ * and a repack writes again from the repacked app's Info.plist. */
+export function widgetExtensionInfo(app, appInfo, platform = 'ios') {
+  const mac = platform === 'macos';
+  const capabilities = appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {};
+  const versions = Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString', mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'].map(key => [key, appInfo[key]]));
+  // The extension resolves the app's strings for the language the app's bundle localizations choose (SessionFacts.viewerLocale).
+  const localizations = Object.fromEntries(['CFBundleDevelopmentRegion', 'CFBundleLocalizations'].filter(key => appInfo[key]).map(key => [key, appInfo[key]]));
+  return plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
+    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac || platform === 'watchos' ? widgetExtensionKeys(appInfo, platform) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
+    NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } });
 }
 
 export function packageWidgets({ app, bundle, shared, directory, sdk, triple, device, entitlements, sign, runApple, production, symbols = directory, profile = null, platform = 'ios', entries = platformWidgetEntries(app, platform), alarm = null }) {
@@ -455,8 +491,6 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const appInfo = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', resolve(contents, 'Info.plist')], { read: true }).stdout);
   const capabilities = appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {};
   const versions = Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString', mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'].map(key => [key, appInfo[key]]));
-  // The extension resolves the app's strings for the language the app's bundle localizations choose (SessionFacts.viewerLocale).
-  const localizations = Object.fromEntries(['CFBundleDevelopmentRegion', 'CFBundleLocalizations'].filter(key => appInfo[key]).map(key => [key, appInfo[key]]));
   const runtimeInfo = resolve(contents, 'Frameworks/ExactCore.framework', mac ? 'Resources/Info.plist' : 'Info.plist');
   const runtime = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', runtimeInfo], { read: true }).stdout);
   writeFileSync(runtimeInfo, plistFile({ ...runtime, ...versions, ...capabilities }));
@@ -476,9 +510,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember, entities: app.manifest.intents?.entities }));
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
-  writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
-    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac || platform === 'watchos' ? widgetExtensionKeys(appInfo, platform) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
-    NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
+  writeFileSync(resolve(extensionContents, 'Info.plist'), widgetExtensionInfo(app, appInfo, platform));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).
   const configured = hasIntents(entries, platform);
