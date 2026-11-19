@@ -823,6 +823,15 @@ component App
   view
     text "home"
 ---
+== route-pattern
+# a pattern that ends in a space, which a browser trims from every location
+routes nav
+  home "/"
+  about "/about "
+component App
+  view
+    text "home"
+---
 == route-no-match
 routes nav
   home "/"

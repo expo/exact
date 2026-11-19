@@ -30,8 +30,10 @@ impl Table {
     }
 
     /// D2's static checks. Parameter identifiers use the ASCII subset
-    /// `[A-Za-z_$][A-Za-z0-9_$]*`; literals may contain Unicode and spaces. Malformed parent links use route-parent-param;
-    /// an empty table uses route-pattern; an unmatched boot location uses route-root.
+    /// `[A-Za-z_$][A-Za-z0-9_$]*`; literals may contain Unicode and spaces,
+    /// though a pattern may not end in a space. Malformed parent links use
+    /// route-parent-param; an empty table uses route-pattern; an unmatched
+    /// boot location uses route-root.
     pub fn check(&self) -> Result<(), CheckError> {
         let reject = |code: &str, route, message: String| CheckError {
             code: code.into(),
@@ -79,6 +81,16 @@ impl Table {
                 }
                 notfound = true;
             } else {
+                // Refuse a pattern that ends in a space: a browser and the
+                // router trim the spaces at a location's end (location.rs
+                // `clean`), so no location is spelled as it is
+                if route.pattern.ends_with(' ') {
+                    return Err(reject(
+                        "route-pattern",
+                        i,
+                        format!("the pattern of `{}` ends in a space, which a browser and the router trim from the end of every location, so no location is spelled as it is: end it without the space (and without its segment, if the space was all of it), or write the space as `%20`", route.name),
+                    ));
+                }
                 let normalized = canonical(&route.pattern);
                 let segments: Vec<String> = segments(&normalized)
                     .into_iter()

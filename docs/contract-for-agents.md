@@ -4007,10 +4007,11 @@ Exact's web servers use declared routes for file-like deep links: `/profile/:han
 admits a navigation to `/profile/photos.zip`. Existing public files win; unmatched
 file paths stay 404, even with `notfound`.
 
-A route literal may hold Unicode and spaces as they are (`"/item/café"`) or escaped, but spells
-an escape as a browser sends it: the router matches a path only as written, while a host serves
-every spelling from one file. An escape of a character a URL carries as itself (`%41` for `A`)
-or one in lower case (`%c3`) is refused (`route-pattern`), naming the spelling to write. A
+A route literal may hold Unicode and spaces as they are (`"/item/café"`) or escaped; a pattern may
+not end in a space, which a browser trims: drop it, or write it `%20`. A literal spells an escape
+as a browser sends it: the router matches a path only as written, while a host serves every
+spelling from one file. An escape of a character a URL carries as itself (`%41` for `A`) or one
+in lower case (`%c3`) is refused (`route-pattern`), naming the spelling to write. A
 `render=build` page is written at its path decoded (`/item/caf%C3%A9` to
 `item/café/index.html`), but for what no file name may hold on every system, which stays escaped:
 a separator, `%`, `<>:"|?*`, a control character, a trailing dot or space, and a Windows device

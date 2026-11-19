@@ -345,6 +345,24 @@
       "route": 1
     },
     {
+      "name": "invalid trailing space",
+      "table": {"routes": [{"name": "home", "pattern": "/", "parent": null, "tab": false, "notfound": false}, {"name": "odd", "pattern": "/:id/ ", "parent": 0, "tab": false, "notfound": false}]},
+      "error": "route-pattern",
+      "route": 1
+    },
+    {
+      "name": "invalid trailing space on a literal",
+      "table": {"routes": [{"name": "home", "pattern": "/", "parent": null, "tab": false, "notfound": false}, {"name": "about", "pattern": "/about ", "parent": 0, "tab": false, "notfound": false}]},
+      "error": "route-pattern",
+      "route": 1
+    },
+    {
+      "name": "a space escaped at the end is kept",
+      "table": {"routes": [{"name": "home", "pattern": "/", "parent": null, "tab": false, "notfound": false}, {"name": "about", "pattern": "/about%20", "parent": 0, "tab": false, "notfound": false}]},
+      "error": null,
+      "route": null
+    },
+    {
       "name": "invalid /:a-b",
       "table": {"routes": [{"name": "home", "pattern": "/", "parent": null, "tab": false, "notfound": false}, {"name": "bad", "pattern": "/:a-b", "parent": 0, "tab": false, "notfound": false}]},
       "error": "route-pattern",
