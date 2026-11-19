@@ -18,25 +18,42 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: docs
-    # Nothing but another cleanup of the same pull request shares this group. A publish that outlasts this
-    # deletes its own preview (docs-preview-publish.yml, "Check the pull request again").
+    # Nothing but another cleanup of the same pull request shares this group: in a group shared with the publish,
+    # a waiting cleanup would be dropped for a newer job. A publish that outlasts this deletes its own preview
+    # (docs-preview-publish.yml, "Check the pull request again").
     concurrency:
       group: docs-preview-cleanup-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     permissions:
       contents: read
+      pull-requests: read
     steps:
+      # The pull request may have reopened or got its label back while this waited, and a preview published since.
+      - name: Check the pull request again
+        id: again
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: context.payload.pull_request.number });
+            const wanted = pull.state === 'open' && pull.labels.some(l => l.name === 'docs-preview');
+            if (wanted) core.notice('Not deleted: the pull request is open and has the docs-preview label.');
+            core.setOutput('wanted', wanted);
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.again.outputs.wanted != 'true'
         with:
           sparse-checkout: docs/site/tools
 
       # no-cache: a cache is written by workflows that run other code.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: steps.again.outputs.wanted != 'true'
         with:
           bun-version: 1.4.2
           no-cache: true
 
       - name: Delete the preview's deployments
+        if: steps.again.outputs.wanted != 'true'
         env:
           CLOUDFLARE_PAGES_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
