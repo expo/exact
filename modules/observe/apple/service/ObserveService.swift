@@ -80,6 +80,7 @@ final class ObserveService {
             case "app.attributes": globals = ObserveRules.attributes(e["attributes"] as? [String: Any] ?? [:]).kept
             case "app.event": log(e, wall: wall, error: false)
             case "app.error": log(e, wall: wall, error: true)
+            case "app.feedback": feedback(e, wall: wall)
             case "background": dispatch()
             default: return
             }
@@ -208,6 +209,23 @@ final class ObserveService {
         if let display = ObserveRules.displayName(e["displayName"] as? String) { attrs["expo.log.display_name"] = display }
         let severity = (e["severity"] as? String).flatMap { ObserveWire.severities[$0] != nil ? $0 : nil } ?? "info"
         store.addLog(session: session, time: wall, severity: severity, name: name, body: ObserveRules.body(e["body"] as? String),
+                     attributes: attrs, dropped: user.dropped)
+    }
+
+    /// Stores feedback as expo-observe's `expo.feedback` log: the message is the body, and the
+    /// `expo.feedback.*` attributes are added after the user's, so none can replace them.
+    func feedback(_ e: [String: Any], wall: Double) {
+        guard let store, let f = ObserveRules.feedback(e) else { return }
+        let user = ObserveRules.attributes(e["attributes"] as? [String: Any] ?? [:])
+        var attrs = globals
+        for (k, v) in user.kept { attrs[k] = v }
+        attrs["expo.feedback.id"] = f.id
+        if let r = f.rating {
+            attrs["expo.feedback.rating"] = r["value"]
+            attrs["expo.feedback.scale.min"] = r["min"]
+            attrs["expo.feedback.scale.max"] = r["max"]
+        }
+        store.addLog(session: session, time: wall, severity: "info", name: ObserveRules.feedbackName, body: ObserveRules.body(f.message),
                      attributes: attrs, dropped: user.dropped)
     }
 

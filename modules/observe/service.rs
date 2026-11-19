@@ -163,6 +163,9 @@ pub fn launch(ctx: LaunchContext) {
     });
 }
 
+/// The log name of `Observe.reportFeedback`, which is sent out of the sample too.
+const FEEDBACK: &str = "expo.feedback";
+
 /// Observe's custom-event validation, copied from expo-app-metrics (`LogEvents`).
 mod rules {
     use super::*;
@@ -178,6 +181,46 @@ mod rules {
             return s.into();
         }
         s.chars().take(max - 1).chain(['…']).collect()
+    }
+
+    /// A feedback report that passed the checks: its id, message and rating.
+    pub struct Feedback {
+        pub id: String,
+        pub message: Option<String>,
+        pub rating: Option<(i64, i64, i64)>,
+    }
+
+    /// Observe's feedback checks, from expo-observe's `reportFeedback.ts`: a non-empty id,
+    /// a message or a rating, and a whole-number rating within a scale from 0 to 10.
+    pub fn feedback(e: &Value) -> Option<Feedback> {
+        let id = e["id"].as_str().unwrap_or("").to_string();
+        let message = e["message"]
+            .as_str()
+            .filter(|m| !m.trim().is_empty())
+            .map(str::to_string);
+        let whole = |v: &Value, or: f64| {
+            let f = if v.is_null() { or } else { v.as_f64()? };
+            (f.fract() == 0.0 && f.abs() < 1e15).then_some(f as i64)
+        };
+        let rating = if e["rating"].is_number() {
+            let r = (whole(&e["rating"], 0.0), whole(&e["min"], 0.0), whole(&e["max"], 10.0));
+            match r {
+                (Some(v), Some(min), Some(max)) if 0 <= min && min < max && max <= 10 && (min..=max).contains(&v) => {
+                    Some((v, min, max))
+                }
+                _ => {
+                    eprintln!("observe: dropped feedback with a rating outside its scale");
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
+        if id.trim().is_empty() || (message.is_none() && rating.is_none()) {
+            eprintln!("observe: dropped feedback with no id, or with neither message nor rating");
+            return None;
+        }
+        Some(Feedback { id, message, rating })
     }
 
     fn reserved(k: &str) -> bool {
@@ -556,6 +599,27 @@ impl Service {
                     wall,
                     severity,
                     &name,
+                    body,
+                    (attrs, dropped),
+                );
+            }
+            "app.feedback" => {
+                let Some(f) = rules::feedback(e) else { return };
+                let (kept, dropped) = rules::attributes(&e["attributes"]);
+                let mut attrs = self.globals.clone();
+                attrs.extend(kept);
+                attrs.insert("expo.feedback.id".into(), f.id.into());
+                if let Some((value, min, max)) = f.rating {
+                    attrs.insert("expo.feedback.rating".into(), value.into());
+                    attrs.insert("expo.feedback.scale.min".into(), min.into());
+                    attrs.insert("expo.feedback.scale.max".into(), max.into());
+                }
+                let body = f.message.map(|m| rules::truncate(&m, 4096));
+                self.log(
+                    self.session.clone(),
+                    wall,
+                    "info",
+                    FEEDBACK,
                     body,
                     (attrs, dropped),
                 );

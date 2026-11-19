@@ -6,6 +6,8 @@ import Foundation
 
 enum ObserveRules {
     static let maxName = 256, maxBody = 4096, maxDisplayName = 128, maxAttributes = 128
+    /// The log name of `Observe.reportFeedback`.
+    static let feedbackName = "expo.feedback"
 
     static func name(_ raw: String) -> String? {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -25,6 +27,28 @@ enum ObserveRules {
     static func displayName(_ raw: String?) -> String? {
         guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
         return truncate(s, maxDisplayName)
+    }
+
+    /// Observe's feedback checks, from expo-observe's `reportFeedback.ts`: a non-empty id,
+    /// a message or a rating, and a whole-number rating within a scale from 0 to 10.
+    static func feedback(_ e: [String: Any]) -> (id: String, message: String?, rating: [String: Int]?)? {
+        let id = e["id"] as? String ?? ""
+        let message = (e["message"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        var rating: [String: Int]?
+        if let value = e["rating"] as? Double {
+            let whole = { (d: Double?) in d.flatMap { $0.rounded() == $0 && abs($0) < 1e15 ? Int($0) : nil } }
+            guard let v = whole(value), let min = whole(e["min"] as? Double ?? 0), let max = whole(e["max"] as? Double ?? 10),
+                  min >= 0, min < max, max <= 10, v >= min, v <= max else {
+                fputs("observe: dropped feedback with a rating outside its scale\n", stderr)
+                return nil
+            }
+            rating = ["value": v, "min": min, "max": max]
+        }
+        guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, message != nil || rating != nil else {
+            fputs("observe: dropped feedback with no id, or with neither message nor rating\n", stderr)
+            return nil
+        }
+        return (id, message, rating)
     }
 
     static func reserved(_ key: String) -> Bool {

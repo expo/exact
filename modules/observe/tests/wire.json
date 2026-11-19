@@ -8,7 +8,7 @@
     "platforms.<name>.startupParams join every expo.app_startup.* metric's params, and launchNavigationParams the launch route's. They are each host's own launch phases and anchor.",
     "Crash records and update downloads are not here: each platform records different ones.",
     "Truncation lengths are counted per platform: graphemes on Apple, as Observe does, UTF-16 units on the web and chars on Linux. The strings here are ASCII, so the counts agree.",
-    "Pinned rules: the launch route gets a navigation tti exactly when the startup event has a timeToInteractive metric and nothing navigated first; navigation params copy every exact.* field of the event; a missing url is omitted; app.error uses the event's source (default reportedByUser); exact.boot.path appears only when the startup event has a bootPath."
+    "Pinned rules: the launch route gets a navigation tti exactly when the startup event has a timeToInteractive metric and nothing navigated first; navigation params copy every exact.* field of the event; a missing url is omitted; app.error uses the event's source (default reportedByUser); app.feedback is dropped without an id, without a message or rating, or with a rating outside its scale, and a rating without a scale is on 0 to 10; exact.boot.path appears only when the startup event has a bootPath."
   ],
   "session": "6f1e4d2c-8b3a-4c5d-9e7f-0a1b2c3d4e5f",
   "sessionStart": 1700000000,
@@ -64,7 +64,13 @@
     },
     {"kind":"app.event","wall":1700000003.5,"name":"expo.internal","severity":"info"},
     {"kind":"app.event","wall":1700000004,"name":"plain","severity":"loud"},
-    {"kind":"app.error","wall":1700000005,"source":"contract","type":"TypeError","message":"boom","stack":"at f (app.js:1:1)"}
+    {"kind":"app.error","wall":1700000005,"source":"contract","type":"TypeError","message":"boom","stack":"at f (app.js:1:1)"},
+    {"kind":"app.feedback","wall":1700000006,"id":"checkout","message":"Too slow","rating":4,"min":1,"max":5,"attributes":{"screen":"cart","expo.feedback.id":"spoofed"}},
+    {"kind":"app.feedback","wall":1700000007,"id":"general","message":"Nice app","attributes":{}},
+    {"kind":"app.feedback","wall":1700000007.5,"id":"nps","rating":7,"attributes":{}},
+    {"kind":"app.feedback","wall":1700000008,"id":"general","rating":6,"min":1,"max":5,"attributes":{}},
+    {"kind":"app.feedback","wall":1700000009,"id":"general","message":"   ","attributes":{}},
+    {"kind":"app.feedback","wall":1700000010,"id":" ","message":"no id","attributes":{}}
   ],
   "expected": {
     "metrics": {
@@ -301,6 +307,56 @@
                     {"key":"exception.type","value":{"stringValue":"TypeError"}},
                     {"key":"expo.error.is_fatal","value":{"boolValue":false}},
                     {"key":"expo.error.source","value":{"stringValue":"contract"}}
+                  ]
+                },
+                {
+                  "timeUnixNano": 1700000006000000000,
+                  "observedTimeUnixNano": 1700000006000000000,
+                  "severityNumber": 9,
+                  "severityText": "INFO",
+                  "body": {"stringValue":"Too slow"},
+                  "attributes": [
+                    {"key":"session.id","value":{"stringValue":"6f1e4d2c-8b3a-4c5d-9e7f-0a1b2c3d4e5f"}},
+                    {"key":"event.name","value":{"stringValue":"expo.feedback"}},
+                    {"key":"count","value":{"intValue":2}},
+                    {"key":"expo.feedback.id","value":{"stringValue":"checkout"}},
+                    {"key":"expo.feedback.rating","value":{"intValue":4}},
+                    {"key":"expo.feedback.scale.max","value":{"intValue":5}},
+                    {"key":"expo.feedback.scale.min","value":{"intValue":1}},
+                    {"key":"screen","value":{"stringValue":"cart"}},
+                    {"key":"tier","value":{"stringValue":"gold"}}
+                  ],
+                  "droppedAttributesCount": 1
+                },
+                {
+                  "timeUnixNano": 1700000007000000000,
+                  "observedTimeUnixNano": 1700000007000000000,
+                  "severityNumber": 9,
+                  "severityText": "INFO",
+                  "body": {"stringValue":"Nice app"},
+                  "attributes": [
+                    {"key":"session.id","value":{"stringValue":"6f1e4d2c-8b3a-4c5d-9e7f-0a1b2c3d4e5f"}},
+                    {"key":"event.name","value":{"stringValue":"expo.feedback"}},
+                    {"key":"count","value":{"intValue":2}},
+                    {"key":"expo.feedback.id","value":{"stringValue":"general"}},
+                    {"key":"tier","value":{"stringValue":"gold"}}
+                  ]
+                },
+                {
+                  "timeUnixNano": 1700000007500000000,
+                  "observedTimeUnixNano": 1700000007500000000,
+                  "severityNumber": 9,
+                  "severityText": "INFO",
+                  "body": {"stringValue":""},
+                  "attributes": [
+                    {"key":"session.id","value":{"stringValue":"6f1e4d2c-8b3a-4c5d-9e7f-0a1b2c3d4e5f"}},
+                    {"key":"event.name","value":{"stringValue":"expo.feedback"}},
+                    {"key":"count","value":{"intValue":2}},
+                    {"key":"expo.feedback.id","value":{"stringValue":"nps"}},
+                    {"key":"expo.feedback.rating","value":{"intValue":7}},
+                    {"key":"expo.feedback.scale.max","value":{"intValue":10}},
+                    {"key":"expo.feedback.scale.min","value":{"intValue":0}},
+                    {"key":"tier","value":{"stringValue":"gold"}}
                   ]
                 }
               ]

@@ -51,6 +51,25 @@ function anyValue(v) {
 /** Observe's custom-event validation, copied from expo-app-metrics (`LogEvents`). */
 function rulesName(raw) { const n = String(raw ?? '').trim(); return n && !n.startsWith('expo.') && n.length <= 256 ? n : null; }
 const truncate = (s, max) => (s.length <= max ? s : s.slice(0, max - 1) + '…');
+/** Observe's feedback checks, from expo-observe's `reportFeedback.ts`. */
+function rulesFeedback(e) {
+  const id = typeof e.id === 'string' ? e.id : '';
+  const message = typeof e.message === 'string' && e.message.trim() ? e.message : undefined;
+  let rating;
+  if (typeof e.rating === 'number') {
+    const value = e.rating, min = e.min ?? 0, max = e.max ?? 10;
+    if (![value, min, max].every(Number.isSafeInteger) || min < 0 || min >= max || max > 10 || value < min || value > max) {
+      console.warn('observe: dropped feedback with a rating outside its scale');
+      return null;
+    }
+    rating = { value, min, max };
+  }
+  if (!id.trim() || (message === undefined && !rating)) {
+    console.warn('observe: dropped feedback with no id, or with neither message nor rating');
+    return null;
+  }
+  return { id, message, rating };
+}
 function rulesAttributes(raw) {
   const kept = {}; let dropped = 0;
   for (const key of Object.keys(raw ?? {}).sort()) {
@@ -235,6 +254,14 @@ export function start(config, { boot = 0 } = {}) {
           const attrs = { ...globals, ...a.kept };
           if (e.displayName?.trim()) attrs['expo.log.display_name'] = truncate(e.displayName.trim(), 128);
           log(SEVERITY[e.severity] ? e.severity : 'info', name, e.body == null ? undefined : truncate(String(e.body), 4096), attrs, a.dropped, e.wall);
+          break;
+        }
+        case 'app.feedback': {
+          const f = rulesFeedback(e); if (!f) break;
+          const a = rulesAttributes(e.attributes);
+          const attrs = { ...globals, ...a.kept, 'expo.feedback.id': f.id };
+          if (f.rating) Object.assign(attrs, { 'expo.feedback.rating': f.rating.value, 'expo.feedback.scale.min': f.rating.min, 'expo.feedback.scale.max': f.rating.max });
+          log('info', 'expo.feedback', f.message === undefined ? undefined : truncate(f.message, 4096), attrs, a.dropped, e.wall);
           break;
         }
         case 'app.error': log('error', 'js.exception', undefined, { 'expo.error.source': e.source ?? 'reportedByUser', 'expo.error.is_fatal': false, 'exception.type': e.type ?? 'Error', 'exception.message': e.message ?? '', ...(e.stack ? { 'exception.stacktrace': e.stack } : {}) }, 0, e.wall); break;

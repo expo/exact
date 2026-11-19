@@ -71,6 +71,23 @@ The web exporter drops queued rows when configuration, sampling or development m
 
 On Linux and Android, the processes of an app share one queue file; each changes it under a file lock, and one process at a time sends it. Android keeps the queue, install ID and pending panic records under its app cache directory; Linux uses `XDG_STATE_HOME`, defaulting to `~/.local/state`. Startup has a 30-second deadline; a pending activation or resource reports a timeout without a TTI value. Android's render and interactive marks wait for the reader's frame-presentation acknowledgements. Its APK's SHA-256 identifies the build for cold and warm launches. The exporter subscribes after startup and replays the journal's retained events. Headless runs keep the bounded in-memory journal but do not start the exporter or emit startup metrics. Crash capture records Rust panics, not fatal signals. Refused dispatches drop these hosts' pending rows; Apple retains rows with `sent: false`.
 
+## Feedback
+
+```
+observeFeedback("checkout", message)                      // a message only
+observeFeedback("checkout", message, 8)                   // a rating on 0 to 10
+observeFeedback("checkout", message, stars, 1, 5, Context(screen=s))
+```
+
+`observeFeedback(id, message[, rating[, min, max]][, Shape(key=value)])` sends what expo-observe's `Observe.reportFeedback` sends: an `expo.feedback` log, info severity, whose body is the message. The id says where in the app the feedback was collected; Observe groups reports by it. The app draws the form.
+
+- the id must not be blank, and a report needs a message or a rating; a blank message is none;
+- a rating is a whole number within its scale, and the scale's ends are whole numbers with 0 ≤ min < max ≤ 10 (0 to 10 when left out); a rating that is not a finite number is none;
+- the message is cut to 4096 characters, and the attributes follow the rules above;
+- `expo.feedback.id`, `expo.feedback.rating`, `expo.feedback.scale.min` and `expo.feedback.scale.max` are added after the app's attributes, so none can replace them.
+
+A report that breaks a rule is dropped with a line on stderr (the console on the web). Feedback is sent outside the `sampleRate` sample too, as expo-observe sends it; `dispatchingEnabled: false` and a development build without `dispatchInDebug` drop it. The text can hold personal data: declare it in the iOS privacy manifest (`NSPrivacyCollectedDataTypeOtherUserContent`), the App Store privacy label and the Google Play Data safety form.
+
 ## Tests
 
 `modules/observe/tests/wire.json` is one fixture that all three encoders must produce:
