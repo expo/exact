@@ -52,7 +52,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { closeSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources, moduleFrameworks, probeDigest } from './arms.mjs';
+import { armArgs, armOutput, evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources, moduleFrameworks, probeDigest } from './arms.mjs';
 import { HOST_MACOS, freeSpace, ROOM_GB } from '../../scripts/filesystem.mjs';
 import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes, browserEntitlements } from './documents.mjs';
 import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
@@ -1056,18 +1056,18 @@ async function main(args, lockHeld = false) {
   // A roster probe route's packages compile for its own target, in a directory of its own (`rosterRoutes`).
   const packageTargets = new Map([[packageDir, [sdkName, ios ? ['-target', moduleTripleFor(app, true, device, tv), '-sdk', sdk] : ['-target', moduleTripleFor(app, false)]]]]);
   const arm = (args, source, built, extra = '', own = false, optional = false) => { // optional: placing a failed one answers its log's path
-    const key = createHash('sha256').update(JSON.stringify([args.map(a => a === built ? '<out>' : snapshot.key(a).replace(packageDir, '<packages>')), [].concat(source).map(f => readFileSync(f, 'utf8')), swiftc, extra])).digest('hex').slice(0, 16);
+    args = armArgs(args, built); const key = createHash('sha256').update(JSON.stringify([args.map(a => a === built ? '<out>' : snapshot.key(a).replace(packageDir, '<packages>')), [].concat(source).map(f => readFileSync(f, 'utf8')), swiftc, extra])).digest('hex').slice(0, 16);
     const dir = resolve(own ? linkRoot : swiftBuildRoot, 'arms'), cached = resolve(dir, `${key}-${basename(built)}`);
     try { const now = new Date(); utimesSync(cached, now, now); copyFileSync(cached, built); return Object.assign(async () => true, { cached }); } catch {} // none, or evicted meanwhile
     mkdirSync(dir, { recursive: true }); const packagesIn = args.find(a => packageTargets.has(a)); if (packagesIn) placePackages(packagesIn); // the packages' objects only for an arm compiled anew
-    const making = `${cached}.${process.pid}.tmp`;
+    const making = armOutput(dir, key, built);
     const log = resolve(webBuildDir, `arm-${beside.length}.log`), compile = startApple('xcrun', args.map(a => a === built ? making : a), log, { authored: snapshot.authored });
     beside.push(compile);
     return Object.assign(async () => {
       if (!await compile.done({ repeated: optional })) return log;
       // Place this build's result before publishing it to the shared eviction pool.
       copyFileSync(making, built);
-      renameSync(making, cached);
+      renameSync(making, cached); rmSync(dirname(making), { recursive: true, force: true });
       evictArms(dir, basename(built)); return true;
     }, { cached }); // its copy's path: a probe's roster is kept beside it
   };

@@ -1,10 +1,10 @@
 import { test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { evictArms, keepRoster, keptRoster, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
+import { armArgs, armOutput, evictArms, keepRoster, keptRoster, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
 
 test('a qualified native roster is bound to the exact probe bytes, including when imported from a simulator run', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-roster-'));
@@ -81,4 +81,38 @@ test("a device build's roster routes each take the packages compiled for that ro
   // Only an xcframework without the route's slice makes it lack.
   const lacking = rosterRoutes({ tv: false, device: true, packageDir: '/b/packages', missingSlice: (v) => v === 'maccatalyst' ? '/app/modules/apple/Map.xcframework' : undefined });
   assert.deepEqual(lacking.map(r => r.lacking ?? null), ['/app/modules/apple/Map.xcframework', null, null]);
+});
+
+test('an arm dylib compiles under its own name and is named @rpath/<name>, so two builds link the same bytes', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-arms-'));
+  const built = '/b/web/libexact_modules.dylib', library = ['swiftc', '-emit-library', '-module-name', 'ExactAppModules', '-o', built];
+  try {
+    // The linker names the dylib and hashes its file name into LC_UUID: neither may carry the process id.
+    const making = armOutput(dir, '0123456789abcdef', built);
+    expect(making.split('/').at(-1)).toBe('libexact_modules.dylib');
+    expect(making.endsWith(`/.0123456789abcdef-libexact_modules.dylib.${process.pid}.tmp/libexact_modules.dylib`)).toBe(true);
+    // Two arms compiling at once in one build (the module artifact and its probe; two outputs of the same arguments) never share a directory.
+    expect(armOutput(dir, 'fedcba9876543210', built)).not.toBe(making);
+    expect(armOutput(dir, '0123456789abcdef', '/b/web/probe-libexact_modules.dylib')).not.toStartWith(making.slice(0, making.lastIndexOf('/') + 1));
+    // A directory a crashed compile left is emptied before the next one.
+    writeFileSync(making, 'half-written');
+    expect(existsSync(armOutput(dir, '0123456789abcdef', built))).toBe(false);
+    assert.deepEqual(armArgs(library, built).slice(library.length), ['-Xlinker', '-install_name', '-Xlinker', '@rpath/libexact_modules.dylib', '-Xlinker', '-headerpad', '-Xlinker', '0x100']);
+    // An install name the arguments give (a manifest's host.ios.link) is kept in every spelling the linker takes: an
+    // appended default would win, as the linker takes the last.
+    for (const given of [['-Xlinker', '-install_name', '-Xlinker', '@rpath/Custom.framework/Custom'], ['-Xlinker', '-dylib_install_name', '-Xlinker', '@rpath/Custom.framework/Custom'],
+      ['-Xlinker', '-dylinker_install_name', '-Xlinker', '@rpath/Custom.framework/Custom'], ['-Xclang-linker', '-Wl,-dylib_install_name,@rpath/Custom.framework/Custom']]) {
+      expect(armArgs([...library, ...given], built)).toEqual([...library, ...given]);
+    }
+    // A header pad the arguments set is theirs.
+    const padded = [...library, '-Xlinker', '-headerpad_max_install_names'];
+    expect(armArgs(padded, built)).toEqual([...padded, '-Xlinker', '-install_name', '-Xlinker', '@rpath/libexact_modules.dylib']);
+    const object = ['clang', '-c', 'sound_mixer.c', '-o', '/b/sound.o'];
+    expect(armArgs(object, '/b/sound.o')).toEqual(object);
+    // A crashed compile's directory goes after a day, as a crashed copy did; a fresh one stays.
+    mkdirSync(resolve(dir, '.aaaaaaaaaaaaaaaa.1.tmp')); writeFileSync(resolve(dir, '.aaaaaaaaaaaaaaaa.1.tmp', 'libexact_modules.dylib'), 'x');
+    const old = new Date(Date.now() - 2 * 86_400_000); utimesSync(resolve(dir, '.aaaaaaaaaaaaaaaa.1.tmp'), old, old);
+    evictArms(dir, 'libexact_modules.dylib');
+    expect(readdirSync(dir).sort()).toEqual([`.0123456789abcdef-libexact_modules.dylib.${process.pid}.tmp`, `.0123456789abcdef-probe-libexact_modules.dylib.${process.pid}.tmp`, `.fedcba9876543210-libexact_modules.dylib.${process.pid}.tmp`]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

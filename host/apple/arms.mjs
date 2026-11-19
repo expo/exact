@@ -10,7 +10,7 @@ import { xcframeworkSlice } from '../../scripts/package-libraries.mjs';
  * one) keep a copy each, as every app's build shares the directory. Only an
  * exact `<16 hex>-<name>` is this name's; `probe-<name>` is another arm's. A copy's
  * kept roster (`<copy>.roster`) goes with it.
- * A copy a crashed build left half-written (`.<pid>.tmp`) goes after a day. */
+ * What a crashed build left half-written (`.<key>-<name>.<pid>.tmp`, armOutput) goes after a day. */
 export function evictArms(dir, name) {
   // A copy another build removed meanwhile is the oldest
   const at = (file) => { try { return statSync(resolve(dir, file)).mtimeMs; } catch { return 0; } };
@@ -20,6 +20,30 @@ export function evictArms(dir, name) {
   for (const tmp of entries.filter((f) => f.endsWith('.tmp'))) {
     if (Date.now() - at(tmp) > 86_400_000) rmSync(resolve(dir, tmp), { recursive: true, force: true });
   }
+}
+
+/** An arm's compile arguments. ld64 and lld name a dylib by its `-o` path (LC_ID_DYLIB) unless given an install
+ * name, and that path is a temporary one (armOutput): a dylib is named `@rpath/<name>`, which is also how the app
+ * finds it beside the executable. An install name the arguments already give is kept, in any spelling the linker
+ * takes (lld's MachO Options.td: `-install_name` and its aliases), passed as swiftc's `-Xlinker` or in a clang `-Wl,`
+ * list. A release build renames each loose dylib to its framework's longer name (wrapFramework); the linker's default
+ * pad after the load commands is 0x20 bytes, so the dylib keeps 0x100 unless the arguments set their own. */
+export function armArgs(args, built) {
+  const given = args.flatMap((a) => a.startsWith('-Wl,') ? a.slice(4).split(',') : [a]);
+  if (!args.includes('-emit-library') || given.some((a) => ['-install_name', '-dylib_install_name', '-dylinker_install_name'].includes(a))) return args;
+  const pad = given.some((a) => a === '-headerpad' || a === '-headerpad_max_install_names') ? [] : ['-Xlinker', '-headerpad', '-Xlinker', '0x100'];
+  return [...args, '-Xlinker', '-install_name', '-Xlinker', `@rpath/${basename(built)}`, ...pad];
+}
+
+/** Where an arm compiles before it is renamed to its cached copy: under its own name, in a directory of this compile's
+ * own (`<dir>/.<key>-<name>.<pid>.tmp/`, emptied first). lld hashes the output's file name into LC_UUID, so a name
+ * with the process id in it made every build's dylib differ; the key and name keep two arms
+ * compiling at once in one build apart, as they name its cached copy. */
+export function armOutput(dir, key, built) {
+  const own = resolve(dir, `.${key}-${basename(built)}.${process.pid}.tmp`);
+  rmSync(own, { recursive: true, force: true });
+  mkdirSync(own, { recursive: true });
+  return resolve(own, basename(built));
 }
 
 /** The roster a probe arm's copy printed when it last ran, kept beside it (`<copy>.roster`): the copy's key is every
