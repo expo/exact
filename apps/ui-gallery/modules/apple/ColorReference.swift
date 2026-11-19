@@ -46,12 +46,6 @@ final class ColorReference: ExactModule {
             route.controller.navigationItem.compactScrollEdgeAppearance = appearance
             sharedBackgrounds.setObject(NSNumber(value: shared), forKey: route.controller)
         }
-        if #available(iOS 27.0, *) {
-            let item = route.controller.navigationItem
-            if item.navigationBarMinimization.minimizationBehavior != .onScrollDown {
-                item.navigationBarMinimization.minimizationBehavior = .onScrollDown
-            }
-        }
     }
 
     private struct Probe { weak var view: UIView?; let diagnostics: ExactDiagnostics; let kind: String; let limit: String }

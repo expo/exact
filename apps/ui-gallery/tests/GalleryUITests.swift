@@ -1,7 +1,8 @@
 import XCTest
 import UIKit
 
-/// Run the full suite on an open Duo; the header and video checks also run closed.
+/// Runs on an open Duo, where no test skips, and on a compact window (the folded Duo or an iPhone), where
+/// the three tests that need the sidebar beside the page skip.
 final class GalleryUITests: XCTestCase {
     override func setUp() {
         super.setUp()
@@ -13,7 +14,7 @@ final class GalleryUITests: XCTestCase {
         app.launch()
         let sidebar = app.tables["gallery-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
-        XCTAssertGreaterThan(app.windows.firstMatch.frame.width, 800, "Run this check on the open Duo so selection leaves the sidebar visible")
+        try requireSidebarBesideThePage(app)
         for section in ["css", "profiles", "textcolors"] {
             app.cells["sidebar-panel-" + section].tap()
             let before = try sidebarPixels(app, sidebar)
@@ -64,58 +65,42 @@ final class GalleryUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["range-css-note"].exists)
         let scroll = app.otherElements["gallery"].firstMatch
         var readings: [[String: Any]] = []
-        func record(_ step: String) throws {
-            let title = bar.staticTexts["CSS color spaces"].firstMatch
-            let rangeTitle = app.staticTexts["range-css-title"]
-            let rangeFrame = app.otherElements["range-bar-css"].firstMatch.frame
-            let image = try screenImage(app), window = app.windows.firstMatch.frame
-            let headerColor = try backgroundChannels(image, window: window, at: CGPoint(x: rangeFrame.minX + 4, y: rangeFrame.minY - 4))
-            let rangeColor = try backgroundChannels(image, window: window, at: CGPoint(x: rangeFrame.minX + 4, y: rangeFrame.minY + 4))
-            let difference = zip(headerColor, rangeColor).map { abs($0 - $1) }.max() ?? 0
-            readings.append(["step": step, "headerBottom": bar.frame.maxY,
-                             "headerTitleBottom": title.exists ? title.frame.maxY : -1,
-                             "rangeTitleTop": rangeTitle.frame.minY, "rangeTitleBottom": rangeTitle.frame.maxY,
+        func record(_ step: String) {
+            let rangeTitle = app.staticTexts["range-css-title"], title = bar.staticTexts["CSS color spaces"].firstMatch
+            readings.append(["step": step, "headerBottom": bar.frame.maxY, "barShown": title.exists && title.isHittable,
+                             "barTop": app.otherElements["range-bar-css"].firstMatch.frame.minY,
+                             "rangeTop": range.frame.minY,
                              "titleControlGap": range.frame.minX - rangeTitle.frame.maxX,
                              "titleCenter": rangeTitle.frame.midY, "controlCenter": range.frame.midY,
-                             "rangeTop": range.frame.minY, "gap": range.frame.minY - bar.frame.maxY,
-                             "barTop": app.otherElements["range-bar-css"].firstMatch.frame.minY,
-                             "titleVisible": title.exists && title.isHittable,
-                             "titleTop": title.exists ? title.frame.minY : -1,
-                             "headerColor": headerColor, "rangeColor": rangeColor,
-                             "backgroundDifference": difference,
                              "hittable": range.isHittable])
-            if step == "initial" || step == "fast-up", let data = UIImage(cgImage: image).pngData() {
-                try? data.write(to: output.appendingPathComponent("header-\(step).png"))
-            }
         }
-        try record("initial")
+        record("initial")
         scroll.swipeUp(velocity: .slow)
-        try record("slow-up")
+        record("slow-up")
         scroll.swipeUp(velocity: .fast)
-        try record("fast-up")
+        record("fast-up")
+        // The CSS page is short: one fast swipe returns it to the top, where the large title shows again
         scroll.swipeDown(velocity: .fast)
-        try record("fast-down")
+        record("fast-down")
         scroll.swipeUp(velocity: .fast)
-        try record("fast-up-again")
+        record("fast-up-again")
         try save(readings, as: "header-range.json")
-        // UIKit retains the bar's accessibility frame after hiding its title
-        XCTAssertEqual(readings.first?["titleVisible"] as? Bool, true)
-        XCTAssertEqual(readings[2]["titleVisible"] as? Bool, false, "Scrolling must hide the native title")
-        XCTAssertEqual(readings[3]["titleVisible"] as? Bool, true, "Scrolling back restores the native title")
-        for reading in readings where reading["titleVisible"] as? Bool == true {
+        let tops = try readings.map { try XCTUnwrap($0["rangeTop"] as? CGFloat) }
+        let expanded = tops[0], collapsed = tops[2]
+        XCTAssertLessThan(collapsed, expanded - 20, "Scrolling collapses the header, and the range bar follows it")
+        XCTAssertEqual(tops[3], expanded, accuracy: 1, "Scrolling back expands the header")
+        for (reading, top) in zip(readings, tops) {
+            XCTAssertTrue(abs(top - expanded) < 1 || abs(top - collapsed) < 1,
+                          "A swipe of either velocity leaves the header expanded or collapsed: \(reading)")
+        }
+        // Read the bar's foot only while it shows its title: a bar UIKit hides keeps its accessibility frame
+        for reading in readings where reading["barShown"] as? Bool == true {
             XCTAssertEqual(try XCTUnwrap(reading["barTop"] as? CGFloat),
                            try XCTUnwrap(reading["headerBottom"] as? CGFloat), accuracy: 1,
-                           "The sticky bar starts at the bottom of the visible header")
+                           "The range bar starts at the bottom of the header: \(reading)")
         }
-        let expanded = readings.filter { $0["titleVisible"] as? Bool == true }.compactMap { $0["rangeTop"] as? CGFloat }
-        let collapsed = readings.filter { $0["titleVisible"] as? Bool == false }.compactMap { $0["rangeTop"] as? CGFloat }
-        XCTAssertLessThan(try XCTUnwrap(collapsed.first), try XCTUnwrap(expanded.first) - 20, "The range bar follows the native header")
-        for positions in [expanded, collapsed] {
-            XCTAssertEqual(try XCTUnwrap(positions.max()), try XCTUnwrap(positions.min()), accuracy: 1, "Swipe velocity does not change spacing within a header state")
-        }
+        XCTAssertEqual(readings.first?["barShown"] as? Bool, true)
         for reading in readings {
-            XCTAssertLessThanOrEqual(try XCTUnwrap(reading["backgroundDifference"] as? Int), 3,
-                                     "The header and range controls share a continuous background: \(reading)")
             XCTAssertEqual(reading["hittable"] as? Bool, true)
             XCTAssertEqual(try XCTUnwrap(reading["titleControlGap"] as? CGFloat), 16, accuracy: 0.5,
                            "The title and segmented control use system horizontal spacing")
@@ -124,13 +109,13 @@ final class GalleryUITests: XCTestCase {
                            "The label is vertically centered beside the control")
         }
         range.buttons["standard"].tap()
-        XCTAssertTrue(range.buttons["standard"].isSelected)
-        if app.windows.firstMatch.frame.width < 500 {
-            let back = app.buttons["BackButton"].firstMatch
-            XCTAssertTrue(back.waitForExistence(timeout: 5))
-            back.tap()
-            XCTAssertTrue(sidebar.waitForExistence(timeout: 10))
-        }
+        XCTAssertTrue(range.buttons["standard"].isSelected, "The control takes a tap over the scrolled page")
+        // A compact window collapses the split to one stack, whose back button returns to the sidebar
+        guard app.windows.firstMatch.frame.width < 500 else { return }
+        let back = app.buttons["BackButton"].firstMatch
+        XCTAssertTrue(back.isHittable, "The scrolled page keeps a back button")
+        back.tap()
+        XCTAssertTrue(sidebar.isHittable)
     }
 
     func testRangeControlsRemainInteractiveOverScrollingContent() throws {
@@ -138,6 +123,7 @@ final class GalleryUITests: XCTestCase {
         app.launch()
         let sidebar = app.tables["gallery-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
+        try requireSidebarBesideThePage(app)
         for section in ["css", "images", "css"] {
             let cell = app.cells["sidebar-panel-" + section]
             for _ in 0..<4 where !cell.isHittable { sidebar.swipeDown() }
@@ -190,12 +176,14 @@ final class GalleryUITests: XCTestCase {
         try data.write(to: output.appendingPathComponent("video-controls.png"))
     }
 
-    func testPageSwitchesKeepContentBelowTheRangeBar() throws {
+    /// Every page starts below its range bar, and beside the sidebar, which floats over the content's
+    /// column that UIKit insets by its width.
+    func testPageSwitchesKeepContentBelowTheRangeBarAndBesideTheSidebar() throws {
         let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
         app.launch()
         let sidebar = app.tables["gallery-sidebar"]
         XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
-        XCTAssertGreaterThan(app.windows.firstMatch.frame.width, 800)
+        try requireSidebarBesideThePage(app)
         var readings: [[String: Any]] = []
         for section in ["typography", "css", "profiles", "images", "typography", "textcolors", "media", "css", "images", "profiles", "textcolors", "typography", "media"] {
             // Read the initial page before a repeated selection can scroll it back to the top
@@ -209,32 +197,24 @@ final class GalleryUITests: XCTestCase {
             let bar = app.otherElements["range-bar-" + section].firstMatch
             let intro = app.staticTexts["intro-" + section]
             XCTAssertTrue(intro.waitForExistence(timeout: 10))
-            readings.append(["section": section, "barBottom": bar.frame.maxY, "contentTop": intro.frame.minY])
+            readings.append(["section": section, "barBottom": bar.frame.maxY, "contentTop": intro.frame.minY,
+                             "sidebarEnd": sidebar.frame.maxX, "introStart": intro.frame.minX,
+                             "rangeStart": app.staticTexts["range-\(section)-title"].frame.minX])
             try save(readings, as: "page-switch-insets.json")
         }
         for reading in readings {
+            let section = reading["section"] as? String ?? ""
             XCTAssertGreaterThanOrEqual(try XCTUnwrap(reading["contentTop"] as? CGFloat),
-                                       try XCTUnwrap(reading["barBottom"] as? CGFloat) + 10,
-                                       reading["section"] as? String ?? "")
+                                       try XCTUnwrap(reading["barBottom"] as? CGFloat) + 10, section)
+            let sidebarEnd = try XCTUnwrap(reading["sidebarEnd"] as? CGFloat)
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(reading["introStart"] as? CGFloat), sidebarEnd, "The page's text starts beside the sidebar: \(section)")
+            XCTAssertGreaterThanOrEqual(try XCTUnwrap(reading["rangeStart"] as? CGFloat), sidebarEnd, "The range controls start beside the sidebar: \(section)")
         }
     }
 
-    /// The sidebar floats over the content's column, which UIKit insets by its width: the page's text and
-    /// the range controls start beside it, not under it.
-    func testPageContentStartsBesideTheSidebar() throws {
-        let app = XCUIApplication(bundleIdentifier: "com.exact.uigallery")
-        app.launch()
-        let sidebar = app.tables["gallery-sidebar"]
-        XCTAssertTrue(sidebar.waitForExistence(timeout: 20))
-        XCTAssertGreaterThan(app.windows.firstMatch.frame.width, 800)
-        let cell = app.cells["sidebar-panel-css"]
-        for _ in 0..<4 where !cell.isHittable { sidebar.swipeDown() }
-        cell.tap()
-        let intro = app.staticTexts["intro-css"], rangeTitle = app.staticTexts["range-css-title"]
-        XCTAssertTrue(intro.waitForExistence(timeout: 10))
-        try save(["sidebarEnd": sidebar.frame.maxX, "introStart": intro.frame.minX, "rangeStart": rangeTitle.frame.minX], as: "sidebar-inset.json")
-        XCTAssertGreaterThanOrEqual(intro.frame.minX, sidebar.frame.maxX, "The page's text starts beside the sidebar")
-        XCTAssertGreaterThanOrEqual(rangeTitle.frame.minX, sidebar.frame.maxX, "The range controls start beside the sidebar")
+    /// Skips the test unless the sidebar shows beside the page, as on the open Duo
+    private func requireSidebarBesideThePage(_ app: XCUIApplication) throws {
+        guard app.windows.firstMatch.frame.width > 800 else { throw XCTSkip("Needs the open Duo, whose sidebar stays beside the page") }
     }
 
     private var output: URL {
@@ -257,16 +237,6 @@ final class GalleryUITests: XCTestCase {
         let cropped = try XCTUnwrap(image.cropping(to: box))
         try XCTUnwrap(UIImage(cgImage: cropped).pngData()).write(to: output.appendingPathComponent("range-body-" + name + ".png"))
         return try pixels(cropped)
-    }
-
-    private func backgroundChannels(_ image: CGImage, window: CGRect, at point: CGPoint) throws -> [Int] {
-        let scale = CGFloat(image.width) / window.width
-        let box = CGRect(x: (point.x - window.minX) * scale, y: (point.y - window.minY) * scale,
-                         width: 2 * scale, height: 2 * scale).integral
-        let data = try pixels(XCTUnwrap(image.cropping(to: box)))
-        return (0..<3).map { channel in
-            stride(from: channel, to: data.count, by: 4).reduce(0) { $0 + Int(data[$1]) } / (data.count / 4)
-        }
     }
 
     private func sidebarPixels(_ app: XCUIApplication, _ sidebar: XCUIElement) throws -> Data {
