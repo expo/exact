@@ -6,7 +6,6 @@
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#ffffff",
-  "background_color": "#ffffff",
   "app": {
     "id": "com.exact.metronome",
     "name": "Metronome"

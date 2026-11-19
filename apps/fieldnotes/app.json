@@ -6,7 +6,6 @@
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#31554a",
-  "background_color": "#f6f3eb",
   "file_handlers": [
     { "action": "/", "name": "Fieldnotes backup", "accept": { "application/json": [".json"] } }
   ],

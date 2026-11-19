@@ -6,7 +6,8 @@
   "start_url": "/",
   "display": "standalone",
   "theme_color": "#254c47",
-  "background_color": "#edece5",
+  "background_color": "#eeeae2",
+  "color_scheme_dark": { "background_color": "#172324" },
   "app": {
     "id": "com.exact.textflow",
     "name": "Textflow"

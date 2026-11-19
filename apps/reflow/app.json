@@ -7,6 +7,7 @@
   "display": "standalone",
   "theme_color": "#3b2f2a",
   "background_color": "#f4efe6",
+  "color_scheme_dark": { "background_color": "#1c1814" },
   "app": {
     "id": "com.exact.reflow",
     "name": "Reflow"
