@@ -215,12 +215,13 @@
       "type": "string"
     },
     "version": {
-      "description": "The version people see: iOS's `CFBundleShortVersionString` and Android's `versionName`, which `exact share` gives its builds and AppDrop shows. Bump it by hand for a release; without it a build is 0.1.0.",
+      "description": "The version people see, which `exact share` gives its builds as iOS's `CFBundleShortVersionString` and AppDrop shows; without it a shared build takes `EXACT_VERSION`, else 0.1.0. Other builds take theirs from `EXACT_VERSION`.",
       "type": "string",
-      "minLength": 1
+      "pattern": "^[0-9]+(\\.[0-9]+){0,2}$",
+      "x-hint": "one to three numbers separated by dots, as 1.2 or 1.2.3: the form of iOS's CFBundleShortVersionString"
     },
     "buildNumber": {
-      "description": "The last build number `exact share` published: iOS's `CFBundleVersion` and Android's `versionCode`. Each share takes the next number past it and past the link's last build, which AppDrop requires to rise, and writes it back here to be committed with the change it ships.",
+      "description": "The last build number `exact share` published, as iOS's `CFBundleVersion`. Each share takes the next number past it and past the link's last build, which AppDrop requires to rise, and writes it back here to be committed. Other builds take theirs from `EXACT_BUILD_NUMBER`.",
       "type": "integer",
       "minimum": 1
     },

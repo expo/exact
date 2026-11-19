@@ -288,7 +288,8 @@ own Apple ID. The first share makes the link; later ones publish a new version t
 an installed copy offers the update. Each build is app.json's version, and the next build
 number past its buildNumber and the link's last build, which the share writes back to
 app.json to commit; AppDrop shows both. With the app's and exact2's trees clean and unchanged
-since the last share it rebuilds nothing and prints the same link. A share from another git
+since the last share but for that build number, committed or not, and the same version, it
+rebuilds nothing and prints the same link. A share from another git
 branch than the last stops with code link_branch_mismatch: pass --new-link or --force.
 The link is kept in .exact/appdrop.json; the iPhone build takes minutes the first time.
 Ports    none. Runs to completion.`,
