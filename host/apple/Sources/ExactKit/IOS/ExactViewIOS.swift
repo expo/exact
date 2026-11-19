@@ -32,7 +32,8 @@ enum LaunchScreenColor {
 
 public final class ExactView: UIView {
     public let session: ExactSession
-    private var fitPending = false
+    /// A fit or a layout this view has queued, for the main queue or for the end of the batch being applied
+    private(set) var fitPending = false
     private var fitting = false
     /// The canvas's colour, which this view shows wherever the viewport does
     /// not reach (`paintUnderKeys`).
