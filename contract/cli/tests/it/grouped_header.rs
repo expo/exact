@@ -112,41 +112,74 @@ fn a_custom_header_starts_at_the_platform_lists_margins() {
 }
 
 /// UIKit's header view in an inset-grouped list spans the card, so a hand-built
-/// header's own inset (16 points) is from the card's edge, not the list's.
+/// header's own inset (16 points) is from the card's edge, not the list's: on
+/// every host, before a host says its margins and after.
 #[test]
 fn a_custom_headers_written_inline_padding_is_from_the_cards_edge() {
-    let source = |padding: &str| {
+    let source = |style: &str, padding: &str| {
         format!(
-            "component App\n  view\n    column testId=\"root\" width=402 height=874\n      list testId=\"list\" appearance=\"auto\" listStyle=\"inset-grouped\" flex=1\n        section\n          header testId=\"header\"{padding}\n            row gap=8 align-items=\"center\"\n              text \"Ken\"\n              text \"25\"\n          row\n            text \"x\"\n"
+            "component App\n  view\n    column testId=\"root\" width=402 height=874\n      list testId=\"list\" appearance=\"auto\" listStyle=\"{style}\" flex=1\n        section\n          header testId=\"header\"{padding}\n            row gap=8 align-items=\"center\"\n              text \"Ken\" testId=\"title\"\n              text \"25\" testId=\"count\"\n          row\n            text \"x\"\n"
         )
     };
-    let padding = |extra: &str| {
-        let mut r = boot_source(&source(extra));
-        let list = id(&r, "list");
-        let k = r.kernel_mut();
-        k.set_grouped_margins(
-            list,
-            Some(GroupedMargins {
-                card: [16.0, 16.0],
-                cell: [20.0, 20.0],
-            }),
-        )
-        .unwrap();
-        let root = k.node_by_key(k.find_by_test_id("root")[0]).unwrap().id;
-        k.compute_layout(root, Offer::definite(402.0, 874.0))
-            .unwrap();
+    // The header's content edges, from the section's (the list's) left.
+    let ends = |style: &str, padding: &str, margins: Option<GroupedMargins>| {
+        let mut r = boot_source(&source(style, padding));
+        if margins.is_some() {
+            let list = id(&r, "list");
+            let k = r.kernel_mut();
+            k.set_grouped_margins(list, margins).unwrap();
+            let root = k.node_by_key(k.find_by_test_id("root")[0]).unwrap().id;
+            k.compute_layout(root, Offer::definite(402.0, 874.0))
+                .unwrap();
+        }
         let k = r.kernel();
-        let p = k
-            .resolved_padding(k.node(id(&r, "header")).unwrap().key)
-            .unwrap();
-        (p.0, p.2)
+        let header = k.node(id(&r, "header")).unwrap();
+        let (f, p) = (header.frame, k.resolved_padding(header.key).unwrap());
+        (f.x + p.0, f.x + f.width - p.2)
     };
-    assert_eq!(padding(""), (36.0, 36.0), "the card's and the cell's");
-    assert_eq!(padding(" padding-left=16 padding-right=16"), (32.0, 32.0));
+    let uikit = Some(GroupedMargins {
+        card: [16.0, 16.0],
+        cell: [20.0, 20.0],
+    });
+    let both = " padding-left=16 padding-right=16";
     assert_eq!(
-        padding(" padding-left=16"),
-        (32.0, 36.0),
+        ends("inset-grouped", "", uikit),
+        (36.0, 366.0),
+        "the card's and the cell's"
+    );
+    assert_eq!(
+        ends("inset-grouped", both, None),
+        (32.0, 370.0),
+        "the sheet's card, no host's"
+    );
+    assert_eq!(ends("inset-grouped", both, uikit), (32.0, 370.0));
+    assert_eq!(
+        ends("inset-grouped", " padding=\"12px 16px\"", uikit),
+        (32.0, 370.0),
+        "the shorthand"
+    );
+    assert_eq!(
+        ends("inset-grouped", " padding-left=16", uikit),
+        (32.0, 366.0),
         "an unsaid side keeps the platform's"
+    );
+    let uneven = Some(GroupedMargins {
+        card: [10.0, 30.0],
+        cell: [20.0, 20.0],
+    });
+    assert_eq!(
+        ends("inset-grouped", both, uneven),
+        (26.0, 356.0),
+        "each side its own card"
+    );
+    let plain = Some(GroupedMargins {
+        card: [0.0, 0.0],
+        cell: [20.0, 20.0],
+    });
+    assert_eq!(
+        ends("plain", both, plain),
+        (16.0, 386.0),
+        "no card: from the list's edge"
     );
 }
 

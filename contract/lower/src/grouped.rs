@@ -596,6 +596,29 @@ fn section(
         if !footer {
             rows.push(m("font-weight", "header-weight", span));
         }
+        // UIKit's header view spans the card, and a hand-built header pins
+        // its content inside it: an inset a custom header's author writes is
+        // from the card's edge, so that side stands in by the card's inset.
+        let custom = !matches!(&children[..], [Node::Element { tag, .. }] if tag == "text");
+        let card = match style {
+            "inset-grouped" => Some("card-inset"),
+            "grouped" => Some("edge-inset"),
+            _ => None,
+        };
+        if let (false, true, Some(card)) = (footer, custom, card) {
+            let says = |side: &str| {
+                attrs.iter().any(|a| {
+                    a.name == "padding"
+                        || a.name == "padding-inline"
+                        || a.name == format!("padding-{side}")
+                })
+            };
+            for side in ["left", "right"] {
+                if says(side) {
+                    rows.push(m(&format!("margin-{side}"), card, span));
+                }
+            }
+        }
         rows.extend(attrs.iter().cloned());
         Node::Element {
             tag: tag.clone(),

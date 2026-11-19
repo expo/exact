@@ -819,27 +819,29 @@ pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::
     };
     // A header's or footer's unsaid insets are the card's and the cell's
     // together, where UIKit starts and ends its own header's text: a custom
-    // header's content stands there, carried into UIKit's header. A written
-    // inset is from the card's edge, as UIKit's header view spans the card.
+    // header's content stands there, carried into UIKit's header. A side
+    // whose inset its author wrote stands in by the card's (the sheet's
+    // stand-in, from lowering), so the inset is from the card's edge, as
+    // UIKit's header view spans the card: that margin is the card's here.
     if is_label(arena, slot) {
         let Some(m) = arena.parent(parent).and_then(|l| arena.grouped_margins(l)) else {
             return;
         };
         let written = &arena.style(slot).written;
-        let from_card = |p: Lp, card: f32| {
-            p.maybe_resolve(None, crate::style::resolve_calc)
-                .map_or(p, |v| Lp::length(v + card))
-        };
-        s.padding.left = if written.has(StyleId::PaddingLeft) {
-            from_card(s.padding.left, m.card[0])
+        if written.has(StyleId::PaddingLeft) {
+            if !written.has(StyleId::MarginLeft) && s.margin.left != Lpa::length(0.0) {
+                s.margin.left = Lpa::length(m.card[0]);
+            }
         } else {
-            Lp::length(m.card[0] + m.cell[0])
-        };
-        s.padding.right = if written.has(StyleId::PaddingRight) {
-            from_card(s.padding.right, m.card[1])
+            s.padding.left = Lp::length(m.card[0] + m.cell[0]);
+        }
+        if written.has(StyleId::PaddingRight) {
+            if !written.has(StyleId::MarginRight) && s.margin.right != Lpa::length(0.0) {
+                s.margin.right = Lpa::length(m.card[1]);
+            }
         } else {
-            Lp::length(m.card[1] + m.cell[1])
-        };
+            s.padding.right = Lp::length(m.card[1] + m.cell[1]);
+        }
         return;
     }
     let (m, content) = match group_margins(arena, parent) {
