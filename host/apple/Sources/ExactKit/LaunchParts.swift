@@ -308,8 +308,9 @@ extension ExactLaunch {
 /// App-reported events, errors and attributes, journaled for a module such as
 /// Observe. The module's service decides what to send.
 public enum ExactEvents {
-    /// Handles the contract's `observe`, `observeAttributes` and `observeError`
-    /// host commands. The compiler sends a record's fields as name, value pairs.
+    /// Handles the contract's `observe`, `observeAttributes`, `observeError` and
+    /// `observeFeedback` host commands. The compiler sends a record's fields as
+    /// name, value pairs.
     static func hostCommand(_ name: String, _ args: [Any]) {
         let pairs = { (from: Int) -> [String: Any] in
             var out: [String: Any] = [:]
@@ -321,6 +322,9 @@ public enum ExactEvents {
         switch name {
         case "observe": log(text(0, ""), attributes: pairs(2), severity: text(1, "info"))
         case "observeAttributes": setGlobalAttributes(pairs(0))
+        case "observeFeedback":
+            let number = { (i: Int) in args.count > i ? (args[i] as? NSNumber)?.doubleValue : nil }
+            reportFeedback(id: text(0, ""), message: text(1, ""), rating: number(2), min: number(3), max: number(4), attributes: pairs(5))
         default: reportError(type: text(1, "ContractError"), message: text(0, ""))
         }
     }
@@ -332,6 +336,14 @@ public enum ExactEvents {
         if let body { f["body"] = body }
         if let displayName { f["displayName"] = displayName }
         ExactJournal.shared.record("app.event", f)
+    }
+
+    /// User feedback (Observe's `reportFeedback`). A blank message is none, and a rating
+    /// without a scale is on 0 to 10.
+    public static func reportFeedback(id: String, message: String, rating: Double? = nil, min: Double? = nil, max: Double? = nil, attributes: [String: Any] = [:]) {
+        var f: [String: Any] = ["id": id, "message": message, "attributes": attributes]
+        for (key, value) in [("rating", rating), ("min", min), ("max", max)] { if let value { f[key] = value } }
+        ExactJournal.shared.record("app.feedback", f)
     }
 
     /// Attributes merged into every later metric and event; per-record keys win.

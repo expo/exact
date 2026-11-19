@@ -13,6 +13,7 @@ import { Kept, DEVELOPMENT_STORE, Hosts, KeyEvent, Propagating } from './rt.js';
 export const observe = say => Hosts.observe ?? (name => say(`observe ${name}`));
 export const observeAttributes = () => Hosts.observeAttributes ?? (() => {});
 export const observeError = say => Hosts.observeError ?? (message => say(`observeError ${message}`));
+export const observeFeedback = say => Hosts.observeFeedback ?? (id => say(`observeFeedback ${id}`));
 // Commands run before the handler returns; beforeunload also needs Safari's returnValue.
 export const preventDefault = () => () => {
   KeyEvent?.preventDefault();

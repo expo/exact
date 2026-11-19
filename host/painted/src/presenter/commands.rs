@@ -121,7 +121,7 @@ impl<D: DataSource> Presenter<D> {
                 // or a wheel's, which take theirs), nothing to prevent or stop.
                 "preventDefault" | "stopPropagation" => {}
                 // Recorded in the journal for launch parts such as Observe.
-                n @ ("observe" | "observeAttributes" | "observeError") => {
+                n @ ("observe" | "observeAttributes" | "observeError" | "observeFeedback") => {
                     crate::journal::host_command(n, &c.args)
                 }
                 // The shell's share sheet; with no shell, refused into the

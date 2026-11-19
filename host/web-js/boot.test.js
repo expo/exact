@@ -31,17 +31,17 @@ test("a reason is cut between code points, and counted in them", () => {
 
 test('observation commands keep launch handlers and otherwise write the journal', async () => {
   const { Hosts, useCommands } = await import('./rt.js');
-  const { observe, observeAttributes, observeError } = await import('./commands.js');
-  const commands = { observe, observeAttributes, observeError }, seen = [];
+  const { observe, observeAttributes, observeError, observeFeedback } = await import('./commands.js');
+  const commands = { observe, observeAttributes, observeError, observeFeedback }, seen = [];
   try {
     for (const name in commands) Hosts[name] = value => seen.push([name, value]);
     useCommands(commands);
-    Hosts.observe('launch'); Hosts.observeAttributes('attributes'); Hosts.observeError('error');
-    expect(seen).toEqual([['observe', 'launch'], ['observeAttributes', 'attributes'], ['observeError', 'error']]);
+    Hosts.observe('launch'); Hosts.observeAttributes('attributes'); Hosts.observeError('error'); Hosts.observeFeedback('feedback');
+    expect(seen).toEqual([['observe', 'launch'], ['observeAttributes', 'attributes'], ['observeError', 'error'], ['observeFeedback', 'feedback']]);
     for (const name in commands) delete Hosts[name];
     useCommands(commands);
-    Hosts.observe('local'); Hosts.observeAttributes('ignored'); Hosts.observeError('local error');
-    expect(journal.slice(-2).map(line => line.slice(line.indexOf(' ') + 1))).toEqual(['observe local', 'observeError local error']);
+    Hosts.observe('local'); Hosts.observeAttributes('ignored'); Hosts.observeError('local error'); Hosts.observeFeedback('checkout');
+    expect(journal.slice(-3).map(line => line.slice(line.indexOf(' ') + 1))).toEqual(['observe local', 'observeError local error', 'observeFeedback checkout']);
   } finally {
     for (const name in commands) delete Hosts[name];
   }

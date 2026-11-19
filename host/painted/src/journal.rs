@@ -250,7 +250,8 @@ fn value_json(v: &exact_plan::Value) -> Value {
     }
 }
 
-/// Records Contract's `observe`, `observeAttributes` and `observeError`.
+/// Records Contract's `observe`, `observeAttributes`, `observeError` and
+/// `observeFeedback`.
 /// Leading positional arguments are followed by alternating keys and values.
 pub fn host_command(name: &str, args: &[exact_plan::Value]) {
     let pairs = |from: usize| {
@@ -277,6 +278,22 @@ pub fn host_command(name: &str, args: &[exact_plan::Value]) {
         "observeAttributes" => {
             f.insert("attributes".into(), pairs(0));
             record("app.attributes", f);
+        }
+        "observeFeedback" => {
+            f.insert("id".into(), text(0, "").into());
+            f.insert("message".into(), text(1, "").into());
+            // A number that is not finite is none, as the Apple host's command JSON has it.
+            for (i, key) in [(2, "rating"), (3, "min"), (4, "max")] {
+                if let Some(n) = args
+                    .get(i)
+                    .and_then(|v| v.as_number())
+                    .filter(|n| n.is_finite())
+                {
+                    f.insert(key.into(), n.into());
+                }
+            }
+            f.insert("attributes".into(), pairs(5));
+            record("app.feedback", f);
         }
         _ => {
             f.insert("source".into(), "reportedByUser".into());
