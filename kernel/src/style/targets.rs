@@ -28,6 +28,32 @@ pub enum Target {
 }
 
 impl Target {
+    /// The target that the part of a name between `--exact-` and its
+    /// family names: `native-<n>` for a chain entry from 1 to 255, a kind,
+    /// a relation, or `target-<name>` for a registered one; `None` for any
+    /// other part.
+    pub fn named(part: &str) -> Option<Target> {
+        if let Some(digits) = part.strip_prefix("native-") {
+            // As written: `native-02` and `native-+2` are no names
+            let n = digits.parse::<u8>().ok();
+            return n
+                .filter(|&n| n >= 1 && n.to_string() == digits)
+                .map(Target::Chain);
+        }
+        if let Some(name) = part.strip_prefix("target-") {
+            return valid_name(name).then(|| Target::Registered(name.into()));
+        }
+        (Kind::ALL
+            .into_iter()
+            .find(|k| k.name() == part)
+            .map(Target::Kind))
+        .or_else(|| {
+            (Relation::ALL.into_iter())
+                .find(|r| r.name() == part)
+                .map(Target::Relation)
+        })
+    }
+
     /// The custom property's name up to its edge, as an author writes it:
     /// `--exact-native-2-safe-area-inset-` for the second chain entry's
     /// safe area.

@@ -105,6 +105,7 @@ impl Kernel {
         let readers = self.report(&targets, reports, self.held_by(slot))?;
         let store = &mut self.arena.observations.targets;
         store.owners.entry(slot).or_default().take(targets);
+        let readers = self.with_captures(readers);
         self.restyle_readers(&readers);
         Ok(!readers.is_empty())
     }
@@ -120,6 +121,7 @@ impl Kernel {
         let reports = Some(&self.arena.observations.targets.session);
         let readers = self.report(&targets, reports, outside)?;
         self.arena.observations.targets.session.take(targets);
+        let readers = self.with_captures(readers);
         self.restyle_readers(&readers);
         Ok(!readers.is_empty())
     }
@@ -163,8 +165,22 @@ impl Kernel {
         let readers = self.reading(raw, |t, edges| *t == read && changes_read(old, new, edges));
         let registered = Arc::make_mut(&mut self.arena.observations.targets.registered);
         registered.insert(key, next);
+        let readers = self.with_captures(readers);
         self.restyle_readers(&readers);
         Ok(!readers.is_empty())
+    }
+
+    /// `readers`, whose read insets a report or a holder change moved, and
+    /// below each that captures a target, each node whose lengths take the
+    /// capture's value (LLP 1123 D5).
+    fn with_captures(&mut self, mut readers: Vec<u32>) -> Vec<u32> {
+        readers.extend(super::readers::Readers::captured_targets(
+            &mut self.arena,
+            &readers,
+        ));
+        readers.sort_unstable();
+        readers.dedup();
+        readers
     }
 
     /// Of `held`, the raw readers a report holds, those whose read insets
@@ -242,6 +258,7 @@ impl Kernel {
             return;
         }
         let readers = self.held_through(slot);
+        let readers = self.with_captures(readers);
         self.restyle_readers(&readers);
     }
 }

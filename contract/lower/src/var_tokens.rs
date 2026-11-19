@@ -747,9 +747,10 @@ fn fallback_value(
 /// box's observation of a family on an edge, the safe area's
 /// (`exact-safe-area-inset-top`), the keyboard's
 /// (`exact-keyboard-inset-bottom`, LLP 1123 D7, D9) or a layout region's
-/// (`exact-layout-margins-inset-left`, D8, D10).
+/// (`exact-layout-margins-inset-left`, D8, D10), or a native target's raw
+/// safe area (`exact-native-2-safe-area-inset-top`, D9).
 fn host_property(name: &str) -> bool {
-    exact_kernel::style::calc::Family::named(&format!("--{name}")).is_some()
+    exact_kernel::style::calc::Family::observed(&format!("--{name}")).is_some()
 }
 
 /// Each `var(` in `text` outside a quoted string, in order.

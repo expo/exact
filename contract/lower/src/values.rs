@@ -485,19 +485,19 @@ fn style_value(
             }
             // @ref LLP 1081 D5 — `--exact-*` names are the web host's own,
             // but for the observations an author reads (LLP 1123 D7, D9),
-            // which `Family::named` matches as written
+            // which `Family::observed` matches as written
             let lower = v.to_ascii_lowercase();
             let host = lower.match_indices("--exact-").any(|(at, _)| {
                 let name = &v[at..];
                 let end = (name
                     .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')))
                 .unwrap_or(name.len());
-                exact_kernel::style::calc::Family::named(&name[..end]).is_none()
+                exact_kernel::style::calc::Family::observed(&name[..end]).is_none()
             });
             if host {
                 return err(
                     "lower-attr-value",
-                    format!("`--exact-*` names are the host's own: a value reads only the observations `var(--exact-<family>-inset-<edge>)`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, and a style is the author's `-exact-` name: `{}=\"{v}\"`", a.name),
+                    format!("`--exact-*` names are the host's own: a value reads only the observations `var(--exact-<family>-inset-<edge>)`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, and a native target's raw safe area `var(--exact-<target>-safe-area-inset-<edge>)`, the target `native-<n>` for the nth chain entry, from 1 to 255, `owner`, `parent`, `navigation`, `tab`, `split`, `column`, `presenter`, `session`, `root`, `window`, `tab-content`, `window-content`, `screen` or `target-<name>` for one native code registered, a name of lowercase letters, digits and inner hyphens; a style is the author's `-exact-` name: `{}=\"{v}\"`", a.name),
                     span,
                 );
             }

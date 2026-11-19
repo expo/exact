@@ -57,13 +57,21 @@ fn resolve(style: &StyleProps, env: &Env) -> Option<Reserved> {
     }
     let (added, padding) = (added(&style.rare), padding(&style.rare));
     let default = env.default_padding.unwrap_or([0.0; 4]);
+    // Take 0 for a length that reads a raw observation, directly, in a
+    // fallback or through a custom property, as for one invalid where it
+    // is read: a reservation reads only incoming observations, since a
+    // native target's raw safe area counts what Exact reserves (LLP 1123
+    // D5, "Provenance")
+    let length = |d: &Dimension| match d {
+        Dimension::Compare(c) if c.reads_raw(env) => 0.0,
+        d => d.at_basis(env, 0.0),
+    };
     Some(Reserved {
-        added: added.map(|d| d.at_basis(env, 0.0)),
-        // An authored `auto` is the platform's default; a calculation that
-        // is invalid where it is read is 0, as CSS's initial value
+        added: added.map(length),
+        // An authored `auto` is the platform's default
         padding: std::array::from_fn(|e| match padding[e] {
             Dimension::Auto => default[e],
-            d => d.at_basis(env, 0.0).max(0.0),
+            d => length(d).max(0.0),
         }),
     })
 }

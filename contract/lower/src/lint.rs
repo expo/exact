@@ -316,7 +316,31 @@ pub(crate) fn active_migration_hint(name: &str, target: &str) -> String {
     format!("; write `{property}` in a `:active` block{migration}")
 }
 
+/// `lower-host-name-declared` (LLP 1123 D10): an `--exact-*` name is the host's, read with
+/// `var()` where the host defines it, and declared nowhere, a class style included.
+pub(crate) fn host_name_declared(a: &Attr) -> Option<LowerError> {
+    use exact_kernel::style::{calc::Family, safe_area_properties::HOST_PREFIX};
+    if !a.name.starts_with(HOST_PREFIX) {
+        return None;
+    }
+    let read = match Family::observed(&a.name) {
+        Some(_) => format!("what the host reports, read with `var({})`", a.name),
+        None => "no name a host defines".to_string(),
+    };
+    Some(LowerError {
+        id: "lower-host-name-declared",
+        message: format!(
+            "`{}` is {read}: `--exact-*` names are the host's, and an app declares none. Declare a custom property under a name of your own, as `--gap=\"12px\"`, and read it with `var(--gap)`",
+            a.name
+        ),
+        span: a.span,
+    })
+}
+
 pub(crate) fn unknown_attr(tag: &str, a: &Attr) -> LowerError {
+    if let Some(declared) = host_name_declared(a) {
+        return declared;
+    }
     let hint = match tags::renamed(&a.name) {
         None if crate::fields::part_hint(&a.name).is_some() => {
             crate::fields::part_hint(&a.name).unwrap_or_default()

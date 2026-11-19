@@ -33,10 +33,10 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// chain entry, then its number from 1; 2 a chain kind and 3 a relation,
 /// then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a registered
 /// target, then its name as the codec's string), its family's index in
-/// [`super::Family::ALL`] (0 the safe area, 1 the keyboard, 2 the keyboard followed
-/// undocked), its edge, then its fallback's presence byte and the fallback.
-/// The round trip through the text admits only the leaves the parser reads:
-/// the box's own keyboard readings, until activation reads the rest.
+/// [`super::Family::ALL`], its edge, then its fallback's presence byte and the fallback.
+/// The round trip through the text admits only the leaves the parser reads: every target's
+/// safe area and the box's other families, not the box's own safe area, whose name is the
+/// local inset until activation.
 pub(super) fn encode(entry: &Entry, w: &mut Writer) {
     match entry {
         Entry::Tree(n) => node_out(n, w),

@@ -593,17 +593,28 @@ fn an_unavailable_band_makes_the_fallback_apply() {
 }
 
 #[test]
-fn the_wire_refuses_the_leaf_until_the_parser_reads_it() {
-    // Its text, `var(--exact-safe-area-inset-top, 3px)`, parses to the local
-    // inset, and a target's to a custom property
-    for target in [Target::Box, Target::Chain(2)] {
+fn the_wire_carries_a_targets_leaf_and_refuses_the_boxs_safe_area() {
+    // Each target's leaf reads back as written, a registered name holding the family's words
+    // among them; the box's own safe area is the local inset until activation, which takes
+    // no fallback, so its leaf is refused
+    use crate::style::targets::{Kind, Relation};
+    let admitted = [
+        Target::Chain(2),
+        Target::Chain(255),
+        Target::Kind(Kind::Tab),
+        Target::Relation(Relation::TabContent),
+        Target::Registered("a-safe-area-inset-top".into()),
+    ];
+    let targets = (admitted.into_iter().map(|t| (t, true))).chain([(Target::Box, false)]);
+    for (target, admitted) in targets {
         let leaf = observe(target, Edge::Top, Some(3.0));
         let c = crate::style::calc::Comparison::intern(leaf);
         let mut w = crate::wire::codec::Writer::new();
         c.encode(&mut w);
         let bytes = w.into_vec();
         let mut r = crate::wire::codec::Reader::new(&bytes);
-        assert!(crate::style::calc::Comparison::decode(&mut r, StyleId::PaddingTop).is_err());
+        let read = crate::style::calc::Comparison::decode(&mut r, StyleId::PaddingTop);
+        assert_eq!(read.ok(), admitted.then_some(c));
     }
 }
 

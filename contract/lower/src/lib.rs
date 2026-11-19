@@ -67,6 +67,7 @@ mod nodes;
 mod overflow;
 pub mod params;
 mod popover_surface;
+mod provenance;
 mod resource_args;
 mod roles;
 mod root_names;
@@ -355,12 +356,6 @@ struct FontUse {
 /// At most this many refusals from one lowering.
 pub const MAX_REFUSALS: usize = 20;
 
-impl From<LowerError> for Vec<LowerError> {
-    fn from(e: LowerError) -> Self {
-        vec![e]
-    }
-}
-
 /// Lower a checked file to a plan.
 pub fn lower(
     checked: &Checked<'_>,
@@ -611,6 +606,9 @@ fn lower_body(
                     ),
                     span: a.span,
                 }),
+                None if a.name.starts_with("--exact-") => {
+                    l.errors.extend(lint::host_name_declared(a));
+                }
                 None => {
                     let hint = (name.is_empty() && !a.name.is_empty())
                         .then(|| "; the press's opacity is `opacity` in an `:active` part (LLP 1121 D8)".to_string())
@@ -641,6 +639,7 @@ fn lower_body(
     }
     // Each component's parts and the rows its classes bring them (LLP 1139 D2).
     l.check_anatomy(file);
+    l.errors.extend(provenance::check(checked));
     let refused = l.declare_keyframes(file);
     l.errors.extend(refused);
     l.declare_shapes(file)?;

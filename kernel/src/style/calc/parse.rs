@@ -19,10 +19,10 @@ pub(crate) mod refusal {
     pub(crate) const RELATIVE: &str =
         "em is not supported inside calc(), min(), max() or clamp(); write rem or px";
     pub(crate) const UNITLESS: &str = "a number where a length goes inside calc(), min(), max() or clamp() takes a unit, as CSS requires, zero too: 0px, 15px";
-    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-safe-area-inset-*), var(--exact-keyboard-inset-*), var(--exact-keyboard-undocked-inset-*), viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
+    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-<family>-inset-<edge>) of a box's observation (the family safe-area, keyboard, keyboard-undocked, safe-area-corners, layout-margins, layout-margins-corners, readable-content, readable-content-corners, readable-content-guide or system-minimum-layout-margins), var(--exact-<target>-safe-area-inset-<edge>) of a native target's raw safe area, viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
     pub(crate) const FUNCTION: &str =
         "inside a length the functions are calc(), min(), max(), clamp(), env() and var()";
-    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)), the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left), or the keyboard's reach into the box (var(--exact-keyboard-inset-top), -right, -bottom or -left, and var(--exact-keyboard-undocked-inset-*) for a keyboard undocked too); other --exact- names are the host's and none is defined";
+    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)), the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left), another of the box's observations (var(--exact-<family>-inset-<edge>), the family keyboard, keyboard-undocked, safe-area-corners, layout-margins, layout-margins-corners, readable-content, readable-content-corners, readable-content-guide or system-minimum-layout-margins), or a native target's raw safe area (var(--exact-<target>-safe-area-inset-<edge>), the target native-<n> for the nth chain entry, from 1 to 255, owner, parent, navigation, tab, split, column, presenter, session, root, window, tab-content, window-content, screen, or target-<name> for one native code registered, a name of lowercase letters, digits and inner hyphens); other --exact- names are the host's and none is defined";
     pub(crate) const VAR_LENGTH: &str =
         "a custom property here is a length, so its fallback is a length too";
     pub(crate) const VAR_FALLBACK: &str =
@@ -492,9 +492,10 @@ impl Calc {
     /// `var(--exact-safe-area-inset-<edge>)`, the local inset (LLP 1123 D9),
     /// without a fallback; or with an optional fallback, a length, another
     /// family's reading, `var(--exact-<family>-inset-<edge>)`: the keyboard's
-    /// (D7) and the layout regions' (D8, D10); or `var(--name)`, an author's
-    /// custom property (D5). A name is
-    /// matched as written, as a custom property's is.
+    /// (D7) and the layout regions' (D8, D10); a native target's raw safe
+    /// area, `var(--exact-<target>-safe-area-inset-<edge>)` (D9); or
+    /// `var(--name)`, an author's custom property (D5). A name is matched as
+    /// written, as a custom property's is.
     fn var<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
         self.count(p)?;
         let name = match p.expect_ident_cloned() {
@@ -511,8 +512,9 @@ impl Calc {
             return Ok((Node::Env(EnvTerm::Local(edge)), Ty::Length));
         }
         // The safe area's name is the local inset above until activation
-        // retires it, so only the other families' readings are observations here
-        let observed = super::Family::named(&name);
+        // retires it, so only the other families' readings and the native
+        // targets' are observations here
+        let observed = super::Family::observed(&name);
         if observed.is_none() && !crate::style::safe_area_properties::is_author_name(&name) {
             return why(p, refusal::VAR);
         }
@@ -531,8 +533,7 @@ impl Calc {
             }
         };
         let node = match observed {
-            Some((family, edge)) => {
-                let target = crate::style::targets::Target::Box;
+            Some((target, family, edge)) => {
                 let leaf = super::Observe {
                     target,
                     family,

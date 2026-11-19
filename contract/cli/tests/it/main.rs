@@ -282,6 +282,7 @@ mod symbol_ink;
 mod symbol_tint;
 mod symbols;
 mod tables;
+mod target_names;
 mod tests_decl;
 mod text_item;
 mod text_px_width;

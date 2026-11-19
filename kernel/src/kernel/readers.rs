@@ -15,8 +15,10 @@
 //! can depend on: a declaration or an inset override, a move while any node
 //! declares, an owner's insets while a capture reads them, a capture's
 //! observation when the solve moves it or a content region withholds it,
-//! and the document's environment. A slot a declaring node leaves keeps its values
-//! until the next node there declares, which drops them.
+//! a capture's native target when a report changes it or its box takes
+//! another holder, and the document's environment. A slot a declaring node
+//! leaves keeps its values until the next node there declares, which drops
+//! them.
 
 use super::owner::{self, OVERRIDES};
 use crate::arena::NodeArena;
@@ -44,9 +46,9 @@ pub(crate) struct Readers {
     /// The components each observer reads, as
     /// [`calc::Comparison::observed_components`] gives them.
     pub(crate) observed: crate::id::IdMap<u32, crate::style::calc::Components>,
-    /// Nodes with a length that reads a native target's raw insets, and
-    /// the targets each reads, each with the edges it reads as bits (LLP
-    /// 1123 D9, "The native chain").
+    /// Nodes with a length or a declaration that reads a native target's
+    /// raw insets, and the targets each reads, each with the edges it reads
+    /// as bits (LLP 1123 D9, "The native chain").
     pub(crate) targets: crate::id::IdMap<u32, Vec<(Target, u8)>>,
     /// Nodes with a length that reads a container unit (LLP 1123 D16), which
     /// a content root they read moves (`block::clear_block`).
@@ -62,8 +64,9 @@ pub(crate) struct Readers {
     /// Nodes that override a local inset.
     overriding: SlotSet,
     /// Each declaration's value, by its node and name, as
-    /// [`owner::properties_at`] substitutes it; `None` where it is invalid.
-    values: RefCell<HashMap<owner::Key, Option<Node>>>,
+    /// [`owner::properties_at`] substitutes it, `None` where it is invalid, and
+    /// whether it read a raw observation.
+    values: RefCell<HashMap<owner::Key, (Option<Node>, bool)>>,
 }
 
 impl Readers {
@@ -96,6 +99,8 @@ impl Readers {
             }
         }
         let own = owner::declarations(style);
+        // A capture of a native target's insets reads them where it is declared
+        targets.extend(own.iter().flat_map(|(_, value)| capture_targets(value)));
         let captures = own.iter().any(|(_, value)| reads_local(value));
         let capture_components = own
             .iter()
@@ -175,25 +180,24 @@ impl Readers {
         let captures: Vec<u32> = (moved.iter().copied())
             .filter(|&s| readers.observing.contains(s))
             .collect();
-        if captures.is_empty() {
-            return Vec::new();
-        }
-        arena.readers.invalidate();
-        let arena = &*arena;
-        let mut out = Vec::new();
-        for capture in captures {
-            let own = owner::own_declarations(arena, capture);
-            let changed: Vec<owner::Key> = (own.iter())
-                .filter(|(_, value)| observed_components(value) != 0)
-                .map(|(name, _)| (capture, name.into()))
-                .collect();
-            let mut depends = owner::Depends::new(arena, changed, true);
-            let readers = below(arena, capture, &arena.readers.properties);
-            out.extend(readers.into_iter().filter(|&s| depends.reader(s)));
-        }
-        out.sort_unstable();
-        out.dedup();
-        out
+        dependents(arena, captures, |value| observed_components(value) != 0)
+    }
+
+    /// The nodes to derive again after a report or a holder change moved what
+    /// the raw readers `readers` read (LLP 1123 D9): below each of them whose
+    /// declarations capture a native target, each node whose lengths take a
+    /// value that depends on such a declaration, as [`Self::captured`] gives
+    /// an observation's.
+    pub(crate) fn captured_targets(arena: &mut NodeArena, readers: &[u32]) -> Vec<u32> {
+        let reads = |value: &Dimension| !capture_targets(value).is_empty();
+        let captures: Vec<u32> = (readers.iter().copied())
+            .filter(|&s| {
+                owner::own_declarations(arena, s)
+                    .iter()
+                    .any(|(_, v)| reads(v))
+            })
+            .collect();
+        dependents(arena, captures, reads)
     }
 
     /// Drop every kept value.
@@ -201,14 +205,44 @@ impl Readers {
         self.values.get_mut().clear();
     }
 
-    /// The kept value of a declaration; `None` where none is kept.
-    pub(crate) fn value(&self, key: &owner::Key) -> Option<Option<Node>> {
+    /// The kept value of a declaration and whether it read a raw observation;
+    /// `None` where none is kept.
+    pub(crate) fn value(&self, key: &owner::Key) -> Option<(Option<Node>, bool)> {
         self.values.borrow().get(key).cloned()
     }
 
-    pub(crate) fn keep(&self, key: owner::Key, value: Option<Node>) {
-        self.values.borrow_mut().insert(key, value);
+    pub(crate) fn keep(&self, key: owner::Key, value: Option<Node>, raw: bool) {
+        self.values.borrow_mut().insert(key, (value, raw));
     }
+}
+
+/// Below each of `captures`, each node whose lengths take a value that depends
+/// on one of its declarations whose value `reads` ([`owner::Depends`]); every
+/// kept value is dropped when there is a capture.
+fn dependents(
+    arena: &mut NodeArena,
+    captures: Vec<u32>,
+    reads: impl Fn(&Dimension) -> bool,
+) -> Vec<u32> {
+    if captures.is_empty() {
+        return Vec::new();
+    }
+    arena.readers.invalidate();
+    let arena = &*arena;
+    let mut out = Vec::new();
+    for capture in captures {
+        let own = owner::own_declarations(arena, capture);
+        let changed: Vec<owner::Key> = (own.iter())
+            .filter(|(_, value)| reads(value))
+            .map(|(name, _)| (capture, name.into()))
+            .collect();
+        let mut depends = owner::Depends::new(arena, changed, true);
+        let readers = below(arena, capture, &arena.readers.properties);
+        out.extend(readers.into_iter().filter(|&s| depends.reader(s)));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 fn put(set: &mut SlotSet, slot: u32, member: bool) {
@@ -216,6 +250,14 @@ fn put(set: &mut SlotSet, slot: u32, member: bool) {
         true => set.insert(slot),
         false => set.remove(slot),
     };
+}
+
+/// The native targets a declaration's value reads.
+fn capture_targets(value: &Dimension) -> Vec<(crate::style::targets::Target, u8)> {
+    match value {
+        Dimension::Compare(c) => c.targets_read(),
+        _ => Vec::new(),
+    }
 }
 
 /// The components of its node's own observations a declared value reads

@@ -19,6 +19,12 @@ impl std::fmt::Display for LowerError {
     }
 }
 
+impl From<LowerError> for Vec<LowerError> {
+    fn from(e: LowerError) -> Self {
+        vec![e]
+    }
+}
+
 /// One refusal, as the plural result lowering returns.
 pub(crate) fn err_one(id: &'static str, message: impl Into<String>, span: Span) -> Vec<LowerError> {
     vec![LowerError {

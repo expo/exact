@@ -23,6 +23,7 @@ pub(crate) use parse::{
 
 use super::env::{self, Edge, Env, Region, SegmentVar, TitleBarVar};
 use super::intern::{Table, Value};
+use super::targets::Target;
 use super::{Dimension, StyleId, ViewportUnit};
 use std::sync::Arc;
 use std::sync::{LazyLock, Mutex};
@@ -231,6 +232,33 @@ impl Family {
         })
     }
 
+    /// The target, family and edge an observation's name reads (LLP 1123 D9):
+    /// the box's own family (`--exact-keyboard-inset-bottom`), or a native
+    /// target's raw safe area (`--exact-native-2-safe-area-inset-top`,
+    /// `--exact-navigation-safe-area-inset-top`,
+    /// `--exact-window-safe-area-inset-left`,
+    /// `--exact-target-map-safe-area-inset-top`); `None` for any other name.
+    pub fn observed(name: &str) -> Option<(Target, Family, Edge)> {
+        if let Some((family, edge)) = Family::named(name) {
+            return Some((Target::Box, family, edge));
+        }
+        let (target, edge) = name
+            .strip_prefix("--exact-")?
+            .rsplit_once("-safe-area-inset-")?;
+        Some((
+            Target::named(target)?,
+            Family::SafeArea,
+            Edge::from_name(edge)?,
+        ))
+    }
+
+    /// Whether an observation of `self` on `target` is raw, which a reservation
+    /// may not read (LLP 1123 D5, "Provenance"): every native target's, and the
+    /// owner controller's system minimum.
+    pub fn raw(self, target: &Target) -> bool {
+        *target != Target::Box || self == Family::SystemMinimum
+    }
+
     /// Its components' bits among a reader's inputs ([`Observe::component`]).
     pub(crate) const fn bits(self) -> Components {
         0b1111 << (self as Components * 4)
@@ -244,10 +272,10 @@ pub const COMPONENTS: usize = Family::ALL.len() * 4;
 /// An observation (LLP 1123 D9, D10's leaf) of a family on `edge`: the
 /// reading box's own, as the solve gives it, or a native target's raw
 /// safe-area insets ([`Env::observation`]); else `fallback`,
-/// guaranteed-invalid without one. The keyboard's readings are lowered from
-/// their names (`var(--exact-keyboard-inset-*)`); the safe area's are built
-/// by the kernel until D10's lowering reads `var(--exact-safe-area-inset-*)`
-/// and the target names as observations.
+/// guaranteed-invalid without one. Each is lowered from its name
+/// (`var(--exact-keyboard-inset-*)`, `var(--exact-native-2-safe-area-inset-*)`)
+/// but the box's own safe area's, which the kernel builds until activation
+/// reads `var(--exact-safe-area-inset-*)` as an observation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observe {
     /// Whose: the box's own, or a native target's.
@@ -558,6 +586,62 @@ pub(crate) fn undefined_in(node: &Node, env: &Env) -> bool {
     }
 }
 
+/// Whether `node` reads a raw observation, directly, in a fallback or through a
+/// custom property `env` says holds one, which a reservation may not (LLP 1123
+/// D5, "Provenance").
+pub(crate) fn reads_raw(node: &Node, env: &Env) -> bool {
+    node.any(&|n| match n {
+        Node::Observe(o) => o.family.raw(&o.target),
+        Node::Var(v) => (env.properties.as_ref()).is_some_and(|p| p.raw(&v.name)),
+        _ => false,
+    })
+}
+
+/// The first name a length text's `var()`s read, fallbacks included, that is a
+/// raw observation or a custom property `raw` says holds one (LLP 1123 D5,
+/// "Provenance"); `None` where it reads neither.
+pub fn raw_read(text: &str, raw: &dyn Fn(&str) -> bool) -> Option<String> {
+    let mut found = None;
+    text_vars(text, &mut |name| {
+        let observed =
+            Family::observed(name).is_some_and(|(target, family, _)| family.raw(&target));
+        if found.is_none() && (observed || raw(name)) {
+            found = Some(name.to_string());
+        }
+    });
+    found
+}
+
+/// The native targets a text's `var()`s read, as [`targets_of`] gives a tree's.
+fn text_targets(text: &str) -> Vec<(Target, u8)> {
+    let mut targets = Vec::new();
+    text_vars(text, &mut |name| {
+        if let Some((target, _, edge)) = Family::observed(name).filter(|(t, ..)| *t != Target::Box)
+        {
+            targets.push((target, 1 << edge as u8));
+        }
+    });
+    targets
+}
+
+/// The native targets `node` reads raw insets from, fallbacks included, each
+/// with the edge it reads as a bit, as [`Edge`] numbers them, once per leaf
+/// (LLP 1123 D9, "The native chain").
+pub(crate) fn targets_of(node: &Node) -> Vec<(Target, u8)> {
+    let targets = std::cell::RefCell::new(Vec::new());
+    node.any(&|n| {
+        if let Node::Observe(o) = n {
+            if o.target != Target::Box {
+                targets
+                    .borrow_mut()
+                    .push((o.target.clone(), 1 << o.edge as u8));
+            }
+        }
+        false
+    });
+    targets.into_inner()
+}
+
 /// Whether `node` is small enough to hold once its custom properties are
 /// substituted: CSS Variables 1 §3.3 has a long expansion invalid, and the
 /// bound is the one every consumer of a tree holds an author's to (CSS
@@ -829,6 +913,21 @@ impl Comparison {
         }
     }
 
+    /// Whether it reads a raw observation under `env` ([`reads_raw`]): a tree's
+    /// leaf, or a text's `var()` of one or of a property that holds one.
+    pub(crate) fn reads_raw(&self, env: &Env) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => reads_raw(t, env),
+            Entry::Text { text, .. } => {
+                let property = |name: &str| (env.properties.as_ref()).is_some_and(|p| p.raw(name));
+                // What the row reads once substituted too: an `env()`'s
+                // fallback can supply a `var()`'s name
+                raw_read(text, &property).is_some()
+                    || matches!(self.substituted(env), Some(Dimension::Compare(c)) if c.is_tree() && c.reads_raw(env))
+            }
+        })
+    }
+
     /// Whether it is invalid at computed-value time under `env`, the row
     /// taking its initial value: a segment a tree reads is undefined,
     /// whichever argument it is in, or a text substituted is no value of its
@@ -898,7 +997,9 @@ impl Comparison {
     pub(crate) fn reads_observed(&self) -> bool {
         self.with(|e| match e {
             Entry::Tree(t) => t.any(&|n| matches!(n, Node::Observe(_))),
-            Entry::Text { text, .. } => text_observations(text) != 0,
+            Entry::Text { text, .. } => {
+                text_observations(text) != 0 || !text_targets(text).is_empty()
+            }
         })
     }
 
@@ -929,19 +1030,10 @@ impl Comparison {
     /// with the edge it reads as a bit, as [`Edge`] numbers them, once per
     /// leaf (LLP 1123 D9, "The native chain").
     pub(crate) fn targets_read(&self) -> Vec<(super::targets::Target, u8)> {
-        let targets = std::cell::RefCell::new(Vec::new());
-        self.tree(|t| {
-            t.any(&|n| {
-                if let Node::Observe(o) = n {
-                    if o.target != super::targets::Target::Box {
-                        let edge = 1 << o.edge as u8;
-                        targets.borrow_mut().push((o.target.clone(), edge));
-                    }
-                }
-                false
-            })
-        });
-        targets.into_inner()
+        self.with(|e| match e {
+            Entry::Tree(t) => targets_of(t),
+            Entry::Text { text, .. } => text_targets(text),
+        })
     }
 
     /// Whether it reads a container unit (LLP 1123 D16), which resolves per

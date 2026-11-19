@@ -347,7 +347,10 @@ pub(crate) fn properties_at(arena: &NodeArena, slot: u32, style: &StyleProps) ->
     let values = names
         .into_iter()
         .zip(keys)
-        .filter_map(|(name, key)| Some((name, resolver.value(&key?)?)))
+        .filter_map(|(name, key)| {
+            let (value, raw) = resolver.captured(&key?);
+            Some((name, value?, raw))
+        })
         .collect();
     Resolved(values)
 }
@@ -489,7 +492,8 @@ pub(crate) fn defined_at(arena: &NodeArena, slot: u32, name: &str) -> bool {
 /// included, and the cycles among them (§2.3, by Tarjan's algorithm), whose
 /// every member is invalid; then it substitutes the rest, each `var()` in a
 /// declaration reading the declaring node's own values, and a capture its
-/// local inset or its own observation (LLP 1123 D5).
+/// local inset, its own observation or a native target's insets as its
+/// holder reports them (LLP 1123 D5, D9).
 struct Resolver<'a> {
     arena: &'a NodeArena,
     found: BTreeMap<Key, Declared>,
@@ -607,24 +611,36 @@ impl<'a> Resolver<'a> {
     /// `None` where it is invalid: in a cycle, reading an undefined
     /// environment value, or too long.
     fn value(&mut self, key: &Key) -> Option<Node> {
+        self.captured(key).0
+    }
+
+    /// [`Self::value`], and whether it read a raw observation, itself or
+    /// through a declaration it read (LLP 1123 D5, "Provenance"), which a
+    /// reservation may not take.
+    fn captured(&mut self, key: &Key) -> (Option<Node>, bool) {
         if self.exhausted {
-            return None;
+            return (None, false);
         }
         if let Some(kept) = self.arena.readers.value(key) {
             return kept;
         }
-        let d = self.found.get(key)?;
+        let Some(d) = self.found.get(key) else {
+            return (None, false);
+        };
         let tree = d.tree.clone().filter(|_| !d.cyclic);
         let local = local_at(self.arena, key.0);
+        let raw_leaf = |n: &Node| matches!(n, Node::Observe(o) if o.family.raw(&o.target));
+        let mut raw = tree.as_ref().is_some_and(|t| t.any(&raw_leaf));
         let value = tree
             .and_then(|tree| {
                 // A capture holds its declaring box's own observation, as the
-                // solve gives it (LLP 1123 D5, D9); a native target's raw
-                // insets are not read from a declaration yet
+                // solve gives it, and a native target's insets as its box's
+                // owner reports them (LLP 1123 D5, D9)
                 let input = self.arena.observations.input(key.0);
-                let observed = |leaf: &calc::Observe| match leaf.target {
+                let scope = self.arena.observations.targets.scope(self.arena, key.0);
+                let observed = |leaf: &calc::Observe| match &leaf.target {
                     crate::style::targets::Target::Box => input[leaf.component()],
-                    _ => None,
+                    target => (scope.as_ref()?.insets(target)).map(|i| i[leaf.edge as usize]),
                 };
                 let leaves = calc::Leaves {
                     local: &|edge| local[edge as usize],
@@ -634,13 +650,15 @@ impl<'a> Resolver<'a> {
                 };
                 calc::substitute(&tree, &leaves, &mut |name| {
                     let dep = self.reach(key.0, name)?;
-                    self.value(&dep)
+                    let (value, read) = self.captured(&dep);
+                    raw |= read;
+                    value
                 })
             })
             .map(simplify::simplify)
             .filter(|v| !calc::undefined_in(v, self.arena.env()) && calc::within_expansion(v));
-        self.arena.readers.keep(key.clone(), value.clone());
-        value
+        self.arena.readers.keep(key.clone(), value.clone(), raw);
+        (value, raw)
     }
 }
 

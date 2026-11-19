@@ -460,3 +460,212 @@ fn a_reset_keeps_what_the_host_reported_for_the_session() {
     lay_out(&mut k);
     assert_eq!(read(&k), before);
 }
+
+#[test]
+fn a_reservation_reads_no_raw_target() {
+    // The owner 2's controller reports 10 at the top. Its raw insets count what Exact
+    // reserves, so safe-area padding that reads them directly (3), through a capture of a
+    // capture its parent declares (5 under 4) or in a fallback (6) is invalid, 0. Ordinary
+    // padding reads them (7), through the capture too (9), which follows a later report, and
+    // safe-area padding of a length stands (8)
+    let raw = || observe(Target::Chain(1), Edge::Top, None);
+    let fallback = Node::Var(calc::Var {
+        name: "--gap".into(),
+        fallback: Some(Box::new(raw())),
+    });
+    let mut ops = create(3..=9);
+    ops.extend([
+        style(3, vec![(StyleId::SafeAreaPaddingTop, raw())], &[]),
+        style(
+            4,
+            vec![],
+            &[(
+                StyleId::SafeAreaProperties,
+                "--x: var(--exact-native-1-safe-area-inset-top); --y: var(--x)",
+            )],
+        ),
+        style(5, vec![], &[(StyleId::SafeAreaPaddingTop, "var(--y, 7px)")]),
+        style(6, vec![(StyleId::SafeAreaPaddingTop, fallback)], &[]),
+        style(7, vec![(StyleId::PaddingTop, raw())], &[]),
+        style(8, vec![], &[(StyleId::SafeAreaPaddingTop, "12px")]),
+        style(9, vec![], &[(StyleId::PaddingTop, "var(--x, 7px)")]),
+    ]);
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[3, 4, 6, 7, 8]),
+        children(4, &[5, 9]),
+    ]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_targets(2, controller(1, 10.0)).unwrap();
+    lay_out(&mut k);
+    let padded = |k: &Kernel, id| {
+        let slot = k.arena.slot_of(id).unwrap();
+        crate::kernel::block::reservation::reserved(&k.arena, slot).map_or(0.0, |r| r.padding[0])
+    };
+    assert_eq!([3, 5, 6, 8].map(|id| padded(&k, id)), [0.0, 0.0, 0.0, 12.0]);
+    assert_eq!([top(&k, 7), top(&k, 9)], [10.0, 10.0]);
+    assert!(k.set_owner_targets(2, controller(1, 15.0)).unwrap());
+    lay_out(&mut k);
+    assert_eq!([top(&k, 7), top(&k, 9), padded(&k, 5)], [15.0, 15.0, 0.0]);
+}
+
+#[test]
+fn a_capture_follows_its_target_through_a_holder_change_and_every_report() {
+    // 4 under 3 declares `--x` from its holder's controller, and 5 under 4 pads by it: 3's
+    // own report (30) applies while 3 holds a block of its own and 2's (10) when it gives it
+    // back; `--y` reads the session's registered `map`, which 6 pads by and a replacement moves
+    let mut ops = create(3..=6);
+    ops.extend([
+        style(3, vec![], &[(StyleId::Height, "100")]),
+        style(4, vec![], &[(StyleId::SafeAreaProperties, "--x: var(--exact-owner-safe-area-inset-top); --y: var(--exact-target-map-safe-area-inset-top)")]),
+        style(5, vec![], &[(StyleId::PaddingTop, "var(--x, 7px)")]),
+        style(6, vec![], &[(StyleId::PaddingTop, "var(--y, 7px)")]),
+    ]);
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[3]),
+        children(3, &[4]),
+        children(4, &[5, 6]),
+    ]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_targets(2, controller(1, 10.0)).unwrap();
+    k.set_owner_targets(3, controller(2, 30.0)).unwrap();
+    k.set_registered_target("map", Some(native(3, 12.0)))
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!([top(&k, 5), top(&k, 6)], [10.0, 12.0]);
+    let block = block(BlockAxis::Is(390.0), BlockAxis::Is(100.0));
+    k.set_host_block(3, Some(block)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 5), 30.0, "3's own report, in the owner it now is");
+    k.set_host_block(3, None).unwrap();
+    let replaced = NativeTarget {
+        generation: 2,
+        ..native(4, 24.0)
+    };
+    k.set_registered_target("map", Some(replaced)).unwrap();
+    lay_out(&mut k);
+    assert_eq!([top(&k, 5), top(&k, 6)], [10.0, 24.0]);
+}
+
+#[test]
+fn a_box_outside_every_owner_captures_the_session_views_target() {
+    // 3 is outside every owner and declares `--x` from the session view's controller, which 4
+    // pads by, through the session's reports
+    let mut ops = create(3..=4);
+    ops.extend([
+        style(
+            3,
+            vec![],
+            &[(
+                StyleId::SafeAreaProperties,
+                "--x: var(--exact-owner-safe-area-inset-top)",
+            )],
+        ),
+        style(4, vec![], &[(StyleId::PaddingTop, "var(--x, 7px)")]),
+    ]);
+    ops.extend([children(1, &[2, 3]), children(3, &[4])]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_session_targets(controller(1, 50.0)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 4), 50.0);
+    assert!(k.set_session_targets(controller(1, 55.0)).unwrap());
+    lay_out(&mut k);
+    assert_eq!(top(&k, 4), 55.0);
+}
+
+#[test]
+fn a_reservation_held_as_text_or_added_reads_no_raw_target() {
+    // A length with an `env()` fallback is a text: 3 pads by a target through one, as 6 does
+    // directly. 4's safe-area padding through one, 5's additional inset, and 7's text whose
+    // `env()` fallback supplies the target's name, where its padding reads the target too,
+    // reserve 0
+    let raw = "var(--exact-native-1-safe-area-inset-top, 4px)";
+    let text = format!("max(env(safe-area-inset-top, 0px), {raw})");
+    let mut ops = create(3..=7);
+    ops.extend([
+        style(3, vec![], &[(StyleId::PaddingTop, &text)]),
+        style(4, vec![], &[(StyleId::SafeAreaPaddingTop, &text)]),
+        style(
+            5,
+            vec![(
+                StyleId::AdditionalSafeAreaTop,
+                observe(Target::Chain(1), Edge::Top, None),
+            )],
+            &[],
+        ),
+        style(
+            6,
+            vec![(
+                StyleId::PaddingTop,
+                observe(Target::Chain(1), Edge::Top, None),
+            )],
+            &[],
+        ),
+        style(
+            7,
+            vec![(
+                StyleId::PaddingTop,
+                observe(Target::Chain(1), Edge::Top, None),
+            )],
+            &[(
+                StyleId::SafeAreaPaddingTop,
+                "var(env(titlebar-area-height, --exact-native-1-safe-area-inset-top))",
+            )],
+        ),
+    ]);
+    ops.extend([children(1, &[2]), children(2, &[3, 4, 5, 6, 7])]);
+    let mut k = owner(390.0, 844.0, ops);
+    k.set_owner_targets(2, controller(1, 10.0)).unwrap();
+    lay_out(&mut k);
+    let reserved = |k: &Kernel, id| {
+        let slot = k.arena.slot_of(id).unwrap();
+        let r = crate::kernel::block::reservation::reserved(&k.arena, slot);
+        r.map_or([0.0; 2], |r| [r.added[0], r.padding[0]])
+    };
+    assert_eq!(
+        [top(&k, 3), top(&k, 7)],
+        [10.0, 10.0],
+        "a text's target read, and 7's own"
+    );
+    assert_eq!([4, 5, 7].map(|id| reserved(&k, id)), [[0.0; 2]; 3]);
+    assert!(k.set_owner_targets(2, controller(1, 20.0)).unwrap());
+    lay_out(&mut k);
+    assert_eq!(
+        [top(&k, 3), top(&k, 6)],
+        [20.0, 20.0],
+        "a text follows a report"
+    );
+}
+
+#[test]
+fn a_capture_in_a_nested_owner_reads_that_owners_report() {
+    // 4, in the owner 3 inside the owner 2, declares `--x` from its owner's controller; 5
+    // under it pads by 3's (30), not 2's (10)
+    let mut ops = create(3..=5);
+    ops.extend([
+        style(3, vec![], &[(StyleId::Height, "100")]),
+        style(
+            4,
+            vec![],
+            &[(
+                StyleId::SafeAreaProperties,
+                "--x: var(--exact-owner-safe-area-inset-top)",
+            )],
+        ),
+        style(5, vec![], &[(StyleId::PaddingTop, "var(--x, 7px)")]),
+    ]);
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[3]),
+        children(3, &[4]),
+        children(4, &[5]),
+    ]);
+    let mut k = owner(390.0, 844.0, ops);
+    let block = block(BlockAxis::Is(390.0), BlockAxis::Is(100.0));
+    k.set_host_block(3, Some(block)).unwrap();
+    k.set_owner_targets(2, controller(1, 10.0)).unwrap();
+    k.set_owner_targets(3, controller(2, 30.0)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 5), 30.0);
+}
