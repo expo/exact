@@ -3,7 +3,7 @@
 //! parser makes, one whose own text (§10.13) parses back to it, so the wire,
 //! the text and the parser hold one form of every value.
 
-use super::super::env::{Edge, Region, SegmentVar, TitleBarVar};
+use super::super::env::{Edge, Region, SegmentVar, Side, TitleBarVar};
 use super::super::targets::{self, Kind, Relation, Target};
 use super::super::ViewportUnit;
 use super::{Comparison, Entry, EnvTerm, Node, Unit};
@@ -33,7 +33,8 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// chain entry, then its number from 1; 2 a chain kind and 3 a relation,
 /// then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a registered
 /// target, then its name as the codec's string), its family's index in
-/// [`super::Family::ALL`], its edge, then its fallback's presence byte and
+/// [`super::Family::ALL`], its side's index in [`Side::ALL`] (an edge, then
+/// `start` and `end`), then its fallback's presence byte and
 /// the fallback; or, with family 10 and the box as its target, an owner
 /// segment (D16): its field's index in [`SegmentVar::ALL`], its column and
 /// row, each 0 to 15, then its fallback's presence byte and the fallback.
@@ -111,7 +112,7 @@ fn node_out(n: &Node, w: &mut Writer) {
             w.u8(11);
             target_out(&o.target, w);
             w.u8(o.family as u8);
-            w.u8(o.edge as u8);
+            w.u8(o.side as u8);
             optional(o.fallback.as_deref(), w);
         }
         Node::Segment(s) => {
@@ -279,7 +280,7 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
                 family => Node::Observe(super::Observe {
                     target,
                     family: super::Family::from_index(family)?,
-                    edge: Edge::from_index(r.u8().ok()?)?,
+                    side: Side::from_index(r.u8().ok()?)?,
                     fallback: optional(r, nodes)?.map(Box::new),
                 }),
             }
@@ -349,7 +350,7 @@ mod tests {
             let leaf = Node::Observe(super::super::Observe {
                 target,
                 family,
-                edge: Edge::Left,
+                side: Side::End,
                 fallback: Some(Box::new(Node::Value(7.0, Unit::Px))),
             });
             let mut w = Writer::new();
@@ -369,6 +370,8 @@ mod tests {
             node(&mut Reader::new(&w.into_vec()), 0, &mut 0)
         };
         assert!(leaf(&Target::Box, SEGMENT + 1, &[Edge::Top as u8]).is_none());
+        // A side past `end`
+        assert!(leaf(&Target::Box, super::super::Family::Keyboard as u8, &[6]).is_none());
         assert!(
             leaf(&Target::Box, SEGMENT, &[2, 1, 0]).is_some(),
             "a segment's leaf"

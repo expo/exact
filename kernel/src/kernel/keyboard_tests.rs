@@ -372,7 +372,7 @@ fn reads(family: calc::Family, edge: Edge) -> Node {
     Node::Observe(calc::Observe {
         target: Target::Box,
         family,
-        edge,
+        side: edge.into(),
         fallback: None,
     })
 }
@@ -758,7 +758,7 @@ fn a_keyboard_leaf_crosses_the_wire_where_the_parser_reads_it() {
         Node::Observe(calc::Observe {
             target,
             family: calc::Family::Keyboard,
-            edge: Edge::Bottom,
+            side: Edge::Bottom.into(),
             fallback: Some(Box::new(Node::Value(3.0, calc::Unit::Px))),
         })
     };

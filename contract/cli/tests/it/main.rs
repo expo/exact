@@ -165,6 +165,7 @@ mod live_time;
 mod local_auth;
 mod local_network;
 mod locals;
+mod logical_sides;
 mod markdown_editing;
 mod match_guards;
 mod media;

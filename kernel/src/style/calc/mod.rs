@@ -21,7 +21,7 @@ pub(crate) use parse::{
     grid, is_env, length_percentage, names_math, parse, refusal, signed, substitutes, Refused,
 };
 
-use super::env::{self, Edge, Env, Region, SegmentVar, TitleBarVar};
+use super::env::{self, Edge, Env, Region, SegmentVar, Side, TitleBarVar};
 use super::intern::{Table, Value};
 use super::targets::Target;
 use super::{Dimension, StyleId, ViewportUnit};
@@ -221,34 +221,36 @@ impl Family {
         Family::ALL.get(i as usize).copied()
     }
 
-    /// The family and edge a host's observation name reads
-    /// (`--exact-safe-area-inset-top`, `--exact-keyboard-inset-bottom`); `None`
-    /// for any other name.
-    pub fn named(name: &str) -> Option<(Family, Edge)> {
+    /// The family and side a host's observation name reads
+    /// (`--exact-safe-area-inset-top`, `--exact-keyboard-inset-start`); `None`
+    /// for any other name. The box's own safe area has no `start` or `end`
+    /// yet: its name is the local inset, by edge, until activation makes it
+    /// D10's leaf (LLP 1123 §"What it replaces").
+    pub fn named(name: &str) -> Option<(Family, Side)> {
         let observed = name.strip_prefix("--exact-")?;
         Family::ALL.into_iter().find_map(|family| {
-            let edge = observed.strip_prefix(family.infix())?;
-            Some((family, Edge::from_name(edge)?))
+            let side = Side::from_name(observed.strip_prefix(family.infix())?)?;
+            (family != Family::SafeArea || !side.logical()).then_some((family, side))
         })
     }
 
-    /// The target, family and edge an observation's name reads (LLP 1123 D9):
+    /// The target, family and side an observation's name reads (LLP 1123 D9):
     /// the box's own family (`--exact-keyboard-inset-bottom`), or a native
     /// target's raw safe area (`--exact-native-2-safe-area-inset-top`,
     /// `--exact-navigation-safe-area-inset-top`,
     /// `--exact-window-safe-area-inset-left`,
     /// `--exact-target-map-safe-area-inset-top`); `None` for any other name.
-    pub fn observed(name: &str) -> Option<(Target, Family, Edge)> {
-        if let Some((family, edge)) = Family::named(name) {
-            return Some((Target::Box, family, edge));
+    pub fn observed(name: &str) -> Option<(Target, Family, Side)> {
+        if let Some((family, side)) = Family::named(name) {
+            return Some((Target::Box, family, side));
         }
-        let (target, edge) = name
+        let (target, side) = name
             .strip_prefix("--exact-")?
             .rsplit_once("-safe-area-inset-")?;
         Some((
             Target::named(target)?,
             Family::SafeArea,
-            Edge::from_name(edge)?,
+            Side::from_name(side)?,
         ))
     }
 
@@ -269,7 +271,7 @@ impl Family {
 /// [`Observe::component`].
 pub const COMPONENTS: usize = Family::ALL.len() * 4;
 
-/// An observation (LLP 1123 D9, D10's leaf) of a family on `edge`: the
+/// An observation (LLP 1123 D9, D10's leaf) of a family on `side`: the
 /// reading box's own, as the solve gives it, or a native target's raw
 /// safe-area insets ([`Env::observation`]); else `fallback`,
 /// guaranteed-invalid without one. Each is lowered from its name
@@ -282,8 +284,9 @@ pub struct Observe {
     pub target: super::targets::Target,
     /// What it reads.
     pub family: Family,
-    /// The edge observed.
-    pub edge: Edge,
+    /// The side observed: an edge, or `start` or `end`, resolved against the
+    /// reading box's `direction`.
+    pub side: Side,
     /// What stands in where the observation is unavailable.
     pub fallback: Option<Box<Node>>,
 }
@@ -332,10 +335,22 @@ pub fn host_name(name: &str) -> bool {
 }
 
 impl Observe {
-    /// Its index among a reader's inputs: four edges a family.
-    pub(crate) fn component(&self) -> usize {
-        self.family as usize * 4 + self.edge as usize
+    /// Its index among a reader's inputs, four edges a family, in a box that
+    /// lays out right to left where `rtl`.
+    pub(crate) fn component(&self, rtl: bool) -> usize {
+        self.family as usize * 4 + self.side.edge(rtl) as usize
     }
+
+    /// The components it may read, whatever the direction: both side edges
+    /// for `start` or `end`.
+    pub(crate) fn components(&self) -> Components {
+        components_of(self.family, self.side)
+    }
+}
+
+/// The components `family`'s `side` may read: a bit per edge it may name.
+fn components_of(family: Family, side: Side) -> Components {
+    Components::from(side.edges()) << (family as usize * 4)
 }
 
 /// `node` with every local inset (`EnvTerm::Local`), container unit and
@@ -676,16 +691,16 @@ pub fn raw_read(text: &str, raw: &dyn Fn(&str) -> bool) -> Option<String> {
 fn text_targets(text: &str) -> Vec<(Target, u8)> {
     let mut targets = Vec::new();
     text_vars(text, &mut |name| {
-        if let Some((target, _, edge)) = Family::observed(name).filter(|(t, ..)| *t != Target::Box)
+        if let Some((target, _, side)) = Family::observed(name).filter(|(t, ..)| *t != Target::Box)
         {
-            targets.push((target, 1 << edge as u8));
+            targets.push((target, side.edges()));
         }
     });
     targets
 }
 
 /// The native targets `node` reads raw insets from, fallbacks included, each
-/// with the edge it reads as a bit, as [`Edge`] numbers them, once per leaf
+/// with the edges it may read as bits, as [`Edge`] numbers them, once per leaf
 /// (LLP 1123 D9, "The native chain").
 pub(crate) fn targets_of(node: &Node) -> Vec<(Target, u8)> {
     let targets = std::cell::RefCell::new(Vec::new());
@@ -694,7 +709,7 @@ pub(crate) fn targets_of(node: &Node) -> Vec<(Target, u8)> {
             if o.target != Target::Box {
                 targets
                     .borrow_mut()
-                    .push((o.target.clone(), 1 << o.edge as u8));
+                    .push((o.target.clone(), o.side.edges()));
             }
         }
         false
@@ -811,8 +826,8 @@ fn text_properties(text: &str, out: &mut Vec<Arc<str>>) {
 fn text_observations(text: &str) -> Components {
     let mut components = 0;
     text_vars(text, &mut |name| {
-        if let Some((family, edge)) = Family::named(name).filter(|(f, _)| *f != Family::SafeArea) {
-            components |= 1 << (family as usize * 4 + edge as usize);
+        if let Some((family, side)) = Family::named(name).filter(|(f, _)| *f != Family::SafeArea) {
+            components |= components_of(family, side);
         }
     });
     components
@@ -1069,6 +1084,22 @@ impl Comparison {
         })
     }
 
+    /// Whether it reads an observation's `start` or `end` (LLP 1123 D9),
+    /// which resolve against the reading box's direction, a text's as it will
+    /// be parsed included.
+    pub(crate) fn reads_logical(&self) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Observe(o) if o.side.logical())),
+            Entry::Text { text, .. } => {
+                let mut reads = false;
+                text_vars(text, &mut |name| {
+                    reads |= Family::observed(name).is_some_and(|(_, _, side)| side.logical())
+                });
+                reads
+            }
+        })
+    }
+
     /// Whether it reads an owner segment (LLP 1123 D16), a text's as it will be
     /// parsed included.
     pub(crate) fn reads_segment(&self) -> bool {
@@ -1098,7 +1129,7 @@ impl Comparison {
             t.any(&|n| {
                 if let Node::Observe(o) = n {
                     if o.target == super::targets::Target::Box {
-                        components.set(components.get() | 1 << o.component());
+                        components.set(components.get() | o.components());
                     }
                 }
                 false
@@ -1108,7 +1139,7 @@ impl Comparison {
     }
 
     /// The native targets it reads raw insets from, fallbacks included, each
-    /// with the edge it reads as a bit, as [`Edge`] numbers them, once per
+    /// with the edges it may read as bits, as [`Edge`] numbers them, once per
     /// leaf (LLP 1123 D9, "The native chain").
     pub(crate) fn targets_read(&self) -> Vec<(super::targets::Target, u8)> {
         self.with(|e| match e {

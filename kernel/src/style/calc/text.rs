@@ -92,7 +92,7 @@ fn tree(n: &Node, out: &mut String) {
         Node::Observe(o) => {
             out.push_str("var(");
             o.target.prefix(o.family, out);
-            out.push_str(o.edge.name());
+            out.push_str(o.side.name());
             if let Some(fallback) = &o.fallback {
                 out.push_str(", ");
                 length(fallback, out);

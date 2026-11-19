@@ -92,6 +92,13 @@ pub(crate) fn segments_held(arena: &NodeArena, slot: u32) -> HeldSegments {
     }
 }
 
+/// Whether `slot` lays out right to left, which an observation's `start` and
+/// `end` resolve against (LLP 1123 D9).
+pub(crate) fn rtl(arena: &NodeArena, slot: u32) -> bool {
+    let style = arena.computed_source(slot, StyleId::Direction);
+    style.direction == crate::Direction::Rtl
+}
+
 /// Whether some node reads an owner segment whose value can differ from
 /// place to place: some owner reported segments, or the document has them,
 /// which a box outside every owner reads. A box's holder then decides what
@@ -157,6 +164,8 @@ pub(crate) fn rederive(
 pub(crate) struct Before {
     declared: Option<SafeAreaProperties>,
     insets: Option<InsetReaders>,
+    /// Whether the change changes the box's own direction.
+    direction: bool,
 }
 
 pub(crate) fn before_style(arena: &NodeArena, slot: u32, changed: StyleMask) -> Before {
@@ -166,6 +175,7 @@ pub(crate) fn before_style(arena: &NodeArena, slot: u32, changed: StyleMask) -> 
             .then(|| own_declarations(arena, slot)),
         insets: (OVERRIDES.iter().any(|&id| changed.has(id)))
             .then(|| InsetReaders::before(arena, slot)),
+        direction: changed.has(StyleId::Direction),
     }
 }
 
@@ -173,7 +183,7 @@ pub(crate) fn before_style(arena: &NodeArena, slot: u32, changed: StyleMask) -> 
 /// ([`before_style`]): the readers of each changed declaration, and each
 /// reader whose inset an override's change moved, a capture's reader below
 /// a nearer override among them, which the override's inheritance alone
-/// does not reach.
+/// does not reach; and what its own direction moves ([`direction_changed`]).
 pub(crate) fn after_style(
     arena: &mut NodeArena,
     layout: &mut dyn LayoutMirror,
@@ -187,6 +197,30 @@ pub(crate) fn after_style(
     }
     if let Some(insets) = before.insets {
         insets_moved(arena, layout, insets, touched, receipt);
+    }
+    if before.direction {
+        direction_changed(arena, layout, slot, touched, receipt);
+    }
+}
+
+/// Derive again, and touch, what a change of `slot`'s direction, its own or
+/// inherited, moves where a declaration of it reads an observation's `start`
+/// or `end` (LLP 1123 D9): the lengths below that read the capture, whatever
+/// their own direction. Its own lengths are restyled with the direction, and
+/// a reader keeps both side inputs measured, so neither is measured again.
+pub(crate) fn direction_changed(
+    arena: &mut NodeArena,
+    layout: &mut dyn LayoutMirror,
+    slot: u32,
+    touched: &mut Vec<crate::id::NodeKey>,
+    receipt: &mut crate::CommitReceipt,
+) {
+    if !arena.readers.logical.contains(slot) {
+        return;
+    }
+    for s in super::readers::Readers::captured_logical(arena, slot) {
+        rederive(arena, layout, s, false, receipt);
+        touched.push(arena.key(s));
     }
 }
 
@@ -354,6 +388,7 @@ fn env_with_containers(arena: &NodeArena, slot: u32, from: Option<u32>) -> Cow<'
     env.observed = Some(arena.observations.input(slot));
     env.targets = arena.observations.targets.scope(arena, slot);
     env.segments_held = Some(segments_held(arena, slot));
+    env.rtl = arena.readers.logical.contains(slot) && rtl(arena, slot);
     if arena.readers.container.contains(slot) {
         env.container = Some(match from {
             Some(from) => container_at(arena, from),
@@ -673,9 +708,14 @@ impl<'a> Resolver<'a> {
                 // owner reports them (LLP 1123 D5, D9)
                 let input = self.arena.observations.input(key.0);
                 let scope = self.arena.observations.targets.scope(self.arena, key.0);
+                // Its `start` and `end` resolve against the declaring box's direction
+                let reversed = self.arena.readers.logical.contains(key.0) && rtl(self.arena, key.0);
                 let observed = |leaf: &calc::Observe| match &leaf.target {
-                    crate::style::targets::Target::Box => input[leaf.component()],
-                    target => (scope.as_ref()?.insets(target)).map(|i| i[leaf.edge as usize]),
+                    crate::style::targets::Target::Box => input[leaf.component(reversed)],
+                    target => {
+                        let edge = leaf.side.edge(reversed) as usize;
+                        (scope.as_ref()?.insets(target)).map(|i| i[edge])
+                    }
                 };
                 // And an owner segment as its box's holder has it (D16)
                 let held = segments_held(self.arena, key.0);

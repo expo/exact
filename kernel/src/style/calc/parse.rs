@@ -19,10 +19,10 @@ pub(crate) mod refusal {
     pub(crate) const RELATIVE: &str =
         "em is not supported inside calc(), min(), max() or clamp(); write rem or px";
     pub(crate) const UNITLESS: &str = "a number where a length goes inside calc(), min(), max() or clamp() takes a unit, as CSS requires, zero too: 0px, 15px";
-    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-<family>-inset-<edge>) of a box's observation (the family safe-area, keyboard, keyboard-undocked, safe-area-corners, layout-margins, layout-margins-corners, readable-content, readable-content-corners, readable-content-guide or system-minimum-layout-margins), var(--exact-<target>-safe-area-inset-<edge>) of a native target's raw safe area, var(--exact-viewport-segment-<field>-<x>-<y>) of the owner's segment, viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
+    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-<family>-inset-<edge>) of a box's observation (the edge top, right, bottom or left, or start or end for any family but safe-area; the family safe-area, keyboard, keyboard-undocked, safe-area-corners, layout-margins, layout-margins-corners, readable-content, readable-content-corners, readable-content-guide or system-minimum-layout-margins), var(--exact-<target>-safe-area-inset-<edge>) of a native target's raw safe area, start and end included, var(--exact-viewport-segment-<field>-<x>-<y>) of the owner's segment, viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
     pub(crate) const FUNCTION: &str =
         "inside a length the functions are calc(), min(), max(), clamp(), env() and var()";
-    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)), the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left), another of the box's observations (var(--exact-<family>-inset-<edge>), the family keyboard, keyboard-undocked, safe-area-corners, layout-margins, layout-margins-corners, readable-content, readable-content-corners, readable-content-guide or system-minimum-layout-margins), a native target's raw safe area (var(--exact-<target>-safe-area-inset-<edge>), the target native-<n> for the nth chain entry, from 1 to 255, owner, parent, navigation, tab, split, column, presenter, session, root, window, tab-content, window-content, screen, or target-<name> for one native code registered, a name of lowercase letters, digits and inner hyphens), or a field of the owner's segment (var(--exact-viewport-segment-<field>-<x>-<y>), the field width, height, top, left, bottom or right, each index 0 to 15); other --exact- names are the host's and none is defined";
+    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)), the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left), another of the box's observations (var(--exact-<family>-inset-<edge>), the edge top, right, bottom, left, start or end, the family keyboard, keyboard-undocked, safe-area-corners, layout-margins, layout-margins-corners, readable-content, readable-content-corners, readable-content-guide or system-minimum-layout-margins), a native target's raw safe area (var(--exact-<target>-safe-area-inset-<edge>), the target native-<n> for the nth chain entry, from 1 to 255, owner, parent, navigation, tab, split, column, presenter, session, root, window, tab-content, window-content, screen, or target-<name> for one native code registered, a name of lowercase letters, digits and inner hyphens), or a field of the owner's segment (var(--exact-viewport-segment-<field>-<x>-<y>), the field width, height, top, left, bottom or right, each index 0 to 15); other --exact- names are the host's and none is defined";
     pub(crate) const VAR_LENGTH: &str =
         "a custom property here is a length, so its fallback is a length too";
     pub(crate) const VAR_FALLBACK: &str =
@@ -542,11 +542,11 @@ impl Calc {
                 y,
                 fallback,
             }),
-            (Some((target, family, edge)), _) => {
+            (Some((target, family, side)), _) => {
                 let leaf = super::Observe {
                     target,
                     family,
-                    edge,
+                    side,
                     fallback,
                 };
                 Node::Observe(leaf)

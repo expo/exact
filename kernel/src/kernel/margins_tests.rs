@@ -531,3 +531,6 @@ fn a_margin_that_reads_a_capture_the_solve_moves_settles_with_it() {
     assert_eq!(read(&k, 9)[3], 22.0);
     assert!(k.safe_area_unsettled().is_empty());
 }
+
+#[path = "logical_tests.rs"]
+mod logical;

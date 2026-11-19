@@ -145,7 +145,7 @@ pub(crate) fn resolve(
                         .control_text_start(slot)
                         .is_some_and(|s| s.mask.has(StyleId::FontSize))
                 {
-                    inherited_changed(arena, layout, slot, rows, receipt);
+                    inherited_changed(arena, layout, slot, rows, touched, receipt);
                     touched.push(arena.key(slot));
                 }
             }
@@ -214,7 +214,7 @@ pub(crate) fn resolve(
         let rows = StyleMask::of(StyleId::FontWeight);
         let slots: Vec<u32> = arena.iter_live().collect();
         for slot in slots {
-            inherited_changed(arena, layout, slot, rows, receipt);
+            inherited_changed(arena, layout, slot, rows, touched, receipt);
             touched.push(arena.key(slot));
         }
     }

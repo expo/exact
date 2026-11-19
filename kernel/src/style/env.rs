@@ -46,6 +46,87 @@ impl Edge {
     }
 }
 
+impl From<Edge> for Side {
+    fn from(edge: Edge) -> Side {
+        Side::ALL[edge as usize]
+    }
+}
+
+/// The side an observation's name reads (LLP 1123 D9): an edge, or `start`
+/// or `end`, which resolve against the reading box's `direction`, the left
+/// and right edge under `ltr` and the right and left under `rtl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Side {
+    /// The top edge.
+    Top = 0,
+    /// The right edge.
+    Right = 1,
+    /// The bottom edge.
+    Bottom = 2,
+    /// The left edge.
+    Left = 3,
+    /// The inline start: the left edge, or the right under `rtl`.
+    Start = 4,
+    /// The inline end: the right edge, or the left under `rtl`.
+    End = 5,
+}
+
+impl Side {
+    /// Every side, in wire order.
+    pub const ALL: [Side; 6] = [
+        Side::Top,
+        Side::Right,
+        Side::Bottom,
+        Side::Left,
+        Side::Start,
+        Side::End,
+    ];
+
+    /// The name's tail: `top`, `right`, `bottom`, `left`, `start`, `end`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::Start => "start",
+            Side::End => "end",
+            side => side.edge(false).name(),
+        }
+    }
+
+    /// The side by its name's tail.
+    pub fn from_name(name: &str) -> Option<Side> {
+        Side::ALL.into_iter().find(|s| s.name() == name)
+    }
+
+    /// The side by wire index (0–5).
+    pub fn from_index(i: u8) -> Option<Side> {
+        Side::ALL.get(usize::from(i)).copied()
+    }
+
+    /// The edge it names in a box that lays out right to left where `rtl`.
+    pub fn edge(self, rtl: bool) -> Edge {
+        match (self, rtl) {
+            (Side::Top, _) => Edge::Top,
+            (Side::Right, _) | (Side::Start, true) | (Side::End, false) => Edge::Right,
+            (Side::Bottom, _) => Edge::Bottom,
+            (Side::Left, _) | (Side::Start, false) | (Side::End, true) => Edge::Left,
+        }
+    }
+
+    /// Whether it resolves against a direction, `start` or `end`.
+    pub fn logical(self) -> bool {
+        matches!(self, Side::Start | Side::End)
+    }
+
+    /// The edges it may name, as bits by [`Edge`]'s index: both side edges
+    /// for a logical side.
+    pub fn edges(self) -> u8 {
+        match self.logical() {
+            true => 1 << Edge::Left as u8 | 1 << Edge::Right as u8,
+            false => 1 << self.edge(false) as u8,
+        }
+    }
+}
+
 /// A layout region a native host reports beside the safe area (LLP 1123
 /// D10): UIKit's and AppKit's `LayoutRegion`s, each an inset per edge from
 /// the layout viewport, which `env(-exact-<region>-inset-<edge>)` names.
@@ -368,6 +449,10 @@ pub struct Env {
     /// 1123 D5), set, as `local` is, only in an environment made for that
     /// node.
     pub properties: Option<crate::style::safe_area_properties::Resolved>,
+    /// Whether the node this environment was made for lays out right to
+    /// left, which an observation's `start` and `end` resolve against (LLP
+    /// 1123 D9); set only for a node that reads one.
+    pub rtl: bool,
     /// What one node's observations are, each family top right bottom left,
     /// `None` where one is unavailable (LLP 1123 D7, D9): the solve's inputs,
     /// set, as `local` is, only in an environment made for that node.
@@ -478,6 +563,7 @@ impl Env {
             observed: None,
             targets: None,
             segments_held: None,
+            rtl: false,
         }
     }
 
@@ -500,9 +586,11 @@ impl Env {
     /// or keyboard as the solve gives it, or its target's raw insets; `None`
     /// where that is unavailable, or the environment was made for no node.
     pub fn observation(&self, leaf: &crate::style::calc::Observe) -> Option<f32> {
-        let edge = leaf.edge as usize;
+        let edge = leaf.side.edge(self.rtl) as usize;
         match &leaf.target {
-            crate::style::targets::Target::Box => self.observed.and_then(|o| o[leaf.component()]),
+            crate::style::targets::Target::Box => {
+                self.observed.and_then(|o| o[leaf.component(self.rtl)])
+            }
             // A native target reports its safe area alone
             _ if leaf.family != crate::style::calc::Family::SafeArea => None,
             target => self.targets.as_ref()?.insets(target).map(|i| i[edge]),

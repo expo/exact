@@ -20,7 +20,7 @@ fn observe(target: Target, edge: Edge, fallback: Option<f64>) -> Node {
     Node::Observe(Observe {
         target,
         family: calc::Family::SafeArea,
-        edge,
+        side: edge.into(),
         fallback: fallback.map(|px| Box::new(Node::Value(px, Unit::Px))),
     })
 }
@@ -1113,7 +1113,7 @@ fn a_content_region_solves_its_shell_and_withholds_its_content() {
         let keyboard = Node::Observe(Observe {
             target: Target::Box,
             family: calc::Family::Keyboard,
-            edge: Edge::Bottom,
+            side: Edge::Bottom.into(),
             fallback: Some(Box::new(px(5.0))),
         });
         let pad = vec![
@@ -1333,7 +1333,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     let leaf = Node::Observe(Observe {
         target: Target::Box,
         family: calc::Family::SafeArea,
-        edge: Edge::Top,
+        side: Edge::Top.into(),
         fallback: Some(Box::new(fallback)),
     });
     ops.push(style(
@@ -1345,7 +1345,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     let nested = Node::Observe(Observe {
         target: Target::Box,
         family: calc::Family::SafeArea,
-        edge: Edge::Top,
+        side: Edge::Top.into(),
         fallback: Some(Box::new(observed(Edge::Left, Some(6.0)))),
     });
     ops.push(style(

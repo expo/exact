@@ -16,7 +16,8 @@
 //! declares, an owner's insets while a capture reads them, a capture's
 //! observation when the solve moves it or a content region withholds it,
 //! a capture's native target or owner segment when a report changes it or
-//! its box takes another holder, and the document's environment. A slot a
+//! its box takes another holder, a capture's box's direction where it reads
+//! a `start` or `end`, and the document's environment. A slot a
 //! declaring node leaves keeps its values until the next node there
 //! declares, which drops them.
 
@@ -53,6 +54,10 @@ pub(crate) struct Readers {
     /// Nodes with a length or a declaration that reads an owner segment (LLP
     /// 1123 D16), which a report of its holder's segments moves.
     pub(crate) segments: SlotSet,
+    /// Nodes with a length or a declaration that reads an observation's
+    /// `start` or `end` (LLP 1123 D9), which resolve against the node's
+    /// direction: only their environments carry it.
+    pub(crate) logical: SlotSet,
     /// Nodes with a length that reads a container unit (LLP 1123 D16), which
     /// a content root they read moves (`block::clear_block`).
     pub(crate) container: SlotSet,
@@ -84,7 +89,7 @@ impl Readers {
             self.invalidate();
         }
         let (mut local, mut properties, mut container, mut observes) = (false, false, false, 0);
-        let (mut targets, mut segments) = (Vec::new(), false);
+        let (mut targets, mut segments, mut logical) = (Vec::new(), false, false);
         for id in style.mask.iter() {
             // Skip the inset overrides: `local_at` resolves them for the subtree,
             // whose readers are indexed
@@ -100,6 +105,7 @@ impl Readers {
                 observes |= c.observed_components();
                 targets.extend(c.targets_read());
                 segments |= c.reads_segment();
+                logical |= c.reads_logical();
             }
         }
         let own = owner::declarations(style);
@@ -107,6 +113,8 @@ impl Readers {
         targets.extend(own.iter().flat_map(|(_, value)| capture_targets(value)));
         segments |= own.iter().any(|(_, value)| reads_segment(value));
         put(&mut self.segments, slot, segments);
+        logical |= own.iter().any(|(_, value)| reads_logical(value));
+        put(&mut self.logical, slot, logical);
         let captures = own.iter().any(|(_, value)| reads_local(value));
         let capture_components = own
             .iter()
@@ -142,6 +150,7 @@ impl Readers {
             &mut self.observing,
             &mut self.overriding,
             &mut self.segments,
+            &mut self.logical,
         ] {
             set.remove(slot);
         }
@@ -207,6 +216,19 @@ impl Readers {
         dependents(arena, captures, reads)
     }
 
+    /// The nodes to derive again after `slot`'s direction changed: below it,
+    /// each node whose lengths take a value that depends on one of its
+    /// declarations that reads a `start` or `end` (LLP 1123 D9).
+    pub(crate) fn captured_logical(arena: &mut NodeArena, slot: u32) -> Vec<u32> {
+        let own = owner::own_declarations(arena, slot);
+        let reads = own.iter().any(|(_, value)| reads_logical(value));
+        dependents(
+            arena,
+            reads.then_some(slot).into_iter().collect(),
+            reads_logical,
+        )
+    }
+
     /// Drop every kept value.
     pub(crate) fn invalidate(&mut self) {
         self.values.get_mut().clear();
@@ -262,6 +284,11 @@ fn put(set: &mut SlotSet, slot: u32, member: bool) {
 /// Whether a declaration's value reads an owner segment.
 fn reads_segment(value: &Dimension) -> bool {
     matches!(value, Dimension::Compare(c) if c.reads_segment())
+}
+
+/// Whether a declaration's value reads an observation's `start` or `end`.
+fn reads_logical(value: &Dimension) -> bool {
+    matches!(value, Dimension::Compare(c) if c.reads_logical())
 }
 
 /// The native targets a declaration's value reads.

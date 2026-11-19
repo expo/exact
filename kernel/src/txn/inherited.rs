@@ -53,7 +53,7 @@ pub(super) fn propagate_inherited(
         if pass.is_empty() {
             continue;
         }
-        inherited_changed(arena, layout, s, pass, receipt);
+        inherited_changed(arena, layout, s, pass, touched, receipt);
         touched.push(arena.key(s));
         stack.extend(arena.children(s).iter().map(|c| (*c, pass)));
     }
@@ -67,11 +67,17 @@ pub(super) fn inherited_changed(
     layout: &mut dyn LayoutMirror,
     slot: u32,
     rows: StyleMask,
+    touched: &mut Vec<NodeKey>,
     receipt: &mut CommitReceipt,
 ) {
     // A box that ignores takes a logical edge by its direction (LLP 1123 D4)
     if rows.has(crate::StyleId::Direction) && arena.ignoring.contains(slot) {
         arena.observations.restyled_taker(slot);
+    }
+    // An observation's `start` and `end` take their edges by the reading box's direction
+    // (LLP 1123 D9)
+    if rows.has(crate::StyleId::Direction) {
+        crate::kernel::owner::direction_changed(arena, layout, slot, touched, receipt);
     }
     // A box's leading and trailing margins take their sides by its direction (LLP 1123 D8)
     let margins = crate::kernel::observe::margins_bits();

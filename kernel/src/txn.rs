@@ -1045,7 +1045,7 @@ pub(crate) fn continue_document(
                         .inherited_source(slot, crate::StyleId::Direction)
                         .is_none()
                 {
-                    inherited_changed(arena, layout, slot, rows, receipt);
+                    inherited_changed(arena, layout, slot, rows, touched, receipt);
                     touched.push(arena.key(slot));
                 } else if changed
                     && matches!(arena.node_type(slot), NodeType::Text | NodeType::TextInput)
@@ -1382,7 +1382,7 @@ fn inherited_after_move(
         changed = changed.union(StyleMask::of(crate::StyleId::Direction));
     }
     if !changed.is_empty() {
-        inherited_changed(arena, layout, slot, changed, receipt);
+        inherited_changed(arena, layout, slot, changed, touched, receipt);
         touched.push(arena.key(slot));
         propagate_inherited(arena, layout, slot, changed, touched, receipt);
     }
