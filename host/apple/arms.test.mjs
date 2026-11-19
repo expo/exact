@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { armArgs, armOutput, evictArms, keepRoster, keptRoster, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
+import { armArgs, armKey, armOutput, evictArms, keepRoster, keptRoster, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
 
 test('a qualified native roster is bound to the exact probe bytes, including when imported from a simulator run', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-roster-'));
@@ -115,4 +115,17 @@ test('an arm dylib compiles under its own name and is named @rpath/<name>, so tw
     evictArms(dir, 'libexact_modules.dylib');
     expect(readdirSync(dir).sort()).toEqual([`.0123456789abcdef-libexact_modules.dylib.${process.pid}.tmp`, `.0123456789abcdef-probe-libexact_modules.dylib.${process.pid}.tmp`, `.fedcba9876543210-libexact_modules.dylib.${process.pid}.tmp`]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('every arm compiles anew under the own-name output layout, the ones armArgs leaves unchanged too', () => {
+  // The key as it was before arms compiled under their own name: arguments, sources, compiler and extra.
+  const before = (args, sources, swiftc, extra) => createHash('sha256').update(JSON.stringify([args, sources, swiftc, extra])).digest('hex').slice(0, 16);
+  const named = ['swiftc', '-emit-library', '-Xlinker', '-install_name', '-Xlinker', '@rpath/libexact_modules.dylib', '-o', '<out>'];
+  const probe = ['swiftc', '-module-name', 'Probe', '-o', '<out>'];
+  for (const args of [named, probe]) {
+    expect(armArgs(args, '/b/web/libexact_modules.dylib')).toBe(args);
+    expect(armKey(args, ['let x = 1'], 'swiftc-6', '')).not.toBe(before(args, ['let x = 1'], 'swiftc-6', ''));
+  }
+  expect(armKey(probe, ['let x = 1'], 'swiftc-6', '')).toBe(armKey(probe, ['let x = 1'], 'swiftc-6', ''));
+  expect(armKey(probe, ['let x = 2'], 'swiftc-6', '')).not.toBe(armKey(probe, ['let x = 1'], 'swiftc-6', ''));
 });

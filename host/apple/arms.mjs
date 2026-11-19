@@ -35,6 +35,12 @@ export function armArgs(args, built) {
   return [...args, '-Xlinker', '-install_name', '-Xlinker', `@rpath/${basename(built)}`, ...pad];
 }
 
+/** An arm's cached copy's key: its arguments (`built` as `<out>`), its sources' text, the compiler and `extra`. The
+ * output's layout is part of it, since the linker writes the output's name into the bytes (armOutput): an arm whose
+ * arguments armArgs leaves as they are (an executable, or a dylib whose arguments name it) is still compiled anew. */
+export const armKey = (args, sources, swiftc, extra) =>
+  createHash('sha256').update(JSON.stringify([args, sources, swiftc, extra, 'output-under-own-name'])).digest('hex').slice(0, 16);
+
 /** Where an arm compiles before it is renamed to its cached copy: under its own name, in a directory of this compile's
  * own (`<dir>/.<key>-<name>.<pid>.tmp/`, emptied first). lld hashes the output's file name into LC_UUID, so a name
  * with the process id in it made every build's dylib differ; the key and name keep two arms
