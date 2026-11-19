@@ -6,11 +6,11 @@ import XCTest
 /// the tests after it in the same process. Hiding a window does not do that: XCTest keeps every test case, and any
 /// window it holds, until the process exits, and a hidden window stays in its scene, where UIKit still lays it out, as
 /// when the keyboard moves. Each such window, after the test's `tearDown`, stops editing, hides, leaves its scene and
-/// lets go of its root view controller, which takes the test's views out of it and runs their work for leaving a window
-/// then. A presentation the test left stays with the window, out of every scene. The windows that were in a scene as
-/// the test started stay, with the scene's own window and the system's. So a window a class shows for all its tests in
-/// `class func setUp` stays, for the class to take out in `class func tearDown`, and so does a window shown between
-/// tests, as by work a test left running.
+/// lets go of its root view controller, which takes the test's views out of it, running their work for leaving a
+/// window. A presentation the test left stays with the window, out of every scene. The windows that were in a scene as
+/// the test started stay, with the scene's own window and the system's. So a window a class shows in a scene in
+/// `class func setUp` stays, for the class to take out in `class func tearDown`, and so does a window shown in a scene
+/// between tests, as by work a test left running.
 final class TestWindows: NSObject, XCTestObservation {
     private static let shared = TestWindows()
     private let shown = NSHashTable<UIWindow>.weakObjects()

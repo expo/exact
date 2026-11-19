@@ -141,10 +141,11 @@ test or drive to investigate; it does not add another blocking check.
   thread of their own.
 - **Each test sets up what it uses.** macOS XCTest classes run one per process
   (`host/apple/xctest.mjs`). iOS classes share processes: the bare and hosted
-  runs each share out their classes between two simulator clones, the touch
-  run's tests run in one app, and which classes run before a class depends on
-  the run, so a class cannot rely on an earlier class. The bundle installs the
-  development composition as it loads (`TestsInstall.swift`), so the capabilities a
+  runs each divide their classes between two simulator clones, and the touch
+  run uses one app. A class's tests can fall in more than one run, and the
+  classes that precede a class differ from run to run, so a class cannot rely
+  on an earlier class. The bundle installs the development composition as it
+  loads (`TestsInstall.swift`), so the capabilities a
   development app links are installed before any test; a class that uses one
   development links only by use (media picker, sign-in sheet, numerals, tips)
   installs it in `class func setUp`, and creates what it reads
@@ -158,9 +159,9 @@ test or drive to investigate; it does not add another blocking check.
   `tearDown`, `TestWindows` takes each window the test showed or added to a scene
   out of its scene and lets go of its root view controller, so a test need not
   hide its windows at its end. A window that has to stay shown for all of a
-  class's tests is shown in `class func setUp` and taken out of its scene in
-  `class func tearDown`.
-- **A test puts back the process's state it changes.** `AppBackground` keeps
+  class's tests is shown in a scene in `class func setUp` and taken out of it
+  in `class func tearDown`.
+- **A test puts back the process state it changes.** `AppBackground` keeps
   the last application lifecycle edge it heard for the whole process, so a test
   that posts `UIApplication.didEnterBackgroundNotification` posts
   `willEnterForegroundNotification` as it ends and clears the cache
