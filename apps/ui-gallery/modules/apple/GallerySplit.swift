@@ -31,7 +31,9 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
 
     /// The sidebar's navigation bar height with its title inline while the split is expanded, else 0: the least
     /// height of the page's range bar, so the two columns' headers end level once both are scrolled. It holds
-    /// whether or not the sidebar shows, so hiding the sidebar, showing it or dragging it in moves nothing.
+    /// whether or not the sidebar shows, so hiding the sidebar, showing it or dragging it in moves nothing. It is
+    /// measured only while the sidebar is in a window, so it is 0 until a sidebar hidden since launch first shows,
+    /// and a size change while the sidebar is hidden takes effect when it next shows.
     private(set) var sidebarBarHeight: CGFloat = 0
     /// Called on the main thread when `sidebarBarHeight` changes
     var sidebarBarHeightChanged: (() -> Void)?
@@ -45,12 +47,14 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
             let bar = navigation.navigationBar
             // Measure only in a window, where the bar has the height it shows (laid out apart from one it reports
             // UIKit's bare 44 points), and again only where its width or the vertical size class changed: measuring
-            // sets the sidebar item's mode twice. A sidebar hidden since launch is first measured as it shows.
+            // sets the sidebar item's mode twice. The text size does not change the inline bar's height (the Duo,
+            // iOS 27.1).
             let at = [bar.bounds.width, CGFloat(traitCollection.verticalSizeClass.rawValue)]
-            // Note the key first, so a layout the measuring starts does not measure again
             if bar.window != nil, bar.bounds.width > 0, at != measuredAt {
+                // Note the key first, so a layout the measuring starts does not measure again. A bar showing another
+                // item is not measured and nothing is laid out, so forget the key and measure at the next layout.
                 measuredAt = at
-                if let measured = sidebar.measureInlineBarHeight() { inlineBarHeight = measured }
+                if let measured = sidebar.measureInlineBarHeight() { inlineBarHeight = measured } else { measuredAt = nil }
             }
         }
         let height = isCollapsed ? 0 : inlineBarHeight
@@ -85,7 +89,7 @@ final class GallerySidebar: UITableViewController {
     private let contents: ExactTabContents
     private let groups = [("Text", [0, 1]), ("Color & images", [2, 3, 4, 5]), ("UI & media", [6, 7, 8])]
     var choose: ((Int) -> Void)?
-    /// Called after the sidebar lays out, once its bar is in a window: a sidebar hidden since launch first does as it shows
+    /// Called after each layout of the sidebar
     var laidOut: (() -> Void)?
 
     init(_ contents: ExactTabContents) {

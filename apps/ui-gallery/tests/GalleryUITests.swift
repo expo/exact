@@ -121,6 +121,14 @@ final class GalleryUITests: XCTestCase {
             XCTAssertFalse(sidebar.isHittable, "The sidebar is hidden")
             XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Hiding the sidebar moves nothing in the page's header")
             XCTAssertEqual(rangeBar.frame.height, docked.height, accuracy: 0.5, "Hiding the sidebar keeps the range bar's height")
+            // The scrolled page hides its bar and the sidebar button with it, so drag the sidebar in from the left edge
+            let edge = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.002, dy: 0.5))
+            edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(dx: 320, dy: 0)))
+            XCTAssertTrue(sidebar.isHittable, "The sidebar shows again")
+            XCTAssertEqual(rangeBar.frame.minY, docked.minY, accuracy: 0.5, "Dragging the sidebar in moves nothing in the page's header")
+            XCTAssertEqual(rangeBar.frame.height, docked.height, accuracy: 0.5, "Dragging the sidebar in keeps the range bar's height")
+            // Hide it again, as a tap on the page would only dismiss a sidebar laid over it
+            app.buttons["Hide Sidebar"].tap()
         }
         range.buttons["standard"].tap()
         XCTAssertTrue(range.buttons["standard"].isSelected, "The control takes a tap over the scrolled page")
