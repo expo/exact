@@ -74,6 +74,39 @@ test("the web service sends wire.json's bodies", async () => {
   check(sent, 'web');
 });
 
+test('out of the sample, the web service sends only feedback', async () => {
+  const storage = new Map([['expo.eas-client-id', fixture.clientId]]);
+  const sent = [];
+  const names = ['localStorage', 'navigator', 'setTimeout', 'fetch'];
+  const saved = Object.fromEntries(names.map(n => [n, Object.getOwnPropertyDescriptor(globalThis, n)]));
+  Object.assign(globalThis, {
+    localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)) },
+    navigator: { platform: 'MacIntel', language: 'en-US' },
+    setTimeout: () => 0,
+    fetch: async (url, init) => {
+      sent.push([url.split('/').pop(), JSON.parse(init.body)]);
+      // An event recorded during the request is not sent after it.
+      service.event({ kind: 'app.event', name: 'during.fetch', wall: Date.now() });
+      return new Response(null, { status: 200 });
+    },
+  });
+  let service;
+  try {
+    const { start } = await import('../web/service.js');
+    service = start({ 'app.CFBundleIdentifier': 'com.example.sample', projectId: 'p', endpoint: 'https://example.com', sampleRate: 0 });
+    for (const e of fixture.events) service.event({ ...e, wall: e.wall * 1000 });
+    await service.background();
+  } finally {
+    for (const n of names) saved[n] ? Object.defineProperty(globalThis, n, saved[n]) : delete globalThis[n];
+  }
+  expect(sent.map(([signal]) => signal)).toEqual(['logs']);
+  const records = sent[0][1].resourceLogs.flatMap(r => r.scopeLogs.flatMap(s => s.logRecords));
+  expect(records.map(r => r.attributes.find(a => a.key === 'event.name').value.stringValue)).toEqual(Array(3).fill('expo.feedback'));
+  const queue = JSON.parse(storage.get('exact-observe:com.example.sample'));
+  expect(queue.metrics).toEqual([]);
+  expect(queue.logs.map(r => r.name)).toEqual(['during.fetch']);
+});
+
 test('the web service retains only current and queued session metadata', async () => {
   const names = ['localStorage', 'navigator', 'setTimeout', 'fetch'];
   const saved = Object.fromEntries(names.map(n => [n, Object.getOwnPropertyDescriptor(globalThis, n)]));
@@ -328,6 +361,8 @@ test.skipIf(process.platform !== 'darwin')('the Apple service sends wire.json\'s
     expect(out.refused.metrics.length).toBeGreaterThan(0);
     expect(out.refused.metrics.every(metric => metric.sent === false)).toBe(true);
     expect(out.acknowledged.metrics.filter(metric => metric.sent === true).length).toBe(1);
+    // Out of the sample, only feedback is sent and acknowledged, and every row is processed.
+    expect(out.outOfSample).toEqual({ requests: ['logs'], names: Array(3).fill('expo.feedback'), delivered: Array(3).fill('expo.feedback'), processed: true });
     // A crash record whose row the store refused stays for the next launch, which stores it once.
     expect(out.crash).toEqual({ refusedRows: 0, keptAfterRefusal: true, storedRows: 1, keptAfterStore: false });
   } finally { rmSync(work, { recursive: true, force: true }); }

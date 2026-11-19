@@ -181,17 +181,18 @@ export function start(config, { boot = 0 } = {}) {
   }
 
   const inSample = () => uniform(clientId) < Math.min(Math.max(config.sampleRate ?? 1, 0), 1);
-  const shouldDispatch = () => (config.dispatchingEnabled ?? true) && inSample() && (!config['fact.development'] || config.dispatchInDebug === true);
+  const mayDispatch = () => (config.dispatchingEnabled ?? true) && (!config['fact.development'] || config.dispatchInDebug === true);
   const backoff = n => Math.min(60 * 2 ** (n - 1), 900) * Math.random();
   const retryAfter = h => { if (!h) return null; const s = Number(h); const clamp = x => Math.min(Math.max(x, 60), 900); if (Number.isFinite(s)) return clamp(s); const d = Date.parse(h); return Number.isNaN(d) ? null : clamp((d - Date.now()) / 1000); };
 
   /** Sends one signal's rows chunk by chunk, as expo-observe's `DispatchLoop.swift` does.
    * With `keepalive`, it also stops at the per-signal JSON-length budget. */
-  async function send(signal, url, keepalive) {
+  async function send(signal, url, keepalive, only) {
     if (Date.now() < gate.after) return;
     let limit = CHUNK, budget = KEEPALIVE_BUDGET;
     for (;;) {
-      const q = load(), rows = q[signal].slice(0, limit);
+      // With `only`, just the rows of that name: another tab may add others during a fetch.
+      const q = load(), rows = (only ? q[signal].filter(r => r.name === only) : q[signal]).slice(0, limit);
       if (!rows.length) return;
       const body = JSON.stringify(signal === 'metrics' ? metricsBody(rows, q.sessions) : logsBody(rows, q.sessions));
       if (keepalive && body.length > budget) {
@@ -219,10 +220,13 @@ export function start(config, { boot = 0 } = {}) {
     }
   }
   async function drain(keepalive) {
-    if (!shouldDispatch() || !config.projectId) { await update(q => { q.metrics = []; q.logs = []; }); return; }
+    if (!mayDispatch() || !config.projectId) { await update(q => { q.metrics = []; q.logs = []; }); return; }
+    // Out of the sample only feedback is sent, as expo-observe sends it.
+    const only = inSample() ? undefined : 'expo.feedback';
+    if (only) await update(q => { q.metrics = []; q.logs = q.logs.filter(r => r.name === only); });
     const base = String(config.endpoint ?? 'https://o.expo.dev').replace(/\/+$/, '');
-    await send('metrics', `${base}/${config.projectId}/v1/metrics`, keepalive);
-    await send('logs', `${base}/${config.projectId}/v1/logs`, keepalive);
+    await send('metrics', `${base}/${config.projectId}/v1/metrics`, keepalive, only);
+    await send('logs', `${base}/${config.projectId}/v1/logs`, keepalive, only);
   }
   // Without Web Locks (a page that is not a secure context) each tab sends alone, and a
   // row two tabs read before either removes it is sent twice.

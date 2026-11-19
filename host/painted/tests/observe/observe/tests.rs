@@ -290,6 +290,34 @@ fn custom_events_follow_observes_rules() {
 }
 
 #[test]
+fn out_of_the_sample_only_feedback_is_sent() {
+    let (url, seen) = sink(|_| (200, ""));
+    let (mut s, _dir) = service(&url, "sample");
+    s.config["sampleRate"] = json!(0);
+    startup(&mut s, 1);
+    s.event(&json!({ "kind": "app.event", "name": "checkout.done" }));
+    s.event(&json!({ "kind": "app.error", "message": "boom" }));
+    s.event(&json!({ "kind": "app.feedback", "id": "checkout", "message": "Too slow", "rating": 2, "min": 1, "max": 5 }));
+    s.dispatch();
+    assert!(!seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|r| r.0.ends_with("/metrics")));
+    assert_eq!(posted_names(&seen), ["expo.feedback"]);
+    assert!(s.logs.is_empty() && s.metrics.is_empty());
+
+    s.config["dispatchingEnabled"] = json!(false);
+    s.event(&json!({ "kind": "app.feedback", "id": "checkout", "message": "Dropped" }));
+    s.dispatch();
+    assert_eq!(
+        posted_names(&seen),
+        ["expo.feedback"],
+        "dispatchingEnabled: false drops feedback too"
+    );
+}
+
+#[test]
 fn sampling_matches_eas_client_ids_uniform_value() {
     // The value web/service.js's BigInt splitmix64 gives for the same id.
     assert_eq!(

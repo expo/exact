@@ -69,6 +69,7 @@ enum WireHarness {
                                  "threads": SQLiteThreads.counts()] as [String: Any]
         out["retry"] = try retryState(fixture, config: config, root: root.appendingPathComponent("retry"))
         out["crash"] = try crashState(fixture, config: config, root: root.appendingPathComponent("crash"))
+        out["outOfSample"] = try outOfSampleState(fixture, config: config, root: root.appendingPathComponent("sample"))
         FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: out))
     }
 
@@ -90,6 +91,30 @@ enum WireHarness {
         let stored = ObserveService(config: config, handoff: Data(), root: root, clientId: clientId)
         return ["refusedRows": refusedRows, "keptAfterRefusal": keptAfterRefusal,
                 "storedRows": crashes(stored), "keptAfterStore": FileManager.default.fileExists(atPath: record.path)]
+    }
+
+    /// wire.json's events from an install outside the sample: only its feedback is sent and acknowledged.
+    private static func outOfSampleState(_ fixture: [String: Any], config: [String: Any], root: URL) throws -> [String: Any] {
+        precondition(URLProtocol.registerClass(SampleTransport.self))
+        defer { URLProtocol.unregisterClass(SampleTransport.self) }
+        var config = config
+        config["projectId"] = "fixture"
+        config["endpoint"] = "https://sample.example"
+        config["sampleRate"] = 0.0
+        let service = ObserveService(config: config, handoff: Data(), root: root,
+                                     clientId: UUID(uuidString: fixture["clientId"] as! String)!)
+        for event in fixture["events"] as! [Any] {
+            service.event(try JSONSerialization.data(withJSONObject: event))
+        }
+        service.queue.sync { service.dispatch() }
+        try waitForIdle(service, requests: 1) { SampleTransport.sent.count }
+        return service.queue.sync {
+            let store = service.store!
+            let delivered = store.rows("SELECT logs.name FROM logs JOIN delivered ON delivered.signal = 'logs' AND delivered.id = logs.id ORDER BY logs.id", [])
+            return ["requests": SampleTransport.sent.map(\.path), "names": SampleTransport.sent.flatMap(\.names),
+                    "delivered": delivered.compactMap { $0.first as? String },
+                    "processed": store.cursor("metrics") == store.maxId("metrics") && store.cursor("logs") == store.maxId("logs")] as [String: Any]
+        }
     }
 
     private static func retryState(_ fixture: [String: Any], config: [String: Any], root: URL) throws -> [String: Any] {
@@ -124,12 +149,12 @@ enum WireHarness {
         return result
     }
 
-    private static func waitForIdle(_ service: ObserveService, requests: Int) throws {
+    private static func waitForIdle(_ service: ObserveService, requests: Int, count: @escaping () -> Int = { RetryTransport.paths.count }) throws {
         let finished = DispatchSemaphore(value: 0)
         let observer = DispatchSource.makeTimerSource(queue: service.queue)
         observer.schedule(deadline: .now(), repeating: .milliseconds(1))
         observer.setEventHandler {
-            if RetryTransport.paths.count >= requests && !service.sending {
+            if count() >= requests && !service.sending {
                 finished.signal()
             }
         }
@@ -159,6 +184,46 @@ private final class RetryTransport: URLProtocol {
         Self.lock.unlock()
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Retry-After": "60"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+/// Answers 200 and records each request's path and its log records' event names.
+private final class SampleTransport: URLProtocol {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var recorded: [(path: String, names: [String])] = []
+    static var sent: [(path: String, names: [String])] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "sample.example" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var body = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let n = stream.read(&buffer, maxLength: buffer.count)
+                if n <= 0 { break }
+                body.append(buffer, count: n)
+            }
+            stream.close()
+        }
+        let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        let records = (json["resourceLogs"] as? [[String: Any]] ?? [])
+            .flatMap { ($0["scopeLogs"] as? [[String: Any]] ?? []).flatMap { $0["logRecords"] as? [[String: Any]] ?? [] } }
+        let names = records.compactMap { record in
+            (record["attributes"] as? [[String: Any]])?.first { $0["key"] as? String == "event.name" }
+                .flatMap { ($0["value"] as? [String: Any])?["stringValue"] as? String }
+        }
+        Self.lock.lock()
+        Self.recorded.append((request.url!.lastPathComponent, names))
+        Self.lock.unlock()
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

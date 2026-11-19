@@ -259,13 +259,29 @@ final class ObserveService {
 
     // MARK: Dispatch
 
-    /// Observe's gate: dispatching enabled, this install in the sample, and not a development
-    /// build unless `dispatchInDebug`. Refusal advances processing without acknowledging rows.
-    var shouldDispatch: Bool {
+    /// Observe's gate: dispatching enabled, and not a development build unless `dispatchInDebug`.
+    /// Refusal advances processing without acknowledging rows.
+    var mayDispatch: Bool {
         let enabled = config["dispatchingEnabled"] as? Bool ?? true
-        let rate = min(max(config["sampleRate"] as? Double ?? 1, 0), 1)
         let development = config["fact.development"] as? Bool == true || config["fact.agent"] as? Bool == true
-        return enabled && ObserveWire.uniform(clientId) < rate && (!development || config["dispatchInDebug"] as? Bool == true)
+        return enabled && (!development || config["dispatchInDebug"] as? Bool == true)
+    }
+
+    /// Whether this install is in the `sampleRate` sample. Out of it, only feedback is sent,
+    /// as expo-observe sends it (`Observability.dispatch`).
+    var inSample: Bool {
+        ObserveWire.uniform(clientId) < min(max(config["sampleRate"] as? Double ?? 1, 0), 1)
+    }
+
+    /// Out of the sample: the log name that is still sent, and the only one `chunk` reads.
+    var only: String?
+
+    /// Moves the logs cursor past the rows that are not sent out of the sample, up to the
+    /// next unsent feedback row.
+    func skipToFeedback() {
+        guard let store else { return }
+        let next = store.rows("SELECT MIN(id) FROM logs WHERE id > ? AND name = ?", [store.cursor("logs"), ObserveRules.feedbackName]).first?.first as? Int64
+        store.setCursor("logs", next.map { $0 - 1 } ?? store.maxId("logs"))
     }
 
     func dispatch() {
@@ -274,17 +290,20 @@ final class ObserveService {
             scheduleDispatch(after: after.timeIntervalSinceNow)
             return
         }
-        guard shouldDispatch, let project = config["projectId"] as? String else {
+        guard mayDispatch, let project = config["projectId"] as? String else {
             store.setCursor("metrics", store.maxId("metrics"))
             store.setCursor("logs", store.maxId("logs"))
             return
         }
+        only = inSample ? nil : ObserveRules.feedbackName
+        if only != nil { store.setCursor("metrics", store.maxId("metrics")) }
         let base = (config["endpoint"] as? String ?? "https://o.expo.dev").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         gate.after = nil
         sending = true
         send("metrics", url: "\(base)/\(project)/v1/metrics", limit: ObserveWire.chunk) { [self] in
             send("logs", url: "\(base)/\(project)/v1/logs", limit: ObserveWire.chunk) { [self] in
                 sending = false
+                if only != nil { skipToFeedback() }
                 if store.cursor("metrics") < store.maxId("metrics") || store.cursor("logs") < store.maxId("logs") {
                     scheduleDispatch(after: gate.after?.timeIntervalSinceNow ?? 5)
                 }
@@ -316,7 +335,7 @@ final class ObserveService {
                     gate.failures = 0
                     send(signal, url: url, limit: rows.count / 2, done: done)
                 case .success:
-                    if let first = rows.first?.first as? Int64 { store.acknowledge(signal, from: first, through: highest) }
+                    if let first = rows.first?.first as? Int64 { store.acknowledge(signal, from: first, through: highest, only: signal == "logs" ? only : nil) }
                     gate.failures = 0
                     store.setCursor(signal, highest)
                     send(signal, url: url, limit: ObserveWire.chunk, done: done)
@@ -339,7 +358,8 @@ final class ObserveService {
         let cursor = store.cursor(signal)
         let rows = signal == "metrics"
             ? store.rows("SELECT id, session, time, category, name, value, route, updateId, params FROM metrics WHERE id > ? ORDER BY id LIMIT ?", [cursor, limit])
-            : store.rows("SELECT id, session, time, severity, name, body, attributes, dropped FROM logs WHERE id > ? ORDER BY id LIMIT ?", [cursor, limit])
+            : only.map { store.rows("SELECT id, session, time, severity, name, body, attributes, dropped FROM logs WHERE id > ? AND name = ? ORDER BY id LIMIT ?", [cursor, $0, limit]) }
+                ?? store.rows("SELECT id, session, time, severity, name, body, attributes, dropped FROM logs WHERE id > ? ORDER BY id LIMIT ?", [cursor, limit])
         guard !rows.isEmpty else { return nil }
         var sessions: [String: [String: Any]] = [:]
         for r in rows { if let s = r[1] as? String, sessions[s] == nil { sessions[s] = store.metadata(s) } }

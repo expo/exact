@@ -14,7 +14,7 @@ Add these fields to `app.json`:
 These settings are optional:
 
 - `endpoint` (default `https://o.expo.dev`);
-- `sampleRate` (0–1, decided per install);
+- `sampleRate` (0–1, decided per install). An install outside the sample sends only feedback;
 - `dispatchingEnabled`;
 - `dispatchInDebug`. A development build sends nothing unless this is true.
 

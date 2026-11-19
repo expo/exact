@@ -89,7 +89,11 @@ final class ObserveStore {
         return run("INSERT INTO logs (session, time, severity, name, body, attributes, dropped) VALUES (?, ?, ?, ?, ?, ?, ?)", [session, time, severity, name, body, json, dropped])
     }
 
-    func acknowledge(_ signal: String, from first: Int64, through last: Int64) {
+    func acknowledge(_ signal: String, from first: Int64, through last: Int64, only name: String? = nil) {
+        if let name {
+            run("INSERT OR IGNORE INTO delivered SELECT ?, id FROM \(signal) WHERE id >= ? AND id <= ? AND name = ?", [signal, first, last, name])
+            return
+        }
         run("INSERT OR IGNORE INTO delivered SELECT ?, id FROM \(signal) WHERE id >= ? AND id <= ?", [signal, first, last])
     }
 

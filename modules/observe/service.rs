@@ -932,14 +932,19 @@ impl Service {
         json!({ outer: resources })
     }
 
-    /// Observe's gate: dispatching enabled, this install in the sample, and not a development
-    /// build unless `dispatchInDebug`. When it fails, rows are dropped, not kept for later.
-    fn should_dispatch(&self) -> bool {
+    /// Observe's gate: dispatching enabled, and not a development build unless
+    /// `dispatchInDebug`. When it fails, rows are dropped, not kept for later.
+    fn may_dispatch(&self) -> bool {
         let c = &self.config;
-        let rate = c["sampleRate"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
         c["dispatchingEnabled"].as_bool().unwrap_or(true)
-            && uniform(&self.client_id) < rate
             && (!self.development || c["dispatchInDebug"] == true)
+    }
+
+    /// Whether this install is in the `sampleRate` sample. Out of it, only feedback is sent,
+    /// as expo-observe sends it (`ObservabilityManager.dispatchUnsentLogs`).
+    fn in_sample(&self) -> bool {
+        let rate = self.config["sampleRate"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
+        uniform(&self.client_id) < rate
     }
 
     fn dispatch(&mut self) {
@@ -949,33 +954,47 @@ impl Service {
         }
         let _sending = self.hold("send.lock");
         let project = self.config["projectId"].as_str().map(str::to_string);
-        let Some(project) = project.filter(|_| self.should_dispatch()) else {
+        let Some(project) = project.filter(|_| self.may_dispatch()) else {
             let _queue = self.hold("queue.lock");
             self.reload();
             self.metrics.clear();
             self.logs.clear();
             return self.save();
         };
+        let only = (!self.in_sample()).then_some(FEEDBACK);
+        if only.is_some() {
+            let _queue = self.hold("queue.lock");
+            self.reload();
+            self.metrics.clear();
+            self.logs.retain(|r| r["name"] == FEEDBACK);
+            self.save();
+        }
         let base = self.config["endpoint"]
             .as_str()
             .unwrap_or("https://o.expo.dev")
             .trim_end_matches('/')
             .to_string();
-        if self.send("metrics", &format!("{base}/{project}/v1/metrics")) {
-            self.send("logs", &format!("{base}/{project}/v1/logs"));
+        if self.send("metrics", &format!("{base}/{project}/v1/metrics"), only) {
+            self.send("logs", &format!("{base}/{project}/v1/logs"), only);
         }
     }
 
-    /// Sends one signal's rows chunk by chunk, as expo-observe's `DispatchLoop.swift` does.
+    /// Sends one signal's rows chunk by chunk, as expo-observe's `DispatchLoop.swift` does,
+    /// or with `only`, just the rows of that name; another process may add others meanwhile.
     /// Returns false when it has to back off.
-    fn send(&mut self, signal: &str, url: &str) -> bool {
+    fn send(&mut self, signal: &str, url: &str, only: Option<&str>) -> bool {
         let mut limit = CHUNK;
         loop {
             let rows: Vec<Row> = {
                 let _queue = self.hold("queue.lock");
                 self.reload();
                 let queue = self.queue(signal);
-                queue[..limit.min(queue.len())].to_vec()
+                queue
+                    .iter()
+                    .filter(|r| only.is_none_or(|name| r["name"] == name))
+                    .take(limit)
+                    .cloned()
+                    .collect()
             };
             if rows.is_empty() {
                 return true;
