@@ -146,6 +146,10 @@ struct GroupedListModel: Equatable {
         /// The space above it when the author changed a margin there (the
         /// web's, collapsed); nil keeps UIKit's gap (`Kernel::grouped_list`).
         var spaceAbove: CGFloat?
+        /// A custom header's node, whose views UIKit's header carries (`GroupedCustomHeadersIOS.swift`).
+        var headerView: UInt32?
+        /// It holds a control or a press, each its own element; else it is one heading.
+        var headerParts = false
     }
     var style = "inset-grouped"
     var sections: [Section] = []
@@ -188,7 +192,7 @@ struct GroupedListModel: Equatable {
             return Section(view: view, header: s["header"] as? String, footer: s["footer"] as? String,
                            headerLook: Look(json: s["headerLook"]), footerLook: Look(json: s["footerLook"]), rows: rows,
                            card: s["card"] as? Bool ?? true, cardView: id(s["cardView"]),
-                           spaceAbove: (s["spaceAbove"] as? NSNumber).map { CGFloat($0.doubleValue) })
+                           spaceAbove: (s["spaceAbove"] as? NSNumber).map { CGFloat($0.doubleValue) }, headerView: id(s["headerView"]), headerParts: s["headerParts"] as? Bool ?? false)
         }
         spaceBelow = (o["spaceBelow"] as? NSNumber).map { CGFloat($0.doubleValue) }
         animates = o["animates"] as? Bool ?? false
@@ -502,6 +506,8 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     var carried: [UInt32: (parent: UIView, frame: CGRect, inert: Bool, accessory: (node: NodeView, hidden: Bool)?)] = [:]
     /// Each parent rows are carried from, the order of its children (`noteHome`).
     var homes: [ObjectIdentifier: [UInt32]] = [:]
+    /// Each custom header's height when it was last carried, as `heights` is a custom row's.
+    var headerHeights: [UInt32: CGFloat] = [:]
     /// The room each accessory leaves a cell's content, as last measured (`room`).
     var rooms: [String: HostCover.Edges] = [:]
     /// The accessory each row's edges were last told for (`tellAccessories`).
@@ -565,9 +571,10 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         }
         collection.setCollectionViewLayout(layout(), animated: false)
         collection.delegate = self
+        collection.marginsChanged = { [weak self] in self?.host.tellSoon() }
         collection.accessibilityIdentifier = owner.props["testId"]
         let cell = UICollectionView.CellRegistration<GroupedCell, UInt32> { [unowned self] cell, _, id in configure(cell, id) }
-        let header = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(elementKind: UICollectionView.elementKindSectionHeader) { [unowned self] view, _, path in
+        let header = UICollectionView.SupplementaryRegistration<GroupedHeaderView>(elementKind: UICollectionView.elementKindSectionHeader) { [unowned self] view, _, path in
             label(view, header: true, section: path.section)
         }
         let footer = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(elementKind: UICollectionView.elementKindSectionFooter) { [unowned self] view, _, path in
@@ -583,13 +590,14 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         }
     }
 
-    private func section(at index: Int) -> GroupedListModel.Section? {
+    func section(at index: Int) -> GroupedListModel.Section? {
         model.sections.indices.contains(index) ? model.sections[index] : nil
     }
 
     /// A section's header or footer: UIKit's, in the author's colour and
     /// font where the author gave its text one (LLP 1116.003 D7).
     private func label(_ view: UICollectionViewListCell, header: Bool, section index: Int) {
+        if let view = view as? GroupedHeaderView, show(customHeader: index, in: view) { return }
         let s = section(at: index)
         var c = view.defaultContentConfiguration()
         // UIKit's header and footer ink is the secondary label: the theme's where it replaces it.
@@ -630,7 +638,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             // Clear where the author wrote one (`writesGround`), else the theme's; nil leaves UIKit's.
             if let ground = writesGround ? .clear : themeGround { c.backgroundColor = ground }
             let s = section(at: index)
-            c.headerMode = s?.header == nil ? .none : .supplementary
+            c.headerMode = s?.hasHeader == true ? .supplementary : .none
             c.footerMode = s?.footer == nil ? .none : .supplementary
             #if !os(tvOS)
             c.showsSeparators = s?.card ?? true
@@ -661,7 +669,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             // An authored space above a header is above it: UIKit's top inset
             // there is the header-to-rows gap (§6.4).
             let space = s?.spaceAbove
-            if let space, s?.header != nil { c.headerTopPadding = space }
+            if let space, s?.hasHeader == true { c.headerTopPadding = space }
             // The list's own background stays behind a card-less section's
             // clear cells: the inset card is the cells' background, not the
             // section's (a clear section background showed the route's white).
@@ -675,7 +683,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             // inset is on the left in either direction, as UIKit lays it.
             insets.leading += self.foldReach.left + self.horizontalPadding.left
             insets.trailing += self.foldReach.right + self.horizontalPadding.right
-            if let space, s?.header == nil { insets.top = space }
+            if let space, s?.hasHeader != true { insets.top = space }
             if s?.footer == nil {
                 if index + 1 < model.sections.count { if self.section(at: index + 1)?.spaceAbove != nil { insets.bottom = 0 } }
                 else if let below = model.spaceBelow { insets.bottom = below }
@@ -765,6 +773,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         #endif
         // Headers and footers live in the sections' layout: one that came, went or changed lays the list out again.
         let texts = previous.sections.map { [$0.header, $0.footer] } != next.sections.map { [$0.header, $0.footer] }
+            || previous.sections.map(\.headerView) != next.sections.map(\.headerView)
             || previous.sections.map { [$0.headerLook, $0.footerLook] } != next.sections.map { [$0.headerLook, $0.footerLook] }
             || !recarded.isEmpty // separators are the section layout's
         let regapped = previous.sections.map(\.spaceAbove) != next.sections.map(\.spaceAbove) || previous.spaceBelow != next.spaceBelow
@@ -861,6 +870,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
             carry(id, into: cell)
             interact(cell, id)
         }
+        carryHeaders()
         // A switch shows its control as it now stands, which a batch may
         // change without changing the row.
         #if !os(tvOS)

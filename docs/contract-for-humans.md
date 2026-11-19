@@ -1348,6 +1348,11 @@ opacity and transforms remain admitted. `accent-color` tints the styles that sup
 A settings screen is a grouped list: a `list` whose `appearance` is the literal
 `auto`. Its children are `section`s. A section's first child may be a `header`
 and its last a `footer`, each holding a `text`; everything between is its rows.
+A `header` may instead hold boxes of your own, such as a `row` of an `image`
+and a `text` (an avatar beside a name). That header is custom: it keeps its
+views in the platform's header, which still pins in a plain list, and its texts
+name it for a screen reader. Several bare texts are refused; lay them out in a
+`row` or a `column`. A `footer` holds one `text` only.
 A row is read by its shape: an optional leading `image "symbol:…"`, a `text`
 title, an optional second `text` (a value) or a `column` of two texts (a
 subtitle), and an optional trailing accessory — a `forward-chevron` or

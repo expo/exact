@@ -33,6 +33,19 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller {
         return insets
     }
 
+    /// UIKit changed the margins it gives the list's cells, or showed the
+    /// list: with no batch, as when a tab first shows a list built behind
+    /// it, so the kernel is told them again (`GroupedListHost.tell`).
+    var marginsChanged: () -> Void = {}
+    override func layoutMarginsDidChange() {
+        super.layoutMarginsDidChange()
+        marginsChanged()
+    }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { marginsChanged() }
+    }
+
     weak var listNode: NodeView?
     var scrollingNode: NodeView? { listNode?.scrollView === self ? listNode : nil }
 

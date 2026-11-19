@@ -19,7 +19,7 @@ extension GroupedListHost {
             session.whenIdle { [weak self] in
                 guard let self else { return }
                 var changes: [(UInt32, [CGFloat]?)] = []
-                for (id, list) in lists where list.carriesCustomRows {
+                for (id, list) in lists where list.carriesCustomRows || list.model.sections.contains(where: { $0.headerView != nil }) {
                     guard let margins = list.margins(), told[id] != margins else { continue }
                     told[id] = margins
                     changes.append((id, margins))
@@ -45,8 +45,8 @@ extension GroupedListHost {
     }
 
     func cellFrame(of view: NodeView, at place: GridPlace) -> CGRect? {
-        guard presenter.views[view.id] === view, lists.values.contains(where: { $0.carried[view.id] != nil }) else { return nil }
-        return GroupedListView.cellFrame(place, scale: presenter.gridScale)
+        guard presenter.views[view.id] === view, let list = lists.values.first(where: { $0.carried[view.id] != nil }) else { return nil }
+        return list.seat(view, at: place)
     }
 }
 
@@ -54,8 +54,10 @@ extension GroupedListView {
     /// UIKit's card and cell margins, left then right, inside the list's
     /// content box. The kernel already applies CSS padding; including it
     /// in the card margins would subtract it from a custom row's width twice.
+    /// None outside a window: UIKit gives a list's cells their margins as
+    /// it shows them, and a cell laid out before that has a bare view's 8.
     func margins() -> [CGFloat]? {
-        guard let cell = collection.visibleCells.first as? UICollectionViewListCell,
+        guard collection.window != nil, let cell = collection.visibleCells.first as? UICollectionViewListCell,
               let path = collection.indexPath(for: cell),
               let frame = collection.layoutAttributesForItem(at: path)?.frame else { return nil }
         let m = cell.directionalLayoutMargins

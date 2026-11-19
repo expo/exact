@@ -5,7 +5,7 @@ use contract_syntax::{Attr, Expr, Node};
 
 /// LLP 1116.014 D1: the edit that puts a `header` or `footer` where UIKit
 /// draws one. Its words may change (`text (on ? "A" : "B")`); what comes and
-/// goes is a section, since a `header` holds one `text` and nothing else.
+/// goes is a section, since a section with a `header` is spaced as one.
 pub(super) fn stray_message(stray: &Stray) -> String {
     let (tag, place) = (
         &stray.tag,
@@ -45,23 +45,44 @@ fn texts_chosen(node: &Node) -> Option<usize> {
     Some(arm(then)? + arm(otherwise)?)
 }
 
-/// LLP 1116.018: the edit for a `header` or `footer` that holds more than one
-/// `text`. A repair told only the rule moved or dropped the status a chain of
-/// texts showed; this names the edit that keeps every arm.
-pub(super) fn label(tag: &str, children: &[Node]) -> String {
+/// LLP 1116.018: the edit for a `header` or `footer` lowering refuses, `None`
+/// for one it takes. Either holds one `text`, the string UIKit draws. A
+/// `header` may instead hold boxes of its author's (an image beside its
+/// text): the list carries those views into UIKit's header, as it carries a
+/// custom row's (`Kernel::grouped_list`). A repair told only the rule moved
+/// or dropped the status a chain of texts showed; this names the edit that
+/// keeps every arm.
+pub(super) fn label(tag: &str, children: &[Node]) -> Option<String> {
+    let holds = if tag == "header" {
+        "one `text`, the words UIKit draws there, or boxes of your own (a `row` of an image and a text)"
+    } else {
+        "one `text`, the words UIKit draws there"
+    };
     match children {
-        [chain] => match texts_chosen(chain) {
-            Some(n) => format!(
-                "write this `{tag}`'s {n} texts as one `text` whose words the same conditions choose, in order: `text (first ? \"A\" : second ? \"B\" : \"C\")` for `if first` / `else if second` / `else`. UIKit draws a section's `{tag}` as one string"
-            ),
-            None if matches!(chain, Node::When { otherwise, .. } if otherwise.is_empty()) => format!(
-                "a `{tag}` shown only while a condition holds is two `section`s under that `if`, the same rows in each and the `{tag}` in one: UIKit draws a section's `{tag}` as one string, and a section with one is spaced differently"
-            ),
-            None => format!("a section's `{tag}` holds one `text`, the words UIKit draws there"),
-        },
-        _ => format!(
-            "a section's `{tag}` holds one `text`, the words UIKit draws there: join its texts into one, or move the others into the section's rows"
-        ),
+        [only] if is(only, "text") => None,
+        [chain @ (Node::When { .. } | Node::Match { .. } | Node::Each { .. })] => {
+            Some(match texts_chosen(chain) {
+                Some(n) => format!(
+                    "write this `{tag}`'s {n} texts as one `text` whose words the same conditions choose, in order: `text (first ? \"A\" : second ? \"B\" : \"C\")` for `if first` / `else if second` / `else`. UIKit draws a section's `{tag}` as one string"
+                ),
+                None if matches!(chain, Node::When { otherwise, .. } if otherwise.is_empty()) => format!(
+                    "a `{tag}` shown only while a condition holds is two `section`s under that `if`, the same rows in each and the `{tag}` in one: UIKit draws a section's `{tag}` as one string, and a section with one is spaced differently"
+                ),
+                None => format!("a section's `{tag}` holds {holds}"),
+            })
+        }
+        [_, ..] if tag == "header" && !children.iter().all(|c| is(c, "text")) => None,
+        [] | [_] => Some(format!("a section's `{tag}` holds {holds}")),
+        _ => {
+            let own = if tag == "header" {
+                ", lay them out in a `row` or a `column` of your own"
+            } else {
+                ""
+            };
+            Some(format!(
+                "a section's `{tag}` holds {holds}: join its texts into one{own}, or move the others into the section's rows"
+            ))
+        }
     }
 }
 

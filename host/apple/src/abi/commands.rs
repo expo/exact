@@ -570,7 +570,9 @@ impl<D: DataSource> Bridge<D> {
 
     /// A grouped list's sections and rows (`exact_grouped_list`, LLP 1084
     /// D4), as JSON in the output buffer: `{"style","sections":[{"view",
-    /// "header","footer","headerLook","footerLook","card","spaceAbove","rows":[{"view","custom","symbol",("symbolPath","symbolViewBox": an
+    /// "header",("headerView": a custom header's node, whose views the host carries,
+    /// "headerParts": whether it holds a control or a press, each its own element),
+    /// "footer","headerLook","footerLook","card","spaceAbove","rows":[{"view","custom","symbol",("symbolPath","symbolViewBox": an
     /// svg-only icon's, `icon_path::push_json`),"title",
     /// "secondary","subtitle","accessory","accessoryView","target","pressable","action",
     /// "checked","destructive","disabled","authoredEdge","nextAuthoredTop","titleLook","secondaryLook"}]}],"spaceBelow","animates"}`,
@@ -644,6 +646,12 @@ impl<D: DataSource> Bridge<D> {
                     json.push_str(if i == 0 { "{" } else { ",{" });
                     json.push_str(&format!("\"view\":{},\"header\":", s.view));
                     opt(&s.header, &mut json);
+                    if let Some(view) = s.header_view {
+                        json.push_str(&format!(
+                            ",\"headerView\":{view},\"headerParts\":{}",
+                            s.header_parts
+                        ));
+                    }
                     json.push_str(",\"footer\":");
                     opt(&s.footer, &mut json);
                     look(",\"headerLook\":", &s.header_look, &mut json);

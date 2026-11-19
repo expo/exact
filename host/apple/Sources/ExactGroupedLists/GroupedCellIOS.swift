@@ -12,6 +12,10 @@ final class GroupedCell: UICollectionViewListCell {
         activeBounds = bounds
         if refreshActiveOnLayout { setNeedsUpdateConfiguration() }
     }
+    override func layoutMarginsDidChange() {
+        super.layoutMarginsDidChange()
+        (superview as? GroupedCollectionView)?.marginsChanged()
+    }
     var forcedPressed = false { didSet { if forcedPressed != oldValue { setNeedsUpdateConfiguration() } } }
     override var configurationState: UICellConfigurationState {
         var state = super.configurationState

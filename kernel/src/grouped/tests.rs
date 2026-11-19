@@ -819,3 +819,89 @@ fn a_hidden_accessory_keeps_each_part_of_its_row() {
         }
     }
 }
+
+#[test]
+fn a_header_of_more_than_one_text_is_custom_and_named_by_its_texts() {
+    let mut k = Kernel::with_monospace();
+    let mut ops = vec![];
+    for (id, node_type) in [
+        (1, NodeType::View),
+        (2, NodeType::View),
+        (3, NodeType::View),
+        (4, NodeType::View),
+        (5, NodeType::Text),
+        (6, NodeType::View),
+        (7, NodeType::Image),
+        (8, NodeType::Text),
+        (9, NodeType::Text),
+        (10, NodeType::Text),
+        (11, NodeType::Pressable),
+    ] {
+        ops.push(Op::CreateView { id, node_type });
+    }
+    let prop = |id, prop, value: &str| Op::SetProp {
+        id,
+        prop,
+        value: value.into(),
+    };
+    let children = |id, children: &[ViewId]| Op::SetChildren {
+        id,
+        children: children.to_vec(),
+    };
+    ops.extend([
+        prop(1, PropId::ListStyle, "plain"),
+        prop(3, PropId::SemanticTag, "header"),
+        prop(5, PropId::Text, "Move"),
+        prop(8, PropId::Text, "Ryu"),
+        prop(9, PropId::Text, "12 moves"),
+        prop(10, PropId::Text, "Avatar"),
+        Op::SetProp {
+            id: 6,
+            prop: PropId::AccessibilityElementsHidden,
+            value: true.into(),
+        },
+        // A header of an avatar (an image and a text no one hears) and two
+        // texts, then the group of one row.
+        children(1, &[2]),
+        children(2, &[3, 4]),
+        children(3, &[6, 8, 9]),
+        children(6, &[7, 10]),
+        children(4, &[5]),
+        Op::AttachRoot { id: 1 },
+    ]);
+    k.apply(0, 1, &ops).unwrap();
+    let section = k.grouped_list(1).unwrap().sections.remove(0);
+    assert_eq!(section.header_view, Some(3));
+    assert_eq!(section.header.as_deref(), Some("Ryu 12 moves"));
+    assert_eq!(section.header_look, TextLook::default());
+    assert!(!section.header_parts, "texts and an image: one heading");
+
+    // A button in it is its own element, as a text with a press is.
+    k.apply(1, 2, &[children(3, &[6, 8, 9, 11])]).unwrap();
+    assert!(k.grouped_list(1).unwrap().sections[0].header_parts);
+    k.apply(2, 3, &[children(3, &[6, 8, 9])]).unwrap();
+    let pressed = k.grouped_list_with(1, &|id| id == 9).unwrap();
+    assert!(pressed.sections[0].header_parts);
+
+    // An image alone is a custom header with no name.
+    k.apply(3, 4, &[children(3, &[6]), children(6, &[7])])
+        .unwrap();
+    let section = k.grouped_list(1).unwrap().sections.remove(0);
+    assert_eq!((section.header_view, section.header), (Some(3), None));
+
+    // One text, the others hidden, is the platform's header.
+    k.apply(
+        4,
+        5,
+        &[
+            children(3, &[6, 8]),
+            style(6, &[(StyleId::Display, "none")], true),
+            style(8, &[(StyleId::TextColor, "#ff0000")], true),
+        ],
+    )
+    .unwrap();
+    let section = k.grouped_list(1).unwrap().sections.remove(0);
+    assert_eq!(section.header_view, None);
+    assert_eq!(section.header.as_deref(), Some("Ryu"));
+    assert!(section.header_look.color.is_some(), "its look, as before");
+}

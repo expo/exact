@@ -426,7 +426,6 @@ fn section(
             stray.span,
         );
     }
-    // UIKit draws a header or footer as one text.
     for label in children[..head]
         .iter()
         .chain(&children[children.len() - tail..])
@@ -438,8 +437,7 @@ fn section(
             ..
         } = label
         {
-            if !matches!(children.as_slice(), [only] if is(only, "text")) {
-                let message = messages::label(tag, children);
+            if let Some(message) = messages::label(tag, children) {
                 return err("lower-grouped-list", message, *span);
             }
         }

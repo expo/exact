@@ -64,8 +64,16 @@ pub struct GroupedList {
 pub struct GroupedSection {
     /// The `section` node.
     pub view: ViewId,
-    /// Its `header`'s text.
+    /// Its `header`'s text: a custom header's texts, joined by a space, as
+    /// its name.
     pub header: Option<String>,
+    /// Its `header`'s node when the header is custom, anything shown but
+    /// one text: the host carries its views, as it does a custom row's.
+    pub header_view: Option<ViewId>,
+    /// Whether a custom header holds a control, a button or a link: each
+    /// part then stays its own element, where a header of texts and images
+    /// is one heading named by `header`.
+    pub header_parts: bool,
     /// Its `footer`'s text.
     pub footer: Option<String>,
     /// How its header's text is set where its author said so.
@@ -399,8 +407,18 @@ impl Kernel {
                 for part in nodes(section) {
                     match part.props.str(PropId::SemanticTag) {
                         Some("header") => {
-                            (out.header, out.header_look) = label(&part)
-                                .map_or((None, TextLook::default()), |(t, l)| (Some(t), l))
+                            let parts = nodes(&part);
+                            let custom = !parts.is_empty()
+                                && !matches!(&parts[..], [t] if t.node_type == NodeType::Text);
+                            if custom {
+                                let mut said = Vec::new();
+                                out.header_parts = self.said_texts(&part, acts, &mut said);
+                                out.header = (!said.is_empty()).then(|| said.join(" "));
+                                out.header_view = Some(part.id);
+                            } else {
+                                (out.header, out.header_look) = label(&part)
+                                    .map_or((None, TextLook::default()), |(t, l)| (Some(t), l))
+                            }
                         }
                         Some("footer") => {
                             (out.footer, out.footer_look) = label(&part)
@@ -441,6 +459,34 @@ impl Kernel {
         let basis = crate::svg::scene::content_box(self, &self.node(view)?).2;
         authored_space(&mut list, &shown, self.arena(), basis);
         Some(list)
+    }
+
+    /// The texts shown under `node`, in order, for a custom header's name:
+    /// none under a `display: none` or `aria-hidden` box. Returns whether a
+    /// part shown there is a control or has a press or a link of its own.
+    fn said_texts(
+        &self,
+        node: &NodeRef<'_>,
+        acts: &dyn Fn(ViewId) -> bool,
+        out: &mut Vec<String>,
+    ) -> bool {
+        let mut parts = false;
+        for child in node.children().into_iter().filter_map(|id| self.node(id)) {
+            if child.style.display == Display::None
+                || child.props.bool(PropId::AccessibilityElementsHidden) == Some(true)
+            {
+                continue;
+            }
+            parts |= child.node_type == NodeType::Pressable
+                || ControlKind::of(child.node_type, child.props).is_some()
+                || child.props.link().is_some()
+                || acts(child.id);
+            match text_of(&child) {
+                Some(text) => out.push(text.trim().to_owned()),
+                None => parts |= self.said_texts(&child, acts, out),
+            }
+        }
+        parts
     }
 
     /// The control a grouped list's row shows as its switch
@@ -771,6 +817,22 @@ pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::
     let Some(parent) = arena.parent(slot) else {
         return;
     };
+    // A header's or footer's unsaid insets are the card's and the cell's
+    // together, where UIKit starts and ends its own header's text: a custom
+    // header's content stands there, carried into UIKit's header.
+    if is_label(arena, slot) {
+        let Some(m) = arena.parent(parent).and_then(|l| arena.grouped_margins(l)) else {
+            return;
+        };
+        let written = &arena.style(slot).written;
+        if !written.has(StyleId::PaddingLeft) {
+            s.padding.left = Lp::length(m.card[0] + m.cell[0]);
+        }
+        if !written.has(StyleId::PaddingRight) {
+            s.padding.right = Lp::length(m.card[1] + m.cell[1]);
+        }
+        return;
+    }
     let (m, content) = match group_margins(arena, parent) {
         Some(_) if inset_inside(arena, slot) => return,
         Some(m) => (m, false),
