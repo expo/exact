@@ -72,6 +72,16 @@ package final class FlatLeaves {
     func holdsLeaves(_ parent: UInt32) -> Bool { order[parent]?.isEmpty == false }
     /// `parent`'s children in order, its flat leaves among them, when it holds one.
     package func children(of parent: UInt32) -> [UInt32]? { order[parent] }
+    /// The box a flat leaf paints over, in its parent's coordinates: its box as layout sent it, or,
+    /// where it has no area, its flat children's together, as CSS paints a box's overflow; empty
+    /// where it paints nothing. Nil for an id that is no leaf.
+    package func paintedBox(of id: UInt32) -> CGRect? {
+        guard let leaf = leaves[id] else { return nil }
+        guard leaf.layout.isEmpty else { return leaf.layout }
+        let origin = leaf.layout.origin
+        return (order[id] ?? []).compactMap { paintedBox(of: $0) }.filter { !$0.isEmpty }
+            .reduce(CGRect.null) { $0.union($1.offsetBy(dx: origin.x, dy: origin.y)) }
+    }
     /// Since launch: made flat, and promoted to views (`state`).
     private(set) var made = 0, promoted = 0
     private(set) var placements = 0
@@ -216,7 +226,7 @@ package final class FlatLeaves {
     func parent(of id: UInt32) -> UInt32? { leaves[id]?.parent }
     /// `id`'s children moved to another container view (a material or a
     /// glass group came or went): its leaves follow at the next flush.
-    func containerChanged(_ id: UInt32) { if order[id] != nil { dirty.insert(id) } }
+    package func containerChanged(_ id: UInt32) { if order[id] != nil { dirty.insert(id) } }
 
     /// A style op for `id`: applied (true), or the leaf was promoted.
     package func style(_ id: UInt32, _ op: BatchOp) -> Bool {
@@ -295,7 +305,10 @@ package final class FlatLeaves {
         guard let parent = ancestor as? NodeView, Self.parents.contains(parent.kind),
               view.superview === parent.container, parent.scroll == nil, parent.overlay == nil,
               parent.canvasAbove == nil, parent.surface == nil else { return }
-        if order[parent.id] == nil { order[parent.id] = parent.container.subviews.compactMap { ($0 as? NodeView)?.id } }
+        // A node lifted over the tab container is among them (LLP 1083.000 D4)
+        if order[parent.id] == nil {
+            order[parent.id] = presenter.navigation.lifted?.recordedIDs(of: parent) ?? parent.container.subviews.compactMap { ($0 as? NodeView)?.id }
+        }
         let leaf = FlatLeaf(id: id, style: view.style, paint: flat)
         leaf.layout = view.grid?.layout ?? view.frame
         leaf.content = view.kernelContentBox.map { ($0, view.kernelPadding) }
@@ -505,7 +518,7 @@ package final class FlatLeaves {
     /// boxes (step 2), any other leaf as its own layer. Under a view, each
     /// directly above the child before it, or below the first view when
     /// none is before it; under a flat box, by rank, then tree order.
-    func flush() {
+    package func flush() {
         // Promotions create views while ops are applied; each affected
         // parent's latest child list is mounted once before drawing runs.
         mountPromoted()
@@ -588,7 +601,7 @@ package final class FlatLeaves {
     /// parent is a view, so a flat box above it is promoted first; its own
     /// children stay flat in it where a view can hold them so.
     @discardableResult
-    func promote(_ id: UInt32, style: NodeStyle? = nil) -> NodeView? {
+    package func promote(_ id: UInt32, style: NodeStyle? = nil) -> NodeView? {
         if let p = leaves[id]?.parent, leaves[p] != nil { promote(p) }
         guard let leaf = leaves.removeValue(forKey: id) else { return presenter.views[id] }
         promoted += 1

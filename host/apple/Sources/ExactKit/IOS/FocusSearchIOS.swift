@@ -35,7 +35,8 @@ enum FocusSearch {
         // nodes themselves.
         if view is NodeView || view is PlainView || view is ScrollView || view is MetalView
             || view is UIImageView || view is UIVisualEffectView || view.next is UINavigationController || view.next is BootHolding
-            || view is NativeButtonIOS { return } // a native button's node keeps the focus (LLP 1069.011 D4)
+            || view is NativeButtonIOS // a native button's node keeps the focus (LLP 1069.011 D4)
+            || view is HoldsLiftedNodes { return } // the navigation's holders of lifted nodes (LLP 1083.000 D4)
         candidates.add(view)
     }
 

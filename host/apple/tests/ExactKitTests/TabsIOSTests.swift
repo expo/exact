@@ -401,6 +401,16 @@ final class TabsIOSTests: XCTestCase {
         XCTAssertGreaterThan(lower.layer.zPosition, holder.layer.zPosition)
         XCTAssertGreaterThan(low.layer.zPosition, lower.layer.zPosition, "z-index -1 over -2")
         XCTAssertGreaterThan(sidebar.layer.zPosition, low.layer.zPosition, "z-index auto over -1")
+        // A bar below routes that end above it, with no native bar there: it paints over the container and takes its touches
+        let player = try node(session, "player")
+        until("the bar below the routes is over the container") { player.layer.zPosition > holder.layer.zPosition }
+        let below = player.convert(CGPoint(x: player.bounds.midX, y: player.bounds.midY), to: window)
+        let under = try XCTUnwrap(window.hitTest(below, with: nil))
+        XCTAssertTrue(under === player || under.isDescendant(of: player), "the bar takes the touch, not \(under)")
+        // A box with no area beside the routes is decided by the badge it holds, which shows outside it
+        let pin = try node(session, "pin")
+        XCTAssertTrue(pin.bounds.isEmpty, "the box has no area")
+        until("the box with no area is over the container") { pin.layer.zPosition > holder.layer.zPosition }
     }
 }
 

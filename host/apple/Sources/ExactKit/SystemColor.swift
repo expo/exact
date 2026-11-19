@@ -369,9 +369,21 @@ extension NodeView {
     /// The nearest node at or above this one in the authored tree (`Presenter.authoredParent`: a
     /// route under its tabpanel, a sheet under its invoker) whose authored `accent-color` is its
     /// subtree's tint
-    private var accentAuthor: NodeView? {
+    private var accentAuthor: NodeView? { authoredLine.first { $0.authoredAccentTint != nil } }
+
+    /// The nearest `-exact-tint-adjustment` other than `auto` at or above the node in the authored tree (LLP 1077
+    /// D19), `.automatic` where none is set: for a view outside the node's superviews, which UIKit carries the mode
+    /// down from, to take as its own. It reads the rows, since `tintAdjustmentMode` reads `.dimmed` wherever UIKit
+    /// dims the views behind an alert.
+    package var authoredTintAdjustment: UIView.TintAdjustmentMode {
+        authoredLine.lazy.map { UIView.TintAdjustmentMode($0.style["tint_adjustment"]) }.first { $0 != .automatic } ?? .automatic
+    }
+
+    /// This node and those above it in the authored tree (`Presenter.authoredParent`: a route under its
+    /// tabpanel, a sheet under its invoker)
+    private var authoredLine: some Sequence<NodeView> {
         sequence(first: self as UIView, next: { [weak presenter] in presenter?.authoredParent(of: $0) ?? $0.superview })
-            .lazy.compactMap { $0 as? NodeView }.first { $0.authoredAccentTint != nil }
+            .lazy.compactMap { $0 as? NodeView }
     }
 
     /// The tint a view UIKit draws for this node outside the node's views takes as its own (a bar, a

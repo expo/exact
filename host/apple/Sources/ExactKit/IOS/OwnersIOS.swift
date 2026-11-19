@@ -82,7 +82,7 @@ extension Presenter {
         if let node = view as? NodeView, navigation.routeSurfaces[node.id]?.node === node, modals.mounts(node) {
             return eventParent(of: node)
         }
-        return view.superview
+        return navigation.lifted?.parent(of: view) ?? view.superview
     }
 
     package func authored(_ view: UIView, inside ancestor: UIView) -> Bool {
@@ -98,7 +98,8 @@ extension Presenter {
         var at: UIView? = start, crossed = false
         while let cur = at, cur !== target {
             let up = listenerParent(of: cur)
-            crossed = crossed || up !== cur.superview
+            // A node lifted over the tab container stays inside its parent's box on the page
+            crossed = crossed || (up !== cur.superview && up !== navigation.lifted?.parent(of: cur))
             at = up
         }
         return at != nil && crossed ? start : target

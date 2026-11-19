@@ -110,7 +110,10 @@ package class ScrollView: UIScrollView {
         contentOffset = PixelGrid.offset(CGPoint(x: contentOffset.x, y: end(keptInset)), in: self)
     }
     package override var accessibilityElements: [Any]? {
-        get { super.accessibilityElements ?? NodeView.emptyBoxAccessibility(in: self) }
+        get {
+            super.accessibilityElements ?? scrollingNode?.presenter?.navigation.lifted?.accessibilityElements(of: self)
+                ?? NodeView.emptyBoxAccessibility(in: self)
+        }
         set { super.accessibilityElements = newValue }
     }
     package override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {

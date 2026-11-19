@@ -284,36 +284,6 @@ extension NavigationHost {
         (container as? TabController)?.syncBarAccessibility()
     }
 
-    /// Rows below the panels stay in CSS flow while UIKit's container fills the page: the root's
-    /// children and, within each child that holds panels, the panels' siblings, at any depth.
-    /// The highest top of those rows, rather than the hidden native bar, bounds the routes'
-    /// bottom safe area. `rows` are those of them that are the root's children, which
-    /// `clearBesideRoutes` paints over the container.
-    func rowsBelowTabs(in area: CGRect, routes: [CGRect], skipping owned: Set<UInt32>, hidden: Bool? = nil) -> (bottom: CGFloat, rows: [NodeView]) {
-        guard !ExactEnv.authoredChrome, let tabs = tabController, tabOwner === tabs, let root = container, !routes.isEmpty else { return (0, []) }
-        if #available(iOS 18.0, tvOS 18.0, *) {
-            guard hidden ?? tabs.isTabBarHidden else { return (0, []) }
-        } else if !(hidden ?? tabs.tabBar.isHidden) { return (0, []) }
-        let panels = tabPanels.compactMap { presenter.views[$0] }
-        var bottom: CGFloat = 0, rows: [NodeView] = []
-        func visit(_ children: [NodeView]) {
-            let holding = children.filter { child in panels.contains { $0 === child || $0.isDescendant(of: child) } }
-            guard let end = holding.map({ $0.convert($0.bounds, to: root).maxY }).max() else { return }
-            for child in children where !holding.contains(child) && !owned.contains(child.id) && RouteGeometry.inFlow(child) && !child.isHidden {
-                let box = child.convert(child.bounds, to: root)
-                guard !box.isEmpty, box.intersects(area), box.minY >= end - 0.5,
-                      routes.contains(where: { $0.minX < box.maxX && $0.maxX > box.minX }) else { continue }
-                bottom = max(bottom, area.maxY - box.minY)
-                if child.superview === ownerMount(root) { rows.append(child) }
-            }
-            for branch in holding where !panels.contains(branch) {
-                visit(branch.container.subviews.compactMap { $0 as? NodeView })
-            }
-        }
-        visit(ownerMount(root).subviews.compactMap { $0 as? NodeView })
-        return (bottom, rows)
-    }
-
     /// Swap a replacement row's clearance with the native bar in one layout.
     /// Showing the bar with the row's inset still installed makes UIKit retain both.
     @available(iOS 18.0, tvOS 18.0, *)
@@ -700,7 +670,13 @@ extension NavigationHost {
             tapping = nil
             return reportCovers()
         }
-        guard let index = tabIndex(of: tabs.selectedViewController) else { return }
+        guard let index = tabIndex(of: tabs.selectedViewController) else {
+            // More's list now shows inside the container, where no route is shown: report the covers before its first
+            // frame, which put back what was lifted over the panels (LLP 1083.000 D4); More's `didShow` reports them
+            // when it pops to its list
+            if let more, tabs.selectedViewController === more { reportCovers() }
+            return
+        }
         if index == routerTab, screen == nil, !popped { return refollowFloatingBar() }
         guard let tab = authoredTab(index) else { return }
         let again = index == routerTab
@@ -830,6 +806,7 @@ extension NavigationHost {
     /// What holds the tabs goes: its stacks are retired, the authored
     /// tablist paints again.
     func retireTabs() {
+        siblings.putAllBack()
         // The tablist's hold on the bar goes with its container (§3.7).
         tablistRoot = nil
         tablistOwed = nil

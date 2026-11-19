@@ -490,7 +490,7 @@ package final class Presenter {
             if view.isHidden || (view as? NodeView)?.props["inert"] == "true" { return }
             if let node = view as? NodeView, views[node.id] === node, Self.tabbable(node),
                !fields || node.field != nil || node.textArea != nil { listed.append(node) } else if view.isFirstResponder, (view as? NodeView)?.paintedGroup != nil { start = listed.count }
-            view.subviews.forEach(walk)
+            (navigation.lifted?.focusChildren(of: view) ?? view.subviews).forEach(walk)
         }
         walk(scope)
         let order = listed.enumerated().sorted { a, b in
@@ -1155,6 +1155,7 @@ package final class Presenter {
         flats.flush()
         // A view the flush promoted and mounted may have moved its children.
         while !gridMoved.isEmpty { regridMoved(); flats.flush() }
+        navigation.lifted?.place()
         if rowFill, pageGeometryOwed || listRowDependencies?.scrollers != scrollers { rowFill = false }
         if !rowFill {
             pageGeometryOwed = false
@@ -1268,8 +1269,9 @@ package final class Presenter {
         let container = parent.container
         // A row a grouped list carries stays in its cell (`GroupedLists.placing`).
         let want = groupedLists.map { $0.placing(container, ids.compactMap { views[$0] }) } ?? ids.compactMap { views[$0] }
-        // An open popover under the agent stays in the top layer.
+        // An open popover under the agent stays in the top layer, and a node nested beside the tab panels over their container.
         menus.children(container, want)
+        navigation.lifted?.children(parent, ids, want)
         let wanted = Set(want.map(ObjectIdentifier.init))
         var current = container.subviews
         for case let child as NodeView in current where !wanted.contains(ObjectIdentifier(child)) && !pool.isParked(child) && !isLeaving(child) {
@@ -1278,14 +1280,14 @@ package final class Presenter {
         // In order, below anything else in the container (a scroll
         // view's indicators): inserting a subview at an index moves
         // it when it is already there. One already there stays.
-        for child in want where child.superview !== container { placedAnew.append(child.id) }
+        for child in want where child.superview !== container && navigation.lifted?.holds(child, under: parent) != true { placedAnew.append(child.id) }
         let heldByArrangement: (NodeView) -> Bool = { node in
             #if os(iOS)
             if #available(iOS 27.1, *) { return self.arrangements.owns(node, under: parent) }
             #endif
             return false
         }
-        let contained = NodeView.keepingGhosts(want.filter { !heldByArrangement($0) && !navigation.ownsContainment(of: $0, under: parent) && !menus.lifted($0) && !flightHost.isFlying($0) }, in: container)
+        let contained = NodeView.keepingGhosts(want.filter { !heldByArrangement($0) && !navigation.ownsContainment(of: $0, under: parent) && !menus.lifted($0) && !flightHost.isFlying($0) && navigation.lifted?.holds($0, under: parent) != true }, in: container)
         // Keep paragraph coverage below authored children when UIKit owns its view
         let text = parent.specs?.rasterView
         let offset = text?.superview === container ? 1 : 0
@@ -1319,7 +1321,7 @@ package final class Presenter {
             var view: UIView? = views[id]
             while let current = view {
                 if let node = current as? NodeView, !seen.insert(node.id).inserted { break }
-                view = current.superview
+                view = layoutParent(of: current)
             }
         }
         return seen
@@ -1420,7 +1422,7 @@ extension Presenter {
             if let p = dialogs.authoredParent(of: node) { return p }
             if navigation.routeSurfaces[node.id]?.node === node, let p = navigation.logicalParent(of: node) ?? navigation.container { return p }
         }
-        return menus.logicalParent(of: view) ?? groupedLists?.logicalParent(of: view) ?? view.superview
+        return menus.logicalParent(of: view) ?? groupedLists?.logicalParent(of: view) ?? navigation.lifted?.parent(of: view) ?? view.superview
     }
 }
 #endif

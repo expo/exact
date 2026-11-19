@@ -783,7 +783,7 @@ extension Presenter {
     /// Native presentations carry views out of their authored ancestry.
     func accessibilityParent(of view: UIView) -> UIView? {
         menus.logicalParent(of: view) ?? groupedLists?.logicalParent(of: view)
-            ?? (view as? NodeView).flatMap { navigation.logicalParent(of: $0) } ?? view.superview
+            ?? (view as? NodeView).flatMap { navigation.logicalParent(of: $0) } ?? navigation.lifted?.parent(of: view) ?? view.superview
     }
     #endif
     /// What `syncAccessibility` writes of a node a staged batch made, while

@@ -7,6 +7,11 @@
 // selection row at its root and a pushed route, the row either the root's
 // child or the panels' sibling in a shared column. Its header search
 // exercises keyboard clearance; its tabs can keep their authored appearance.
+// The shared column can also hold a sidebar before the panels and a drawer
+// positioned over them, a box with no area over them whose button shows
+// outside it, and the grid's panel a button beside its routes, which iOS
+// lifts over its tab container; the column can set an accent and keep its
+// tint from greying.
 routes nav
   tab scrolls "/"
     scrollsPushed "/scrolls/pushed"
@@ -17,15 +22,50 @@ routes nav
   tab grid "/grid"
     gridPushed "/grid/pushed"
 
+keyframes barOut
+  from opacity=1
+  to opacity=0
+
 component TabEdge
   state selecting = false
   state insetBar = false
   state wrappedBar = false
+  state staticBar = false
   state authoredTabs = false
+  state sidebar = false
+  state fab = false
+  state wrappedFab = false
+  state fadingBar = false
+  state inertColumn = false
+  state trailingSidebar = false
+  state extraRows = false
+  state accented = false
+  state keptTint = false
+  action accentColumn
+    accented = true
+  action keepColumnTint
+    keptTint = true
+  action showRows
+    extraRows = true
+  action showTrailingSidebar
+    sidebar = true
+    trailingSidebar = true
+  action makeColumnInert
+    inertColumn = true
+  action showSidebar
+    sidebar = true
+  action showFab
+    fab = true
+  action showWrappedFab
+    wrappedFab = true
+  action fadeBar
+    fadingBar = true
   action insetSelectionBar
     insetBar = true
   action wrapSelectionBar
     wrappedBar = true
+  action makeSelectionBarStatic
+    staticBar = true
   action toggleAuthoredTabs
     authoredTabs = not authoredTabs
   action toggleSelecting
@@ -46,7 +86,14 @@ component TabEdge
       display="flex"
       flex-direction="column"
       // The panels and a selection row can share a column of their own.
-      column flex=1 min-height=0
+      column flex=1 min-height=0 flex-direction=(sidebar ? (trailingSidebar ? "row-reverse" : "row") : "column") testId="panels-column" inert=inertColumn
+        accent-color=(accented ? "#ff8800" : "auto") -exact-tint-adjustment=(keptTint ? "normal" : "auto")
+        if extraRows
+          row testId="top-row" height=44 flex-shrink=0 background-color="#123456"
+        if sidebar
+          column testId="side" width="5rem" flex-shrink=0 background-color="#fedcba"
+            button press=showSidebar testId="side-button"
+              text "Side"
         column flex=1 min-height=0 position="relative"
           for t in nav.tabs key = t.name
             column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
@@ -69,8 +116,28 @@ component TabEdge
                         text "Inset bar"
                       button press=wrapSelectionBar testId="wrap-bar"
                         text "Wrap bar"
+                      button press=makeSelectionBarStatic testId="static-bar"
+                        text "Static bar"
                       button press=toggleAuthoredTabs testId="author-tabs"
                         text "Tabs"
+                      button press=showSidebar testId="show-sidebar"
+                        text "Sidebar"
+                      button press=showTrailingSidebar testId="show-trailing-sidebar"
+                        text "Trailing sidebar"
+                      button press=showRows testId="show-rows"
+                        text "Rows"
+                      button press=showFab testId="show-fab"
+                        text "Add"
+                      button press=showWrappedFab testId="show-wrapped-fab"
+                        text "Wrapped"
+                      button press=fadeBar testId="fade-bar"
+                        text "Fade bar"
+                      button press=makeColumnInert testId="inert-column"
+                        text "Inert"
+                      button press=accentColumn testId="accent-column"
+                        text "Accent"
+                      button press=keepColumnTint testId="keep-tint"
+                        text "Keep tint"
                       input type="search" value="" placeholder="Search" testId="grid-search"
                   // A menu between the header and the scroller, and a dialog
                   // after it, take no place in the route's flow, open or closed.
@@ -81,6 +148,9 @@ component TabEdge
                   // A pushed screen is the next kind: scroll → plain list → grouped list → scroll.
                   if e.name == "grid" or e.name == "gridPushed"
                     scroll id=`content-${e.id}` testId=`content-${e.name}` flex=1 min-height=0
+                      if sidebar
+                        button press=showSidebar testId=`${e.name}-first`
+                          text "First"
                       column display="grid" grid-template-columns="repeat(3, 1fr)" gap=4
                         for r in rows key=r
                           box height=180 background-color="#abcdef" testId=`${e.name}-${r}`
@@ -118,22 +188,65 @@ component TabEdge
                         text "Cancel"
                       button press=open commandfor="confirm" command="close"
                         text "Open"
-        if selecting and wrappedBar
+              // A button beside the grid tab's routes, in its panel
+              if fab and t.name == "grid"
+                button press=showFab testId="panel-fab"
+                  position="absolute"
+                  left=16
+                  bottom=200
+                  width="3.5rem"
+                  height="3.5rem"
+                  background-color="#00ff00"
+                  text "+"
+        if extraRows
+          row testId="mini-player" height=60 flex-shrink=0 position="relative" background-color="#654321"
+        if selecting and wrappedBar and not fadingBar
           row testId="selection-bar"
             height=46
             flex-shrink=0
             margin-left=(insetBar ? 16 : 0)
             margin-right=(insetBar ? 16 : 0)
-            position="relative"
+            position=(staticBar ? "static" : "relative")
             background-color="#eeeeee"
             text "Select photos"
+        // The same bar, leaving with an animation, which makes it the containing block of what is absolute in it: the
+        // compiler refuses a bound `position` on such a box, so this one is always relative
+        if selecting and wrappedBar and fadingBar
+          row testId="selection-bar"
+            height=46
+            flex-shrink=0
+            position="relative"
+            background-color="#eeeeee"
+            -exact-exit-animation="barOut 800ms"
+            text "Select photos"
+        // A drawer over the routes at the trailing edge, after the panels
+        if fab
+          button press=showFab testId="fab"
+            position="absolute"
+            top=0
+            bottom=0
+            right=0
+            width="3.5rem"
+            background-color="#ff0000"
+            text "+"
+        // A box with no area over the routes, after the panels, whose button shows outside it
+        if wrappedFab
+          column testId="fab-wrapper" position="absolute" left=0 bottom=120 width=0 height=0
+            button press=showWrappedFab testId="wrapped-fab"
+              position="absolute"
+              left=24
+              bottom=0
+              width="3.5rem"
+              height="3.5rem"
+              background-color="#0000ff"
+              text "+"
       if selecting and not wrappedBar
         row testId="selection-bar"
           height=46
           flex-shrink=0
           margin-left=(insetBar ? 16 : 0)
           margin-right=(insetBar ? 16 : 0)
-          position="relative"
+          position=(staticBar ? "static" : "relative")
           background-color="#eeeeee"
           text "Select photos"
       row role="tablist" testId="tabs" appearance=(authoredTabs ? "none" : "auto") display=(selecting ? "none" : "flex")

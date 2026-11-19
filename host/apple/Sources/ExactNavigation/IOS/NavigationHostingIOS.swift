@@ -42,6 +42,7 @@ extension Presenter {
 }
 
 extension NavigationHost: NavigationHosting {
+    package var lifted: (any LiftedNodes)? { siblings }
     var routeSurfaces: [UInt32: any RouteSurface] { controllers }
     var primaryRouteSurfaces: [any RouteSurface] { primaryRoutes }
     var activeRouteSurface: (any RouteSurface)? { activeRoute }

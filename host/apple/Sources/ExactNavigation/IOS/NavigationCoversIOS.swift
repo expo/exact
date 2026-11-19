@@ -19,34 +19,76 @@ extension NavigationHost {
 
     /// @ref LLP 1075.003 §3.7, LLP 1083.000 D4 — the native container stands
     /// for the routes in the navigation root's paint order. Its box can extend
-    /// past the routes' authored boxes: a column the author
-    /// placed beside routes offset past it shows on the web and would be
-    /// covered here. A child of the root that no shown route's box
-    /// meets, which the routes therefore paint nothing over, paints over the
-    /// container; one a route's box meets keeps CSS's order under it. The
-    /// tab panels and a tablist replaced by the native bar are the container's
-    /// own. Such a child that reaches the container's top edge and one side
-    /// (a column) grows the container's safe area on that side
+    /// past the routes' authored boxes: a column the author placed beside
+    /// routes offset past it shows on the web and would be covered here. A
+    /// child of the root beside the routes, which they therefore paint nothing
+    /// over (`PanelSiblings.beside`: no shown route's box meets it, and no
+    /// route's view covers it except to its side), paints over the container;
+    /// one a route's box meets keeps CSS's order under it. A child with no
+    /// area is decided by the box its children paint over, within what clips
+    /// them, and one with a `clip-path` by its own (`paintedBox`).
+    /// The tab panels and a tablist replaced by the native bar are the
+    /// container's own. Such a child that reaches the container's top edge
+    /// and one side (a column) grows the container's safe area on that side
     /// by its width, so UIKit lays the bars' contents out clear of it, as a
     /// hand-built screen insets its bars from a view beside them; the routes
-    /// clear only the part of that inset their own boxes reach (`reportCovers`).
-    /// With the tab bar hidden, an in-flow row below the panels bounds the
-    /// bottom too, whether the root's child or nested beside them (`rowsBelowTabs`).
+    /// clear only the part of that inset their own boxes reach
+    /// (`reportCovers`). With the tab bar hidden, an in-flow row below the
+    /// panels bounds the bottom too, whether the root's child or nested beside
+    /// them. A node nested beside the panels that paints over the container is
+    /// lifted into a layer just after it (`panelSiblings`, LLP 1083.000 D4),
+    /// and one that reaches the top edge and one side grows the safe area as a
+    /// root child does.
     func clearBesideRoutes(tabBarHidden: Bool? = nil) {
         guard let owner = primaryOwner, let root = container, let holder = owner.viewIfLoaded,
               holder.superview === ownerMount(root) else { return }
-        let routes = primaryRoutes.filter { $0.viewIfLoaded?.window != nil && presenter.views[$0.node.id] === $0.node }
-            .map { $0.node.convert($0.node.bounds, to: root) }.filter { !$0.isEmpty }
+        // Each shown route's box where CSS lays it out, within its logical parent (UIKit holds a tab's route at its
+        // container's origin, sized to the page, which leaves out the panel's place; a parent with no box of its
+        // own leaves the frame as it is), and where its view is drawn
+        let shown = primaryRoutes.filter { $0.viewIfLoaded?.window != nil && presenter.views[$0.node.id] === $0.node }
+        let routes = shown.map { c in
+            let parent = logicalParent(of: c.node) ?? root
+            let frame = parent.container.convert(c.node.frame, to: root), within = frame.intersection(parent.convert(parent.bounds, to: root))
+            return within.isEmpty ? frame : within
+        }.filter { !$0.isEmpty }
+        let drawn = shown.map { $0.node.convert($0.node.bounds, to: root) }.filter { !$0.isEmpty }
         let owned = Set(tabPanels + (tablistAppearanceNone ? [] : [adoptedTablist].compactMap { $0 }))
         let area = holder.convert(holder.bounds, to: root)
         let before = besideOwner === owner ? besideInsets : .zero
         var changed = false, reach = UIEdgeInsets.zero
-        let (bottom, rows) = rowsBelowTabs(in: area, routes: routes, skipping: owned, hidden: tabBarHidden)
+        siblings.place(in: ownerMount(root))
+        var walk = panelSiblings(in: area, routes: routes, drawn: drawn, skipping: owned, hidden: tabBarHidden)
+        if !walk.promote.isEmpty {
+            // A flat leaf that paints over the container gets a view, mounted now, and lifts with the rest
+            for id in walk.promote { presenter.flats.promote(id) }
+            presenter.flats.flush()
+            walk = panelSiblings(in: area, routes: routes, drawn: drawn, skipping: owned, hidden: tabBarHidden)
+        }
+        let (bottom, rows, lifts) = (walk.bottom, walk.rows, walk.lifts)
+        #if os(iOS)
+        // The adopted More on screen at its list, as its stack names it from the start of a pop to it (reading
+        // `moreNavigationController` makes a More where UIKit has none); not the tab controller's selection, which
+        // names More only after More's `didShow` for its pop to the list
+        let moreList = more.map { $0.viewIfLoaded?.window != nil && $0.topViewController === $0.viewControllers.first } ?? false
+        #else
+        let moreList = false
+        #endif
+        // With no route in the window, under a full-screen cover, the last decision stands, as the covers do;
+        // More's list, inside the container, shows no route for a node to be beside, so it lifts nothing
+        if !routes.isEmpty || moreList { siblings.apply(lifts, in: ownerMount(root), after: holder) }
+        // A lifted column beside the routes; one over them, an overlay, insets nothing, as CSS moves nothing for it
+        for lift in lifts {
+            let box = paintedBox(lift.node, in: root)
+            guard box.minY <= area.minY + 0.5, PanelSiblings.beside(box, routes, drawn: drawn) else { continue }
+            let left = box.minX <= area.minX + 0.5, right = box.maxX >= area.maxX - 0.5
+            if left, !right { reach.left = max(reach.left, box.maxX - area.minX) }
+            if right, !left { reach.right = max(reach.right, area.maxX - box.minX) }
+        }
         for case let child as NodeView in ownerMount(root).subviews {
-            let box = child.convert(child.bounds, to: root)
+            let box = paintedBox(child, in: root)
             let below = rows.contains { $0 === child }
             let clears = !ExactEnv.authoredChrome && !routes.isEmpty && !owned.contains(child.id) && !box.isEmpty
-                && box.intersects(area) && (below || !routes.contains { $0.intersects(box) })
+                && box.intersects(area) && (below || PanelSiblings.beside(box, routes, drawn: drawn))
             if child.clearsNavigation != clears {
                 child.clearsNavigation = clears
                 changed = true

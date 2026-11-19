@@ -194,7 +194,7 @@ package final class ArrangementHost {
         if node.props["hatch"] != nil || requests[node.id] != nil || entries[node.id] != nil { children[node.id] = ids }
     }
 
-    func owns(_ node: NodeView, under parent: NodeView) -> Bool {
+    package func owns(_ node: NodeView, under parent: NodeView) -> Bool {
         entries[parent.id]?.panes.contains { $0 === node } == true
     }
 

@@ -120,6 +120,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// What Exact added to its owner's `additionalSafeAreaInsets` for the
     /// boxes beside the routes, and that owner (`clearBesideRoutes`).
     var besideInsets = UIEdgeInsets.zero
+    /// The nodes nested beside the tab panels that paint over the container (LLP 1083.000 D4).
+    lazy var siblings = PanelSiblings(navigation: self)
     weak var besideOwner: UIViewController?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
@@ -235,6 +237,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Put each route node back under its logical parent, before native
     /// ownership retires, so surviving content stays in the window.
     private func restoreLogicalChildren() {
+        siblings.putAllBack()
         for (owner, ids) in logicalChildren {
             guard let parent = owner == container?.id ? container : presenter.views[owner] else { continue }
             for (index, node) in ids.compactMap({ presenter.views[$0] }).enumerated() where presenter.views[node.id] === node {
@@ -272,6 +275,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for panel in tabs?.panels ?? [] where logicalChildren[panel.id] == nil {
             logicalChildren[panel.id] = panel.container.subviews.compactMap { ($0 as? NodeView)?.id }
         }
+        // The lists of the nodes that hold panels, whose children ops ran before they were known to (LLP 1083.000 D4)
+        if tabs != nil { siblings.record(batch, holders: panelHolders) }
         let owners = tabs?.panels ?? [root]
         let stacks = owners.map { owner in
             (logicalChildren[owner.id] ?? []).compactMap { presenter.views[$0] }.filter { $0.props["navigationKey"] != nil }
@@ -623,11 +628,16 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         let after = Set(region.map { ids[($0 + 1)...] } ?? [])
         guard let next = mount.subviews.first(where: { ($0 as? NodeView).map { after.contains($0.id) } == true }) else {
-            if mount.subviews.last !== owner { mount.bringSubviewToFront(owner) }
+            let placed = mount.subviews.last === owner || (mount.subviews.last === siblings.layer && mount.subviews.dropLast().last === owner)
+            if !placed { mount.bringSubviewToFront(owner) }
+            if siblings.layer != nil { siblings.mountLayer(in: mount, after: owner) }
             return
         }
         let at = mount.subviews.firstIndex { $0 === next }!
-        if at == 0 || mount.subviews[at - 1] !== owner { mount.insertSubview(owner, belowSubview: next) }
+        let layer = siblings.layer.flatMap { $0.superview === mount ? $0 : nil }
+        let behind = at > 0 && mount.subviews[at - 1] === layer ? at - 2 : at - 1
+        if behind < 0 || mount.subviews[behind] !== owner { mount.insertSubview(owner, belowSubview: next) }
+        if siblings.layer != nil { siblings.mountLayer(in: mount, after: owner) }
     }
 
     /// A route's controller leaves for good: its header paints again and the
@@ -1021,6 +1031,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if navigationController === more {
             followSelection(showing: viewController)
             if declineMoreRow(viewController) { return }
+            // More's list shows, which no route's view is in: report the covers, which put back what was lifted over the
+            // panels (LLP 1083.000 D4), whether More's Back, its swipe or a second tap on More popped to it; not within a
+            // sync that writes More's stack, which reports them at its end from the whole projection
+            if !syncing, viewController === navigationController.viewControllers.first { reportCovers() }
         }
         guard navigationController === navigation, navigationController.topViewController === viewController else {
             // Run the sync a transition held when a stack navigation does not follow reports its end: More's pop to

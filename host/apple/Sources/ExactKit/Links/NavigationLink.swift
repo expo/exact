@@ -307,6 +307,8 @@ package protocol NavigationHosting: AnyObject {
     func scopes(tablist: NodeView) -> Bool
     func tabIntent(_ kind: UInt32, _ text: String) -> Bool
     func setAppDelegate(_ controller: AnyObject, _ delegate: AnyObject?)
+    /// The nodes it lifts out of their parents to paint over its tab container.
+    var lifted: (any LiftedNodes)? { get }
     #if os(tvOS)
     /// The Siri remote's Menu goes back in a pushed stack.
     var menuGoesBack: Bool { get }
@@ -345,6 +347,38 @@ package protocol NavigationHosting: AnyObject {
     /// `segments` is no route's scope control.
     func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]?
     #endif
+}
+
+/// The nodes a navigation lifts out of their parents to paint over its tab
+/// container (LLP 1083.000 D4), as the core's walks and passes meet them.
+package protocol LiftedNodes: AnyObject {
+    /// The parent a lifted node, or a view in its place, is under in the authored tree.
+    func parent(of view: UIView) -> NodeView?
+    /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is.
+    func holds(_ node: NodeView, under parent: NodeView) -> Bool
+    /// A children op on `parent`, before the presenter places it.
+    func children(_ parent: NodeView, _ ids: [UInt32], _ want: [NodeView])
+    /// The nodes `parent` lifted.
+    func lifted(from parent: NodeView) -> [NodeView]
+    /// The ids `parent` was last given, where it lifted nodes or holds panels.
+    func recordedIDs(of parent: NodeView) -> [UInt32]?
+    /// The lifted nodes at their parents' places, at the end of a batch.
+    func place()
+    /// `view`'s children in Tab's order: a lifted node on its side of the routes, as in the tree.
+    func focusChildren(of view: UIView) -> [UIView]
+    /// The mount's accessibility children while a lifted node reads before the routes.
+    func accessibilityElements(of view: UIView) -> [Any]?
+    /// The lifted nodes positioned `absolute` among `parent`'s children after `view`.
+    func absoluteNodes(after view: UIView, in parent: UIView) -> [NodeView]
+}
+
+/// A view that holds lifted nodes, which the focus search skips.
+package protocol HoldsLiftedNodes: UIView {}
+
+extension Presenter {
+    /// The view above `view` in a pass over the layout: a lifted node's
+    /// parent (LLP 1083.000 D4), else its superview.
+    package func layoutParent(of view: UIView) -> UIView? { navigation.lifted?.parent(of: view) ?? view.superview }
 }
 
 extension NavigationHosting {
@@ -536,6 +570,7 @@ package final class NoNavigation: NavigationHosting {
     package func scopes(tablist: NodeView) -> Bool { false }
     package func tabIntent(_ kind: UInt32, _ text: String) -> Bool { false }
     package func setAppDelegate(_ controller: AnyObject, _ delegate: AnyObject?) {}
+    package var lifted: (any LiftedNodes)? { nil }
     #if os(tvOS)
     package var menuGoesBack: Bool { false }
     package func menuBack() {}

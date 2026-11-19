@@ -786,7 +786,7 @@ package final class MenuHost {
         #endif
     }
     /// Whether `node` is an open popover in the top layer (the agent's).
-    func lifted(_ node: NodeView) -> Bool {
+    package func lifted(_ node: NodeView) -> Bool {
         #if os(iOS)
         if context.lifts(node) { return true }
         #endif

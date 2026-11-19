@@ -51,7 +51,7 @@ package enum PaintOrder {
 }
 
 extension NodeView {
-    var paintRank: Int64 {
+    package var paintRank: Int64 {
         if paintLifted { return 4_294_967_294 }
         // A ghost keeps its rank, but one at rank 0 paints at ½ (the encoded 1), as the web's absolute ghost does.
         // So does a ghost's parent at rank 0 while the ghost lives, since the parent stacks (LLP 1083.000 D4).
@@ -85,6 +85,10 @@ extension NodeView {
         paintGhost = value
         if value {
             var parent = superview
+            #if os(iOS) || os(tvOS)
+            // A lifted node's parent stacks while its ghost lives, as any parent does (LLP 1083.000 D4)
+            if let lifted = presenter?.navigation.lifted?.parent(of: self) { parent = lifted }
+            #endif
             while let view = parent, !(view is NodeView) { parent = view.superview }
             ghostParent = parent as? NodeView
             ghostParent?.paintGhosts += 1
@@ -197,7 +201,7 @@ extension NodeView {
         return views.contains { $0.layer.zPosition != first.layer.zPosition }
         #endif
     }
-    static func hitOrder(_ views: [PaintView]) -> [PaintView] {
+    package static func hitOrder(_ views: [PaintView]) -> [PaintView] {
         func z(_ view: PaintView) -> CGFloat {
             #if os(macOS)
             return view.layer?.zPosition ?? 0

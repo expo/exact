@@ -19,7 +19,7 @@
   },
   "counts": {
     "nodeViewCasts": {
-      "ceiling": 613,
+      "ceiling": 612,
       "sites": [
         "host/apple/Sources/ExactCollections/Collection.swift: current as? NodeView",
         "host/apple/Sources/ExactCollections/Collection.swift: current as? NodeView",
@@ -322,8 +322,6 @@
         "host/apple/Sources/ExactKit/IOS/NavigationIOS.swift: current as? NodeView",
         "host/apple/Sources/ExactKit/IOS/NavigationIOS.swift: presenter.root.subviews.first as? NodeView",
         "host/apple/Sources/ExactKit/IOS/NavigationIOS.swift: presenter.root.subviews.first as? NodeView",
-        "host/apple/Sources/ExactKit/IOS/NavigationTabsIOS.swift: $0 as? NodeView",
-        "host/apple/Sources/ExactKit/IOS/NavigationTabsIOS.swift: $0 as? NodeView",
         "host/apple/Sources/ExactKit/IOS/NavigationTitleIOS.swift: $0 as? NodeView",
         "host/apple/Sources/ExactKit/IOS/NavigationTitleIOS.swift: child as? NodeView",
         "host/apple/Sources/ExactKit/IOS/NavigationTitleIOS.swift: heading.superview as? NodeView",
@@ -621,6 +619,7 @@
         "host/apple/Sources/ExactNativeViews/NativeModule.swift: if (view as? NodeView",
         "host/apple/Sources/ExactNativeViews/NativeModule.swift: next as? NodeView",
         "host/apple/Sources/ExactNativeViews/ScopeHatches.swift: $0 as? NodeView",
+        "host/apple/Sources/ExactNavigation/IOS/PanelSiblingsIOS.swift: $0 as? NodeView",
         "host/apple/Sources/ExactSurfaces/Canvas2DImage.swift: parent.delegate as? NodeView",
         "host/apple/Sources/ExactSurfaces/CanvasSeams.swift: $0 as? NodeView",
         "host/apple/Sources/ExactSurfaces/GpuIOS.swift: (superview as? NodeView",

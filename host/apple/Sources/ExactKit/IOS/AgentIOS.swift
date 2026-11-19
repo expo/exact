@@ -917,7 +917,9 @@ extension Agent {
            let top = presenter.keyboardGuideTop(in: container), p.y >= container.convert(CGPoint(x: 0, y: top), to: nil).y {
             return "its middle is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
         }
-        if hit === v || hit.isDescendant(of: v) || (hit is NodeView && v.isDescendant(of: hit)) { return nil }
+        // A child lifted over the tab container is still the target's (LLP 1083.000 D4)
+        let inside = sequence(first: hit, next: { self.presenter.layoutParent(of: $0) }).contains { $0 === v }
+        if hit === v || inside || (hit is NodeView && v.isDescendant(of: hit)) { return nil }
         return Agent.covers(hit)
     }
 

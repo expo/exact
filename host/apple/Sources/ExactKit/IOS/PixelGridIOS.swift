@@ -150,6 +150,8 @@ extension Presenter {
             return node.grid?.origin ?? .zero
         }
         guard let holder = view.superview else { return .zero }
+        // A node lifted over the tab container is placed from its parent's origin (LLP 1083.000 D4)
+        if let parent = navigation.lifted?.parent(of: view) { return parent.grid?.origin ?? .zero }
         if let found = origin(holder) { return found }
         guard groupedLists?.carriesRows == true, let home = groupedLists?.logicalParent(of: view) else { return .zero }
         return origin(home) ?? .zero
@@ -204,6 +206,7 @@ extension Presenter {
             applyFrame(child, old.layout)
         }
         for case let child as NodeView in parent.container.subviews { regrid(child) }
+        navigation.lifted?.lifted(from: parent).forEach(regrid)
         // A grouped list's carried rows are its children too, in their cells.
         if groupedLists?.carriesRows == true { groupedLists?.carried(from: parent.container).forEach(regrid) }
         flats.regrid(parent: parent)
@@ -214,7 +217,7 @@ extension Presenter {
     /// placed it before its parent's, and each box is then placed from its
     /// parent's final origin once, not once for each ancestor that moved.
     func regridMoved() {
-        func depth(_ v: UIView) -> Int { var d = 0, s = v.superview; while let x = s { d += 1; s = x.superview }; return d }
+        func depth(_ v: UIView) -> Int { var d = 0, s = layoutParent(of: v); while let x = s { d += 1; s = layoutParent(of: x) }; return d }
         while !gridMoved.isEmpty {
             var seen = Set<ObjectIdentifier>()
             let round = gridMoved.filter { seen.insert(ObjectIdentifier($0)).inserted }.map { ($0, depth($0)) }.sorted { $0.1 < $1.1 }
@@ -232,11 +235,11 @@ extension Presenter {
     /// leaves, and each scroller's end and offset.
     func regridAll() {
         groupedLists?.prepare()
-        func depth(_ v: UIView) -> Int { var d = 0, s = v.superview; while let x = s { d += 1; s = x.superview }; return d }
+        func depth(_ v: UIView) -> Int { var d = 0, s = layoutParent(of: v); while let x = s { d += 1; s = layoutParent(of: x) }; return d }
         // A flying view's subtree is placed from it, which its landing places.
         func flying(_ v: UIView) -> Bool {
             var at: UIView? = v
-            while let a = at { if let n = a as? NodeView, flightHost.isFlying(n) { return true }; at = a.superview }
+            while let a = at { if let n = a as? NodeView, flightHost.isFlying(n) { return true }; at = layoutParent(of: a) }
             return false
         }
         for (v, _) in views.values.map({ ($0, depth($0)) }).sorted(by: { $0.1 < $1.1 }) where !flying(v) {

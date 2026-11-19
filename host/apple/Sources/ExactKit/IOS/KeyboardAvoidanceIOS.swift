@@ -136,6 +136,8 @@ extension Presenter {
                 for case let sibling as NodeView in parent.subviews[(at + 1)...] where sibling.layoutPosition == "absolute" {
                     consider(sibling)
                 }
+                // And those lifted over the tab container, after it (LLP 1083.000 D4)
+                navigation.lifted?.absoluteNodes(after: child, in: parent).forEach(consider)
             }
             child = parent
             up = parent.superview

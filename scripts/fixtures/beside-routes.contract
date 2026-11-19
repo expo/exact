@@ -2,7 +2,9 @@
 // written before them, with the routes offset past it. The web draws it, so
 // the native container, whose box is the page's, must not cover it. Over
 // is a box the routes' box meets, which CSS paints under the routes. Low and
-// lower overlap beside the routes, ordered by their z-index.
+// lower overlap beside the routes, ordered by their z-index. Player is a bar
+// below the routes, which end above it. Pin is a box with no area beside the
+// routes, whose badge shows outside it.
 routes nav
   home "/"
 
@@ -14,8 +16,11 @@ component BesideRoutes
       column position="absolute" top=0 left=200 width=200 height=40 background-color="-exact-system-blue" testId="over"
       column position="absolute" top=100 left=20 width=60 height=60 z-index=-1 background-color="-exact-system-green" testId="low"
       column position="absolute" top=120 left=40 width=60 height=60 z-index=-2 background-color="-exact-system-red" testId="lower"
+      column position="absolute" bottom=0 left=290 right=0 height=60 background-color="-exact-system-purple" testId="player"
+      column position="absolute" top=300 left=200 width=0 height=0 testId="pin"
+        column width=40 height=40 flex-shrink=0 background-color="-exact-system-yellow"
       for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" top=0 bottom=0 right=0 left=290
+        column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" top=0 bottom=60 right=0 left=290
           header
             text "Inbox" role="heading" aria-level=1
           scroll id="list" flex=1 min-height=0

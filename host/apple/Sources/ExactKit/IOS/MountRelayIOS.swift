@@ -42,7 +42,10 @@ package final class MountRelay: NSObject, UIGestureRecognizerDelegate {
     func listener(_ touched: UIView?, contextMenu: Bool = false, _ listens: (NodeView) -> Bool) -> NodeView? {
         var view = touched
         while let v = view {
-            if let n = v as? NodeView, listens(n), !(contextMenu ? n.formDisabled : n.disabled) { return n.isDescendant(of: mount) ? nil : n }
+            // One inside the mount, or one that holds it (the root over a layer of lifted nodes), hears the touch itself
+            if let n = v as? NodeView, listens(n), !(contextMenu ? n.formDisabled : n.disabled) {
+                return n.isDescendant(of: mount) || mount.isDescendant(of: n) ? nil : n
+            }
             view = presenter?.pointerParent(of: v) ?? v.superview
         }
         return nil
