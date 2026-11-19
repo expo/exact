@@ -481,7 +481,7 @@ fn materials_segmented_buttons_share_the_row_and_fill_the_checked_one() {
     let [km, mi, nmi] = ["u-km", "u-mi", "u-nmi"].map(|n| rect(&mut p, n));
     for s in [km, mi, nmi] {
         assert_eq!(s.3, 40.0, "the segmented-button-height row: {s:?}");
-        assert!((s.2 - km.2).abs() <= 1.0, "equal shares: {s:?} {km:?}");
+        assert_eq!(s.2, km.2, "equal shares: {s:?} {km:?}");
     }
     assert_eq!(mi.0, km.0 + km.2 - 1.0, "one outline between them");
     assert_eq!(units.2, km.2 + mi.2 + nmi.2 - 2.0);
@@ -491,7 +491,7 @@ fn materials_segmented_buttons_share_the_row_and_fill_the_checked_one() {
     }
     // An authored width is shared out.
     let (w1, w2) = (rect(&mut p, "w-1"), rect(&mut p, "w-2"));
-    assert_eq!((w1.2, w2.2), (150.0, 151.0));
+    assert_eq!((w1.2, w2.2), (150.5, 150.5));
     assert_eq!(w2.0 + w2.2, w1.0 + 300.0, "the row's width");
     // Five, each at least `ButtonDefaults.MinWidth`.
     let five = ["f-1", "f-2", "f-3", "f-4", "f-5"].map(|n| rect(&mut p, n));
@@ -1011,7 +1011,7 @@ fn materials_segmented_group_fits_what_holds_it() {
     // A label that no longer fits its share wraps, as an ordinary
     // button's title does, and the segment grows to hold it.
     let long = rect(&mut p, "l-1");
-    assert_eq!(long.2, 100.0);
+    assert_eq!(long.2, 100.5);
     assert!(long.3 > 40.0, "{long:?}");
 }
 

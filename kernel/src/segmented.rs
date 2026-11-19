@@ -24,7 +24,7 @@ use crate::arena::NodeArena;
 use crate::generated::{AlignItems, AlignSelf, Display, FlexDirection};
 use crate::style::metrics::{self, Column};
 use crate::{ControlKind, PropId, StyleId};
-use taffy::style::{LengthPercentage as Lp, LengthPercentageAuto as Lpa};
+use taffy::style::LengthPercentage as Lp;
 
 /// Where a segment sits in its group, in reading order: which of its ends
 /// are the group's.
@@ -205,8 +205,9 @@ fn metric(index: usize, column: Column) -> f32 {
 /// Compose's `width(IntrinsicSize.Min)`) and no wider than what holds it.
 /// Under Material it is one row of equal columns (`Modifier.weight(1f)` on
 /// each segment), so it is as wide as its widest segment makes them all;
-/// each segment after the first reaches back over the one before by the
-/// outline, so neighbours share one line (`Arrangement.spacedBy(-BorderWidth)`).
+/// a gap of minus the outline overlaps neighbours on one line, as
+/// `Arrangement.spacedBy(-BorderWidth)` does, so the group is n widest
+/// segments less n − 1 outlines.
 /// Under the neutral look each segment keeps its own width.
 pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let column = metrics::column();
@@ -234,31 +235,12 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                 taffy::style::MaxTrackSizingFunction::fr(1.0),
             )];
             if !written.has(StyleId::ColumnGap) {
-                s.gap.width = Lp::length(0.0);
+                s.gap.width = Lp::length(-metric(
+                    crate::generated::metric::SEGMENTED_BUTTON_OUTLINE,
+                    Column::Material,
+                ));
             }
         }
-        return;
-    }
-    let Some(place) = arena.segment_place(slot) else {
-        return;
-    };
-    if column == Column::Neutral {
-        return;
-    }
-    let laid_out = arena
-        .parent(slot)
-        .is_some_and(|g| !arena.authored_layout(g));
-    // The start side; `sides::mirror_unsaid` moves it to the right under
-    // right to left, as it moves any margin the author did not write.
-    if laid_out
-        && matches!(place, SegmentPlace::Middle | SegmentPlace::Last)
-        && !written.has(StyleId::MarginLeft)
-        && !written.has(StyleId::MarginRight)
-    {
-        s.margin.left = Lpa::length(-metric(
-            crate::generated::metric::SEGMENTED_BUTTON_OUTLINE,
-            Column::Material,
-        ));
     }
 }
 
