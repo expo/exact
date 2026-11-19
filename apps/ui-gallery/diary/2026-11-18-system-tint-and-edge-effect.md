@@ -6,18 +6,20 @@ task: The tint was not the system's, and the header and the controls under it di
 
 The scroller's `overflow-x="hidden"` clipped it at its box, though the host draws its scroll view up through the range bar and the navigation bar to the screen's top (LLP 1131 D2). Content and UIKit's edge effect ended in a hard line at the box's top, under the status bar. Screenshots showed the line but not its cause; a dump of UIKit's view hierarchy through lldb did: the scroller's node clipped, and its scroll view reached past it. The host now leaves a banded scroller's clipping to its scroll view (expo/exact#963). What would have helped: `agent.mjs check` naming a band that the scroller's own clip cuts short.
 
-The Accent section's last button, `accent-color="auto"` written inside the purple box, was labelled "auto: the app's" but draws the box's purple on iOS, where the host maps a written `auto` to UIKit's unset tint, which inherits (`applyAccentTint`). A browser's `auto` is its own accent (CSS), and a native Mac button takes the system accent there. What a written `auto` should be beneath an accented box is not settled, so the label and the legend no longer claim one.
+The Accent section's last button, `accent-color="auto"` written inside the purple box, was labelled "auto: the app's" but draws the box's purple on iOS, where the host maps a written `auto` to UIKit's unset tint, which inherits (`applyAccentTint`). A browser's `auto` is its own accent (CSS), and a native Mac button takes the system accent there. A written `auto` is what each host's toolkit draws where nothing sets a tint (LLP 1115.000 D3 item 4): the box's purple on iOS, the app's accent on the Mac and the browser's on the web. The label and the legend say only "auto".
+
+UIKit's automatic scroll edge effect drops out while the range bar's segmented control slides its selection: for about a quarter of a second at each tap, the content under the navigation bar and the range bar shows sharp. A hand-built UIKit screen, a bar holding a `UISegmentedControl` registered with `UIScrollEdgeElementContainerInteraction` over a scroll view, does the same on iOS 27.0 and 27.1, and keeps its effect through the slide with the style set by name, soft or hard. Screen recordings found it; screenshots taken after a tap could not, as an XCUITest tap returns once the app is idle. The scroller names the hard style, which the automatic one draws there. What would have helped: a note beside `-exact-scroll-edge-effect` that UIKit's automatic style drops out while a control in the bar animates; Apple's documentation does not say so.
 
 ### Lean in
 
-Saying less fixed the rest. The app's red `AccentColor`, its request that iOS 27 minimize the bar on scroll, and its soft scroll edge effect each overrode UIKit. Without them the tint is the system's; the bar stays on an iPhone (iOS 27.0), while the Duo (iOS 27.1) hides it as the content scrolls up, as UIKit does there unasked; and with the range bar registered as the scroll view's edge element, UIKit's automatic style blurs the content from the screen's top to the range bar's foot, as a hand-built screen with a `UIScrollEdgeElementContainerInteraction` does.
+Saying less fixed the rest. The app's red `AccentColor`, its request that iOS 27 minimize the bar on scroll, and its soft scroll edge effect each overrode UIKit. Without them the tint is the system's; the bar stays on an iPhone (iOS 27.0), while the Duo (iOS 27.1) hides it as the content scrolls up, as UIKit does there unasked; and with the range bar registered as the scroll view's edge element, UIKit blurs the content from the screen's top to the range bar's foot, as a hand-built screen with a `UIScrollEdgeElementContainerInteraction` does.
 
 ### Needed
 
 - system tint: provided
-- scroll edge effect under a control bar: provided, rough (the host clipped a banded scroller with `overflow-x: hidden`; fixed in expo/exact#963)
+- scroll edge effect under a control bar: provided, rough (the host clipped a banded scroller with `overflow-x: hidden`; fixed in expo/exact#963; UIKit's automatic style drops out while a segmented control in the bar slides, so the gallery names the hard one)
 
 ### Checkpoints
 
 - iOS build: smooth
-- driving the app: smooth (`GalleryUITests`, and a probe that photographs the header at measured drags)
+- driving the app: smooth (`GalleryUITests`, a probe that photographs the header at measured drags, and screen recordings of range taps)

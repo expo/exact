@@ -149,7 +149,10 @@ component GalleryDemo
         column id="range-bar" hatch="sticky-limit" position="relative" z-index=1 flex-shrink=0 padding-top=8 padding-bottom=12 padding-left="calc(var(--exact-safe-area-inset-left) + 16px)" padding-right="calc(var(--exact-safe-area-inset-right) + 16px)" testId=`range-bar-${section}`
           column testId=`range-card-${section}`
             LimitControl(section=section, limit=limit, choose=choose)
-      scroll id=`gallery-${section}` testId="gallery" position="relative" z-index=0 flex=1 min-height=0 width="100%" overflow-x="hidden" overflow-y="scroll" box-sizing="border-box" padding-left="var(--exact-safe-area-inset-left)" padding-right="var(--exact-safe-area-inset-right)"
+      // Name the hard scroll edge effect, which UIKit's automatic style draws under the range bar and which,
+      // unlike that style, holds while the range control's selection slides (iOS 27). It applies to every
+      // edge; only the top has a bar to draw it under.
+      scroll id=`gallery-${section}` testId="gallery" position="relative" z-index=0 flex=1 min-height=0 width="100%" overflow-x="hidden" overflow-y="scroll" -exact-scroll-edge-effect="hard" box-sizing="border-box" padding-left="var(--exact-safe-area-inset-left)" padding-right="var(--exact-safe-area-inset-right)"
         column class=Page padding-top=12 padding-bottom=(host == "web" ? "calc(env(safe-area-inset-bottom) + 12px)" : "12px") testId=`page-${section}`
           if section == "typography"
             text "Sizes, weights, scripts, decorations and changing text." font="-exact-subheadline" color="-exact-secondary-label" padding-bottom=8 testId=`intro-${section}`
