@@ -30,10 +30,10 @@ export function answers(resources, types, sourceTypes) {
     }
     const params = sourceTypes[r.source]?.[0] ?? [];
     // List in `open`, for the reader's page to ask again, an answer whose work goes on past the render: a ticket kept
-    // (an open stream, rt.js `land`, or a request still pending; one not yet sent leaves the page to `revalidate`), a
-    // watch, or a source refused storage or visitor credentials (ts-data.js `refuseInRender`); a watch and a refusal
-    // by the resource's name, which a list's elements share
-    if (r.ticket || data.watchedInRender?.has(r.name) || data.refusedInRender?.has(r.name)) {
+    // (an open stream, rt.js `land`, or a request still pending; one not yet sent leaves the page to `revalidate`), or
+    // the call that gave it watched a document or was refused storage or visitor credentials (ts-data.js
+    // `refuseInRender`): each of a list's elements by its own answer
+    if (r.ticket || r.renderCall?.watchedInRender || r.renderCall?.refused) {
       open.push(out.length);
     }
     if (r.store) {

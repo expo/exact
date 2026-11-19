@@ -253,7 +253,7 @@ export function res(
       return r.value;
     };
   // `origin`: when it was asked (overlay.js)
-  const take = (v, a, origin, generation) => {
+  const take = (v, a, origin, generation, call) => {
     if (type && !conforms(v, type, [0], r.checked))
       throw new Failed(
         loneSurrogate(v)
@@ -268,6 +268,9 @@ export function res(
     r.placeholder = false;
     // a fresh answer: current again after idleness (LLP 1161.001)
     r.slept = false;
+    // In a render, keep the call that gave the answer taken: the checkpoint lists the answer in `open` when that call
+    // watched a document or was refused storage or visitor credentials (checkpoint.js `answers`)
+    if (globalThis.__exactRender) r.renderCall = call;
     Inspections.take(r, generation);
   };
   const land = t =>
@@ -311,7 +314,7 @@ export function res(
           if (globalThis.__exactRender && !globalThis.__exactProduction) for (const url of t.call?.urls ?? []) (r.renderUrls ??= new Set()).add(url);
           if (t.baked) say(revalidated(name, eq(p.v, r.value)));
           t.baked = false;
-          take(p.v, t.args, t.origin, t.generation);
+          take(p.v, t.args, t.origin, t.generation, t.madeBy);
           r.failed = null;
           r.error = r.code = r.reason = undefined;
           if (!o.more) r.ticket = null;
@@ -414,7 +417,7 @@ export function res(
         if (ans && 'v' in ans) {
           if (baked) say(revalidated(name, eq(ans.v, r.value)));
           try {
-            take(ans.v, a, Ov.tick());
+            take(ans.v, a, Ov.tick(), undefined, ans.madeBy);
           } catch (e) {
             if (!reconciling) throw e;
             return Invocation.run(invocation, () => fails(a, String(e?.message ?? e), 'shape'));
@@ -456,6 +459,7 @@ export function res(
             req: ans.req && { ...ans.req, forced: refresh, origin },
             promise: ans.promise,
             call: ans.call,
+            madeBy: ans.madeBy,
             stream: ans.stream,
             upload: ans.upload,
             baked,
@@ -539,6 +543,7 @@ export function res(
       r.watches,
       r.launch,
       r.askOrigin,
+      r.renderCall,
     ],
     restore: x => {
       [r.value, r.settled, r.ticket] = x;
@@ -565,6 +570,7 @@ export function res(
       r.watches = x[22];
       r.launch = x[23];
       r.askOrigin = x[24];
+      r.renderCall = x[25];
       write(pend.n, x[19]);
       // and what it shows is read again, from what was put back
       write(ver.n, ver.n.v + 1);

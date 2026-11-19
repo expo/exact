@@ -51,7 +51,7 @@ export function uploadAnswer(r, mark, a, { take, fails, release }) {
   if (mark.t && mark.t === r.ticket) { r.ticket.args = a; return r.value; }
   if (mark.v === undefined) return fails(a, ...(mark.gone ? ALREADY_SENT : mark.failed ?? INTERRUPTED));
   if (!equal(a, r.settled) || r.ticket) {
-    try { take(mark.v, a, r.origin); } catch { return fails(a, "the upload's answer no longer fits the resource's shape; it is not sent again at these arguments", 'shape', 'interrupted'); }
+    try { take(mark.v, a, r.origin, undefined, mark.madeBy); } catch { return fails(a, "the upload's answer no longer fits the resource's shape; it is not sent again at these arguments", 'shape', 'interrupted'); }
     release();
   }
   return r.value;
@@ -62,7 +62,7 @@ export function uploadAnswer(r, mark, a, { take, fails, release }) {
 function ends(r, t, f, next, gone) {
   const marked = () => uploadSent(r, t.args, t);
   if (t.upload) marked(); else t.uploading = marked;
-  return [(p, o) => { f(p, o); if (t.upload && !o.more) uploadEnded(r, t, { v: p.v }); }, next,
+  return [(p, o) => { f(p, o); if (t.upload && !o.more) uploadEnded(r, t, { v: p.v, madeBy: globalThis.__exactRender ? t.madeBy : undefined }); }, next,
     (error, code, reason) => { if (t.upload) uploadEnded(r, t, { failed: [error, code, reason] }); gone(error, code, reason); }];
 }
 /** What rt.js's `data.uploads` is once a TypeScript source is installed. */

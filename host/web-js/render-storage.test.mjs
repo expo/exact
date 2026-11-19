@@ -810,3 +810,45 @@ export const answer = (): any => fetch('http://127.0.0.1:9/', { method: 'POST', 
     rmSync(dir, { recursive: true, force: true });
   }
 }, 120000);
+
+// A list's elements share its name, but each answer is its own call's: only an answer whose call watched a document, or
+// was refused storage, after an await or not, is listed in `open` for the reader's page to ask again (LLP 1048.000 D9).
+// Each use of a component is a row of its own, listed by its own answer too.
+test('a render lists in `open` only the answers whose own calls watched or were refused storage', async () => {
+  const dir = scratch();
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `component App
+  state ids: string[] = ["a", "b", "c", "d", "e"]
+  resource notes = note(id) for id in ids as shape string
+  view
+    column
+      text notes.join(",") testId="notes"
+      Note(id="x")
+      Note(id="y")
+
+component Note
+  props
+    id: string
+  resource own = note(id) as shape string
+  view
+    text own
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'fs.read app:/data';
+export const answer = (name: string, [id]: string[], _store: unknown, storage: any): any => {
+  if (id === 'e') return (async () => { await Promise.resolve(); storage.fs.watch('doc:/notes'); return 'note e'; })();
+  if (id === 'b' || id === 'x') storage.fs.watch('doc:/notes');
+  if (id === 'd') void storage.fs.readFile('app:/data/p');
+  return 'note ' + id;
+};
+`);
+    const dist = await build(dir);
+    const { renderer } = await import('./render.mjs');
+    const render = renderer(dist); render.ahead = false;
+    const reply = await render('/');
+    const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
+    expect(checkpoint.answers.map(a => a[3])).toEqual(['note a', 'note b', 'note c', 'note d', 'note e', 'note x', 'note y']);
+    expect((checkpoint.open ?? []).map(k => checkpoint.answers[k][3])).toEqual(['note b', 'note d', 'note e', 'note x']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);

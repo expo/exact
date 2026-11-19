@@ -430,13 +430,11 @@ const expectRefusal = (m, args) => expecting(m, args) && !isDocument(args) ? new
 // answers. Nothing was started, so nothing waits for it (held.js `answersAtWork`). The reader's page asks its source
 // again even if the source answered without waiting for storage. `owner`, the answer's call, is named in the
 // journal and the server's log; a stream's controller is the owner of the file its body is read from as it opens, and
-// a stream refused that file starts no request, so it no longer counts as in flight (held.js `counted`).
-const refusedInRender = new Set();
+// a stream refused that file starts no request, so it no longer counts as in flight (held.js `counted`). An answer's
+// call keeps its refusal, which lists that answer in `open` (checkpoint.js `answers`); a stream is listed by its ticket.
 function refuseInRender(api, owner, unavailable = 'storage') {
   rt.journal.push(`t=${rt.clock.now} ${unavailable} refused (render): ${owner?.name ?? owner?.streamName ?? 'background work'}: ${api}: a page rendered on the server has no ${unavailable}; the reader's page asks again`);
   if (owner) { owner.refused = api; owner.recount?.(); }
-  const name = owner?.name ?? owner?.streamName;
-  if (name) refusedInRender.add(name);
   return new Promise(() => {});
 }
 // Set as this module loads, before any app module's code can make a file-body fetch (a prewarmed realm evaluates them
@@ -445,9 +443,6 @@ if (globalThis.__exactRender) {
   answering.refuseStorage = refuseInRender;
   answering.refuseVisitor = (api, owner) => refuseInRender(api, owner, 'visitor credentials');
 }
-// Answers that watched a document in a render (`storage.fs.watch`), by name: the reader's page asks each again, as it
-// does an open stream's, and makes its watch.
-const watchedInRender = new Set();
 function renderStorage(owner) {
   // What the device rejects before asking storage it rejects here too, so a source that catches it answers alike.
   const refuse = (api, check = () => null) => (...args) => {
@@ -465,7 +460,9 @@ function renderStorage(owner) {
     if (overlaying.on) throw inOverlay(api);
     if (!watching) throw new Error(`${api} outside an answer`);
     if (typeof path !== 'string' || !path.startsWith('doc:/')) throw new TypeError(`${api}: path must be a doc:/ path`);
-    watchedInRender.add(answering.call.name);
+    // The reader's page asks an answer that watched a document again, as it does an open stream's, which makes its
+    // watch: the answer's call keeps it (checkpoint.js `answers`)
+    answering.call.watchedInRender = true;
   };
   return Object.freeze({ fs: Object.freeze({ directories: DIRECTORIES, ...fs, watch }), sqlite: Object.freeze({ open: refuse('storage.sqlite.open()') }), work: promise => Promise.resolve(promise) });
 }
@@ -575,7 +572,6 @@ export function install(data, mixed = false, modules = null) {
   bodyFiles.appId = appId ?? null; // `exactBodyFrom`'s store (ts-fetch.js)
   data.grants = setAppGrantSet(tsGrantSet);
   const storage = globalThis.__exactRender ? renderStorage(null) : storageOf(tsGrantSet);
-  if (globalThis.__exactRender) { data.watchedInRender = watchedInRender; data.refusedInRender = refusedInRender; }
   globalThis.captureCanvas = (surface, path, type, quality) => {
     if (overlaying.on) return Promise.reject(inOverlay('captureCanvas()'));
     if (answering.mapper || answering.mapperCall) return Promise.reject(new Error("captureCanvas() is unavailable in a stream's mapper: capture in the answer that opens the stream"));
@@ -672,7 +668,7 @@ export function install(data, mixed = false, modules = null) {
     }
     const effects = effectsOf(!mutation || !!(r && typeof r.then === 'function'));
     // An upload's request identity: the same request for newer arguments keeps it (rt.js, LLP 1016.000 D10).
-    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects, watches: call.watches }; }
+    if (call.stream) { call.settled = true; return { stream: opener(call.stream, v => conv(shaped(v), result, target_), target_), upload: requestKey(call.stream), store: seen.read, effects, watches: call.watches, madeBy: call }; }
     if (r && typeof r.then === 'function') {
       pendingAnswers++;
       call.seen = seen; // a read after an `await` makes a store reader too: rt.js looks when the answer lands (LLP 1146 §2.3)
@@ -695,10 +691,10 @@ export function install(data, mixed = false, modules = null) {
       call.flight = true;
       const stood = Object.assign(() => { call.stood = true; for (const go of call.waiting ?? []) go(); call.waiting = null; },
         { refused: why => { call.stood = false; for (const go of call.waiting ?? []) go.refused(why); call.waiting = null; call.unsent = []; } });
-      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call, watches: call.watches };
+      return { promise: r.then(v => (settle(), conv(shaped(v), result, target_)), e => { settle(); leftOpen(); throw e; }), store: seen.read, effects: [...(effects ?? []), stood], call, watches: call.watches, madeBy: call };
     }
     call.settled = true; dropTimers(call); answering.untraced.delete(call);
-    return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches };
+    return { v: conv(shaped(r), result, target_), store: seen.read, effects, watches: call.watches, madeBy: call };
   };
   // Beside a Rust source (LLP 1027.002): a source this module does not
   // answer is the Rust module's, not ready until it loads; rust-data.js
