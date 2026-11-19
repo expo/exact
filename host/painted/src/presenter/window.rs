@@ -178,9 +178,24 @@ impl<D: DataSource> Presenter<D> {
             // The keyboard's edge has no inset of its own (the web's reading).
             env[2] = 0.0;
         }
+        // The bands an edge box's background reaches into (D3.7): none under
+        // `cover`, and none at a keyboard's edge.
+        let bands = match cover {
+            true => [0.0; 4],
+            false => [
+                safe[0],
+                safe[1],
+                match keyboard > 0.0 && policy == Keyboard::Resizes {
+                    true => 0.0,
+                    false => safe[2],
+                },
+                safe[3],
+            ],
+        };
         let rose = keyboard > self.window.keyboard;
         let moved = self.window.keyboard != keyboard;
-        self.dirty |= self.window.frame != Some(frame) || moved;
+        self.dirty |= self.window.frame != Some(frame) || moved || self.brush.bands != bands;
+        self.brush.bands = bands;
         self.window.frame = Some(frame);
         self.window.keyboard = keyboard;
         // The size, the insets and the keyboard's overlap in one commit (LLP

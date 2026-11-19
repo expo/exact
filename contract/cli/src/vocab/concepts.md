@@ -1721,6 +1721,9 @@ counts), and `-exact-safe-area="top"` (or `none`, or other edges) on the route t
 as SwiftUI's `ignoresSafeArea`: a scroller at the route's top then starts under the bar, and
 its first box pads `var(--exact-safe-area-inset-top)` itself. A box may set
 `--exact-safe-area-inset-bottom="0px"` for its subtree.
+On Android a bar of your own needs neither `cover` nor that margin: a box at the top or bottom
+of the page, with square corners there and nothing above it that clips or scrolls, paints its
+background on under the status or navigation bar (LLP 1115.001 D3.7).
 
 - A scroller's last row sits its `padding-bottom` above UIKit's inset: subtract the inset
   from the original's gap rather than adding `env(safe-area-inset-bottom)`.

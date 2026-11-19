@@ -65,6 +65,7 @@ pub(crate) mod numerals;
 pub(crate) mod ripple;
 pub(crate) use native::object_fit_of;
 pub use native::NativeKind;
+mod bleed;
 mod order;
 mod placed;
 mod presented;
@@ -119,6 +120,8 @@ struct BoxGeometry {
     // Left and top padding + border, summed as the kernel's measure closure
     // sums them: flowed text is measured and painted around the same bits.
     inset: (f32, f32),
+    /// How far its background reaches into the window's bands (`bleed.rs`).
+    bleed: [f32; 4],
 }
 impl BoxGeometry {
     /// The content box on the content edge's curve: where a picture or a
@@ -208,6 +211,7 @@ impl BoxPaint {
         let pad = self.padding;
         BoxGeometry {
             inset: (pad[3] + widths[3], pad[0] + widths[0]),
+            bleed: [0.0; 4],
             outer: Shape::elliptical(
                 rect,
                 border::resolve_radii(self.radii.clone(), &self.env, w, h),
@@ -232,12 +236,13 @@ impl BoxPaint {
         if !self.backdrop.is_none() {
             backend.backdrop_filter(&geometry.outer, &self.backdrop, ts);
         }
-        self.emit(geometry, |shape, color| backend.fill(&shape, color, ts));
+        let back = bleed::geometry(geometry);
+        self.emit(&back, |shape, color| backend.fill(&shape, color, ts));
         // The last layer first, so the first is on top (LLP 1077 D5), within
         // the background's clip (D6).
-        if let Some(clip) = self.background_shape(geometry) {
+        if let Some(clip) = self.background_shape(&back) {
             for g in self.gradients.iter().rev() {
-                gradient::paint(g, &geometry.outer, &clip, self.widths, backend, ts);
+                gradient::paint(g, &back.outer, &clip, self.widths, backend, ts);
             }
         }
         for band in self.inset_shadow_fills(geometry) {
@@ -360,7 +365,7 @@ pub struct Scene<'a> {
 }
 
 mod frame;
-pub use backend::{Backend, FrameTarget, WindowLayer};
+pub use backend::{Backend, FrameTarget, WindowLayer, POINTER};
 pub use exact_ink::Rotation;
 pub use frame::Frame;
 
@@ -404,6 +409,8 @@ pub struct Painter {
     pub(crate) top_surface: Option<TopSurface>,
     pub(crate) scrollbars: scrollbar::State,
     viewport: (f32, f32),
+    /// How far the window reaches past each edge of the viewport (`bleed.rs`).
+    pub(crate) bands: [f32; 4],
     cpu_ms: Option<f64>,
     /// What a reorder lifts: a row in its list, or a ghost over everything.
     pub(crate) lift: Lift,
@@ -555,6 +562,7 @@ impl Painter {
             top_surface: None,
             scrollbars: Default::default(),
             viewport: (0., 0.),
+            bands: [0.0; 4],
             cpu_ms: None,
             flatten: None,
             ringless: None,
@@ -1098,6 +1106,7 @@ impl Painter {
         // A hidden box paints none of its own chrome. Children still do,
         // and a text node still walks its runs so a visible inline paints.
         if paints_self {
+            surface.bleed = self.bleed(walk.scene.kernel, node.id, &surface.outer, ts);
             paint.paint(self.backend.as_mut(), &surface, ts);
             self.column_rules(walk.scene.kernel, node, rect, ts);
             let (dark, feedback) = (
@@ -1425,17 +1434,6 @@ fn intersect(a: Rect4, b: Rect4) -> Rect4 {
     let y1 = (a.1 + a.3).min(b.1 + b.3);
     (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
-
-/// The pointer arrow's outline, at the origin, in points.
-pub const POINTER: [(f32, f32); 7] = [
-    (0.0, 0.0),
-    (0.0, 16.0),
-    (4.0, 12.5),
-    (7.0, 19.0),
-    (9.5, 18.0),
-    (6.5, 11.5),
-    (11.5, 11.5),
-];
 
 #[cfg(test)]
 mod inline_image_tests;

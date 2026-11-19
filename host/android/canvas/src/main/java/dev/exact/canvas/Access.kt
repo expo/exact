@@ -703,6 +703,9 @@ internal class Root(context: Context) : FrameLayout(context) {
     /** Whether an accessibility service is on ([ExactActivity]). */
     var accessible = false
 
+    // The page paints an edge box's background past its frame, under the system bars (LLP 1115.001 D3.7).
+    init { clipChildren = false }
+
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider? = if (accessible) access.provider else null
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean = (accessible && access.hover(event)) || super.dispatchHoverEvent(event)

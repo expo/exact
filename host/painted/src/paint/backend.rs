@@ -1,6 +1,17 @@
 //! What the paint walk draws through.
 use super::*;
 
+/// The pointer arrow's outline, at the origin, in points.
+pub const POINTER: [(f32, f32); 7] = [
+    (0.0, 0.0),
+    (0.0, 16.0),
+    (4.0, 12.5),
+    (7.0, 19.0),
+    (9.5, 18.0),
+    (6.5, 11.5),
+    (11.5, 11.5),
+];
+
 /// The consumer of a completed paint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameTarget {

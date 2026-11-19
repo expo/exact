@@ -117,6 +117,68 @@ fn a_page_that_covers_the_window_is_told_the_insets() {
 }
 
 #[test]
+fn a_box_at_an_edge_paints_its_background_into_the_band_beyond_it() {
+    use crate::paint::Shape;
+    use tiny_skia::Transform;
+    let mut p = boot(
+        "component App\n  view\n    main testId=\"root\" width=\"100%\" height=\"100%\" display=\"flex\" flex-direction=\"column\"\n      box testId=\"bar\" height=56\n      scroll testId=\"port\" flex=1 min-height=0\n        box testId=\"row\" height=56\n      box testId=\"tabs\" height=56 border-radius=12\n",
+    );
+    assert!(p.set_window(phone()).is_none());
+    p.frame();
+    // The page is 400 × 754 from y 30: 30 above it, 16 below.
+    assert_eq!(p.brush.bands, [30., 0., 16., 0.]);
+    let id = |p: &Presenter<()>, name| {
+        let kernel = p.host().kernel();
+        kernel
+            .node_by_key(kernel.find_by_test_id(name)[0])
+            .unwrap()
+            .id
+    };
+    let mut bleed = |name, rect, radius, ts| {
+        let id = id(&p, name);
+        let kernel = p.host.kernel();
+        p.brush
+            .bleed(kernel, id, &Shape::new(rect, [radius; 4]), ts)
+    };
+    let one = Transform::identity();
+    let top = (0., 0., 400., 56.);
+    assert_eq!(
+        bleed("root", (0., 0., 400., 754.), 0., one),
+        [30., 0., 16., 0.]
+    );
+    assert_eq!(bleed("bar", top, 0., one), [30., 0., 0., 0.]);
+    // Placed there by a translation it reaches too; not below the edge, not
+    // rounded there and not turned.
+    assert_eq!(
+        bleed(
+            "bar",
+            (0., -20., 400., 56.),
+            0.,
+            Transform::from_translate(0., 20.)
+        ),
+        [30., 0., 0., 0.]
+    );
+    assert_eq!(bleed("bar", (0., 1., 400., 56.), 0., one), [0.; 4]);
+    assert_eq!(bleed("tabs", (0., 698., 400., 56.), 12., one), [0.; 4]);
+    assert_eq!(
+        bleed("bar", top, 0., Transform::from_scale(1.1, 1.)),
+        [0.; 4]
+    );
+    // A scroller's row, recorded apart at its own origin, is under a scroller.
+    assert_eq!(bleed("row", top, 0., one), [0.; 4]);
+    // A keyboard's edge has no band, and a page that covers the window has none.
+    let typing = Window {
+        keyboard: [0., 0., 300., 0.],
+        ..phone()
+    };
+    assert!(p.set_window(typing).is_none());
+    assert_eq!(p.brush.bands, [30., 0., 0., 0.]);
+    let mut p = boot(&page("viewport-fit=\"cover\""));
+    assert!(p.set_window(phone()).is_none());
+    assert_eq!(p.brush.bands, [0.; 4]);
+}
+
+#[test]
 fn the_keyboard_ends_the_viewport_at_its_top() {
     for (root, without, with) in [
         // Inside the bars: 754 tall from 30; the keyboard covers 284 of it.

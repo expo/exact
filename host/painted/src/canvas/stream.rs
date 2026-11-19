@@ -265,6 +265,10 @@ impl Recorder {
 }
 
 #[cfg(test)]
+#[path = "bleed_tests.rs"]
+mod bleed_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
