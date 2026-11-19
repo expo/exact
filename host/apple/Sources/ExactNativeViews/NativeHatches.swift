@@ -11,7 +11,7 @@
 //
 // The host's table, handed to the module once (`module_connect`):
 //
-//    0  u32 size                200
+//    0  u32 size                208
 //    8  resolve(host, routeKey, keyLen, id, idLen) → node (0: none)
 //   16  act(host, node, action) → 0 done   action 0 click, 1 focus, 2 blur
 //   24  log(host, text, len)
@@ -55,6 +55,9 @@
 //  192  tab_intent(host, kind, text, len) → 0 queued: an intent of a tab
 //        container the app owns (LLP 1075.003 §3.6), kind 0 Back, 1 open the
 //        URL `text`, 2 select the tab whose index is `text`; queued like `act`
+//  200  content_scroll(host, controller) → borrowed UIScrollView *: a live
+//        route controller's content scroll view now, the one a status-bar tap
+//        scrolls while the route is active, or nil (`ExactRoute.contentScrollView`)
 //
 // `host` is the session's runtime handle, as for `changed` and `now`: a
 // destroyed session's is answered with nothing. Service queries use the
@@ -100,6 +103,16 @@ private let hatchResolve: HatchResolveFn = { host, key, keyLength, id, idLength 
     hatchSession(host)?.presenter.resolveRoute(hatchText(key, keyLength), id: hatchText(id, idLength)) ?? 0
     #else
     0
+    #endif
+}
+
+private let hatchContentScroll: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = { host, controller in
+    #if os(iOS) || os(tvOS)
+    guard let controller else { return nil }
+    let route = Unmanaged<UIViewController>.fromOpaque(controller).takeUnretainedValue()
+    return hatchSession(host)?.presenter.routeContentScrollView(of: route).map { Unmanaged.passUnretained($0).toOpaque() }
+    #else
+    nil
     #endif
 }
 
@@ -352,7 +365,7 @@ private let hatchService: @convention(c) (UnsafeMutableRawPointer?, UnsafePointe
 /// The host's callbacks, one table for the process: each finds its session
 /// by the handle it is called with.
 private let hatchHostTable: UnsafeRawPointer = {
-    let size = 200
+    let size = 208
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: UInt32(size), as: UInt32.self)
@@ -379,6 +392,7 @@ private let hatchHostTable: UnsafeRawPointer = {
     t.storeBytes(of: unsafeBitCast(hatchService, to: UnsafeRawPointer.self), toByteOffset: 176, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchAfterCoalescing, to: UnsafeRawPointer.self), toByteOffset: 184, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchTabIntent, to: UnsafeRawPointer.self), toByteOffset: 192, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(hatchContentScroll, to: UnsafeRawPointer.self), toByteOffset: 200, as: UnsafeRawPointer.self)
     return UnsafeRawPointer(t)
 }()
 

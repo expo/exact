@@ -321,6 +321,13 @@ extension Presenter {
     package func listCreating(_ id: UInt32) -> Bool { pool.list(creating: id) != nil }
     /// The node a route hatch names by its route key and id, or nil.
     package func resolveRoute(_ key: String, id: String) -> UInt32? { navigation.resolve(route: key, id: id)?.id }
+    /// A live route controller's content scroll view now (`NavigationHosting.contentScrollView(of:)`), the one a
+    /// status-bar tap scrolls while the route is active; nil for a controller that is not one of this presenter's
+    /// live routes.
+    package func routeContentScrollView(of controller: UIViewController) -> UIScrollView? {
+        guard let route = controller as? any RouteSurface, views[route.node.id] === route.node else { return nil }
+        return navigation.contentScrollView(of: route)
+    }
     package func tabIntent(_ kind: UInt32, _ text: String) -> Bool { navigation.tabIntent(kind, text) }
     package func setNavigationAppDelegate(_ controller: AnyObject, _ delegate: AnyObject?) { navigation.setAppDelegate(controller, delegate) }
     #if os(iOS)

@@ -40,7 +40,9 @@
 // 128  module_navigation(module, event, controller, flags) → flags
 //        event 0 built (the hatch runs), 1 retired; bit 0 showsBar
 // 136  module_route(module, event, controller, navigation, scroll, json, len)
-//        event 0 built, 1 changed, 2 ended; json {"key", "data": {…}}
+//        event 0 built, 1 changed, 2 ended; json {"key", "data": {…}};
+//        scroll the content scroll view as the hook runs (`content_scroll`
+//        reads it at any time)
 // 144  module_tabs(module, event, controller, index)      size ≥ 168
 //        event 0 built, 1 retired, 2 the router selected `index` in the
 //        app's container, 3 the app's container retired

@@ -600,6 +600,10 @@ final class ExactHatches {
     /// One of 200 or more: an intent of a tab container the app owns (LLP
     /// 1075.003 §3.6): 0 Back, 1 open a URL, 2 select a tab.
     let tabIntentFn: InputFn?
+    /// One of 208 or more: a route controller's content scroll view now
+    /// (`ExactRoute.contentScrollView`).
+    typealias ContentScrollFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
+    let contentScrollFn: ContentScrollFn?
     #if os(iOS) || os(tvOS)
     var navigations: [ObjectIdentifier: ExactNavigation] = [:]
     var routes: [String: ExactRoute] = [:]
@@ -655,6 +659,8 @@ final class ExactHatches {
             ? table.load(fromByteOffset: 184, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ExactModuleContext.AfterFn.self) } : nil
         tabIntentFn = table.load(as: UInt32.self) >= 200
             ? table.load(fromByteOffset: 192, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: InputFn.self) } : nil
+        contentScrollFn = table.load(as: UInt32.self) >= 208
+            ? table.load(fromByteOffset: 200, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ContentScrollFn.self) } : nil
     }
 
     /// An intent of the app's tab container; false when the host refused it or has no such entry.
@@ -710,6 +716,14 @@ final class ExactHatches {
         }
     }
 
+    #if os(iOS) || os(tvOS)
+    /// A live route controller's content scroll view, as the host decides it now; nil without one or without the
+    /// host's entry.
+    func contentScroll(of controller: UIViewController) -> UIScrollView? {
+        contentScrollFn?(host, Unmanaged.passUnretained(controller).toOpaque()).map { Unmanaged<UIScrollView>.fromOpaque($0).takeUnretainedValue() }
+    }
+    #endif
+
     func resolve(route: String, id: String) -> UInt32 {
         let key = Array(route.utf8), name = Array(id.utf8)
         return key.withUnsafeBufferPointer { k in
@@ -764,18 +778,17 @@ public final class ExactRoute {
     public internal(set) var navigation: ExactNavigation?
     /// The route node's `data-*` words.
     public internal(set) var data: ExactData
-    /// The route's content scroll view when the hatch was last called: the app's top-edge
-    /// selection; else, where the route has a `navigationScroll`, the scroll view of the element
-    /// it names, or nil when no element carries the name or it does not scroll; else the scroll
-    /// view of the route's first vertical scroller; else the route's own viewport, which an
-    /// unpresented route has when its navigation root scrolls or native chrome uses
-    /// `interactive-widget="resizes-visual"`; else nil. A top-edge
-    /// selection or nil made with UIKit's `controller.setContentScrollView(_:for:)` reaches it
-    /// when the hatch next runs, which Exact does as it prepares the route with a changed
-    /// projection: once the runtime's answer to a changed clearance is applied, or else at the
-    /// next authored update. Nil makes the edge automatic, as in UIKit.
+    /// The route's content scroll view, read when asked on the main thread, the one a status-bar tap
+    /// scrolls while the route is active: the app's top-edge selection, made with UIKit's `controller.setContentScrollView(_:for:)`;
+    /// else, where the route has a `navigationScroll`, the scroll view of the element it names, or nil
+    /// when no element carries the name or it does not scroll; else the scroll view of the route's
+    /// first vertical scroller; else the route's own viewport, which an unpresented route has when its
+    /// navigation root scrolls or native chrome uses `interactive-widget="resizes-visual"`; else nil.
+    /// After the app's nil it is that automatic choice at once, while UIKit's
+    /// `contentScrollView(for: .top)` stays nil until the route's next layout. Nil from `routeEnded`
+    /// on, and on a host whose hatch table has no `content_scroll`.
     /// An authored scroller's offset, insets, size and delegate remain Exact's.
-    public internal(set) weak var contentScrollView: UIScrollView?
+    public var contentScrollView: UIScrollView? { isLive ? hatches?.contentScroll(of: controller) : nil }
     /// Whether this call is the controller's first.
     public internal(set) var isNew: Bool
     /// False once `routeEnded` has run: the handle then does nothing.
@@ -1128,8 +1141,10 @@ private let moduleNavigation: @convention(c) (UnsafeMutableRawPointer?, UInt32, 
 }
 
 /// `route(module, event, controller, navigation, scroll, json, len)`: event
-/// 0 built, 1 changed, 2 ended; json `{"key": …, "data": {…}}`.
-private let moduleRoute: @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> Void = { raw, event, controller, navigation, scroll, json, length in
+/// 0 built, 1 changed, 2 ended; json `{"key": …, "data": {…}}`. `scroll` is the
+/// content scroll view as the hook runs; `ExactRoute` asks the host's
+/// `content_scroll` each time it is read.
+private let moduleRoute: @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> Void = { raw, event, controller, navigation, _, json, length in
     #if os(iOS) || os(tvOS)
     guard let m = module(raw), let hatches = m.hatches, let controller, let json, length > 0,
           let object = try? JSONSerialization.jsonObject(with: Data(bytes: json, count: Int(length))) as? [String: Any],
@@ -1158,7 +1173,6 @@ private let moduleRoute: @convention(c) (UnsafeMutableRawPointer?, UInt32, Unsaf
         hatches.routes[key] = route
     }
     route.navigation = navigation.flatMap { hatches.navigations[ObjectIdentifier(Unmanaged<UINavigationController>.fromOpaque($0).takeUnretainedValue())] }
-    route.contentScrollView = scroll.map { Unmanaged<UIScrollView>.fromOpaque($0).takeUnretainedValue() }
     m.route(route)
     #endif
 }

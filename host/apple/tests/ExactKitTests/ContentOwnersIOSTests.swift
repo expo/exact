@@ -355,6 +355,7 @@ final class ContentOwnersIOSTests: XCTestCase {
             XCTAssertTrue(selected.scrollsToTop, "a native write updates scroll-to-top without an authored batch")
             XCTAssertFalse(other.scrollsToTop)
             XCTAssertTrue(route.contentScrollView(for: .top) === selected, "the bar follows the selection at once")
+            XCTAssertTrue(p.routeContentScrollView(of: route) === selected, "the host answers a route hatch with the selection at once")
             route.node.props["navigationScroll"] = named
             pass()
             panesUnderTheBar()
@@ -367,6 +368,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         // nil is UIKit's automatic selection, which Exact makes: the pane `navigationScroll` names
         route.node.props["navigationScroll"] = "pane-second"
         route.setContentScrollView(nil, for: .top)
+        XCTAssertTrue(p.routeContentScrollView(of: route) === secondary, "and with the automatic choice at once after a nil")
         XCTAssertTrue(secondary.scrollsToTop)
         XCTAssertFalse(primary.scrollsToTop)
         route.view.layoutIfNeeded()

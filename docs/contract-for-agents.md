@@ -3936,13 +3936,14 @@ A pane's view controller reports its scroll view only while UIKit insets the pan
 reports none for a pane UIKit hides. A pane `scroll` with an element hatch always has its
 scroller in the hatch's `element.scrollView`.
 
-The route hatch's `contentScrollView` is the route's content scroll view when the
-hatch was last called: an app's top-edge selection, an app-owned `UIScrollView`
-included; else, where the route has a `navigationScroll`, the scroll view of the
-element it names, or nil when no element carries the name or it does not scroll;
-else the scroll view of the route's first vertical scroller; else the route's own
-viewport, which an unpresented route has when the navigation root scrolls or native
-chrome uses `interactive-widget="resizes-visual"`; else nil. A native list's scroll
+The route hatch's `contentScrollView` is the route's content scroll view when it is
+read, the one a status-bar tap scrolls while the route is active: an app's top-edge
+selection, an app-owned `UIScrollView` included; else, where the route has a
+`navigationScroll`, the scroll view of the element it names, or nil when no element
+carries the name or it does not scroll; else the scroll view of the route's first
+vertical scroller; else the route's own viewport, which an unpresented route has
+when the navigation root scrolls or native chrome uses
+`interactive-widget="resizes-visual"`; else nil. A native list's scroll
 view is its collection view. UIKit's
 `contentScrollView(for: .top)` reports Exact's scroller only while it sits under the
 bar. UIKit's bar follows a selection at once. Exact's own layout of the route follows
@@ -3951,10 +3952,8 @@ route's clearance) at the route's next layout or as the route appears. A selecti
 during a push or a pop on screen, a presentation or a dismissal, on a route that does not
 appear in it, follows when it ends, unless a batch meanwhile prepares the route's stack; a
 transition that a stack off screen keeps until its tab shows again does not hold it.
-Until then, after a nil, `contentScrollView(for:)` returns nil. A top-edge
-selection or nil reaches the hatch when the hatch next runs, which Exact does as it
-prepares the route with a changed projection: once the runtime's answer to a changed
-clearance is applied, or else at the next authored update.
+Until then, after a nil, `contentScrollView(for:)` returns nil, while the route
+hatch's `contentScrollView` already names Exact's automatic choice.
 
 The containing navigation controller still owns one shared navigation bar. UIKit
 decides where its large title and each pane's edge effect appear; the panes keep
