@@ -476,6 +476,30 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(ControlBars(p).bars(of: list, in: route, top: true).map { $0.map(\.id) }, [bar.id])
     }
 
+    /// A route padding its left by `env(safe-area-inset-left)`, 59, beside a 59-point cover, as
+    /// in landscape or beside an open Duo's sidebar: layout pads that edge by the larger of the
+    /// two (LLP 1123 D3), so its list starts at 59, where the room its bars leave starts too.
+    func testARoutePaddedByItsOwnInsetKeepsItsBars() {
+        let p = Presenter()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "button"],
+            ["op": "create", "id": 4, "kind": "scroll", "props": ["flexGrows": "true"]],
+            ["op": "children", "id": 2, "ids": [3]],
+            ["op": "children", "id": 1, "ids": [2, 4]],
+            ["op": "roots", "ids": [1]]
+        ]))
+        let route = p.views[1]!, bar = p.views[2]!, list = p.views[4]!
+        route.frame = CGRect(x: 0, y: 0, width: 951, height: 669)
+        route.applyKernelContentBox(route.bounds.inset(by: UIEdgeInsets(top: 0, left: 59, bottom: 0, right: 0)), padding: [0, 0, 0, 59])
+        bar.frame = CGRect(x: 59, y: 82, width: 892, height: 51)
+        list.frame = CGRect(x: 59, y: 133, width: 892, height: 502)
+        p.navigationHost.covers[route.id] = .edges(.init(top: 82, right: 0, bottom: 34, left: 59))
+        route.style["inset_credit"] = .number(8)
+        XCTAssertEqual(ControlBars(p).bars(of: list, in: route, top: true).map { $0.map(\.id) }, [bar.id])
+    }
+
     func testAControlBarMayIncludeACaptionButACaptionAloneIsNotABar() {
         let p = Presenter()
         p.apply(wireBatch([

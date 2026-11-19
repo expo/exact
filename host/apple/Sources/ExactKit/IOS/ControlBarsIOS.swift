@@ -142,15 +142,24 @@ package final class ControlBars {
         return found
     }
 
-    /// `p`'s content box inside the cover a route's containers give it, as
-    /// well as the author's padding, but for the edges the route opts out of
-    /// (`-exact-safe-area`, LLP 1123 D4), which its content reaches.
+    /// `p`'s content box less the cover a route's containers give it, as
+    /// layout pads it: the whole cover on an edge the route keeps; none on an
+    /// edge it opts out of (`-exact-safe-area`, LLP 1123 D4), which its
+    /// content reaches; and on an edge whose padding clears its own inset,
+    /// what the cover adds beyond that padding, as layout pads such an edge by
+    /// the larger of the two (D3).
     private func available(_ p: NodeView) -> CGRect {
         var room = p.contentBox()
         if case .edges(let e)? = presenter.navigation.covers[p.id] {
-            let off = RouteGeometry.clearanceOff(p)
-            let kept = { (bit: Int, inset: CGFloat) in off & bit != 0 ? 0 : inset }
-            room = room.inset(by: UIEdgeInsets(top: kept(1, e.top), left: kept(8, e.left), bottom: kept(4, e.bottom), right: kept(2, e.right)))
+            let off = RouteGeometry.clearanceOff(p), credit = Int(p.style["inset_credit"]?.number ?? 0)
+            // Each edge by its index, top right bottom left, and its bit in both sets
+            let kept = { (edge: Int, inset: CGFloat) -> CGFloat in
+                let bit = 1 << edge
+                if off & bit != 0 { return 0 }
+                if credit & bit == 0 { return inset }
+                return max(0, inset - ((p.kernelPadding?[edge] ?? nil) ?? 0))
+            }
+            room = room.inset(by: UIEdgeInsets(top: kept(0, e.top), left: kept(3, e.left), bottom: kept(2, e.bottom), right: kept(1, e.right)))
         }
         return room
     }
