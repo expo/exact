@@ -1,6 +1,9 @@
 // The finding lines of a verify report: check's groups, each line's rule and place, the lines by rule (LLP 1116.004
-// D1.3), its largest-text comparison, and the accessibility tree's group (LLP 1166.002 D1). verify.mjs re-exports what
-// its callers import.
+// D1.3), its largest-text comparison, the accessibility tree's group (LLP 1166.002 D1), and the launch colour's note
+// (LLP 1163 D2). verify.mjs re-exports what its callers import.
+import { readFileSync } from 'node:fs';
+import { decodePng } from './png.mjs';
+import { parseColour, schemeColours } from './scheme-colours.mjs';
 
 export const FIRST = 'first screen', RELAUNCH = 'relaunch';
 /** The hosts whose accessibility tree verify reads (verify-ax.mjs): the web (Chrome's) and iOS (UIKit's). */
@@ -307,4 +310,70 @@ export function largeRemedy(f, { inRow = false } = {}) {
   // grow to 31 points and no further (iOS 27), never shrinking them.
   if (f.kind === 'overlap') return `${WRAP}; for a row of equal cells that must stay one line (a week's days), cap the size its text grows to, as UIKit's calendar does: font-size="min(-exact-subheadline, 31px)"`;
   return WRAP;
+}
+
+/** LLP 1163 D2: a note, never a finding, where the launch screen is not the first screen's colour in a scheme. Each
+ * scheme's launch colour is the manifest's for it (`schemeColours`: the scheme's own member, else the top-level
+ * `background_color`, which holds in every scheme; a fixed `userInterfaceStyle` shows its side, but on Android, which
+ * follows the device), and each host fades from it to the first frame. A named colour is the author's word, so a
+ * difference may be meant: the lines say so. `grounds` is the first screen's ground by the scheme the system asked for
+ * (`firstGrounds`), read from 8-bit sRGB captures, null where unread. Lines, none where nothing is named or nothing
+ * differs. */
+export function launchNotes(manifest, grounds, host = 'ios') {
+  const style = host === 'android' ? null : manifest.userInterfaceStyle, named = schemeColours(manifest, 'background_color', style);
+  const side = (scheme) => (style === 'light' || style === 'dark' ? style : scheme);
+  const colour = (scheme) => {
+    const parsed = named[scheme] && parseColour(named[scheme], `the ${scheme} launch colour`);
+    return parsed && parsed.alpha === 1 ? parsed : null;
+  };
+  // A Display P3 colour beyond sRGB is its clip in a capture, which is sRGB
+  const differ = ['light', 'dark'].filter((scheme) => colour(scheme) && grounds[scheme] && !nearHex(colour(scheme).hex, grounds[scheme]));
+  if (!differ.length) return [];
+  const source = (scheme) => manifest[`color_scheme_${side(scheme)}`]?.background_color ? `color_scheme_${side(scheme)}.background_color`
+    : `background_color${side(scheme) === 'dark' ? ', which holds in dark mode too unless color_scheme_dark.background_color names another' : ''}`;
+  // Each scheme the manifest names takes the first screen's colour where it was read; one it leaves to Exact stays so
+  const want = { light: named.light && (grounds.light ?? named.light), dark: named.dark && (grounds.dark ?? named.dark) };
+  const members = want.light && want.dark
+    ? [`"background_color": "${want.light}"`, ...(want.dark !== want.light ? [`"color_scheme_dark": { "background_color": "${want.dark}" }`] : [])]
+    : [`"color_scheme_${want.light ? 'light' : 'dark'}": { "background_color": "${want.light ?? want.dark}" }`];
+  return [`launch: a note, not a problem, not counted: the launch screen is not the first screen's colour in ${differ.map((s) => `${s} mode`).join(' and ')}`,
+    ...differ.map((scheme) => `  ${scheme} mode: the launch screen is ${named[scheme]} (${source(scheme)}) and the first screen's ground is ${grounds[scheme]}, so the app fades from one to the other as it opens`),
+    `  that is fine where it is meant; to open on the first screen's colour instead, put these in app.json in place of every background_color it names: ${members.join(', ')}`];
+}
+
+/** The first screen's ground in each scheme the system asked for (`launchNotes`): `edgeGround` of the first capture of
+ * each among `runs`, `{ light, dark }`, null where none was kept or its edges show no one colour. */
+export function firstGrounds(runs) {
+  const grounds = { light: null, dark: null }, read = new Set();
+  for (const run of runs.filter((r) => r.screen === FIRST && r.shot)) {
+    const scheme = run.asked ?? run.scheme;
+    if (!(scheme in grounds) || read.has(scheme)) continue;
+    read.add(scheme);
+    try { grounds[scheme] = edgeGround(decodePng(readFileSync(run.shot))); } catch { /* no capture: unread */ }
+  }
+  return grounds;
+}
+
+/** A screen's ground, read from its capture: the colour of most of a strip down each side, its middle half (below the bars,
+ * above a tab bar or the home indicator), where both sides show the same one. The page shows there under an inset list's
+ * margins, and a full-width row that fills it with its own colour reads as that colour; a sidebar, a picture, a gradient
+ * or content to the edge leave the sides unlike, and then there is no answer (null), never a guess. `#rrggbb`. */
+export function edgeGround({ width, height, data }) {
+  const side = (x) => {
+    const counts = new Map();
+    let n = 0;
+    for (let y = Math.floor(height / 4); y < Math.ceil(height * 3 / 4); y += 2, n++) {
+      const i = (y * width + x) * 4, key = data[i] << 16 | data[i + 1] << 8 | data[i + 2];
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const [key, count] = [...counts].reduce((a, b) => (b[1] > a[1] ? b : a), [0, 0]);
+    return n && count >= n * 0.8 ? `#${key.toString(16).padStart(6, '0')}` : null;
+  };
+  const left = side(Math.min(2, width - 1)), right = side(Math.max(width - 3, 0));
+  return left && right && nearHex(left, right) ? right : null;
+}
+
+/** Whether two `#rrggbb` colours match, no channel more than 6 apart: a margin for a capture's rounding */
+function nearHex(a, b) {
+  return [1, 3, 5].every((i) => Math.abs(parseInt(a.slice(i, i + 2), 16) - parseInt(b.slice(i, i + 2), 16)) <= 6);
 }
