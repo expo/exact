@@ -14,7 +14,7 @@ final class ColorReference: ExactModule {
             return ["available": false]
         case "sidebarBarHeight":
             #if os(iOS)
-            return ["height": Double(split?.besideBarHeight ?? 0)]
+            return ["height": Double(split?.sidebarBarHeight ?? 0)]
             #else
             return ["height": 0]
             #endif
@@ -24,7 +24,7 @@ final class ColorReference: ExactModule {
     }
 
     #if os(iOS)
-    /// What the `sidebarBarHeight` answer watches: said whenever the split's `besideBarHeight` changes
+    /// What the `sidebarBarHeight` answer watches: said whenever the split's `sidebarBarHeight` changes
     static let sidebarBarTopic = "gallery-sidebar-bar"
     private weak var split: GallerySplit?
     private let sharedBackgrounds = NSMapTable<UIViewController, NSNumber>.weakToStrongObjects()
@@ -40,7 +40,7 @@ final class ColorReference: ExactModule {
 
     override func tabContainer(_ contents: ExactTabContents) -> UIViewController? {
         let split = GallerySplit(contents)
-        split.besideBarHeightChanged = { [context] in context.changed(Self.sidebarBarTopic) }
+        split.sidebarBarHeightChanged = { [context] in context.changed(Self.sidebarBarTopic) }
         self.split = split
         return split
     }

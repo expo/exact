@@ -17,6 +17,7 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
         setViewController(UINavigationController(rootViewController: sidebar), for: .primary)
         setViewController(stacks[contents.selected], for: .secondary)
         sidebar.choose = { [weak self] index in self?.choose(index) }
+        sidebar.laidOut = { [weak self] in self?.updateSidebarBarHeight() }
         contents.onSelect = { [weak self] index in
             guard let self else { return }
             selectedFromSidebar = true
@@ -28,33 +29,34 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
 
     required init?(coder: NSCoder) { nil }
 
-    /// The sidebar's navigation bar height with its title inline while the sidebar shows beside the page, else 0:
-    /// the least height of the page's range bar, so the two columns' headers end level once both are scrolled
-    private(set) var besideBarHeight: CGFloat = 0
-    /// Called on the main thread when `besideBarHeight` changes
-    var besideBarHeightChanged: (() -> Void)?
-    /// The sidebar's inline bar height, and the bar width and size classes it was measured at
+    /// The sidebar's navigation bar height with its title inline while the split is expanded, else 0: the least
+    /// height of the page's range bar, so the two columns' headers end level once both are scrolled. It holds
+    /// whether or not the sidebar shows, so hiding the sidebar, showing it or dragging it in moves nothing.
+    private(set) var sidebarBarHeight: CGFloat = 0
+    /// Called on the main thread when `sidebarBarHeight` changes
+    var sidebarBarHeightChanged: (() -> Void)?
+    /// The sidebar's inline bar height, and the bar width and vertical size class it was measured at
     private var inlineBarHeight: CGFloat = 0
     private var measuredAt: [CGFloat]?
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        updateBesideBarHeight(displayMode)
-    }
-
-    /// Sets `besideBarHeight` for the split shown in `mode`, and says so when it changes
-    private func updateBesideBarHeight(_ mode: DisplayMode) {
-        let beside = !isCollapsed && mode != .secondaryOnly
-        // Measure once the bar is laid out in a window, and again only where its width or the size classes changed:
-        // measuring sets the sidebar item's mode twice
-        if beside, let bar = sidebar.navigationController?.navigationBar, bar.window != nil, bar.bounds.width > 0 {
-            let at = [bar.bounds.width, CGFloat(traitCollection.horizontalSizeClass.rawValue), CGFloat(traitCollection.verticalSizeClass.rawValue)]
-            if at != measuredAt, let measured = sidebar.measureInlineBarHeight() { inlineBarHeight = measured; measuredAt = at }
+    /// Sets `sidebarBarHeight`, and says so when it changes
+    private func updateSidebarBarHeight() {
+        if !isCollapsed, let navigation = sidebar.navigationController {
+            let bar = navigation.navigationBar
+            // Measure only in a window, where the bar has the height it shows (laid out apart from one it reports
+            // UIKit's bare 44 points), and again only where its width or the vertical size class changed: measuring
+            // sets the sidebar item's mode twice. A sidebar hidden since launch is first measured as it shows.
+            let at = [bar.bounds.width, CGFloat(traitCollection.verticalSizeClass.rawValue)]
+            // Note the key first, so a layout the measuring starts does not measure again
+            if bar.window != nil, bar.bounds.width > 0, at != measuredAt {
+                measuredAt = at
+                if let measured = sidebar.measureInlineBarHeight() { inlineBarHeight = measured }
+            }
         }
-        let height = beside ? inlineBarHeight : 0
-        if height != besideBarHeight {
-            besideBarHeight = height
-            besideBarHeightChanged?()
+        let height = isCollapsed ? 0 : inlineBarHeight
+        if height != sidebarBarHeight {
+            sidebarBarHeight = height
+            sidebarBarHeightChanged?()
         }
     }
 
@@ -74,18 +76,17 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
         selectedFromSidebar ? .secondary : .primary
     }
 
-    // Hiding or showing the sidebar, collapsing and expanding need not lay out the split's own view
-    func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
-        updateBesideBarHeight(displayMode)
-    }
-    func splitViewControllerDidCollapse(_ svc: UISplitViewController) { updateBesideBarHeight(displayMode) }
-    func splitViewControllerDidExpand(_ svc: UISplitViewController) { updateBesideBarHeight(displayMode) }
+    // Update when the split collapses or expands, which need not lay out the sidebar
+    func splitViewControllerDidCollapse(_ svc: UISplitViewController) { updateSidebarBarHeight() }
+    func splitViewControllerDidExpand(_ svc: UISplitViewController) { updateSidebarBarHeight() }
 }
 
 final class GallerySidebar: UITableViewController {
     private let contents: ExactTabContents
     private let groups = [("Text", [0, 1]), ("Color & images", [2, 3, 4, 5]), ("UI & media", [6, 7, 8])]
     var choose: ((Int) -> Void)?
+    /// Called after the sidebar lays out, once its bar is in a window: a sidebar hidden since launch first does as it shows
+    var laidOut: (() -> Void)?
 
     init(_ contents: ExactTabContents) {
         self.contents = contents
@@ -109,6 +110,11 @@ final class GallerySidebar: UITableViewController {
             navigationItem.largeTitleDisplayMode = mode
         }
         return height
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        laidOut?()
     }
 
     override func viewDidLoad() {
