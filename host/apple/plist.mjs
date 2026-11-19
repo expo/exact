@@ -401,6 +401,7 @@ export function appleMetadataOwners() {
   for (const [platform, keys] of [
     ['ios', ['application-identifier', 'com.apple.developer.team-identifier', 'keychain-access-groups', 'get-task-allow',
       'com.apple.security.application-groups', 'com.apple.developer.parent-application-identifiers',
+      'com.apple.developer.on-demand-install-capable', 'com.apple.developer.associated-appclip-app-identifiers',
       'com.apple.developer.associated-domains', 'com.apple.developer.web-browser', MEMORY_ENTITLEMENT,
       'com.apple.developer.applesignin', 'com.apple.developer.in-app-payments']],
     ['macos', ['com.apple.application-identifier', 'com.apple.developer.team-identifier', 'com.apple.security.application-groups',

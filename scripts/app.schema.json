@@ -961,7 +961,7 @@
               "items": { "type": "string" }
             },
             "appClip": {
-              "description": "An App Clip (LLP 1126 D12: an App Clip is an app). `{}` embeds the whole app a second time at `<App>.app/AppClips/<name>.app`, with `NSAppClip` in its Info.plist, the app as its parent application and each concrete `applinks:` domain it signs (`handle_links`'s and `associatedDomains`') as an `appclips:` invocation domain (the app's entitlements list those too). A device build needs a profile for the clip's App ID, registered with the App Clip capability, of the app's profile's team and method.",
+              "description": "An App Clip (LLP 1126 D12: an App Clip is an app). `{}` embeds the whole app a second time at `<App>.app/AppClips/<name>.app`, with `NSAppClip` in its Info.plist, the app as its parent application and each concrete `applinks:` domain it signs (`handle_links`'s and `associatedDomains`') as an `appclips:` invocation domain (the app's entitlements list those too). A device build needs a profile for the clip's App ID, registered with the App Clip capability, of the app's profile's team and method. Make the app's profile after registering the clip's App ID: only such a profile lets the app name its clip, which App Store Connect asks for.",
               "type": "object",
               "additionalProperties": false,
               "properties": {

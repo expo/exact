@@ -65,7 +65,7 @@ import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { rebuildArgs } from './link.mjs';
 export { rebuildArgs };
 import { composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
-import { associatedDomains, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
+import { associatedDomains, clipEntitlements, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
 import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
@@ -327,8 +327,8 @@ export { appClip };
 /** Device identity comes from the profile. Simulators need an app identity too: Keychain's default access group
  * is the application-identifier. A simulator's is `SIMULATORX.<id>`, with the bare id it had before kept as a
  * second Keychain group so items stored then still read and update in place (D3, measured).
- * `allows`: the signing profile's entitlements. */
-export const entitlements = (app, team = null, debuggable = true, reach = null, { simulator = false, prefix = team, allows = [], distributed = false } = {}) => {
+ * `allows`: the signing profile's entitlements; `profile`: that profile. */
+export const entitlements = (app, team = null, debuggable = true, reach = null, { simulator = false, prefix = team, allows = [], profile = null, distributed = false } = {}) => {
   const prefixed = `${SIMULATOR_PREFIX}.${app.id}`;
   const dict = {
     'application-identifier': team ? `${prefix}.${app.id}` : simulator ? prefixed : app.id,
@@ -340,7 +340,7 @@ export const entitlements = (app, team = null, debuggable = true, reach = null, 
   // The clip (`clipParent`, the app's id) is its parent's App Clip: the parent's entitlements, the App Group and
   // Keychain group of the parent's included (how a clip shares data with its app), under the clip's own
   // application-identifier (Apple, "Creating an App Clip with Xcode", the App Clip entitlement).
-  if (app.clipParent) dict['com.apple.developer.parent-application-identifiers'] = [`${prefix ?? SIMULATOR_PREFIX}.${app.clipParent}`];
+  Object.assign(dict, clipEntitlements(app, { prefix: prefix ?? SIMULATOR_PREFIX, profile }));
   if (hasEntries(app) && !app.widgetTV && !app.widgetHost) {
     dict['com.apple.security.application-groups'] = [widgetGroup(app)];
     const owner = app.widgetAppId ?? app.clipParent ?? app.id;
