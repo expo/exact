@@ -593,18 +593,23 @@ impl<D: DataSource> Runner<D> {
                         force.retain(|f| *f != i);
                         self.reconciling.retain(|r| *r != i);
                         let upload = self.uploading(i);
-                        if !upload {
-                            // An earlier pass's `Later` was never handed out.
-                            if let RequestEffect::Later { requests, .. } =
-                                std::mem::replace(&mut effects[i], RequestEffect::Answered)
-                            {
-                                for request in &requests {
-                                    self.discard_request(request);
-                                }
+                        // Replace an earlier pass's effect: `Answered` has the
+                        // commit let a request in flight go, and none leaves an
+                        // upload's ticket. A `Later` was never handed out.
+                        let idle = if upload {
+                            RequestEffect::None
+                        } else {
+                            RequestEffect::Answered
+                        };
+                        if let RequestEffect::Later { requests, .. } =
+                            std::mem::replace(&mut effects[i], idle)
+                        {
+                            for request in &requests {
+                                self.discard_request(request);
                             }
-                            pending_res[i] = false;
-                            self.resources[i].failed_args = None;
                         }
+                        pending_res[i] = upload;
+                        self.resources[i].failed_args = None;
                         awaiting[i] = false;
                         if let Some(waiting) = &mut self.resources[i].waiting {
                             waiting.slept = true;
