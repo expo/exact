@@ -159,6 +159,11 @@ fn a_box_at_an_edge_paints_its_background_into_the_band_beyond_it() {
         [30., 0., 0., 0.]
     );
     assert_eq!(bleed("bar", (0., 1., 400., 56.), 0., one), [0.; 4]);
+    // Moved 10 past the bottom edge, it reaches the rest of the band.
+    assert_eq!(
+        bleed("tabs", (0., 708., 400., 56.), 0., one),
+        [0., 0., 6., 0.]
+    );
     assert_eq!(bleed("tabs", (0., 698., 400., 56.), 12., one), [0.; 4]);
     assert_eq!(
         bleed("bar", top, 0., Transform::from_scale(1.1, 1.)),

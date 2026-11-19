@@ -388,9 +388,12 @@ impl<D: DataSource> Presenter<D> {
             ..
         } = &mut gesture
         {
-            // The release's own sample counts toward the speed.
+            // The release's own sample counts toward the speed; a finger
+            // still for 40 ms has stopped (Android's `VelocityTracker`).
             let dt = (event - last.1) as f32 / 1000.0;
-            if dt > 0.0 && dt <= 0.1 {
+            if dt > 0.04 {
+                *velocity = 0.0;
+            } else if dt > 0.0 {
                 *velocity = 0.6 * ((y - last.0) / dt) + 0.4 * *velocity;
             }
         }

@@ -441,6 +441,24 @@ fn a_sheet_covers_what_the_app_wrote_after_its_routes() {
 }
 
 #[test]
+fn a_sheet_dragged_fast_then_held_before_release_stays_open() {
+    let mut p = phone();
+    tap(&mut p, "open-form");
+    after(&mut p, 1000.0);
+    let (_, frame) = p.top_sheet().unwrap();
+    let (t, y) = (p.host().now(), frame.1 + 10.0);
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 100., t + 16.).unwrap();
+    p.pointer_move(200., y + 200., t + 32.).unwrap();
+    p.pointer_up(200., y + 200., t + 132.).unwrap();
+    p.run_commands(|| ());
+    after(&mut p, 1000.0);
+    assert!(has(&p, "route-form"), "a held finger flings nothing");
+    let (_, rest) = p.top_sheet().unwrap();
+    assert!(near(rest.1, frame.1), "{rest:?} {frame:?}");
+}
+
+#[test]
 fn back_closes_a_sheet_which_slides_out_of_the_window() {
     let mut p = phone();
     tap(&mut p, "open-info");

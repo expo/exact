@@ -9,8 +9,8 @@ use super::*;
 
 impl Painter {
     /// How far a box's background reaches past each edge of the viewport
-    /// (top, right, bottom, left): the band at each edge its border box
-    /// touches with square corners, when no ancestor clips or scrolls it and
+    /// (top, right, bottom, left): to the window's edge at each edge its border
+    /// box touches or passes with square corners, when no ancestor clips or scrolls it and
     /// nothing scales, skews or rotates it. `outer` is in the coordinates `ts` places in the
     /// viewport. The ancestors are read from the tree, not the walk: a
     /// scroller's rows may be recorded apart, in coordinates of their own.
@@ -28,16 +28,15 @@ impl Painter {
         let (x, y, w, h) = outer.rect;
         let (x, y) = (x + ts.tx, y + ts.ty);
         let (vw, vh) = self.viewport;
-        let at = |a: f32, b: f32| (a - b).abs() < 0.5;
+        // How far each edge is past the viewport's: a box moving off the page
+        // (a sheet gliding back up) keeps its background at the window's edge.
+        let past = [-y, x + w - vw, y + h - vh, -x];
         let square =
-            |a: usize, b: usize| outer.radii[a] == (0.0, 0.0) && outer.radii[b] == (0.0, 0.0);
-        let reach = [
-            at(y, 0.0) && square(0, 1),
-            at(x + w, vw) && square(1, 2),
-            at(y + h, vh) && square(2, 3),
-            at(x, 0.0) && square(3, 0),
-        ];
-        let bleed: [f32; 4] = std::array::from_fn(|i| if reach[i] { self.bands[i] } else { 0.0 });
+            |i: usize| outer.radii[i] == (0.0, 0.0) && outer.radii[(i + 1) % 4] == (0.0, 0.0);
+        let bleed: [f32; 4] = std::array::from_fn(|i| match past[i] > -0.5 && square(i) {
+            true => (self.bands[i] - past[i].max(0.0)).max(0.0),
+            false => 0.0,
+        });
         // What it paints in a band is outside the box, where damage never looks.
         self.damage.unsupported |= bleed != [0.0; 4];
         bleed
