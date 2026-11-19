@@ -17,19 +17,30 @@ public final class CalculatedLength: Equatable {
         self.environment = environment
         self.context = context
     }
-    /// Interpret the private length wire only in a style, never app payloads.
+    /// Interpret the private length wire only in a style, never app payloads. A value that holds no calculation keeps
+    /// its storage, which the decoder shares between the styles that repeat it.
     package static func decode(_ style: NodeStyle) -> NodeStyle {
-        style.mapValues { value in
-            if case .array(let coordinates) = value {
-                return .array(coordinates.map(decodeLength))
-            }
-            return decodeLength(value)
+        var resolved = style
+        for (key, value) in style {
+            if let decoded = decoded(value) { resolved[key] = decoded }
+        }
+        return resolved
+    }
+    /// The value with its calculated lengths, its own or its coordinates' (`object-position`), or nil when it holds none
+    private static func decoded(_ value: BatchValue) -> BatchValue? {
+        switch value {
+        case .object(let object): return CalculatedLength(object).map(BatchValue.calculation)
+        case .array(let coordinates) where coordinates.contains(where: isCalculation):
+            return .array(coordinates.map { coordinate in
+                guard case .object(let object) = coordinate, let calculation = CalculatedLength(object) else { return coordinate }
+                return .calculation(calculation)
+            })
+        default: return nil
         }
     }
-    private static func decodeLength(_ value: BatchValue) -> BatchValue {
-        guard case .object(let object) = value,
-              let calculation = CalculatedLength(object) else { return value }
-        return .calculation(calculation)
+    private static func isCalculation(_ value: BatchValue) -> Bool {
+        guard case .object(let object) = value else { return false }
+        return object["calc"] != nil
     }
     deinit { exact_calc_destroy(context) }
     public func length(basis: CGFloat) -> CGFloat { CGFloat(exact_calc_resolve(context, Double(basis))) }
