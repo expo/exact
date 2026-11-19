@@ -443,8 +443,10 @@ extension NavigationHost {
             // Title the tab's controller, which titles its item and its navigation item (`UIViewController.title`):
             // More's bar shows a plain tab's when More pushes the tab.
             nav.title = face.title
-            item.image = image
-            item.selectedImage = face.base.flatMap(TabFace.filled) ?? image
+            // UIKit's own tab bar draws the `.fill` variant selected or not.
+            let filled = face.base.flatMap(TabFace.filled)
+            item.image = filled ?? image
+            item.selectedImage = filled ?? image
             item.accessibilityIdentifier = ids[index]
             item.isEnabled = !face.disabled
             if face.disabled || face.accessibilityDisabled { item.accessibilityTraits.insert(.notEnabled) }
