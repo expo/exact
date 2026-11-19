@@ -17,26 +17,24 @@ public final class CalculatedLength: Equatable {
         self.environment = environment
         self.context = context
     }
-    /// Interpret the private length wire only in a style, never app payloads. A value that holds no calculation keeps
-    /// its storage, which the decoder shares between the styles that repeat it.
+    /// Interpret the private length wire only in a style, never app payloads: a length, or a coordinate of
+    /// `object-position`. A value that holds no calculation keeps its storage, which the decoder shares between the
+    /// styles that repeat it (`StyleCache`).
     package static func decode(_ style: NodeStyle) -> NodeStyle {
         var resolved = style
         for (key, value) in style {
-            if let decoded = decoded(value) { resolved[key] = decoded }
+            switch value {
+            case .object(let object):
+                if let calculation = CalculatedLength(object) { resolved[key] = .calculation(calculation) }
+            case .array(let coordinates) where coordinates.contains(where: isCalculation):
+                resolved[key] = .array(coordinates.map { coordinate in
+                    guard case .object(let object) = coordinate, let calculation = CalculatedLength(object) else { return coordinate }
+                    return .calculation(calculation)
+                })
+            default: break
+            }
         }
         return resolved
-    }
-    /// The value with its calculated lengths, its own or its coordinates' (`object-position`), or nil when it holds none
-    private static func decoded(_ value: BatchValue) -> BatchValue? {
-        switch value {
-        case .object(let object): return CalculatedLength(object).map(BatchValue.calculation)
-        case .array(let coordinates) where coordinates.contains(where: isCalculation):
-            return .array(coordinates.map { coordinate in
-                guard case .object(let object) = coordinate, let calculation = CalculatedLength(object) else { return coordinate }
-                return .calculation(calculation)
-            })
-        default: return nil
-        }
     }
     private static func isCalculation(_ value: BatchValue) -> Bool {
         guard case .object(let object) = value else { return false }

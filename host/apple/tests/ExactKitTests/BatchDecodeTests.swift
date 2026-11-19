@@ -411,6 +411,13 @@ final class BatchDecodeTests: XCTestCase {
         XCTAssertNotEqual(a, b)
         XCTAssertEqual(try storage(a["background_color"]), try storage(b["background_color"]))
         XCTAssertEqual(try storage(a["box_shadow"]), try storage(b["box_shadow"]))
+        // A style with a calculation still shares the values that hold none, and keeps the coordinate beside it as written.
+        let calculated = Batch.decode(Data(#"{"ops":[{"op":"style","id":6,"style":{"background_color":[0.125,0.25,0.5,1]}},{"op":"style","id":7,"style":{"background_color":[0.125,0.25,0.5,1],"object_position":[{"calc":"max(25%, 20px)","env":[0,0,0,0,400,800,1,1,0,0,16]},{"pct":50}]}}]}"#.utf8), resolver: nil)
+        let (plain, placed) = (calculated.ops[0].style, calculated.ops[1].style)
+        XCTAssertEqual(try storage(plain["background_color"]), try storage(placed["background_color"]))
+        let position = try XCTUnwrap(placed["object_position"]?.array)
+        if case .calculation? = position.first {} else { XCTFail("the first coordinate's calculation is decoded: \(position)") }
+        XCTAssertEqual(position.last, .object(["pct": .number(50)]))
         // A style with an escape is neither cached nor shares: one can spell out a profile path.
         let escapedText = #"{"ops":[{"op":"style","id":3,"style":{"font_family":"A\u0020family","background_color":[0.125,0.25,0.5,1]}}]}"#
         let (escaped, again) = (try compare(escapedText), try compare(escapedText))
