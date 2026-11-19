@@ -53,8 +53,8 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
     /// EXACT PATCH 81: whether some child of this box is a bar, which it measures before its
     /// algorithm lays out the others and places after.
     pub bars: bool,
-    /// EXACT PATCH 81: how far in from this box's border its bars' slots begin on each edge: the
-    /// part of its padding that its own reservations make.
+    /// EXACT PATCH 81: how far in from this box's border its bars' slots begin on each edge: its
+    /// unsafe area there, what it observes with what its own reservations add to its padding.
     pub bar_inset: Rect<f32>,
     /// Keeps the custom identifier type when grid layout is disabled.
     #[cfg_attr(feature = "serde", serde(skip))]

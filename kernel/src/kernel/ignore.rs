@@ -246,14 +246,15 @@ impl Kernel {
                 t.whole = [false; 4];
             }
         }
-        self.restyle_taken(&reopened);
+        self.restyle_measured(&reopened);
     }
 
-    /// Lay out and publish again each box that took more or less: an
-    /// extended one's engine style carries it, and publication places a
-    /// moved one.
-    pub(super) fn restyle_taken(&mut self, taking: &[u32]) {
-        if taking.is_empty() {
+    /// Lay out and publish again each box whose engine style carries a
+    /// measurement that moved: what a box that ignores takes, which
+    /// publication places where it moves the box, or what a parent of bars
+    /// observes past which their slots begin (D12).
+    pub(super) fn restyle_measured(&mut self, boxes: &[u32]) {
+        if boxes.is_empty() {
             return;
         }
         if let Some(r) = &mut self.region {
@@ -261,7 +262,7 @@ impl Kernel {
         }
         let mut unmirrored = crate::layout::Unmirrored;
         let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
-        for &s in taking {
+        for &s in boxes {
             self.arena.layout_dirty.insert(s);
             if let Some(node) = self.arena.taffy(s) {
                 layout.restyle(&self.arena, s, node);

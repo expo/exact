@@ -23,8 +23,9 @@
 //! readers after each layout ([`Kernel::solve_observations`]): each input
 //! comes within half a device pixel of its measurement, or the reader is
 //! left unsettled after a bounded number of rounds. The same rounds measure
-//! what each box that ignores the band takes past its place (D4) and lay it
-//! out again with it.
+//! what each box that ignores the band takes past its place (D4), and what
+//! each parent of bars observes, past which their slots begin (D12), and lay
+//! it out again with it.
 
 use super::area::{area, band_at, depth, passed, scroll_view, Space};
 use super::block::reservation;
@@ -69,7 +70,8 @@ pub(crate) struct Observations {
     inputs: IdMap<u32, Observed>,
     /// Each reader's last measurement: its readout.
     readouts: IdMap<u32, Readout>,
-    /// The readers the last solve left unsettled.
+    /// The readers, boxes that ignore and parents of bars the last solve left
+    /// unsettled.
     unsettled: Vec<u32>,
     /// The layouts the last solve added.
     pub(crate) rounds: usize,
@@ -266,8 +268,9 @@ impl Kernel {
     /// readers' observations guaranteed-invalid, so their fallbacks apply.
     /// The band less the contributions is what the owner's host clears for
     /// its content root (D3). Returns whether a layout is owed: that band
-    /// changed, and it moved the content root, or some box reads an
-    /// observation or ignores the band (D4). The update is refused whole,
+    /// changed, and it moved the content root or the root's bars' slots on
+    /// an edge it takes (D12), or some box reads an observation, ignores the
+    /// band (D4) or has bars past what it observes (D12). The update is refused whole,
     /// keeping the last, for
     /// nonfinite or negative insets, a nonfinite effect, or a
     /// contribution's identity twice.
@@ -293,7 +296,8 @@ impl Kernel {
         }
         observations.invalidate_band(Some(slot));
         let moved = super::block::clearance(&self.arena, slot) != cleared;
-        Ok(moved || self.band_read())
+        let slots = super::block::Blocks::slots_moved(&self.arena, slot);
+        Ok(moved || slots || self.band_read())
     }
 
     /// Set the session view's band, top right bottom left in the document's
@@ -312,12 +316,16 @@ impl Kernel {
     }
 
     /// Whether a band's change can move a layout though the content root
-    /// does not move: some box reads an observation, or some box inside a
-    /// root ignores the band (an owner's root's taking is its clearance).
+    /// does not move: some box reads an observation, some box inside a
+    /// root ignores the band (an owner's root's taking is its clearance),
+    /// or some box other than an owner's root has bars, whose slots begin
+    /// past what it observes (D12); an owner's root's own bars move with its
+    /// band only where it takes an edge (`Blocks::slots_moved`).
     pub(super) fn band_read(&self) -> bool {
         let arena = &self.arena;
         !arena.readers.observers.is_empty()
             || (arena.ignoring.iter()).any(|s| !super::block::owns(arena, s))
+            || super::bar::slotted(arena)
     }
 
     /// What `view` observes of its safe area, top right bottom left, as the
@@ -368,9 +376,9 @@ impl Kernel {
     }
 
     /// The readers the last layout left unsettled, whose inputs are not
-    /// within half a device pixel of their measurements, and the boxes
-    /// whose taking of the band had not settled (D9, D4,
-    /// `exactSafeAreaUnsettled()`).
+    /// within half a device pixel of their measurements, the boxes whose
+    /// taking of the band had not settled, and the parents whose bars'
+    /// slots had not (D9, D4, D12, `exactSafeAreaUnsettled()`).
     pub fn safe_area_unsettled(&self) -> Vec<ViewId> {
         let observations = &self.arena.observations;
         (observations.unsettled.iter())
@@ -393,7 +401,15 @@ impl Kernel {
         receipt: &mut LayoutReceipt,
     ) -> Result<(), KernelError> {
         self.arena.observations.rounds = 0;
-        if self.arena.readers.observers.is_empty() && self.arena.ignoring.is_empty() {
+        let arena = &self.arena;
+        let quiet = arena.readers.observers.is_empty() && arena.ignoring.is_empty();
+        if quiet && !super::bar::slotted(arena) {
+            // Nothing under `slot` reads, ignores or has slots past what it observes, so
+            // nothing there is unsettled
+            let unsettled = &arena.observations.unsettled;
+            let others = (unsettled.iter().copied()).filter(|&s| !within(arena, s, slot));
+            let others: Vec<u32> = others.collect();
+            self.arena.observations.unsettled = others;
             return Ok(());
         }
         let tolerance = 0.5 / self.arena.display_scale.unwrap_or(1.0);
@@ -465,18 +481,22 @@ impl Kernel {
             // The boxes that took more or less lay out again with it (D4),
             // and at the bound are left as they are, unsettled
             let taking = self.check_taken(&takers, round < MAX_ROUNDS);
+            // And so do the parents whose bars' slots moved (D12)
+            let slotting = self.check_slots(slot, round < MAX_ROUNDS);
             if round == MAX_ROUNDS {
                 off.extend(taking);
+                off.extend(slotting);
                 break;
             }
-            if moved.is_empty() && taking.is_empty() {
+            if moved.is_empty() && taking.is_empty() && slotting.is_empty() {
                 break;
             }
             // A capture's readers take its declarations' values anew (D5)
             let captured = super::readers::Readers::captured(&mut self.arena, &moved);
             self.restyle_readers(&moved);
             self.restyle_readers(&captured);
-            self.restyle_taken(&taking);
+            self.restyle_measured(&taking);
+            self.restyle_measured(&slotting);
             let laid = relayout(self)?;
             self.check_spaces(&laid);
             self.check_reservations();
@@ -487,6 +507,9 @@ impl Kernel {
             merge(receipt, laid);
             self.arena.observations.rounds += 1;
         }
+        // A box off as a reader and as a taker or a parent of bars is listed once
+        off.sort_unstable();
+        off.dedup();
         self.arena.observations.unsettled.extend(off);
         Ok(())
     }

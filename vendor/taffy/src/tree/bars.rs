@@ -29,6 +29,11 @@ struct Bar {
 }
 
 /// The side of `r` on `edge`, top 0, right 1, bottom 2, left 3.
+fn at(r: &Rect<f32>, edge: usize) -> f32 {
+    [r.top, r.right, r.bottom, r.left][edge]
+}
+
+/// [`at`], to change it.
 fn side(r: &mut Rect<f32>, edge: usize) -> &mut f32 {
     match edge {
         0 => &mut r.top,
@@ -62,7 +67,8 @@ where
         let inset = placed_style.rare.bar_inset;
         let rtl = placed_style.direction.is_rtl();
         let known = inputs.known_dimensions;
-        let (bars, taken, contribution) = self.measure_bars(key, known, inputs.available_space, border, inset, rtl);
+        let (bars, taken, mut contribution, held) =
+            self.measure_bars(key, known, inputs.available_space, border, inset, rtl);
 
         // In flow, the bars reserve as padding
         let mut barred = (*placed_style).clone();
@@ -85,6 +91,16 @@ where
             width: whole.left + whole.right + border.left + border.right,
             height: whole.top + whole.bottom + border.top + border.bottom,
         };
+        // Across a barred edge the box holds its slots where its padding and bars do not, past an
+        // observation deeper than its own reservations; elsewhere its minimum stays as authored,
+        // so a ratio's height stays a floor. Each side adds two terms, the slots' each at most
+        // the padding's, so the comparison never holds by rounding alone
+        if held.width > whole.left + whole.right {
+            contribution.width = contribution.width.max(held.width + border.left + border.right);
+        }
+        if held.height > whole.top + whole.bottom {
+            contribution.height = contribution.height.max(held.height + border.top + border.bottom);
+        }
         // A definite size, minimum and maximum keep their border box whatever `box-sizing`, as a
         // UIKit view keeps its frame: the bars take their room from its content
         let shrink = |d: Dimension, parent: Option<f32>, by: f32, tree: &Self| {
@@ -134,8 +150,9 @@ where
 
     /// Each bar of `parent` in tree order, measured against its slot's extent along its edge where
     /// the parent's `known` size gives it, and otherwise in the space the parent is offered there,
-    /// `available`, as an in-flow child is; what they take of each edge; and the least
-    /// border-box size along each axis they give the parent.
+    /// `available`, as an in-flow child is; what they take of each edge; the least border-box
+    /// size along each axis they give the parent; and what holds their slots across their
+    /// edges inside the borders, each barred edge's inset and bars.
     fn measure_bars(
         &mut self,
         parent: DefaultKey,
@@ -144,9 +161,10 @@ where
         border: Rect<f32>,
         inset: Rect<f32>,
         rtl: bool,
-    ) -> (Vec<Bar>, Rect<f32>, Size<f32>) {
+    ) -> (Vec<Bar>, Rect<f32>, Size<f32>, Size<f32>) {
         let children: Vec<NodeId> = self.taffy.children[parent].iter().copied().collect();
         let (mut bars, mut taken, mut contribution) = (Vec::new(), Rect::ZERO, Size::ZERO);
+        let mut barred = [false; 4];
         for (order, child) in children.into_iter().enumerate() {
             let Some(edge) = self.taffy.nodes[child.into()].style.rare.bar else {
                 continue;
@@ -159,6 +177,7 @@ where
                 continue;
             }
             let edge = edge as usize;
+            barred[edge] = true;
             let horizontal = edge % 2 == 0;
             let sides = match horizontal {
                 true => border.left + border.right + inset.left + inset.right + taken.left + taken.right,
@@ -256,7 +275,12 @@ where
             };
             bars.push(Bar { node: child, edge, order: order as u32, size, margin, depth, stretch, align, range, authored_depth });
         }
-        (bars, taken, contribution)
+        // Across their edges the slots lie past the inset too, which the parent's padding holds
+        // only where it is the parent's own reservations: a view sized by its content grows to
+        // hold a bar pinned to its safe-area guide
+        let on = |e: usize| if barred[e] { at(&inset, e) + at(&taken, e) } else { 0.0 };
+        let held = Size { width: on(1) + on(3), height: on(0) + on(2) };
+        (bars, taken, contribution, held)
     }
 
     /// Lay each of `bars` out in its slot of a parent `size` big, in tree order, keeping each

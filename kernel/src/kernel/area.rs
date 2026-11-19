@@ -24,8 +24,9 @@ pub(super) fn depth([outer, inner]: [f32; 2], at: f32) -> f32 {
 /// further out where that edge lies in the area; an owner's root from the
 /// allocation's edge, with the band as its observation and its padding
 /// stacked on the keyboard it clears. An ancestor's bars reserve past its
-/// own reservations, each its slot's depth, and a bar observes only the
-/// bars before it (D12). A box's own reservations are not among them.
+/// unsafe area, its observation and its own reservations, each its slot's
+/// depth, and a bar observes only the bars before it (D12). A box's own
+/// reservations are not among them.
 pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2]; 4] {
     let from = |open: [bool; 4]| -> [[f32; 2]; 4] {
         std::array::from_fn(|e| [0.0, if open[e] { band[e] } else { 0.0 }])
@@ -73,14 +74,16 @@ pub(super) fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) 
         let cover = std::array::from_fn(|e| if r.padding[e] > 0.0 { cover[e] } else { 0.0 });
         let inside = r.inside_covered(observed, cover);
         // The slots begin where the engine places them, inside the box's border:
-        // at an owner's root's content root, past what its host clears, and past
-        // another box's own reservations (`bar::lay_out`)
+        // at an owner's root's content root, past what its host clears, and on an
+        // edge it takes past what it would clear there; past another box's unsafe
+        // area there (`bar::lay_out`)
         let slots = match space.owner == Some(s) {
             true => {
                 let (clear, border) = (super::block::clearance(arena, s), border(arena, s));
-                std::array::from_fn(|e| clear[e] + border[e])
+                let past = arena.blocks.bar_slots(s);
+                std::array::from_fn(|e| clear[e] + border[e].max(past[e]))
             }
-            false => r.inside([0.0; 4]),
+            false => inside,
         };
         for e in 0..4 {
             if open[e] && (r.added[e] != 0.0 || r.padding[e] != 0.0 || bars[e] != 0.0) {

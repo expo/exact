@@ -265,8 +265,9 @@ pub fn geometry(kernel: &Kernel, id: &str, space: &Space, generation: u64) -> Fa
     )
 }
 
-/// What `exactSafeAreaUnsettled` reads: how many boxes the last layout left unsettled, readers
-/// and boxes whose taking of the band did not settle, and the `id` of each that has one. A
+/// What `exactSafeAreaUnsettled` reads: how many boxes the last layout left unsettled, readers,
+/// boxes whose taking of the band did not settle and parents whose bars' slots did not, and the
+/// `id` of each that has one. A
 /// kernel that has not laid out, as on the web's wasm target, measured none: unavailable.
 pub fn unsettled(kernel: &Kernel, generation: u64) -> Fact {
     let boxes = kernel.safe_area_unsettled();

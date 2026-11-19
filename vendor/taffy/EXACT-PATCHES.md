@@ -2520,8 +2520,9 @@ absolute pass places nothing for it (`AbsolutePass::place`, through
 `placed_layout`) first measures each bar in tree order as the only flex item
 of a slot whose main axis crosses the edge, a bar laid out `display: none`
 taking no slot and keeping no depth. Its extent along the edge is the parent's size there less the
-border, `RareStyle::bar_inset` (what the parent's own reservations add to its
-padding) and the earlier bars on the edges beside it, where that size is
+border, `RareStyle::bar_inset` (the parent's unsafe area: what it observes,
+with what its own reservations add to its padding) and the earlier bars on
+the edges beside it, where that size is
 known; otherwise the bar is measured in the space the parent is offered
 there, less the same. The bar stretches along it within its minimum and
 maximum, which a `content-box` bar's padding and border add to, unless its
@@ -2531,7 +2532,10 @@ with each edge's bar depths added to its padding; under `content-box` its
 definite size, minimum and maximum shrink by them, so they keep their border
 box as under `border-box`; and on an axis its parent left unknown, its least
 size is raised to its widest bar's there with the borders, insets and earlier
-side bars. For a final layout each bar is then laid out in its slot,
+side bars, and across a barred edge to the borders with each barred edge's
+inset and bars where its padding, bars and border do not already hold that
+much, so it holds its slots past an observation and its authored minimum,
+a ratio's floor among them, stands elsewhere. For a final layout each bar is then laid out in its slot,
 stretched to the slot's final extent within its bounds or placed by
 `align-self` (`left` and `right` physical, start and end following the
 parent's direction) or its `auto` margins, held by its margins, at the depth
@@ -2546,7 +2550,8 @@ content root and the content between them, later bars inside earlier ones on
 any edge, `align-self`, margins, a bar's bounds and `auto` margins, a
 content-sized parent as wide as its widest bar, a definite size, a minimum
 and a maximum keeping their border box under a block and a flex parent, a bar
-past its parent's reservation in a flex row, two panes whose bars hold
+past its parent's reservation in a flex row, bars past their parent's
+observation, along and across their edges, two panes whose bars hold
 wrapping text, a positioned parent's bar in a scroller's content, a bar its
 host replaces, and the boxes that are no bars; `contract/cli/tests/it/duo_lab.rs`'s
 bars screen.

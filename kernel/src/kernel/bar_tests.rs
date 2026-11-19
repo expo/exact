@@ -149,6 +149,8 @@ fn a_bar_lies_past_its_parents_own_reservations() {
     assert_eq!((frame(&k, 5).0, frame(&k, 5).1), (0.0, 47.0 + 70.0));
     assert_eq!((frame(&k, 6).0, frame(&k, 6).1), (40.0, 47.0 + 70.0));
     assert_eq!(frame(&k, 3).3, 80.0);
+    // A parent under no band takes no round
+    assert_eq!(k.arena.observations.rounds, 0);
 }
 
 #[test]
@@ -297,18 +299,38 @@ fn a_roots_bar_lies_inside_its_border() {
 }
 
 #[test]
-fn a_bar_on_a_root_that_takes_its_edge_lies_at_the_roots_edge() {
-    // The root takes its top band, so its content root and its bar's slot start at the
-    // allocation's edge; 4, below the bar, lies clear of the area and observes 0
+fn a_bar_on_a_root_that_takes_its_edge_lies_past_the_band() {
+    // The root takes its top band, so its content root starts at the allocation's edge and its
+    // bar's slot past the band, where a bar pinned to the controller view's safe-area guide
+    // lies; 4, laid out past the bar's depth, observes the band and the bar to 97, and the bar
+    // follows the band to 59
     let mut ops = create(3..=4);
     ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
     let reads = vec![(StyleId::PaddingLeft, observed(Edge::Top, None))];
     ops.push(style(4, reads, &[(StyleId::Height, "10")]));
     ops.extend([children(1, &[2]), children(2, &[3, 4])]);
-    let k = root(&[(StyleId::SafeAreaIgnore, "container top")], ops);
-    assert_eq!(frame(&k, 3), (0.0, 0.0, 390.0, 50.0));
+    let mut k = root(&[(StyleId::SafeAreaIgnore, "container top")], ops);
+    assert_eq!(frame(&k, 3), (0.0, 47.0, 390.0, 50.0));
     assert_eq!(frame(&k, 4).1, 50.0);
-    assert_eq!(k.observation(4).unwrap()[0], Some(0.0));
+    assert_eq!(k.observation(4).unwrap()[0], Some(47.0));
+    k.set_owner_band(2, Some([59.0, 0.0, 34.0, 0.0]), &[])
+        .unwrap();
+    lay_out(&mut k);
+    assert_eq!(frame(&k, 3).1, 59.0);
+}
+
+#[test]
+fn a_bar_of_a_box_under_an_owners_band_lies_past_it() {
+    // In a root that takes its top band, 3 lies at the allocation's edge, under the band: its
+    // top bar lies past the band, and 5 past the bar's depth
+    let mut ops = create(3..=5);
+    ops.push(style(3, vec![], &[(StyleId::Height, "200")]));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(5, vec![], &[(StyleId::Height, "10")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let k = root(&[(StyleId::SafeAreaIgnore, "container top")], ops);
+    assert_eq!(frame(&k, 3).1, 0.0);
+    assert_eq!((frame(&k, 4).1, frame(&k, 5).1), (47.0, 50.0));
 }
 
 #[test]
@@ -641,4 +663,294 @@ fn a_child_becomes_a_bar_and_stops_being_one() {
     .unwrap();
     lay_out(&mut k);
     assert_eq!(frame(&k, 4).1, 97.0);
+}
+
+/// A document (1), 390 by 844 and outside every owner, under the session's `band`, holding 2
+/// with `rows` and what `ops` makes. Frames are in the document's space.
+fn document(band: [f32; 4], rows: &[(StyleId, &'static str)], mut ops: Vec<Op>) -> Kernel {
+    let mut k = Kernel::with_monospace();
+    ops.splice(0..0, create(1..=2));
+    ops.push(style(1, vec![], &[(StyleId::Height, "844")]));
+    ops.push(style(2, vec![], rows));
+    ops.extend([children(1, &[2]), Op::AttachRoot { id: 1 }]);
+    k.apply(0, 1, &ops).unwrap();
+    k.set_session_band(band).unwrap();
+    lay_out(&mut k);
+    k
+}
+
+#[test]
+fn a_bar_lies_past_its_parents_observation_and_follows_it() {
+    // 2 lies under the session's 47-point top band, which it does not clear: its 50-point top
+    // bar lies past the band, where one pinned to its safe-area guide would, while 4, in flow,
+    // is laid out past the bar's depth alone, at 50; the band's change moves the bar, though
+    // no box reads an observation or ignores the band
+    let mut ops = create(3..=4);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(4, vec![], &[(StyleId::Height, "10")]));
+    ops.extend([children(2, &[3, 4])]);
+    let mut k = document([47.0, 0.0, 34.0, 0.0], &[(StyleId::Height, "300")], ops);
+    assert_eq!(frame(&k, 3), (0.0, 47.0, 390.0, 50.0));
+    assert_eq!(frame(&k, 4).1, 50.0);
+    assert_eq!(k.arena.observations.rounds, 1, "one round moves the slot");
+    assert!(k.set_session_band([59.0, 0.0, 34.0, 0.0]).unwrap());
+    lay_out(&mut k);
+    assert_eq!((frame(&k, 3).1, frame(&k, 4).1), (59.0, 50.0));
+    assert!(k.set_session_band([0.0, 0.0, 34.0, 0.0]).unwrap());
+    lay_out(&mut k);
+    assert_eq!((frame(&k, 3).1, frame(&k, 4).1), (0.0, 50.0));
+}
+
+#[test]
+fn a_bars_slot_spans_the_room_its_parents_side_observations_leave() {
+    // Under an 84-point left band, 2's top bar 3 spans 84 to 390; 5, an item of the row 4 sized
+    // by its content, holds a 9-point box and a 300-point top bar, 7, which lies beside the
+    // band, so 5 is 384 wide, as a view sized by its content grows to fit a bar pinned to its
+    // safe-area guide
+    let mut ops = create(3..=7);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "20")]));
+    let row = [
+        (StyleId::Display, "flex"),
+        (StyleId::FlexDirection, "row"),
+        (StyleId::AlignItems, "flex-start"),
+    ];
+    ops.extend([style(4, vec![], &row), style(5, vec![], &[])]);
+    let item = [(StyleId::Width, "9"), (StyleId::Height, "10")];
+    ops.push(style(6, vec![], &item));
+    let wide = [
+        bar("top"),
+        (StyleId::Width, "300"),
+        (StyleId::Height, "20"),
+        (StyleId::AlignSelf, "flex-start"),
+    ];
+    ops.push(style(7, vec![], &wide));
+    ops.extend([
+        children(2, &[3, 4]),
+        children(4, &[5]),
+        children(5, &[6, 7]),
+    ]);
+    let k = document([0.0, 0.0, 0.0, 84.0], &[], ops);
+    assert_eq!(frame(&k, 3), (84.0, 0.0, 306.0, 20.0));
+    assert_eq!(frame(&k, 5).2, 384.0);
+    assert_eq!((frame(&k, 7).0, frame(&k, 7).2), (84.0, 300.0));
+}
+
+#[test]
+fn a_bar_lies_past_its_parents_observation_with_its_reservations() {
+    // 2, under a 47-point top band and inside a 6-point top border that the band covers, adds
+    // 10 to its safe area: its bar lies at 57 and 4 at 66, clear of the border, the addition
+    // and the bar; taking 20 instead, its bar lies at 27 and 4 at 56
+    let mut ops = create(3..=4);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(4, vec![], &[(StyleId::Height, "10")]));
+    ops.extend([children(2, &[3, 4])]);
+    let rows = |added: &'static str| {
+        [
+            (StyleId::Height, "300"),
+            (StyleId::BorderWidthTop, "6"),
+            (StyleId::BorderStyleTop, "solid"),
+            (StyleId::AdditionalSafeAreaTop, added),
+        ]
+    };
+    let mut k = document([47.0, 0.0, 34.0, 0.0], &rows("10"), ops);
+    assert_eq!((frame(&k, 3).1, frame(&k, 4).1), (57.0, 66.0));
+    k.apply(0, 2, &[style(2, vec![], &rows("-20"))]).unwrap();
+    lay_out(&mut k);
+    assert_eq!((frame(&k, 3).1, frame(&k, 4).1), (27.0, 56.0));
+}
+
+#[test]
+fn a_bar_past_its_parents_observation_observes_none_of_it_and_its_descendants_all() {
+    // Under a 47-point top band, 3, 2's bar, observes 0 at its top; 4, in flow at 50, and 5,
+    // pinned to 2's top, observe the band and the bar, to 97
+    let mut ops = create(3..=5);
+    let reads = vec![(StyleId::PaddingLeft, observed(Edge::Top, None))];
+    ops.push(style(
+        3,
+        reads.clone(),
+        &[bar("top"), (StyleId::Height, "50")],
+    ));
+    ops.push(style(4, reads.clone(), &[(StyleId::Height, "10")]));
+    let pinned = [
+        (StyleId::PositionType, "absolute"),
+        (StyleId::Top, "0"),
+        (StyleId::Height, "10"),
+    ];
+    ops.push(style(5, reads, &pinned));
+    ops.extend([children(2, &[3, 4, 5])]);
+    let rows = [
+        (StyleId::Height, "300"),
+        (StyleId::PositionType, "relative"),
+    ];
+    let k = document([47.0, 0.0, 34.0, 0.0], &rows, ops);
+    assert_eq!(frame(&k, 3).1, 47.0);
+    let top = |id| k.observation(id).unwrap()[0];
+    assert_eq!(
+        [top(3), top(4), top(5)],
+        [Some(0.0), Some(47.0), Some(97.0)]
+    );
+}
+
+#[test]
+fn a_parent_whose_slots_do_not_settle_is_unsettled() {
+    // 4, sized by its content at the end of the row 2 under an 84-point left band, holds a
+    // 307-point top bar: each layout widens it by what it observes, which moves it a point
+    // further into the band, so it is still off at the bound; once it holds no bar, nothing
+    // is listed, though no box reads an observation or ignores the band
+    let mut k = unsettled(vec![]);
+    assert_eq!(k.arena.observations.rounds, MAX_ROUNDS);
+    assert_eq!(k.safe_area_unsettled(), vec![4]);
+    let clear = Op::ClearStyle {
+        id: 3,
+        mask: crate::StyleMask::of(StyleId::SafeAreaBar),
+        written: true,
+    };
+    k.apply(0, 2, &[clear]).unwrap();
+    lay_out(&mut k);
+    assert_eq!(k.safe_area_unsettled(), Vec::<ViewId>::new());
+}
+
+#[test]
+fn a_parent_off_as_a_reader_and_for_its_slots_is_listed_once() {
+    // The same 4, padding by what it observes too
+    let k = unsettled(vec![(StyleId::PaddingLeft, observed(Edge::Left, None))]);
+    assert_eq!(k.safe_area_unsettled(), vec![4]);
+}
+
+/// [`a_parent_whose_slots_do_not_settle_is_unsettled`]'s document, 4 reading `reads`.
+fn unsettled(reads: Vec<(StyleId, Node)>) -> Kernel {
+    let mut ops = create(3..=5);
+    let wide = [
+        bar("top"),
+        (StyleId::Width, "307"),
+        (StyleId::Height, "20"),
+        (StyleId::AlignSelf, "flex-start"),
+    ];
+    ops.extend([style(3, vec![], &wide), style(4, reads, &[])]);
+    ops.extend([children(2, &[4]), children(4, &[3, 5])]);
+    let row = [
+        (StyleId::Display, "flex"),
+        (StyleId::FlexDirection, "row"),
+        (StyleId::JustifyContent, "flex-end"),
+        (StyleId::AlignItems, "flex-start"),
+    ];
+    document([0.0, 0.0, 0.0, 84.0], &row, ops)
+}
+
+#[test]
+fn a_parent_sized_by_its_content_holds_its_slot_across_its_edge() {
+    // Under a 47-point top band, 4, sized by its content, holds only a 50-point top bar, which
+    // lies past the band: 4 is 97 tall, as a view sized by its content grows to hold a bar
+    // pinned to its safe-area guide, and 5 follows it
+    let mut ops = create(3..=5);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.extend([
+        style(4, vec![], &[]),
+        style(5, vec![], &[(StyleId::Height, "10")]),
+    ]);
+    ops.extend([children(2, &[4, 5]), children(4, &[3])]);
+    let k = document([47.0, 0.0, 34.0, 0.0], &[], ops);
+    assert_eq!(frame(&k, 4), (0.0, 0.0, 390.0, 97.0));
+    assert_eq!((frame(&k, 3).1, frame(&k, 5).1), (47.0, 97.0));
+}
+
+#[test]
+fn a_bottom_bar_lies_above_the_band_and_an_edge_no_slot_reads_takes_no_round() {
+    // 2 fills the document over a 34-point bottom band: its 40-point bottom bar lies above
+    // the band; a top band's change moves no slot of a bottom bar's edges, so takes no round
+    let mut ops = create(3..=3);
+    ops.push(style(3, vec![], &[bar("bottom"), (StyleId::Height, "40")]));
+    ops.extend([children(2, &[3])]);
+    let mut k = document([0.0, 0.0, 34.0, 0.0], &[(StyleId::Height, "844")], ops);
+    assert_eq!(frame(&k, 3).1, 844.0 - 34.0 - 40.0);
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    lay_out(&mut k);
+    assert_eq!(frame(&k, 3).1, 844.0 - 34.0 - 40.0);
+    assert_eq!(k.arena.observations.rounds, 0);
+}
+
+#[test]
+fn a_parent_that_becomes_an_owners_root_begins_its_slots_where_its_block_does() {
+    // 2, under the session's 47-point band, has its bar past it; given a block, it is an
+    // owner's root whose host has reported no band, so its bar lies at its content root's edge
+    let mut ops = create(3..=3);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.extend([children(2, &[3])]);
+    let mut k = document([47.0, 0.0, 34.0, 0.0], &[(StyleId::Height, "300")], ops);
+    assert_eq!(frame(&k, 3).1, 47.0);
+    let block = block(BlockAxis::Is(390.0), BlockAxis::Is(300.0));
+    k.set_host_block(2, Some(block)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(frame(&k, 3).1, 0.0);
+}
+
+#[test]
+fn a_band_change_on_an_edge_a_root_takes_owes_a_layout_for_its_bars() {
+    // The root takes its top band and reads no observation: a deeper band moves no content
+    // root, but its bar, past the band, follows it
+    let mut ops = create(3..=3);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.extend([children(1, &[2]), children(2, &[3])]);
+    let mut k = root(&[(StyleId::SafeAreaIgnore, "container top")], ops);
+    assert_eq!(frame(&k, 3).1, 47.0);
+    assert!(k
+        .set_owner_band(2, Some([59.0, 0.0, 34.0, 0.0]), &[])
+        .unwrap());
+    lay_out(&mut k);
+    assert_eq!(frame(&k, 3).1, 59.0);
+}
+
+#[test]
+fn a_parent_with_a_ratio_under_no_band_keeps_its_content_floor() {
+    // 3, 200 wide at a ratio of 1, holds a 50-point top bar and a 300-point child in a
+    // content root that clears the band: the ratio's height is a floor, so 3 is 350 tall
+    let mut ops = create(3..=5);
+    let ratio = [(StyleId::Width, "200"), (StyleId::AspectRatio, "1")];
+    ops.push(style(3, vec![], &ratio));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(5, vec![], &[(StyleId::Height, "300")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let k = root(&[], ops);
+    assert_eq!(frame(&k, 3).3, 350.0);
+}
+
+#[test]
+fn a_border_on_an_edge_a_root_takes_lies_within_the_band() {
+    // The root takes its top band and has a 6-point top border, which lies within the band:
+    // its bar lies past the band at 47, as a box's under the band does, not past the border,
+    // and 4, laid out past the border and the bar at 56, observes them to the bar's inner side
+    let mut ops = create(3..=4);
+    ops.push(style(3, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    let reads = vec![(StyleId::PaddingLeft, observed(Edge::Top, None))];
+    ops.push(style(4, reads, &[(StyleId::Height, "10")]));
+    ops.extend([children(1, &[2]), children(2, &[3, 4])]);
+    let rows = [
+        (StyleId::SafeAreaIgnore, "container top"),
+        (StyleId::BorderWidthTop, "6"),
+        (StyleId::BorderStyleTop, "solid"),
+    ];
+    let k = root(&rows, ops);
+    assert_eq!((frame(&k, 3).1, frame(&k, 4).1), (47.0, 56.0));
+    assert_eq!(k.observation(4).unwrap()[0], Some(41.0));
+}
+
+#[test]
+fn a_parent_with_a_ratio_and_hairline_borders_keeps_its_content_floor() {
+    // The same 3 with a third of a point of border above and below, which do not add exactly:
+    // its floor stands, so it holds the bar and the 300 points of content
+    let mut ops = create(3..=5);
+    let ratio = [
+        (StyleId::Width, "200"),
+        (StyleId::AspectRatio, "1"),
+        (StyleId::BorderWidthTop, "0.33333334"),
+        (StyleId::BorderStyleTop, "solid"),
+        (StyleId::BorderWidthBottom, "0.33333334"),
+        (StyleId::BorderStyleBottom, "solid"),
+    ];
+    ops.push(style(3, vec![], &ratio));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(5, vec![], &[(StyleId::Height, "300")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let k = root(&[], ops);
+    assert!(frame(&k, 3).3 > 350.0, "{:?}", frame(&k, 3));
 }

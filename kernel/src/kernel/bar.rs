@@ -1,8 +1,10 @@
 //! Bars (`-exact-safe-area-bar`, LLP 1123 D12): a child that names an edge is a bar of its
 //! parent, laid out in a slot on that edge, out of the parent's flow (Taffy patch 81, which
-//! measures and places it). Its slot lies past the parent's own reservations and the earlier
-//! bars, and the bar reserves its slot's depth: the parent lays its in-flow children out clear of
-//! it, and its descendants observe it (D9, `area.rs`), the bar itself only the bars before it.
+//! measures and places it). Its slot lies past the parent's unsafe area, its observation and
+//! its own reservations, and past the earlier bars, and the bar reserves its slot's depth: the
+//! parent lays its in-flow children out clear of it, and its descendants observe it (D9,
+//! `area.rs`), the bar itself only the bars before it.
+use super::block::reservation::Reserved;
 use crate::arena::NodeArena;
 use crate::generated::SafeAreaBar;
 use crate::id::IdMap;
@@ -17,12 +19,19 @@ pub(crate) struct Bars {
     pub(crate) styled: SlotSet,
     /// Each bar's slot depth on its parent's last layout (Taffy patch 81).
     pub(crate) depths: IdMap<u32, f32>,
+    /// What each parent of a bar observes inside its border, past which its
+    /// slots begin, as the readers' solve last measured it
+    /// (`Kernel::check_slots`); none before it has. An owner's root is not
+    /// measured, and one a measured parent becomes is not read: its slots
+    /// begin where its block places them (`Blocks::bar_slots`).
+    pub(crate) observed: IdMap<u32, [f32; 4]>,
 }
 
 impl Bars {
     pub(crate) fn forget(&mut self, slot: u32) {
         self.styled.remove(slot);
         self.depths.remove(&slot);
+        self.observed.remove(&slot);
     }
 }
 
@@ -67,6 +76,18 @@ pub(crate) fn edge(arena: &NodeArena, slot: u32) -> Option<usize> {
     }
 }
 
+/// The edges `parent` has bars on, top right bottom left, from the boxes styled as bars.
+fn edges(arena: &NodeArena, parent: u32) -> [bool; 4] {
+    let mut on = [false; 4];
+    let styled = arena.observations.bars.styled.iter();
+    for bar in styled.filter(|&b| arena.parent(b) == Some(parent)) {
+        if let Some(e) = edge(arena, bar) {
+            on[e] = true;
+        }
+    }
+    on
+}
+
 /// Whether some child of `slot` is a bar: a walk of the boxes styled as bars, few, rather
 /// than of `slot`'s children.
 pub(crate) fn has_bars(arena: &NodeArena, slot: u32) -> bool {
@@ -78,9 +99,9 @@ pub(crate) fn has_bars(arena: &NodeArena, slot: u32) -> bool {
 
 /// `slot`'s part of its engine style: a bar is laid out `position: absolute`, out of its
 /// parent's flow, and so is the containing block of its own absolutely positioned descendants;
-/// a parent with bars has its slots begin past `reserved`, what its own reservations add to its
-/// padding (Taffy patch 81).
-pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: [f32; 4], s: &mut taffy::Style) {
+/// a parent with bars has its slots begin past its unsafe area inside its border, what it
+/// observes there with what it reserves, `reserved` (Taffy patch 81).
+pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: Reserved, s: &mut taffy::Style) {
     if arena.observations.bars.styled.is_empty() {
         return;
     }
@@ -89,7 +110,22 @@ pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: [f32; 4], s: &mut 
         s.rare.bar = Some(e as u8);
     }
     if has_bars(arena, slot) {
-        let [top, right, bottom, left] = reserved;
+        // An owner's root begins its slots at its content root, past what its host clears,
+        // and on an edge it takes past what the host would clear there, its border within
+        // that, as another box's border lies within the area it observes (`block::bar_slots`)
+        let [top, right, bottom, left] = match super::block::owns(arena, slot) {
+            true => {
+                use taffy::util::ResolveOrZero;
+                let b = s.border.map(|w| w.resolve_or_zero(None, |_, _| 0.0));
+                let border = [b.top, b.right, b.bottom, b.left];
+                let past = arena.blocks.bar_slots(slot);
+                std::array::from_fn(|e| (past[e] - border[e]).max(0.0))
+            }
+            false => {
+                let observed = arena.observations.bars.observed.get(&slot);
+                reserved.inside(observed.copied().unwrap_or([0.0; 4]))
+            }
+        };
         s.rare.bars = true;
         s.rare.bar_inset = taffy::geometry::Rect {
             top,
@@ -188,6 +224,76 @@ pub(crate) fn reserved(arena: &NodeArena, parent: u32, via: Option<u32>) -> [f32
         }
     }
     depths
+}
+
+impl super::Kernel {
+    /// Measure what each parent of a bar under `root` observes inside its border on the layout
+    /// just made, past which its slots begin (D12), keep each measurement where `keep`, and
+    /// return the parents whose slots it moves by more than half a device pixel, on an edge
+    /// a slot of theirs reads, which lay out again with it, as a box that ignores lays out
+    /// again with what it takes (D4). It is their observation at their padding edge, as their
+    /// descendants' area has it (`area.rs`); 0 where the band is unavailable. An owner's root
+    /// is none of them, nor a parent in a content region's branch, which the region lays out
+    /// apart from the frames the solve measures, as it does a reader there; a parent without a
+    /// layout box keeps what it had.
+    pub(super) fn check_slots(&mut self, root: u32, keep: bool) -> Vec<u32> {
+        let arena = &self.arena;
+        if arena.observations.bars.styled.is_empty() {
+            return Vec::new();
+        }
+        let parents = parents(arena);
+        let (held, tolerance) = (
+            &arena.observations.bars.observed,
+            arena.observations.tolerance(),
+        );
+        let hidden = |p: u32| arena.flags(p).has(crate::id::NodeFlags::HIDDEN);
+        let branches =
+            (self.region.as_ref()).map(|r| [r.binding.content.index, r.binding.pending.index]);
+        let branched = |p: u32| branches.is_some_and(|b| super::observe::in_branches(arena, b, p));
+        let moved: Vec<(u32, [f32; 4])> = (parents.iter().copied())
+            .filter(|&p| super::observe::within(arena, p, root) && !branched(p))
+            .filter(|&p| !super::block::owns(arena, p) && !hidden(p) && arena.taffy(p).is_some())
+            .map(|p| (p, observed_inside(self, p)))
+            .filter(|&(p, now)| {
+                let was = held.get(&p).copied().unwrap_or([0.0; 4]);
+                // A slot reads its own edge and the two beside it, past the reservations
+                let r = (arena.observations.held_reservation(p))
+                    .unwrap_or_else(|| super::block::reservation::reserved(arena, p))
+                    .unwrap_or_default();
+                let (was, now, on) = (r.inside(was), r.inside(now), edges(arena, p));
+                let read = |e: usize| on[e] || on[(e + 1) % 4] || on[(e + 3) % 4];
+                (0..4).any(|e| read(e) && (was[e] - now[e]).abs() > tolerance)
+            })
+            .collect();
+        let held = &mut self.arena.observations.bars.observed;
+        held.retain(|p, _| parents.binary_search(p).is_ok());
+        if keep {
+            held.extend(moved.iter().copied());
+        }
+        moved.into_iter().map(|(p, _)| p).collect()
+    }
+}
+
+/// What `parent` observes inside its border on each edge, top right bottom left: the depth of
+/// the area it lies in at its padding edge (D9).
+fn observed_inside(kernel: &super::Kernel, parent: u32) -> [f32; 4] {
+    let arena = &kernel.arena;
+    let space = super::area::band_at(kernel, parent);
+    let Some(band) = space.band else {
+        return [0.0; 4];
+    };
+    let sides = super::area::area(arena, parent, &space, band);
+    let edges = space.padding_edges(arena, parent);
+    std::array::from_fn(|e| super::area::depth(sides[e], edges[e]))
+}
+
+/// Whether some parent of a bar is no owner's root, so its slots begin past what it observes
+/// and the solve measures it ([`Kernel::check_slots`](super::Kernel::check_slots)).
+pub(crate) fn slotted(arena: &NodeArena) -> bool {
+    !arena.observations.bars.styled.is_empty()
+        && parents(arena)
+            .iter()
+            .any(|&p| !super::block::owns(arena, p))
 }
 
 /// The parents of the bars, each once, which the solve checks as it checks the boxes that

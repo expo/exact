@@ -121,11 +121,34 @@ pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
 
 /// [`clearance`] for `held`'s root, with no search of the blocks.
 fn cleared(arena: &NodeArena, held: &Held) -> [f32; 4] {
+    cleared_taking(arena, held, true)
+}
+
+/// How far past its content root's edge `held`'s root begins its bars'
+/// slots (LLP 1123 D12), given its clearance `clear`: on an edge it takes,
+/// past what its host would clear there had it not taken it, as a bar
+/// pinned to the controller view's safe-area guide lies past the band its
+/// content reaches under; 0 on every other edge, and for a root with no
+/// bars.
+fn bar_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [f32; 4] {
+    if !is_owner(arena, held) || !super::bar::has_bars(arena, held.slot) {
+        return [0.0; 4];
+    }
+    let untaken = cleared_taking(arena, held, false);
+    std::array::from_fn(|e| (untaken[e] - clear[e]).max(0.0))
+}
+
+/// [`cleared`] with the edges its root takes of the container region taken,
+/// where `taking`, or none of them.
+fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
     if !is_owner(arena, held) {
         return [0.0; 4];
     }
     let band = arena.observations.band(held.slot).unwrap_or([0.0; 4]);
-    let taken = super::ignore::edges(arena, held.slot, SafeAreaIgnore::Container);
+    let taken = match taking {
+        true => super::ignore::edges(arena, held.slot, SafeAreaIgnore::Container),
+        false => [false; 4],
+    };
     let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
     let cover = super::keyboard::cover(arena, held.slot);
     match reservation::reserved(arena, held.slot) {
@@ -202,6 +225,9 @@ pub(crate) struct Held {
     /// What the host cleared of it for its content root when it was last
     /// laid out (`clearance`).
     cleared: [f32; 4],
+    /// How far past its content root's edge its bars' slots began when it
+    /// was last laid out (`bar_slots`).
+    slots: [f32; 4],
     /// Its content root's width and height where its host fixes them, as
     /// they were when it was last laid out: what container units below read
     /// (`owner::container_at`, LLP 1123 D16).
@@ -220,6 +246,20 @@ impl Blocks {
     /// The block `slot`'s host gave it: a content owner's (LLP 1123 D2).
     pub(crate) fn given(&self, slot: u32) -> Option<HostBlock> {
         self.held(slot).and_then(|b| b.given)
+    }
+
+    /// How far past its content root's edge `slot`'s bars' slots begin, as
+    /// it was last laid out (LLP 1123 D12): 0 but on an edge an owner's root
+    /// takes.
+    pub(crate) fn bar_slots(&self, slot: u32) -> [f32; 4] {
+        self.held(slot).map_or([0.0; 4], |b| b.slots)
+    }
+
+    /// Whether `slot`'s bars' slots would begin elsewhere than at its last
+    /// layout (`bar_slots`): a band's change on an edge an owner's root takes
+    /// moves them though its clearance stays.
+    pub(crate) fn slots_moved(arena: &NodeArena, slot: u32) -> bool {
+        (arena.blocks.held(slot)).is_some_and(|b| b.slots != bar_slots(arena, b, cleared(arena, b)))
     }
 
     /// Whether `slot` is the root of a layout of its own.
@@ -317,6 +357,7 @@ impl Blocks {
                 implied,
                 buried: false,
                 cleared: [0.0; 4],
+                slots: [0.0; 4],
                 content: [None; 2],
                 read_off: Default::default(),
             }),
@@ -766,10 +807,10 @@ impl Kernel {
 
     /// The blocks under `root`, each with its offer: the lengths the host
     /// gave less what it clears for a content root, which a maximum's root
-    /// is sized inside (`apply`). A block whose clearance changed since its
-    /// last layout, a band or what its root takes of it, is restyled, and
-    /// published whole where its content root's corner moved, which moves
-    /// every frame in it (@ref LLP 1123 D3).
+    /// is sized inside (`apply`). A block whose clearance or bars' slots
+    /// changed since its last layout, by a band or what its root takes of it,
+    /// is restyled, and published whole where its content root's corner
+    /// moved, which moves every frame in it (@ref LLP 1123 D3).
     fn blocks_under(&mut self, root: u32) -> Vec<(u32, Offer)> {
         let arena = &self.arena;
         let under = |b: &&Held| b.slot != root && arena.is_ancestor(root, b.slot);
@@ -784,19 +825,21 @@ impl Kernel {
     }
 
     /// Give the `i`th block its clearance `clear`, and return its root and
-    /// offer: the block less the clearance. A clearance that changed
-    /// restyles the block, and one that moved the content root's corner
-    /// publishes it whole.
+    /// offer: the block less the clearance. A clearance or bars' slots that
+    /// changed restyle the block, and a clearance that moved the content
+    /// root's corner publishes it whole.
     fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
         let content = fixed_lengths(&self.arena, &self.arena.blocks.0[i], clear);
+        let slots = bar_slots(&self.arena, &self.arena.blocks.0[i], clear);
         let held = &mut self.arena.blocks.0[i];
         let (slot, inner) = (held.slot, held.block.less(clear));
         let was = std::mem::replace(&mut held.cleared, clear);
+        let slotted = std::mem::replace(&mut held.slots, slots) != slots;
         // Derive the container readers again where the content root's fixed lengths
         // moved, or where one was derived against others since the last layout
         let moved = std::mem::replace(&mut held.content, content) != content;
         let resized = held.read_off.replace(false) || moved;
-        if was != clear {
+        if was != clear || slotted {
             self.restyle_block(slot);
         }
         if resized {
@@ -946,7 +989,8 @@ impl Kernel {
         // the host places by the last one.
         let (wants, moved) = self.implied_changes();
         let clear = clearance(&self.arena, slot);
-        let restyle = (self.arena.blocks.held(slot)).is_some_and(|b| b.cleared != clear);
+        let restyle = (self.arena.blocks.held(slot)).is_some_and(|b| b.cleared != clear)
+            || Blocks::slots_moved(&self.arena, slot);
         if restyle
             || !self.readers_measured(slot)
             || !wants.is_empty()
