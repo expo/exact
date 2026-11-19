@@ -35,6 +35,7 @@ import { checkDesignName } from './forma-design-path.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathFrom, preservePaths, samePath, within } from './paths.mjs';
+import { parseColour, schemeColours } from './scheme-colours.mjs';
 export { pathFrom } from './paths.mjs';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -567,8 +568,8 @@ export function readManifest(dir, name) {
       ? 'game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)'
       // LLP 1163 D2: the dark launch colour moved into the W3C member.
       : /^background_color_dark: /.test(p) ? 'background_color_dark is now color_scheme_dark.background_color: "color_scheme_dark": { "background_color": "#000000" } (LLP 1163 D2)'
-      // Expo's splash keys and a host's own launch colour: the launch is the manifest's one colour on every host.
-      : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color, and color_scheme_dark.background_color in a dark scheme, on every host (host.ios.launchImage and host.android.launchImage add a picture)`
+      // Expo's splash keys and a host's own launch colour: the launch colours are the manifest's on every host.
+      : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color in every colour scheme, or color_scheme_light.background_color and color_scheme_dark.background_color in one, on every host (host.ios.launchImage and host.android.launchImage add a picture)`
       : /^host\.ios\.associatedDomains: expected array, got boolean$/.test(p) ? REMOVED_DOMAINS[parsed.host.ios.associatedDomains]
       : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...linkProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir), ...variantProblems(parsed, dir));
@@ -616,8 +617,11 @@ function protocolHandlerProblems({ protocol_handlers = [], host }) {
  * (LLP 1030 D2/D10; 1030.000 D7). A browser opens files only, so
  * `inode/directory` (the Apple bake's word for a folder) goes, and it
  * registers neither `http` nor `https`, so those handlers go too.
- * `color_scheme_dark` keeps only the W3C draft's members, and with the app's
- * `dir` each icon gets the `sizes` and `type` of its file (LLP 1163 D2). */
+ * The themeable members take the W3C form (`schemeColours`, LLP 1163 D2): the
+ * light colour as the base where it holds in a dark scheme too or a dark one is
+ * named, the dark one under `color_scheme_dark`; a light colour named alone has
+ * none, so it is left out. `background_color` is clipped to sRGB. With the
+ * app's `dir` each icon gets the `sizes` and `type` of its file. */
 export function webAppManifest(manifest, name, notes = [], dir = null) {
   const keys = ['name', 'short_name', 'description', 'id', 'start_url', 'display', 'display_override', 'theme_color', 'background_color', 'icons', 'lang', 'orientation', 'file_handlers', 'protocol_handlers', 'launch_handler', 'shortcuts', 'categories', 'handle_links', 'scope', 'scope_extensions'];
   let web = Object.fromEntries(keys.filter((k) => manifest[k] !== undefined).map((k) => [k, manifest[k]]));
@@ -626,8 +630,12 @@ export function webAppManifest(manifest, name, notes = [], dir = null) {
   // A shortcut's `apple` and `android` words are the native bakes' (LLP 1133.023 D11).
   if (web.shortcuts) web.shortcuts = web.shortcuts.map(({ apple, android, ...item }) => item);
   if (manifest.share_target) web.share_target = webShareTarget(manifest.share_target, notes);
-  const { icons: _, ...dark } = manifest.color_scheme_dark ?? {};
-  if (Object.keys(dark).length) web.color_scheme_dark = dark;
+  for (const member of ['background_color', 'theme_color']) {
+    delete web[member];
+    const { light, dark } = schemeColours(manifest, member), value = (text) => text && (member === 'background_color' ? parseColour(text, member).hex : text);
+    if (light && dark) web[member] = value(light);
+    if (dark && value(dark) !== value(light)) (web.color_scheme_dark ??= {})[member] = value(dark);
+  }
   if (dir && web.icons) web.icons = publishedIcons(web.icons, dir);
   for (const key of ['file_handlers', 'protocol_handlers', 'shortcuts']) if (!web[key]?.length) delete web[key];
   web.name ??= name;

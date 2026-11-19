@@ -1,5 +1,5 @@
-// The Android launch window (LLP 1115.001 D3.6, agent-android.mjs `androidLaunch`): the manifest's first-frame
-// background, light and dark, and `host.android.launchImage`, with nothing written where the manifest says neither.
+// The Android launch window (LLP 1115.001 D3.6, agent-android.mjs `androidLaunch`): the manifest's launch colour in
+// each scheme it names one for, and `host.android.launchImage`, with nothing written where the manifest says neither.
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -32,22 +32,40 @@ test('background_color colours the launch window, its dark member in night mode,
   assert.doesNotMatch(read(res, 'values-v31'), /windowSplashScreenAnimatedIcon/);
 }));
 
-test('one colour serves both schemes, a fixed userInterfaceStyle takes its side, and #RGB and #RRGGBBAA are Android\'s #AARRGGBB', () => inDir((dir) => {
+test('one colour serves both schemes, Android follows the device whatever userInterfaceStyle says, and #RGB, #RRGGBBAA and Display P3 are Android\'s #AARRGGBB', () => inDir((dir) => {
   const res = resolve(dir, 'res');
   androidLaunch({ background_color: '#1e3a5f' }, res);
   assert.equal(colour(read(res, 'values-night')), '#FF1E3A5F');
   assert.equal(light(read(res, 'values')), 'false');
   androidLaunch({ background_color: '#fff', color_scheme_dark: { background_color: '#00000080' }, userInterfaceStyle: 'dark' }, res);
-  assert.equal(colour(read(res, 'values')), '#80000000');
+  assert.equal(colour(read(res, 'values')), '#FFFFFFFF');
   assert.equal(colour(read(res, 'values-night')), '#80000000');
-  androidLaunch({ background_color: '#abc', color_scheme_dark: { background_color: '#000' }, userInterfaceStyle: 'light' }, res);
-  assert.equal(colour(read(res, 'values-night')), '#FFAABBCC');
+  // Display P3's red is beyond sRGB, which a colour resource holds: clipped
+  androidLaunch({ background_color: 'color(display-p3 1 0 0)' }, res);
+  assert.equal(colour(read(res, 'values')), '#FFFF0000');
 }));
 
-test('without background_color or launchImage nothing is written and the reader\'s own launch theme stays', () => inDir((dir) => {
+test('a scheme the manifest names no colour for keeps the reader\'s launch theme there', () => inDir((dir) => {
+  const res = resolve(dir, 'res');
+  androidLaunch({ color_scheme_light: { background_color: '#f4efe6' } }, res);
+  assert.equal(colour(read(res, 'values')), '#FFF4EFE6');
+  assert.match(read(res, 'values-v31'), /windowSplashScreenBackground/);
+  for (const night of ['values-night', 'values-night-v31']) {
+    assert.match(read(res, night), /<style name="ExactAppLaunch" parent="ExactLaunch">\n    <\/style>/);
+    assert.equal(colour(read(res, night)), undefined);
+  }
+  androidLaunch({ color_scheme_dark: { background_color: '#14110d' } }, res);
+  // Declared in values too, which release lint asks of every resource, though the day style does not read it
+  assert.equal(colour(read(res, 'values')), '#FF14110D');
+  assert.doesNotMatch(read(res, 'values'), /<item/);
+  assert.equal(colour(read(res, 'values-night')), '#FF14110D');
+  assert.match(read(res, 'values-night-v31'), /windowSplashScreenBackground">@color\/exact_launch/);
+}));
+
+test('without a launch colour or launchImage nothing is written and the reader\'s own launch theme stays', () => inDir((dir) => {
   const res = resolve(dir, 'res');
   androidLaunch({ background_color: '#fff' }, res);
-  assert.deepEqual(androidLaunch({ color_scheme_dark: { background_color: '#000' } }, res), { theme: null, files: [] });
+  assert.deepEqual(androidLaunch({ theme_color: '#000' }, res), { theme: null, files: [] });
   assert.equal(existsSync(res), false);
 }));
 
@@ -84,8 +102,9 @@ test('a launch picture without background_color sits on the platform\'s surface,
   assert.equal(androidLaunch({ host: { android: { launchImage: { src: 'logo.png', width: 120 } } } }, res, dir).theme, '@style/ExactAppLaunch');
   assert.equal(readPng(resolve(res, 'drawable-nodpi/exact_launch_picture.png')).width, 100);
   assert.match(readFileSync(resolve(res, 'drawable/exact_launch_window.xml'), 'utf8'), /<item android:drawable="\?android:attr\/colorBackground" \/>/);
-  assert.doesNotMatch(read(res, 'values-v31'), /windowSplashScreenBackground|windowBackground|windowLightStatusBar/);
-  assert.equal(existsSync(resolve(res, 'values-night')), false);
+  assert.match(readFileSync(resolve(res, 'drawable-night/exact_launch_window.xml'), 'utf8'), /<item android:drawable="\?android:attr\/colorBackground" \/>/);
+  for (const v31 of ['values-v31', 'values-night-v31']) assert.doesNotMatch(read(res, v31), /windowSplashScreenBackground|windowBackground|windowLightStatusBar/);
+  assert.equal(colour(read(res, 'values-night')), undefined);
 }));
 
 test('launchImage false hides the starting window\'s icon and draws nothing', () => inDir((dir) => {

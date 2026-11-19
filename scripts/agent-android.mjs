@@ -38,6 +38,7 @@ import { createConnection } from 'node:net';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { within } from './paths.mjs';
+import { parseColour, schemeColours } from './scheme-colours.mjs';
 import { missingDependencies } from './package-libraries.mjs';
 import { HOST_DEV, PINNED_RUST, androidPackageId, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, linuxBuild, mavenProblems, resolveApp } from './app.mjs';
 import { ANDROID_MIN_API } from './hermes-android.mjs';
@@ -892,8 +893,8 @@ const androidColour = (css) => {
 
 /** The launcher icon and TV banner from the manifest's `icons` (LLP 1163 D6), written as resources under `res`, and
  * the references to them: `icon` for `android:icon` and `android:roundIcon`, `banner` for `android:banner`, each null
- * when the manifest has none. A square `maskable` PNG of at least 432 px becomes an adaptive icon over
- * `background_color`, else over the image's top-left pixel, and a square `monochrome` one of that size, its alpha drawn
+ * when the manifest has none. A square `maskable` PNG of at least 432 px becomes an adaptive icon over the light
+ * launch colour (`schemeColours`: the icon has no scheme), clipped to sRGB, else over the image's top-left pixel, and a square `monochrome` one of that size, its alpha drawn
  * white, its themed layer. Without one, a square `any` PNG of at least 192 px is the legacy icon, which the launcher
  * encloses itself. A 16:9 `any` PNG of at least 640×360 px is the banner, the size Android TV asks for at xxxhdpi.
  * Every refusal is thrown at once, before anything is written. */
@@ -912,8 +913,9 @@ export function androidIcons(manifest, dir, res) {
   // `files`: each picked file and its digest, which the build record keeps for a drive's staleness check (`apkChanges`).
   const refs = { icon: adaptive || legacy ? '@mipmap/exact_icon' : null, banner: banner ? '@drawable/exact_banner' : null,
     files: picked.flatMap((file, i) => file ? [{ file: file.path, sha256: digests[i] }] : []) };
+  const backdrop = schemeColours(manifest, 'background_color', null).light;
   // Made again only when a picked file or the background colour changes: the key of what was made is kept beside `res`.
-  const key = createHash('sha256').update(JSON.stringify([ANDROID_ICONS, picked.map((file, i) => file && [file.src, digests[i]]), manifest.background_color ?? null])).digest('hex');
+  const key = createHash('sha256').update(JSON.stringify([ANDROID_ICONS, picked.map((file, i) => file && [file.src, digests[i]]), backdrop])).digest('hex');
   if (existsSync(res) && existsSync(`${res}.key`) && readFileSync(`${res}.key`, 'utf8') === key) return refs;
   rmSync(res, { recursive: true, force: true });
   const write = (path, bytes) => { mkdirSync(dirname(resolve(res, path)), { recursive: true }); writeFileSync(resolve(res, path), bytes); };
@@ -921,7 +923,7 @@ export function androidIcons(manifest, dir, res) {
   if (adaptive) {
     // The corner's colour without its alpha: the background layer is opaque.
     const image = readPng(adaptive.path), corner = `#${[...image.data.subarray(0, 3)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
-    write('values/exact_icon.xml', `<resources>\n    <color name="exact_icon_background">${androidColour(manifest.background_color ?? corner)}</color>\n</resources>\n`);
+    write('values/exact_icon.xml', `<resources>\n    <color name="exact_icon_background">${androidColour(backdrop ? parseColour(backdrop, 'the light launch colour').hex : corner)}</color>\n</resources>\n`);
     write('drawable-nodpi/exact_icon_foreground.png', encodePng(onLayer(image)));
     if (glyph) {
       const placed = onLayer(readPng(glyph.path)), white = new Uint8Array(LAYER * LAYER * 4).fill(255);
@@ -958,24 +960,25 @@ const lightColour = (css) => {
  * on an Android 16 emulator, an Android 14 phone (HyperOS, which does not cut it) and an Android 17 emulator. */
 const SPLASH_ICON_SCALE = 108 / 192;
 
-/** The launch window in the app's first-frame background (LLP 1115.001 D3.6): the manifest's `background_color`, and
- * `color_scheme_dark.background_color` in night mode, as the iOS launch screen and the web page's first paint take
- * them (a fixed `userInterfaceStyle` takes its side alone, as there). Written under `res` as `ExactAppLaunch`, the
- * reader's `ExactLaunch` with that colour behind the window and on Android 12's starting window, and the bars' icons
- * dark over a light colour and light over a dark one, until the host says the page's (`ExactActivity.chrome`).
- * Android 12's starting window shows the launcher icon unless `host.android.launchImage` says otherwise: a picture
- * (`{ src, width }`) is that icon, laid out at [SPLASH_ICON_SCALE] of its `width`, and before Android 12 it is
- * centred on the window's background, which has no icon; `false` shows no icon. `dir` is the app's, which the
- * picture's path is relative to. Returns the activity's theme, null where the manifest says neither, which leaves the
- * platform's own launch, and the picture's file and digest for the APK's record of its sources. */
+/** The launch window in the app's first-frame background (LLP 1115.001 D3.6): each scheme's launch colour the manifest
+ * names (`schemeColours`, LLP 1163 D2), as the iOS launch screen and the web page's first paint take them, clipped to
+ * sRGB, which a colour resource holds. Android follows the device's scheme whatever `userInterfaceStyle` says. Written
+ * under `res` as `ExactAppLaunch`, the reader's `ExactLaunch` with that colour behind the window and on Android 12's
+ * starting window, and the bars' icons dark over a light colour and light over a dark one, until the host says the
+ * page's (`ExactActivity.chrome`). A scheme the manifest names none for keeps the reader's: `ExactAppLaunch` is
+ * written for each scheme (`values`, `values-night`), with the colour only in the one that names it, since a colour
+ * resource cannot name the theme's surface. Android 12's starting window shows the launcher icon unless
+ * `host.android.launchImage` says otherwise: a picture (`{ src, width }`) is that icon, laid out at
+ * [SPLASH_ICON_SCALE] of its `width`, and before Android 12 it is centred on the window's background, which has no
+ * icon; `false` shows no icon. `dir` is the app's, which the picture's path is relative to. Returns the activity's
+ * theme, null where the manifest says neither, which leaves the platform's own launch, and the picture's file and
+ * digest for the APK's record of its sources. */
 export function androidLaunch(manifest, res, dir = '.') {
   rmSync(res, { recursive: true, force: true });
-  const style = manifest.userInterfaceStyle, named = manifest.color_scheme_dark?.background_color;
+  const named = schemeColours(manifest, 'background_color', null);
   const image = manifest.host?.android?.launchImage;
-  let light = manifest.background_color;
-  if (!light && image === undefined) return { theme: null, files: [] };
-  const dark = style === 'light' ? light : named ?? light;
-  if (style === 'dark') light = dark;
+  if (!named.light && !named.dark && image === undefined) return { theme: null, files: [] };
+  const colour = (scheme) => named[scheme] && parseColour(named[scheme], `the ${scheme} launch colour`).hex;
   const write = (path, body) => {
     mkdirSync(dirname(resolve(res, path)), { recursive: true });
     writeFileSync(resolve(res, path), typeof body === 'string' ? `<?xml version="1.0" encoding="utf-8"?>\n${body}` : body);
@@ -983,6 +986,7 @@ export function androidLaunch(manifest, res, dir = '.') {
   const values = (body) => `<resources>\n${body}</resources>\n`;
   const scheme = (css) => `    <color name="exact_launch">${androidColour(css)}</color>\n    <bool name="exact_launch_light">${lightColour(css)}</bool>\n`;
   const files = [], picture = image ? readPng(resolve(dir, image.src)) : null;
+  const qualifier = { light: '', dark: '-night' };
   if (picture) {
     const source = resolve(dir, image.src);
     files.push({ file: source, sha256: createHash('sha256').update(readFileSync(source)).digest('hex') });
@@ -992,19 +996,25 @@ export function androidLaunch(manifest, res, dir = '.') {
     const size = (scale) => `android:width="${+(image.width * scale).toFixed(2)}dp" android:height="${+(image.width * picture.height / picture.width * scale).toFixed(2)}dp"`;
     const layers = (items) => `<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n${items}</layer-list>\n`;
     write('drawable/exact_launch_icon.xml', layers(`    <item ${size(SPLASH_ICON_SCALE)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
-    write('drawable/exact_launch_window.xml', layers(`    <item android:drawable="${light ? '@color/exact_launch' : '?android:attr/colorBackground'}" />\n` +
-      `    <item ${size(1)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
+    for (const s of ['light', 'dark']) {
+      write(`drawable${qualifier[s]}/exact_launch_window.xml`, layers(`    <item android:drawable="${colour(s) ? '@color/exact_launch' : '?android:attr/colorBackground'}" />\n` +
+        `    <item ${size(1)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
+    }
   }
   const item = (name, value) => `        <item name="android:${name}">${value}</item>`;
-  const theme = (splash) => ['    <style name="ExactAppLaunch" parent="ExactLaunch">',
-    ...(picture && !splash ? [item('windowBackground', '@drawable/exact_launch_window')] : light ? [item('windowBackground', '@color/exact_launch')] : []),
-    ...(splash && light ? [item('windowSplashScreenBackground', '@color/exact_launch')] : []),
+  const theme = (splash, coloured) => ['    <style name="ExactAppLaunch" parent="ExactLaunch">',
+    ...(picture && !splash ? [item('windowBackground', '@drawable/exact_launch_window')] : coloured ? [item('windowBackground', '@color/exact_launch')] : []),
+    ...(splash && coloured ? [item('windowSplashScreenBackground', '@color/exact_launch')] : []),
     ...(splash && image !== undefined ? [item('windowSplashScreenAnimatedIcon', picture ? '@drawable/exact_launch_icon' : '@android:color/transparent')] : []),
-    ...(light ? [item('windowLightStatusBar', '@bool/exact_launch_light'), item('windowLightNavigationBar', '@bool/exact_launch_light')] : []),
+    ...(coloured ? [item('windowLightStatusBar', '@bool/exact_launch_light'), item('windowLightNavigationBar', '@bool/exact_launch_light')] : []),
     '    </style>', ''].join('\n');
-  write('values/exact_launch.xml', values((light ? scheme(light) : '') + theme(false)));
-  if (light) write('values-night/exact_launch.xml', values(scheme(dark)));
-  write('values-v31/exact_launch.xml', values(theme(true)));
+  // `values` declares the colour whichever scheme names it, since a resource only `values-night` has fails release lint
+  // (MissingDefaultResource); the day style reads it only where the light scheme names one
+  for (const s of ['light', 'dark']) {
+    const declared = s === 'light' ? colour('light') ?? colour('dark') : colour('dark');
+    write(`values${qualifier[s]}/exact_launch.xml`, values((declared ? scheme(declared) : '') + theme(false, !!colour(s))));
+    write(`values${qualifier[s]}-v31/exact_launch.xml`, values(theme(true, !!colour(s))));
+  }
   return { theme: '@style/ExactAppLaunch', files };
 }
 

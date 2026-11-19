@@ -10,6 +10,7 @@ import { chmodSync, closeSync, lstatSync, openSync, readlinkSync, readSync, copy
 export { buildInfo } from './buildinfo.mjs';
 import { alternateIcons, iconDigests, pickIcon, placeRgba, writeTinted } from '../../scripts/app-icons.mjs';
 import { encodePng } from '../../scripts/png.mjs';
+import { parseColour, schemeColours } from '../../scripts/scheme-colours.mjs';
 
 const run = (cmd, args, opts = {}) => {
   const r = spawnSync(cmd, args, { ...opts, stdio: opts.stdio === 'ignore' ? ['ignore', 'ignore', 'pipe'] : opts.stdio ?? 'inherit' });
@@ -345,12 +346,12 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
   if (refused) throw new Error(refused);
   if (platform === 'macos' && !catalogs.length) { rmSync(resolve(dir, 'Assets.car'), { force: true }); return {}; }
   if (kept) {
-    const key = createHash('sha256').update(JSON.stringify([catalogs, iconDigests(app.manifest, app.dir), app.manifest.background_color ?? null, app.manifest.color_scheme_dark?.background_color ?? null, launch, ground, launchImage,
+    const key = createHash('sha256').update(JSON.stringify([catalogs, iconDigests(app.manifest, app.dir), schemeColours(app.manifest, 'background_color'), app.manifest.userInterfaceStyle ?? null, launch, ground, launchImage,
       minimum, platform, device, catalog, kept.stamp,
       // What the compile itself writes: a cache from before `--accent-color` named no accent,
       // one from before `ExactLaunchImageSource` no launch image's source or digest,
       // one from before `digest` launch assets under fixed names
-      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components', 'declared-alternate-icons', 'launch-ground'])).digest('hex').slice(0, 16);
+      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components', 'declared-alternate-icons', 'launch-ground', 'launch-per-scheme'])).digest('hex').slice(0, 16);
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;
@@ -453,26 +454,28 @@ export function composerFallback(manifest, dir) {
 
 /** The launch screen in the app's own background, light and dark: iOS crossfades from the
  * launch screen to the first frame, and between two screens of one colour that crossfade is
- * invisible, so the app opens on its first frame. The manifest's `background_color` is the
- * author's word, in a dark scheme too unless `color_scheme_dark.background_color` names another,
- * as the W3C manifest draft reads it (LLP 1163 D2). Where it names none, the launch screen is
- * the app's own ground (`ground`, the bake's `launchGround`: the ground every route the app can
- * open on stands on, as the kernel reads a colour), else the platform's page (LLP 1115 D2):
- * `systemBackground`, which an empty `UILaunchScreen` already is in both schemes, or, where the
- * first screen scrolls a grouped list (`launch`, the bake's `launchBackground`, LLP 1116.011
- * D2.3), `systemGroupedBackground`, which the system shows as #F2F2F7 and black. That is a
- * colour set of its own (a reference to the system colour compiles to its light value alone), so
- * the window under the first frame (`ExactLaunchColor`, the same components) is the same grey and
- * nothing lighter shows between the launch screen and the first frame (stopwatch, round 13:
- * "blank white screen for ~1 s"). `UILaunchScreen` names colours and images only from an asset
- * catalog, so this writes its colour set, and the manifest's `host.ios.launchImage` (`picture`:
- * its captured bytes' file and width) as an image set at its width in points (1x, 2x and 3x),
- * which iOS centres on that colour, for the shared compile. Returns the plist keys to merge. */
+ * invisible, so the app opens on its first frame. Each scheme's colour is the manifest's for it
+ * (`schemeColours`, LLP 1163 D2), else the app's own ground (`ground`, the bake's `launchGround`),
+ * else the platform's page (LLP 1115 D2): `systemBackground`, which an empty `UILaunchScreen`
+ * already is in both schemes, or, where the first screen scrolls a grouped list (`launch`, the
+ * bake's `launchBackground`, LLP 1116.011 D2.3), `systemGroupedBackground`. `UILaunchScreen`
+ * names one colour set or none, and a set's reference to a system colour compiles to its light
+ * value alone, so a page that shares a set with a named or read colour is written as the values
+ * the system shows at the base level: #FFFFFF or #F2F2F7 light, black dark, as a hand-built app's
+ * launch colour set writes them. A Display P3 colour is written in that space. The window under
+ * the first frame (`ExactLaunchColor`, the same components) is the same colour, so nothing else
+ * shows between the launch screen and the first frame (stopwatch, round 13: "blank white screen
+ * for ~1 s"). The manifest's `host.ios.launchImage` (`picture`: its captured bytes' file and
+ * width) is an image set at its width in points (1x, 2x and 3x), which iOS centres on that
+ * colour, for the shared compile. Returns the plist keys to merge. */
 export function launchScreen(app, catalog, launch = 'system', picture = null, ground = null) {
-  const named = app.manifest.background_color;
-  const page = launch === 'grouped' ? { light: '#F2F2F7', dark: '#000000' } : {};
-  const light = named ?? ground?.light ?? page.light;
-  const dark = named ? app.manifest.color_scheme_dark?.background_color : ground?.dark ?? page.dark;
+  const named = schemeColours(app.manifest, 'background_color'), style = app.manifest.userInterfaceStyle;
+  const page = launch === 'grouped' ? { light: '#F2F2F7', dark: '#000000' } : { light: '#FFFFFF', dark: '#000000' };
+  // Write no colour where the launch is the plain page in both schemes: the system's own launch screen is that
+  const plain = !named.light && !named.dark && !ground && launch !== 'grouped';
+  const colour = (scheme) => (plain ? null : named[scheme] ?? ground?.[scheme] ?? page[scheme]);
+  const fixed = style === 'light' || style === 'dark' ? style : null;
+  const light = colour(fixed ?? 'light'), dark = colour(fixed ?? 'dark');
   const keys = {};
   if (picture) {
     keys.UIImageName = `ExactLaunchImage-${digest([picture.sha256, picture.width])}`;
@@ -490,22 +493,26 @@ export function launchScreen(app, catalog, launch = 'system', picture = null, gr
   // ImageIO reader; other bytes under the name (an update's) are decoded.
   const source = picture ? { ExactLaunchImageSource: app.manifest.host.ios.launchImage.src, ExactLaunchImageSHA256: picture.sha256 } : {};
   if (!light) return picture ? { UILaunchScreen: keys, ...source } : {};
-  const components = (hex, field) => {
-    const m = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(hex ?? '');
-    if (!m) throw new Error(`${field} must be a #RGB, #RRGGBB or #RRGGBBAA colour, not ${JSON.stringify(hex)}`);
-    const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join('') : m[1];
-    const a = h.length === 8 ? parseInt(h.slice(6), 16) : 255;
-    return { 'color-space': 'srgb', components: { red: `0x${h.slice(0, 2)}`, green: `0x${h.slice(2, 4)}`, blue: `0x${h.slice(4, 6)}`, alpha: (a / 255).toFixed(3) } };
+  const field = (scheme) => (app.manifest[`color_scheme_${scheme}`]?.background_color ? `color_scheme_${scheme}.background_color` : named[scheme] ? 'background_color' : `the ${scheme} launch colour`);
+  const components = (text, scheme) => {
+    const { space, rgb, alpha } = parseColour(text, field(scheme));
+    const value = (v) => (space === 'srgb' ? `0x${Math.round(v * 255).toString(16).padStart(2, '0')}` : v.toFixed(4));
+    return { 'color-space': space, components: { red: value(rgb[0]), green: value(rgb[1]), blue: value(rgb[2]), alpha: alpha.toFixed(3) } };
   };
-  const colors = [{ idiom: 'universal', color: components(light, 'background_color') }];
-  if (dark) colors.push({ idiom: 'universal', appearances: [{ appearance: 'luminosity', value: 'dark' }], color: components(dark, 'color_scheme_dark.background_color') });
+  const lightColour = components(light, fixed ?? 'light'), darkColour = components(dark, 'dark');
+  const colors = [{ idiom: 'universal', color: lightColour }];
+  // Write a dark appearance only where it differs, so a colour that serves both schemes keeps its set's name
+  if (JSON.stringify(darkColour) !== JSON.stringify(lightColour)) colors.push({ idiom: 'universal', appearances: [{ appearance: 'luminosity', value: 'dark' }], color: darkColour });
   const name = `ExactLaunch-${digest(colors)}`;
   mkdirSync(resolve(catalog, `${name}.colorset`), { recursive: true });
   writeFileSync(resolve(catalog, `${name}.colorset`, 'Contents.json'), JSON.stringify({ colors, info: { author: 'exact', version: 1 } }));
-  // The host uses the same sRGB components as the catalogue, including its
-  // rounded alpha, without loading Assets.car before UIApplicationMain.
-  const rgba = ({ color: { components: c } }) => [parseInt(c.red, 16) / 255, parseInt(c.green, 16) / 255, parseInt(c.blue, 16) / 255, Number(c.alpha)];
-  return { UILaunchScreen: { UIColorName: name, ...keys }, ExactLaunchColor: { light: rgba(colors[0]), ...(dark ? { dark: rgba(colors[1]) } : {}) }, ...source };
+  // The host uses the same components as the catalogue, including its rounded alpha, without loading
+  // Assets.car before UIApplicationMain: an sRGB colour's as they are, a Display P3 one's under its space
+  const rgba = ({ color: { 'color-space': space, components: c } }) => {
+    const value = [...[c.red, c.green, c.blue].map((v) => (space === 'srgb' ? parseInt(v, 16) / 255 : Number(v))), Number(c.alpha)];
+    return space === 'srgb' ? value : { [space]: value };
+  };
+  return { UILaunchScreen: { UIColorName: name, ...keys }, ExactLaunchColor: { light: rgba(colors[0]), ...(colors[1] ? { dark: rgba(colors[1]) } : {}) }, ...source };
 }
 
 /** A launch asset's name ends in a digest of what it draws: iOS keeps the launch

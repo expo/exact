@@ -309,17 +309,25 @@
       "description": "The app's appearance from launch, as the device's appearance would be (Expo's key): automatic (the default) follows the device; light or dark fixes it on iOS and tvOS (Info.plist's UIUserInterfaceStyle), macOS (the application's appearance, set before the first window) and the web (the page's color-scheme). A color-scheme a node sets still wins in its subtree. Android, Linux and Windows follow the device.",
       "enum": ["automatic", "light", "dark"]
     },
-    "theme_color": { "type": "string" },
-    "color_scheme_dark": {
-      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page, the iOS launch screen and the Android launch window), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
+    "theme_color": {
+      "type": "string",
+      "description": "The browser's toolbar and title bar colour in every colour scheme, unless color_scheme_light or color_scheme_dark names another for one (LLP 1163 D2). Unset, the browser's own."
+    },
+    "color_scheme_light": {
+      "description": "The colours of the light scheme alone, which win there over the top-level members: background_color and theme_color. Exact's member, the mirror of the W3C color_scheme_dark; icons is already the light list. A colour named here alone leaves the dark scheme to Exact (LLP 1163 D2), and a browser's own splash, which reads only W3C members, leaves it out.",
       "type": "object",
       "properties": {
-        "background_color": {
-          "type": "string",
-          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-          "description": "The dark first-frame background: #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes."
-        },
-        "theme_color": { "type": "string" },
+        "background_color": { "$ref": "#/$defs/launchColour", "description": "The light first-frame background." },
+        "theme_color": { "type": "string", "description": "The light theme colour." }
+      },
+      "additionalProperties": false
+    },
+    "color_scheme_dark": {
+      "description": "The colours and icons of the dark scheme alone, which win there over the top-level members, as the W3C manifest draft's member of this name: background_color, theme_color, and icons, which replaces icons there (LLP 1163 D2). A colour named here alone leaves the light scheme to Exact. manifest.json carries it without icons.",
+      "type": "object",
+      "properties": {
+        "background_color": { "$ref": "#/$defs/launchColour", "description": "The dark first-frame background." },
+        "theme_color": { "type": "string", "description": "The dark theme colour." },
         "icons": {
           "description": "The dark scheme's icons, which replace icons there: every file a dark slot may take, \"any\" only. iOS's dark icon and the web's dark favicon are picked from it as the light ones are from icons.",
           "type": "array",
@@ -329,9 +337,8 @@
       "additionalProperties": false
     },
     "background_color": {
-      "type": "string",
-      "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-      "description": "The first-frame background, the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12): #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes, so a colour the web accepts is one every host builds. Unset, the iOS launch screen is the app's own background where the build can read it and every route it can open on agrees (each route's background-color, else its root's, written as a colour or a theme's colour), else systemBackground, or the grouped background where the first route scrolls a grouped list; on Android the theme's surface."
+      "$ref": "#/$defs/launchColour",
+      "description": "The first-frame background in every colour scheme, unless color_scheme_light or color_scheme_dark names another for one (LLP 1163 D2): the web page's, the iOS launch screen's and the Android launch window's (its starting window from Android 12). Name none unless the launch must differ from what Exact shows. A scheme named none for is the app's own background on iOS where the build can read it and every route it can open on agrees (each route's background-color, else its root's: a colour or a theme's colour), else systemBackground, or the grouped background where the first route scrolls a grouped list; on Android the theme's surface, on the web the page's own colour."
     },
     "lang": {
       "description": "The W3C manifest's language: a BCP 47 tag for the page's <html lang> and the web manifest. Absent is en.",
@@ -1705,6 +1712,12 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "launchColour": {
+      "type": "string",
+      "pattern": "^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|color\\(\\s*display-p3(\\s+(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)){3}\\s*(/\\s*(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)\\s*)?\\))$",
+      "x-hint": "write #RGB, #RRGGBB or #RRGGBBAA, or a Display P3 colour as color(display-p3 r g b) or color(display-p3 r g b / a), each component from 0 to 1 or 0% to 100%",
+      "description": "A launch colour: hex, or Display P3 as CSS writes it, which iOS and the web's first paint show in Display P3 and Android and the browser's manifest take clipped to sRGB."
+    },
     "swiftPackages": {
       "description": "Swift Package Manager products for native Swift, with exact versions. The app keeps Package.resolved; exact lock refreshes it (LLP 1133.001 D9, expo/exact#751).",
       "type": "array",

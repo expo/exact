@@ -479,12 +479,14 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   record the simulator (`xcrun simctl io booted recordVideo`) and read its frames.
 
 - **A cold launch flashes the wrong colour, and no screenshot shows it.** The launch
-  screen is `host.ios.launchImage` centred on `background_color` (`color_scheme_dark`'s
-  `background_color` in dark mode); unset, the app's own background where the build can read
-  it and every route agrees (a colour or a theme's colour on each route, else the root),
-  else the platform's (the grouped grey under a first route that scrolls a grouped list).
-  A named `background_color` holds in dark mode too unless the dark one is named.
-  Android's launch window takes the same two colours, with the launcher icon on them from
+  screen is `host.ios.launchImage` centred on the launch colour, which a top-level
+  `background_color` names in every scheme, so a lone `"#ffffff"` launches white in dark
+  mode too; `color_scheme_light` or `color_scheme_dark` names one scheme's alone. Unnamed,
+  it is the app's own background where the build can read it and every route agrees (a
+  colour or a theme's colour on each route, else the root), else the platform's (the
+  grouped grey under a first route that scrolls a grouped list): name none unless the
+  launch must differ.
+  Android's launch window takes the same colours, with the launcher icon on them from
   Android 12 unless `host.android.launchImage` names a picture or `false`. It is gone before a screenshot
   can be taken: record one (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl
   launch`; `adb shell screenrecord` on Android) and read its frames (the euxy port's white

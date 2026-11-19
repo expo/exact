@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { decodePng, encodePng, shrink } from './png.mjs';
+import { schemeColours } from './scheme-colours.mjs';
 
 const TYPES = { png: 'image/png', svg: 'image/svg+xml', ico: 'image/x-icon' };
 const ICO_TYPES = ['image/x-icon', 'image/vnd.microsoft.icon'];
@@ -267,16 +268,15 @@ export function webIconLinks(manifest, dir, fallback) {
   return [...icons, ...(touch ? [`<link rel="apple-touch-icon" sizes="${touch.sizes}" href="./${esc(touch.src)}">`] : [])].join('\n');
 }
 
-/** The page's theme colours: the dark one first, since a browser takes the first `theme-color`
- * whose `media` matches (HTML, "obtain a page's theme color"). A fixed `userInterfaceStyle` takes
- * its side alone, as the page does. */
+/** The page's theme colour in each scheme the manifest names one for (`schemeColours`, LLP 1163 D2): the dark one
+ * first, since a browser takes the first `theme-color` whose `media` matches (HTML, "obtain a page's theme color"), and
+ * the light one for light alone where dark is left to the browser. A fixed `userInterfaceStyle` takes its side alone,
+ * as the page does. */
 export function webThemeColors(manifest) {
-  const dark = manifest.color_scheme_dark?.theme_color, light = manifest.theme_color, style = manifest.userInterfaceStyle;
-  if (style === 'light' || style === 'dark') {
-    const colour = style === 'dark' ? dark ?? light : light;
-    return colour ? [`<meta name="theme-color" content="${esc(colour)}">`] : [];
-  }
-  return [...(dark ? [`<meta name="theme-color" content="${esc(dark)}" media="${DARK}">`] : []), ...(light ? [`<meta name="theme-color" content="${esc(light)}">`] : [])];
+  const { light, dark } = schemeColours(manifest, 'theme_color');
+  const meta = (colour, media) => `<meta name="theme-color" content="${esc(colour)}"${media ? ` media="${media}"` : ''}>`;
+  if (light === dark) return light ? [meta(light)] : [];
+  return [...(dark ? [meta(dark, DARK)] : []), ...(light ? [meta(light, dark ? null : LIGHT)] : [])];
 }
 
 /** The sizes of the Windows executable's icon: the shell's at 100% to 400% scale (Microsoft, "Construct your

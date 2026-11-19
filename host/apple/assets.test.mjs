@@ -66,13 +66,13 @@ test('Mac resource trees cannot replace the generated privacy manifest', () => {
   }
 });
 
-test('the launch colour is the manifest\'s, else the app\'s own ground, else the platform\'s page', () => {
+test('each scheme\'s launch colour is the manifest\'s, else the app\'s own ground, else the platform\'s page', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-launch-rule-'));
   try {
     const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).concat(1);
     const color = (manifest, ground, launch) => launchScreen({ manifest }, dir, launch, null, ground).ExactLaunchColor;
     const ground = { light: '#f5f6f8', dark: '#1c1814' };
-    // LLP 1163 D2: a named colour is the author's word, in a dark scheme too unless a dark one is named
+    // LLP 1163 D2: a top-level colour holds in every scheme unless a scheme names its own
     assert.deepEqual(color({ background_color: '#ffffff' }, ground), { light: rgb('#ffffff') });
     assert.deepEqual(color({ background_color: '#ffffff', color_scheme_dark: { background_color: '#123456' } }, ground), { light: rgb('#ffffff'), dark: rgb('#123456') });
     // Named none: the app's own ground, else the platform's page
@@ -80,6 +80,21 @@ test('the launch colour is the manifest\'s, else the app\'s own ground, else the
     assert.deepEqual(color({}, ground, 'grouped'), { light: rgb('#f5f6f8'), dark: rgb('#1c1814') });
     assert.deepEqual(color({}, null, 'grouped'), { light: rgb('#f2f2f7'), dark: rgb('#000000') });
     assert.equal(color({}), undefined);
+    // One scheme named: the other is the app's ground, else the page's values, which a set of its own must write out
+    const lightOnly = { color_scheme_light: { background_color: '#f4efe6' } };
+    assert.deepEqual(color(lightOnly, ground), { light: rgb('#f4efe6'), dark: rgb('#1c1814') });
+    assert.deepEqual(color(lightOnly), { light: rgb('#f4efe6'), dark: rgb('#000000') });
+    assert.deepEqual(color({ color_scheme_dark: { background_color: '#14110d' } }), { light: rgb('#ffffff'), dark: rgb('#14110d') });
+    // A scheme's own member wins over the top level; a fixed style shows its side in both
+    assert.deepEqual(color({ background_color: '#808080', color_scheme_light: { background_color: '#fafafa' } }), { light: rgb('#fafafa'), dark: rgb('#808080') });
+    assert.deepEqual(color({ userInterfaceStyle: 'dark', background_color: '#ffffff', color_scheme_dark: { background_color: '#000000' } }, ground), { light: rgb('#000000') });
+    assert.deepEqual(color({ userInterfaceStyle: 'dark' }, ground), { light: rgb('#1c1814') });
+    // One colour in two spellings is one appearance
+    assert.deepEqual(color({ background_color: '#FFF', color_scheme_dark: { background_color: '#ffffff' } }), { light: rgb('#ffffff') });
+    // Display P3 in its own space, beside an sRGB colour
+    assert.deepEqual(color({ background_color: '#ffffff', color_scheme_dark: { background_color: 'color(display-p3 0.5 0.25 0)' } }),
+      { light: rgb('#ffffff'), dark: { 'display-p3': [0.5, 0.25, 0, 1] } });
+    assert.throws(() => color({ background_color: 'color(display-p3 1.5 0 0)' }), /background_color is "color\(display-p3 1\.5 0 0\)", which is not a colour app\.json takes/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

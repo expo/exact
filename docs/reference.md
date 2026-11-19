@@ -1304,17 +1304,32 @@ refuses. Under the agent the roster is the word `app-icon.icons` (`prefer`),
 and each change holds an `app-icon` ticket standing for iOS's alert
 (`docs/recipes/alternate-app-icons.md`).
 
-What shows before the first frame is `app.json`'s Web App Manifest
-`background_color`, and in a dark scheme `color_scheme_dark.background_color`
-(`#RGB`, `#RRGGBB` or `#RRGGBBAA`); a fixed `userInterfaceStyle` takes its side
-alone. The web page has it until the first frame, the iOS launch screen centres
-`host.ios.launchImage` on it, and the Android launch window is it, with the bars'
-icons dark over a light colour. Unset, the iOS launch screen is the app's own
-background where the build can read it and every route it can open on agrees
-(each route's `background-color`, else its root's, written as a colour or a
-theme's colour, LLP 1163 D2), else `systemBackground` (its grouped background under a first route
-that scrolls a grouped list); the web and Android show the platform's surface,
-Android's `surface`.
+What shows before the first frame is the launch colour, which `app.json` names
+per colour scheme (LLP 1163 D2):
+
+| `app.json` | Light | Dark |
+|---|---|---|
+| `"background_color": "#f4efe6"` | `#f4efe6` | `#f4efe6` |
+| `"color_scheme_light": { "background_color": "#f4efe6" }` | `#f4efe6` | Exact's |
+| `"color_scheme_dark": { "background_color": "#14110d" }` | Exact's | `#14110d` |
+| `"background_color": "#f4efe6", "color_scheme_dark": { "background_color": "#14110d" }` | `#f4efe6` | `#14110d` |
+| none | Exact's | Exact's |
+
+A scheme's own member wins over the top-level one, which holds in every scheme.
+Name none unless the launch must differ from what Exact shows: on iOS the app's
+own background where the build can read it and every route it can open on
+agrees (each route's `background-color`, else its root's, written as a colour or
+a theme's colour), else `systemBackground` (its grouped background under a first
+route that scrolls a grouped list); on Android the theme's surface; on the web
+the page's own colour. A colour is `#RGB`, `#RRGGBB`, `#RRGGBBAA`, or Display P3 as
+`color(display-p3 r g b)` (`/ a` for alpha), which iOS and the web's first paint
+show in Display P3 and Android takes clipped to sRGB. A fixed
+`userInterfaceStyle` shows its side in both on iOS and the web; Android follows
+the device. The web page has the colour until the first frame, the iOS launch
+screen centres `host.ios.launchImage` on it, and the Android launch window is
+it, with the bars' icons dark over a light colour. `theme_color` takes the same
+three places for the browser's toolbar. The `manifest.json` a browser reads has
+only the W3C members, so a colour named for light alone is not in it.
 
 From Android 12 the launch window (the starting window) shows the launcher icon
 in its middle, as every app's does. `host.android.launchImage` replaces it:

@@ -45,6 +45,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
       ['white', { background_color: '#ffffff' }],
       ['opaque', { background_color: '#abc', color_scheme_dark: { background_color: '#123456' } }],
       ['translucent', { background_color: '#abc', color_scheme_dark: { background_color: '#12345680' } }],
+      ['p3', { color_scheme_light: { background_color: 'color(display-p3 1 0 0)' }, color_scheme_dark: { background_color: 'color(display-p3 0.1 0.2 0.3 / 0.5)' } }],
     ]) {
       const bundle = resolve(fixtures, `${name}.bundle`);
       mkdirSync(bundle, { recursive: true });

@@ -916,15 +916,16 @@ fn launch_background(plan: &exact_plan::Plan) -> &'static str {
 }
 
 /// LLP 1163 D2: the app's own ground, light and dark, which the iOS launch
-/// screen shows where the manifest names no `background_color`: the ground
-/// every screen the app can open on stands on ([`screens`]), a colour
-/// written as such or a theme's name for one, on one side in both schemes
+/// screen shows in a scheme the manifest names no launch colour for: the
+/// ground every screen the app can open on stands on ([`screens`]), a colour
+/// written as such (in Display P3 beyond sRGB, [`wide_ground`]) or a theme's
+/// name for one, on one side in both schemes
 /// where that screen or the root fixes a `color-scheme`. The plan does not
 /// say which route the app opens on, so the screens must agree. Null, and
 /// the launch screen the platform's page, wherever the first frame may show
-/// another colour: screens that disagree; a role, a platform colour or a
-/// wide-gamut one, which the host draws as the OS, the app's tint or the
-/// display has it; a theme's colour that varies by an app mode; a computed,
+/// another colour: screens that disagree; a role or a platform colour,
+/// which the host draws as the OS or the app's tint has it; a colour beyond
+/// Display P3; a theme's colour that varies by an app mode; a computed,
 /// translucent or pictured ground; a computed `color-scheme`; and an app
 /// with a tab panel, whose routes may stand on the panel or a box above it.
 fn launch_ground(plan: &exact_plan::Plan) -> Value {
@@ -977,7 +978,10 @@ fn ground(
     let varies = read
         .iter()
         .any(|name| theme.iter().any(|e| e.name == *name && e.varies));
-    let (Some(value @ (ColorValue::Fixed(_) | ColorValue::LightDark(..))), false) = (value, varies)
+    let (
+        Some(value @ (ColorValue::Fixed(_) | ColorValue::LightDark(..) | ColorValue::Wide(_))),
+        false,
+    ) = (value, varies)
     else {
         return Value::Null;
     };
@@ -997,14 +1001,38 @@ fn ground(
             Some(_) => return Value::Null,
         };
     // An opaque colour only: a translucent ground is not what the first frame shows
-    let hex = |dark| {
-        let Color(rgba) = value.resolve(dark);
-        (rgba & 0xff == 0xff).then(|| format!("#{:06x}", rgba >> 8))
+    let hex = |dark| match value {
+        ColorValue::Wide(id) => wide_ground(exact_kernel::style::wide::wide(id)?.half(dark)),
+        _ => {
+            let Color(rgba) = value.resolve(dark);
+            (rgba & 0xff == 0xff).then(|| format!("#{:06x}", rgba >> 8))
+        }
     };
     match (hex(light), hex(dark)) {
         (Some(light), Some(dark)) => json!({"light": light, "dark": dark}),
         _ => Value::Null,
     }
+}
+
+/// A colour in its own space (LLP 1100 D2) as the launch screen can show it,
+/// which the host draws in that space: as hex within sRGB, else as
+/// `color(display-p3 r g b)` within Display P3. None for a translucent colour
+/// or one beyond Display P3, which no launch colour set holds.
+fn wide_ground(colour: exact_color::Wide) -> Option<String> {
+    if colour.alpha < 1.0 {
+        return None;
+    }
+    if colour.in_srgb() {
+        let c = colour.srgb8();
+        return Some(format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b));
+    }
+    let p3 = exact_color::MixSpace::DisplayP3.from_linear_srgb(colour.linear_srgb());
+    p3.iter()
+        .all(|c| (-1e-4..=1.0 + 1e-4).contains(c))
+        .then(|| {
+            let [r, g, b] = p3.map(|c| c.clamp(0.0, 1.0));
+            format!("color(display-p3 {r:.4} {g:.4} {b:.4})")
+        })
 }
 
 /// The screens the app can open on, each as the node whose `background-color`

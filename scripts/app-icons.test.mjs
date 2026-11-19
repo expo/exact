@@ -213,6 +213,10 @@ test('the web head links a raster then an SVG favicon per scheme, the light ones
   assert.deepEqual(links({ icons: [{ src: 'assets/wide.png' }] }), ['<link rel="icon" type="image/png" sizes="320x120" href="./assets/wide.png">'], 'with no square, another shape');
   assert.deepEqual(webThemeColors({ theme_color: '#ffffff', color_scheme_dark: { theme_color: '#000000' } }), [
     '<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">', '<meta name="theme-color" content="#ffffff">']);
+  // One scheme named alone leaves the other to the browser
+  assert.deepEqual(webThemeColors({ color_scheme_light: { theme_color: '#f4efe6' } }), ['<meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)">']);
+  assert.deepEqual(webThemeColors({ color_scheme_dark: { theme_color: '#14110d' } }), ['<meta name="theme-color" content="#14110d" media="(prefers-color-scheme: dark)">']);
+  assert.deepEqual(webThemeColors({ theme_color: '#336699' }), ['<meta name="theme-color" content="#336699">']);
 }));
 
 test('the published manifest fills sizes and type and keeps color_scheme_dark\'s W3C members', async () => inDir(async (dir) => {
@@ -222,6 +226,12 @@ test('the published manifest fills sizes and type and keeps color_scheme_dark\'s
   const web = webAppManifest({ icons: [{ src: 'assets/app.png', purpose: 'any maskable' }, { src: 'assets/mark.svg' }], color_scheme_dark: { background_color: '#000000', icons: [{ src: 'assets/mark.svg' }] } }, 'Icons', [], dir);
   assert.deepEqual(web.icons, [{ src: 'assets/app.png', sizes: '1024x1024', type: 'image/png', purpose: 'any maskable' }, { src: 'assets/mark.svg', sizes: 'any', type: 'image/svg+xml' }]);
   assert.deepEqual(web.color_scheme_dark, { background_color: '#000000' });
+  // The W3C form of each scheme's colours: the light one as the base where dark is named too, a Display P3 launch
+  // colour clipped to sRGB, and a light colour named alone left out, since a base holds in a dark scheme too
+  const colours = (manifest) => (({ background_color, theme_color, color_scheme_dark }) => ({ background_color, theme_color, color_scheme_dark }))(webAppManifest(manifest));
+  assert.deepEqual(colours({ color_scheme_light: { background_color: 'color(display-p3 1 0 0)', theme_color: '#eee' }, color_scheme_dark: { background_color: '#111' } }),
+    { background_color: '#ff0000', theme_color: undefined, color_scheme_dark: { background_color: '#111111' } });
+  assert.deepEqual(colours({ background_color: '#fff', theme_color: '#336699' }), { background_color: '#ffffff', theme_color: '#336699', color_scheme_dark: undefined });
 }));
 
 test.skipIf(process.platform !== 'darwin')('the iOS icon compiles its light, dark and tinted appearances in a development build', () => inDir((dir) => {

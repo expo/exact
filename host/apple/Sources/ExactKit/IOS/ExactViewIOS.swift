@@ -11,21 +11,24 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
-/// The catalogue's sRGB components, emitted by host/apple/assets.mjs so the
-/// host need not load Assets.car before UIApplicationMain.
+/// The catalogue's components, emitted by host/apple/assets.mjs so the host
+/// need not load Assets.car before UIApplicationMain.
 public let launchScreenColor = LaunchScreenColor.make(Bundle.main.object(forInfoDictionaryKey: "ExactLaunchColor"))
 
 enum LaunchScreenColor {
+    /// `light` and, where it differs, `dark`: each sRGB components, or Display
+    /// P3 ones under `display-p3`.
     static func make(_ value: Any?) -> UIColor? {
-        let components = value as? [String: [NSNumber]]
-        func color(_ rgba: [NSNumber]?) -> UIColor? {
-            guard let rgba, rgba.count == 4,
-                  let space = CGColorSpace(name: CGColorSpace.sRGB),
+        let halves = value as? [String: Any]
+        func color(_ half: Any?) -> UIColor? {
+            let p3 = (half as? [String: [NSNumber]])?["display-p3"]
+            guard let rgba = p3 ?? half as? [NSNumber], rgba.count == 4,
+                  let space = CGColorSpace(name: p3 == nil ? CGColorSpace.sRGB : CGColorSpace.displayP3),
                   let color = CGColor(colorSpace: space, components: rgba.map { CGFloat($0.doubleValue) }) else { return nil }
             return UIColor(cgColor: color)
         }
-        guard let light = color(components?["light"]) else { return nil }
-        guard let dark = color(components?["dark"]) else { return light }
+        guard let light = color(halves?["light"]) else { return nil }
+        guard let dark = color(halves?["dark"]) else { return light }
         return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
     }
 }

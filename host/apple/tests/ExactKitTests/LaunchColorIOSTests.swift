@@ -50,6 +50,14 @@ final class LaunchColorIOSTests: XCTestCase {
         try compare("opaque")
     }
 
+    func testDisplayP3PlistMatchesTheCatalogue() throws {
+        // A red beyond sRGB in light, a translucent colour in dark, each named for its scheme alone
+        try compare("p3")
+        let (named, _) = try colors("p3")
+        let light = try pixels(named, traits: UITraitCollection(userInterfaceStyle: .light), space: CGColorSpace.displayP3)
+        XCTAssertEqual(Array(light.prefix(4)), [255, 0, 0, 255])
+    }
+
     func testDirectComponentsMatchTheCatalogueInEverySupportedAppearance() throws {
         try compare("translucent")
         let (named, _) = try colors("translucent")

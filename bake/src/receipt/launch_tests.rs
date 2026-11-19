@@ -106,9 +106,19 @@ component App
         ground(&themed),
         json!({"light": "#fafafa", "dark": "#101010"})
     );
+    // A wide colour as the host draws it: within sRGB as hex, beyond it in
+    // Display P3 (one beyond Display P3 is below).
+    assert_eq!(
+        route("background-color=\"oklch(1 0 0)\""),
+        json!({"light": "#ffffff", "dark": "#ffffff"})
+    );
+    assert_eq!(
+        route("background-color=\"light-dark(color(display-p3 1 0 0), #000000)\""),
+        json!({"light": "color(display-p3 1.0000 0.0000 0.0000)", "dark": "#000000"})
+    );
     // Whatever the first frame may show in another colour leaves the launch
     // screen to the platform: a role (the page's, the tint's, any other the
-    // OS draws), a platform or wide-gamut colour, a translucent, computed or
+    // OS draws), a platform colour or one beyond Display P3, a translucent, computed or
     // pictured ground, a computed scheme, and none.
     for written in [
         "background-color=\"-exact-background\"",
@@ -116,7 +126,7 @@ component App
         "background-color=\"-exact-secondary-background\"",
         "background-color=\"AccentColor\"",
         "background-color=\"-exact-platform-color(ios systemPurpleColor, #800080)\"",
-        "background-color=\"color(display-p3 1 0 0)\"",
+        "background-color=\"color(rec2020 0 1 0)\"",
         "background-color=\"#ffffff80\"",
         "background-color=(e.id == 0 ? \"#ffffff\" : \"#000000\")",
         "background-color=\"#ffffff\" background-image=\"linear-gradient(#ff0000, #0000ff)\"",

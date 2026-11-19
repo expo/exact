@@ -590,10 +590,11 @@ the shape their state layer had (below), and so do the top layer's menu rows and
 `system_surface_dark` (`res/values-v34`, `values-night-v34`), the colour the first frame's unsaid background has, with
 the bars' icons set for it. On Android 12 and 13 the platform has no `surface` to name in a theme, and the launch
 window is the device theme's own day or night background (`?android:attr/colorBackground`). An app whose manifest
-names a `background_color` launches on it instead, and on `color_scheme_dark.background_color` in night mode, as its
-iOS launch screen and its web page's first paint do: the build writes a theme over `ExactLaunch` with that colour
-behind the window and on Android 12's starting window, and the bars' icons dark over a light colour
-(`agent-android.mjs` `androidLaunch`).
+names a launch colour launches on it instead in each scheme it names one for (`background_color` in both,
+`color_scheme_light` or `color_scheme_dark` in one, LLP 1163 D2), as its iOS launch screen and its web page's first
+paint do, following the device's scheme: the build writes a theme over `ExactLaunch` for each scheme, with the colour
+behind the window and on Android 12's starting window and the bars' icons dark over a light colour where the scheme
+names one (`agent-android.mjs` `androidLaunch`).
 
 From Android 12 the starting window shows the launcher icon on that colour, as the platform has it; before 12 the
 window has no icon. `host.android.launchImage` replaces the icon with a picture, as iOS's launch screen has one: from

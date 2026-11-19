@@ -26,7 +26,7 @@
 - **`app.id` and `app.name`** are set before the first build (`exact new --name --bundle-id`,
   [porting and release](porting-and-release.md)); `app.ts` takes the id from here.
 - **`host.ios.launchImage`** `{ "src": "assets/splash.png", "width": 276 }`: the launch
-  screen's PNG, `width` points wide, on `background_color` (Android: `host.android.launchImage`).
+  screen's PNG, `width` points wide, on the launch colour (Android: `host.android.launchImage`).
 - **`host.ios.icon`** `"art/App.icon"`: an Icon Composer `.icon`; dark icons are `color_scheme_dark.icons`.
 - **`protocol_handlers`**: `euxy://p/abc` is `/p/euxy%3A%2F%2Fp%2Fabc` (whole at `%s`).
   Cold, it opens in its route's tab (declare `p "/p/:d"`); running, `go` pushes it on the

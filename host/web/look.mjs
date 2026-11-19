@@ -1,9 +1,10 @@
 // The web's neutral presentation, composed after the shared browser resets.
 // @ref LLP 1115.000 D4 part B
 import { readFileSync } from 'node:fs';
+import { parseColour, schemeColours } from '../../scripts/scheme-colours.mjs';
 
 /** The shell inputs recorded by a web build's freshness receipt. */
-export const SHELL_SOURCES = ['host/web/index.html', 'host/web/neutral.css', 'host/web/look.mjs', 'host/web/scheme.js', 'kernel/tables/schema.json'];
+export const SHELL_SOURCES = ['host/web/index.html', 'host/web/neutral.css', 'host/web/look.mjs', 'host/web/scheme.js', 'kernel/tables/schema.json', 'scripts/scheme-colours.mjs'];
 
 /** Append the neutral sheet before the build minifies the shell's styles. */
 export function withLook(shell) {
@@ -46,11 +47,15 @@ export const colorSchemeMeta = (style) => (style ? `<meta name="color-scheme" co
 /** Restore the app's stored scheme before the runtime or the first paint. */
 export const schemeHead = (key, { development = false, wasm = false } = {}) => `${key ? `<meta name="exact-scheme" content="${key}"${development ? ' data-development' : ''}${wasm ? ' data-wasm' : ''}>\n` : ''}<script data-exact-scheme>${readFileSync(new URL('./scheme.js', import.meta.url), 'utf8').trimEnd()}</script>\n`;
 
-/** The manifest's launch background, until the app paints its root (LLP 1034 D2). */
+/** The manifest's launch colour in each scheme it names one for (`schemeColours`, LLP 1163 D2), until the app paints
+ * its root (LLP 1034 D2), and the shell's page (`--exact-background`, neutral.css, which is one colour in every engine
+ * where each engine's dark `Canvas` is its own) in a scheme it names none for. A Display P3 colour is written as CSS
+ * has it. */
 export function launchBackground(manifest) {
-  const hex = value => /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value ?? '') ? value : null;
-  const light = hex(manifest.background_color), dark = hex(manifest.color_scheme_dark?.background_color);
-  if (!light) return '';
-  const color = dark ? `light-dark(${light},${dark})` : light;
+  const { light, dark } = schemeColours(manifest, 'background_color');
+  if (!light && !dark) return '';
+  for (const [scheme, text] of Object.entries({ light, dark })) if (text) parseColour(text, `the ${scheme} launch colour`);
+  const page = 'var(--exact-background)';
+  const color = light === dark ? light : `light-dark(${light ?? page},${dark ?? page})`;
   return `html:has(#exact-root:empty){background-color:${color}}`;
 }

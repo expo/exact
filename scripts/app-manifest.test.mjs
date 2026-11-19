@@ -925,7 +925,11 @@ test('a launch colour of a host\'s own or Expo\'s splash is refused for backgrou
       assert.throws(() => read(extra), new RegExp(`${key.replaceAll('.', '\\.')}: not a known key; what shows before the first frame is background_color.*host\\.android\\.launchImage add a picture`));
     }
     assert.equal(read({ background_color: '#102839', color_scheme_dark: { background_color: '#000' } }).background_color, '#102839');
-    assert.throws(() => read({ color_scheme_dark: { background_color: 'navy' } }), /color_scheme_dark\.background_color: "navy" does not match/);
+    assert.throws(() => read({ color_scheme_dark: { background_color: 'navy' } }), /color_scheme_dark\.background_color: "navy" does not match.*: write #RGB, #RRGGBB or #RRGGBBAA, or a Display P3 colour/);
+    // LLP 1163 D2: one scheme's colours under its own member, Display P3 among them
+    assert.deepEqual(read({ color_scheme_light: { background_color: 'color(display-p3 1 0.5 0)', theme_color: '#eee' } }).color_scheme_light, { background_color: 'color(display-p3 1 0.5 0)', theme_color: '#eee' });
+    assert.throws(() => read({ color_scheme_light: { background_color: 'color(display-p3 1.5 0 0)' } }), /color_scheme_light\.background_color: .* does not match/);
+    assert.throws(() => read({ color_scheme_light: { icons: [] } }), /color_scheme_light\.icons/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
