@@ -10,6 +10,8 @@ The Accent section's last button, `accent-color="auto"` written inside the purpl
 
 UIKit's automatic scroll edge effect drops out while the range bar's segmented control slides its selection: for about a quarter of a second at each tap, the content under the navigation bar and the range bar shows sharp. A hand-built UIKit screen, a bar holding a `UISegmentedControl` registered with `UIScrollEdgeElementContainerInteraction` over a scroll view, does the same on iOS 27.0 and 27.1, and keeps its effect through the slide with the style set by name, soft or hard. Screen recordings found it; screenshots taken after a tap could not, as an XCUITest tap returns once the app is idle. The scroller names the hard style, which the automatic one draws there. What would have helped: a note beside `-exact-scroll-edge-effect` that UIKit's automatic style drops out while a control in the bar animates; Apple's documentation does not say so.
 
+On the open Duo, the page's range bar docked 7 points shorter than the sidebar's inline navigation bar (51 against 58), so the two headers ended on different lines once both were scrolled. Exact gives a page no navigation bar height, and the right one is UIKit's, so the gallery's module measures it: the sidebar is the module's own `UITableViewController`, and its bar's `sizeThatFits` gives the inline height while the item asks for no large title, the large title's height otherwise. The module returns it from `native.call`, calls `context.changed` when it changes so the page asks again, and the page takes it as the range bar's `min-height`, 0 where the sidebar is not beside the page. A two-line label or a larger text size makes the bar taller still. What would have helped: the inline navigation bar's height as a value a page can read.
+
 ### Lean in
 
 Saying less fixed the rest. The app's red `AccentColor`, its request that iOS 27 minimize the bar on scroll, and its soft scroll edge effect each overrode UIKit. Without them the tint is the system's; the bar stays on an iPhone (iOS 27.0), while the Duo (iOS 27.1) hides it as the content scrolls up, as UIKit does there unasked; and with the range bar registered as the scroll view's edge element, UIKit blurs the content from the screen's top to the range bar's foot, as a hand-built screen with a `UIScrollEdgeElementContainerInteraction` does.
@@ -18,6 +20,7 @@ Saying less fixed the rest. The app's red `AccentColor`, its request that iOS 27
 
 - system tint: provided
 - scroll edge effect under a control bar: provided, rough (the host clipped a banded scroller with `overflow-x: hidden`; fixed in expo/exact#963; UIKit's automatic style drops out while a segmented control in the bar slides, so the gallery names the hard one)
+- navigation bar height: by hand (the module measures the sidebar's bar)
 
 ### Checkpoints
 

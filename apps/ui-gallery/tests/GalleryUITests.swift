@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 /// Runs on an open Duo, where no test skips, and on a compact window (the folded Duo or an iPhone), where
-/// the three tests that need the sidebar beside the page skip.
+/// the tests that need the sidebar beside the page skip.
 final class GalleryUITests: XCTestCase {
     override func setUp() {
         super.setUp()
@@ -22,6 +22,38 @@ final class GalleryUITests: XCTestCase {
             let after = try sidebarPixels(app, sidebar)
             XCTAssertTrue(before == after, "Sidebar selection must finish drawing without another touch. Keep existing cells when only selection changes.")
         }
+    }
+
+    /// Beside the page, the split measures the sidebar's inline bar height, not its large title's, reports it
+    /// only when it changes, and leaves the sidebar's large title as it was. This process's scene is in the
+    /// background, where UIKit neither collapses the split nor changes its display mode: the app's own run
+    /// checks those (`testHeaderCollapsesAndTheRangeBarFollowsIt`, and the iPhone's unchanged range bar)
+    func testTheSplitMeasuresTheSidebarsInlineBarBesideThePage() throws {
+        let tabs = (0..<9).map { index in
+            GalleryTestTab(name: "Section \(index)", controller: UINavigationController(rootViewController: UIViewController()),
+                           item: UITabBarItem(title: "Section \(index)", image: nil, tag: index))
+        }
+        let split = GallerySplit(ExactTabContents(tabs: tabs))
+        var said: [CGFloat] = []
+        split.besideBarHeightChanged = { [unowned split] in said.append(split.besideBarHeight) }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 951, height: 669)
+        window.traitOverrides.horizontalSizeClass = .regular
+        window.rootViewController = split
+        window.isHidden = false
+        defer { window.isHidden = true }
+        window.layoutIfNeeded()
+        let navigation = try XCTUnwrap(split.viewController(for: .primary) as? UINavigationController)
+        let sidebar = try XCTUnwrap(navigation.topViewController as? GallerySidebar)
+        XCTAssertFalse(split.isCollapsed)
+        XCTAssertGreaterThan(split.besideBarHeight, 0)
+        XCTAssertLessThan(split.besideBarHeight, navigation.navigationBar.frame.height, "The inline height, not the large title's")
+        XCTAssertEqual(sidebar.navigationItem.largeTitleDisplayMode, .always, "Measuring leaves the large title as it was")
+        XCTAssertEqual(said, [split.besideBarHeight], "The height is reported once")
+        split.view.setNeedsLayout()
+        split.view.layoutIfNeeded()
+        XCTAssertEqual(said.count, 1, "An unchanged height is not reported again: \(said)")
     }
 
     func testSidebarSelectionPreservesVisibleCells() throws {
@@ -107,6 +139,18 @@ final class GalleryUITests: XCTestCase {
             XCTAssertEqual(try XCTUnwrap(reading["titleCenter"] as? CGFloat),
                            try XCTUnwrap(reading["controlCenter"] as? CGFloat), accuracy: 0.5,
                            "The label is vertically centered beside the control")
+        }
+        // Beside the sidebar, once it is scrolled too, the docked range bar ends level with its inline bar
+        if sidebarIsBesideThePage(app) {
+            let rangeBar = app.otherElements["range-bar-css"].firstMatch, sidebarBar = app.navigationBars["UI Gallery"]
+            let large = sidebarBar.frame.height
+            sidebar.swipeUp(velocity: .slow)
+            XCTAssertLessThan(sidebarBar.frame.height, large, "The sidebar's title is inline once it is scrolled")
+            XCTAssertEqual(rangeBar.frame.minY, sidebarBar.frame.minY, accuracy: 0.5, "The range bar is docked where the sidebar's bar starts")
+            XCTAssertEqual(rangeBar.frame.maxY, sidebarBar.frame.maxY, accuracy: 0.5, "The two headers end on one line")
+            let inline = sidebarBar.frame.height
+            app.buttons["Hide Sidebar"].tap()
+            XCTAssertLessThan(rangeBar.frame.height, inline, "With the sidebar hidden, the range bar takes its own height")
         }
         range.buttons["standard"].tap()
         XCTAssertTrue(range.buttons["standard"].isSelected, "The control takes a tap over the scrolled page")
@@ -214,7 +258,12 @@ final class GalleryUITests: XCTestCase {
 
     /// Skips the test unless the sidebar shows beside the page, as on the open Duo
     private func requireSidebarBesideThePage(_ app: XCUIApplication) throws {
-        guard app.windows.firstMatch.frame.width > 800 else { throw XCTSkip("Needs the open Duo, whose sidebar stays beside the page") }
+        guard sidebarIsBesideThePage(app) else { throw XCTSkip("Needs the open Duo, whose sidebar stays beside the page") }
+    }
+
+    /// Whether the window is wide enough for the sidebar to stay beside the page, as on the open Duo
+    private func sidebarIsBesideThePage(_ app: XCUIApplication) -> Bool {
+        app.windows.firstMatch.frame.width > 800
     }
 
     private var output: URL {

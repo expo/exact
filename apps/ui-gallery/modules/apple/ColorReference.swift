@@ -6,14 +6,27 @@ import QuartzCore
 
 final class ColorReference: ExactModule {
     override func call(_ request: [String: Any]) throws -> [String: Any] {
-        guard request["op"] as? String == "colorReference" else { throw ExactNativeRefusal("unknown color reference operation") }
-        #if os(iOS)
-        if #available(iOS 26, *) { return ["available": true] }
-        #endif
-        return ["available": false]
+        switch request["op"] as? String {
+        case "colorReference":
+            #if os(iOS)
+            if #available(iOS 26, *) { return ["available": true] }
+            #endif
+            return ["available": false]
+        case "sidebarBarHeight":
+            #if os(iOS)
+            return ["height": Double(split?.besideBarHeight ?? 0)]
+            #else
+            return ["height": 0]
+            #endif
+        case let op:
+            throw ExactNativeRefusal("The gallery's module was asked for \(op.map { "\"\($0)\"" } ?? "no operation"), which it does not answer. Pass \"colorReference\" or \"sidebarBarHeight\" as native.call's op.")
+        }
     }
 
     #if os(iOS)
+    /// What the `sidebarBarHeight` answer watches: said whenever the split's `besideBarHeight` changes
+    static let sidebarBarTopic = "gallery-sidebar-bar"
+    private weak var split: GallerySplit?
     private let sharedBackgrounds = NSMapTable<UIViewController, NSNumber>.weakToStrongObjects()
 
     /// Whether the gallery draws the header's material itself, before iOS 26, where the bar draws one of
@@ -25,7 +38,12 @@ final class ColorReference: ExactModule {
         return true
     }
 
-    override func tabContainer(_ contents: ExactTabContents) -> UIViewController? { GallerySplit(contents) }
+    override func tabContainer(_ contents: ExactTabContents) -> UIViewController? {
+        let split = GallerySplit(contents)
+        split.besideBarHeightChanged = { [context] in context.changed(Self.sidebarBarTopic) }
+        self.split = split
+        return split
+    }
 
     override func route(_ route: ExactRoute) {
         let shared = route.element("range-bar") != nil

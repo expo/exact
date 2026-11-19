@@ -135,6 +135,18 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
     return Array.from({ length: 180 }, (_, index): string => `Line group ${index + 1}: The quick brown fox jumps over the lazy dog. Café, naïve and Ångström keep their accents as the paragraph scrolls.`).join(' ');
   }
   if (source === 'hostKind') return nativeHost(native) ? 'native' : 'web';
+  // Answer the sidebar's inline navigation bar height while the sidebar is beside the page, else 0, and watch
+  // the module's topic so that a change asks again
+  if (source === 'sidebarBarHeight') {
+    if (web || !native?.available) return 0;
+    // Web modules have no synchronous call, even when a module is available
+    try {
+      native.watch('gallery-sidebar-bar');
+      return (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+    } catch {
+      return 0;
+    }
+  }
   if (source === 'hdrWhite') return nativeHost(native) ? `color(rec2100-linear ${args[0]} ${args[0]} ${args[0]})` : '#ffffff';
   if (source === 'hdrPictures') return HDR.filter((p) => shows(p.src));
   // As of Mobile Safari 27.0 (LLP 1100 D8).

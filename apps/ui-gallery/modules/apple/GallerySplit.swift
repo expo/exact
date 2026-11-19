@@ -28,6 +28,36 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
 
     required init?(coder: NSCoder) { nil }
 
+    /// The sidebar's navigation bar height with its title inline while the sidebar shows beside the page, else 0:
+    /// the least height of the page's range bar, so the two columns' headers end level once both are scrolled
+    private(set) var besideBarHeight: CGFloat = 0
+    /// Called on the main thread when `besideBarHeight` changes
+    var besideBarHeightChanged: (() -> Void)?
+    /// The sidebar's inline bar height, and the bar width and size classes it was measured at
+    private var inlineBarHeight: CGFloat = 0
+    private var measuredAt: [CGFloat]?
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateBesideBarHeight(displayMode)
+    }
+
+    /// Sets `besideBarHeight` for the split shown in `mode`, and says so when it changes
+    private func updateBesideBarHeight(_ mode: DisplayMode) {
+        let beside = !isCollapsed && mode != .secondaryOnly
+        // Measure once the bar is laid out in a window, and again only where its width or the size classes changed:
+        // measuring sets the sidebar item's mode twice
+        if beside, let bar = sidebar.navigationController?.navigationBar, bar.window != nil, bar.bounds.width > 0 {
+            let at = [bar.bounds.width, CGFloat(traitCollection.horizontalSizeClass.rawValue), CGFloat(traitCollection.verticalSizeClass.rawValue)]
+            if at != measuredAt, let measured = sidebar.measureInlineBarHeight() { inlineBarHeight = measured; measuredAt = at }
+        }
+        let height = beside ? inlineBarHeight : 0
+        if height != besideBarHeight {
+            besideBarHeight = height
+            besideBarHeightChanged?()
+        }
+    }
+
     private func choose(_ index: Int) {
         selectedFromSidebar = true
         // Reveal the current section too: its router selection does not change
@@ -43,6 +73,13 @@ final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
                              topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column) -> UISplitViewController.Column {
         selectedFromSidebar ? .secondary : .primary
     }
+
+    // Hiding or showing the sidebar, collapsing and expanding need not lay out the split's own view
+    func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
+        updateBesideBarHeight(displayMode)
+    }
+    func splitViewControllerDidCollapse(_ svc: UISplitViewController) { updateBesideBarHeight(displayMode) }
+    func splitViewControllerDidExpand(_ svc: UISplitViewController) { updateBesideBarHeight(displayMode) }
 }
 
 final class GallerySidebar: UITableViewController {
@@ -58,6 +95,21 @@ final class GallerySidebar: UITableViewController {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    /// The navigation bar's height with the title inline, whichever title it shows now: what the bar says it
+    /// fits while this item asks for no large title, the item's mode set back at once without animation. Nil
+    /// while the bar shows another item.
+    func measureInlineBarHeight() -> CGFloat? {
+        guard let bar = navigationController?.navigationBar, bar.topItem === navigationItem else { return nil }
+        let mode = navigationItem.largeTitleDisplayMode
+        var height: CGFloat = 0
+        UIView.performWithoutAnimation {
+            navigationItem.largeTitleDisplayMode = .never
+            height = bar.sizeThatFits(CGSize(width: bar.bounds.width, height: 0)).height
+            navigationItem.largeTitleDisplayMode = mode
+        }
+        return height
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
