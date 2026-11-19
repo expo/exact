@@ -105,7 +105,13 @@ function cargoEnvironment(args, options, env) {
       ...linkerDriver(sdk), `-Wl,${platformVersion(sdk, triple).join(',')}`];
     const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
     const script = `#!/bin/sh\nexec ${linkerArgs.map(quote).join(' ')} "$@"\n`;
-    const directory = resolve(options.cwd ?? process.cwd(), valueAfter(buildArgs, '--target-dir') ?? env.CARGO_TARGET_DIR ?? 'target', 'exact-cross-tools');
+    // The linker's path is in Cargo's configuration hash of every unit it builds, so it lives where those units do:
+    // Cargo's build directory when CARGO_BUILD_BUILD_DIR sets one, else the target directory. A build with its own
+    // --target-dir and a shared build directory (the host's module build into target/apple-modules, say) otherwise
+    // wrote the units it shares with every other build there (libc, bitflags, objc2, ...) under another hash, and each
+    // rebuilt them after the other. A templated build directory ({workspace-root}) keeps the old place.
+    const buildDir = env.CARGO_BUILD_BUILD_DIR && !env.CARGO_BUILD_BUILD_DIR.includes('{') ? env.CARGO_BUILD_BUILD_DIR : null;
+    const directory = resolve(options.cwd ?? process.cwd(), buildDir ?? valueAfter(buildArgs, '--target-dir') ?? env.CARGO_TARGET_DIR ?? 'target', 'exact-cross-tools');
     const file = resolve(directory, `${createHash('sha256').update(script).digest('hex')}-linker`);
     mkdirSync(directory, { recursive: true });
     if (!existsSync(file) || readFileSync(file, 'utf8') !== script) {

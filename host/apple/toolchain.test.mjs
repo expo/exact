@@ -384,6 +384,19 @@ test('Cargo links with the selected Apple SDK and minimum OS while preserving ta
   expect(appleCommand('cargo', args, { cwd: root, env: { ...env, IPHONEOS_DEPLOYMENT_TARGET: '18.2' } }, 'linux')[2].env.CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER).toBe(executable);
 }));
 
+test('Cargo keeps the linker in the build directory when one is set, so every unit there has one configuration', () => fixture(({ root, env }) => {
+  const linker = (args, extra = {}) => appleCommand('cargo', args, { cwd: root, env: { ...env, IPHONEOS_DEPLOYMENT_TARGET: '18.2', ...extra } }, 'linux')[2].env.CARGO_TARGET_AARCH64_APPLE_IOS_SIM_LINKER;
+  const app = linker(['build', '--target', 'aarch64-apple-ios-sim'], { CARGO_TARGET_DIR: resolve(root, 'target') });
+  expect(app.startsWith(resolve(root, 'target/exact-cross-tools') + '/')).toBe(true);
+  const modules = ['build', '--target', 'aarch64-apple-ios-sim', '--target-dir', resolve(root, 'target/apple-modules')];
+  // Without a build directory a --target-dir build keeps its own linker, as its units are its own.
+  expect(linker(modules, { CARGO_TARGET_DIR: resolve(root, 'target') }).startsWith(resolve(root, 'target/apple-modules/exact-cross-tools') + '/')).toBe(true);
+  // With one, a --target-dir build's linker is the one every other build in that directory uses.
+  expect(linker(modules, { CARGO_TARGET_DIR: resolve(root, 'target'), CARGO_BUILD_BUILD_DIR: resolve(root, 'target') })).toBe(app);
+  expect(linker(['build', '--target', 'aarch64-apple-ios-sim'], { CARGO_BUILD_BUILD_DIR: 'target' })).toBe(app);
+  expect(linker(modules, { CARGO_BUILD_BUILD_DIR: '{workspace-root}/build' }).startsWith(resolve(root, 'target/apple-modules/exact-cross-tools') + '/')).toBe(true);
+}));
+
 test('Linux plist tools preserve typed XML and binary bundle metadata and report missing keys', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-plist-'));
   const file = resolve(dir, 'Info.plist');
