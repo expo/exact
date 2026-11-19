@@ -192,6 +192,8 @@ impl Kernel {
         if !next.segments_consistent() || !next.is_finite() {
             return Err(LayoutError::InvalidSegments.into());
         }
+        // A box outside every owner that reads an owner segment reads the document's (LLP 1123
+        // D16), and its calculation is derived again with every other
         self.replace_env(next)
     }
 

@@ -40,6 +40,7 @@ pub(crate) mod observe;
 pub(crate) mod owner;
 mod provenance;
 pub(crate) mod readers;
+mod segments;
 pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;

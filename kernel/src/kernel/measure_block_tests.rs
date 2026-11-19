@@ -482,3 +482,40 @@ fn flip_start_sizes_the_trial_and_final_box_with_transformed_rows() {
         "authored rows survive the tactic"
     );
 }
+
+/// A trial places the box as giving the block does: its readers of an owner
+/// segment take none once their host places it (LLP 1123 D16), so 5, which
+/// pads by the document's second column, 410, under the block the kernel
+/// implies, measures as it lays out once given the block.
+#[test]
+fn a_measure_places_the_box_for_its_owner_segment_readers() {
+    let mut k = page(&[], "one two three");
+    let padding = t("var(--exact-viewport-segment-left-1-0, 7px)");
+    let rows = [
+        (StyleId::Width, n(120.0)),
+        (StyleId::Height, n(10.0)),
+        (StyleId::PaddingTop, padding),
+    ];
+    k.apply(0, 2, &[style(5, &rows)]).unwrap();
+    let rects = vec![
+        crate::style::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 390.0,
+            height: 844.0,
+        },
+        crate::style::Rect {
+            x: 410.0,
+            y: 0.0,
+            width: 390.0,
+            height: 844.0,
+        },
+    ];
+    k.set_segments(2, 1, rects).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    let block = region(250.0, 600.0);
+    let measured = k.measure_block(3, block).unwrap().used;
+    k.set_host_block(3, Some(block)).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(Some(measured), k.host_block_size(3));
+}

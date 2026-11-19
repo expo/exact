@@ -482,11 +482,17 @@ impl Kernel {
         // Measure the readers under a box that gains or gives back a block again, which
         // changes the band they observe; a reader elsewhere that this moves has a frame
         // that moved
-        if self.arena.blocks.given(slot).is_some() != block.is_some() {
+        let placed = self.arena.blocks.given(slot).is_some() != block.is_some();
+        if placed {
             self.arena.observations.moved(slot);
         }
         self.arena.blocks.set(slot, block);
         self.block_changed(slot, before);
+        // Derive the owner segments' readers below a box whose host starts or stops placing
+        // it while its implied block stands
+        if placed && before.is_some() && self.arena.blocks.get(slot).is_some() {
+            self.segments_moved(slot);
+        }
         Ok(())
     }
 
@@ -509,7 +515,8 @@ impl Kernel {
         for slot in moved {
             self.restyle_block(slot);
         }
-        // Derive the raw readers again below each box that joined or left the top layer
+        // Derive the raw readers and the owner segments' readers again below
+        // each box that joined or left the top layer
         for slot in std::mem::take(&mut self.arena.observations.targets.moved) {
             if self.arena.is_live(slot) {
                 self.targets_moved(slot);
@@ -949,6 +956,7 @@ impl Kernel {
         {
             return Err(LayoutError::HostBlock("a layout is due first").into());
         }
+        let placing = self.arena.blocks.given(slot).is_none();
         let (mut arena, mut trial) = (self.arena.trial_copy(), tree.clone());
         arena.blocks.set(slot, Some(block));
         trial.restyle(&arena, slot, node);
@@ -962,6 +970,11 @@ impl Kernel {
             self.layout.replace(Box::new(trial)),
             self.region.take(),
         );
+        // Derive in the copies the owner segments' readers below a box the trial starts
+        // placing, as giving it the block does
+        if placing {
+            self.segments_moved(slot);
+        }
         let measured = self.measure_trial(slot, node, block);
         let trial = std::mem::replace(&mut self.arena, kept.0);
         (self.layout, self.region) = (kept.1, kept.2);

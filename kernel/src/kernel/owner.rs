@@ -20,6 +20,7 @@
 //! node where its engine style is derived. An owner's own clearance of its
 //! chrome is D3's content root (`block.rs`).
 
+use super::area::Holder;
 use super::readers::InsetReaders;
 use super::Kernel;
 use crate::arena::NodeArena;
@@ -28,6 +29,7 @@ use crate::generated::{StyleId, StyleMask, StyleProps};
 use crate::id::ViewId;
 use crate::layout::LayoutMirror;
 use crate::style::calc::{self, simplify, Node};
+use crate::style::env::HeldSegments;
 use crate::style::safe_area_properties::{Resolved, SafeAreaProperties};
 use crate::style::{Dimension, Edge, Env, RowValue};
 use std::borrow::Cow;
@@ -72,16 +74,48 @@ pub(crate) fn container_at(arena: &NodeArena, slot: u32) -> (f32, f32) {
     (width.unwrap_or(w), height.unwrap_or(h))
 }
 
+/// The owner segments `slot` reads (LLP 1123 D16): where it reads one, its
+/// owner's report inside an owner, none in a top-layer box its host places,
+/// where the kernel is not told (as its band is unavailable, `area.rs`), and
+/// the document's elsewhere; none for a box that reads none, so an inset
+/// override, which the reader index leaves out, reads none either.
+pub(crate) fn segments_held(arena: &NodeArena, slot: u32) -> HeldSegments {
+    if !arena.readers.segments.contains(slot) {
+        return HeldSegments::Holder(None);
+    }
+    match super::area::holder(arena, slot) {
+        Holder::Owner(owner) => {
+            HeldSegments::Holder(arena.observations.segments.get(&owner).cloned())
+        }
+        Holder::TopLayer(s) if arena.blocks.given(s).is_some() => HeldSegments::Holder(None),
+        Holder::TopLayer(_) | Holder::Session => HeldSegments::Document,
+    }
+}
+
+/// Whether some node reads an owner segment whose value can differ from
+/// place to place: some owner reported segments, or the document has them,
+/// which a box outside every owner reads. A box's holder then decides what
+/// it reads, so a holder change or a move derives it again.
+pub(crate) fn segments_differ(arena: &NodeArena) -> bool {
+    !arena.readers.segments.is_empty()
+        && (!arena.observations.segments.is_empty() || !arena.env().segments.is_empty())
+}
+
 /// The rows of `style` whose lengths read a local inset, its own overrides
 /// aside (they read their parent's, [`local_at`]), an author's custom
-/// property, an observation or a container unit (LLP 1123 D16).
+/// property, an observation, a container unit or an owner segment (LLP 1123
+/// D16).
 fn node_rows(style: &StyleProps) -> StyleMask {
     let mut rows = StyleMask::EMPTY;
     for id in style.mask.iter().filter(|id| !OVERRIDES.contains(id)) {
         let row = style.get(id);
         if calc::reads_plain_container(&row)
             || calc::in_row(row).any(|c| {
-                c.reads_local() || c.reads_custom() || c.reads_observed() || c.reads_container()
+                c.reads_local()
+                    || c.reads_custom()
+                    || c.reads_observed()
+                    || c.reads_container()
+                    || c.reads_segment()
             })
         {
             rows.set(id);
@@ -319,6 +353,7 @@ fn env_with_containers(arena: &NodeArena, slot: u32, from: Option<u32>) -> Cow<'
     env.properties = Some(properties_at(arena, slot, &arena.effective_style(slot)));
     env.observed = Some(arena.observations.input(slot));
     env.targets = arena.observations.targets.scope(arena, slot);
+    env.segments_held = Some(segments_held(arena, slot));
     if arena.readers.container.contains(slot) {
         env.container = Some(match from {
             Some(from) => container_at(arena, from),
@@ -642,11 +677,15 @@ impl<'a> Resolver<'a> {
                     crate::style::targets::Target::Box => input[leaf.component()],
                     target => (scope.as_ref()?.insets(target)).map(|i| i[leaf.edge as usize]),
                 };
+                // And an owner segment as its box's holder has it (D16)
+                let held = segments_held(self.arena, key.0);
+                let env = self.arena.env();
                 let leaves = calc::Leaves {
                     local: &|edge| local[edge as usize],
                     observed: &observed,
                     // A declaration holds no container unit (`SafeAreaProperties::value`)
                     container: &|_| None,
+                    segment: &|leaf| env.segment_held(Some(&held), leaf),
                 };
                 calc::substitute(&tree, &leaves, &mut |name| {
                     let dep = self.reach(key.0, name)?;
@@ -799,8 +838,10 @@ fn resolve(
             }
             let mut env = env.clone();
             env.local = Some(local);
-            // An override reads no custom property, so a `var()` of one takes its fallback
+            // An override reads no custom property and no owner segment, so a
+            // `var()` of either takes its fallback
             env.properties = Some(Resolved::default());
+            env.segments_held = Some(HeldSegments::Holder(None));
             d.at_basis(&env, 0.0)
         }
         _ => base[i],
@@ -811,8 +852,8 @@ fn resolve(
 
 /// A box moved to another parent, created ones included, may be in another
 /// owner, and below other declarations, now: what in its subtree reads a
-/// local inset, a custom property, a native target or a container unit is
-/// derived again. Whether anything was.
+/// local inset, a custom property, a native target, a container unit or an
+/// owner segment is derived again. Whether anything was.
 pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: u32) -> bool {
     let readers = &arena.readers;
     // A host's insets or an override make insets differ from place to place
@@ -824,7 +865,8 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
     let targets = !readers.targets.is_empty() && arena.observations.targets.placed_any();
     // With no owner's block, a container unit reads the small viewport anywhere
     let container = !readers.container.is_empty() && arena.blocks.any_given();
-    if !local && !properties && !targets && !container {
+    let segments = segments_differ(arena);
+    if !local && !properties && !targets && !container && !segments {
         return false;
     }
     let mut receipt = crate::CommitReceipt::default();
@@ -833,7 +875,8 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
         let reads = local && arena.readers.local.contains(s)
             || properties && arena.readers.properties.contains(s)
             || targets && arena.readers.targets.contains_key(&s)
-            || container && arena.readers.container.contains(s);
+            || container && arena.readers.container.contains(s)
+            || segments && arena.readers.segments.contains(s);
         if reads {
             rederive(arena, layout, s, false, &mut receipt);
             any = true;
@@ -910,6 +953,7 @@ impl Kernel {
             None => Env {
                 local: Some(Edge::ALL.map(|e| self.arena.env().root_inset(e))),
                 properties: Some(Default::default()),
+                segments_held: Some(HeldSegments::Document),
                 ..self.env()
             },
         }

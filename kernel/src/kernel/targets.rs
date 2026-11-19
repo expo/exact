@@ -173,7 +173,7 @@ impl Kernel {
     /// `readers`, whose read insets a report or a holder change moved, and
     /// below each that captures a target, each node whose lengths take the
     /// capture's value (LLP 1123 D5).
-    fn with_captures(&mut self, mut readers: Vec<u32>) -> Vec<u32> {
+    pub(super) fn with_captures(&mut self, mut readers: Vec<u32>) -> Vec<u32> {
         readers.extend(super::readers::Readers::captured_targets(
             &mut self.arena,
             &readers,
@@ -231,33 +231,30 @@ impl Kernel {
     /// readers are found (`readers::walk_down`); else each reader's
     /// ancestors are checked.
     pub(super) fn held_through(&self, top: u32) -> Vec<u32> {
-        let arena = &self.arena;
-        let raw = &arena.readers.targets;
-        if raw.is_empty() {
-            return Vec::new();
-        }
-        let enter = |c: u32| holds(arena, c).is_none();
-        let mut out: Vec<u32> =
-            match super::readers::walk_down(arena, top, 2 * raw.len() + 1, enter) {
-                Some(nodes) => (nodes.into_iter())
-                    .filter(|s| raw.contains_key(s))
-                    .collect(),
-                None => (raw.keys().copied())
-                    .filter(|&s| through(arena, s, top))
-                    .collect(),
-            };
-        out.sort_unstable();
-        out
+        let raw = &self.arena.readers.targets;
+        let readers = raw.keys().copied();
+        held_among(
+            &self.arena,
+            top,
+            raw.len(),
+            |s| raw.contains_key(&s),
+            readers,
+        )
     }
 
-    /// Derive again the raw readers whose holder is `slot`'s or `slot`
-    /// ([`Kernel::held_through`]), after a block gained or given back, or a
-    /// top-layer change, that may give them another.
+    /// Derive again the raw readers and the owner segments' readers whose
+    /// holder is `slot`'s or `slot` ([`Kernel::held_through`]), after a block
+    /// gained or given back, or a top-layer change, that may give them another.
     pub(super) fn targets_moved(&mut self, slot: u32) {
-        if !self.arena.observations.targets.placed_any() {
-            return;
+        let mut readers = Vec::new();
+        if self.arena.observations.targets.placed_any() {
+            readers.extend(self.held_through(slot));
         }
-        let readers = self.held_through(slot);
+        // An owner segment's reader reads its holder's report as a raw
+        // reader does (D16)
+        if super::owner::segments_differ(&self.arena) {
+            readers.extend(self.segment_readers_through(slot));
+        }
         let readers = self.with_captures(readers);
         self.restyle_readers(&readers);
     }
@@ -272,6 +269,29 @@ impl Reports {
         }
         self.last = Some(Arc::new(report));
     }
+}
+
+/// The readers whose holder is `top`'s or `top` itself, of a set of `count`
+/// for which `is_reader` holds and which `readers` lists, found by a walk
+/// down from `top` where that is shorter than the set
+/// ([`Kernel::held_through`]).
+pub(super) fn held_among(
+    arena: &NodeArena,
+    top: u32,
+    count: usize,
+    is_reader: impl Fn(u32) -> bool,
+    readers: impl Iterator<Item = u32>,
+) -> Vec<u32> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let enter = |c: u32| holds(arena, c).is_none();
+    let mut out: Vec<u32> = match super::readers::walk_down(arena, top, 2 * count + 1, enter) {
+        Some(nodes) => nodes.into_iter().filter(|&s| is_reader(s)).collect(),
+        None => readers.filter(|&s| through(arena, s, top)).collect(),
+    };
+    out.sort_unstable();
+    out
 }
 
 /// Whether `reader` is `top` or below it short of a box that holds its own.

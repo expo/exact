@@ -202,6 +202,7 @@ mod notify_actions;
 mod observe_commands;
 mod orientationlock;
 mod overlay;
+mod owner_segments;
 mod package_designs;
 mod package_icons;
 mod packages;

@@ -129,11 +129,12 @@ impl NodeArena {
         // top layer: its block follows at the next layout.
         let lifted = crate::style::top_layer::lifted(self, slot);
         // Measure the readers under a box that joins or leaves the top layer again, and at
-        // the next layout derive the raw readers below again: their holder, and with it their
-        // band and targets, changes; a reader elsewhere that this moves has a frame that moved
+        // the next layout derive the raw readers and the owner segments' readers below again:
+        // their holder, and with it their band, targets and segments, changes; a reader
+        // elsewhere that this moves has a frame that moved
         if lifted != self.top_layer_slots.contains(slot) {
             self.observations.moved(slot);
-            if !self.readers.targets.is_empty() {
+            if !self.readers.targets.is_empty() || crate::kernel::owner::segments_differ(self) {
                 self.observations.targets.moved.push(slot);
             }
         }

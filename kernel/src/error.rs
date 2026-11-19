@@ -362,6 +362,8 @@ pub enum LayoutError {
     HostBlock(&'static str),
     /// A host's report of native targets refused (LLP 1123 D9).
     NativeTarget(&'static str),
+    /// A host's report of an owner's segments refused (LLP 1123 D16).
+    OwnerSegments(&'static str),
     /// A host's report of Exact's contributions refused (LLP 1123 D11).
     Contribution(&'static str),
     /// A host's report of an owner's keyboard refused (LLP 1123 D7).

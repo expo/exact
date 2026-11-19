@@ -1,8 +1,8 @@
 //! The reader index (@ref LLP 1123 D9 "Cost", D5 "Captures"): which nodes
 //! read what only their own environment has, so a change of an owner's
-//! insets, an inset override, a declaration or a content root derives again
-//! the boxes whose inputs it moves, found from these sets rather than from a
-//! walk of every node it might reach.
+//! insets or segments, an inset override, a declaration or a content root
+//! derives again the boxes whose inputs it moves, found from these sets
+//! rather than from a walk of every node it might reach.
 //!
 //! The sets follow each node's own style. A platform default never reads a
 //! local inset, a custom property or a container unit (`arena/defaults.rs`
@@ -15,10 +15,10 @@
 //! can depend on: a declaration or an inset override, a move while any node
 //! declares, an owner's insets while a capture reads them, a capture's
 //! observation when the solve moves it or a content region withholds it,
-//! a capture's native target when a report changes it or its box takes
-//! another holder, and the document's environment. A slot a declaring node
-//! leaves keeps its values until the next node there declares, which drops
-//! them.
+//! a capture's native target or owner segment when a report changes it or
+//! its box takes another holder, and the document's environment. A slot a
+//! declaring node leaves keeps its values until the next node there
+//! declares, which drops them.
 
 use super::owner::{self, OVERRIDES};
 use crate::arena::NodeArena;
@@ -50,6 +50,9 @@ pub(crate) struct Readers {
     /// raw insets, and the targets each reads, each with the edges it reads
     /// as bits (LLP 1123 D9, "The native chain").
     pub(crate) targets: crate::id::IdMap<u32, Vec<(Target, u8)>>,
+    /// Nodes with a length or a declaration that reads an owner segment (LLP
+    /// 1123 D16), which a report of its holder's segments moves.
+    pub(crate) segments: SlotSet,
     /// Nodes with a length that reads a container unit (LLP 1123 D16), which
     /// a content root they read moves (`block::clear_block`).
     pub(crate) container: SlotSet,
@@ -81,7 +84,7 @@ impl Readers {
             self.invalidate();
         }
         let (mut local, mut properties, mut container, mut observes) = (false, false, false, 0);
-        let mut targets = Vec::new();
+        let (mut targets, mut segments) = (Vec::new(), false);
         for id in style.mask.iter() {
             // Skip the inset overrides: `local_at` resolves them for the subtree,
             // whose readers are indexed
@@ -96,11 +99,14 @@ impl Readers {
                 container |= c.reads_container();
                 observes |= c.observed_components();
                 targets.extend(c.targets_read());
+                segments |= c.reads_segment();
             }
         }
         let own = owner::declarations(style);
         // A capture of a native target's insets reads them where it is declared
         targets.extend(own.iter().flat_map(|(_, value)| capture_targets(value)));
+        segments |= own.iter().any(|(_, value)| reads_segment(value));
+        put(&mut self.segments, slot, segments);
         let captures = own.iter().any(|(_, value)| reads_local(value));
         let capture_components = own
             .iter()
@@ -135,6 +141,7 @@ impl Readers {
             &mut self.captures,
             &mut self.observing,
             &mut self.overriding,
+            &mut self.segments,
         ] {
             set.remove(slot);
         }
@@ -184,12 +191,12 @@ impl Readers {
     }
 
     /// The nodes to derive again after a report or a holder change moved what
-    /// the raw readers `readers` read (LLP 1123 D9): below each of them whose
-    /// declarations capture a native target, each node whose lengths take a
-    /// value that depends on such a declaration, as [`Self::captured`] gives
-    /// an observation's.
+    /// the readers `readers` read of native targets or owner segments (LLP
+    /// 1123 D9, D16): below each of them whose declarations capture one, each
+    /// node whose lengths take a value that depends on such a declaration, as
+    /// [`Self::captured`] gives an observation's.
     pub(crate) fn captured_targets(arena: &mut NodeArena, readers: &[u32]) -> Vec<u32> {
-        let reads = |value: &Dimension| !capture_targets(value).is_empty();
+        let reads = |value: &Dimension| !capture_targets(value).is_empty() || reads_segment(value);
         let captures: Vec<u32> = (readers.iter().copied())
             .filter(|&s| {
                 owner::own_declarations(arena, s)
@@ -250,6 +257,11 @@ fn put(set: &mut SlotSet, slot: u32, member: bool) {
         true => set.insert(slot),
         false => set.remove(slot),
     };
+}
+
+/// Whether a declaration's value reads an owner segment.
+fn reads_segment(value: &Dimension) -> bool {
+    matches!(value, Dimension::Compare(c) if c.reads_segment())
 }
 
 /// The native targets a declaration's value reads.

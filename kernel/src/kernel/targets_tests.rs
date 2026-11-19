@@ -669,3 +669,6 @@ fn a_capture_in_a_nested_owner_reads_that_owners_report() {
     lay_out(&mut k);
     assert_eq!(top(&k, 5), 30.0);
 }
+
+#[path = "segments_tests.rs"]
+mod segments;

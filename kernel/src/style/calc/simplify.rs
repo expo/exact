@@ -25,6 +25,10 @@ fn canonical(n: Node) -> Node {
             fallback: o.fallback.map(|f| Box::new(canonical(*f))),
             ..o
         }),
+        Node::Segment(s) => Node::Segment(super::SegmentRead {
+            fallback: s.fallback.map(|f| Box::new(canonical(*f))),
+            ..s
+        }),
         Node::Sum(c) => Node::Sum(all(c)),
         Node::Product(c) => Node::Product(all(c)),
         Node::Min(c) => Node::Min(all(c)),
@@ -45,6 +49,10 @@ fn fold(root: Node) -> Node {
         Node::Observe(o) => Node::Observe(super::Observe {
             fallback: o.fallback.map(|f| Box::new(fold(*f))),
             ..o
+        }),
+        Node::Segment(s) => Node::Segment(super::SegmentRead {
+            fallback: s.fallback.map(|f| Box::new(fold(*f))),
+            ..s
         }),
         Node::Min(c) => min_max(c.into_iter().map(fold).collect(), false),
         Node::Max(c) => min_max(c.into_iter().map(fold).collect(), true),

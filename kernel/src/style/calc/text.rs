@@ -38,7 +38,7 @@ pub(super) fn math_function(root: &Node, out: &mut String) {
             out.push(')');
         }
         // A non-math function as normal
-        Node::Env(..) | Node::Var(..) | Node::Observe(..) => tree(root, out),
+        Node::Env(..) | Node::Var(..) | Node::Observe(..) | Node::Segment(..) => tree(root, out),
         _ => {
             out.push_str("calc(");
             out.push_str(stripped(&serialized(root)));
@@ -94,6 +94,16 @@ fn tree(n: &Node, out: &mut String) {
             o.target.prefix(o.family, out);
             out.push_str(o.edge.name());
             if let Some(fallback) = &o.fallback {
+                out.push_str(", ");
+                length(fallback, out);
+            }
+            out.push(')');
+        }
+        Node::Segment(s) => {
+            out.push_str("var(");
+            out.push_str(super::SegmentRead::PREFIX);
+            out.push_str(&format!("{}-{}-{}", s.var.name(), s.x, s.y));
+            if let Some(fallback) = &s.fallback {
                 out.push_str(", ");
                 length(fallback, out);
             }

@@ -164,15 +164,17 @@ impl SegmentVar {
         SegmentVar::ALL.get(i as usize).copied()
     }
 
-    /// The length of a segment this variable names.
-    pub fn of(self, rect: &Rect) -> f32 {
+    /// The length of a segment this variable names, its far edges added in
+    /// `f64`.
+    pub fn of(self, rect: &Rect) -> f64 {
+        let [x, y, width, height] = [rect.x, rect.y, rect.width, rect.height].map(f64::from);
         match self {
-            SegmentVar::Width => rect.width,
-            SegmentVar::Height => rect.height,
-            SegmentVar::Top => rect.y,
-            SegmentVar::Left => rect.x,
-            SegmentVar::Bottom => rect.y + rect.height,
-            SegmentVar::Right => rect.x + rect.width,
+            SegmentVar::Width => width,
+            SegmentVar::Height => height,
+            SegmentVar::Top => y,
+            SegmentVar::Left => x,
+            SegmentVar::Bottom => y + height,
+            SegmentVar::Right => x + width,
         }
     }
 }
@@ -374,6 +376,69 @@ pub struct Env {
     /// set, as `local` is, only in an environment made for a node that reads
     /// one.
     pub targets: Option<crate::style::targets::Scope>,
+    /// The owner segments one node reads (LLP 1123 D16), set, as `local` is,
+    /// only in an environment made for a node.
+    pub segments_held: Option<HeldSegments>,
+}
+
+/// The segments a node reads by `--exact-viewport-segment-*` (LLP 1123 D16).
+#[derive(Debug, Clone, PartialEq)]
+pub enum HeldSegments {
+    /// The document's, outside every owner.
+    Document,
+    /// Its holder's report: an owner's, `None` where it reported none or lies
+    /// on one segment, and `None` in a top-layer box its host places, where
+    /// the kernel is not told.
+    Holder(Option<std::sync::Arc<SegmentGrid>>),
+}
+
+/// An owner's segments, `cols × rows` rects row-major in its coordinates, as
+/// the host splits them (LLP 1078's rule, applied to the owner's own division
+/// regions).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentGrid {
+    /// Its columns, 1 to 16.
+    pub cols: u8,
+    /// Its rows, 1 to 16.
+    pub rows: u8,
+    /// Its segments, row-major.
+    pub rects: Vec<Rect>,
+}
+
+impl SegmentGrid {
+    /// The segment at column `x`, row `y`; `None` past the grid.
+    pub fn get(&self, x: u8, y: u8) -> Option<&Rect> {
+        if x >= self.cols || y >= self.rows {
+            return None;
+        }
+        self.rects
+            .get(usize::from(y) * usize::from(self.cols) + usize::from(x))
+    }
+
+    /// Why the grid is refused, if it is. A grid holds more than one segment,
+    /// at most 16 columns and rows, `cols × rows` rects, and each rect finite
+    /// and of a size that is not negative.
+    pub fn refusal(&self) -> Option<&'static str> {
+        let max = SegmentVar::MAX_INDEX + 1;
+        let count = usize::from(self.cols) * usize::from(self.rows);
+        if self.cols == 0 || self.rows == 0 || self.cols > max || self.rows > max {
+            return Some("an owner's segment grid takes 1 to 16 columns and rows; split the owner's active division regions by the document's rule (LLP 1078)");
+        }
+        if count < 2 {
+            return Some("an owner's segment grid of one segment is no grid; report none (`None`) where the owner lies on one segment");
+        }
+        if self.rects.len() != count {
+            return Some("an owner's segment grid holds cols × rows rects, row-major; report one rect for each column of each row");
+        }
+        let finite = |r: &Rect| {
+            [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite())
+                && r.width >= 0.0
+                && r.height >= 0.0
+        };
+        (!self.rects.iter().all(finite)).then_some(
+            "a segment's rect is nonfinite or of negative size; report its frame in the owner's points",
+        )
+    }
 }
 
 impl Default for Env {
@@ -412,6 +477,7 @@ impl Env {
             properties: None,
             observed: None,
             targets: None,
+            segments_held: None,
         }
     }
 
@@ -441,6 +507,33 @@ impl Env {
             _ if leaf.family != crate::style::calc::Family::SafeArea => None,
             target => self.targets.as_ref()?.insets(target).map(|i| i[edge]),
         }
+    }
+
+    /// An owner segment's field at the node this environment was made for
+    /// (LLP 1123 D16): its holder's, or the document's outside every owner;
+    /// `None` where the segment is absent.
+    pub fn owner_segment(&self, leaf: &crate::style::calc::SegmentRead) -> Option<f64> {
+        self.segment_held(self.segments_held.as_ref(), leaf)
+    }
+
+    /// An owner segment's field as `held` has it. With `held` `None` the
+    /// environment was made for no node, so reading one is a caller's
+    /// mistake, which a test stops at ([`misread_segment`]); the document's
+    /// stands in.
+    pub fn segment_held(
+        &self,
+        held: Option<&HeldSegments>,
+        leaf: &crate::style::calc::SegmentRead,
+    ) -> Option<f64> {
+        let rect = match held {
+            Some(HeldSegments::Holder(grid)) => grid.as_deref()?.get(leaf.x, leaf.y)?,
+            Some(HeldSegments::Document) => self.segment(leaf.x, leaf.y)?,
+            None => {
+                misread_segment(leaf);
+                self.segment(leaf.x, leaf.y)?
+            }
+        };
+        Some(leaf.var.of(rect))
     }
 
     /// An author's custom property's value at the node this environment was
@@ -714,12 +807,7 @@ pub(crate) fn decode(kind: u8, plus: f32, x: u8, y: u8) -> Option<Dimension> {
 }
 
 fn resolve_segment(var: SegmentVar, x: u8, y: u8, env: &Env) -> Option<f64> {
-    let rect = env.segment(x, y)?;
-    Some(match var {
-        SegmentVar::Right => f64::from(rect.x) + f64::from(rect.width),
-        SegmentVar::Bottom => f64::from(rect.y) + f64::from(rect.height),
-        _ => f64::from(var.of(rect)),
-    })
+    Some(var.of(env.segment(x, y)?))
 }
 
 fn segment_css(var: SegmentVar, x: u8, y: u8, plus: f32, out: &mut String) {
@@ -997,6 +1085,20 @@ fn misread(edge: Edge) {
          resolve a box's lengths with NodeArena::env_of or Kernel::env_of (LLP 1123 D9); \
          the session root's inset stands in",
         edge.name()
+    ));
+}
+
+/// An owner segment read against an environment made for no node (LLP 1123
+/// D16): the reader should have taken the box's own ([`Env::segments_held`]),
+/// and the document's segments stand in.
+fn misread_segment(leaf: &crate::style::calc::SegmentRead) {
+    report(&format!(
+        "var({}{}-{}-{}) resolved against the document's environment: resolve a box's lengths \
+         with NodeArena::env_of or Kernel::env_of (LLP 1123 D16); the document's segment stands in",
+        crate::style::calc::SegmentRead::PREFIX,
+        leaf.var.name(),
+        leaf.x,
+        leaf.y
     ));
 }
 

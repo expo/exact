@@ -33,10 +33,14 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// chain entry, then its number from 1; 2 a chain kind and 3 a relation,
 /// then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a registered
 /// target, then its name as the codec's string), its family's index in
-/// [`super::Family::ALL`], its edge, then its fallback's presence byte and the fallback.
-/// The round trip through the text admits only the leaves the parser reads: every target's
-/// safe area and the box's other families, not the box's own safe area, whose name is the
-/// local inset until activation.
+/// [`super::Family::ALL`], its edge, then its fallback's presence byte and
+/// the fallback; or, with family 10 and the box as its target, an owner
+/// segment (D16): its field's index in [`SegmentVar::ALL`], its column and
+/// row, each 0 to 15, then its fallback's presence byte and the fallback.
+/// The round trip through the text admits only the leaves the parser reads:
+/// every target's safe area, the box's other families and its owner's
+/// segments, not the box's own safe area, whose name is the local inset until
+/// activation.
 pub(super) fn encode(entry: &Entry, w: &mut Writer) {
     match entry {
         Entry::Tree(n) => node_out(n, w),
@@ -110,8 +114,21 @@ fn node_out(n: &Node, w: &mut Writer) {
             w.u8(o.edge as u8);
             optional(o.fallback.as_deref(), w);
         }
+        Node::Segment(s) => {
+            w.u8(11);
+            target_out(&Target::Box, w);
+            w.u8(SEGMENT);
+            w.u8(s.var as u8);
+            w.u8(s.x);
+            w.u8(s.y);
+            optional(s.fallback.as_deref(), w);
+        }
     }
 }
+
+/// An observation's family byte for an owner segment, past [`super::Family::ALL`]'s.
+const SEGMENT: u8 = 10;
+const _: () = assert!(super::Family::ALL.len() <= SEGMENT as usize);
 
 fn optional(n: Option<&Node>, w: &mut Writer) {
     match n {
@@ -168,7 +185,7 @@ fn authored(n: &Node, opened: bool) -> (usize, usize) {
     let product = matches!(n, Node::Product(_));
     let leaf = matches!(
         n,
-        Node::Value(..) | Node::Env(..) | Node::Var(..) | Node::Observe(..)
+        Node::Value(..) | Node::Env(..) | Node::Var(..) | Node::Observe(..) | Node::Segment(..)
     );
     let mut values = usize::from(leaf);
     let mut deepest = 0;
@@ -243,12 +260,30 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
                 fallback: optional(r, nodes)?.map(Box::new),
             })
         }
-        11 => Node::Observe(super::Observe {
-            target: target(r)?,
-            family: super::Family::from_index(r.u8().ok()?)?,
-            edge: Edge::from_index(r.u8().ok()?)?,
-            fallback: optional(r, nodes)?.map(Box::new),
-        }),
+        11 => {
+            let target = target(r)?;
+            match r.u8().ok()? {
+                SEGMENT if target == Target::Box => {
+                    let var = *SegmentVar::ALL.get(usize::from(r.u8().ok()?))?;
+                    let index =
+                        |r: &mut Reader| r.u8().ok().filter(|&i| i <= SegmentVar::MAX_INDEX);
+                    let (x, y) = (index(r)?, index(r)?);
+                    let fallback = optional(r, nodes)?.map(Box::new);
+                    Node::Segment(super::SegmentRead {
+                        var,
+                        x,
+                        y,
+                        fallback,
+                    })
+                }
+                family => Node::Observe(super::Observe {
+                    target,
+                    family: super::Family::from_index(family)?,
+                    edge: Edge::from_index(r.u8().ok()?)?,
+                    fallback: optional(r, nodes)?.map(Box::new),
+                }),
+            }
+        }
         _ => return None,
     })
 }
@@ -322,14 +357,26 @@ mod tests {
             let bytes = w.into_vec();
             assert_eq!(node(&mut Reader::new(&bytes), 0, &mut 0), Some(leaf));
         }
-        // A family past the list is refused
-        let mut w = Writer::new();
-        w.u8(11);
-        target_out(&Target::Box, &mut w);
-        w.u8(super::super::Family::ALL.len() as u8);
-        w.u8(Edge::Top as u8);
-        w.u8(0);
-        assert!(node(&mut Reader::new(&w.into_vec()), 0, &mut 0).is_none());
+        // A family past the list and the segment's is refused, as is a segment's leaf with a
+        // field past its list, an index past 15, or a chain entry for its target
+        let leaf = |target: &Target, family: u8, rest: &[u8]| {
+            let mut w = Writer::new();
+            w.u8(11);
+            target_out(target, &mut w);
+            w.u8(family);
+            rest.iter().for_each(|&b| w.u8(b));
+            w.u8(0);
+            node(&mut Reader::new(&w.into_vec()), 0, &mut 0)
+        };
+        assert!(leaf(&Target::Box, SEGMENT + 1, &[Edge::Top as u8]).is_none());
+        assert!(
+            leaf(&Target::Box, SEGMENT, &[2, 1, 0]).is_some(),
+            "a segment's leaf"
+        );
+        for rest in [[6, 1, 0], [2, 16, 0], [2, 0, 16]] {
+            assert!(leaf(&Target::Box, SEGMENT, &rest).is_none(), "{rest:?}");
+        }
+        assert!(leaf(&Target::Chain(1), SEGMENT, &[2, 1, 0]).is_none());
         // A chain entry 0, an index past its list, a name no target has, an unknown target
         let refused = |write: &dyn Fn(&mut Writer)| {
             let mut w = Writer::new();

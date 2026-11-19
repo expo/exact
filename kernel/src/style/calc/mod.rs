@@ -288,6 +288,49 @@ pub struct Observe {
     pub fallback: Option<Box<Node>>,
 }
 
+/// A field of the segment at column `x`, row `y` of the reading box's owner,
+/// in the owner's coordinates, or of the document's outside every owner (LLP
+/// 1123 D16, D10's leaf); else `fallback`, guaranteed-invalid without one.
+/// The owner's segments are its host's split of its own active division
+/// regions, commonly the document's projected into it, and none where it
+/// lies on one segment, so a segment it does not have is unavailable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentRead {
+    /// The field read.
+    pub var: SegmentVar,
+    /// The segment's column, from 0 to [`SegmentVar::MAX_INDEX`].
+    pub x: u8,
+    /// Its row, from 0 to [`SegmentVar::MAX_INDEX`].
+    pub y: u8,
+    /// What stands in where the segment is unavailable.
+    pub fallback: Option<Box<Node>>,
+}
+
+impl SegmentRead {
+    /// The name's part before the field.
+    pub const PREFIX: &str = "--exact-viewport-segment-";
+
+    /// The field and indices `--exact-viewport-segment-<field>-<x>-<y>`
+    /// reads, each index from 0 to 15 as written; `None` for any other name.
+    pub fn named(name: &str) -> Option<(SegmentVar, u8, u8)> {
+        let mut parts = name.strip_prefix(Self::PREFIX)?.split('-');
+        let var = SegmentVar::from_name(parts.next()?)?;
+        let index = |part: Option<&str>| {
+            let part = part?;
+            let i: u8 = part.parse().ok()?;
+            (i <= SegmentVar::MAX_INDEX && i.to_string() == part).then_some(i)
+        };
+        let (x, y) = (index(parts.next())?, index(parts.next())?);
+        parts.next().is_none().then_some((var, x, y))
+    }
+}
+
+/// Whether `name` is a host's name a length reads: an observation's (LLP
+/// 1123 D9) or an owner segment's (D16).
+pub fn host_name(name: &str) -> bool {
+    Family::observed(name).is_some() || SegmentRead::named(name).is_some()
+}
+
 impl Observe {
     /// Its index among a reader's inputs: four edges a family.
     pub(crate) fn component(&self) -> usize {
@@ -295,10 +338,10 @@ impl Observe {
     }
 }
 
-/// `node` with every local inset (`EnvTerm::Local`) and container unit (LLP
-/// 1123 D16) replaced by its points under `env`, and every custom property
-/// by its value there (D5);
-/// `None` where a property has neither a value nor a fallback.
+/// `node` with every local inset (`EnvTerm::Local`), container unit and
+/// owner segment (LLP 1123 D16) replaced by its points under `env`, and
+/// every custom property by its value there (D5); `None` where a property
+/// or a segment has neither a value nor a fallback.
 fn localize(node: &Node, env: &Env) -> Option<Node> {
     let leaves = Leaves {
         local: &|edge| env.local_inset(edge),
@@ -306,6 +349,7 @@ fn localize(node: &Node, env: &Env) -> Option<Node> {
         // Replace every container leaf, so `localized` leaves none it fires on: the basis
         // is the small viewport's where `env` has no container
         container: &|unit| Some(unit.basis(env)),
+        segment: &|leaf| env.owner_segment(leaf),
     };
     substitute(node, &leaves, &mut |name| env.property(name).cloned())
 }
@@ -325,6 +369,8 @@ pub enum Node {
     Var(Var),
     /// An observation of the box that reads it (LLP 1123 D9, D10's leaf).
     Observe(Observe),
+    /// A field of a segment of the box's owner (LLP 1123 D16, D10's leaf).
+    Segment(SegmentRead),
     /// Its children added.
     Sum(Vec<Node>),
     /// Its children multiplied.
@@ -350,6 +396,7 @@ impl PartialEq for Node {
             (Env(a), Env(b)) => a == b,
             (Var(a), Var(b)) => a == b,
             (Observe(a), Observe(b)) => a == b,
+            (Segment(a), Segment(b)) => a == b,
             (Sum(a), Sum(b)) | (Product(a), Product(b)) | (Min(a), Min(b)) | (Max(a), Max(b)) => {
                 a == b
             }
@@ -371,6 +418,10 @@ impl Node {
             ),
             Node::Observe(o) => (
                 o.fallback.as_deref().map_or(&[][..], std::slice::from_ref),
+                &[],
+            ),
+            Node::Segment(s) => (
+                s.fallback.as_deref().map_or(&[][..], std::slice::from_ref),
                 &[],
             ),
             Node::Sum(c) | Node::Product(c) | Node::Min(c) | Node::Max(c) => (c, &[]),
@@ -414,6 +465,10 @@ impl Node {
             Node::Observe(o) => match env.observation(o) {
                 Some(points) => f64::from(points),
                 None => o.fallback.as_ref()?.value(env, basis)?,
+            },
+            Node::Segment(s) => match env.owner_segment(s) {
+                Some(points) => points,
+                None => s.fallback.as_ref()?.value(env, basis)?,
             },
             Node::Sum(c) => {
                 let mut total = 0.0;
@@ -582,6 +637,11 @@ pub(crate) fn undefined_in(node: &Node, env: &Env) -> bool {
             (None, Some(fallback)) => undefined_in(fallback, env),
             (None, None) => true,
         },
+        Node::Segment(s) => match (env.owner_segment(s), &s.fallback) {
+            (Some(_), _) => false,
+            (None, Some(fallback)) => undefined_in(fallback, env),
+            (None, None) => true,
+        },
         n => n.children().any(|c| undefined_in(c, env)),
     }
 }
@@ -675,6 +735,8 @@ pub(crate) struct Leaves<'a> {
     /// A container unit's basis in points (LLP 1123 D16); `None` keeps the
     /// leaf, where no node's containers are known.
     pub(crate) container: &'a dyn Fn(ViewportUnit) -> Option<f32>,
+    /// An owner segment's field (D16); `None` where the segment is unavailable.
+    pub(crate) segment: &'a dyn Fn(&SegmentRead) -> Option<f64>,
 }
 
 /// `node` with each local inset and observation as `leaves` gives it and
@@ -699,6 +761,10 @@ pub(crate) fn substitute(
         Node::Observe(o) => match (leaves.observed)(o) {
             Some(points) => Node::Value(f64::from(points), Unit::Px),
             None => substitute(o.fallback.as_ref()?, leaves, property)?,
+        },
+        Node::Segment(s) => match (leaves.segment)(s) {
+            Some(points) => Node::Value(points, Unit::Px),
+            None => substitute(s.fallback.as_ref()?, leaves, property)?,
         },
         Node::Value(v, Unit::Viewport(unit)) if unit.is_container() => {
             match (leaves.container)(*unit) {
@@ -1003,6 +1069,21 @@ impl Comparison {
         })
     }
 
+    /// Whether it reads an owner segment (LLP 1123 D16), a text's as it will be
+    /// parsed included.
+    pub(crate) fn reads_segment(&self) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Segment(_))),
+            Entry::Text { text, .. } => {
+                let mut reads = false;
+                text_vars(text, &mut |name| {
+                    reads |= SegmentRead::named(name).is_some()
+                });
+                reads
+            }
+        })
+    }
+
     /// The components of its box's own observations it reads, fallbacks
     /// included: a bit per [`Observe::component`].
     pub(crate) fn observed_components(&self) -> Components {
@@ -1086,17 +1167,21 @@ impl Comparison {
         })
     }
 
-    /// The tree with its local insets, custom properties, observations and
-    /// container units as `env` has them, as the dimension that holds it,
-    /// `Auto` (the row's initial value) where a property is invalid; `None`
-    /// when it reads none of them. A tree handed to layout, where only the
-    /// window's environment is known, is localized first (LLP 1123 D5, D16).
+    /// The tree with its local insets, custom properties, observations,
+    /// container units and owner segments as `env` has them, as the
+    /// dimension that holds it, `Auto` (the row's initial value) where a
+    /// property is invalid; `None` when it reads none of them. A tree handed
+    /// to layout, where only the window's environment is known, is localized
+    /// first (LLP 1123 D5, D16).
     pub(crate) fn localized(&self, env: &Env) -> Option<Dimension> {
         self.tree(|t| {
             t.any(&|n| {
                 matches!(
                     n,
-                    Node::Env(EnvTerm::Local(_)) | Node::Var(_) | Node::Observe(_)
+                    Node::Env(EnvTerm::Local(_))
+                        | Node::Var(_)
+                        | Node::Observe(_)
+                        | Node::Segment(_)
                 ) || matches!(n, Node::Value(_, Unit::Viewport(u)) if u.is_container())
             })
             .then(|| {

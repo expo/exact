@@ -103,6 +103,8 @@ pub(crate) struct Observations {
     pub(crate) margins: IdMap<u32, super::margins::OwnerMargins>,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
+    /// The segments each owner's host reports (D16).
+    pub(crate) segments: IdMap<u32, std::sync::Arc<crate::style::env::SegmentGrid>>,
     /// The keyboard each owner's host reports, and the policy (D7).
     pub(crate) keyboards: super::keyboard::Keyboards,
 }
@@ -235,6 +237,7 @@ impl Observations {
         self.bars.forget(slot);
         self.keyboards.forget(slot);
         self.margins.remove(&slot);
+        self.segments.remove(&slot);
         self.stopped_reading(slot);
     }
 
