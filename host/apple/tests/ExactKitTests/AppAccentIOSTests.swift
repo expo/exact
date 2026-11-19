@@ -503,8 +503,8 @@ final class AppAccentIOSTests: XCTestCase {
     }
 
     /// LLP 1011 §4: a symbol in a box of another shape keeps its aspect under
-    /// CSS's default `object-fit: fill`, as an SVG does; `cover` and `none` say otherwise.
-    /// `object-fit` places the symbol's view, which draws the glyph undistorted in its frame.
+    /// CSS's default `object-fit: fill`, as an SVG does; `cover` and `none` size the symbol's view differently.
+    /// `object-fit` places that view, which draws the glyph undistorted in its frame.
     func testASymbolKeepsItsAspectUnderFill() throws {
         func symbol(_ id: Int, _ style: [String: Any]) -> [[String: Any]] {
             [["op": "create", "id": id, "kind": "image", "props": ["imageSource": "symbol:sf/chevron.right", "symbolName": "chevron.right"], "handlers": [],
@@ -520,7 +520,7 @@ final class AppAccentIOSTests: XCTestCase {
         let box = CGRect(x: 0, y: 0, width: 16, height: 16), glyph = try XCTUnwrap(p.views[4]?.image).size
         XCTAssertNotEqual(glyph.width, glyph.height, "the chevron is not square, so the fits differ")
         XCTAssertEqual(fill.frame, box)
-        XCTAssertEqual(fill.contentMode, .scaleAspectFit, "unsaid `fill` draws the glyph undistorted in the box")
+        XCTAssertEqual(fill.contentMode, .scaleAspectFit, "the view draws the glyph aspect-fit, so unsaid `fill` keeps its aspect in the box")
         let covered = cover.frame, scale = 16 / min(glyph.width, glyph.height)
         XCTAssertEqual(covered.width, glyph.width * scale, accuracy: 0.001, "`cover` scales the glyph until its short side spans the box")
         XCTAssertEqual(covered.height, glyph.height * scale, accuracy: 0.001, "keeping its aspect")
