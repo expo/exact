@@ -500,6 +500,9 @@ final class ContentOwnersIOSTests: XCTestCase {
         controller.view.layoutIfNeeded()
         p.arrangements.sync()
         until("the hidden pane leaves both edges to its sibling") { hidden() }
+        // While its saved position waits, a pane carries no position over it from another scroll view
+        second.retainScrollPosition(from: scrolls[0])
+        XCTAssertNil(second.pendingScrollTop, "a hidden pane carries nothing over the position it saved")
         controller.setViewController(holders[1], for: .secondary)
         controller.view.layoutIfNeeded()
         until("the shown peer restores its inset and position") {

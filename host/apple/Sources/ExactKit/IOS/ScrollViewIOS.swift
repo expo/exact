@@ -404,8 +404,11 @@ extension NodeView {
         sv.scrollsItself || presenter?.elementScrolls.revealing(sv) != nil || presenter?.collections.animating.contains(id) == true
     }
 
-    /// A replacement keeps the logical offset; an authored write takes priority.
+    /// A replacement keeps the logical offset; an authored write takes priority. A position saved while the scroller had
+    /// no port (`hiddenScroll`) is already the reader's, and `applyPendingScroll` restores it into whichever scroll view
+    /// the node has then: nothing is carried over it.
     package func retainScrollPosition(from view: UIScrollView) {
+        guard hiddenScroll == nil else { return }
         let authored = extras?.pendingScrollTransfer != true && (pendingScrollTop != nil || pendingScrollLeft != nil)
         if pendingScrollTop == nil { pendingScrollTop = Double(view.contentOffset.y + scrollTopInset(view)) }
         if pendingScrollLeft == nil { pendingScrollLeft = Double(view.contentOffset.x) }
