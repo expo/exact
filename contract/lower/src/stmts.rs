@@ -111,7 +111,10 @@ impl Lowerer<'_> {
             Stmt::Call { body, .. } => self.block(asm, body, scope, locals)?,
             // Hosts receive records positionally (`expr::observe_args`).
             Stmt::Command { name, args, .. }
-                if name == "observe" || name == "observeAttributes" =>
+                if matches!(
+                    name.as_str(),
+                    "observe" | "observeAttributes" | "observeFeedback"
+                ) =>
             {
                 let flat = expr::observe_args(name, args).expect("an observe command");
                 for arg in &flat {

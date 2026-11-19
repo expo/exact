@@ -9,10 +9,11 @@ use contract_types::{Ref, Scope, Ty};
 use exact_plan::asm::Asm;
 use exact_plan::{Opcode, Stdlib};
 
-/// `observe` and `observeAttributes` as hosts receive them. A record goes
+/// `observe`, `observeAttributes` and `observeFeedback` as hosts receive them. A record goes
 /// positionally, each field name before its value in the order the call names
 /// them: `observe(name, Shape(a=x), sev)` is `name, sev, "a", x` (`sev` is
-/// `"info"` when left out) and `observeAttributes(Shape(a=x))` is `"a", x`.
+/// `"info"` when left out), `observeAttributes(Shape(a=x))` is `"a", x` and
+/// `observeFeedback(id, message, 4, Shape(a=x))` is `id, message, 4, none, none, "a", x`.
 /// `None` for any other command. The lowerer and the Lean embedding both read
 /// it, so the plan and the semantics cannot disagree.
 pub fn observe_args(name: &str, args: &[Expr]) -> Option<Vec<Expr>> {
@@ -25,6 +26,17 @@ pub fn observe_args(name: &str, args: &[Expr]) -> Option<Vec<Expr>> {
             (vec![args[0].clone(), severity], args.get(1))
         }
         "observeAttributes" => (Vec::new(), args.first()),
+        // `id, message, rating, min, max`, `none` for each one left out. The
+        // Observe module puts a rating without a scale on 0 to 10.
+        "observeFeedback" => {
+            let span = args[0].span();
+            let shape = args.len() > 2 && args.last().is_some_and(Expr::constructs_shape);
+            let numbers = &args[2..args.len() - usize::from(shape)];
+            let mut flat = vec![args[0].clone(), args[1].clone()];
+            flat.extend(numbers.iter().cloned());
+            flat.resize(5, Expr::None(span));
+            (flat, args.last().filter(|_| shape))
+        }
         _ => return None,
     };
     if let Some(Expr::Call(_, fields, _)) = record {

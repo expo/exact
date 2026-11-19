@@ -1234,6 +1234,13 @@ pub enum TemplatePart {
 }
 
 impl Expr {
+    /// A shape built in place, `Shape(key=value, …)`: a call whose arguments are all
+    /// named, at least one of them. Observe's commands send its fields by name.
+    pub fn constructs_shape(&self) -> bool {
+        matches!(self, Expr::Call(_, args, _)
+            if !args.is_empty() && args.iter().all(|a| matches!(a, Expr::NamedArg(..))))
+    }
+
     /// Where.
     pub fn span(&self) -> Span {
         match self {

@@ -217,11 +217,13 @@ pub const HOST_COMMANDS: &[&str] = &[
     // `event.stopPropagation()` for the same event: no ancestor's `key`
     // handler hears it, and its default still happens (files diary F8).
     "stopPropagation",
-    // Observe's custom event, attributes added to every later event, and a
-    // caught error. The Observe module sends them when the app links it.
+    // Observe's custom event, attributes added to every later event, a
+    // caught error and user feedback. The Observe module sends them when the
+    // app links it.
     "observe",
     "observeAttributes",
     "observeError",
+    "observeFeedback",
     // `window.close()` (studio diary R17): the window closes without asking
     // its `beforeunload` again — what an app calls once its own "Save
     // changes?" is answered. An action prop named `close` may be bound, but

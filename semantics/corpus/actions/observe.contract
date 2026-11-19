@@ -20,6 +20,9 @@ component App
     observeAttributes(EventDetails(count=count, screen=screen, previous=EventScreen(screen="home"), active=false))
     observeError("unavailable")
     observeError("unavailable", "ScreenError")
+    observeFeedback("screen", "slow")
+    observeFeedback("screen", "", count)
+    observeFeedback("screen", "slow", 4, 1, 5, EventScreen(screen=screen))
     count = count + 1
   view
     column

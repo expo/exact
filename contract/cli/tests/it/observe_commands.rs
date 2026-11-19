@@ -1,4 +1,4 @@
-//! `observe(…)`, `observeAttributes(…)` and `observeError(…)` reach the host as
+//! `observe(…)`, `observeAttributes(…)`, `observeError(…)` and `observeFeedback(…)` reach the host as
 //! commands, in order, with their arguments. Malformed calls fail to compile.
 use exact_runner::{DataError, DataSource, Runner, Value};
 
@@ -9,6 +9,8 @@ const APP: &str = r#"shape Checkout
 shape Tier
   tier: string
 
+fn five(): number = 5
+
 component App
   state count = 0
   action checkout(items: number)
@@ -18,6 +20,11 @@ component App
     observe("checkout.seen")
   action fail
     observeError("cart unavailable", "CartError")
+  action rate(stars: number)
+    observeFeedback("checkout", "Too slow", stars, 1, 5, Tier(tier="pro"))
+    observeFeedback("checkout", "", stars)
+    observeFeedback("checkout", "Computed", count + 1, 1, five())
+    observeFeedback("general", "Nice app")
   view
     column
       button press=checkout(2) testId="buy"
@@ -77,6 +84,51 @@ fn custom_events_are_commands_in_order() {
 }
 
 #[test]
+fn feedback_goes_positionally() {
+    let mut r = boot(APP);
+    r.take_commands();
+    r.act("rate", vec![Value::Number(4.)]).unwrap();
+    let args: Vec<_> = r.take_commands().into_iter().map(|c| c.args).collect();
+    let (id, none) = (Value::str, Value::NONE);
+    assert_eq!(
+        args,
+        [
+            vec![
+                id("checkout"),
+                id("Too slow"),
+                Value::Number(4.),
+                Value::Number(1.),
+                Value::Number(5.),
+                id("tier"),
+                id("pro")
+            ],
+            vec![
+                id("checkout"),
+                id(""),
+                Value::Number(4.),
+                none.clone(),
+                none.clone()
+            ],
+            vec![
+                id("checkout"),
+                id("Computed"),
+                Value::Number(1.),
+                Value::Number(1.),
+                Value::Number(5.)
+            ],
+            vec![
+                id("general"),
+                id("Nice app"),
+                none.clone(),
+                none.clone(),
+                none
+            ],
+        ],
+        "what the call leaves out is none"
+    );
+}
+
+#[test]
 fn observe_arguments_are_checked() {
     for statement in [
         "observe()",
@@ -85,6 +137,12 @@ fn observe_arguments_are_checked() {
         r#"observe("a", Tier(tier="x"), 2)"#,
         r#"observeAttributes("x")"#,
         "observeError(3)",
+        r#"observeFeedback("a")"#,
+        r#"observeFeedback("a", 1)"#,
+        r#"observeFeedback("a", "m", 1, 5)"#,
+        r#"observeFeedback("a", "m", "4")"#,
+        r#"observeFeedback("a", "m", 1, 2, 3, 4)"#,
+        r#"observeFeedback("a", "m", Tier(tier="x"), 4)"#,
     ] {
         let source = APP.replace(r#"observe("checkout.seen")"#, statement);
         let refused = contract::compile(&source).expect_err(statement);

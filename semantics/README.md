@@ -71,7 +71,9 @@ before this lowering step.
 
 Observe commands carry the host's positional arguments: `observe` emits
 the event name, severity (`"info"` when omitted), then each attribute's
-name and value; `observeAttributes` emits only those pairs. Fields go in
+name and value; `observeAttributes` emits only those pairs; `observeFeedback`
+emits the id, message, rating, scale minimum and maximum (`none` for each one
+left out), then the pairs. Fields go in
 the order the call names them; the lowerer and the embedding share
 `contract_lower::expr::observe_args`. An attribute value, including a
 nested record, remains one expression.
