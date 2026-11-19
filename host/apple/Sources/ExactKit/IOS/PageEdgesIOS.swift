@@ -106,7 +106,9 @@ extension Presenter {
     private func pageBands(of v: NodeView, _ sv: UIScrollView, margins m: UIEdgeInsets, area: CGSize, _ judge: ControlBars?) -> Bands {
         var at: UIView? = v, page: NodeView?
         while let c = at, c !== root {
-            if c.isHidden || !c.transform.isIdentity || c.clipsToBounds || (c !== v && c is UIScrollView) { return Bands() }
+            // The scroller's own clip gives way to its band where its scroll view holds what it draws (`clipsItself`)
+            let clips = c === v ? c.clipsToBounds && !v.scrollHoldsContent : c.clipsToBounds || c is UIScrollView
+            if c.isHidden || !c.transform.isIdentity || clips { return Bands() }
             if let n = c as? NodeView, c.superview === root { page = n }
             at = c.superview
         }
@@ -211,6 +213,8 @@ extension NodeView {
         let atEnd = follows && sv.contentOffset.y >= end() - 1 && !authorOwnsScroll(sv)
         let oldOwn = bandInset, top = sv.contentOffset.y + scrollTopInset(sv)
         more.pageBand = band; more.bandInset = own
+        // A layout transition's surface that took the clip over keeps it until it ends (`endSurface`)
+        if surface?.clippedSelf != true, clipsToBounds != clipsItself { clipsToBounds = clipsItself }
         sv.frame = scrollFrame
         var inset = sv.contentInset, bars = sv.verticalScrollIndicatorInsets
         inset.top += own.top - oldOwn.top; inset.bottom += own.bottom - oldOwn.bottom

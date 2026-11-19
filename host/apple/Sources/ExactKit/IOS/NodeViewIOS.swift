@@ -1271,7 +1271,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// scroll container that scrolls that axis; `hidden` clips.
     /// Whether the style clips the children (`overflow: hidden` or `clip`); a waiting
     /// scroll clips as its scroll view would. Without a clip box, it is the
-    /// layer's `masksToBounds` (`syncScroll`; a landing flight, `FlightsIOS`).
+    /// layer's `masksToBounds`, except on a scroller drawn into a band (`clipsItself`).
     package var overflowClips: Bool {
         let ox = style["overflow_x"]?.string ?? "visible", oy = style["overflow_y"]?.string ?? "visible"
         return ["hidden", "clip"].contains(ox) || ["hidden", "clip"].contains(oy) || scrollDormant

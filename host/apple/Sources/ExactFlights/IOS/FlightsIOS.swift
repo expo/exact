@@ -213,7 +213,7 @@ extension Presenter {
         // new joint) was never put on it; in a clip, the clip flew rounded,
         // not the view. A gradient sublayer copies the layer's radius when
         // the view displays, so it displays again.
-        view.layer.masksToBounds = view.overflowClips && view.clipBox == nil
+        view.layer.masksToBounds = view.clipsItself
         view.applyBoxLayer()
         view.setNeedsDisplay()
     }

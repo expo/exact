@@ -84,6 +84,48 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(scroll.contentOffset.y, 100 - inset.top, accuracy: 0.5)
     }
 
+    /// A scroller whose overflow clips (`overflow-x: hidden` beside `overflow-y: scroll`) leaves the clip
+    /// to its scroll view while a band draws the scroll view past the scroller's box: the scroller's own
+    /// clip would cut the band, and the edge effect in it, off at its top. A restyle and a layout
+    /// transition keep that. A text keeps its clip: its lines are drawn outside its scroll view.
+    func testABandedScrollerLeavesItsClipToItsScrollView() throws {
+        let p = Presenter()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_x": "hidden", "overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "A long status line"], "style": ["overflow_x": "hidden", "overflow_y": "auto"]],
+            ["op": "roots", "ids": [1, 2]],
+            ["op": "frame", "id": 1, "x": 0, "y": 56, "w": 300, "h": 200],
+            ["op": "content", "id": 1, "w": 300, "h": 1000],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 100, "h": 22],
+        ]))
+        let text = try XCTUnwrap(p.views[2])
+        XCTAssertNotNil(text.scrollView)
+        text.setPageBand(UIEdgeInsets(top: 56, left: 0, bottom: 0, right: 0))
+        XCTAssertTrue(text.clipsToBounds, "a banded text still clips its lines")
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scroll)
+        XCTAssertTrue(node.clipsToBounds)
+        let band = UIEdgeInsets(top: 56, left: 0, bottom: 0, right: 0)
+        node.setPageBand(band)
+        XCTAssertFalse(node.clipsToBounds)
+        XCTAssertTrue(scroll.clipsToBounds)
+        XCTAssertEqual(scroll.frame.minY, -56)
+        node.syncScroll()
+        XCTAssertFalse(node.clipsToBounds, "a restyle keeps the band's clip off")
+        node.setPageBand(.zero)
+        XCTAssertTrue(node.clipsToBounds, "a scroller with no band clips again")
+        // A layout transition's surface clips the scroll view in the node's place; as it ends the node clips or not by the band it then has
+        for after in [band, .zero] {
+            node.layoutResize = CGSize(width: 0, height: 20)
+            node.applySurface()
+            XCTAssertFalse(node.clipsToBounds)
+            node.setPageBand(after)
+            XCTAssertFalse(node.clipsToBounds, "the surface keeps the clip while it lasts")
+            node.layoutResize = .zero
+            node.applySurface()
+            XCTAssertEqual(node.clipsToBounds, after == .zero)
+        }
+    }
+
     func testThePageKeepsItsAreaAndIsDrawnPastIt() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the status bar and the safe area are a scene window's") }
         let (session, view) = try fixture()
@@ -164,6 +206,18 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(top.convert(top.bounds, to: nil).minY, safe.top, accuracy: 0.5, "its content shows where it did")
         // The CSS port is the box: the band is neither port nor content.
         XCTAssertEqual(sv.bounds.height - list.scrollPortInsets(sv).top - list.scrollPortInsets(sv).bottom, list.bounds.height, accuracy: 0.5)
+        // A scroller that clips its own overflow (`overflow-x: hidden`) takes the bands, as one with `overflow-x: auto` does
+        list.style["overflow_x"] = .string("hidden")
+        list.syncScroll()
+        list.setPageBand(.zero)
+        XCTAssertTrue(list.clipsToBounds)
+        session.presenter.reachPageEdges()
+        XCTAssertEqual(list.pageBand, UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0))
+        XCTAssertFalse(list.clipsToBounds)
+        // The agent still names it as what clips its content
+        let facts = try XCTUnwrap(Agent(session: session).layout(["id": Int(top.id)])["node"] as? [String: Any])
+        let clip = try XCTUnwrap(facts["clip"] as? [[String: Any]], "\(facts)")
+        XCTAssertTrue(clip.contains { $0["id"] as? Int == Int(list.id) && $0["kind"] as? String == "overflow" }, "\(clip)")
     }
 
     func testATouchInABandReachesTheScrollerThere() throws {
@@ -474,6 +528,16 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertNil(ControlBars(p).bars(of: list, in: route, top: true), "a scroller wider than the cleared room is no bar's")
         route.style["safe_area"] = .number(Double(2 | 8))
         XCTAssertEqual(ControlBars(p).bars(of: list, in: route, top: true).map { $0.map(\.id) }, [bar.id])
+        // One side: the scroller reaches the left edge it opts out of and stops at the right cover it keeps
+        list.frame = CGRect(x: 0, y: 133, width: 951 - 84, height: 502)
+        route.style["safe_area"] = .number(8)
+        XCTAssertEqual(ControlBars(p).bars(of: list, in: route, top: true).map { $0.map(\.id) }, [bar.id])
+        route.style["safe_area"] = .number(2)
+        XCTAssertNil(ControlBars(p).bars(of: list, in: route, top: true), "the left cover it keeps is not its room")
+        // The foot: open at the bottom cover it keeps, short of the route's edge it opts out of
+        XCTAssertEqual(ControlBars(p).bars(of: list, in: route, top: false).map { $0.map(\.id) }, [])
+        route.style["safe_area"] = .number(Double(2 | 4))
+        XCTAssertNil(ControlBars(p).bars(of: list, in: route, top: false))
     }
 
     /// A route padding its left by `env(safe-area-inset-left)`, 59, beside a 59-point cover, as

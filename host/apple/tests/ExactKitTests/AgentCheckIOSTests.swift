@@ -682,10 +682,12 @@ final class AgentCheckIOSTests: XCTestCase {
             box(10, ["overflow_x": "auto", "overflow_y": "auto"]), box(2, [:]),
             box(11, ["overflow_x": "auto", "overflow_y": "hidden", "written": ["overflow_x", "overflow_y"]]), box(3, [:]),
             box(12, ["overflow_x": "hidden", "written": ["overflow_x"]]), box(4, [:]),
-            ["op": "children", "id": 1, "ids": [10, 11, 12]],
+            box(13, ["overflow_x": "hidden", "overflow_y": "auto", "written": ["overflow_x"]]), box(5, [:]),
+            ["op": "children", "id": 1, "ids": [10, 11, 12, 13]],
             ["op": "children", "id": 10, "ids": [2]],
             ["op": "children", "id": 11, "ids": [3]],
             ["op": "children", "id": 12, "ids": [4]],
+            ["op": "children", "id": 13, "ids": [5]],
             ["op": "roots", "ids": [1]],
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
             ["op": "frame", "id": 10, "x": 0.0, "y": 0.0, "w": 400.0, "h": 200.0],
@@ -694,12 +696,15 @@ final class AgentCheckIOSTests: XCTestCase {
             ["op": "frame", "id": 3, "x": 16.0, "y": 0.0, "w": 430.0, "h": 40.0],   // in a strip that scrolls sideways
             ["op": "frame", "id": 12, "x": 0.0, "y": 300.0, "w": 400.0, "h": 60.0],
             ["op": "frame", "id": 4, "x": 16.0, "y": 0.0, "w": 430.0, "h": 40.0],   // in an authored clip
+            ["op": "frame", "id": 13, "x": 0.0, "y": 380.0, "w": 400.0, "h": 60.0],
+            ["op": "frame", "id": 5, "x": 16.0, "y": 0.0, "w": 430.0, "h": 40.0],   // in a scroller with the same clip, drawn into a band
         ])
+        try XCTUnwrap(session?.presenter.views[13]).setPageBand(UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0))
         let reply = agent.check([:])
         XCTAssertNil(reply["error"], "\(reply)")
         let items = try XCTUnwrap(reply["items"] as? [[String: Any]])
         XCTAssertEqual(items.first { $0["id"] as? Int == 2 }?["outX"] as? Double, 46, "#2 in \(items)")
-        for id in [3, 4] { XCTAssertNil(items.first { $0["id"] as? Int == id }?["outX"], "#\(id) is held: \(items)") }
+        for id in [3, 4, 5] { XCTAssertNil(items.first { $0["id"] as? Int == id }?["outX"], "#\(id) is held: \(items)") }
     }
 
     /// Round 21's event-rsvp at the largest text size: a centred caption wider than its flex column runs past both of

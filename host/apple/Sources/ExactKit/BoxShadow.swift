@@ -443,9 +443,25 @@ extension NodeView {
         #endif
         syncClipBox(overflowClips && kind != "text" && scroll == nil
                     && (clipsOneAxis || shadowColor != nil && overlay == nil && canHoldChildren))
-        let clipped = overflowClips && clipBox == nil
-        if clipsToBounds != clipped { clipsToBounds = clipped }
+        if clipsToBounds != clipsItself { clipsToBounds = clipsItself }
     }
+
+    /// Whether the node's own bounds clip its children: its overflow clips and
+    /// no clip box holds them. A scroller drawn past its box into a band
+    /// (`setPageBand`) leaves the clip to its scroll view where that holds all
+    /// it draws (`scrollHoldsContent`); the node's own clip would cut the band off.
+    package var clipsItself: Bool {
+        #if os(iOS) || os(tvOS)
+        if pageBand != .zero, scrollHoldsContent { return false }
+        #endif
+        return overflowClips && clipBox == nil
+    }
+
+    /// Whether all that the node's overflow clip holds is in its scroll view: a
+    /// container's children, which `syncScroll` moves there, but not a text's
+    /// lines or an image's pixels, which the node draws itself. A button is left
+    /// out, since a native face draws its title in the node.
+    var scrollHoldsContent: Bool { ["view", "scroll", "list"].contains(kind) }
 
     /// The children into a clipping box of their own, or back out of it, as
     /// a scroll view takes them.

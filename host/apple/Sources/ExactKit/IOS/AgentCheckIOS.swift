@@ -354,7 +354,7 @@ extension Agent {
                 // what runs past its side, which the screen's edge cuts (LLP 1116.020 D4; round 18's focus-timer and
                 // trivia-quiz). The web's `holdsX` (host/web-js/check.js).
                 let sideways = n.scroll == nil || n.style["written"]?.array?.contains(.string("overflow_x")) == true
-                if sideways && (n.scroll?.scrollsX == true || n.clipsToBounds || n.clipBox != nil) { heldBelow = true }
+                if sideways && (n.scroll?.scrollsX == true || n.overflowClips || n.clipBox != nil) { heldBelow = true }
             } else if let label = v as? UILabel {
                 nativeLabel(label, alpha: a, into: &items)
                 return
@@ -401,7 +401,7 @@ extension Agent {
                 let content = n.contentBox(), box = n.paragraphBox()
                 let widths = p.lines.map { CGFloat(CTLineGetTypographicBounds($0, nil, nil, nil) - CTLineGetTrailingWhitespaceWidth($0)) }
                 let dx = (widths.max() ?? 0) - content.width, dy = p.height - content.height
-                if dx > 1 || dy > 1 { item["over"] = [Double(r2(max(0, dx))), Double(r2(max(0, dy)))]; if n.clipsToBounds || n.clipBox != nil { item["clips"] = true } }
+                if dx > 1 || dy > 1 { item["over"] = [Double(r2(max(0, dx))), Double(r2(max(0, dy)))]; if n.overflowClips || n.clipBox != nil { item["clips"] = true } }
                 // Where its lines are drawn, as `TextEngine.draw` places them, where that is not its box: the driver
                 // judges two texts running into each other on it (a centred word wider than its column).
                 var ink = CGRect.null
@@ -410,7 +410,7 @@ extension Agent {
                 }
                 if !ink.isNull {
                     var drawn = n.convert(ink, to: nil)
-                    if n.clipsToBounds || n.clipBox != nil { drawn = drawn.intersection(b) }
+                    if n.overflowClips || n.clipBox != nil { drawn = drawn.intersection(b) }
                     if !drawn.isNull, abs(drawn.minX - b.minX) > 0.5 || abs(drawn.maxX - b.maxX) > 0.5 || abs(drawn.minY - b.minY) > 0.5 || abs(drawn.maxY - b.maxY) > 0.5 { item["ink"] = rect(drawn) }
                 }
             }
