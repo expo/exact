@@ -490,29 +490,28 @@ final class ContentOwnersIOSTests: XCTestCase {
         p.arrangements.sync()
         XCTAssertEqual(scrolls[0].contentOffset.y, revealedTop, accuracy: 1, "a finished adoption does not undo an element reveal")
         let savedTop = scrolls[1].contentOffset.y + second.scrollTopInset(scrolls[1])
+        // A pane UIKit hides is laid out 0×0, and its sibling owns both edges alone
+        func hidden() -> Bool {
+            self.window?.layoutIfNeeded()
+            return p.arrangements.hiddenPanes.contains(second.id) && second.bounds.isEmpty
+                && [true, false].allSatisfy { p.arrangements.scrollers(in: route.node, top: $0).map(\.id) == [first.id] }
+        }
         controller.setViewController(nil, for: .secondary)
         controller.view.layoutIfNeeded()
         p.arrangements.sync()
-        until("the native-hidden pane leaves the kernel's bottom-edge chain") {
-            self.window?.layoutIfNeeded()
-            return p.navigationHost.covers[second.id] == .whole && abs(first.bounds.height - route.view.bounds.height) < 1
-        }
+        until("the hidden pane leaves both edges to its sibling") { hidden() }
         controller.setViewController(holders[1], for: .secondary)
         controller.view.layoutIfNeeded()
-        // UIKit gives the pane room before Exact tells it its allocation, then the kernel lays it out 0×0 until its covers follow
-        for told in [false, true] {
-            if told { p.arrangements.sync() }
-            XCTAssertTrue(!holders[1].view.bounds.isEmpty && second.bounds.isEmpty, "the shown pane has room and no layout yet")
-            for top in [true, false] {
-                XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: top).map(\.id), [first.id],
-                               "a pane UIKit shows again owns no edge until it is laid out, and its sibling keeps its own")
-            }
-        }
         until("the shown peer restores its inset and position") {
             self.window?.layoutIfNeeded()
-            return p.navigationHost.covers[second.id] != .whole && scrolls[1].contentInsetAdjustmentBehavior == .automatic
+            return !p.arrangements.hiddenPanes.contains(second.id) && scrolls[1].contentInsetAdjustmentBehavior == .automatic
                 && abs(scrolls[1].contentOffset.y + second.scrollTopInset(scrolls[1]) - savedTop) < 1
         }
+        // A shown pane not yet laid out owns no edge, and its sibling keeps its own
+        let shownFrame = second.frame
+        second.frame.size = .zero
+        for top in [true, false] { XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: top).map(\.id), [first.id]) }
+        second.frame = shownFrame
         let rootBox = root.kernelContentBox, rootPadding = root.kernelPadding
         root.applyKernelContentBox(root.bounds.inset(by: UIEdgeInsets(top: 16, left: 0, bottom: 0, right: 0)), padding: [16, nil, nil, nil])
         XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: true).isEmpty)
@@ -553,7 +552,7 @@ final class ContentOwnersIOSTests: XCTestCase {
         controller.setViewController(nil, for: .secondary)
         controller.view.layoutIfNeeded()
         p.arrangements.sync()
-        until("the secondary is hidden before retiring the arrangement") { p.navigationHost.covers[second.id] == .whole }
+        until("the secondary is hidden before retiring the arrangement") { hidden() }
         XCTAssertTrue(p.arrangements.set(root.id, controller: nil))
         until("retired panes return their insets") {
             p.navigationHost.coversChanged()

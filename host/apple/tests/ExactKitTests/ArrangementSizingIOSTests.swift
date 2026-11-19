@@ -192,16 +192,24 @@ final class ArrangementSizingIOSTests: XCTestCase {
         session.presenter.press(try node("change-margin").id)
         expected = fitted(pane, width: pane.bounds.width).height
         waitFor("changed margins resize the intrinsic pane", cap: 5) { layout(); return abs(pane.bounds.height - expected) < 1 }
-        for (dimension, height) in [(UISplitArrangement.Dimension.absolute(140), CGFloat(140)), (.fractional(0.25), 200)] {
+        // A fraction is of the arrangement view's height. Each allocation is far from the last, so the dimension, not the
+        // content, is what moves the pane.
+        let arranged = controller.view.bounds.height
+        for (dimension, height) in [(UISplitArrangement.Dimension.absolute(expected + 100), expected + 100), (.fractional(0.5), arranged / 2)] {
+            XCTAssertGreaterThan(abs(pane.bounds.height - height), 20, "the dimension changes the allocation")
             controller.updateArrangement(split(dimension))
-            waitFor("the native dimension sets the allocation", cap: 5) { layout(); return abs(pane.bounds.height - height) < 1 }
+            waitFor("the native dimension sets the allocation", cap: 5, facts: { "pane \(pane.bounds.height), arranged in \(controller.view.bounds.height)" }) {
+                layout(); return abs(pane.bounds.height - height) < 1
+            }
         }
         controller.updateArrangement(split(.automatic))
         layout()
         XCTAssertGreaterThan(pane.bounds.height, 0)
         controller.updateArrangement(split(.intrinsic))
         waitFor("intrinsic sizing resumes", cap: 5) { layout(); return abs(pane.bounds.height - expected) < 1 }
-        waitForMainQueue()
+        // Count from a quiet session: the data's activation and the runtime's answers to the resumed allocation land first
+        waitForActivation(session)
+        waitFor("the session's own work lands") { !session.ownerInFlight && !session.hasPublished() }
         let batches = session.appliedBatches
         for _ in 0..<5 { layout(); waitForMainQueue() }
         XCTAssertEqual(session.appliedBatches, batches, "allocation and measurement settle without feedback")
