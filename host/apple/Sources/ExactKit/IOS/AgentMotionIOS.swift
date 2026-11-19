@@ -135,7 +135,7 @@ extension Agent {
         func moving() -> Bool {
             let now = CACurrentMediaTime(), whole = taking()
             var moved = false, next: [ObjectIdentifier: Int] = [:]
-            Agent.pruneUnbegun(now: now)
+            LayerMotion.pruneUnbegun(now: now)
             var pending = over().map { ($0.layer, $0 === whole) }
             while let (layer, anywhere) = pending.popLast() {
                 guard !layer.isHidden else { continue }
@@ -145,7 +145,7 @@ extension Agent {
                     next[key] = print
                     if prints[key].map({ $0 != print }) == true { moved = true }
                     for name in layer.animationKeys() ?? [] {
-                        if let a = layer.animation(forKey: name), Agent.inFlight(a, on: layer, key: name, now: now) { moved = true }
+                        if let a = layer.animation(forKey: name), LayerMotion.inFlight(a, on: layer, key: name, now: now) { moved = true }
                     }
                 }
                 pending.append(contentsOf: (layer.sublayers ?? []).map { ($0, anywhere) })
@@ -171,7 +171,7 @@ extension Agent {
     static func wallMotion(under root: CALayer) -> Bool {
         let now = CACurrentMediaTime()
         var pending: [(CALayer, Float)] = [(root, 1)], moving = false
-        pruneUnbegun(now: now)
+        LayerMotion.pruneUnbegun(now: now)
         // Every animation is looked at, not only up to the first running:
         // one with no begin time is timed from when it is first seen, so two
         // begun together are seen together (`inFlight`).
@@ -179,38 +179,12 @@ extension Agent {
             let s = speed * layer.speed
             guard s != 0, !layer.isHidden else { continue }
             for key in layer.animationKeys() ?? [] {
-                if let a = layer.animation(forKey: key), inFlight(a, on: layer, key: key, now: now) { moving = true }
+                if let a = layer.animation(forKey: key), LayerMotion.inFlight(a, on: layer, key: key, now: now) { moving = true }
             }
             pending.append(contentsOf: (layer.sublayers ?? []).map { ($0, s) })
         }
         return moving
     }
-
-    /// Whether `a`, on `layer` under `key`, is still running on the wall
-    /// clock: finite (a caret's blink and a spinner repeat for ever), not
-    /// held at speed 0 (Contract motion the agent's clock seeks), and not
-    /// past its end, though kept on the layer to hold its last frame
-    /// (`isRemovedOnCompletion` false). Its begin time is the one Core
-    /// Animation recorded when it was attached; one still at 0 (not yet
-    /// committed, or kept with none) runs for its span from when it was
-    /// first seen, the nearest to its attachment a reader can know. Callers
-    /// look at every animation in one pass, so ones attached together are
-    /// first seen together.
-    package static func inFlight(_ a: CAAnimation, on layer: CALayer, key: String, now: CFTimeInterval) -> Bool {
-        guard a.speed != 0, a.repeatCount < 1e6, a.repeatDuration < 1e6, a.duration < 60 else { return false }
-        let span = max(a.duration * Double(max(1, a.repeatCount)) * (a.autoreverses ? 2 : 1), a.repeatDuration) / Double(abs(a.speed))
-        guard a.beginTime == 0 else { return layer.convertTime(now, from: nil) < a.beginTime + span }
-        let seen = "\(ObjectIdentifier(layer).hashValue)/\(key)/\(ObjectIdentifier(a).hashValue)"
-        let first = unbegun[seen]?.first ?? now
-        unbegun[seen] = (first, now)
-        return now - first < span
-    }
-    /// When each animation with no begin time was first and last seen (`inFlight`).
-    nonisolated(unsafe) private static var unbegun: [String: (first: CFTimeInterval, last: CFTimeInterval)] = [:]
-    /// Forgets, before a pass, an animation not seen for a minute (the
-    /// longest `inFlight` counts): it is gone, and a reused identity is a
-    /// new one. Never during a pass, so every one in it is timed alike.
-    static func pruneUnbegun(now: CFTimeInterval) { unbegun = unbegun.filter { now - $0.value.last < 60 } }
 
     /// One layer's model geometry and opacity, hashed: what a frame-by-frame
     /// animation (a display link's) changes.

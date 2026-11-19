@@ -59,13 +59,14 @@ final class NativeCrop {
         }
     }
 
-    /// Whether an animation of `layer`'s place or size is under way (`Agent.inFlight`: not one held at speed 0
-    /// or kept past its end).
+    /// Whether an animation of `layer`'s place or size is under way (`LayerMotion.inFlight`: not one held at
+    /// speed 0 or kept past its end).
     private static func moving(_ layer: CALayer) -> Bool {
         let now = CACurrentMediaTime()
+        LayerMotion.pruneUnbegun(now: now)
         return (layer.animationKeys() ?? []).contains { key in
             (key.hasPrefix("bounds") || key.hasPrefix("position"))
-                && layer.animation(forKey: key).map { Agent.inFlight($0, on: layer, key: key, now: now) } == true
+                && layer.animation(forKey: key).map { LayerMotion.inFlight($0, on: layer, key: key, now: now) } == true
         }
     }
 }

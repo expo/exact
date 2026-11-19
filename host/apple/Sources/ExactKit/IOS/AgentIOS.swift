@@ -201,7 +201,7 @@ extension Agent {
         var pending = [presenter.viewport] + presenter.presentations(includingRetiring: true)
         let now = CACurrentMediaTime()
         var moving = false
-        Agent.pruneUnbegun(now: now)
+        LayerMotion.pruneUnbegun(now: now)
         while let view = pending.popLast() {
             guard !view.isHidden, view.alpha > 0, (view as? NodeView)?.drawnBySurface != true else { continue }
             // Only one still running (`inFlight`): not one held at speed 0
@@ -209,7 +209,7 @@ extension Agent {
             // ever, or kept on the layer past its end. Every one is looked
             // at, so ones with no begin time are first seen together.
             for key in view.layer.animationKeys() ?? [] {
-                if let a = view.layer.animation(forKey: key), movesGeometry(a), Agent.inFlight(a, on: view.layer, key: key, now: now) { moving = true }
+                if let a = view.layer.animation(forKey: key), movesGeometry(a), LayerMotion.inFlight(a, on: view.layer, key: key, now: now) { moving = true }
             }
             pending.append(contentsOf: view.subviews)
         }
