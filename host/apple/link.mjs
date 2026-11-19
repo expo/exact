@@ -1,7 +1,7 @@
 // What an Apple app links: the capabilities its composition names, the deployment
 // targets it compiles and links for, and the SDK its executable records, with the
 // device launch link of LLP 1047.001.001.
-import { spawnSync } from './toolchain.mjs';
+import { experimental, spawnSync } from './toolchain.mjs';
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
@@ -117,9 +117,13 @@ const BY_USE_IN_DEVELOPMENT = ['media_picker', 'auth_session', 'numerals', 'tips
  * `products` the Swift capability products the composition links and
  * installs, and an embedder links beside
  * ExactKit. Cargo is told `plan` or `all` before the bake; the Rust entry
- * reads that bake's linked set through `exact_bake::apple_link`. */
-export function appleComposition(graph, production, ahead = [], compat = null) {
-  const uses = graph?.uses;
+ * reads that bake's linked set through `exact_bake::apple_link`.
+ * Experimental (`EXACT_EXPERIMENTAL=1`): a `--development` archive links those
+ * too, so every app's archive has one composition and shares one ExactKit
+ * compile, where each combination of them compiles ExactKit anew; the archive
+ * pays their launch time and size. */
+export function appleComposition(graph, production, ahead = [], compat = null, developmentArchive = false) {
+  const uses = developmentArchive && experimental() ? null : graph?.uses;
   const byUse = production ? compat?.inputs?.linked
     : Array.isArray(uses) ? [...uses, ...ahead, ...(compat?.reach?.auth?.sessions === true ? ['auth_session'] : [])] : null;
   const link = !Array.isArray(byUse) ? 'all'

@@ -5,6 +5,7 @@ import { relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { appleCommand, crossSdk, experimental, spawn as appleSpawn, spawnSync as appleSpawnSync, swiftOptimization, swiftOptimizationKey } from './toolchain.mjs';
 import { widgetReload } from './widgets.mjs';
+import { appleComposition } from './link.mjs';
 import { createHash } from 'node:crypto';
 import { decodeProfile, xcodeRefusal } from './devices.mjs';
 import { appleCrossReport, CROSS_IOS_ROWS, distributionToolchain, ensureWatchSDK, installWatchSDK } from './sdk.mjs';
@@ -650,5 +651,23 @@ test('the widget reload dylib compiles and is kept as before without EXACT_EXPER
     process.argv = was.argv;
     if (was.flag === undefined) delete process.env.EXACT_EXPERIMENTAL; else process.env.EXACT_EXPERIMENTAL = was.flag;
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('EXACT_EXPERIMENTAL=1 links every Swift capability into a development archive, and nothing else changes', () => {
+  const graph = { uses: ['markdown', 'picker'] }, baked = { inputs: { linked: ['markdown'] } };
+  const was = process.env.EXACT_EXPERIMENTAL;
+  try {
+    delete process.env.EXACT_EXPERIMENTAL;
+    const byUse = appleComposition(graph, false);
+    expect(byUse.products.includes('ExactTips')).toBe(false);
+    expect(appleComposition(graph, false, [], null, true)).toEqual(byUse);
+    process.env.EXACT_EXPERIMENTAL = '1';
+    expect(appleComposition(graph, false, [], null, true)).toEqual(appleComposition(undefined, false));
+    expect(appleComposition(graph, false, [], null, true).link).toBe('all');
+    expect(appleComposition(graph, false)).toEqual(byUse);
+    expect(appleComposition(graph, true, [], baked)).toEqual({ link: 'markdown', products: ['ExactMarkdown'] });
+  } finally {
+    if (was === undefined) delete process.env.EXACT_EXPERIMENTAL; else process.env.EXACT_EXPERIMENTAL = was;
   }
 });
