@@ -827,6 +827,7 @@ impl Painter {
             self.paint_stage(&mut walk, *root, Some(*root) == last);
         }
         self.replay_kept(walk.scene, &kept, scene.roots.len(), space);
+        self.paint_sheets(&mut walk);
         self.paint_ghost(&mut walk);
         self.paint_alert(&mut walk);
         self.rows_end();

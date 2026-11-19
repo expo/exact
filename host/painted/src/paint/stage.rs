@@ -3,8 +3,12 @@
 //!
 //! A sheet's routes, and on a shell with no bars a route shown in a sheet's
 //! box, are placed by the presenter: the walk leaves them to the stage's
-//! display list, drawn after the last route of the stack, so what the app
-//! wrote after the routes (a toast) stays above.
+//! display list. An open or closing sheet and its scrim are drawn after the
+//! whole page, under its top layer, as Compose's `ModalBottomSheet` is a
+//! window over the activity's content: what the app wrote after the routes,
+//! its own tab bar included, is dimmed beneath it. The rest is drawn after
+//! the last route of the stack, so what the app wrote after the routes (a
+//! tab bar) stays above a page that moves.
 //!
 //! A crossing in the page is drawn where the walk paints its routes: each
 //! one with its ancestors' transform, opacity and clip, in a split view's
@@ -111,6 +115,8 @@ pub(crate) struct Stage {
     /// did not write is not painted.
     pub(crate) bare: Vec<ViewId>,
     pub(crate) items: Vec<Item>,
+    /// The open and closing sheets over their scrims, drawn after the page.
+    pub(crate) sheets: Vec<Item>,
     /// Drawn after a route of their own instead, under what the stack
     /// presents above it: a sheet a full-screen route covers.
     pub(crate) beneath: Vec<(ViewId, Vec<Item>)>,
@@ -218,10 +224,16 @@ impl Painter {
     /// are let go.
     pub(crate) fn set_stage(&mut self, kernel: &Kernel, mut stage: Stage) {
         let routes: Vec<ViewId> = (stage.tape.iter().chain(&stage.rest).copied())
-            .chain(stage.items.iter().filter_map(|item| match item {
-                Item::Route { id, tape: true, .. } => Some(*id),
-                _ => None,
-            }))
+            .chain(
+                stage
+                    .items
+                    .iter()
+                    .chain(&stage.sheets)
+                    .filter_map(|item| match item {
+                        Item::Route { id, tape: true, .. } => Some(*id),
+                        _ => None,
+                    }),
+            )
             .collect();
         // The ancestors a switch could remove with a route.
         for &route in &routes {
@@ -257,7 +269,7 @@ impl Painter {
         }
         let key = |id: &ViewId| kernel.node(*id).map(|n| n.key);
         let beneath = stage.beneath.iter().flat_map(|(_, items)| items);
-        let kept: Vec<NodeKey> = (stage.items.iter().chain(beneath))
+        let kept: Vec<NodeKey> = (stage.items.iter().chain(&stage.sheets).chain(beneath))
             .filter_map(|item| match item {
                 Item::Taped(key, _) => Some(*key),
                 Item::Route { id, tape: true, .. } => key(id),
@@ -678,6 +690,16 @@ impl Painter {
         let items = std::mem::take(&mut self.stage.items);
         self.stage_items(walk, &items);
         self.stage.items = items;
+    }
+
+    /// Draw the open and closing sheets over the whole page.
+    pub(super) fn paint_sheets(&mut self, walk: &mut Walk<'_, '_>) {
+        if self.kept.recording.is_some() || self.stage.sheets.is_empty() {
+            return;
+        }
+        let items = std::mem::take(&mut self.stage.sheets);
+        self.stage_items(walk, &items);
+        self.stage.sheets = items;
     }
 
     fn stage_items(&mut self, walk: &mut Walk<'_, '_>, items: &[Item]) {

@@ -422,6 +422,25 @@ fn a_tap_on_a_sheet_presses_what_is_there_and_on_the_scrim_dismisses() {
 }
 
 #[test]
+fn a_sheet_covers_what_the_app_wrote_after_its_routes() {
+    // The app's own bar, after the routes, as Jetsnack's tab bar is.
+    let source = format!(
+        "{APP}      button press=open(\"/detail\") testId=\"own-bar\" position=\"absolute\" left=0 right=0 bottom=0 height=56 background-color=\"#0000ff\"\n"
+    );
+    let mut p = phone_source(&source);
+    assert_eq!(red(&mut p, 200, 880), 0, "the bar is blue");
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    assert!(red(&mut p, 200, 880) > 200, "the sheet is over the bar");
+    let t = p.host().now();
+    p.pointer_down(200., 880., t).unwrap();
+    p.pointer_up(200., 880., t + 50.).unwrap();
+    p.run_commands(|| ());
+    assert!(!has(&p, "route-detail"), "the bar takes no press");
+    assert!(has(&p, "route-info"));
+}
+
+#[test]
 fn back_closes_a_sheet_which_slides_out_of_the_window() {
     let mut p = phone();
     tap(&mut p, "open-info");

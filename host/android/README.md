@@ -1252,7 +1252,8 @@ shell that shows bars; desktop Linux and the headless carrier show a `modal` rou
 **A `modal` route is Material 3's modal bottom sheet** (Compose's `ModalBottomSheet` and `BottomSheetDefaults`): as
 wide as the window up to 640 dp and centred, its top corners 28 dp, `surfaceContainerLow` under a route that writes no
 `background-color`, a 32 by 4 dp drag handle 22 dp below its top (`onSurfaceVariant` at 40 %), over a scrim of 32 %
-black that covers the window, the page's bars and the status bar included. It is drawn in the page's surface, not a
+black that covers the window: the page's bars, the status bar, and what the app wrote after its routes, such as a
+tab bar of its own. It is drawn in the page's surface, not a
 window of its own (LLP 1115.001 D10, amended): the page's own walk paints it, so its fields, its touches and
 TalkBack are the page's, and the bars of the page beneath are drawn in the page under the scrim while it is up (the
 reader is told none). Its heights are `navigationDetent`'s, shortest first: `large` (the default) the window below

@@ -1083,6 +1083,9 @@ impl<D: DataSource> Presenter<D> {
         let window = self.window().map_or((w, h), |win| win.size);
         // The scrim covers the window, the system's bars included.
         let whole = (-page[0], -page[1], window.0, window.1);
+        // A sheet runs on to the window's foot, under the gesture bar, on a
+        // page laid out above it as well.
+        let foot = window.1 - page[1];
         let container = |route: Option<exact_kernel::NodeRef<'_>>| -> [u8; 4] {
             let written =
                 route.is_some_and(|n| n.style.written.has(exact_kernel::StyleId::BackgroundColor));
@@ -1127,7 +1130,7 @@ impl<D: DataSource> Presenter<D> {
             }
             .transform((x, top));
             let tallest = sheet.heights[sheet.heights.len() - 1];
-            let body = (0.0, 0.0, width, (h - top).max(tallest));
+            let body = (0.0, 0.0, width, (foot - top).max(tallest));
             let shape = Shape::new(body, [SHEET_CORNER, SHEET_CORNER, 0.0, 0.0]);
             items.push(Item::Clip(shape, ts));
             items.push(Item::Fill(shape, container(modal), ts));
@@ -1181,13 +1184,13 @@ impl<D: DataSource> Presenter<D> {
             items.push(Item::PopClip);
             match sheet.covered {
                 true => stage.beneath.push((shown.id, items)),
-                false => stage.items.extend(items),
+                false => stage.sheets.extend(items),
             }
         }
         for closing in &self.stage.closing {
             let top = closing.top.at(now);
             let left = ((h - top) / (h - closing.from).max(1.0)).clamp(0.0, 1.0) * SCRIM;
-            stage.items.push(Item::Fill(
+            stage.sheets.push(Item::Fill(
                 Shape::rect(whole),
                 [0, 0, 0, (left * 255.0).round() as u8],
                 Transform::identity(),
@@ -1198,14 +1201,14 @@ impl<D: DataSource> Presenter<D> {
                 ..Pose::REST
             }
             .transform((closing.x, top));
-            let body = (0.0, 0.0, closing.width, (h - closing.from).max(1.0));
+            let body = (0.0, 0.0, closing.width, (foot - closing.from).max(1.0));
             let shape = Shape::new(body, [SHEET_CORNER, SHEET_CORNER, 0.0, 0.0]);
-            stage.items.push(Item::Clip(shape, ts));
-            stage.items.push(Item::Fill(shape, container(None), ts));
-            stage.items.push(Item::Taped(closing.shown, ts));
+            stage.sheets.push(Item::Clip(shape, ts));
+            stage.sheets.push(Item::Fill(shape, container(None), ts));
+            stage.sheets.push(Item::Taped(closing.shown, ts));
             let grip = Shape::new(((closing.width - 32.0) / 2.0, 22.0, 32.0, 4.0), [2.0; 4]);
-            stage.items.push(Item::Fill(grip, handle, ts));
-            stage.items.push(Item::PopClip);
+            stage.sheets.push(Item::Fill(grip, handle, ts));
+            stage.sheets.push(Item::PopClip);
         }
     }
 
