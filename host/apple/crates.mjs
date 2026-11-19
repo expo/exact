@@ -46,10 +46,11 @@
  * may write it.
  * EXACT_APPLE_KEEP_CHECKOUT=0 turns the scope off.
  *
- * A CARGO_TARGET_DIR keeps and takes nothing, registry crates included: it is a
- * target apps may share, which already holds its units for the next build that
- * names it, and keeping copied them after every development build (several GB
- * each time).
+ * A CARGO_TARGET_DIR keeps nothing, registry crates included: it is a target
+ * apps may share, which already holds its units for the next build that names
+ * it, and each app's build compiles units the newest generation lacks, so
+ * keeping copied them after every development build (several GB each time).
+ * One that has compiled nothing still takes the registry's generation.
  *
  * A production build compiles everything it ships and keeps nothing.
  */
@@ -148,9 +149,7 @@ export function checkoutCrates(root, app) {
  */
 export function keptCrates({ root, env, profile, app = null }) {
   const idle = { take() {}, keep() {} };
-  // Every CARGO_TARGET_DIR counts as shared, since the variable cannot tell: one private to a checkout (a CI's, say)
-  // also loses the take of registry crates its other apps compiled.
-  if (typeof Bun === 'undefined' || env.CARGO_TARGET_DIR) return idle;
+  if (typeof Bun === 'undefined') return idle;
   const channel = env.RUSTUP_TOOLCHAIN ?? /channel\s*=\s*"([^"]+)"/.exec(text(resolve(root, 'rust-toolchain.toml')) ?? '')?.[1];
   if (!channel || !/^[\w.+-]+$/.test(channel)) return idle;
   const store = resolve(env.HOME ?? homedir(), '.cache/exact/apple-crates', `${channel}-${profile}`);
@@ -264,7 +263,9 @@ export function keptCrates({ root, env, profile, app = null }) {
     },
     keep(target, kind, lock) {
       try {
-        if (!plain(target)) return;
+        // Every CARGO_TARGET_DIR counts as shared, since the variable cannot tell: one private to a checkout (a CI's,
+        // say) keeps nothing either, and its builds feed no generation.
+        if (!plain(target) || env.CARGO_TARGET_DIR) return;
         const stamp = JSON.parse(text(stampOf(target)) ?? '{}'), dirs = profileDirs(target);
         const scope = scopeOf(kind, target), byCheckout = stamp.scope === 'checkout' && scope !== null;
         // A build of this checkout is a use of its scope, whether or not it keeps anything.

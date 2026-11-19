@@ -146,7 +146,7 @@ test('a rebuild in the same target after an edit makes the next generation, and 
   } finally { rmSync(run, { recursive: true, force: true }); }
 }, 180_000);
 
-test('a CARGO_TARGET_DIR takes and keeps nothing, registry crates included', () => {
+test('a CARGO_TARGET_DIR keeps nothing, registry crates included, and takes only the registry\'s', () => {
   const run = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-kept-shared-'))), store = (home) => resolve(home, '.cache/exact/apple-crates');
   const made = (home) => existsSync(store(home)) ? readdirSync(store(home), { recursive: true }).filter(path => /(^|\/)(gen-|\.making-)/.test(path)) : [];
   try {
@@ -164,12 +164,11 @@ test('a CARGO_TARGET_DIR takes and keeps nothing, registry crates included', () 
     const next = appOf(resolve(run, 'next'), root);
     keeper(own, root, next).take(next.target, 'app');
     assert.ok(existsSync(resolve(next.target, profile, '.fingerprint')));
-    // And with generations kept, a target that has compiled nothing starts with none of them.
+    // And with generations kept, a CARGO_TARGET_DIR that has compiled nothing starts from the registry's, never the checkout's.
     cpSync(store(own), store(shared), { recursive: true });
     const later = appOf(resolve(run, 'later'), root);
     keeper(shared, root, later, { CARGO_TARGET_DIR: later.target }).take(later.target, 'app');
-    assert.equal(existsSync(resolve(later.target, profile)), false);
-    assert.equal(existsSync(resolve(later.target, `kept-crates-${profile}.json`)), false);
+    assert.equal(JSON.parse(readFileSync(resolve(later.target, `kept-crates-${profile}.json`), 'utf8')).scope, 'registry');
   } finally { rmSync(run, { recursive: true, force: true }); }
 }, 120_000);
 
