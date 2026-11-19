@@ -118,7 +118,7 @@ impl EnvTerm {
     /// `env` does not define.
     fn value(self, env: &Env) -> Option<f64> {
         match self {
-            EnvTerm::Inset(edge) => Some(f64::from(env.inset(edge))),
+            EnvTerm::Inset(edge) => Some(f64::from(env.safe_inset(edge))),
             EnvTerm::Segment(var, x, y) => env::resolve_wide(var, x, y, env),
             EnvTerm::Region(region, edge) => Some(f64::from(env.region_inset(region, edge))),
             EnvTerm::TitleBar(var) => env.titlebar(var).map(f64::from),
@@ -1083,6 +1083,15 @@ impl Comparison {
         })
     }
 
+    /// Whether it reads `env(safe-area-inset-*)`, which reads the node's
+    /// context (`kernel::context`), a text's as it will be parsed included.
+    pub(crate) fn reads_inset(&self) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Env(EnvTerm::Inset(_)))),
+            Entry::Text { text, .. } => text.contains("safe-area-inset"),
+        })
+    }
+
     /// Whether it reads an observation, its box's own or a native target's
     /// (LLP 1123 D7, D9), a text's as it will be parsed included.
     pub(crate) fn reads_observed(&self) -> bool {
@@ -1205,6 +1214,15 @@ impl Comparison {
             Entry::Text { text, .. } => {
                 text.contains(&format!("{}{}", env::LOCAL_PREFIX, edge.name()))
             }
+        })
+    }
+
+    /// Whether it reads `env(safe-area-inset-<edge>)`, a text's as it will be
+    /// parsed included.
+    pub(crate) fn reads_inset_edge(&self, edge: Edge) -> bool {
+        self.with(|e| match e {
+            Entry::Tree(t) => t.any(&|n| matches!(n, Node::Env(EnvTerm::Inset(e)) if *e == edge)),
+            Entry::Text { text, .. } => text.contains(&format!("safe-area-inset-{}", edge.name())),
         })
     }
 

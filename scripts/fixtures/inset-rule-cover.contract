@@ -1,0 +1,28 @@
+// The inset rule (`kernel/src/kernel/context.rs`, InsetRuleIOSTests) under a
+// `viewport-fit="cover"` root with no routes: a full-screen scroller arranged
+// as each case of the safe-area design's 2.2 and 2.3, picked by a press.
+// `env()` and `var(--exact-safe-area-inset-*)` in the scroller's padding and
+// content read 0 on the edges it does not ignore, where its host insets it.
+component InsetRuleCover
+  state arrangement = "plain"
+  action pick(name: string)
+    arrangement = name
+  derive envTop = "env(safe-area-inset-top)"
+  derive atLeast = "max(16px, env(safe-area-inset-top))"
+  derive ignoring = arrangement == "ignore" or arrangement == "ignore-max"
+  derive padTop = (arrangement == "env" or arrangement == "ignore") ? envTop : ((arrangement == "max" or arrangement == "ignore-max") ? atLeast : (arrangement == "var" ? "var(--exact-safe-area-inset-top)" : "0px"))
+  derive bar = "calc(50px + env(safe-area-inset-bottom))"
+  view
+    main testId="app" viewport-fit="cover" width="100%" height="100%" position="relative"
+      scroll testId="scroller" width="100%" height="100%" box-sizing="border-box" padding-top=padTop padding-bottom=(arrangement == "bar" ? bar : "0px") -exact-safe-area-ignore=(ignoring ? "container top" : "none")
+        if arrangement == "sticky" or arrangement == "sticky-env"
+          box testId="sticky" position="sticky" top=(arrangement == "sticky" ? "0px" : envTop) height=20
+        column testId="first-box" padding-top=(arrangement == "child-env" ? envTop : "0px") padding-left=(arrangement == "sides" ? "env(safe-area-inset-left)" : "0px") padding-right=(arrangement == "sides" ? "env(safe-area-inset-right)" : "0px")
+          text "first" testId="first"
+        column testId="body" height=(arrangement == "short" ? 100 : 2000)
+        text "last" testId="last"
+      if arrangement == "bar"
+        row testId="bar" position="absolute" left=0 right=0 bottom=0 height=bar
+      column position="absolute" top="40%" right=0 width=8
+        for name in ["plain", "env", "var", "max", "ignore", "ignore-max", "child-env", "short", "sticky", "sticky-env", "bar", "sides"] key=name
+          button press=pick(name) testId=`pick-${name}` aria-label=name width=8 height=8

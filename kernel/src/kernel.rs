@@ -25,6 +25,7 @@ mod alert;
 pub(crate) mod area;
 pub(crate) mod bar;
 pub(crate) mod block;
+pub(crate) mod context;
 mod cover;
 mod document;
 mod edge_bar;

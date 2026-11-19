@@ -2,7 +2,8 @@
 
 A route clears its controller's safe area. Use
 `var(--exact-safe-area-inset-<edge>)` to read the route's inset, and
-`env(safe-area-inset-<edge>)` for the document.
+`env(safe-area-inset-<edge>)` for what the box's context leaves. A scroller's
+padding and content read zero on the edges it insets.
 
 Write `-exact-safe-area="top"` on a route to draw under its bar. A scroller
 can reach past its border box with `-exact-safe-area-reach="top bottom"`.

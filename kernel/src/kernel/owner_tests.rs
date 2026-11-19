@@ -300,10 +300,12 @@ fn overrides_resolve_their_dependencies_and_reject_cycles() {
     );
 }
 
-/// A sticky box's inset that reads the local inset sticks below its route's
-/// bar, not at the document's 0: the constraint resolves where the box is.
+/// A sticky box's inset that reads the local inset in a scroller reads 0 on
+/// the edges of the axes the scroller scrolls (`kernel::context`): its host
+/// sticks the box past that inset, at its route's bar's bottom, so 106 would
+/// stick it twice as low.
 #[test]
-fn a_sticky_inset_reads_its_owners_inset() {
+fn a_sticky_inset_in_a_scroller_reads_what_the_scroller_leaves() {
     let mut k = Kernel::with_monospace();
     let mut ops = create(1..=5);
     ops.push(style(1, &[(StyleId::Height, "844")]));
@@ -328,7 +330,7 @@ fn a_sticky_inset_reads_its_owners_inset() {
     layout(&mut k);
     let key = k.node(4).unwrap().key;
     let constraint = k.sticky_constraint(key).expect("a sticky box");
-    assert_eq!(constraint.insets[0], Some(106.0));
+    assert_eq!(constraint.insets[0], Some(0.0));
 }
 
 #[test]

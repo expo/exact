@@ -116,9 +116,13 @@ fn node_rows(style: &StyleProps) -> StyleMask {
     let mut rows = StyleMask::EMPTY;
     for id in style.mask.iter().filter(|id| !OVERRIDES.contains(id)) {
         let row = style.get(id);
-        if calc::reads_plain_container(&row)
+        // `env(safe-area-inset-*)` reads the node's context (`super::context`)
+        let env = matches!(row, RowValue::Dimension(Dimension::Env(..)));
+        if env
+            || calc::reads_plain_container(&row)
             || calc::in_row(row).any(|c| {
                 c.reads_local()
+                    || c.reads_inset()
                     || c.reads_custom()
                     || c.reads_observed()
                     || c.reads_container()
@@ -384,6 +388,7 @@ fn env_with_containers(arena: &NodeArena, slot: u32, from: Option<u32>) -> Cow<'
     let mut env = arena.env().clone();
     env.font_size = arena.computed_source(slot, StyleId::FontSize).font_size;
     env.local = Some(local_at(arena, slot));
+    env.context = Some(super::context::context_at(arena, slot, false));
     env.properties = Some(properties_at(arena, slot, &arena.effective_style(slot)));
     env.observed = Some(arena.observations.input(slot));
     env.targets = arena.observations.targets.scope(arena, slot);
@@ -753,9 +758,7 @@ impl NodeArena {
     }
 }
 
-/// The four local insets at `slot`, top right bottom left (main's model,
-/// which LLP 1123 retires): an
-/// override `slot` declares, else its owner's host value when `slot` is an
+/// The four local insets at `slot`, top right bottom left: an override `slot` declares, else its owner's host value when `slot` is an
 /// owner's root, else its parent's; at a root, the session root's. An
 /// override's `var()` reads the edge as `slot` has it: that edge's override
 /// on `slot`, else what `slot` inherits. Overrides that read themselves,
@@ -764,8 +767,9 @@ impl NodeArena {
 pub(crate) fn local_at(arena: &NodeArena, slot: u32) -> [f32; 4] {
     let base = match arena.blocks.local(slot) {
         Some(host) => host,
+        // A scroller's content reads 0 on the edges it takes (`super::context`)
         None => match arena.parent(slot) {
-            Some(parent) => local_at(arena, parent),
+            Some(parent) => super::context::inside(arena, parent, local_at(arena, parent)),
             None => Edge::ALL.map(|e| arena.env().root_inset(e)),
         },
     };
@@ -793,25 +797,31 @@ impl<'a> LocalInsets<'a> {
         // The nodes up to the first whose insets are known or given
         let (path, mut at) = (&mut self.path, slot);
         path.clear();
-        let base = loop {
+        // `above`: the known node whose content the topmost node lies in
+        let (base, mut above) = loop {
             // Only a kept node is known, so only one is looked up
             if self.keep.contains(at) {
                 if let Some(&known) = self.known.get(&at) {
-                    break known;
+                    break (known, Some(at));
                 }
             }
             path.push(at);
             if let Some(host) = arena.blocks.local(at) {
-                break host;
+                break (host, None);
             }
             match arena.parent(at) {
                 Some(parent) => at = parent,
-                None => break Edge::ALL.map(|e| arena.env().root_inset(e)),
+                None => break (Edge::ALL.map(|e| arena.env().root_inset(e)), None),
             }
         };
         // The topmost node takes `base`: what is known above it, its host's or the root's
         let mut insets = base;
         for &s in path.iter().rev() {
+            // As `local_at`: a scroller's content reads 0 on the edges it takes
+            if let Some(parent) = above {
+                insets = super::context::inside(arena, parent, insets);
+            }
+            above = Some(s);
             insets = with_overrides(arena, s, insets);
             if self.keep.contains(s) {
                 self.known.insert(s, insets);
