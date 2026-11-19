@@ -11,10 +11,13 @@ import { windowsMetalCommand } from './metal.mjs';
 /** `EXACT_EXPERIMENTAL=1` turns on the Apple build's experimental features; each says where it applies. With any other
  *  value, or unset, a build is byte for byte the one it is without them. */
 export const experimental = (env = process.env) => env.EXACT_EXPERIMENTAL === '1';
-/** The optimization the Swift a build compiles itself (app modules, packages, extensions, intents) takes. Experimental:
- *  `-Onone` in a `--development` archive, a build to iterate on rather than ship, since an optimized whole-module
- *  compile runs mostly on one core and takes minutes for some packages and extensions. Otherwise `-O`. */
-export const swiftOptimization = (env = process.env, args = process.argv) => experimental(env) && args.includes('--development') ? '-Onone' : '-O';
+/** The optimization the Swift a build compiles itself (app modules, packages, extensions) takes. Experimental: `-Onone`
+ *  in a `--development` archive, a build to iterate on rather than ship, since an optimized whole-module compile runs
+ *  mostly on one core and takes minutes for some packages and extensions. Otherwise `-O`, and so for what bakes
+ *  production trust, which build.mjs sets for every distributed build (`--distribution` with `--development` too).
+ *  Intents stay `-O`: on Linux their cache key hashes intents.mjs's own source, so any edit there invalidates it. */
+export const swiftOptimization = (env = process.env, args = process.argv) =>
+  experimental(env) && args.includes('--development') && !args.includes('--distribution') && env.EXACT_UPDATE_TRUST !== 'production' ? '-Onone' : '-O';
 /** `swiftOptimization()` as part of a cache key: empty for `-O`, so a key without the experiment is unchanged. */
 export const swiftOptimizationKey = (env = process.env, args = process.argv) => swiftOptimization(env, args) === '-O' ? [] : [swiftOptimization(env, args)];
 

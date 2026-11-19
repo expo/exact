@@ -611,6 +611,10 @@ test('EXACT_EXPERIMENTAL=1 alone turns on experimental features, and only a deve
     expect(swiftOptimization(on, args)).toBe('-O');
     expect(swiftOptimizationKey(on, args)).toEqual([]);
   }
+  // A distributed development archive bakes production trust, which build.mjs sets: it compiles optimized.
+  expect(swiftOptimization(on, [...development, '--distribution'])).toBe('-O');
+  expect(swiftOptimization({ ...on, EXACT_UPDATE_TRUST: 'production' }, development)).toBe('-O');
+  expect(swiftOptimizationKey({ ...on, EXACT_UPDATE_TRUST: 'production' }, development)).toEqual([]);
 });
 
 test('the widget reload dylib compiles and is kept as before without EXACT_EXPERIMENTAL, and unoptimized beside it with it in a development archive', () => {
