@@ -433,9 +433,19 @@ fn fills_parent(
         NodeType::from_wire(parent.node_type),
         Some(NodeType::ScrollView | NodeType::List)
     );
-    let repeated = node
-        .arm
-        .is_some_and(|a| plan.region(plan.arm(a).region).kind == exact_plan::RegionKind::Each);
+    // A row of a `for`, through any `if` between them
+    let repeated = node.parent.is_none() && {
+        let mut arm = node.arm;
+        let mut each = false;
+        while let Some(a) = arm.take() {
+            let region = plan.region(plan.arm(a).region);
+            each = region.kind == exact_plan::RegionKind::Each;
+            if !each && region.parent.is_none() {
+                arm = region.arm;
+            }
+        }
+        each
+    };
     // A length in points, or one in px, rem or em; a computed or `calc()` one may be 0
     let length = |node: &NodesRow, id: StyleId| {
         number(node, id).is_some_and(|n| n > 0.0)
@@ -464,11 +474,17 @@ fn fills_parent(
 }
 
 /// Whether a node's size `id` may be its parent's or the screen's: `100%` or
-/// more, 100 viewport units or more, an expression such as `calc()`, or
-/// computed (a number is points)
+/// more, 100 viewport or container units or more, an expression such as
+/// `calc()` with a percentage, a viewport or container unit or a viewport
+/// segment in it, or computed (a number is points)
 fn full(plan: &exact_plan::Plan, node: &exact_plan::NodesRow, id: exact_kernel::StyleId) -> bool {
     match literal(plan, node, exact_plan::BindingKind::Style, id as u16) {
-        Some(Some(written)) if written.contains('(') => true,
+        Some(Some(written)) if written.contains('(') => {
+            written.contains('%')
+                || ["vw", "vh", "vmin", "vmax", "cq", "viewport-segment"]
+                    .iter()
+                    .any(|unit| written.contains(unit))
+        }
         Some(Some(written)) => {
             let (value, unit) = split_length(written);
             value >= 100.0
@@ -484,6 +500,12 @@ fn full(plan: &exact_plan::Plan, node: &exact_plan::NodesRow, id: exact_kernel::
                         | "lvh"
                         | "vmin"
                         | "vmax"
+                        | "cqw"
+                        | "cqh"
+                        | "cqi"
+                        | "cqb"
+                        | "cqmin"
+                        | "cqmax"
                 )
         }
         Some(None) => number(plan, node, exact_plan::BindingKind::Style, id as u16).is_none(),
