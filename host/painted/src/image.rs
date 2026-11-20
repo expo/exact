@@ -980,6 +980,11 @@ impl Images {
             .collect();
         self.natural(reports)
     }
+    /// Whether view `id`'s picture is asked for.
+    #[cfg(test)]
+    pub(crate) fn wanted(&self, id: ViewId) -> bool {
+        self.views.get(&id).is_some_and(|view| view.visible)
+    }
     /// Which assignment of its source view `id` shows ([`LoadEvent`]).
     pub(crate) fn assignment(&self, id: ViewId) -> Option<u64> {
         self.views.get(&id).map(|view| view.assignment)
