@@ -33,28 +33,58 @@ struct NativeWorldLayout {
 /// less of the old one as it shrinks, never a layout smaller than the box around it. Once the box's animation ends,
 /// the view takes its content box again.
 final class NativeCrop {
-    private let held = NSHashTable<UIView>.weakObjects()
+    /// Each held view's own layout margins, and whether it insets them from its safe area, from before it was held:
+    /// meanwhile its margins also take what of it lies past its box.
+    private let held = NSMapTable<UIView, Margins>.weakToStrongObjects()
+    private final class Margins {
+        let insets: UIEdgeInsets, fromSafeArea: Bool
+        init(_ view: UIView) {
+            fromSafeArea = view.insetsLayoutMarginsFromSafeArea
+            // `layoutMargins` reads the safe area added where the view insets its margins from it
+            let safe = fromSafeArea ? view.safeAreaInsets : .zero, m = view.layoutMargins
+            insets = UIEdgeInsets(top: max(0, m.top - safe.top), left: max(0, m.left - safe.left),
+                                  bottom: max(0, m.bottom - safe.bottom), right: max(0, m.right - safe.right))
+        }
+    }
 
     /// Whether `view` keeps its own size until its box's animation ends.
-    func holds(_ view: UIView) -> Bool { held.contains(view) }
+    func holds(_ view: UIView) -> Bool { held.object(forKey: view) != nil }
 
     /// `owner`'s box, which holds `view`, changes size in `resize`; `end` lays the view out in its content box once
-    /// the box's animation is over.
+    /// the box's animation is over. Meanwhile the view's layout margins take what of it lies past the box, so what
+    /// it places by its margins (a map's logo and legal link, its compass) stands where the box shows it and moves
+    /// with the box, as it would in a view that took the box's size.
     func resize(_ view: UIView, in owner: NodeView, _ resize: () -> Void, end: @escaping () -> Void) {
-        let old = view.bounds.size
+        let old = view.bounds.size, holding = held.object(forKey: view)
         view.autoresizingMask = []
         resize()
-        let box = owner.contentBox()
-        UIView.performWithoutAnimation { view.bounds.size = CGSize(width: max(old.width, box.width), height: max(old.height, box.height)) }
+        let box = owner.contentBox(), own = holding ?? Margins(view)
+        let size = CGSize(width: max(old.width, box.width), height: max(old.height, box.height))
+        let safe = own.fromSafeArea ? view.safeAreaInsets : .zero
+        func past(_ shown: CGSize) -> UIEdgeInsets {
+            let x = max(0, size.width - shown.width) / 2, y = max(0, size.height - shown.height) / 2
+            return UIEdgeInsets(top: own.insets.top + safe.top + y, left: own.insets.left + safe.left + x,
+                                bottom: own.insets.bottom + safe.bottom + y, right: own.insets.right + safe.right + x)
+        }
+        UIView.performWithoutAnimation {
+            view.bounds.size = size
+            view.insetsLayoutMarginsFromSafeArea = false
+            // Newly held, its margins start where its old box showed it
+            if holding == nil { view.layoutMargins = past(old); view.layoutIfNeeded() }
+        }
         view.center = CGPoint(x: box.midX, y: box.midY)
-        guard !held.contains(view) else { return }
-        held.add(view)
+        view.layoutMargins = past(box.size)
+        view.layoutIfNeeded()
+        guard holding == nil else { return }
+        held.setObject(own, forKey: view)
         // The box's animation ends on the first frame with nothing of its place or size in flight
         FrameClock.shared.want(view, .nativeResize) { [weak self, weak view, weak owner] _ in
             if let owner, owner.window != nil, Self.moving(owner.layer) { return }
-            guard let self, let view, held.contains(view) else { return }
+            guard let self, let view, let own = held.object(forKey: view) else { return }
             FrameClock.shared.drop(view)
-            held.remove(view)
+            held.removeObject(forKey: view)
+            view.insetsLayoutMarginsFromSafeArea = own.fromSafeArea
+            view.layoutMargins = own.insets
             end()
         }
     }
