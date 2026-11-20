@@ -326,12 +326,12 @@ extension NSView {
 #if os(iOS) || os(tvOS)
 extension UIView {
     /// UIKit adds views of its own after the nodes they draw over, at
-    /// depth 0: a scroller's edge effect (iOS 26), and the highlight a
-    /// context menu grows a row from in its route's `PresentationMount`
-    /// (`LiftTarget.container`), while UIKit hides the row itself. A child
+    /// depth 0: a scroller's edge effect (iOS 26), and, in a scroller or a
+    /// route's `PresentationMount`, the highlight a context menu grows a node
+    /// from (`LiftTarget.standing`), while UIKit hides the node itself. A child
     /// ranked above 0 (a positioned route, one holding a native button, a
     /// `position: relative` card, a `z-index`) would paint over them: the
-    /// effect would run sharp under the bar and the row would show blank.
+    /// effect would run sharp under the bar and the node would show blank.
     /// So each view of UIKit's after the last ranked child goes to the top
     /// child's depth, where its later place puts it over them. One with a
     /// depth of its own (the indicators' 1000, a view sent behind) keeps it.

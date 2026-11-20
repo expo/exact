@@ -71,6 +71,9 @@ final class ContextMenuIOSTests: XCTestCase {
         try XCTUnwrap(sequence(first: try XCTUnwrap(node.superview) as UIResponder, next: { $0.next }).lazy.compactMap { ($0 as? UIViewController)?.viewIfLoaded }.first)
     }
 
+    /// A node a box that clips already cuts lifts whole over its controller's
+    /// view, with its ancestors' scale; one inside its parent lifts there,
+    /// which carries the parent's scale itself.
     func testTheTargetCarriesTheAncestorsScale() throws {
         let session = try boot()
         let host = session.presenter.menus.context
@@ -81,11 +84,17 @@ final class ContextMenuIOSTests: XCTestCase {
         let parent = try XCTUnwrap(peek.superview)
         parent.transform = CGAffineTransform(scaleX: 0.5, y: 0.5)
         peek.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
-        defer { parent.transform = .identity; peek.transform = .identity }
-        let lifted = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
+        defer { parent.transform = .identity; peek.transform = .identity; parent.clipsToBounds = false }
+        let inside = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
+        XCTAssertTrue(inside.target.container === parent, "in its parent")
+        XCTAssertEqual(inside.target.transform, CGAffineTransform(scaleX: 0.96, y: 0.96), "its own scale")
+        parent.clipsToBounds = true
+        peek.transform = CGAffineTransform(scaleX: 0.96, y: 0.96).translatedBy(x: parent.bounds.width, y: 0)
+        let cut = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
         let over = try holder(of: peek)
-        XCTAssertEqual(lifted.target.transform, CGAffineTransform(scaleX: 0.48, y: 0.48), "its own scale and its parent's")
-        XCTAssertEqual(lifted.target.center, peek.convert(CGPoint(x: peek.bounds.midX, y: peek.bounds.midY), to: over), "from where it shows")
+        XCTAssertTrue(cut.target.container === over, "cut by its parent: over its controller's view")
+        XCTAssertEqual(cut.target.transform, CGAffineTransform(scaleX: 0.48, y: 0.48), "its own scale and its parent's")
+        XCTAssertEqual(cut.target.center, peek.convert(CGPoint(x: peek.bounds.midX, y: peek.bounds.midY), to: over), "from where it shows")
     }
 
     func testTheLiftsOutlineIsTheNodesOwn() throws {
@@ -139,11 +148,13 @@ final class ContextMenuIOSTests: XCTestCase {
                        "a fill clipped to the text is drawn in the copy: UIKit's own ground")
     }
 
-    /// UIKit hides the long-pressed node and grows its highlight in the
-    /// preview's container, the route's mount, after the route and at depth 0.
-    /// The positioned route ranks above 0, so the highlight takes the route's
-    /// depth: it paints over the route, and the node never shows blank.
-    func testTheHighlightUIKitAddsBesideTheRoutePaintsOverIt() throws {
+    /// UIKit hides the long-pressed node and grows its highlight where the
+    /// preview stands: the node's parent, inside the route, which paints it at
+    /// the route's depth, or, for a node a box already cuts, the route's mount,
+    /// after the route and at depth 0. The positioned route ranks above 0, so a
+    /// view UIKit adds to the mount takes the route's depth: it paints over the
+    /// route, and the node never shows blank.
+    func testTheHighlightUIKitAddsPaintsOverTheRoute() throws {
         let session = try boot()
         let host = session.presenter.menus.context
         let peek = try node(session, "peek")
@@ -151,8 +162,9 @@ final class ContextMenuIOSTests: XCTestCase {
         let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
         defer { host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
         let lifted = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
-        let mount = try XCTUnwrap(lifted.target.container as? PresentationMount, "the route's mount")
+        let mount = try XCTUnwrap(try holder(of: peek) as? PresentationMount, "the route's mount")
         let route = try XCTUnwrap(mount.subviews.last as? NodeView)
+        XCTAssertTrue(lifted.target.container === peek.superview && peek.isDescendant(of: route), "in the node's parent, inside the route")
         XCTAssertGreaterThan(route.paintZPosition, 0, "the positioned route ranks above the origin")
         let highlight = UIView(frame: peek.convert(peek.bounds, to: mount))
         mount.addSubview(highlight)
@@ -175,9 +187,9 @@ final class ContextMenuIOSTests: XCTestCase {
         XCTAssertTrue(lifted.view === peek, "the node itself, which UIKit hides and returns")
         XCTAssertEqual(lifted.parameters.visiblePath?.cgPath, UIBezierPath(roundedRect: peek.bounds, cornerRadius: 12).cgPath,
                        "its one radius as UIKit's rounded rectangle, which UIKit keeps through the lift")
-        let over = try holder(of: peek)
-        XCTAssertTrue(lifted.target.container === over && over !== peek.superview && lifted.target.center == peek.convert(CGPoint(x: peek.bounds.midX, y: peek.bounds.midY), to: over),
-                      "from the node's place, over its controller's view, so no ancestor that clips cuts it")
+        let parent = try XCTUnwrap(peek.superview)
+        XCTAssertTrue(lifted.target.container === parent && lifted.target.center == peek.convert(CGPoint(x: peek.bounds.midX, y: peek.bounds.midY), to: parent),
+                      "from the node's place, in its parent, which it moves with")
         let owner = try XCTUnwrap(host.open)
         let controller = try XCTUnwrap(host.lift(owner))
         let menu = try XCTUnwrap(host.menu(owner))
@@ -286,8 +298,8 @@ final class ContextMenuIOSTests: XCTestCase {
         _ = try XCTUnwrap(host.lift(owner))
         let preview = try node(session, "peek-preview")
         let returned = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, dismissalPreviewForItemWithIdentifier: configuration.identifier))
-        let over = try holder(of: peek)
-        XCTAssertTrue(returned.view === peek && returned.target.container === over && returned.target.center == peek.convert(CGPoint(x: peek.bounds.midX, y: peek.bounds.midY), to: over),
+        let parent = try XCTUnwrap(peek.superview)
+        XCTAssertTrue(returned.view === peek && returned.target.container === parent && returned.target.center == peek.convert(CGPoint(x: peek.bounds.midX, y: peek.bounds.midY), to: parent),
                       "dismissed, UIKit returns the node to its place")
         host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
         XCTAssertNil(host.open)

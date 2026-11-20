@@ -204,7 +204,7 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     /// leaves out: the context menu's preview of a node (`LiftTarget`), which
     /// a node with both lifts once (D4).
     static func preview(of view: UIView) -> UITargetedDragPreview? {
-        guard !view.isHidden, let target = LiftTarget.target(view) else { return nil }
+        guard !view.isHidden, let target = LiftTarget.target(view, detached: true) else { return nil }
         let parameters = UIDragPreviewParameters()
         parameters.visiblePath = LiftTarget.rounded(view)
         parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear

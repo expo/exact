@@ -76,9 +76,9 @@ final class PullDownPreviewIOSTests: XCTestCase {
         invoker.removeFromSuperview()
         invoker.frame = CGRect(x: 0, y: 0, width: 120, height: 44)
         strip.addSubview(invoker)
-        XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === LiftTarget.container(of: invoker), "cut by the strip: above it")
+        XCTAssertTrue(LiftTarget.standing(of: invoker) === LiftTarget.container(of: invoker), "cut by the strip: above it")
         strip.frame.size.width = 200
-        XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === strip, "whole inside the strip: its parent")
+        XCTAssertTrue(LiftTarget.standing(of: invoker) === strip, "whole inside the strip: its parent")
     }
 
     /// The same for an `overflow: hidden` box: it clips as its layer, or its
@@ -98,9 +98,9 @@ final class PullDownPreviewIOSTests: XCTestCase {
             ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0],
         ]))
         let invoker = try XCTUnwrap(p.views[2])
-        XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === controller.view, "cut by the box: above it")
+        XCTAssertTrue(LiftTarget.standing(of: invoker) === controller.view, "cut by the box: above it")
         p.apply(wireBatch([["op": "frame", "id": 5, "x": 100.0, "y": 60.0, "w": 200.0, "h": 44.0]]))
-        XCTAssertTrue(LiftTarget.pullDownContainer(of: invoker) === invoker.superview, "whole inside the box: its parent")
+        XCTAssertTrue(LiftTarget.standing(of: invoker) === invoker.superview, "whole inside the box: its parent")
     }
 
     /// A page-drawn pill (`appearance: none`) filled 8 % white, its menu
